@@ -226,6 +226,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   bool islit = ((ins >> 12) & 1) != 0;
   uint32_t lit = (ins >> 13) & 0xFF;
   SafeOp op = classify(ins, pal_block);
+  // Cold pass (hot/cold split): emit only the slow paths recorded in the hot
+  // pass; every other instruction produces nothing.
+  const uint32_t cold_idx = m_cold_base + i;
+  if (m_cold_pass && (cold_idx >= kColdMax || !m_cold_used[cold_idx]))
+    return;
 
   do {
     // MISC barriers (TRAPB/EXCB/MB/WMB) and prefetch/cache hints: AArch64 has
@@ -392,6 +397,17 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.blr(a64::x16);
       a64_reload_pins(a);
     };
+    // Hot pass: defer this instruction's slow path (entered at `slow`, resuming
+    // at `back`) to the cold pass. False when the table is full -- the caller
+    // then emits the slow path inline.
+    auto cold_record = [&](const Label &slow, const Label &back) {
+      if (cold_idx >= kColdMax)
+        return false;
+      m_cold_slow[cold_idx] = slow.id();
+      m_cold_back[cold_idx] = back.id();
+      m_cold_used[cold_idx] = true;
+      return true;
+    };
     // After a 0-ok / nonzero-bail int helper: bail at this instruction.
     auto bail_if_w0 = [&]() {
       Label ok = a.new_label();
@@ -438,9 +454,6 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                             : (op == OP_LDL)                 ? 32
                             : (op == OP_LDWU)                ? 16
                                                              : 8;
-      ea_x2((int16_t)(ins & 0xFFFF));
-      if (op == OP_LDQ_U)
-        a.and_(x2, x2, imm(~(uint64_t)7));
       auto load_from = [&](const a64::Mem &m) {
         if (size_bits == 64)
           a.ldr(x0, m);
@@ -461,8 +474,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         load_from(out_slot);
       };
 #ifdef JIT_VERIFY
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_LDQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      if (m_cold_pass) { // x2 = va, as the hot path left it
+        a.bind(Label(m_cold_slow[cold_idx]));
+        emit_helper();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_LDQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), ldone = a.new_label();
       if (size_bits > 8) {
         a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
@@ -470,9 +495,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
       dpc_probe(false, slow);
       load_from(a64::ptr(x10, x11));
-      a.b(ldone);
-      a.bind(slow);
-      emit_helper();
+      if (!cold_record(slow, ldone)) {
+        a.b(ldone);
+        a.bind(slow);
+        emit_helper();
+      }
       a.bind(ldone);
 #endif
       continue;
@@ -485,9 +512,6 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                             : (op == OP_STL)                 ? 32
                             : (op == OP_STW)                 ? 16
                                                              : 8;
-      ea_x2((int16_t)(ins & 0xFFFF));
-      if (op == OP_STQ_U)
-        a.and_(x2, x2, imm(~(uint64_t)7));
       auto emit_helper = [&]() {
         emit_call(hs.write_helper, {{JA_CPU, 0},
                                     {JA_VA, 0},
@@ -496,8 +520,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         bail_if_w0();
       };
 #ifdef JIT_VERIFY
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_STQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      if (m_cold_pass) { // x2 = va, as the hot path left it
+        a.bind(Label(m_cold_slow[cold_idx]));
+        emit_helper();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_STQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), sdone = a.new_label();
       if (size_bits > 8) {
         a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
@@ -517,9 +553,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.strh(w12, m);
       else
         a.strb(w12, m);
-      a.b(sdone);
-      a.bind(slow);
-      emit_helper();
+      if (!cold_record(slow, sdone)) {
+        a.b(sdone);
+        a.bind(slow);
+        emit_helper();
+      }
       a.bind(sdone);
 #endif
       continue;
@@ -542,6 +580,19 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint32_t descr = (fmt << 16) | (uint32_t)size_bits;
       if (isload && fa == 31)
         continue; // LDT/LDS f31: interp skips the read (NOP)
+#ifndef JIT_VERIFY
+      if (m_cold_pass) { // only the raw LDT/STT inline path records; x2 = va
+        a.bind(Label(m_cold_slow[cold_idx]));
+        emit_call(isload ? hs.fp_read_helper : hs.fp_write_helper,
+                  {{JA_CPU, 0},
+                   {JA_VA, 0},
+                   {JA_I32, (uint64_t)fa},
+                   {JA_I32, (uint64_t)descr}});
+        bail_if_w0();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+#endif
       ea_x2((int16_t)(ins & 0xFFFF));
       auto emit_helper = [&]() {
         emit_call(isload ? hs.fp_read_helper : hs.fp_write_helper,
@@ -573,9 +624,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.ldr(x12, fld(m_off.f_base + (uint32_t)fa * 8, 3));
         a.str(x12, a64::ptr(x10, x11));
       }
-      a.b(fdone);
-      a.bind(slow);
-      emit_helper();
+      if (!cold_record(slow, fdone)) {
+        a.b(fdone);
+        a.bind(slow);
+        emit_helper();
+      }
       a.bind(fdone);
 #endif
       continue;
@@ -612,6 +665,32 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint32_t size_arg =
           (uint32_t)size_bits |
           ((op == OP_HW_LD_VIRT && ld_fn >= 12) ? 0x100u : 0u);
+      auto ld_helper = [&]() {
+        emit_call((op == OP_HW_LDQ_VPTE || op == OP_HW_LDL_VPTE)
+                      ? hs.read_vpte_helper
+                  : op == OP_HW_LDL_WCHK ? hs.read_wchk_helper
+                  : op == OP_HW_LD_VIRT  ? hs.read_helper
+                                         : hs.hw_ld_helper,
+                  {{JA_CPU, 0},
+                   {JA_VA, 0},
+                   {JA_I32, (uint64_t)size_arg},
+                   {JA_OUT, 0}});
+        bail_if_w0();
+        if (size_bits == 32)
+          a.ldrsw(x0, out_slot); // longword sign-extends (see the x86 emitter)
+        else
+          a.ldr(x0, out_slot);
+        mov_to_reg(ra, x0);
+      };
+#ifndef JIT_VERIFY
+      const bool ld_phys = (op == OP_HW_LDL || op == OP_HW_LDQ);
+      if (m_cold_pass) { // only the physical forms record; x2 = pa
+        a.bind(Label(m_cold_slow[cold_idx]));
+        ld_helper();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+#endif
       ea_x2((int32_t)(ins << 20) >> 20);
 #ifndef JIT_VERIFY
       // Physical forms into DRAM load inline (NT's PALcode walks page tables
@@ -619,9 +698,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // the MMIO range and the virtual / VPTE / WrChk forms take the helper.
       // Aligned like READ_PHYS_NT; dram_size is page-aligned, so an aligned
       // address below it has the whole datum in DRAM.
-      const bool ld_phys = (op == OP_HW_LDL || op == OP_HW_LDQ);
-      Label ld_slow = a.new_label(), ld_done = a.new_label();
       if (ld_phys) {
+        Label ld_slow = a.new_label(), ld_done = a.new_label();
         a.and_(x11, x2, imm(~(uint64_t)(size_bits / 8 - 1)));
         a.ldr(x10, fld(m_off.dram_size, 3));
         a.cmp(x11, x10);
@@ -632,26 +710,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         else
           a.ldr(x0, a64::ptr(x10, x11));
         mov_to_reg(ra, x0);
-        a.b(ld_done);
-        a.bind(ld_slow);
+        if (!cold_record(ld_slow, ld_done)) {
+          a.b(ld_done);
+          a.bind(ld_slow);
+          ld_helper();
+        }
+        a.bind(ld_done);
+        continue;
       }
 #endif
-      emit_call(
-          (op == OP_HW_LDQ_VPTE || op == OP_HW_LDL_VPTE) ? hs.read_vpte_helper
-          : op == OP_HW_LDL_WCHK                         ? hs.read_wchk_helper
-          : op == OP_HW_LD_VIRT                          ? hs.read_helper
-                                                         : hs.hw_ld_helper,
-          {{JA_CPU, 0}, {JA_VA, 0}, {JA_I32, (uint64_t)size_arg}, {JA_OUT, 0}});
-      bail_if_w0();
-      if (size_bits == 32)
-        a.ldrsw(x0, out_slot); // longword sign-extends (see the x86 emitter)
-      else
-        a.ldr(x0, out_slot);
-      mov_to_reg(ra, x0);
-#ifndef JIT_VERIFY
-      if (ld_phys)
-        a.bind(ld_done);
-#endif
+      ld_helper();
       continue;
     }
 
@@ -743,13 +811,29 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint32_t size_arg =
           (uint32_t)size_bits |
           ((op == OP_HW_ST_VIRT && st_fn >= 12) ? 0x100u : 0u);
+      auto st_helper = [&]() {
+        emit_call(op == OP_HW_ST_VIRT ? hs.write_helper : hs.hw_st_helper,
+                  {{JA_CPU, 0},
+                   {JA_VA, 0},
+                   {JA_I32, (uint64_t)size_arg},
+                   {JA_GPZ, (uint64_t)ra}});
+        bail_if_w0();
+      };
+#ifndef JIT_VERIFY
+      const bool st_phys = (op == OP_HW_STL || op == OP_HW_STQ);
+      if (m_cold_pass) { // only the physical forms record; x2 = pa
+        a.bind(Label(m_cold_slow[cold_idx]));
+        st_helper();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+#endif
       ea_x2((int32_t)(ins << 20) >> 20);
 #ifndef JIT_VERIFY
       // Physical forms into DRAM store inline (see HW_LD above); the MMIO
       // range and the virtual forms take the helper.
-      const bool st_phys = (op == OP_HW_STL || op == OP_HW_STQ);
-      Label st_slow = a.new_label(), st_done = a.new_label();
       if (st_phys) {
+        Label st_slow = a.new_label(), st_done = a.new_label();
         a.and_(x11, x2, imm(~(uint64_t)(size_bits / 8 - 1)));
         a.ldr(x10, fld(m_off.dram_size, 3));
         a.cmp(x11, x10);
@@ -760,20 +844,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.str(a64::w(v.id()), a64::ptr(x10, x11));
         else
           a.str(v, a64::ptr(x10, x11));
-        a.b(st_done);
-        a.bind(st_slow);
+        if (!cold_record(st_slow, st_done)) {
+          a.b(st_done);
+          a.bind(st_slow);
+          st_helper();
+        }
+        a.bind(st_done);
+        continue;
       }
 #endif
-      emit_call(op == OP_HW_ST_VIRT ? hs.write_helper : hs.hw_st_helper,
-                {{JA_CPU, 0},
-                 {JA_VA, 0},
-                 {JA_I32, (uint64_t)size_arg},
-                 {JA_GPZ, (uint64_t)ra}});
-      bail_if_w0();
-#ifndef JIT_VERIFY
-      if (st_phys)
-        a.bind(st_done);
-#endif
+      st_helper();
       continue;
     }
 
@@ -1763,6 +1843,10 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 
   RegAlloc ra;
   a64_regalloc(ra);
+  m_cold_pass = false;
+  m_cold_base = 0;
+  for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
+    m_cold_used[i] = false;
   for (uint32_t i = 0; i < plen; ++i)
     emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
 
@@ -1931,6 +2015,18 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   a.mov(a64::x0, a64::x27);
   a.bind(done); // bails arrive with x0 already set
   a64_epilogue(a);
+  // Cold section: the recorded memory-op slow paths, after the epilogue's ret
+  // so nothing falls into them. Each binds its hot-pass label, runs the helper
+  // and branches back. A scratch RegAlloc keeps value-forwarding state local.
+  {
+    RegAlloc cra;
+    a64_regalloc(cra);
+    m_cold_pass = true;
+    for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
+      if (m_cold_used[i])
+        emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, cra);
+    m_cold_pass = false;
+  }
 
   const size_t csz = code.code_size();
 #ifdef JIT_DISASM
@@ -1973,9 +2069,15 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 
   RegAlloc ra;
   a64_regalloc(ra);
+  m_cold_pass = false;
+  for (uint32_t i = 0; i < kColdMax; ++i)
+    m_cold_used[i] = false;
+  uint32_t cold_base = 0;
   for (uint32_t bi = 0; bi < n_blocks; ++bi) {
     JitBlock *b = blocks[bi];
     const uint32_t plen = b->prefix_len;
+    m_cold_base = cold_base; // segment-relative cold index base
+    cold_base += plen;
     const uint32_t *words = (const uint32_t *)(dram + b->phys);
     const bool pal_block = (b->tag & 1) != 0;
     // Default next PC = the sequential successor (terminators overwrite it).
@@ -2022,6 +2124,26 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 #endif
   a.bind(done);
   a64_epilogue(a);
+  // Cold section for the fused segments (see assemble_block).
+  {
+    RegAlloc cra;
+    a64_regalloc(cra);
+    m_cold_pass = true;
+    uint32_t base = 0;
+    for (uint32_t bi = 0; bi < n_blocks; ++bi) {
+      JitBlock *b = blocks[bi];
+      const uint32_t plen = b->prefix_len;
+      const uint32_t *words = (const uint32_t *)(dram + b->phys);
+      m_cold_base = base;
+      for (uint32_t i = 0; i < plen && base + i < kColdMax; ++i)
+        if (m_cold_used[base + i])
+          emit_op(&a, nullptr, &done, hs, (b->tag & 1) != 0, b, words[i], i,
+                  cra);
+      base += plen;
+    }
+    m_cold_pass = false;
+    m_cold_base = 0;
+  }
 
   if (eh.failed)
     return false;

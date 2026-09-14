@@ -560,6 +560,16 @@ private:
       false; // flush() hit kReclaimBytes; reclaim at the next dispatch boundary
   void *m_rt;            // asmjit::JitRuntime*
   JitOffsets m_off = {}; // field offsets for the inline load fast path
+  // a64 hot/cold split: memory ops record the asmjit label ids of their
+  // out-of-line slow path (indexed m_cold_base + instruction index), and
+  // assemble_block / assemble_trace re-run emit_op with m_cold_pass set to
+  // emit those paths after the epilogue, off the fall-through hot path.
+  static constexpr uint32_t kColdMax = 1024;
+  uint32_t m_cold_slow[kColdMax];
+  uint32_t m_cold_back[kColdMax];
+  bool m_cold_used[kColdMax] = {};
+  uint32_t m_cold_base = 0;
+  bool m_cold_pass = false;
   uint32_t m_compile_after = 1; // interpreted passes before a block compiles
                                 // (AXPBOX_JIT_COMPILE_AFTER overrides)
 #ifdef JIT_DISASM
