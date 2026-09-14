@@ -180,6 +180,11 @@ window or display server.
 | `AXPBOX_AUTOMOUSE=<sec>` | Starting `<sec>` seconds in, inject synthetic PS/2 mouse motion (a repeating square pattern plus a periodic left click) directly into the guest, bypassing host input entirely. If the guest cursor moves with this but not with your real mouse, the problem is host-side SDL event delivery, not the emulated hardware. |
 | `AXPBOX_MOUSE_DEBUG=1` | Trace every host mouse-motion event, grab/focus transition, and relative-mouse-mode failure to stderr (`MOUSEDBG ...` lines). |
 | `AXPBOX_PC_SAMPLE=1` | Print the guest program counter on every CPU state poll (~100 ms) — identifies where a guest is stuck on headless runs. |
+| `AXPBOX_IRQSTATS=1` | Every 5 s, print interrupt rates: CPU interrupt entries by source (external lines, software interrupts, ASTs), Cchip interval-timer ticks, 8259 edges/acknowledges per ISA IRQ and Cchip DRIR rises. Spots interrupt storms. |
+| `AXPBOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39` together with the IER/SIRR/CM writes and ISUM reads between them (`IRQT` lines). |
+| `AXPBOX_IDETRACE=1` | Timestamped IDE timeline: each command (opcode, drive, LBA/count), ATAPI packet opcode, bus-master start and interrupt (`IDET` lines). Separates guest-paced from emulator-paced I/O. |
+| `AXPBOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write (`USBT` lines). |
+| `AXPBOX_JIT_COMPILE_AFTER=<n>` | JIT builds: interpret a block `n` times before compiling it (default 1). |
 
 Key names for `AXPBOX_KEYSCRIPT`/`AXPBOX_KEYPIPE`: `a`–`z`, `0`–`9`,
 `enter`, `esc`, `tab`, `space`, `up`, `down`, `left`, `right`, `del`, `ins`,
@@ -194,6 +199,9 @@ AXPBOX_KEYPIPE=keys.txt AXPBOX_KEYSCRIPT="40:a,41:r,42:c,43:enter" \
 axpbox run &
 # ... watch fb-*.ppm to see the screen, echo keys >> keys.txt to react
 ```
+
+On macOS the `offscreen` driver is unavailable (it needs EGL); use
+`SDL_VIDEO_DRIVER=dummy` for headless runs there.
 
 Note: a `serial` section configured with a `port` waits for a telnet
 connection at startup before the GUI comes up — connect a client (e.g.

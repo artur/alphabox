@@ -78,6 +78,7 @@
           (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &           \
                   state.astrr & (state.asten * 0xc)))                          \
            << 7);                                                              \
+      irq_trace_ipr("iISUM", function, state.r[REG_1]);                        \
       break;                                                                   \
                                                                                \
     case 0x0f: /* EXC_SUM */                                                   \
@@ -143,11 +144,13 @@
     }                                                                          \
     if (function & 2) {                                                        \
       state.aster = (int)(state.r[REG_2] >> 5) & 0xf;                          \
-      state.check_int = true;                                                  \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
     }                                                                          \
     if (function & 4) {                                                        \
       state.astrr = (int)(state.r[REG_2] >> 9) & 0xf;                          \
-      state.check_int = true;                                                  \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
     }                                                                          \
     if (function & 8)                                                          \
       state.ppcen = (int)(state.r[REG_2] >> 1) & 1;                            \
@@ -177,12 +180,15 @@
                                                                                \
     case 0x09: /* CM */                                                        \
       state.cm = (int)(state.r[REG_2] >> 3) & 3;                               \
-      state.check_int = true;                                                  \
+      irq_trace_ipr("iMTPR", function, state.r[REG_2]);                        \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
       break;                                                                   \
                                                                                \
     case 0x0b: /* IER_CM */                                                    \
       state.cm = (int)(state.r[REG_2] >> 3) & 3;                               \
-      state.check_int = true;                                                  \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
       [[fallthrough]];                                                         \
     case 0x0a: /* IER */                                                       \
       state.asten = (int)(state.r[REG_2] >> 13) & 1;                           \
@@ -191,12 +197,16 @@
       state.cren = (int)(state.r[REG_2] >> 31) & 1;                            \
       state.slen = (int)(state.r[REG_2] >> 32) & 1;                            \
       state.eien = (int)(state.r[REG_2] >> 33) & 0x3f;                         \
-      state.check_int = true;                                                  \
+      irq_trace_ipr("iMTPR", function, state.r[REG_2]);                        \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
       break;                                                                   \
                                                                                \
     case 0x0c: /* SIRR */                                                      \
       state.sir = (int)(state.r[REG_2] >> 13) & 0xfffe;                        \
-      state.check_int = true;                                                  \
+      irq_trace_ipr("iMTPR", function, state.r[REG_2]);                        \
+      if (int_deliverable())                                                   \
+        state.check_int = true;                                                \
       break;                                                                   \
                                                                                \
     case 0x0e: /* HW_INT_CLR */                                                \

@@ -207,8 +207,37 @@ void CAliM1543C_usb::WriteMem_Bar(int func, int bar, u32 address, int dsize,
   return;
 }
 
+// AXPBOX_USBTRACE=1: log each OHCI register write with the per-register read
+// counts since the previous write, plus a read summary every 20000 reads
+// (driver-polling diagnosis).
+static const bool g_usbtrace = getenv("AXPBOX_USBTRACE") != nullptr;
+static const auto g_usbtrace_t0 = std::chrono::steady_clock::now();
+static u64 g_usb_reads[0x110 / 4 + 1];
+static u64 g_usb_reads_total;
+
+static void usbtrace_line(const char *what, u64 address, u64 data) {
+  char buf[640];
+  int len = snprintf(buf, sizeof(buf), "USBT %10.1f %s %03x=%08x reads:",
+                     std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - g_usbtrace_t0)
+                         .count(),
+                     what, (unsigned)address, (unsigned)data);
+  for (int i = 0; i <= 0x110 / 4 && len < (int)sizeof(buf) - 24; i++)
+    if (g_usb_reads[i]) {
+      len += snprintf(buf + len, sizeof(buf) - len, " %03x:%llu", i * 4,
+                      (unsigned long long)g_usb_reads[i]);
+      g_usb_reads[i] = 0;
+    }
+  printf("%s\n", buf);
+}
+
 u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
   u64 data = 0;
+  if (g_usbtrace && address < 0x110) {
+    g_usb_reads[address / 4]++;
+    if (++g_usb_reads_total % 20000 == 0)
+      usbtrace_line("R", address, state.usb_data[address / 4]);
+  }
   if (dsize != 32)
     printf("%%USB-W-HCIREAD: Non dword read, returning 32 bits anyway.\n");
   switch (address) {
@@ -216,29 +245,51 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
     data = 0x00000110;
     break;
 
+  case 0x0c: // HcInterruptStatus: SF is set every frame while operational
+    data = state.usb_data[address / 4];
+    if (ohci_operational())
+      data |= OHCI_INT_SF;
+    break;
+
+  case 0x14: // HcInterruptDisable reads back the enable mask
+    data = state.usb_data[0x10 / 4];
+    break;
+
+  case 0x30: // HcDoneHead: nothing is ever scheduled, so nothing completes
+    data = 0;
+    break;
+
+  case 0x38: // HcFrameRemaining
+    data = state.usb_data[0x34 / 4] & 0x3fff;
+    break;
+
+  case 0x3c: // HcFmNumber: advances once per (wall-clock) ms while operational
+    data = ohci_operational()
+               ? (u32)(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count() &
+                       0xffff)
+               : state.usb_data[address / 4];
+    break;
+
   case 4:     // HcControl
   case 8:     // HcCommandStatus
-  case 0x0c:  // HcInterruptStatus
-  case 0x10:  // HcInterrupt Enable
-  case 0x14:  // HcInterruptDisable
-  case 0x18:  // HcHCCA (datasheet says 0x17, but that's wrong)
+  case 0x10:  // HcInterruptEnable
+  case 0x18:  // HcHCCA
   case 0x1c:  // HcPeriodCurrentED
   case 0x20:  // HcControlHeadED
   case 0x24:  // HcControlCurrentED
   case 0x28:  // HcBulkHeadED
   case 0x2c:  // HcBulkCurrentED
-  case 0x30:  // HcDoneHead
   case 0x34:  // HcFmInterval
-  case 0x38:  // HcFrameRemaining
-  case 0x3c:  // HcFmNumber
   case 0x40:  // HcPeriodicStart
   case 0x44:  // HcLSThreshold
   case 0x48:  // HcRhDescriptorA
   case 0x4c:  // HcRhDescriptorB
   case 0x50:  // HcRhStatus
-  case 0x54:  // HcRhPortStatus1
-  case 0x58:  // HcRhPortStatus1
-  case 0x5c:  // HcRhPortStatus1
+  case 0x54:  // HcRhPortStatus1 (power bit only: no device is ever connected)
+  case 0x58:  // HcRhPortStatus2
+  case 0x5c:  // HcRhPortStatus3
   case 0x100: // HceControlRegister
   case 0x104: // HceInputRegister
   case 0x108: // HceOutputRegister
@@ -254,44 +305,114 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
   return data;
 }
 
+// HcControl HCFS == UsbOperational (OHCI 1.0a 7.1.2).
+bool CAliM1543C_usb::ohci_operational() const {
+  return ((state.usb_data[4 / 4] >> 6) & 3) == 2;
+}
+
+// Level-sensitive INTA: an enabled status bit with MasterInterruptEnable set.
+// SF is synthesized on read only and never drives the line (no frame ticks).
+void CAliM1543C_usb::ohci_update_irq() {
+  const u32 enable = state.usb_data[0x10 / 4];
+  const bool level =
+      (enable & OHCI_INT_MIE) &&
+      (state.usb_data[0x0c / 4] & enable & ~OHCI_INT_SF & 0x4000007f);
+  do_pci_interrupt(0, level);
+}
+
 void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
+  if (g_usbtrace)
+    usbtrace_line("W", address, data);
   if (dsize != 32)
     printf("%%USB-W-HCIWRITE: Non dword write, writing 32 bits anyway.\n");
+  // OHCI 1.0a chapter 7 semantics for a controller with no attached devices:
+  // the reset / ownership-change / frame-counter handshakes a host controller
+  // driver polls must complete, or the driver busy-waits out its timeouts.
   switch (address) {
-  case 4:     // HcControl
-  case 8:     // HcCommandStatus
-  case 0x0c:  // HcInterruptStatus
-  case 0x10:  // HcInterrupt Enable
-  case 0x14:  // HcInterruptDisable
-  case 0x18:  // HcHCCA (datasheet says 0x17, but that's wrong)
-  case 0x1c:  // HcPeriodCurrentED
-  case 0x20:  // HcControlHeadED
-  case 0x24:  // HcControlCurrentED
-  case 0x28:  // HcBulkHeadED
-  case 0x2c:  // HcBulkCurrentED
-  case 0x30:  // HcDoneHead
+  case 4: // HcControl
+    state.usb_data[address / 4] = (u32)data & 0x7ff;
+    break;
+
+  case 8: // HcCommandStatus: write 1 to set
+    if (data & OHCI_CMD_HCR) {
+      // Software reset: registers to their defaults (IR and RWC survive),
+      // functional state UsbSuspend, and HCR clears when the reset is done --
+      // immediately here.
+      const u32 keep = state.usb_data[4 / 4] & 0x300;
+      for (u32 off = 0x08; off <= 0x44; off += 4)
+        state.usb_data[off / 4] = 0;
+      state.usb_data[0x34 / 4] = 0x2edf;
+      state.usb_data[0x44 / 4] = 0x0628;
+      state.usb_data[4 / 4] = keep | 0xc0;
+    }
+    if (data & OHCI_CMD_OCR) {
+      // Ownership change: no SMM firmware owns the controller, so the handoff
+      // completes at once -- InterruptRouting clears and OC is reported.
+      state.usb_data[4 / 4] &= ~(u32)0x100;
+      state.usb_data[0x0c / 4] |= OHCI_INT_OC;
+    }
+    state.usb_data[8 / 4] |= (u32)data & 0x06; // CLF/BLF; HCR/OCR self-clear
+    break;
+
+  case 0x0c: // HcInterruptStatus: write 1 to clear
+    state.usb_data[address / 4] &= ~(u32)data;
+    break;
+
+  case 0x10: // HcInterruptEnable: write 1 to set
+    state.usb_data[0x10 / 4] |= (u32)data & 0xc000007f;
+    break;
+
+  case 0x14: // HcInterruptDisable: write 1 to clear the enable bit
+    state.usb_data[0x10 / 4] &= ~((u32)data & 0xc000007f);
+    break;
+
+  case 0x18: // HcHCCA: the controller needs a 512-byte-aligned block
+    state.usb_data[address / 4] = (u32)data & 0xfffffe00;
+    break;
+
+  case 0x1c: // HcPeriodCurrentED
+  case 0x20: // HcControlHeadED
+  case 0x24: // HcControlCurrentED
+  case 0x28: // HcBulkHeadED
+  case 0x2c: // HcBulkCurrentED
+    state.usb_data[address / 4] = (u32)data & ~(u32)0xf;
+    break;
+
+  case 0x30: // HcDoneHead, HcFrameRemaining, HcFmNumber: read-only
+  case 0x38:
+  case 0x3c:
+    break;
+
+  case 0x50: // HcRhStatus: only DRWE is stored; power/OCIC writes are no-ops
+    state.usb_data[address / 4] = (u32)data & 0x8000;
+    break;
+
+  case 0x54: // HcRhPortStatus: SetPortPower / ClearPortPower; change bits
+  case 0x58: // write-1-to-clear (none are ever set: nothing connects)
+  case 0x5c:
+    if (data & 0x100)
+      state.usb_data[address / 4] |= 0x100;
+    if (data & 0x200)
+      state.usb_data[address / 4] &= ~(u32)0x100;
+    break;
+
   case 0x34:  // HcFmInterval
-  case 0x38:  // HcFrameRemaining
-  case 0x3c:  // HcFmNumber
   case 0x40:  // HcPeriodicStart
   case 0x44:  // HcLSThreshold
   case 0x48:  // HcRhDescriptorA
   case 0x4c:  // HcRhDescriptorB
-  case 0x50:  // HcRhStatus
-  case 0x54:  // HcRhPortStatus1
-  case 0x58:  // HcRhPortStatus1
-  case 0x5c:  // HcRhPortStatus1
   case 0x100: // HceControlRegister
   case 0x104: // HceInputRegister
   case 0x108: // HceOutputRegister
   case 0x10c: // HceStatusRegister
-    state.usb_data[address / 4] = data;
+    state.usb_data[address / 4] = (u32)data;
     break;
 
   default:
     printf("%%USB-W-HCIWRITE: Writing to unknown address %x.  Ignoring.\n",
            (int)address);
   }
+  ohci_update_irq();
 }
 
 static u32 usb_magic1 = 0x9000432B;

@@ -55,6 +55,15 @@ public:
 private:
   u64 usb_hci_read(u64 address, int dsize);
   void usb_hci_write(u64 address, int dsize, u64 data);
+  bool ohci_operational() const;
+  void ohci_update_irq();
+
+  // OHCI 1.0a register bits
+  static constexpr u32 OHCI_CMD_HCR = 0x00000001; // HostControllerReset
+  static constexpr u32 OHCI_CMD_OCR = 0x00000008; // OwnershipChangeRequest
+  static constexpr u32 OHCI_INT_SF = 0x00000004;  // StartofFrame
+  static constexpr u32 OHCI_INT_OC = 0x40000000;  // OwnershipChange
+  static constexpr u32 OHCI_INT_MIE = 0x80000000; // MasterInterruptEnable
 
   /// The state structure contains all elements that need to be saved to the
   /// statefile.

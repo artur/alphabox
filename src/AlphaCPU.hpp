@@ -54,7 +54,7 @@ class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
 /// Byte numer of an address in an ICache entry.
 #define ICACHE_BYTE_MASK (u64)(ICACHE_INDEX_MASK << 2)
 /// Number of entries in each Translation Buffer
-#define TB_ENTRIES 16 // real EV68 has 128
+#define TB_ENTRIES 128 // as the real EV68 (16 thrashed data-TB misses under NT)
 
 /**
  * \brief Emulated CPU.
@@ -76,6 +76,9 @@ public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
   void irq_h(int number, bool assert, int delay);
+  inline bool int_deliverable() const;
+  void irq_trace_entry(); // AXPBOX_IRQTRACE: interrupt-storm diagnosis
+  void irq_trace_ipr(const char *what, u32 fn, u64 val);
   int get_cpuid();
   void flush_icache();
 
@@ -320,7 +323,23 @@ private:
     bool valid;
   } data_page_cache[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
 
+  // Drop only the cached translation(s) a single data-TB entry could have
+  // produced: its page's slot in both rows for an 8K entry (match_mask bit 13
+  // set), or everything for a granularity-hint (large page) entry.
+  inline void flush_data_page_cache_range(u64 virt, u64 match_mask) {
+    if (!(match_mask & U64(0x2000))) {
+      flush_data_page_cache();
+      return;
+    }
+    const u64 idx = dpc_index(virt);
+    for (int rw = 0; rw < 2; rw++) {
+      data_page_cache[rw][idx].valid = false;
+      data_page_cache[rw][idx].host_base = 0;
+    }
+  }
+  u64 m_stat_dpc_flushes = 0; // flush_data_page_cache() calls (JIT_STATS)
   inline void flush_data_page_cache() {
+    ++m_stat_dpc_flushes;
     for (int i = 0; i < kDpcEntries; i++) {
       data_page_cache[0][i].valid = false;
       data_page_cache[1][i].valid = false;
@@ -349,6 +368,7 @@ private:
   // value to va. Return 0 on success, 1 on fault/unaligned (caller bails to the
   // interpreter).
   static int jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out);
+  int jit_spe_data(u64 va, int cm, u64 *phys) const; // data superpage probe
   static int jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                            u64 *out); // HW_LD physical: no translation
   static int jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
@@ -791,6 +811,21 @@ inline u64 CAlphaCPU::va_form(u64 address, bool bIBOX) {
  * Return processor number.
  **/
 inline int CAlphaCPU::get_cpuid() { return state.iProcNum; }
+
+/**
+ * True when execute()'s interrupt poll would deliver something: an enabled
+ * external or software interrupt request, or an enabled AST at or below the
+ * current mode. IPR writes that change these inputs (CM, IER, SIRR, AST) use it
+ * to raise check_int only when needed -- check_int keeps compiled code out of
+ * the dispatcher, and Windows rewrites IER on every IRQL change, so an
+ * unconditional kick sent ~1.8M chain exits a second through the interpreter.
+ * Device lines raise check_int themselves (irq_h), so nothing is missed.
+ **/
+inline bool CAlphaCPU::int_deliverable() const {
+  return (state.eien & state.eir) || (state.sien & state.sir) ||
+         (state.asten &&
+          (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)));
+}
 
 /**
  * Assert or release an external interrupt line to the cpu.

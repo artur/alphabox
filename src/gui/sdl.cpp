@@ -57,8 +57,10 @@
 #define BX_PLUGGABLE
 
 #include <SDL3/SDL.h>
+#include <mutex>
 #include <stdlib.h>
 #include <string.h>
+#include <vector>
 
 #include "sdl_fonts.hpp"
 
@@ -91,6 +93,7 @@ public:
                                              unsigned h) override;
   void graphics_frame_update(const u32 *pixels, unsigned w,
                              unsigned h) override;
+  void main_thread_pump(void) override;
 
 private:
   CConfigurator *myCfg;
@@ -102,6 +105,7 @@ private:
   bool mouse_invert_y = false;
   void reset_window_size();
   void adjust_window_scale(int delta);
+  void present_frame(const u32 *pixels, unsigned w, unsigned h);
 };
 
 // declare one instance of the gui object and call macro to insert the
@@ -149,18 +153,47 @@ static const char *sdl_title_grabbed =
     "Ctrl+Alt+Del "
     "- Ctrl+Alt+Home resets window";
 
+#if defined(__APPLE__)
+// macOS (Cocoa) only accepts window and event calls on the process main
+// thread, but the display device thread drives this GUI. There every SDL call
+// is deferred to main_thread_pump(), which CSystem::Run() runs on the main
+// thread; the device thread only hands over frames, resizes and clears.
+static constexpr bool sdl_defer_to_main = true;
+#else
+static constexpr bool sdl_defer_to_main = false;
+#endif
+static thread_local bool sdl_in_main_pump = false; // this thread is the pump
+static bool sdl_video_ready = false;               // SDL_Init(VIDEO) done
+static std::mutex sdl_handoff_mutex;               // guards sdl_handoff_*
+static std::vector<u32>
+    sdl_handoff_frame; // latest frame from the device thread
+static unsigned sdl_handoff_w = 0, sdl_handoff_h = 0;
+static bool sdl_handoff_dirty = false;
+static bool sdl_handoff_dim = false; // resize requested
+static unsigned sdl_handoff_dim_x = 0, sdl_handoff_dim_y = 0;
+static bool sdl_handoff_clear = false;
+static std::vector<u32> sdl_main_frame; // pump-side frame being presented
+// True when an SDL call has to be queued for the main-thread pump instead.
+static inline bool sdl_deferred() {
+  return sdl_defer_to_main && !sdl_in_main_pump;
+}
+
 bx_sdl_gui_c::bx_sdl_gui_c(CConfigurator *cfg) {
   myCfg = cfg;
   bx_keymap = new bx_keymap_c(cfg);
 }
 
 void bx_sdl_gui_c::specific_init(unsigned x_tilesize, unsigned y_tilesize) {
-  if (!SDL_Init(SDL_INIT_VIDEO)) {
-    FAILURE(SDL, "Unable to initialize SDL3 video subsystem");
+  if (!sdl_defer_to_main) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+      FAILURE(SDL, "Unable to initialize SDL3 video subsystem");
+    }
+    sdl_video_ready = true;
   }
 
-  // Create the initial window + renderer + texture at 640x480.
-  // dimension_update() will recreate the texture if the resolution changes.
+  // Create the initial window + renderer + texture at 640x480 (queued for the
+  // main thread on macOS). dimension_update() will recreate the texture if the
+  // resolution changes.
   dimension_update(640, 480);
 
   // SDL3: key repeat is handled by the OS; no SDL_EnableKeyRepeat().
@@ -192,7 +225,7 @@ void bx_sdl_gui_c::specific_init(unsigned x_tilesize, unsigned y_tilesize) {
 
 void bx_sdl_gui_c::graphics_frame_update(const u32 *pixels, unsigned width,
                                          unsigned height) {
-  if (!sdl_texture || !sdl_renderer)
+  if (!sdl_deferred() && (!sdl_texture || !sdl_renderer))
     return;
 
   // Debug aid: AXPBOX_DUMP_FB=<path-prefix> writes the frame as a PPM every
@@ -219,6 +252,22 @@ void bx_sdl_gui_c::graphics_frame_update(const u32 *pixels, unsigned width,
       }
     }
   }
+
+  if (sdl_deferred()) { // macOS: hand the frame to the main-thread pump
+    std::lock_guard<std::mutex> guard(sdl_handoff_mutex);
+    sdl_handoff_frame.assign(pixels, pixels + (size_t)width * height);
+    sdl_handoff_w = width;
+    sdl_handoff_h = height;
+    sdl_handoff_dirty = true;
+    return;
+  }
+  present_frame(pixels, width, height);
+}
+
+void bx_sdl_gui_c::present_frame(const u32 *pixels, unsigned width,
+                                 unsigned height) {
+  if (!sdl_texture || !sdl_renderer)
+    return;
 
   // Upload the ARGB32 pixels directly to the streaming texture.
   // pitch = width * 4 bytes per pixel
@@ -564,6 +613,9 @@ static u32 sdl_debug_key_lookup(const char *name) {
 }
 
 void bx_sdl_gui_c::handle_events(void) {
+  if (sdl_deferred())
+    return; // macOS: events are pumped by main_thread_pump()
+
   // Debug aid: AXPBOX_AUTOKEY_ENTER=<seconds> presses Enter once every
   // <seconds> (drives firmware prompts on headless/scripted runs).
   static const char *autokey = getenv("AXPBOX_AUTOKEY_ENTER");
@@ -973,6 +1025,12 @@ void bx_sdl_gui_c::flush(void) {
  * Clear sdl_screen display, and flush it.
  **/
 void bx_sdl_gui_c::clear_screen(void) {
+  if (sdl_deferred()) {
+    std::lock_guard<std::mutex> guard(sdl_handoff_mutex);
+    sdl_handoff_clear = true;
+    sdl_handoff_dirty = false; // drop a frame queued before the clear
+    return;
+  }
   if (!sdl_renderer)
     return;
 
@@ -996,6 +1054,14 @@ void bx_sdl_gui_c::dimension_update(unsigned x, unsigned y, unsigned fheight,
   SDL_DisplayID display;
   float scaled_x, scaled_y;
   float content_scale = 1.0f;
+
+  if (sdl_deferred()) { // macOS: (re)create the window on the main thread
+    std::lock_guard<std::mutex> guard(sdl_handoff_mutex);
+    sdl_handoff_dim = true;
+    sdl_handoff_dim_x = x;
+    sdl_handoff_dim_y = y;
+    return;
+  }
 
   if (sdl_texture) {
     SDL_DestroyTexture(sdl_texture);
@@ -1129,6 +1195,58 @@ void bx_sdl_gui_c::mouse_enabled_changed_specific(bool val) {
   }
 
   sdl_grab = val;
+}
+
+/**
+ * macOS: run on the process main thread by CSystem::Run() (~100 Hz). Owns every
+ * SDL call there: initializes video, (re)creates the window for the requested
+ * size, presents the latest frame the display thread handed over and pumps the
+ * input events. A no-op on other hosts, where the display thread calls SDL.
+ **/
+void bx_sdl_gui_c::main_thread_pump(void) {
+  if (!sdl_defer_to_main)
+    return;
+  struct PumpScope {
+    PumpScope() { sdl_in_main_pump = true; }
+    ~PumpScope() { sdl_in_main_pump = false; } // FAILURE() throws
+  } scope;
+
+  if (!sdl_video_ready) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+      FAILURE(SDL, "Unable to initialize SDL3 video subsystem");
+    }
+    sdl_video_ready = true;
+  }
+
+  bool dim, clear, dirty;
+  unsigned dim_x, dim_y, frame_w = 0, frame_h = 0;
+  {
+    std::lock_guard<std::mutex> guard(sdl_handoff_mutex);
+    dim = sdl_handoff_dim;
+    dim_x = sdl_handoff_dim_x;
+    dim_y = sdl_handoff_dim_y;
+    clear = sdl_handoff_clear;
+    dirty = sdl_handoff_dirty;
+    sdl_handoff_dim = sdl_handoff_clear = sdl_handoff_dirty = false;
+    if (dirty) {
+      sdl_main_frame.swap(sdl_handoff_frame);
+      frame_w = sdl_handoff_w;
+      frame_h = sdl_handoff_h;
+    }
+  }
+  if (dim)
+    dimension_update(dim_x, dim_y);
+  if (clear)
+    clear_screen();
+  if (dirty && frame_w == res_x && frame_h == res_y) // skip pre-resize frames
+    present_frame(sdl_main_frame.data(), frame_w, frame_h);
+
+  // Same serialization with the display thread's update() as before.
+  struct GuiLock {
+    GuiLock() { bx_gui->lock(); }
+    ~GuiLock() { bx_gui->unlock(); }
+  } gui_lock;
+  handle_events();
 }
 
 void bx_sdl_gui_c::exit(void) {

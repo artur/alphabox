@@ -32,6 +32,9 @@
 #include "Flash.hpp"
 #include "StdAfx.hpp"
 #include "lockstep.hpp"
+#if defined(__APPLE__) && defined(HAVE_SDL)
+#include "gui/gui.hpp" // bx_gui->main_thread_pump()
+#endif
 
 #include <ctype.h>
 #include <signal.h>
@@ -275,7 +278,17 @@ void CSystem::Run() {
     if (ProcessPendingReset())
       continue;
 
+#if defined(__APPLE__) && defined(HAVE_SDL)
+    // macOS: SDL windowing only works on the main thread, so pump the GUI
+    // here (~100 Hz) between the device state checks (see gui/sdl.cpp).
+    for (int pump = 0; pump < 10; pump++) {
+      if (bx_gui)
+        bx_gui->main_thread_pump();
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+#else
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#endif
     for (i = 0; i < iNumComponents; i++)
       acComponents[i]->check_state();
 #if !defined(HIDE_COUNTER)
@@ -1985,6 +1998,7 @@ void CSystem::interrupt(int number, bool assert) {
   if (number == -1) {
 
     // timer int...
+    g_irqstats.cchip_timer.fetch_add(1, std::memory_order_relaxed);
     state.cchip.misc |= 0xf0;
     for (i = 0; i < iNumCPUs; i++)
       acCPUs[i]->irq_h(2, true, 0); // timer interrupt is immediate
@@ -1992,6 +2006,8 @@ void CSystem::interrupt(int number, bool assert) {
 
     //    if (!(state.cchip.drir & (1i64<<number)))
     //      printf("%%TYP-I-INTERRUPT: Interrupt %d asserted.\n",number);
+    if (!(state.cchip.drir & (U64(0x1) << number)))
+      g_irqstats.drir_rise[number].fetch_add(1, std::memory_order_relaxed);
     state.cchip.drir |= (U64(0x1) << number);
   } else {
 

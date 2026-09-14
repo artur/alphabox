@@ -98,6 +98,9 @@ public:
                                 unsigned fwidth = 0, unsigned bpp = 8) = 0;
   virtual void mouse_enabled_changed_specific(bool val) = 0;
   virtual void exit(void) = 0;
+  // Called from the main thread by CSystem::Run() on hosts whose windowing
+  // must live there (macOS); a no-op unless the GUI defers to it.
+  virtual void main_thread_pump(void) {}
 
   virtual u32 get_sighandler_mask() { return 0; }
   virtual void sighandler(int sig) {}

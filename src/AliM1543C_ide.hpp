@@ -124,10 +124,17 @@ private:
   void ide_status(int index);
 
   void execute(int index);
+  void wake_controller(int index); // queue work for the controller thread
+  void sync_controller(int index); // let queued work land before a status read
 
   std::unique_ptr<std::thread>
       thrController[2]; // one thread per controller chip
   std::atomic_bool myThreadDead{false};
+  // Controller-thread progress for sync_controller(): work_queued is bumped
+  // before every wake-up, work_done is the last queued value the thread has
+  // finished (or parked on the guest for).
+  std::atomic<u64> work_queued[2]{};
+  std::atomic<u64> work_done[2]{};
   CSemaphore *semController[2];     // controller start/stop
   CSemaphore *semBusMaster[2];      // bus master start/stop
   std::shared_mutex mtRegisters[2]; // main registers

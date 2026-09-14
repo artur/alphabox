@@ -1397,16 +1397,57 @@ void CAliM1543C::pit_clock() {
   }
 }
 
+// AXPBOX_IRQSTATS: print (and reset) the interrupt counters.
+static void print_irqstats(double secs) {
+  SIrqStats &s = g_irqstats;
+  char buf[1400];
+  const int cap = (int)sizeof(buf) - 48;
+  int len = snprintf(buf, sizeof(buf), "%%IRQ-I-STATS %.1fs: cpu-int %llu [eir",
+                     secs, (unsigned long long)s.cpu_int.exchange(0));
+  for (int b = 0; b < 6; b++)
+    len += snprintf(buf + len, sizeof(buf) - len, " %d:%llu", b,
+                    (unsigned long long)s.cpu_eir[b].exchange(0));
+  len += snprintf(buf + len, sizeof(buf) - len,
+                  " sw:%llu ast:%llu] cchip-timer %llu | isa-ack",
+                  (unsigned long long)s.cpu_sw.exchange(0),
+                  (unsigned long long)s.cpu_ast.exchange(0),
+                  (unsigned long long)s.cchip_timer.exchange(0));
+  for (int i = 0; i < 16 && len < cap; i++)
+    if (const u64 v = s.isa_ack[i].exchange(0))
+      len += snprintf(buf + len, sizeof(buf) - len, " irq%d:%llu", i,
+                      (unsigned long long)v);
+  len += snprintf(buf + len, sizeof(buf) - len, " | isa-edge");
+  for (int i = 0; i < 16 && len < cap; i++)
+    if (const u64 v = s.isa_edge[i].exchange(0))
+      len += snprintf(buf + len, sizeof(buf) - len, " irq%d:%llu", i,
+                      (unsigned long long)v);
+  len += snprintf(buf + len, sizeof(buf) - len, " | drir-rise");
+  for (int i = 0; i < 64 && len < cap; i++)
+    if (const u64 v = s.drir_rise[i].exchange(0))
+      len += snprintf(buf + len, sizeof(buf) - len, " #%d:%llu", i,
+                      (unsigned long long)v);
+  printf("%s\n", buf);
+}
+
 /**
  * Thread entry point.
  **/
 void CAliM1543C::run() {
+  const bool irqstats = getenv("AXPBOX_IRQSTATS") != nullptr;
+  auto irq_last = std::chrono::steady_clock::now();
   try {
     for (;;) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       if (StopThread)
         return;
       do_pit_clock();
+      if (irqstats) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - irq_last >= std::chrono::seconds(5)) {
+          print_irqstats(std::chrono::duration<double>(now - irq_last).count());
+          irq_last = now;
+        }
+      }
     }
   }
 
@@ -1593,6 +1634,7 @@ void CAliM1543C::pic_update_output(int index) {
  * Caller must hold picLock.
  **/
 void CAliM1543C::pic_intack(int index, int irq) {
+  g_irqstats.isa_ack[index * 8 + irq].fetch_add(1, std::memory_order_relaxed);
   if (state.pic_auto_eoi[index]) {
     if (state.pic_rotate_on_aeoi[index])
       state.pic_priority_add[index] = (irq + 1) & 7;
@@ -1839,6 +1881,8 @@ void CAliM1543C::pic_interrupt_inner(int index, int intno) {
 #endif
 
   const u8 mask = (u8)(1 << intno);
+  g_irqstats.isa_edge[index * 8 + intno].fetch_add(1,
+                                                   std::memory_order_relaxed);
 
   // Latch a fresh edge: drop last_irr first, then raise.
   state.pic_last_irr[index] &= ~mask;
@@ -1908,6 +1952,9 @@ void CAliM1543C::pic_deassert(int index, int intno) {
  **/
 void CAliM1543C::pic_set_line_inner(int index, int intno, bool active) {
   const u8 mask = (u8)(1 << intno);
+  if (active && !(state.pic_last_irr[index] & mask))
+    g_irqstats.isa_edge[index * 8 + intno].fetch_add(1,
+                                                     std::memory_order_relaxed);
 
   if ((state.pic_elcr[index] & mask) || state.pic_ltim[index]) {
     // Level triggered: IRR follows the input line.

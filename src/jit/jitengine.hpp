@@ -65,8 +65,17 @@ public:
       16; // guards / side-exits per trace
 
   // Reclaim executable memory once compiled code passes this many bytes, rather
-  // than tearing down the asmjit runtime on every flush (see flush()).
+  // than tearing down the asmjit runtime on every flush (see flush()). A
+  // reclaim frees ALL compiled code, so the budget must hold the guest's hot
+  // working set: AArch64 output is ~2x the x86-64 size per Alpha instruction
+  // (~135 bytes), and at 32 MB Windows 2000 setup reclaimed every few seconds
+  // and spent ~30% of its time recompiling the same blocks; its boot alone
+  // reaches ~200 MB of compiled code.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  static constexpr uint64_t kReclaimBytes = 768 * 1024 * 1024;
+#else
   static constexpr uint64_t kReclaimBytes = 32 * 1024 * 1024;
+#endif
 
   // Compiled block entry point. Runs the prefix on regs[0..31], calling back
   // into cpu for memory accesses; returns the number of instructions fully
@@ -114,6 +123,8 @@ public:
                         // revalidate_flushed() re-hashes (lazy IC_FLUSH)
     uint32_t hot; // dispatches since record; at the promote threshold -> form a
                   // trace
+    uint32_t cold_runs; // interpreted passes since record; compiled once this
+                        // reaches compile_after() (hotness threshold)
 #ifdef JIT_REGPROF
     uint64_t rp_hits; // REGPROF: block executions since record (body-entry inc
                       // -- counts chained runs)
@@ -189,6 +200,86 @@ public:
         sde; // CALL_PAL: exc_addr save, PAL entry base, PALshadow enable
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
+  // Hotness threshold: a block is compiled only after it has been interpreted
+  // this many times. Compiling costs far more than interpreting a short block
+  // a few times, so one-shot code (driver init, setup loaders) stays cheap.
+  uint32_t compile_after() const { return m_compile_after; }
+
+  // Why the dispatcher interpreted instead of running compiled code
+  // (JIT_STATS cold-path accounting, see note_cold()).
+  enum ColdReason {
+    CR_NO_PHYS,      // start PC didn't translate side-effect-free
+    CR_NO_BLOCK,     // no block recorded at this PC yet
+    CR_NOT_HOT,      // recorded, below the compile threshold
+    CR_UNCOMPILABLE, // compiled, but its first instruction can't be
+    CR_STALE,        // block's physical no longer matches the live mapping
+    CR_INT,          // interrupt pending (check_int)
+    CR_TIMER,        // delayed interrupt countdown pending (check_timers)
+    CR_PAL_NOSDE,    // PALmode block while shadow registers are off
+    CR_BUDGET,       // prefix longer than the remaining dispatch budget
+    CR_DONE0,        // compiled block ran but completed no instruction
+    CR_COUNT
+  };
+  // Why a memory helper refused (bailed to the interpreter).
+  enum BailKind {
+    BK_UNALIGNED,
+    BK_TB_MISS,
+    BK_ACV,
+    BK_FAULT,
+    BK_MMIO,
+    BK_COUNT
+  };
+  // C++ helper entries from compiled code (JIT_STATS): which slow paths run.
+  enum HelperKind {
+    HK_READ,
+    HK_WRITE,
+    HK_LOCKED,
+    HK_STC,
+    HK_INDIRECT,
+    HK_READ_PHYS,
+    HK_WRITE_PHYS,
+    HK_MTPR,
+    HK_MFPR,
+    HK_COUNT
+  };
+#ifdef JIT_STATS
+  inline void note_cold(int reason, uint32_t n_instr, uint32_t first_op) {
+    m_cold_n[reason]++;
+    m_cold_instr[reason] += n_instr;
+    if (reason == CR_UNCOMPILABLE)
+      m_cold_op[first_op & 63] += n_instr;
+    if (reason == CR_DONE0)
+      m_done0_op[first_op & 63]++;
+  }
+  inline void note_bail(bool write, int kind) {
+    m_bail_kind[write ? 1 : 0][kind]++;
+  }
+  // Hot guest code: compiled-chain entry PCs weighted by the instructions the
+  // chain ran (direct-mapped, a colliding heavier entry keeps its slot). phys
+  // + dram locate the guest words dumped for the top entries.
+  inline void note_hot_pc(uint64_t pc, uint64_t phys, uint32_t n,
+                          const uint8_t *dram) {
+    HotPc &h = m_hot_pc[(uint64_t)((pc >> 2) * UINT64_C(0x9E3779B97F4A7C15)) >>
+                        (64 - kHotPcBits)];
+    if (h.pc != pc) {
+      if (h.n > n) {
+        h.n -= n;
+        return;
+      }
+      h.pc = pc;
+      h.phys = phys;
+      h.n = 0;
+    }
+    h.n += n;
+    m_hot_dram = dram;
+  }
+  inline void note_helper(int kind) { m_helper_n[kind]++; }
+  inline void set_dpc_flush_counter(const uint64_t *p) { m_dpc_flush_src = p; }
+#else
+  inline void note_helper(int) {}
+  inline void set_dpc_flush_counter(const uint64_t *) {}
+  inline void note_bail(bool, int) {}
+#endif
 
   // Per-op helper function pointers
   struct HelperSet {
@@ -367,6 +458,19 @@ public:
   // ACCESS_EXEC) ... those can remap a code page WITHOUT flushing the JIT, so a
   // chained block could run stale bytes.
   inline void note_itb_invalidate() { ++m_itb_gen; }
+  // Record a validated computed-jump target for the inline cache (see
+  // m_ind_cache). Non-global blocks are safe too: the entry comes from a
+  // lookup under the current ASN, and an ASN change bumps the epoch
+  // (jit_note_asn_change), so it can't be hit from another address space.
+  // Superpage kernel code is never ASM, so excluding it would gut the cache.
+  inline void ind_cache_fill(uint64_t target, JitBlock *b) {
+    if (!b->jit_body || (target & 1))
+      return;
+    IndCacheEntry &e = m_ind_cache[(target >> 2) & ((1u << kIndBits) - 1)];
+    e.tag = target;
+    e.vgen = b->vgen;
+    e.body = b->jit_body;
+  }
   inline uint64_t vgen() const {
     return m_itb_gen + m_flush_gen;
   } // combined validation epoch
@@ -426,11 +530,26 @@ private:
       0; // current ITB generation (bumped on every I-stream TB invalidate)
   uint64_t m_flush_gen = 0; // current icache-flush generation (bumped by
                             // flush(); lazy IC_FLUSH/IMB)
+  // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
+  // block validated for it, valid while its epoch (m_itb_gen + m_flush_gen at
+  // validation, kept in vgen) is current; any ITB invalidate, ASN change or
+  // flush bumps the epoch. Declared right after the epoch counters so compiled
+  // code reaches all three through one base register. Filled by jit_indirect,
+  // cleared by reclaim_code (it frees the bodies).
+  struct IndCacheEntry {
+    uint64_t tag, vgen;
+    void *body;
+    uint64_t pad; // 32-byte entries: index << 5
+  };
+  static constexpr int kIndBits = 10;
+  IndCacheEntry m_ind_cache[1 << kIndBits] = {};
   uint64_t m_code_bytes;    // compiled bytes since last reclaim (see flush())
   bool m_reclaim_pending =
       false; // flush() hit kReclaimBytes; reclaim at the next dispatch boundary
   void *m_rt;            // asmjit::JitRuntime*
   JitOffsets m_off = {}; // field offsets for the inline load fast path
+  uint32_t m_compile_after = 1; // interpreted passes before a block compiles
+                                // (AXPBOX_JIT_COMPILE_AFTER overrides)
 #ifdef JIT_DISASM
   FILE *m_disasm_fp =
       nullptr; // per-CPU disassembly trace file (jit_disasm_cpuN.txt)
@@ -447,6 +566,24 @@ private:
       m_stat_plen_sum; // cumulative: compiled blocks, sum of their lengths
   uint64_t m_stat_code_bytes; // cumulative: emitted x86 bytes (code expansion =
                               // /plen_sum)
+  uint64_t m_stat_reclaims; // cumulative: code-cache reclaims (all code freed)
+  uint64_t m_cold_n[CR_COUNT];     // windowed: cold-path entries by reason
+  uint64_t m_cold_instr[CR_COUNT]; // windowed: instructions interpreted there
+  uint64_t m_cold_op[64];  // windowed: interp instrs of uncompilable blocks by
+                           // their first opcode
+  uint64_t m_done0_op[64]; // windowed: zero-progress compiled runs by first op
+  uint64_t m_bail_kind[2]
+                      [BK_COUNT]; // windowed: helper bails [read/write][kind]
+  static constexpr int kHotPcBits = 12;
+  struct HotPc {
+    uint64_t pc, phys, n;
+  };
+  HotPc m_hot_pc[1 << kHotPcBits]; // 5-window: hot chain-entry PCs
+  const uint8_t *m_hot_dram = nullptr;
+  uint64_t m_hot_win = 0;
+  uint64_t m_helper_n[HK_COUNT];             // windowed: helper entries
+  const uint64_t *m_dpc_flush_src = nullptr; // CPU's data-page-cache flushes
+  uint64_t m_dpc_flush_last = 0;             // ...at the previous window
   uint64_t m_stat_wall_last_ns; // steady_clock ns at the last window report
                                 // (throughput delta)
   uint64_t m_tsc_compiled,

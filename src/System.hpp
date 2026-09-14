@@ -38,6 +38,20 @@
 
 #define MAX_COMPONENTS 100
 
+// Interrupt-rate counters: bumped where interrupts are raised and taken,
+// printed and reset every 5 s by the Ali thread under AXPBOX_IRQSTATS=1.
+struct SIrqStats {
+  std::atomic<u64> cpu_int{0};      // CPU interrupt entries (PAL INTERRUPT)
+  std::atomic<u64> cpu_eir[6]{};    // ...by EIR & EIEN bit pending at entry
+  std::atomic<u64> cpu_sw{0};       // ...with a software interrupt pending
+  std::atomic<u64> cpu_ast{0};      // ...with an AST pending
+  std::atomic<u64> cchip_timer{0};  // Cchip interval-timer ticks
+  std::atomic<u64> drir_rise[64]{}; // Cchip DRIR bits going 0 -> 1
+  std::atomic<u64> isa_edge[16]{};  // 8259 input edges (PIC0 0-7, PIC1 8-15)
+  std::atomic<u64> isa_ack[16]{};   // 8259 IRQs acknowledged by the guest
+};
+inline SIrqStats g_irqstats;
+
 #if defined(PROFILE)
 #define PROFILE_FROM U64(0x8000)
 #define PROFILE_TO U64(0x1a81c0)

@@ -150,8 +150,10 @@ void CAlphaCPU::init() {
   state.iProcNum = cSystem->RegisterCPU(this);
 
 #ifdef ES40_JIT
-  if (!m_jit)
+  if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum);
+    m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
+  }
   {
     // Tell the JIT the byte offsets (from `this`) of the fields its inline load
     // fast path reads, so compiled code can address them via [cpu + offset].
@@ -640,6 +642,9 @@ void CAlphaCPU::jit_run(int budget) {
                (unsigned long long)b->phys, (unsigned long long)start_phys);
     }
 
+#ifdef JIT_STATS
+    int cold_reason = CJitEngine::CR_NO_BLOCK; // why we end up interpreting
+#endif
     // Run the compiled safe prefix natively when available -- but not while an
     // interrupt or delayed timer is pending. Compiled blocks don't run the
     // per-instruction polls, so run the interpreter.
@@ -778,9 +783,8 @@ void CAlphaCPU::jit_run(int budget) {
           // replays through this same vlog, but its address is physical
           // (untranslated) with a 12-bit disp. Func 5 (quad VPTE) too -- its
           // logged va is virtual, jit_read_vpte's replay key.
-          const bool is_hwld = (opc == 0x1b) && ((((ins >> 12) & 0xf) <= 1) ||
-                                                 (((ins >> 12) & 0xf) == 5) ||
-                                                 (((ins >> 12) & 0xf) == 10));
+          const bool is_hwld = // forms 0,1,4,5,8,9,10,12,13 (compiled HW_LD)
+              (opc == 0x1b) && ((U64(0x373b) >> ((ins >> 12) & 0xf)) & 1);
           // RPCC/RC/RS (MISC 0x18) and ISUM (HW_MFPR 0x19 fn 0x0d) read CPU
           // state the verify can't re-derive; the compiled forms pull their
           // value from this same load log (jit_misc / jit_hw_mfpr replay it),
@@ -826,7 +830,8 @@ void CAlphaCPU::jit_run(int budget) {
           const bool is_sc =
               (opc == 0x2e ||
                opc == 0x2f); // STL_C/STQ_C: store-conditional (success in Ra)
-          const bool is_hwst = (opc == 0x1f) && (((ins >> 12) & 0xf) <= 1);
+          const bool is_hwst = // forms 0,1,4,5,12,13 (compiled HW_ST)
+              (opc == 0x1f) && ((U64(0x3033) >> ((ins >> 12) & 0xf)) & 1);
           const bool is_fpst =
               (opc == 0x26 || opc == 0x27 || opc == 0x24 ||
                opc == 0x25); // STS/STT/STF/STG: value source is f[lra]
@@ -1214,14 +1219,34 @@ void CAlphaCPU::jit_run(int budget) {
       cc_large += (u64)done * cc_per_instruction;
       budget -= done;
 #ifdef JIT_STATS
+      m_jit->note_hot_pc(start_virt, start_phys, done, (const u8 *)dram_ptr);
       cc_last_sync += std::chrono::nanoseconds(m_jit->note_exec(
           done, 0, _comp_tsc,
           0)); // don't bill the stats-print stall to the wall-clock RPCC
 #endif
       if (done > 0)
         continue; // progress made; done==0 (faulting first insn) falls through
+#ifdef JIT_STATS
+      cold_reason = CJitEngine::CR_DONE0;
+#endif
 #endif
     }
+#ifdef JIT_STATS
+    else
+      cold_reason = !have_phys ? CJitEngine::CR_NO_PHYS
+                    : !b       ? CJitEngine::CR_NO_BLOCK
+                    : !b->code ? (b->compiled ? CJitEngine::CR_UNCOMPILABLE
+                                              : CJitEngine::CR_NOT_HOT)
+                    : b->phys != start_phys        ? CJitEngine::CR_STALE
+                    : state.check_int              ? CJitEngine::CR_INT
+                    : state.check_timers           ? CJitEngine::CR_TIMER
+                    : ((b->tag & 1) && !state.sde) ? CJitEngine::CR_PAL_NOSDE
+                                                   : CJitEngine::CR_BUDGET;
+    const u32 cold_first_op =
+        (have_phys && start_phys + 4 <= dram_size)
+            ? (((const u32 *)((const u8 *)dram_ptr + start_phys))[0] >> 26)
+            : 0;
+#endif
 
     // Miss path (cold): the up-front translation gave start_phys/start_asm
     // (when have_phys). We're not running a compiled block here, so drop any
@@ -1247,6 +1272,7 @@ void CAlphaCPU::jit_run(int budget) {
     cc_last_sync += std::chrono::nanoseconds(m_jit->note_exec(
         0, n, 0, jit_rdtsc() - _interp_t0)); // don't bill the stats-print stall
                                              // to the wall-clock RPCC
+    m_jit->note_cold(cold_reason, n, cold_first_op);
 #endif
     // Record only translatable block starts (a translation miss left have_phys
     // false).
@@ -1254,7 +1280,8 @@ void CAlphaCPU::jit_run(int budget) {
       CJitEngine::JitBlock *nb =
           m_jit->record(start_virt, start_phys, start_asn, start_asm, n,
                         (const uint8_t *)dram_ptr);
-      if (!nb->compiled)
+      // Compile only once the block has proven hot (see compile_after()).
+      if (!nb->compiled && ++nb->cold_runs >= m_jit->compile_after())
         m_jit->compile_block(
             nb, (const uint8_t *)dram_ptr, dram_size,
             (void *)&CAlphaCPU::jit_read, (void *)&CAlphaCPU::jit_write,
@@ -1272,19 +1299,52 @@ void CAlphaCPU::jit_run(int budget) {
   }
 }
 
+static inline bool alpha_valid_va_form(u64 virt, bool va48);
+
+// Side-effect-free data superpage probe for the JIT memory helpers, mirroring
+// virt2phys (VA form check, then SPE[2]/[1]/[0] before the TB). The TB never
+// holds superpage translations, so without this every kernel superpage access
+// that misses the data page cache bailed to the interpreter. Returns 1 with
+// *phys set on a hit, 0 when va is not a superpage address (use the TB), or
+// -1 when the interpreter must take it (bad VA form, or a hit outside kernel
+// mode -> ACV).
+int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
+  if (!alpha_valid_va_form(va, state.va_ctl_va_mode & 1))
+    return -1;
+  const int spe = state.m_ctl_spe;
+  if (!spe)
+    return 0;
+  if (((va & SPE_2_MASK) == SPE_2_MATCH) && (spe & 4))
+    *phys = va & SPE_2_MAP;
+  else if (((va & SPE_1_MASK) == SPE_1_MATCH) && (spe & 2))
+    *phys = (va & SPE_1_MAP) | ((va & SPE_1_TEST) ? SPE_1_ADD : 0);
+  else if (((va & SPE_0_MASK) == SPE_0_MATCH) && (spe & 1))
+    *phys = va & SPE_0_MAP;
+  else
+    return 0;
+  return cm ? -1 : 1;
+}
+
 // JIT load helper (static). Reads size_bits from virtual address va into *out,
 // mirroring DATA_PHYS_NT's normal-read fast path. Returns 0 on success, or 1 on
 // a translation fault / unaligned access - the caller bails to the interpreter
 int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
+  // Bit 8 of size_bits selects DTB_ALTMODE access checks (the HW_LD/HW_ST
+  // virtual-alt forms); plain loads/stores pass the bare size.
+  const int cm = (size_bits & 0x100) ? cpu->state.alt_cm : cpu->state.cm;
+  size_bits &= 0xff;
   const u64 amask = (u64)(size_bits / 8) - 1;
-  if (va & amask)
-    return 1; // unaligned: let the interpreter handle it
+  cpu->m_jit->note_helper(CJitEngine::HK_READ);
+  if (va & amask) { // unaligned: let the interpreter handle it
+    cpu->m_jit->note_bail(false, CJitEngine::BK_UNALIGNED);
+    return 1;
+  }
 
   u64 phys;
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
       cpu->data_page_cache[0][dpc_index(va)]; // direct-mapped by virt page
-  if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
+  if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
@@ -1293,21 +1353,34 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
     // after we bail) corrupts state. Bail on a TB miss or any access fault and
     // let the interpreter do the side-effect translation ~  it fills this cache
     // so the next compiled run hits. Mirrors virt2phys's read path.
-    const int i = cpu->FindTBEntry(va, ACCESS_READ);
-    if (i < 0)
-      return 1; // TB miss
-    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-    if (!e.access[0][cpu->state.cm])
-      return 1; // protection (ACV)
-    if (e.fault[0])
-      return 1; // fault-on-read (FOR)
-    phys = e.phys | (va & e.keep_mask);
+    const int spe = cpu->jit_spe_data(va, cm, &phys);
+    if (spe < 0) { // bad VA form / superpage outside kernel mode (ACV)
+      cpu->m_jit->note_bail(false, CJitEngine::BK_ACV);
+      return 1;
+    }
+    if (!spe) {
+      const int i = cpu->FindTBEntry(va, ACCESS_READ);
+      if (i < 0) { // TB miss
+        cpu->m_jit->note_bail(false, CJitEngine::BK_TB_MISS);
+        return 1;
+      }
+      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+      if (!e.access[0][cm]) { // protection (ACV)
+        cpu->m_jit->note_bail(false, CJitEngine::BK_ACV);
+        return 1;
+      }
+      if (e.fault[0]) { // fault-on-read (FOR)
+        cpu->m_jit->note_bail(false, CJitEngine::BK_FAULT);
+        return 1;
+      }
+      phys = e.phys | (va & e.keep_mask);
+    }
     dpc.virt_page = vp;
     dpc.phys_base = phys & ~U64(0x1FFF);
     dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
                         ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
                         : 0;
-    dpc.cm = cpu->state.cm;
+    dpc.cm = cm;
     dpc.asn = cpu->state.asn0;
     dpc.valid = true;
   }
@@ -1319,8 +1392,17 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // movzx would falsely mismatch the interpreter. Bailing -> the compiled block
   // stops at the load (done < prefix_len) and the verify skips the compare,
   // matching prod.
-  if (phys >= cpu->dram_size)
+  if (phys >= cpu->dram_size) {
+#ifdef JIT_VERIFY
     return 1;
+#else
+    // Production: do the device read here, at the same point in the
+    // instruction stream the interpreter would. Bailing instead sent every
+    // MMIO load (device registers, S3 aperture) back through the interpreter.
+    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    return 0;
+#endif
+  }
 
   // Verify replay: return the value the interpreter pass loaded here, rather
   // than re-reading (another CPU may have written it)
@@ -1625,6 +1707,7 @@ int CAlphaCPU::jit_fltv(CAlphaCPU *cpu, u32 ins) {
 // -- the LL/SC exclusive monitor. cpu_lock is per-CPU + atomic + idempotent.
 int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
                                u64 *out) {
+  cpu->m_jit->note_helper(CJitEngine::HK_LOCKED);
   const u64 amask = (u64)(size_bits / 8) - 1;
   if (va & amask)
     return 1; // unaligned: let the interpreter handle it
@@ -1636,15 +1719,20 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    const int i = cpu->FindTBEntry(va, ACCESS_READ);
-    if (i < 0)
-      return 1; // TB miss
-    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-    if (!e.access[0][cpu->state.cm])
-      return 1; // protection (ACV)
-    if (e.fault[0])
-      return 1; // fault-on-read (FOR)
-    phys = e.phys | (va & e.keep_mask);
+    const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
+    if (spe < 0)
+      return 1; // bad VA form / superpage outside kernel mode (ACV)
+    if (!spe) {
+      const int i = cpu->FindTBEntry(va, ACCESS_READ);
+      if (i < 0)
+        return 1; // TB miss
+      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+      if (!e.access[0][cpu->state.cm])
+        return 1; // protection (ACV)
+      if (e.fault[0])
+        return 1; // fault-on-read (FOR)
+      phys = e.phys | (va & e.keep_mask);
+    }
     dpc.virt_page = vp;
     dpc.phys_base = phys & ~U64(0x1FFF);
     dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
@@ -1734,18 +1822,24 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (va & amask)
     return 1; // unaligned: let the interpreter handle it
 
-  const int i = cpu->FindTBEntry(va, ACCESS_READ);
-  if (i < 0)
-    return 1; // TB miss
-  const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+  u64 phys;
   const int cm = cpu->state.cm;
-  if (!e.access[0][cm])
-    return 1; // no read access (ACV)
-  if (!e.access[1][cm])
-    return 1; // no write access -- WrChk fails (ACV)
-  if (e.fault[0] || e.fault[1])
-    return 1; // FOR/FOW: bail so the interpreter vectors the fault
-  const u64 phys = e.phys | (va & e.keep_mask);
+  const int spe = cpu->jit_spe_data(va, cm, &phys);
+  if (spe < 0)
+    return 1; // bad VA form / superpage outside kernel mode (ACV)
+  if (!spe) {
+    const int i = cpu->FindTBEntry(va, ACCESS_READ);
+    if (i < 0)
+      return 1; // TB miss
+    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+    if (!e.access[0][cm])
+      return 1; // no read access (ACV)
+    if (!e.access[1][cm])
+      return 1; // no write access -- WrChk fails (ACV)
+    if (e.fault[0] || e.fault[1])
+      return 1; // FOR/FOW: bail so the interpreter vectors the fault
+    phys = e.phys | (va & e.keep_mask);
+  }
 
   if (phys >=
       cpu->dram_size) // MMIO: bail before the replay (mirrors jit_read_vpte)
@@ -1775,12 +1869,22 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
 // success, 1 on a bail.
 int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                              u64 *out) {
+  cpu->m_jit->note_helper(CJitEngine::HK_READ_PHYS);
   // MMIO: bail before the replay so verify models production (which bails
   // here). A device read isn't size-truncated, so a replayed+re-truncated value
   // would falsely mismatch. dram_size is page-aligned and the align below only
   // rounds within 8 bytes, so this raw check is exact.
-  if (phys >= cpu->dram_size)
+  if (phys >= cpu->dram_size) {
+#ifdef JIT_VERIFY
     return 1;
+#else
+    // Production: the ordered device read happens here, as in the interpreter
+    // (see jit_read).
+    phys &= ~((u64)(size_bits / 8) - 1); // align like READ_PHYS_NT (ALIGN_PHYS)
+    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    return 0;
+#endif
+  }
 
   if (cpu->m_jit_vreplay) {
     if (phys != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
@@ -1804,9 +1908,16 @@ int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 // mirroring jit_read's side-effect-free translation. Returns 0 on success, 1 on
 // fault/unaligned.
 int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
+  // Bit 8 of size_bits selects DTB_ALTMODE access checks (the HW_LD/HW_ST
+  // virtual-alt forms); plain loads/stores pass the bare size.
+  const int cm = (size_bits & 0x100) ? cpu->state.alt_cm : cpu->state.cm;
+  size_bits &= 0xff;
   const u64 amask = (u64)(size_bits / 8) - 1;
-  if (va & amask)
-    return 1; // unaligned: let the interpreter handle it
+  cpu->m_jit->note_helper(CJitEngine::HK_WRITE);
+  if (va & amask) { // unaligned: let the interpreter handle it
+    cpu->m_jit->note_bail(true, CJitEngine::BK_UNALIGNED);
+    return 1;
+  }
 
   // Verify: the interpreter pass already performed (and recorded) this store.
   // Compare rather than write -- stores change memory, not GPRs, so the
@@ -1830,7 +1941,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
       cpu->data_page_cache[1][dpc_index(va)]; // direct-mapped by virt page
-  if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
+  if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
@@ -1838,21 +1949,34 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     // or access fault so the interpreter does the side-effecting translation
     // (filling this cache, so the next compiled run hits). NOT virt2phys -- it
     // vectors faults as a side effect.
-    const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
-    if (i < 0)
-      return 1; // TB miss
-    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-    if (!e.access[1][cpu->state.cm])
-      return 1; // protection (ACV)
-    if (e.fault[1])
-      return 1; // fault-on-write (FOW)
-    phys = e.phys | (va & e.keep_mask);
+    const int spe = cpu->jit_spe_data(va, cm, &phys);
+    if (spe < 0) { // bad VA form / superpage outside kernel mode (ACV)
+      cpu->m_jit->note_bail(true, CJitEngine::BK_ACV);
+      return 1;
+    }
+    if (!spe) {
+      const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
+      if (i < 0) { // TB miss
+        cpu->m_jit->note_bail(true, CJitEngine::BK_TB_MISS);
+        return 1;
+      }
+      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+      if (!e.access[1][cm]) { // protection (ACV)
+        cpu->m_jit->note_bail(true, CJitEngine::BK_ACV);
+        return 1;
+      }
+      if (e.fault[1]) { // fault-on-write (FOW)
+        cpu->m_jit->note_bail(true, CJitEngine::BK_FAULT);
+        return 1;
+      }
+      phys = e.phys | (va & e.keep_mask);
+    }
     dpc.virt_page = vp;
     dpc.phys_base = phys & ~U64(0x1FFF);
     dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
                         ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
                         : 0;
-    dpc.cm = cpu->state.cm;
+    dpc.cm = cm;
     dpc.asn = cpu->state.asn0;
     dpc.valid = true;
   }
@@ -1871,6 +1995,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
 // interpreter does the ordered device write. Returns 0 on success, 1 on a bail.
 int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                               u64 value) {
+  cpu->m_jit->note_helper(CJitEngine::HK_WRITE_PHYS);
   if (cpu->m_jit_vreplay) {
     const u32 i = cpu->m_jit_slog_i++;
     if (phys != cpu->m_jit_slog_addr[i] || value != cpu->m_jit_slog_val[i]) {
@@ -1886,8 +2011,16 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
   }
 
   phys &= ~((u64)(size_bits / 8) - 1); // align like WRITE_PHYS_NT (ALIGN_PHYS)
-  if (phys >= cpu->dram_size)
+  if (phys >= cpu->dram_size) {
+#ifdef JIT_VERIFY
     return 1; // MMIO: let the interpreter do the ordered write
+#else
+    // Production: the device write happens here, in instruction order (as
+    // jit_write already does for virtual stores).
+    cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+    return 0;
+#endif
+  }
   dram_write(cpu->dram_ptr, phys, size_bits, value);
   return 0;
 }
@@ -1896,6 +2029,7 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 // CAS-backed MP model; different-address same-line STx_C stores without
 // comparing against the LDx_L datum.
 u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
+  cpu->m_jit->note_helper(CJitEngine::HK_STC);
   if (cpu->m_jit_vreplay) {
     const u32 i = cpu->m_jit_slog_i++;
     const u64 success = cpu->m_jit_slog_success[i];
@@ -1928,15 +2062,20 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
-    if (i < 0)
-      return U64(0x100); // TB miss
-    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-    if (!e.access[1][cpu->state.cm])
-      return U64(0x100); // protection (ACV)
-    if (e.fault[1])
-      return U64(0x100); // fault-on-write (FOW)
-    phys = e.phys | (va & e.keep_mask);
+    const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
+    if (spe < 0)
+      return U64(0x100); // bad VA form / superpage outside kernel mode (ACV)
+    if (!spe) {
+      const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
+      if (i < 0)
+        return U64(0x100); // TB miss
+      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
+      if (!e.access[1][cpu->state.cm])
+        return U64(0x100); // protection (ACV)
+      if (e.fault[1])
+        return U64(0x100); // fault-on-write (FOW)
+      phys = e.phys | (va & e.keep_mask);
+    }
     dpc.virt_page = vp;
     dpc.phys_base = phys & ~U64(0x1FFF);
     dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
@@ -1974,6 +2113,7 @@ void CAlphaCPU::jit_opcdec(CAlphaCPU *cpu, u64 cpc) {
 
 /* HW_MFPR (PALmode): return the IPR selected by (ins>>8)&0xff. */
 u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
+  cpu->m_jit->note_helper(CJitEngine::HK_MFPR);
   const auto &state = cpu->state;
   const u32 function = (ins >> 8) & 0xff;
 
@@ -2005,20 +2145,23 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
            (((u64)state.cm) << 3);
   case 0x0c:
     return ((u64)state.sir) << 13; // SIRR
-  case 0x0d:                       // ISUM (production path: read the live async
+  case 0x0d: {                     // ISUM (production path: read the live async
     // interrupt-request lines; the verify replays via the m_jit_vreplay
     // short-circuit at the top).
-    return (((u64)(state.eir & state.eien)) << 33) |
-           (((u64)(state.slr & state.slen)) << 32) |
-           (((u64)(state.crr & state.cren)) << 31) |
-           (((u64)(state.pcr & state.pcen)) << 29) |
-           (((u64)(state.sir & state.sien)) << 13) |
-           (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
-                   state.astrr & (state.asten * 0x3)))
-            << 3) |
-           (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
-                   state.astrr & (state.asten * 0xc)))
-            << 7);
+    const u64 isum = (((u64)(state.eir & state.eien)) << 33) |
+                     (((u64)(state.slr & state.slen)) << 32) |
+                     (((u64)(state.crr & state.cren)) << 31) |
+                     (((u64)(state.pcr & state.pcen)) << 29) |
+                     (((u64)(state.sir & state.sien)) << 13) |
+                     (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
+                             state.astrr & (state.asten * 0x3)))
+                      << 3) |
+                     (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
+                             state.astrr & (state.asten * 0xc)))
+                      << 7);
+    cpu->irq_trace_ipr("jISUM", function, isum);
+    return isum;
+  }
   case 0x0f:
     return state.exc_sum; // EXC_SUM
   case 0x10:
@@ -2056,17 +2199,20 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
  * excluded -- classify() never compiles it (it flushes the dpc + bumps the asn
  * epoch). */
 void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
+  cpu->m_jit->note_helper(CJitEngine::HK_MTPR);
   // 0x40-0x7f bitmask group: ASTER/ASTRR/PPCEN/FPEN field stores (+check_int
   // for the AST bits). The ASN write (bit 0, dpc flush + asn-epoch bump) is
   // never compiled -- classify() routes it to OP_NONE.
   if ((function & 0xc0) == 0x40) {
     if (function & 2) {
       cpu->state.aster = (int)(value >> 5) & 0xf;
-      cpu->state.check_int = true;
+      if (cpu->int_deliverable())
+        cpu->state.check_int = true;
     }
     if (function & 4) {
       cpu->state.astrr = (int)(value >> 9) & 0xf;
-      cpu->state.check_int = true;
+      if (cpu->int_deliverable())
+        cpu->state.check_int = true;
     }
     if (function & 8)
       cpu->state.ppcen = (int)(value >> 1) & 1;
@@ -2093,13 +2239,38 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
   case 0x13:
     cpu->flush_icache();
     break;   // IC_FLUSH (lazy flush + deferred reclaim)
+  case 0x0e: // HW_INT_CLR
+    cpu->state.pcr &= ~((value >> 29) & U64(0x3));
+    cpu->state.crr &= ~((value >> 31) & U64(0x1));
+    cpu->state.slr &= ~((value >> 32) & U64(0x1));
+    break;
+  case 0x24: // DTB_IS0
+    cpu->tbis_d(value, cpu->state.asn0);
+    break;
+  case 0xa4: // DTB_IS1
+    cpu->tbis_d(value, cpu->state.asn1);
+    break;
+  case 0xa3: // DTB_IA
+    cpu->tbia(ACCESS_READ);
+    break;
+  case 0x25: // DTB_ASN0
+    cpu->state.asn0 = (int)(value >> 56);
+    cpu->flush_data_page_cache();
+    break;
+  case 0xa5: // DTB_ASN1
+    cpu->state.asn1 = (int)(value >> 56);
+    cpu->flush_data_page_cache();
+    break;
   case 0x09: // CM (current mode)
     cpu->state.cm = (int)(value >> 3) & 3;
-    cpu->state.check_int = true;
+    if (cpu->int_deliverable())
+      cpu->state.check_int = true;
+    cpu->irq_trace_ipr("jMTPR", function, value);
     break;
   case 0x0b: // IER_CM: write CM, then fall into IER
     cpu->state.cm = (int)(value >> 3) & 3;
-    cpu->state.check_int = true;
+    if (cpu->int_deliverable())
+      cpu->state.check_int = true;
     [[fallthrough]];
   case 0x0a: // IER
     cpu->state.asten = (int)(value >> 13) & 1;
@@ -2108,11 +2279,15 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
     cpu->state.cren = (int)(value >> 31) & 1;
     cpu->state.slen = (int)(value >> 32) & 1;
     cpu->state.eien = (int)(value >> 33) & 0x3f;
-    cpu->state.check_int = true; // newly enabled pending ints must be polled
+    if (cpu->int_deliverable())
+      cpu->state.check_int = true; // newly enabled pending ints must be polled
+    cpu->irq_trace_ipr("jMTPR", function, value);
     break;
   case 0x0c: // SIRR (software interrupt request)
     cpu->state.sir = (int)(value >> 13) & 0xfffe;
-    cpu->state.check_int = true;
+    if (cpu->int_deliverable())
+      cpu->state.check_int = true;
+    cpu->irq_trace_ipr("jMTPR", function, value);
     break;
   case 0x11: // I_CTL (terminator; mirrors DO_HW_MTPR)
     cpu->state.i_ctl_other =
@@ -2160,6 +2335,7 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
 // single-slot link thrashing on varying jumps.
 void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_jmp_attempt();
+  cpu->m_jit->note_helper(CJitEngine::HK_INDIRECT);
   CJitEngine::JitBlock *b = cpu->m_jit->lookup(target, (u32)cpu->state.asn);
   if (!b || !b->jit_body)
     return nullptr;
@@ -2178,6 +2354,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   const u64 gen = cpu->m_jit->vgen();
   if (b->vgen == gen) {
     cpu->m_jit->note_jmp_hit();
+    cpu->m_jit->ind_cache_fill(target, b);
     return b->jit_body;
   }
   // SLOW PATH (only right after an ITB invalidate): the in-frame chain bypasses
@@ -2203,6 +2380,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   }
   b->vgen = gen; // re-validated -> fast path henceforth
   cpu->m_jit->note_jmp_hit();
+  cpu->m_jit->ind_cache_fill(target, b);
   return b->jit_body;
 }
 
@@ -2850,6 +3028,19 @@ _next_instruction:
         if ((state.eien & state.eir) || (state.sien & state.sir) ||
             (state.asten &&
              (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
+          { // AXPBOX_IRQSTATS: what the guest is taking interrupts for
+            const u64 pend = (u64)(state.eien & state.eir);
+            for (int b = 0; b < 6; b++)
+              if (pend & (U64(1) << b))
+                g_irqstats.cpu_eir[b].fetch_add(1, std::memory_order_relaxed);
+            if (state.sien & state.sir)
+              g_irqstats.cpu_sw.fetch_add(1, std::memory_order_relaxed);
+            if (state.asten &&
+                (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
+              g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
+            g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
+            irq_trace_entry();
+          }
           GO_PAL(INTERRUPT);
           seq_remaining = 0;
 #ifndef ES40_JIT
@@ -3847,6 +4038,38 @@ static inline bool alpha_valid_va_form(u64 virt, bool va48) {
   return (va48 ? sext_u64_48(virt) : alpha_sext_u64_43(virt)) == virt;
 }
 
+// AXPBOX_IRQTRACE=<n>: log interrupt entries n..n+39 and the IER/SIRR/CM
+// writes and ISUM reads between them (interrupt-storm diagnosis).
+static const long long g_irqtrace_start = [] {
+  const char *e = getenv("AXPBOX_IRQTRACE");
+  return e ? atoll(e) : -1LL;
+}();
+static std::atomic<long long> g_irqtrace_entries{0};
+static std::atomic<bool> g_irqtrace_on{false};
+
+void CAlphaCPU::irq_trace_entry() {
+  if (g_irqtrace_start < 0)
+    return;
+  const long long n = ++g_irqtrace_entries;
+  const bool on = n >= g_irqtrace_start && n < g_irqtrace_start + 40;
+  g_irqtrace_on.store(on, std::memory_order_relaxed);
+  if (on)
+    printf("IRQT INT #%lld pc=%016llx cm=%d sir=%04x sien=%04x eir&eien=%02llx "
+           "asten=%d aster=%x astrr=%x\n",
+           n, (unsigned long long)state.pc, state.cm, state.sir, state.sien,
+           (unsigned long long)(state.eir & state.eien), state.asten,
+           state.aster, state.astrr);
+}
+
+void CAlphaCPU::irq_trace_ipr(const char *what, u32 fn, u64 val) {
+  if (!g_irqtrace_on.load(std::memory_order_relaxed))
+    return;
+  printf("IRQT   %s %02x val=%016llx exc=%016llx -> cm=%d sir=%04x "
+         "sien=%04x\n",
+         what, fn, (unsigned long long)val, (unsigned long long)state.exc_addr,
+         state.cm, state.sir, state.sien);
+}
+
 int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
   int res;
 
@@ -4026,8 +4249,13 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
       }
 
       *phys = spe_phys;
+      // A superpage mapping doesn't involve the TB or the ASN at all, so it
+      // matches every address space. Reporting it as ASM lets instruction
+      // cache lines survive a process switch and lets the JIT keep one
+      // compiled copy of kernel code for all processes (reporting it per-ASN
+      // recompiled the NT kernel on every context switch).
       if (asm_bit)
-        *asm_bit = false;
+        *asm_bit = true;
 #if defined(DEBUG_TB)
       if (forreal)
 #if defined(IDB)
@@ -4379,6 +4607,11 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
     if (state.next_tb[t] == TB_ENTRIES)
       state.next_tb[t] = 0;
   }
+  // The entry being replaced (a same-page refill, or the round-robin victim):
+  // its cached data translation must not outlive it.
+  const bool old_valid = state.tb[t][i].valid;
+  const u64 old_virt = state.tb[t][i].virt;
+  const u64 old_mask = state.tb[t][i].match_mask;
 
   state.tb[t][i].match_mask = match_mask;
   state.tb[t][i].keep_mask = keep_mask;
@@ -4406,8 +4639,13 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
                                   // re-validate
 #endif
 
-  if (t == TB_INDEX_DATA)
-    flush_data_page_cache();
+  if (t == TB_INDEX_DATA) {
+    // Only the replaced entry's and the new entry's pages can change
+    // translation (a wholesale flush here emptied the cache on every miss).
+    if (old_valid)
+      flush_data_page_cache_range(old_virt, old_mask);
+    flush_data_page_cache_range(virt, match_mask);
+  }
 
 #if defined(DEBUG_TB_)
 #if defined(IDB)
@@ -4577,10 +4815,13 @@ void CAlphaCPU::tbis_d(u64 virt, int asn) {
         (state.tb[TB_INDEX_DATA][i].asm_bit ||
          state.tb[TB_INDEX_DATA][i].asn == asn)) {
       state.tb[TB_INDEX_DATA][i].valid = false;
+      flush_data_page_cache_range(state.tb[TB_INDEX_DATA][i].virt,
+                                  state.tb[TB_INDEX_DATA][i].match_mask);
     }
   }
 
-  flush_data_page_cache();
+  // The page itself, whether or not an entry still held it.
+  flush_data_page_cache_range(virt, U64(0xfffffffffffff000) | U64(0x2000));
 }
 
 //\}

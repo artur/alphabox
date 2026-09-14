@@ -36,6 +36,8 @@
 #include "AliM1543C_ide.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include <chrono>
+#include <thread>
 
 #include <math.h>
 
@@ -526,7 +528,7 @@ u32 CAliM1543C_ide::ide_command_read(int index, u32 address, int dsize) {
         SEL_STATUS(index).busy = true;
         SEL_STATUS(index).drive_ready = false;
         UPDATE_ALT_STATUS(index);
-        semController[index]->set(); // wake up the controller.
+        wake_controller(index); // wake up the controller.
 #if defined(DEBUG_IDE_MULTIPLE) || defined(DEBUG_IDE_PACKET)
         printf("Command still in progress, waking up controller.\n");
         printf("-- Packet Phase: %d\n", SEL_COMMAND(index).packet_phase);
@@ -574,6 +576,7 @@ u32 CAliM1543C_ide::ide_command_read(int index, u32 address, int dsize) {
   case REG_COMMAND_STATUS:
 
     // get the status and clear the interrupt.
+    sync_controller(index);
     data = get_status(index);
     deassert_interrupt(index);
 #ifdef DEBUG_IDE_INTERRUPT
@@ -590,6 +593,16 @@ u32 CAliM1543C_ide::ide_command_read(int index, u32 address, int dsize) {
   }
 #endif
   return data;
+}
+
+// AXPBOX_IDETRACE=1: timestamped command / ATAPI packet / bus-master start /
+// interrupt timeline (I/O pacing diagnosis).
+static const bool g_idetrace = getenv("AXPBOX_IDETRACE") != nullptr;
+static const auto g_idetrace_t0 = std::chrono::steady_clock::now();
+static double idetrace_ms() {
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - g_idetrace_t0)
+      .count();
 }
 
 void CAliM1543C_ide::ide_command_write(int index, u32 address, int dsize,
@@ -630,7 +643,11 @@ void CAliM1543C_ide::ide_command_write(int index, u32 address, int dsize,
       SEL_STATUS(index).drq = false;
       SEL_STATUS(index).busy = true;
       UPDATE_ALT_STATUS(index);
-      semController[index]->set(); // wake the controller up.
+      if (g_idetrace && SEL_COMMAND(index).current_command == 0xa0)
+        printf("IDET %10.1f ch%d.%d PKT %02x\n", idetrace_ms(), index,
+               CONTROLLER(index).selected,
+               (unsigned)(CONTROLLER(index).data[0] & 0xff));
+      wake_controller(index); // wake the controller up.
     }
 
     if (CONTROLLER(index).data_ptr > IDE_BUFFER_SIZE) {
@@ -701,6 +718,15 @@ void CAliM1543C_ide::ide_command_write(int index, u32 address, int dsize,
 
     SEL_COMMAND(index).command_in_progress = false;
     SEL_COMMAND(index).current_command = data;
+    if (g_idetrace)
+      printf(
+          "IDET %10.1f ch%d.%d CMD %02x feat=%02x cnt=%02x lba=%x/%04x/%02x\n",
+          idetrace_ms(), index, CONTROLLER(index).selected, (unsigned)data,
+          (unsigned)SEL_REGISTERS(index).features,
+          (unsigned)SEL_REGISTERS(index).sector_count,
+          (unsigned)SEL_REGISTERS(index).head_no,
+          (unsigned)SEL_REGISTERS(index).cylinder_no,
+          (unsigned)SEL_REGISTERS(index).sector_no);
 #ifdef DEBUG_IDE_CMD
     printf("%%IDE-I-CMD: Command %02x issued on controller %d, disk %d.\n",
            data, index, CONTROLLER(index).selected);
@@ -715,7 +741,7 @@ void CAliM1543C_ide::ide_command_write(int index, u32 address, int dsize,
       UPDATE_ALT_STATUS(index);
       SEL_COMMAND(index).command_in_progress = true;
       SEL_COMMAND(index).packet_phase = PACKET_NONE;
-      semController[index]->set(); // wake up the controller.
+      wake_controller(index); // wake up the controller.
     } else {
 
       // this is a nop, so we cancel everything that's pending and
@@ -731,6 +757,7 @@ u32 CAliM1543C_ide::ide_control_read(int index, u32 address) {
   u32 data = 0;
   switch (address) {
   case 0: {
+    sync_controller(index);
     SCOPED_READ_LOCK(mtRegisters[index]);
     // Compute live from current status flags rather than reading the
     // cached alt_status, which only gets refreshed at UPDATE_ALT_STATUS
@@ -929,6 +956,9 @@ void CAliM1543C_ide::ide_busmaster_write(int index, u32 address, u32 data,
 
       // set the status register
       CONTROLLER(index).busmaster[2] |= 0x01;
+      if (g_idetrace)
+        printf("IDET %10.1f ch%d BM start %02x\n", idetrace_ms(), index,
+               (unsigned)data);
       semBusMaster[index]->set(); // wake up the controller for busmastering
     } else {
 
@@ -1033,6 +1063,8 @@ void CAliM1543C_ide::raise_interrupt(int index) {
     }
     UPDATE_ALT_STATUS(index);
     CONTROLLER(index).interrupt_pending = true;
+    if (g_idetrace)
+      printf("IDET %10.1f ch%d IRQ\n", idetrace_ms(), index);
     if (channel_is_native(index))
       do_pci_interrupt(0, true);
     else
@@ -2374,6 +2406,7 @@ int CAliM1543C_ide::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   u8 status = 0;
   u8 count = 0;
   u32 prd;
+  work_done[index].store(work_queued[index].load()); // parked on the guest
   semBusMaster[index]->wait(); // wait until the start bit is set.
   {
     SCOPED_READ_LOCK(mtBusMaster[index]);
@@ -2462,12 +2495,37 @@ int CAliM1543C_ide::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
 /**
  * Thread entry point.
  **/
+void CAliM1543C_ide::wake_controller(int index) {
+  work_queued[index].fetch_add(1);
+  semController[index]->set();
+}
+
+/**
+ * Give the controller thread a moment to finish work the guest just queued
+ * before reporting status. Firmware polls BSY right after issuing a command or
+ * draining a data block and, when it is still set, stalls a whole delay unit
+ * (a busy-wait on RPCC, i.e. real time) before looking again -- the Windows
+ * setup loader spent ~87% of its time in that stall. The host thread normally
+ * finishes in well under a millisecond; the wait is bounded so a command that
+ * legitimately stays busy costs at most a couple of milliseconds per poll.
+ **/
+void CAliM1543C_ide::sync_controller(int index) {
+  if (work_done[index].load() >= work_queued[index].load())
+    return;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+  while (work_done[index].load() < work_queued[index].load() &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+}
+
 void CAliM1543C_ide::run(int index) {
   try {
     for (;;) {
       semController[index]->wait();
       if (StopThread)
         return;
+      const u64 queued = work_queued[index].load();
       {
 #ifdef DEBUG_IDE_THREADS
         printf("Thread %d: \n", index);
@@ -2476,6 +2534,7 @@ void CAliM1543C_ide::run(int index) {
         if (SEL_COMMAND(index).command_in_progress)
           execute(index);
         UPDATE_ALT_STATUS(index);
+        work_done[index].store(queued);
 
 #ifdef IDE_YIELD_INTERRUPTS
         if (CONTROLLER(index).interrupt_pending) {

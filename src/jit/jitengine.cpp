@@ -5,6 +5,7 @@
 #include <cassert>
 #include <chrono> // note_exec times its own stats-print I/O (excluded from the wall-clock RPCC)
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 #define ASMJIT_STATIC
@@ -166,6 +167,10 @@ enum SafeOp {
                   // KERNEL mode
   OP_HW_LDL_WCHK, // HW_LD (0x1b) func 0xa: longword virtual read + write-check
                   // (WrChk)
+  OP_HW_LDL_VPTE, // HW_LD (0x1b) func 4: longword VPTE fetch (jit_read_vpte,
+                  // 32)
+  OP_HW_LD_VIRT,  // HW_LD (0x1b) func 8/9/12/13: virtual load, current/alt mode
+  OP_HW_ST_VIRT, // HW_ST (0x1f) func 4/5/12/13: virtual store, current/alt mode
   OP_HW_MTPR, // HW_MTPR (0x1d) side-effect-free IPRs, PALmode only: IPR[fn] =
               // Rb
   OP_HW_MTPR_TERM, // HW_MTPR I_CTL (0x11): writes SDE/SPE/VA mode -> terminate,
@@ -589,6 +594,14 @@ SafeOp classify(uint32_t ins, bool pal_block) {
         return OP_NONE; // Ra==31: probe-only, interpret for the fault
       return OP_HW_LDL_WCHK;
     }
+    if (f == 4 || f == 8 || f == 9 || f == 12 || f == 13) {
+      // Virtual forms (HRM TYPE 0102/1002/1102): translated loads through the
+      // side-effect-free read helpers (alt forms check DTB_ALTMODE); a miss or
+      // fault bails so the interpreter vectors it. Ra==31: interpret.
+      if (((ins >> 21) & 0x1f) == 31)
+        return OP_NONE;
+      return (f == 4) ? OP_HW_LDL_VPTE : OP_HW_LD_VIRT;
+    }
     return OP_NONE;
   }
   case 0x1d: { // HW_MTPR (PALmode): compile the pure-store IPRs, the TB fills
@@ -596,9 +609,11 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     // invalidates (idempotent tbia/tbiap/tbis -> note_itb_invalidate), IC_FLUSH
     // (lazy flush; reclaim deferred off the compiled frame), I_CTL (terminator:
     // writes SDE/SPE/VA mode), CM/SIRR (mode + soft-int fields, check_int
-    // kick), and the 0x40-7f AST/FPEN/PPCEN stores. DTB invalidates (dpc
-    // coherence), ASN writes, HW_INT_CLR, PAL_BASE, VA_CTL (translation/flush)
-    // stay interpreted.
+    // kick), the 0x40-7f AST/FPEN/PPCEN stores, HW_INT_CLR (request-bit
+    // clears), and the DTB invalidates / data ASNs (idempotent tbis_d/tbia and
+    // dpc flushes: compiled loads re-probe the dpc after the helper returns).
+    // The ITB ASN write, PAL_BASE and VA_CTL (translation/flush) stay
+    // interpreted.
     if (!pal_block)
       return OP_NONE;
     const uint32_t mfn = (ins >> 8) & 0xff;
@@ -626,6 +641,12 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     case 0x09:
     case 0x0b:
     case 0x0c: // CM, IER_CM, SIRR (mode/soft-int fields + check_int)
+    case 0x0e: // HW_INT_CLR (the most frequent block breaker under NT)
+    case 0x24:
+    case 0xa4: // DTB_IS0, DTB_IS1
+    case 0xa3: // DTB_IA
+    case 0x25:
+    case 0xa5: // DTB_ASN0, DTB_ASN1
       return OP_HW_MTPR;
     case 0x11: // I_CTL: changes SDE (shadow remap)/SPE/VA mode -> terminate
       return OP_HW_MTPR_TERM;
@@ -651,6 +672,8 @@ SafeOp classify(uint32_t ins, bool pal_block) {
       return OP_HW_STL;
     if (f == 1)
       return OP_HW_STQ;
+    if (f == 4 || f == 5 || f == 12 || f == 13)
+      return OP_HW_ST_VIRT; // virtual store, current (4/5) or alt (12/13) mode
     return OP_NONE;
   }
   case 0x1a:
@@ -773,12 +796,28 @@ CJitEngine::CJitEngine(int cpu_id)
   m_traces_enabled = false;
 #endif
   m_rt = new asmjit::JitRuntime();
+  if (const char *ca = getenv("AXPBOX_JIT_COMPILE_AFTER")) {
+    const long v = atol(ca);
+    if (v >= 1 && v <= 1000000)
+      m_compile_after = (uint32_t)v;
+    if (cpu_id == 0)
+      printf("[JIT] compiling blocks after %u interpreted passes\n",
+             m_compile_after);
+  }
 #ifdef JIT_VERIFY
   m_v_exec = m_v_fail = 0;
 #endif
 #ifdef JIT_STATS
   m_stat_native = m_stat_interp = m_stat_hot = m_stat_miss = 0;
   m_stat_compiled = m_stat_plen_sum = m_stat_code_bytes = 0;
+  m_stat_reclaims = 0;
+  memset(m_cold_n, 0, sizeof(m_cold_n));
+  memset(m_cold_instr, 0, sizeof(m_cold_instr));
+  memset(m_cold_op, 0, sizeof(m_cold_op));
+  memset(m_done0_op, 0, sizeof(m_done0_op));
+  memset(m_bail_kind, 0, sizeof(m_bail_kind));
+  memset(m_hot_pc, 0, sizeof(m_hot_pc));
+  memset(m_helper_n, 0, sizeof(m_helper_n));
   m_stat_wall_last_ns =
       (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
@@ -901,6 +940,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.prefix_len = 0;
   b.compiled = false;
   b.hot = 0; // fresh block: restart the trace-promotion counter
+  b.cold_runs = 0; // fresh block: restart the hotness count
 #ifdef JIT_REGPROF
   b.rp_hits = 0; // fresh block: restart the exec counter (resurrect/revalidate
                  // keep theirs)
@@ -1047,8 +1087,12 @@ void CJitEngine::reclaim_code() {
   delete (asmjit::JitRuntime *)m_rt;
   m_rt = new asmjit::JitRuntime();
   m_code_bytes = 0;
+#ifdef JIT_STATS
+  m_stat_reclaims++;
+#endif
   m_reclaim_pending =
       false; // a reclaim (cold-path or deferred) satisfies any pending request
+  memset(m_ind_cache, 0, sizeof(m_ind_cache)); // bodies just freed
   for (int i = 0; i < kCacheEntries; ++i) {
     m_blocks[i].valid = false;
     m_blocks[i].code = nullptr;
@@ -1747,12 +1791,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // verify, bails on MMIO so the interpreter does the ordered device read).
     // disp is 12-bit here, not the 16-bit memory-format displacement.
     if (op == OP_HW_LDL || op == OP_HW_LDQ || op == OP_HW_LDQ_VPTE ||
-        op == OP_HW_LDL_WCHK) {
+        op == OP_HW_LDL_WCHK || op == OP_HW_LDL_VPTE || op == OP_HW_LD_VIRT) {
       if (ra == 31)
         continue; // R31 dest discards the read
       const int disp =
           (int)((int32_t)(ins << 20) >> 20); // sign-extend 12-bit displacement
-      const int size_bits = (op == OP_HW_LDL || op == OP_HW_LDL_WCHK) ? 32 : 64;
+      const uint32_t ld_fn = (ins >> 12) & 0xf;
+      const bool ld_virt = (op == OP_HW_LD_VIRT || op == OP_HW_LDL_VPTE);
+      const int size_bits = ld_virt ? ((ld_fn & 1) ? 64 : 32)
+                            : (op == OP_HW_LDL || op == OP_HW_LDL_WCHK) ? 32
+                                                                        : 64;
+      // bit 8 of the size argument selects DTB_ALTMODE (jit_read)
+      const uint32_t size_arg =
+          (uint32_t)size_bits |
+          ((op == OP_HW_LD_VIRT && ld_fn >= 12) ? 0x100u : 0u);
       if (rb == 31)
         a.mov(x86::rdx,
               imm(disp)); // address (phys, or virtual for VPTE) -> RDX
@@ -1763,13 +1815,12 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
       // func 5 -> jit_read_vpte (kernel-checked virtual read); else
       // jit_read_phys
-      emit_call(op == OP_HW_LDQ_VPTE   ? read_vpte_helper
-                : op == OP_HW_LDL_WCHK ? read_wchk_helper
-                                       : hw_ld_helper,
-                {{JA_CPU, 0},
-                 {JA_VA, 0},
-                 {JA_I32, (uint64_t)size_bits},
-                 {JA_OUT, 0}});
+      emit_call(
+          (op == OP_HW_LDQ_VPTE || op == OP_HW_LDL_VPTE) ? read_vpte_helper
+          : op == OP_HW_LDL_WCHK                         ? read_wchk_helper
+          : op == OP_HW_LD_VIRT                          ? read_helper
+                                                         : hw_ld_helper,
+          {{JA_CPU, 0}, {JA_VA, 0}, {JA_I32, (uint64_t)size_arg}, {JA_OUT, 0}});
       Label ok = a.new_label();
       a.test(x86::eax, x86::eax);
       a.jz(ok);
@@ -1783,7 +1834,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // MO_LESL; the EV68CB HRM is silent but the Alpha longword-canonical rule
       // applies, same as LDL). NOTE: the interp's DO_HW_LDL zero-extends --
       // that is the bug, fixed in cpu_pal.h to match this.
-      if (op == OP_HW_LDL || op == OP_HW_LDL_WCHK)
+      if (size_bits == 32)
         a.movsxd(x86::rax, x86::dword_ptr(x86::rsp, 32));
       else
         a.mov(x86::rax,
@@ -1855,10 +1906,17 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // translation. jit_write_phys does the aligned DRAM write (or compares the
     // logged store in verify, bails on MMIO). disp is 12-bit here, not the
     // 16-bit memory-format displacement.
-    if (op == OP_HW_STL || op == OP_HW_STQ) {
+    if (op == OP_HW_STL || op == OP_HW_STQ || op == OP_HW_ST_VIRT) {
       const int disp =
           (int)((int32_t)(ins << 20) >> 20); // sign-extend 12-bit displacement
-      const int size_bits = (op == OP_HW_STQ) ? 64 : 32;
+      const uint32_t st_fn = (ins >> 12) & 0xf;
+      const int size_bits = (op == OP_HW_ST_VIRT)
+                                ? ((st_fn & 1) ? 64 : 32)
+                                : ((op == OP_HW_STQ) ? 64 : 32);
+      // bit 8 of the size argument selects DTB_ALTMODE (jit_write)
+      const uint32_t size_arg =
+          (uint32_t)size_bits |
+          ((op == OP_HW_ST_VIRT && st_fn >= 12) ? 0x100u : 0u);
       if (rb == 31)
         a.mov(x86::rdx, imm(disp)); // phys addr -> RDX
       else {
@@ -1867,10 +1925,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.add(x86::rdx, imm(disp));
       }
       emit_call(
-          hw_st_helper,
+          op == OP_HW_ST_VIRT ? write_helper : hw_st_helper,
           {{JA_CPU, 0},
            {JA_VA, 0},
-           {JA_I32, (uint64_t)size_bits},
+           {JA_I32, (uint64_t)size_arg},
            {JA_GPZ, (uint64_t)ra}}); // jit_write_phys(cpu, phys, size, value)
       Label ok = a.new_label();
       a.test(x86::eax, x86::eax);
@@ -2336,7 +2394,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         dbl_bail(x86::xmm0, true,
                  bail); // Inf/NaN(neg)/denormal result -> interp
       } else {
-        a.cvtsd2ss(x86::xmm0, x86::xmm0);
+        // The S operand must be exact in single precision: the interpreter
+        // takes the root of the full register value, so a narrowing that
+        // rounds would give a different result -> interp.
+        a.cvtsd2ss(x86::xmm2, x86::xmm0);
+        a.cvtss2sd(x86::xmm3, x86::xmm2);
+        a.movq(x86::rax, x86::xmm3);
+        a.movq(x86::rcx, x86::xmm0);
+        a.cmp(x86::rax, x86::rcx);
+        a.jne(bail);
+        a.movaps(x86::xmm0, x86::xmm2);
         a.sqrtss(x86::xmm0, x86::xmm0);
         sgl_bail(x86::xmm0, true,
                  bail); // Inf/NaN(neg)/denormal result -> interp
@@ -3950,6 +4017,140 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
     hist[best] = 0;
   }
   printf("%s\n", buf);
+  {
+    static const char *const kColdNames[CR_COUNT] = {
+        "nophys", "noblock", "nothot",  "uncompilable", "stale",
+        "int",    "timer",   "pal!sde", "budget",       "done0"};
+    len = snprintf(
+        buf, sizeof(buf),
+        "[JIT][STATS][CPU%d] cold-path instr/entries by reason:", m_cpu_id);
+    for (int r = 0; r < CR_COUNT && len < (int)sizeof(buf) - 48; ++r)
+      if (m_cold_n[r])
+        len += snprintf(buf + len, sizeof(buf) - len, " %s=%llu/%llu",
+                        kColdNames[r], (unsigned long long)m_cold_instr[r],
+                        (unsigned long long)m_cold_n[r]);
+    printf("%s\n", buf);
+    uint64_t ops[64];
+    memcpy(ops, m_cold_op, sizeof(ops));
+    len = snprintf(buf, sizeof(buf),
+                   "[JIT][STATS][CPU%d]   uncompilable-start first opcode "
+                   "(interp instrs):",
+                   m_cpu_id);
+    for (int rank = 0; rank < 6 && len < (int)sizeof(buf) - 32; ++rank) {
+      int best = -1;
+      uint64_t bestv = 0;
+      for (int op = 0; op < 64; ++op)
+        if (ops[op] > bestv) {
+          bestv = ops[op];
+          best = op;
+        }
+      if (best < 0)
+        break;
+      len += snprintf(buf + len, sizeof(buf) - len, " %s(0x%02x)=%llu",
+                      opcode_name(best), best, (unsigned long long)bestv);
+      ops[best] = 0;
+    }
+    printf("%s\n", buf);
+    memcpy(ops, m_done0_op, sizeof(ops));
+    len = snprintf(
+        buf, sizeof(buf),
+        "[JIT][STATS][CPU%d]   done0 first opcode (entries):", m_cpu_id);
+    for (int rank = 0; rank < 8 && len < (int)sizeof(buf) - 32; ++rank) {
+      int best = -1;
+      uint64_t bestv = 0;
+      for (int op = 0; op < 64; ++op)
+        if (ops[op] > bestv) {
+          bestv = ops[op];
+          best = op;
+        }
+      if (best < 0)
+        break;
+      len += snprintf(buf + len, sizeof(buf) - len, " %s(0x%02x)=%llu",
+                      opcode_name(best), best, (unsigned long long)bestv);
+      ops[best] = 0;
+    }
+    printf("%s\n", buf);
+    printf("[JIT][STATS][CPU%d]   helper bails read/write: unaligned %llu/%llu "
+           "| tbmiss %llu/%llu | acv %llu/%llu | fault %llu/%llu | mmio "
+           "%llu/%llu\n",
+           m_cpu_id, (unsigned long long)m_bail_kind[0][BK_UNALIGNED],
+           (unsigned long long)m_bail_kind[1][BK_UNALIGNED],
+           (unsigned long long)m_bail_kind[0][BK_TB_MISS],
+           (unsigned long long)m_bail_kind[1][BK_TB_MISS],
+           (unsigned long long)m_bail_kind[0][BK_ACV],
+           (unsigned long long)m_bail_kind[1][BK_ACV],
+           (unsigned long long)m_bail_kind[0][BK_FAULT],
+           (unsigned long long)m_bail_kind[1][BK_FAULT],
+           (unsigned long long)m_bail_kind[0][BK_MMIO],
+           (unsigned long long)m_bail_kind[1][BK_MMIO]);
+    if (++m_hot_win % 5 == 0) {
+      HotPc top[10] = {};
+      for (const HotPc &h : m_hot_pc)
+        for (int k = 0; k < 10; ++k)
+          if (h.n > top[k].n) {
+            memmove(&top[k + 1], &top[k], (9 - k) * sizeof(HotPc));
+            top[k] = h;
+            break;
+          }
+      len = snprintf(
+          buf, sizeof(buf),
+          "[JIT][STATS][CPU%d]   hot chain-entry pcs (instr):", m_cpu_id);
+      for (int k = 0; k < 10 && top[k].n && len < (int)sizeof(buf) - 40; ++k)
+        len += snprintf(buf + len, sizeof(buf) - len, " %llx=%llu",
+                        (unsigned long long)top[k].pc,
+                        (unsigned long long)top[k].n);
+      printf("%s\n", buf);
+      // Guest words around the top entries (kept inside the entry's page,
+      // which is DRAM: a block was compiled from it).
+      for (int k = 0; k < 3 && top[k].n && m_hot_dram; ++k) {
+        const uint64_t page = top[k].phys & ~UINT64_C(0x1FFF);
+        uint64_t p = (top[k].phys & ~UINT64_C(3)) >= page + 16
+                         ? (top[k].phys & ~UINT64_C(3)) - 16
+                         : page;
+        if (p + 96 > page + 0x2000)
+          p = page + 0x2000 - 96;
+        len = snprintf(
+            buf, sizeof(buf), "[JIT][STATS][CPU%d]   code %llx:", m_cpu_id,
+            (unsigned long long)(top[k].pc -
+                                 ((top[k].phys & ~UINT64_C(3)) - p)));
+        for (int w = 0; w < 24; ++w) {
+          uint32_t word;
+          memcpy(&word, m_hot_dram + p + 4 * w, 4);
+          len += snprintf(buf + len, sizeof(buf) - len, " %08x", word);
+        }
+        printf("%s\n", buf);
+      }
+      memset(m_hot_pc, 0, sizeof(m_hot_pc));
+    }
+    {
+      const uint64_t fl = m_dpc_flush_src ? *m_dpc_flush_src : 0;
+      printf("[JIT][STATS][CPU%d]   helper calls: read %llu write %llu locked "
+             "%llu stc %llu indirect %llu read_phys %llu write_phys %llu mtpr "
+             "%llu mfpr %llu | dpc flushes %llu\n",
+             m_cpu_id, (unsigned long long)m_helper_n[HK_READ],
+             (unsigned long long)m_helper_n[HK_WRITE],
+             (unsigned long long)m_helper_n[HK_LOCKED],
+             (unsigned long long)m_helper_n[HK_STC],
+             (unsigned long long)m_helper_n[HK_INDIRECT],
+             (unsigned long long)m_helper_n[HK_READ_PHYS],
+             (unsigned long long)m_helper_n[HK_WRITE_PHYS],
+             (unsigned long long)m_helper_n[HK_MTPR],
+             (unsigned long long)m_helper_n[HK_MFPR],
+             (unsigned long long)(fl - m_dpc_flush_last));
+      m_dpc_flush_last = fl;
+      memset(m_helper_n, 0, sizeof(m_helper_n));
+    }
+    memset(m_cold_n, 0, sizeof(m_cold_n));
+    memset(m_cold_instr, 0, sizeof(m_cold_instr));
+    memset(m_cold_op, 0, sizeof(m_cold_op));
+    memset(m_done0_op, 0, sizeof(m_done0_op));
+    memset(m_bail_kind, 0, sizeof(m_bail_kind));
+  }
+  printf("[JIT][STATS][CPU%d] code cache: %.1f MB live of %.0f MB budget | "
+         "%llu reclaims\n",
+         m_cpu_id, (double)m_code_bytes / (1024.0 * 1024.0),
+         (double)kReclaimBytes / (1024.0 * 1024.0),
+         (unsigned long long)m_stat_reclaims);
   if (m_term_op[0]) { // CALL_PAL cut blocks -- show which function codes
                       // dominate (chain targets)
     len = snprintf(buf, sizeof(buf),
