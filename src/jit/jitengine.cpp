@@ -8,14 +8,19 @@
 #include <cstring>
 #include <initializer_list>
 #define ASMJIT_STATIC
-#include <asmjit/x86.h>
 
-// asmjit's x64 backend emits x86-64; asmjit's CallConv maps the host C ABI
-// (Microsoft x64 or System V) from the build env. Block any other host arch
-// rather than silently emit for a 32-bit or non-x86 target. (until ARM is
-// added) I don't forsee ever wanting to add or use 32-bit x86.
-#if !defined(_M_X64) && !defined(__x86_64__)
-#error "ES40_JIT requires an x86-64 host (asmjit x64 backend emits 64-bit code)"
+// asmjit's x64 backend emits x86-64 (CallConv maps the host C ABI, Microsoft
+// x64 or System V, from the build env); its a64 backend emits AArch64 (AAPCS64,
+// see jitemit_a64.hpp). Block any other host arch rather than silently emit
+// for the wrong target.
+#if defined(_M_X64) || defined(__x86_64__)
+#define JIT_HOST_X64 1
+#include <asmjit/x86.h>
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define JIT_HOST_A64 1
+#include <asmjit/a64.h>
+#else
+#error "ES40_JIT requires an x86-64 or AArch64 host"
 #endif
 
 namespace {
@@ -211,15 +216,19 @@ static inline bool is_terminator(SafeOp op) {
 // CTLZ/CTTZ use baseline BSR/BSF, so only CTPOP is gated -- it stays
 // interpreted when the host lacks POPCNT.
 static bool host_has_popcnt() {
+#ifdef JIT_HOST_X64
   static const bool ok = asmjit::CpuInfo::host().features().x86().has_popcnt();
   return ok;
+#else
+  return true; // AArch64: CTPOP is emitted as a SWAR popcount (no feature gate)
+#endif
 }
 
 // Safe = goto-free, register-only operate-format ops (no trap, memory, or
 // branch). pal_block enables PALmode-only ops (HW_MFPR): outside PALmode they'd
 // OPCDEC, so only compile them when the block is PALmode (the dispatcher keys
 // blocks by PC bit 0).
-SafeOp classify(uint32_t ins, bool pal_block) {
+static SafeOp classify_op(uint32_t ins, bool pal_block) {
   uint32_t opcode = ins >> 26;
   uint32_t func = (ins >> 5) & 0x7F;
   switch (opcode) {
@@ -743,6 +752,48 @@ SafeOp classify(uint32_t ins, bool pal_block) {
   return OP_NONE;
 }
 
+#ifdef JIT_HOST_A64
+// AArch64 backend coverage: the inline IEEE FP paths are written against SSE
+// semantics (MXCSR rounding, cvt* indefinite results) and have no a64 port
+// yet, so they stay interpreted -- they end the compiled prefix like any other
+// uncompilable op. Everything else in classify_op() has an a64 emitter.
+static bool a64_supported(SafeOp op) {
+  switch (op) {
+  case OP_CVTQT:
+  case OP_CVTQS:
+  case OP_ADDT:
+  case OP_SUBT:
+  case OP_MULT:
+  case OP_DIVT:
+  case OP_CMPTUN:
+  case OP_CMPTEQ:
+  case OP_CMPTLT:
+  case OP_CMPTLE:
+  case OP_ADDS:
+  case OP_SUBS:
+  case OP_MULS:
+  case OP_DIVS:
+  case OP_CVTST:
+  case OP_CVTTS:
+  case OP_CVTTQ:
+  case OP_SQRTS:
+  case OP_SQRTT:
+    return false;
+  default:
+    return true;
+  }
+}
+#endif
+
+SafeOp classify(uint32_t ins, bool pal_block) {
+  const SafeOp op = classify_op(ins, pal_block);
+#ifdef JIT_HOST_A64
+  if (!a64_supported(op))
+    return OP_NONE;
+#endif
+  return op;
+}
+
 } // namespace
 
 // Defined further down; forward-declared so compile_block's punch-list print
@@ -1187,6 +1238,7 @@ static uint32_t regprof_mask(const uint32_t *w, uint32_t n) {
 // with the trace's own hot regs (the M2 regalloc spike).
 static const int kGlobalPins[3] = {26, 16, 27};
 
+#ifdef JIT_HOST_X64
 void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                          const HelperSet &hs, bool pal_block, JitBlock *b,
                          uint32_t ins, uint32_t i, RegAlloc &regalloc) {
@@ -3019,6 +3071,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       mov_to_reg(rc, x86::rax);
   } while (0);
 }
+#endif // JIT_HOST_X64
 
 void CJitEngine::compile_block(
     JitBlock *b, const uint8_t *dram, uint64_t dram_size, void *read_helper,
@@ -3119,6 +3172,48 @@ void CJitEngine::compile_block(
       words, plen); // GPR-access fingerprint; exec-weighted at report time
 #endif
 
+  const HelperSet hs = {
+      read_helper,        write_helper,    opcdec_helper, hw_mfpr_helper,
+      hw_ld_helper,       hw_mtpr_helper,  hw_st_helper,  indirect_helper,
+      read_locked_helper, stc_helper,      misc_helper,   read_vpte_helper,
+      read_wchk_helper,   itof_helper,     ftoi_helper,   fltl_helper,
+      fp_read_helper,     fp_write_helper, fltv_helper};
+  JitFn fn = nullptr;
+  uint32_t body_off = 0;
+  size_t csz = 0;
+  if (!assemble_block(b, words, plen, terminator_branch, terminator_jmp, hs,
+                      &fn, &body_off, &csz))
+    return;
+  b->code = fn;
+  b->jit_body = (void *)((uint8_t *)(void *)fn +
+                         body_off); // chained re-entry (past prologue)
+  b->body_off = (uint32_t)body_off; // to restore jit_body on revalidate
+  b->src_sum = src_hash(
+      dram + phys, b->n_instr); // source fingerprint (revalidate vs self-mod)
+  b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
+  b->prefix_len = plen;
+  m_code_bytes += csz; // track for the reclaim threshold (see flush())
+#ifdef JIT_STATS
+  m_stat_compiled++;
+  m_stat_plen_sum += plen;
+  m_stat_code_bytes += csz;
+#endif
+#ifdef JIT_REGPROF
+  b->rp_csz = (uint32_t)csz; // exec-weighted expansion: sum(rp_hits*rp_csz) /
+                             // sum(rp_hits*prefix_len)
+#endif
+}
+
+#ifdef JIT_HOST_X64
+bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
+                                uint32_t plen, bool terminator_branch,
+                                bool terminator_jmp, const HelperSet &hs,
+                                JitFn *out_fn, uint32_t *out_body_off,
+                                size_t *out_csz) {
+  using namespace asmjit;
+  const bool pal_block = (b->tag & 1) != 0;
+  void *const indirect_helper = hs.indirect_helper; // computed-jump chain
+
   // Emit  uint32_t fn(CAlphaCPU* cpu, uint64_t* regs)  (Win64: cpu=RCX,
   // regs=RDX). Keep cpu in RBP and regs in RBX (callee-saved, so they survive
   // helper calls); reserve a 40-byte frame (32 shadow + 8 load-out slot) that
@@ -3126,7 +3221,7 @@ void CJitEngine::compile_block(
   // variable shifts).
   CodeHolder code;
   if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
-    return;
+    return false;
 #ifdef JIT_DISASM
   // Dev: capture this block's disassembly, validate each emitted instruction,
   // and trap any emit failure (dumped + bailed near rt->add() below). Logging
@@ -3231,13 +3326,6 @@ void CJitEngine::compile_block(
   ra.host[29] = (int)x86::rsi.id(); // GP (Win64)
   ra.host[0] = (int)x86::rdi.id();  // v0 (Win64)
 #endif
-
-  const HelperSet hs = {
-      read_helper,        write_helper,    opcdec_helper, hw_mfpr_helper,
-      hw_ld_helper,       hw_mtpr_helper,  hw_st_helper,  indirect_helper,
-      read_locked_helper, stc_helper,      misc_helper,   read_vpte_helper,
-      read_wchk_helper,   itof_helper,     ftoi_helper,   fltl_helper,
-      fp_read_helper,     fp_write_helper, fltv_helper};
 
   for (uint32_t i = 0; i < plen; ++i)
     emit_op(&a, gpa, &done, hs, pal_block, b, words[i], i, ra);
@@ -3410,29 +3498,16 @@ void CJitEngine::compile_block(
         out); // per-block flush: preserve the trace if JIT'd code later crashes
   }
   if (eh.failed)
-    return; // emit error already reported -- don't ship a broken block
+    return false; // emit error already reported -- don't ship a broken block
 #endif
   if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
-    return;
-  b->code = fn;
-  b->jit_body = (void *)((uint8_t *)(void *)fn +
-                         body_off); // chained re-entry (past prologue)
-  b->body_off = (uint32_t)body_off; // to restore jit_body on revalidate
-  b->src_sum = src_hash(
-      dram + phys, b->n_instr); // source fingerprint (revalidate vs self-mod)
-  b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
-  b->prefix_len = plen;
-  m_code_bytes += csz; // track for the reclaim threshold (see flush())
-#ifdef JIT_STATS
-  m_stat_compiled++;
-  m_stat_plen_sum += plen;
-  m_stat_code_bytes += csz;
-#endif
-#ifdef JIT_REGPROF
-  b->rp_csz = (uint32_t)csz; // exec-weighted expansion: sum(rp_hits*rp_csz) /
-                             // sum(rp_hits*prefix_len)
-#endif
+    return false;
+  *out_fn = fn;
+  *out_body_off = (uint32_t)body_off;
+  *out_csz = csz;
+  return true;
 }
+#endif // JIT_HOST_X64
 
 // Compile an N-block trace. Reuses the shared emit_op for each block's per-op
 // codegen (so the body is the exact one the block path already verifies).
@@ -3456,9 +3531,43 @@ void CJitEngine::compile_trace(TraceFragment *t, JitBlock **blocks,
       return;
   }
 
+  JitFn fn = nullptr;
+  size_t csz = 0;
+  if (!assemble_trace(blocks, n_blocks, dram, hs, &fn, &csz))
+    return;
+  uint32_t total = 0;
+  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
+    JitBlock *b = blocks[bi];
+    t->segs[bi] = {b->tag,        b->phys,
+                   b->prefix_len, b->asm_global,
+                   b->asn,        src_hash(dram + b->phys, b->prefix_len)};
+    total += b->prefix_len;
+  }
+  t->code = fn;
+  t->head_tag = blocks[0]->tag;
+  t->asn = blocks[0]->asn;
+  t->asm_global = blocks[0]->asm_global;
+  t->valid = true;
+  t->vgen = m_itb_gen + m_flush_gen;
+  t->flush_gen = m_flush_gen;
+  t->n_blocks = n_blocks;
+  t->n_instr = total;
+  t->n_segs = n_blocks;
+  t->n_exits = 0;
+  m_code_bytes += csz;
+#ifdef JIT_STATS
+  m_trace_formed++;
+#endif
+}
+
+#ifdef JIT_HOST_X64
+bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
+                                const uint8_t *dram, const HelperSet &hs,
+                                JitFn *out_fn, size_t *out_csz) {
+  using namespace asmjit;
   CodeHolder code;
   if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
-    return;
+    return false;
   x86::Assembler a(&code);
   CallConv cc;
   (void)cc.init(CallConvId::kCDecl, ((JitRuntime *)m_rt)->environment());
@@ -3600,31 +3709,16 @@ void CJitEngine::compile_trace(TraceFragment *t, JitBlock **blocks,
   const size_t csz = code.code_size();
   JitFn fn = nullptr;
   if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
-    return;
-  uint32_t total = 0;
-  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-    JitBlock *b = blocks[bi];
-    t->segs[bi] = {b->tag,        b->phys,
-                   b->prefix_len, b->asm_global,
-                   b->asn,        src_hash(dram + b->phys, b->prefix_len)};
-    total += b->prefix_len;
-  }
-  t->code = fn;
-  t->head_tag = blocks[0]->tag;
-  t->asn = blocks[0]->asn;
-  t->asm_global = blocks[0]->asm_global;
-  t->valid = true;
-  t->vgen = m_itb_gen + m_flush_gen;
-  t->flush_gen = m_flush_gen;
-  t->n_blocks = n_blocks;
-  t->n_instr = total;
-  t->n_segs = n_blocks;
-  t->n_exits = 0;
-  m_code_bytes += csz;
-#ifdef JIT_STATS
-  m_trace_formed++;
-#endif
+    return false;
+  *out_fn = fn;
+  *out_csz = csz;
+  return true;
 }
+#endif // JIT_HOST_X64
+
+#ifdef JIT_HOST_A64
+#include "jitemit_a64.hpp" // AArch64 emit_op / assemble_block / assemble_trace
+#endif
 
 #ifdef JIT_VERIFY
 uint64_t CJitEngine::verify_compare(uint64_t blk_virt, const uint64_t *interp,

@@ -83,7 +83,7 @@ statically and pcap is loaded dynamically).
 
 ### JIT
 
-See the x86-64 JIT section below for the optional asmjit-based JIT lane.
+See the JIT section below for the optional asmjit-based JIT lane (x86-64 and AArch64 hosts).
 
 ## Usage
 
@@ -100,9 +100,9 @@ Please read the [Installation Guide](https://github.com/lenticularis39/axpbox/wi
 
 
 
-### x86-64 JIT
+### JIT
 
-An optional JIT (ported from [ES40-Emu/es40](https://github.com/ES40-Emu/es40), based on asmjit) can be enabled at build time on x86-64 hosts:
+An optional JIT (ported from [ES40-Emu/es40](https://github.com/ES40-Emu/es40), based on asmjit) can be enabled at build time on x86-64 and AArch64 (Apple Silicon, arm64 Linux) hosts. On AArch64 the inline IEEE floating-point fast paths are not ported yet and those instructions run in the interpreter:
 
 ```
 git clone https://github.com/lenticularis39/axpbox

@@ -1,0 +1,1402 @@
+/* AXPbox -- JIT engine, AArch64 backend.
+ *
+ * Included from jitengine.cpp (JIT_HOST_A64) after the arch-neutral engine: it
+ * shares classify()/SafeOp, g_zapnot_mask and the JitOffsets/HelperSet
+ * contract, and provides emit_op / assemble_block / assemble_trace on asmjit's
+ * a64 backend. It mirrors the x86-64 emitter op for op -- same bail protocol
+ * (state.pc = faulting instruction, return the chain's completed count), same
+ * chaining (shared frame, poly-link, jit_indirect), same verify behaviour --
+ * so the dispatcher, the helpers and the JIT_VERIFY harness are unchanged.
+ *
+ * Host register roles (AAPCS64; x18 is the platform register, never touched):
+ *   x19      cpu (CAlphaCPU*)          x20      regs (guest GPR file)
+ *   x21-x26  global pins: R26 R16 R27 R30 R29 R0 (callee-saved, chain-live)
+ *   x0       op1 / result (x86: rax)   x1       op2 (x86: rcx)
+ *   x2       effective address (rdx)   x9       next PC (r10)
+ *   x10-x12  scratch                   x16      helper call target
+ *   x17      wide CAlphaCPU field offsets (see a64_cpu_field)
+ * Frame, shared by every block of a chain (chained entry skips the prologue):
+ *   [sp+0] x29/x30  [sp+16..79] x19-x26  [sp+80] helper out slot
+ *   [sp+88] chain instruction count
+ */
+#if !defined(INCLUDED_JITEMIT_A64_H)
+#define INCLUDED_JITEMIT_A64_H
+
+#include <atomic>
+
+namespace {
+
+constexpr uint32_t kA64FrameSize = 96;
+constexpr int32_t kA64OutSlot = 80;
+constexpr int32_t kA64CountSlot = 88;
+
+// Global pins: guest GPR -> callee-saved host register id. kGlobalPins (the
+// x86 hot set RA/a0/PV) plus SP, GP and v0 -- AAPCS64 has callee-saved
+// registers to spare, so this is the Win64 x86 pin set on every a64 host.
+constexpr struct {
+  int guest;
+  uint32_t host;
+} kA64Pins[] = {{26, 21}, {16, 22}, {27, 23}, {30, 24}, {29, 25}, {0, 26}};
+
+// Emit failures (an operand combination a64 can't encode) must not ship a
+// silently truncated block: record them and let assemble_* discard the code.
+class A64EmitErrors : public asmjit::ErrorHandler {
+public:
+  bool failed = false;
+  int cpu_id = -1;
+  void handle_error(asmjit::Error err, const char *message,
+                    asmjit::BaseEmitter *) override {
+    (void)err;
+    static std::atomic<int> reported{0};
+    if (!failed && reported.fetch_add(1) < 20)
+      fprintf(stderr, "[JIT][CPU%d][A64-EMIT-ERROR] %s\n", cpu_id, message);
+    failed = true;
+  }
+};
+
+inline asmjit::Imm a64_cc(asmjit::a64::CondCode c) {
+  return asmjit::Imm((uint32_t)c);
+}
+
+// [cpu + off] for a (1 << lg)-byte load/store. CAlphaCPU is large, so many
+// fields sit beyond the scaled imm12 range; those use x17 as the offset.
+asmjit::a64::Mem a64_cpu_field(asmjit::a64::Assembler &a, uint32_t off,
+                               unsigned lg) {
+  using namespace asmjit;
+  if ((off & ((1u << lg) - 1)) == 0 && (off >> lg) <= 4095)
+    return a64::ptr(a64::x19, (int32_t)off);
+  a.mov(a64::x17, imm(off));
+  return a64::ptr(a64::x19, a64::x17);
+}
+
+// dst = src + d for any 64-bit d (imm12 when it fits, else through x17).
+void a64_add_imm(asmjit::a64::Assembler &a, const asmjit::a64::Gp &dst,
+                 const asmjit::a64::Gp &src, int64_t d) {
+  using namespace asmjit;
+  if (d >= 0 && d < 4096)
+    a.add(dst, src, imm(d));
+  else if (d < 0 && d > -4096)
+    a.sub(dst, src, imm(-d));
+  else {
+    a.mov(a64::x17, imm(d));
+    a.add(dst, src, a64::x17);
+  }
+}
+
+void a64_prologue(asmjit::a64::Assembler &a) {
+  using namespace asmjit;
+  a.sub(a64::sp, a64::sp, imm(kA64FrameSize));
+  a.stp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
+  a.mov(a64::x29, a64::sp);
+  a.stp(a64::x19, a64::x20, a64::ptr(a64::sp, 16));
+  a.stp(a64::x21, a64::x22, a64::ptr(a64::sp, 32));
+  a.stp(a64::x23, a64::x24, a64::ptr(a64::sp, 48));
+  a.stp(a64::x25, a64::x26, a64::ptr(a64::sp, 64));
+  a.mov(a64::x19, a64::x0);                          // cpu  (arg 0)
+  a.mov(a64::x20, a64::x1);                          // regs (arg 1)
+  a.str(a64::xzr, a64::ptr(a64::sp, kA64CountSlot)); // chain count := 0
+  // Load the pins on cold entry; chained re-entry skips this and they stay
+  // live across the chain, synced back in a64_epilogue.
+  for (const auto &p : kA64Pins)
+    a.ldr(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+}
+
+// Shared exit: x0 = instructions completed across the chain (the JitFn
+// result), state.pc already written by the exit path.
+void a64_epilogue(asmjit::a64::Assembler &a) {
+  using namespace asmjit;
+  for (const auto &p : kA64Pins)
+    a.str(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+  a.ldp(a64::x25, a64::x26, a64::ptr(a64::sp, 64));
+  a.ldp(a64::x23, a64::x24, a64::ptr(a64::sp, 48));
+  a.ldp(a64::x21, a64::x22, a64::ptr(a64::sp, 32));
+  a.ldp(a64::x19, a64::x20, a64::ptr(a64::sp, 16));
+  a.ldp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
+  a.add(a64::sp, a64::sp, imm(kA64FrameSize));
+  a.ret(a64::x30);
+}
+
+void a64_regalloc(CJitEngine::RegAlloc &ra) {
+  for (int r = 0; r < 32; ++r)
+    ra.host[r] = -1;
+  ra.rax_holds = -1;
+  for (const auto &p : kA64Pins)
+    ra.host[p.guest] = (int)p.host;
+}
+
+// Chain gate: branch to lbl when the chain hit the budget ceiling or an
+// interrupt/timer is pending. Clobbers x0/x1.
+void a64_emit_gate(asmjit::a64::Assembler &a, const CJitEngine::JitOffsets &off,
+                   const asmjit::Label &lbl) {
+  using namespace asmjit;
+  a.ldr(a64::x0, a64::ptr(a64::sp, kA64CountSlot));
+  a.ldr(a64::x1, a64_cpu_field(a, off.jit_budget, 3));
+  a.cmp(a64::x0, a64::x1);
+  a.b_ge(lbl);
+  a.ldrb(a64::w1, a64_cpu_field(a, off.check_int, 0));
+  a.cbnz(a64::w1, lbl);
+  a.ldrb(a64::w1, a64_cpu_field(a, off.check_timers, 0));
+  a.cbnz(a64::w1, lbl);
+}
+
+void a64_count_add(asmjit::a64::Assembler &a, uint32_t n) {
+  using namespace asmjit;
+  a.ldr(a64::x0, a64::ptr(a64::sp, kA64CountSlot));
+  a.add(a64::x0, a64::x0, imm(n));
+  a.str(a64::x0, a64::ptr(a64::sp, kA64CountSlot));
+}
+
+} // namespace
+
+void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
+                         const HelperSet &hs, bool pal_block, JitBlock *b,
+                         uint32_t ins, uint32_t i, RegAlloc &regalloc) {
+  using namespace asmjit;
+  using a64::CondCode;
+  (void)gpa; // AAPCS64 argument order is fixed: x0..x7
+  a64::Assembler &a = *(a64::Assembler *)a_ptr;
+  Label &done = *(Label *)done_ptr;
+  const a64::Gp x0 = a64::x0, x1 = a64::x1, x2 = a64::x2, x9 = a64::x9,
+                x10 = a64::x10, x11 = a64::x11, x12 = a64::x12;
+  const a64::Gp w0 = a64::w0, w1 = a64::w1, w11 = a64::w11, w12 = a64::w12;
+  const a64::Gp kCpu = a64::x19, kRegs = a64::x20;
+  const a64::Mem out_slot = a64::ptr(a64::sp, kA64OutSlot);
+  const a64::Mem count_slot = a64::ptr(a64::sp, kA64CountSlot);
+
+  auto fld = [&](uint32_t off, unsigned lg) {
+    return a64_cpu_field(a, off, lg);
+  };
+  auto set_pc = [&](uint64_t pc_val) {
+    a.mov(x9, imm(pc_val));
+    a.str(x9, fld(m_off.state_pc, 3));
+  };
+  // Bail to the dispatcher: resume at this block's instruction n, having
+  // completed n of its instructions (plus the chain's earlier blocks).
+  auto bail = [&](uint32_t n) {
+    set_pc(b->tag + 4 * (uint64_t)n);
+    a.ldr(x0, count_slot);
+    a.add(x0, x0, imm(n));
+    a.b(done);
+  };
+
+  int ra = (ins >> 21) & 0x1F;
+  int rb = (ins >> 16) & 0x1F;
+  int rc = ins & 0x1F;
+  bool islit = ((ins >> 12) & 1) != 0;
+  uint32_t lit = (ins >> 13) & 0xFF;
+  SafeOp op = classify(ins, pal_block);
+
+  do {
+    // MISC barriers (TRAPB/EXCB/MB/WMB) and prefetch/cache hints: AArch64 has
+    // no store-serializing instruction like x86 mfence, so both emit nothing
+    // and the block extends straight past them.
+    if (op == OP_NOP || op == OP_MFENCE)
+      continue;
+
+    // Value-forwarding: x0 may still hold the guest reg the previous op
+    // computed (see the x86 emitter).
+    const int prev_x0 = regalloc.rax_holds;
+    regalloc.rax_holds = -1;
+
+    auto reg = [&](int r) { // PALshadow remap (RREG), as in the x86 emitter
+      int idx = (pal_block && ((r & 0xc) == 0x4)) ? r + 32 : r;
+      return a64::ptr(kRegs, idx * 8);
+    };
+    auto mov_from_reg = [&](const a64::Gp &dst, int r) { // dst is 64-bit
+      int p = regalloc.host_of(r);
+      if (p >= 0)
+        a.mov(dst, a64::x((uint32_t)p));
+      else
+        a.ldr(dst, reg(r));
+    };
+    auto mov_from_reg32 = [&](const a64::Gp &dst, int r) { // dst is 32-bit
+      int p = regalloc.host_of(r);
+      if (p >= 0)
+        a.mov(dst, a64::w((uint32_t)p));
+      else
+        a.ldr(dst, reg(r)); // low dword (little-endian)
+    };
+    auto mov_to_reg = [&](int r, const a64::Gp &src) { // src is 64-bit
+      int p = regalloc.host_of(r);
+      if (p >= 0)
+        a.mov(a64::x((uint32_t)p), src);
+      else
+        a.str(src, reg(r));
+      if (src.id() == 0 && r != 31)
+        regalloc.rax_holds = r; // x0 now mirrors r[r]; forward it
+    };
+    auto op1_x0 = [&]() {
+      if (ra != 31 && prev_x0 == ra)
+        return;
+      if (ra == 31)
+        a.mov(x0, imm(0));
+      else
+        mov_from_reg(x0, ra);
+    };
+    auto op2_x1 = [&]() { // operand2 (literal, or r[Rb] with r31=0)
+      if (islit)
+        a.mov(x1, imm(lit));
+      else if (rb == 31)
+        a.mov(x1, imm(0));
+      else
+        mov_from_reg(x1, rb);
+    };
+    // va = r[Rb] + disp -> x2
+    auto ea_x2 = [&](int64_t disp) {
+      if (rb == 31)
+        a.mov(x2, imm(disp));
+      else {
+        mov_from_reg(x2, rb);
+        if (disp)
+          a64_add_imm(a, x2, x2, disp);
+      }
+    };
+
+    // ABI-native helper call; same argument kinds as the x86 emitter.
+    // Register-sourced arguments are placed before immediates so a size
+    // immediate for arg 2 can't clobber x2 while JA_VA still needs it.
+    enum JitArgKind {
+      JA_CPU,
+      JA_GP,
+      JA_GPZ,
+      JA_VA,
+      JA_OUT,
+      JA_R10,
+      JA_I32,
+      JA_I64
+    };
+    struct JitArg {
+      JitArgKind k;
+      uint64_t v;
+    };
+    auto emit_call = [&](void *fn, std::initializer_list<JitArg> as) {
+      auto place = [&](uint32_t k, const JitArg &s) {
+        const a64::Gp xk = a64::x(k), wk = a64::w(k);
+        switch (s.k) {
+        case JA_CPU:
+          a.mov(xk, kCpu);
+          break;
+        case JA_GP:
+          mov_from_reg(xk, (int)s.v);
+          break;
+        case JA_GPZ:
+          if (s.v == 31)
+            a.mov(xk, imm(0));
+          else
+            mov_from_reg(xk, (int)s.v);
+          break;
+        case JA_VA:
+          if (k != 2)
+            a.mov(xk, x2);
+          break;
+        case JA_OUT:
+          a.add(xk, a64::sp, imm(kA64OutSlot));
+          break;
+        case JA_R10:
+          a.mov(xk, x9);
+          break;
+        case JA_I32:
+          a.mov(wk, imm((uint32_t)s.v));
+          break;
+        case JA_I64:
+          a.mov(xk, imm((uint64_t)s.v));
+          break;
+        }
+      };
+      uint32_t k = 0;
+      for (const JitArg &s : as) {
+        if (s.k != JA_I32 && s.k != JA_I64)
+          place(k, s);
+        ++k;
+      }
+      k = 0;
+      for (const JitArg &s : as) {
+        if (s.k == JA_I32 || s.k == JA_I64)
+          place(k, s);
+        ++k;
+      }
+      a.mov(a64::x16, imm((uint64_t)fn));
+      a.blr(a64::x16);
+    };
+    // After a 0-ok / nonzero-bail int helper: bail at this instruction.
+    auto bail_if_w0 = [&]() {
+      Label ok = a.new_label();
+      a.cbz(w0, ok);
+      bail(i);
+      a.bind(ok);
+    };
+
+#ifndef JIT_VERIFY
+    // Inline data-page-cache probe (mirrors jit_read/jit_write's cache path):
+    // x2 = va. On a hit: x10 = host page base, x11 = page offset. Misses (slot
+    // tag, {cm,asn0}, MMIO/none) branch to slow. Clobbers x10-x12.
+    const uint32_t dpc_cm_rel = m_off.dpc_cm - m_off.dpc_virt_page;
+    const uint32_t dpc_host_rel = m_off.dpc_host_base - m_off.dpc_virt_page;
+    auto dpc_probe = [&](bool write_row, const Label &slow) {
+      a.lsr(x10, x2, imm(13));
+      a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
+      a.mov(x11, imm(m_off.dpc_stride));
+      a.mul(x10, x10, x11);
+      a.mov(x11, imm((uint64_t)m_off.dpc_virt_page +
+                     (write_row ? m_off.dpc_write_row : 0)));
+      a.add(x10, x10, x11);
+      a.add(x10, kCpu, x10); // x10 = &data_page_cache[row][dpc_index(va)]
+      a.and_(x11, x2, imm(~(uint64_t)0x1FFF));
+      a.ldr(x12, a64::ptr(x10, 0)); // slot virt_page
+      a.cmp(x12, x11);
+      a.b_ne(slow);
+      a.ldr(x11, fld(m_off.state_cm, 3)); // {cm, asn0} (adjacent in state)
+      a.ldr(x12, a64::ptr(x10, (int32_t)dpc_cm_rel)); // vs slot {cm, asn}
+      a.cmp(x12, x11);
+      a.b_ne(slow);
+      a.ldr(x10, a64::ptr(x10, (int32_t)dpc_host_rel)); // 0 = MMIO / none
+      a.cbz(x10, slow);
+      a.and_(x11, x2, imm(0x1FFF));
+    };
+#endif
+
+    // Memory-format loads: Ra = MEM[Rb + disp16].
+    if (op == OP_LDQ || op == OP_LDL || op == OP_LDBU || op == OP_LDWU ||
+        op == OP_LDQ_U) {
+      if (ra == 31)
+        continue; // LDx R31 is a NOP (interpreter skips the read)
+      const int size_bits = (op == OP_LDQ || op == OP_LDQ_U) ? 64
+                            : (op == OP_LDL)                 ? 32
+                            : (op == OP_LDWU)                ? 16
+                                                             : 8;
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_LDQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
+      auto load_from = [&](const a64::Mem &m) {
+        if (size_bits == 64)
+          a.ldr(x0, m);
+        else if (size_bits == 32)
+          a.ldrsw(x0, m);
+        else if (size_bits == 16)
+          a.ldrh(w0, m);
+        else
+          a.ldrb(w0, m);
+        mov_to_reg(ra, x0);
+      };
+      auto emit_helper = [&]() {
+        emit_call(hs.read_helper, {{JA_CPU, 0},
+                                   {JA_VA, 0},
+                                   {JA_I32, (uint64_t)size_bits},
+                                   {JA_OUT, 0}});
+        bail_if_w0();
+        load_from(out_slot);
+      };
+#ifdef JIT_VERIFY
+      emit_helper();
+#else
+      Label slow = a.new_label(), ldone = a.new_label();
+      if (size_bits > 8) {
+        a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+        a.b_ne(slow);
+      }
+      dpc_probe(false, slow);
+      load_from(a64::ptr(x10, x11));
+      a.b(ldone);
+      a.bind(slow);
+      emit_helper();
+      a.bind(ldone);
+#endif
+      continue;
+    }
+
+    // Memory-format stores: MEM[Rb + disp16] = Ra.
+    if (op == OP_STL || op == OP_STQ || op == OP_STB || op == OP_STW ||
+        op == OP_STQ_U) {
+      const int size_bits = (op == OP_STQ || op == OP_STQ_U) ? 64
+                            : (op == OP_STL)                 ? 32
+                            : (op == OP_STW)                 ? 16
+                                                             : 8;
+      ea_x2((int16_t)(ins & 0xFFFF));
+      if (op == OP_STQ_U)
+        a.and_(x2, x2, imm(~(uint64_t)7));
+      auto emit_helper = [&]() {
+        emit_call(hs.write_helper, {{JA_CPU, 0},
+                                    {JA_VA, 0},
+                                    {JA_I32, (uint64_t)size_bits},
+                                    {JA_GPZ, (uint64_t)ra}});
+        bail_if_w0();
+      };
+#ifdef JIT_VERIFY
+      emit_helper();
+#else
+      Label slow = a.new_label(), sdone = a.new_label();
+      if (size_bits > 8) {
+        a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+        a.b_ne(slow);
+      }
+      dpc_probe(true, slow);
+      if (ra == 31)
+        a.mov(x12, imm(0));
+      else
+        mov_from_reg(x12, ra);
+      const a64::Mem m = a64::ptr(x10, x11);
+      if (size_bits == 64)
+        a.str(x12, m);
+      else if (size_bits == 32)
+        a.str(w12, m);
+      else if (size_bits == 16)
+        a.strh(w12, m);
+      else
+        a.strb(w12, m);
+      a.b(sdone);
+      a.bind(slow);
+      emit_helper();
+      a.bind(sdone);
+#endif
+      continue;
+    }
+
+    // FP memory (LDS/LDT/STS/STT + VAX LDF/LDG/STF/STG): f[Fa] <->
+    // MEM[Rb+disp16]. LDT/STT (raw 8B) get the inline path; the converting
+    // forms go through the helper.
+    if (op == OP_LDT || op == OP_LDS || op == OP_STT || op == OP_STS ||
+        op == OP_LDF || op == OP_LDG || op == OP_STF || op == OP_STG) {
+      const bool isload =
+          (op == OP_LDT || op == OP_LDS || op == OP_LDF || op == OP_LDG);
+      const bool israw = (op == OP_LDT || op == OP_STT);
+      const int fa = ra;
+      const uint32_t fmt = (op == OP_LDS || op == OP_STS)   ? 1u
+                           : (op == OP_LDF || op == OP_STF) ? 2u
+                           : (op == OP_LDG || op == OP_STG) ? 3u
+                                                            : 0u;
+      const int size_bits = (fmt == 1 || fmt == 2) ? 32 : 64;
+      const uint32_t descr = (fmt << 16) | (uint32_t)size_bits;
+      if (isload && fa == 31)
+        continue; // LDT/LDS f31: interp skips the read (NOP)
+      ea_x2((int16_t)(ins & 0xFFFF));
+      auto emit_helper = [&]() {
+        emit_call(isload ? hs.fp_read_helper : hs.fp_write_helper,
+                  {{JA_CPU, 0},
+                   {JA_VA, 0},
+                   {JA_I32, (uint64_t)fa},
+                   {JA_I32, (uint64_t)descr}});
+        bail_if_w0();
+      };
+#ifdef JIT_VERIFY
+      (void)israw;
+      emit_helper();
+#else
+      if (!israw) {
+        emit_helper();
+        continue;
+      }
+      Label slow = a.new_label(), fdone = a.new_label();
+      a.ldrb(w11, fld(m_off.fpen, 0));
+      a.cbz(w11, slow); // fpen==0 -> FEN trap
+      a.str(a64::xzr, fld(m_off.exc_sum, 3));
+      a.tst(x2, imm(7));
+      a.b_ne(slow);
+      dpc_probe(!isload, slow);
+      if (isload) {
+        a.ldr(x0, a64::ptr(x10, x11));
+        a.str(x0, fld(m_off.f_base + (uint32_t)fa * 8, 3));
+      } else {
+        a.ldr(x12, fld(m_off.f_base + (uint32_t)fa * 8, 3));
+        a.str(x12, a64::ptr(x10, x11));
+      }
+      a.b(fdone);
+      a.bind(slow);
+      emit_helper();
+      a.bind(fdone);
+#endif
+      continue;
+    }
+
+    // Store-conditional STL_C/STQ_C: jit_stc -> 0x100 bail, else Ra = 1/0.
+    if (op == OP_STL_C || op == OP_STQ_C) {
+      const int size_bits = (op == OP_STQ_C) ? 64 : 32;
+      ea_x2((int16_t)(ins & 0xFFFF));
+      emit_call(hs.stc_helper, {{JA_CPU, 0},
+                                {JA_VA, 0},
+                                {JA_I32, (uint64_t)size_bits},
+                                {JA_GP, (uint64_t)ra}});
+      Label nobail = a.new_label();
+      a.tst(x0, imm(0x100));
+      a.b_eq(nobail);
+      bail(i);
+      a.bind(nobail);
+      mov_to_reg(ra, x0);
+      continue;
+    }
+
+    // HW_LD physical / VPTE / WrChk (PALmode): Ra = MEM[Rb + disp12].
+    if (op == OP_HW_LDL || op == OP_HW_LDQ || op == OP_HW_LDQ_VPTE ||
+        op == OP_HW_LDL_WCHK) {
+      if (ra == 31)
+        continue;
+      const int size_bits = (op == OP_HW_LDL || op == OP_HW_LDL_WCHK) ? 32 : 64;
+      ea_x2((int32_t)(ins << 20) >> 20);
+      emit_call(op == OP_HW_LDQ_VPTE   ? hs.read_vpte_helper
+                : op == OP_HW_LDL_WCHK ? hs.read_wchk_helper
+                                       : hs.hw_ld_helper,
+                {{JA_CPU, 0},
+                 {JA_VA, 0},
+                 {JA_I32, (uint64_t)size_bits},
+                 {JA_OUT, 0}});
+      bail_if_w0();
+      if (size_bits == 32)
+        a.ldrsw(x0, out_slot); // longword sign-extends (see the x86 emitter)
+      else
+        a.ldr(x0, out_slot);
+      mov_to_reg(ra, x0);
+      continue;
+    }
+
+    // Load-locked LDL_L/LDQ_L: Ra = MEM[Rb + disp16] + LL/SC monitor.
+    if (op == OP_LDL_L || op == OP_LDQ_L) {
+      const int size_bits = (op == OP_LDQ_L) ? 64 : 32;
+      ea_x2((int16_t)(ins & 0xFFFF));
+      emit_call(hs.read_locked_helper, {{JA_CPU, 0},
+                                        {JA_VA, 0},
+                                        {JA_I32, (uint64_t)size_bits},
+                                        {JA_OUT, 0}});
+      bail_if_w0();
+      a.ldr(x0, out_slot); // already sign-extended by the helper
+      mov_to_reg(ra, x0);
+      continue;
+    }
+
+    // HW_MTPR side-effect-free IPRs (PALmode): jit_hw_mtpr(cpu, fn, Rb).
+    if (op == OP_HW_MTPR || op == OP_HW_MTPR_TERM) {
+      const uint32_t function = (ins >> 8) & 0xff;
+      emit_call(
+          hs.hw_mtpr_helper,
+          {{JA_CPU, 0}, {JA_I32, (uint64_t)function}, {JA_GPZ, (uint64_t)rb}});
+      if (op == OP_HW_MTPR_TERM) // I_CTL: end the block, re-dispatch past it
+        set_pc(b->tag + 4 * (uint64_t)(i + 1));
+      continue;
+    }
+
+    // HW_ST physical (PALmode): phys[Rb + disp12] = Ra.
+    if (op == OP_HW_STL || op == OP_HW_STQ) {
+      const int size_bits = (op == OP_HW_STQ) ? 64 : 32;
+      ea_x2((int32_t)(ins << 20) >> 20);
+      emit_call(hs.hw_st_helper, {{JA_CPU, 0},
+                                  {JA_VA, 0},
+                                  {JA_I32, (uint64_t)size_bits},
+                                  {JA_GPZ, (uint64_t)ra}});
+      bail_if_w0();
+      continue;
+    }
+
+    // LDA / LDAH: Ra = Rb + disp16 (<< 16 for LDAH).
+    if (op == OP_LDA || op == OP_LDAH) {
+      if (ra == 31)
+        continue;
+      int64_t d = (int64_t)(int16_t)(ins & 0xFFFF);
+      if (op == OP_LDAH)
+        d *= 65536;
+      if (rb == 31)
+        a.mov(x0, imm(d));
+      else {
+        mov_from_reg(x0, rb);
+        if (d)
+          a64_add_imm(a, x0, x0, d);
+      }
+      mov_to_reg(ra, x0);
+      continue;
+    }
+
+    // HW_MFPR (PALmode): Ra = IPR value (helper returns it; cur = Ra).
+    if (op == OP_HW_MFPR) {
+      if (ra != 31) {
+        emit_call(
+            hs.hw_mfpr_helper,
+            {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}, {JA_GP, (uint64_t)ra}});
+        mov_to_reg(ra, x0);
+      }
+      continue;
+    }
+
+    // MISC state reads RPCC/RC/RS: Ra = jit_misc(cpu, sel).
+    if (op == OP_RPCC || op == OP_RC || op == OP_RS) {
+      const int sel = (op == OP_RPCC) ? 0 : (op == OP_RC) ? 1 : 2;
+      emit_call(hs.misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)sel}});
+      if (ra != 31)
+        mov_to_reg(ra, x0);
+      continue;
+    }
+
+    // ITOFx: f[Fc] = fmt(Ra) via jit_itof (FEN trap -> bail).
+    if (op == OP_ITOFS || op == OP_ITOFF || op == OP_ITOFT) {
+      emit_call(hs.itof_helper, {{JA_CPU, 0},
+                                 {JA_I32, (uint64_t)rc},
+                                 {JA_GPZ, (uint64_t)ra},
+                                 {JA_I32, (uint64_t)(op == OP_ITOFS   ? 1
+                                                     : op == OP_ITOFF ? 2
+                                                                      : 0)}});
+      bail_if_w0();
+      continue;
+    }
+
+    // FTOIx: Rc = fmt(f[Fa]) via jit_ftoi (FEN trap -> bail).
+    if (op == OP_FTOIS || op == OP_FTOIT) {
+      emit_call(hs.ftoi_helper, {{JA_CPU, 0},
+                                 {JA_I32, (uint64_t)ra},
+                                 {JA_I32, (uint64_t)(op == OP_FTOIS ? 1 : 0)},
+                                 {JA_OUT, 0}});
+      bail_if_w0();
+      a.ldr(x0, out_slot);
+      mov_to_reg(rc, x0);
+      continue;
+    }
+
+    // FLTL non-arithmetic: jit_fltl(cpu, ins) (FEN trap -> bail).
+    if (op == OP_FLTL) {
+      emit_call(hs.fltl_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
+      bail_if_w0();
+      continue;
+    }
+
+    // FLTV VAX: 0 ok / 1 FEN bail (op not run) / 2 arith trap (op ran, GO_PAL
+    // already set state.pc -> count it and return as-is).
+    if (op == OP_FLTV) {
+      emit_call(hs.fltv_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
+      Label ok = a.new_label(), trapped = a.new_label();
+      a.cbz(w0, ok);
+      a.cmp(w0, imm(2));
+      a.b_eq(trapped);
+      bail(i);
+      a.bind(trapped);
+      a.ldr(x0, count_slot);
+      a.add(x0, x0, imm(i + 1));
+      a.b(done);
+      a.bind(ok);
+      continue;
+    }
+
+    // JMP/JSR/RET: Ra = PC+4; PC = Rb & ~3 (| current mode bits). x9 = target
+    // for the epilogue's jit_indirect chain.
+    if (op == OP_JMP) {
+      const uint64_t ret = b->tag + 4 * (uint64_t)(i + 1);
+      if (rb == 31)
+        a.mov(x9, imm(0));
+      else
+        mov_from_reg(x9, rb);
+      a.and_(x9, x9, imm(~(uint64_t)3));
+      if (b->tag & 3)
+        a.orr(x9, x9, imm(b->tag & 3));
+      if (ra != 31) {
+        a.mov(x0, imm(ret & ~(uint64_t)3));
+        mov_to_reg(ra, x0);
+      }
+      a.str(x9, fld(m_off.state_pc, 3));
+      continue;
+    }
+
+    // HW_RET (PALmode): PC = Rb & ~2.
+    if (op == OP_HW_RET) {
+      if (rb == 31)
+        a.mov(x9, imm(0));
+      else
+        mov_from_reg(x9, rb);
+      a.and_(x9, x9, imm(~(uint64_t)2));
+      a.str(x9, fld(m_off.state_pc, 3));
+      continue;
+    }
+
+    // CALL_PAL: R23 (shadow-aware) = return address, EXC_ADDR = this PC,
+    // PC = pal_base | entry offset; privileged funcs OPCDEC in user mode.
+    if (op == OP_CALL_PAL) {
+      const uint32_t func = ins & 0x1FFFFFFF;
+      const uint64_t cpc = b->tag + 4 * (uint64_t)i;
+      const uint64_t ret = (b->tag + 4 * (uint64_t)(i + 1)) & ~(uint64_t)2;
+      const uint64_t voff = (uint64_t)0x2000 | ((uint64_t)(func & 0x80) << 5) |
+                            ((uint64_t)(func & 0x3f) << 6) | (uint64_t)1;
+      Label do_vector = a.new_label();
+      if (func < 0x40) {
+        a.ldr(w11, fld(m_off.state_cm, 2));
+        a.cbz(w11, do_vector);
+        emit_call(hs.opcdec_helper, {{JA_CPU, 0}, {JA_I64, cpc}});
+        a64_count_add(a, i + 1); // helper already wrote state.pc; x0 = count
+        a.b(done);
+      }
+      a.bind(do_vector);
+      a.mov(x11, imm(cpc));
+      a.str(x11, fld(m_off.exc_addr, 3));
+      a.ldrb(w11, fld(m_off.sde, 0));
+      a.lsl(w11, w11, imm(5));
+      a.add(w11, w11, imm(23)); // R23 index: 23, or 55 if SDE
+      a.mov(x12, imm(ret));
+      a.str(x12, a64::ptr(kRegs, x11, a64::lsl(3)));
+      a.ldr(x9, fld(m_off.pal_base, 3));
+      a.mov(x11, imm(voff));
+      a.orr(x9, x9, x11);
+      a.str(x9, fld(m_off.state_pc, 3));
+      continue;
+    }
+
+    // FP branches: FPSTART, then branch on f[Fa] vs 0.0 through the same
+    // sign-magnitude -> monotonic signed mapping as the x86 emitter.
+    if (is_fp_branch(op)) {
+      const int64_t bdisp = (int64_t)((uint64_t)(ins & 0x1FFFFF) << 43) >> 43;
+      const uint64_t fall = b->tag + 4 * (uint64_t)(i + 1);
+      const uint64_t tgt = fall + (uint64_t)(bdisp * 4);
+      Label fbail = a.new_label(), cont = a.new_label();
+      a.ldrb(w11, fld(m_off.fpen, 0));
+      a.cbz(w11, fbail);
+      a.str(a64::xzr, fld(m_off.exc_sum, 3));
+      if (ra == 31)
+        a.mov(x0, imm(0));
+      else {
+        a.ldr(x0, fld(m_off.f_base + 8u * (uint32_t)ra, 3));
+        a.asr(x10, x0, imm(63));                   // sign mask
+        a.and_(x0, x0, imm(~((uint64_t)1 << 63))); // magnitude
+        a.eor(x0, x0, x10);
+        a.sub(x0, x0, x10); // s = sign ? -magnitude : magnitude
+      }
+      a.mov(x9, imm(fall));
+      a.mov(x10, imm(tgt));
+      a.cmp(x0, imm(0));
+      CondCode cc = CondCode::kEQ;
+      switch (op) {
+      case OP_FBEQ:
+        cc = CondCode::kEQ;
+        break;
+      case OP_FBNE:
+        cc = CondCode::kNE;
+        break;
+      case OP_FBLT:
+        cc = CondCode::kLT;
+        break;
+      case OP_FBGE:
+        cc = CondCode::kGE;
+        break;
+      case OP_FBLE:
+        cc = CondCode::kLE;
+        break;
+      default:
+        cc = CondCode::kGT;
+        break; // OP_FBGT
+      }
+      a.csel(x9, x10, x9, a64_cc(cc));
+      a.str(x9, fld(m_off.state_pc, 3));
+      a.b(cont);
+      a.bind(fbail);
+      bail(i);
+      a.bind(cont);
+      continue;
+    }
+
+    // Integer branches: x9 = next PC (target or fall-through) -> state.pc.
+    if (is_branch(op)) {
+      const int64_t bdisp = (int64_t)((uint64_t)(ins & 0x1FFFFF) << 43) >> 43;
+      const uint64_t fall = b->tag + 4 * (uint64_t)(i + 1);
+      const uint64_t tgt = fall + (uint64_t)(bdisp * 4);
+      if (op == OP_BR || op == OP_BSR) {
+        if (ra != 31) {
+          a.mov(x9, imm(fall & ~(uint64_t)3));
+          mov_to_reg(ra, x9);
+        }
+        a.mov(x9, imm(tgt));
+      } else {
+        if (ra == 31)
+          a.mov(x0, imm(0));
+        else
+          mov_from_reg(x0, ra);
+        a.mov(x9, imm(fall));
+        a.mov(x10, imm(tgt));
+        if (op == OP_BLBC || op == OP_BLBS)
+          a.tst(x0, imm(1));
+        else
+          a.tst(x0, x0);
+        CondCode cc = CondCode::kEQ;
+        switch (op) {
+        case OP_BEQ:
+        case OP_BLBC:
+          cc = CondCode::kEQ;
+          break;
+        case OP_BNE:
+        case OP_BLBS:
+          cc = CondCode::kNE;
+          break;
+        case OP_BLT:
+          cc = CondCode::kLT;
+          break;
+        case OP_BGE:
+          cc = CondCode::kGE;
+          break;
+        case OP_BLE:
+          cc = CondCode::kLE;
+          break;
+        default:
+          cc = CondCode::kGT;
+          break; // OP_BGT
+        }
+        a.csel(x9, x10, x9, a64_cc(cc));
+      }
+      a.str(x9, fld(m_off.state_pc, 3));
+      continue;
+    }
+
+    // CMOVxx: Rc = cond(Ra) ? op2 : Rc.
+    if (op == OP_CMOV) {
+      if (rc == 31)
+        continue;
+      const uint32_t f = (ins >> 5) & 0x7f;
+      op1_x0();
+      op2_x1();
+      mov_from_reg(x9, rc);
+      if (f == 0x14 || f == 0x16)
+        a.tst(x0, imm(1));
+      else
+        a.tst(x0, x0);
+      CondCode cc = CondCode::kEQ;
+      switch (f) {
+      case 0x24: // CMOVEQ
+      case 0x16: // CMOVLBC
+        cc = CondCode::kEQ;
+        break;
+      case 0x26: // CMOVNE
+      case 0x14: // CMOVLBS
+        cc = CondCode::kNE;
+        break;
+      case 0x44:
+        cc = CondCode::kLT;
+        break;
+      case 0x46:
+        cc = CondCode::kGE;
+        break;
+      case 0x64:
+        cc = CondCode::kLE;
+        break;
+      default:
+        cc = CondCode::kGT;
+        break; // 0x66 CMOVGT
+      }
+      a.csel(x9, x1, x9, a64_cc(cc));
+      mov_to_reg(rc, x9);
+      continue;
+    }
+
+    // INTS byte-manipulation (EXT/INS/MSK/ZAP), keyed on pos = op2 & 7.
+    if (op == OP_EXTL || op == OP_EXTH || op == OP_INSL || op == OP_INSH ||
+        op == OP_MSKL || op == OP_MSKH || op == OP_ZAP) {
+      if (rc == 31)
+        continue;
+      const uint32_t f = (ins >> 5) & 0x7f;
+      const int size = (f >> 4) & 3;
+      const uint64_t mask = (size == 0)   ? (uint64_t)0xff
+                            : (size == 1) ? (uint64_t)0xffff
+                            : (size == 2) ? (uint64_t)0xffffffff
+                                          : ~(uint64_t)0;
+      op1_x0(); // data
+      op2_x1(); // selector
+      switch (op) {
+      case OP_EXTL: // (Ra >> pos*8) & mask
+        a.and_(x1, x1, imm(7));
+        a.lsl(x1, x1, imm(3));
+        a.lsr(x0, x0, x1);
+        if (size != 3)
+          a.and_(x0, x0, imm(mask));
+        break;
+      case OP_EXTH: // (Ra << ((64-pos*8)&63)) & mask
+        a.and_(x1, x1, imm(7));
+        a.lsl(x1, x1, imm(3));
+        a.neg(x1, x1);
+        a.and_(x1, x1, imm(63));
+        a.lsl(x0, x0, x1);
+        if (size != 3)
+          a.and_(x0, x0, imm(mask));
+        break;
+      case OP_INSL: // (Ra & mask) << pos*8
+        if (size != 3)
+          a.and_(x0, x0, imm(mask));
+        a.and_(x1, x1, imm(7));
+        a.lsl(x1, x1, imm(3));
+        a.lsl(x0, x0, x1);
+        break;
+      case OP_INSH: // pos ? ((Ra&mask) >> ((64-pos*8)&63)) : 0
+        if (size != 3)
+          a.and_(x0, x0, imm(mask));
+        a.and_(x1, x1, imm(7));
+        a.mov(x10, x1);
+        a.lsl(x1, x1, imm(3));
+        a.neg(x1, x1);
+        a.and_(x1, x1, imm(63));
+        a.lsr(x0, x0, x1);
+        a.mov(x11, imm(0));
+        a.cmp(x10, imm(0));
+        a.csel(x0, x11, x0, a64_cc(CondCode::kEQ));
+        break;
+      case OP_MSKL: // Ra & ~(mask << pos*8)
+        a.and_(x1, x1, imm(7));
+        a.lsl(x1, x1, imm(3));
+        a.mov(x9, imm(mask));
+        a.lsl(x9, x9, x1);
+        a.bic(x0, x0, x9);
+        break;
+      case OP_MSKH: // pos ? (Ra & ~(mask >> ((64-pos*8)&63))) : Ra
+        a.and_(x1, x1, imm(7));
+        a.mov(x10, x1);
+        a.lsl(x1, x1, imm(3));
+        a.neg(x1, x1);
+        a.and_(x1, x1, imm(63));
+        a.mov(x9, imm(mask));
+        a.lsr(x9, x9, x1);
+        a.bic(x11, x0, x9);
+        a.cmp(x10, imm(0));
+        a.csel(x0, x11, x0, a64_cc(CondCode::kNE));
+        break;
+      case OP_ZAP: // Ra & byte_expand(selector); ZAP inverts
+        a.and_(x1, x1, imm(0xff));
+        a.mov(x11, imm((uint64_t)&g_zapnot_mask[0]));
+        a.ldr(x9, a64::ptr(x11, x1, a64::lsl(3)));
+        if (f == 0x30)
+          a.mvn(x9, x9); // ZAP keeps bytes whose bit is CLEAR
+        a.and_(x0, x0, x9);
+        break;
+      default:
+        break;
+      }
+      mov_to_reg(rc, x0);
+      continue;
+    }
+
+    switch (op) {
+    case OP_ADDQ:
+      op1_x0();
+      op2_x1();
+      a.add(x0, x0, x1);
+      break;
+    case OP_SUBQ:
+      op1_x0();
+      op2_x1();
+      a.sub(x0, x0, x1);
+      break;
+    case OP_AND:
+      op1_x0();
+      op2_x1();
+      a.and_(x0, x0, x1);
+      break;
+    case OP_BIS:
+      op1_x0();
+      op2_x1();
+      a.orr(x0, x0, x1);
+      break;
+    case OP_XOR:
+      op1_x0();
+      op2_x1();
+      a.eor(x0, x0, x1);
+      break;
+    case OP_BIC:
+      op1_x0();
+      op2_x1();
+      a.bic(x0, x0, x1);
+      break;
+    case OP_ORNOT:
+      op1_x0();
+      op2_x1();
+      a.orn(x0, x0, x1);
+      break;
+    case OP_EQV:
+      op1_x0();
+      op2_x1();
+      a.eon(x0, x0, x1);
+      break;
+    case OP_MULQ:
+      op1_x0();
+      op2_x1();
+      a.mul(x0, x0, x1);
+      break;
+    case OP_UMULH:
+      op1_x0();
+      op2_x1();
+      a.umulh(x0, x0, x1);
+      break;
+    case OP_MULL: // 32-bit multiply, low 32 sign-extended
+      if (ra == 31)
+        a.mov(w0, imm(0));
+      else
+        mov_from_reg32(w0, ra);
+      if (islit)
+        a.mov(w1, imm(lit));
+      else if (rb == 31)
+        a.mov(w1, imm(0));
+      else
+        mov_from_reg32(w1, rb);
+      a.mul(w0, w0, w1);
+      a.sxtw(x0, w0);
+      break;
+
+    case OP_S4ADDQ:
+    case OP_S8ADDQ:
+    case OP_S4SUBQ:
+    case OP_S8SUBQ:
+      op1_x0();
+      a.lsl(x0, x0, imm((op == OP_S4ADDQ || op == OP_S4SUBQ) ? 2 : 3));
+      op2_x1();
+      if (op == OP_S4ADDQ || op == OP_S8ADDQ)
+        a.add(x0, x0, x1);
+      else
+        a.sub(x0, x0, x1);
+      break;
+
+    case OP_SLL: // AArch64 variable shifts take the count mod 64, like x86 CL
+      op1_x0();
+      op2_x1();
+      a.lsl(x0, x0, x1);
+      break;
+    case OP_SRL:
+      op1_x0();
+      op2_x1();
+      a.lsr(x0, x0, x1);
+      break;
+    case OP_SRA:
+      op1_x0();
+      op2_x1();
+      a.asr(x0, x0, x1);
+      break;
+
+    case OP_SEXTB:
+      op2_x1();
+      a.sxtb(x0, w1);
+      break;
+    case OP_SEXTW:
+      op2_x1();
+      a.sxth(x0, w1);
+      break;
+
+    case OP_CTPOP: // SWAR popcount of op2
+      op2_x1();
+      a.lsr(x9, x1, imm(1));
+      a.and_(x9, x9, imm(0x5555555555555555ull));
+      a.sub(x1, x1, x9);
+      a.and_(x9, x1, imm(0x3333333333333333ull));
+      a.lsr(x1, x1, imm(2));
+      a.and_(x1, x1, imm(0x3333333333333333ull));
+      a.add(x1, x1, x9);
+      a.lsr(x9, x1, imm(4));
+      a.add(x1, x1, x9);
+      a.and_(x1, x1, imm(0x0f0f0f0f0f0f0f0full));
+      a.mov(x9, imm(0x0101010101010101ull));
+      a.mul(x1, x1, x9);
+      a.lsr(x0, x1, imm(56));
+      break;
+    case OP_CTLZ: // CLZ(0) == 64 == CTLZ(0)
+      op2_x1();
+      a.clz(x0, x1);
+      break;
+    case OP_CTTZ: // ctz = clz(bit-reverse); 0 -> 64
+      op2_x1();
+      a.rbit(x0, x1);
+      a.clz(x0, x0);
+      break;
+
+    case OP_AMASK: // Rc = op2 & ~CPU_AMASK (keep in sync w/ cpu_defs.h)
+      op2_x1();
+      a.mov(x9, imm(0x1307));
+      a.bic(x0, x1, x9);
+      break;
+    case OP_IMPLVER: // Rc = CPU_IMPLVER (keep in sync w/ cpu_defs.h)
+      a.mov(x0, imm(2));
+      break;
+
+    case OP_CMPEQ:
+    case OP_CMPLT:
+    case OP_CMPLE:
+    case OP_CMPULT:
+    case OP_CMPULE: {
+      op1_x0();
+      op2_x1();
+      a.cmp(x0, x1);
+      const CondCode cc = (op == OP_CMPEQ)    ? CondCode::kEQ
+                          : (op == OP_CMPLT)  ? CondCode::kLT
+                          : (op == OP_CMPLE)  ? CondCode::kLE
+                          : (op == OP_CMPULT) ? CondCode::kLO
+                                              : CondCode::kLS;
+      a.cset(x0, a64_cc(cc));
+      break;
+    }
+
+    case OP_CMPBGE: { // per-byte unsigned Ra >= op2 -> bit i (SWAR)
+      op1_x0();
+      op2_x1();
+      // Low 7 bits per byte: (a|H) - (b&~H) never borrows across bytes, and
+      // its bit 7 is (a7 >= b7). Fold in the top bits: a >= b per byte is
+      // (a & ~b) | (~(a ^ b) & d), taken at bit 7.
+      a.mov(x10, imm(0x8080808080808080ull));
+      a.orr(x11, x0, x10);
+      a.bic(x12, x1, x10);
+      a.sub(x11, x11, x12); // d
+      a.eor(x12, x0, x1);
+      a.bic(x11, x11, x12); // d & ~(a ^ b)
+      a.bic(x12, x0, x1);   // a & ~b
+      a.orr(x11, x11, x12);
+      a.and_(x11, x11, x10);
+      a.lsr(x11, x11, imm(7)); // 0x01 per set byte
+      // Gather byte i's bit into bit i: x * 0x0102040810204080 >> 56.
+      a.mov(x12, imm(0x0102040810204080ull));
+      a.mul(x11, x11, x12);
+      a.lsr(x0, x11, imm(56));
+      break;
+    }
+
+    case OP_ADDL:
+    case OP_SUBL:
+    case OP_S4ADDL:
+    case OP_S8ADDL:
+    case OP_S4SUBL:
+    case OP_S8SUBL: { // sext32((Ra*scale) +/- op2)
+      const bool issub = (op == OP_SUBL || op == OP_S4SUBL || op == OP_S8SUBL);
+      const int sh = (op == OP_S4ADDL || op == OP_S4SUBL)   ? 2
+                     : (op == OP_S8ADDL || op == OP_S8SUBL) ? 3
+                                                            : 0;
+      if (ra == 31)
+        a.mov(w0, imm(0));
+      else
+        mov_from_reg32(w0, ra);
+      if (sh)
+        a.lsl(w0, w0, imm(sh));
+      if (islit)
+        a.mov(w1, imm(lit));
+      else if (rb == 31)
+        a.mov(w1, imm(0));
+      else
+        mov_from_reg32(w1, rb);
+      if (issub)
+        a.sub(w0, w0, w1);
+      else
+        a.add(w0, w0, w1);
+      a.sxtw(x0, w0);
+      break;
+    }
+    default:
+      break;
+    }
+
+    if (rc != 31)
+      mov_to_reg(rc, x0);
+  } while (0);
+}
+
+bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
+                                uint32_t plen, bool terminator_branch,
+                                bool terminator_jmp, const HelperSet &hs,
+                                JitFn *out_fn, uint32_t *out_body_off,
+                                size_t *out_csz) {
+  using namespace asmjit;
+  const bool pal_block = (b->tag & 1) != 0;
+  CodeHolder code;
+  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
+    return false;
+#ifdef JIT_DISASM
+  StringLogger logger;
+  code.set_logger(&logger);
+#endif
+  A64EmitErrors eh;
+  eh.cpu_id = m_cpu_id;
+  code.set_error_handler(&eh);
+  a64::Assembler a(&code);
+
+  a64_prologue(a);
+  Label done = a.new_label();
+  Label body = a.new_label(); // chained re-entry (after the prologue)
+  a.bind(body);
+  const size_t body_off = code.code_size();
+#ifdef JIT_REGPROF
+  a.mov(a64::x9, imm((uint64_t)&b->rp_hits));
+  a.ldr(a64::x10, a64::ptr(a64::x9));
+  a.add(a64::x10, a64::x10, imm(1));
+  a.str(a64::x10, a64::ptr(a64::x9));
+#endif
+
+  RegAlloc ra;
+  a64_regalloc(ra);
+  for (uint32_t i = 0; i < plen; ++i)
+    emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
+
+  // Epilogue: count this block, then chain (stay native) or return.
+#ifndef JIT_VERIFY
+  const uint32_t off_body = (uint32_t)((char *)&b->jit_body - (char *)b);
+  const uint32_t off_tag = (uint32_t)((char *)&b->tag - (char *)b);
+  const uint32_t off_vgen = (uint32_t)((char *)&b->vgen - (char *)b);
+  // Cached direct link (x9 = next PC): tail into a live successor's body --
+  // compiled, mapping this PC, and validated under the current epoch --
+  // else record a link-patch request and fall through to lbl.
+  auto emit_chain = [&](const Label &lbl) {
+    Label miss = a.new_label();
+    {
+      Label ok = a.new_label(); // PALmode target needs SDE (shadow remap)
+      a.tst(a64::x9, imm(1));
+      a.b_eq(ok);
+      a.ldrb(a64::w1, a64_cpu_field(a, m_off.sde, 0));
+      a.cbz(a64::w1, miss);
+      a.bind(ok);
+    }
+    a.mov(a64::x2, imm((uint64_t)&m_itb_gen));
+    a.ldr(a64::x10, a64::ptr(a64::x2));
+    a.mov(a64::x2, imm((uint64_t)&m_flush_gen));
+    a.ldr(a64::x11, a64::ptr(a64::x2));
+    a.add(a64::x10, a64::x10, a64::x11); // x10 = current epoch sum
+    for (int sl = 0; sl < kLinkSlots; ++sl) {
+      Label nxt = (sl + 1 < kLinkSlots) ? a.new_label() : miss;
+      a.mov(a64::x0, imm((uint64_t)&b->link[sl]));
+      a.ldr(a64::x0, a64::ptr(a64::x0)); // succ = b->link[sl]
+      a.cbz(a64::x0, nxt);
+      a.ldr(a64::x1, a64::ptr(a64::x0, (int32_t)off_body));
+      a.cbz(a64::x1, nxt);
+      a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_tag));
+      a.cmp(a64::x2, a64::x9);
+      a.b_ne(nxt);
+      a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_vgen));
+      a.cmp(a64::x2, a64::x10);
+      a.b_ne(nxt);
+      a.br(a64::x1); // HIT: tail in (shared frame)
+      if (sl + 1 < kLinkSlots)
+        a.bind(nxt);
+    }
+    a.bind(miss);
+    a.mov(a64::x0, imm((uint64_t)b));
+    a.str(a64::x0, a64_cpu_field(a, m_off.link_from, 3));
+  };
+#endif
+  if (terminator_jmp) {
+    a64_count_add(a, plen);
+#ifndef JIT_VERIFY
+    Label exit_chain = a.new_label();
+    a64_emit_gate(a, m_off, exit_chain);
+    a.mov(a64::x0, a64::x19); // cpu
+    a.mov(a64::x1, a64::x9);  // target == state.pc
+    a.mov(a64::x16, imm((uint64_t)hs.indirect_helper));
+    a.blr(a64::x16); // jit_indirect(cpu, target) -> body | 0
+    a.cbz(a64::x0, exit_chain);
+    a.br(a64::x0);
+    a.bind(exit_chain);
+#endif
+  } else if (terminator_branch) {
+    a64_count_add(a, plen); // x9 still holds the next PC
+#ifndef JIT_VERIFY
+    Label exit_chain = a.new_label();
+    Label not_self = a.new_label();
+    a64_emit_gate(a, m_off, exit_chain);
+    a.mov(a64::x0, imm(b->tag)); // self-loop: straight back into the body
+    a.cmp(a64::x9, a64::x0);
+    a.b_ne(not_self);
+    a.b(body);
+    a.bind(not_self);
+    emit_chain(exit_chain);
+    a.bind(exit_chain);
+#endif
+  } else {
+    a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
+    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+    a64_count_add(a, plen);
+#ifndef JIT_VERIFY
+    Label exit_chain = a.new_label();
+    a64_emit_gate(a, m_off, exit_chain);
+    emit_chain(exit_chain);
+    a.bind(exit_chain);
+#endif
+  }
+  a.ldr(a64::x0, a64::ptr(a64::sp, kA64CountSlot));
+  a.bind(done); // bails arrive with x0 already set
+  a64_epilogue(a);
+
+  const size_t csz = code.code_size();
+#ifdef JIT_DISASM
+  {
+    FILE *out = m_disasm_fp ? m_disasm_fp : stderr;
+    fprintf(out, "[JIT][CPU%d] block @ %016llx%s  (%u instr, %llu bytes)\n%s\n",
+            m_cpu_id, (unsigned long long)(b->tag & ~(uint64_t)1),
+            (b->tag & 1) ? " PAL" : "", plen, (unsigned long long)csz,
+            logger.data());
+    fflush(out);
+  }
+#endif
+  if (eh.failed)
+    return false; // an instruction failed to encode -- don't ship the block
+  JitFn fn = nullptr;
+  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+    return false;
+  *out_fn = fn;
+  *out_body_off = (uint32_t)body_off;
+  *out_csz = csz;
+  return true;
+}
+
+bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
+                                const uint8_t *dram, const HelperSet &hs,
+                                JitFn *out_fn, size_t *out_csz) {
+  using namespace asmjit;
+  CodeHolder code;
+  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
+    return false;
+  A64EmitErrors eh;
+  eh.cpu_id = m_cpu_id;
+  code.set_error_handler(&eh);
+  a64::Assembler a(&code);
+
+  a64_prologue(a);
+  Label done = a.new_label();
+  Label body = a.new_label(); // loop re-entry (pins + count stay live)
+  a.bind(body);
+
+  RegAlloc ra;
+  a64_regalloc(ra);
+  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
+    JitBlock *b = blocks[bi];
+    const uint32_t plen = b->prefix_len;
+    const uint32_t *words = (const uint32_t *)(dram + b->phys);
+    const bool pal_block = (b->tag & 1) != 0;
+    // Default next PC = the sequential successor (terminators overwrite it).
+    a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen));
+    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+    for (uint32_t i = 0; i < plen; ++i)
+      emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
+    a64_count_add(a, plen); // x0 = instrs completed so far (preset for done)
+    if (bi + 1 < n_blocks) {
+      // Guard: did this block flow into the next fused block?
+      a.mov(a64::x1, imm(blocks[bi + 1]->tag));
+      a.cmp(a64::x9, a64::x1);
+      a.b_ne(done);
+    }
+  }
+#ifndef JIT_VERIFY
+  // Loop closure (see the x86 emitter): back-edge to the head, gated.
+  {
+    JitBlock *lb = blocks[n_blocks - 1];
+    const uint32_t *lw = (const uint32_t *)(dram + lb->phys);
+    const uint32_t lop = lw[lb->prefix_len - 1], lopc = lop >> 26;
+    if (lopc == 0x30 || lopc == 0x34 || (lopc >= 0x38 && lopc <= 0x3f)) {
+      const int64_t disp = (int64_t)((uint64_t)(lop & 0x1FFFFF) << 43) >> 43;
+      const uint64_t tgt =
+          (((lb->tag & ~(uint64_t)1) + 4 * (uint64_t)(lb->prefix_len - 1)) + 4 +
+           (uint64_t)(disp * 4)) |
+          (lb->tag & 1);
+      if (tgt == blocks[0]->tag) {
+        a.mov(a64::x1, imm(blocks[0]->tag));
+        a.cmp(a64::x9, a64::x1);
+        a.b_ne(done);
+        a.ldr(a64::x1, a64_cpu_field(a, m_off.jit_budget, 3));
+        a.cmp(a64::x0, a64::x1);
+        a.b_ge(done);
+        a.ldrb(a64::w1, a64_cpu_field(a, m_off.check_int, 0));
+        a.cbnz(a64::w1, done);
+        a.ldrb(a64::w1, a64_cpu_field(a, m_off.check_timers, 0));
+        a.cbnz(a64::w1, done);
+        a.b(body);
+      }
+    }
+  }
+#endif
+  a.bind(done);
+  a64_epilogue(a);
+
+  if (eh.failed)
+    return false;
+  const size_t csz = code.code_size();
+  JitFn fn = nullptr;
+  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+    return false;
+  *out_fn = fn;
+  *out_csz = csz;
+  return true;
+}
+
+#endif // INCLUDED_JITEMIT_A64_H

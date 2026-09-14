@@ -13,14 +13,24 @@
 #ifdef ES40_JIT
 
 #include "../config_debug.hpp" // JIT_VERIFY
+#include <cstddef>
 #include <cstdint>
 #ifdef JIT_STATS
+#if defined(_M_X64) || defined(__x86_64__)
 #if defined(_MSC_VER)
 #include <intrin.h> // __rdtsc -- host TSC for the JIT_STATS wall-time split
 #else
 #include <x86intrin.h>
 #endif
 static inline uint64_t jit_rdtsc() { return __rdtsc(); }
+#else
+#include <chrono> // no TSC on AArch64 hosts: the time split uses steady_clock ns
+static inline uint64_t jit_rdtsc() {
+  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+#endif
 #endif
 #if defined(JIT_REGPROF) && !defined(JIT_STATS)
 #error                                                                         \
@@ -304,16 +314,28 @@ public:
   void flush();
 
   // Per-op codegen, shared by compile_block and compile_trace
-  // Block register allocator: maps each guest GPR to a host x86 reg id, or -1 =
-  // the state.r[] memory slot. The 3 global pins (R26/R16/R27 -> r12/r13/r15)
-  // are the static binding, live across the chain; dynamic block-local pool
-  // next. host_of(r) drives emit_op's operand routing either way.
+  // Block register allocator: maps each guest GPR to a host reg id, or -1 =
+  // the state.r[] memory slot. The global pins (x86-64: R26/R16/R27/R30 ->
+  // r12/r13/r15/r14; AArch64: see jitemit_a64.hpp) are the static binding, live
+  // across the chain; dynamic block-local pool next. host_of(r) drives
+  // emit_op's operand routing either way.
   struct RegAlloc {
-    int host[32];  // host x86 reg id for guest GPR r, or -1 (memory)
-    int rax_holds; // guest GPR whose value currently lives in rax
-                   // (value-forward), or -1
+    int host[32];  // host reg id for guest GPR r, or -1 (memory)
+    int rax_holds; // guest GPR whose value currently lives in the result reg
+                   // (rax / x0) (value-forward), or -1
     int host_of(int r) const { return host[r]; }
   };
+
+  // Host-architecture backend (x86-64: jitengine.cpp; AArch64:
+  // jitemit_a64.hpp). compile_block / compile_trace do the arch-neutral work
+  // (prefix scan, stats, slot bookkeeping) and call these to emit + add the
+  // native code. Return false when nothing was produced.
+  bool assemble_block(JitBlock *b, const uint32_t *words, uint32_t plen,
+                      bool terminator_branch, bool terminator_jmp,
+                      const HelperSet &hs, JitFn *fn, uint32_t *body_off,
+                      size_t *csz);
+  bool assemble_trace(JitBlock **blocks, uint32_t n_blocks, const uint8_t *dram,
+                      const HelperSet &hs, JitFn *fn, size_t *csz);
 
   void emit_op(void *a, const uint8_t *gpa, void *done, const HelperSet &hs,
                bool pal_block, JitBlock *b, uint32_t ins, uint32_t i,

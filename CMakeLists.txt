@@ -3,8 +3,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project(AXPBox VERSION 1.2.0)
 
-# x86-64 JIT (requires the asmjit sources in third_party/asmjit; see README)
-option(ES40_DISABLE_ASMJIT "Disable the x86-64 JIT (asmjit)" ON)
+# JIT for x86-64 and AArch64 hosts (requires the asmjit sources in
+# third_party/asmjit; see README)
+option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
 
 # Source files
 file(GLOB srcs src/*.cpp src/base/*.cpp src/gui/*.cpp)
