@@ -38,6 +38,21 @@ constexpr struct {
   uint32_t host;
 } kA64Pins[] = {{26, 21}, {16, 22}, {27, 23}, {30, 24}, {29, 25}, {0, 26}};
 
+// Caller-saved pins: more hot guest GPRs in host registers the emitter never
+// uses as scratch (x4-x8, x13-x15; x18 is platform-reserved). Helper calls
+// clobber them, so both call sites store them to their guest slots first and
+// reload them after (a64_spill_pins / a64_reload_pins); the prologue and
+// epilogue sync them like the callee-saved pins. No helper reads state.r
+// directly, so the guest slots only need to be current across the call.
+// Guests exclude R4-7 / R20-23 (PALshadow remap). Chosen from a JIT_REGPROF
+// Windows 2000 setup profile: the hottest pin-eligible GPRs not already pinned
+// (t0-t2 R1-R3, a1-a2 R17-R18, s0-s2 R9-R11).
+constexpr struct {
+  int guest;
+  uint32_t host;
+} kA64CallerPins[] = {{1, 4},  {9, 5},   {17, 6}, {2, 7},
+                      {10, 8}, {18, 13}, {3, 14}, {11, 15}};
+
 // Emit failures (an operand combination a64 can't encode) must not ship a
 // silently truncated block: record them and let assemble_* discard the code.
 class A64EmitErrors : public asmjit::ErrorHandler {
@@ -105,6 +120,8 @@ void a64_prologue(asmjit::a64::Assembler &a, uint64_t epoch_base) {
   // live across the chain, synced back in a64_epilogue.
   for (const auto &p : kA64Pins)
     a.ldr(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+  for (const auto &p : kA64CallerPins)
+    a.ldr(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
 }
 
 // Shared exit: x0 = instructions completed across the chain (the JitFn
@@ -112,6 +129,8 @@ void a64_prologue(asmjit::a64::Assembler &a, uint64_t epoch_base) {
 void a64_epilogue(asmjit::a64::Assembler &a) {
   using namespace asmjit;
   for (const auto &p : kA64Pins)
+    a.str(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+  for (const auto &p : kA64CallerPins)
     a.str(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
   a.ldp(a64::x27, a64::x28, a64::ptr(a64::sp, kA64SavedX27));
   a.ldp(a64::x25, a64::x26, a64::ptr(a64::sp, 64));
@@ -129,6 +148,21 @@ void a64_regalloc(CJitEngine::RegAlloc &ra) {
   ra.rax_holds = -1;
   for (const auto &p : kA64Pins)
     ra.host[p.guest] = (int)p.host;
+  for (const auto &p : kA64CallerPins)
+    ra.host[p.guest] = (int)p.host;
+}
+
+// Around a helper call: the caller-saved pins go to their guest slots before
+// the blr and come back after it (the result stays in x0).
+void a64_spill_pins(asmjit::a64::Assembler &a) {
+  for (const auto &p : kA64CallerPins)
+    a.str(asmjit::a64::x(p.host),
+          asmjit::a64::ptr(asmjit::a64::x20, p.guest * 8));
+}
+void a64_reload_pins(asmjit::a64::Assembler &a) {
+  for (const auto &p : kA64CallerPins)
+    a.ldr(asmjit::a64::x(p.host),
+          asmjit::a64::ptr(asmjit::a64::x20, p.guest * 8));
 }
 
 // Chain gate: branch to lbl when the chain hit the budget ceiling or an
@@ -354,7 +388,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         ++k;
       }
       a.mov(a64::x16, imm((uint64_t)fn));
+      a64_spill_pins(a);
       a.blr(a64::x16);
+      a64_reload_pins(a);
     };
     // After a 0-ok / nonzero-bail int helper: bail at this instruction.
     auto bail_if_w0 = [&]() {
@@ -636,6 +672,59 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // HW_MTPR side-effect-free IPRs (PALmode): jit_hw_mtpr(cpu, fn, Rb).
     if (op == OP_HW_MTPR || op == OP_HW_MTPR_TERM) {
       const uint32_t function = (ins >> 8) & 0xff;
+      // IER inline: NT's PALcode rewrites IER on every IRQL change (~1 in 20
+      // instructions under Windows, 99.9% of HW_MTPR helper calls). Mirrors
+      // jit_hw_mtpr case 0x0a: store the enable fields, then set check_int if
+      // int_deliverable(). The verify lane snapshots these fields, so it
+      // checks this path too. AXPBOX_IRQTRACE keeps the helper (it logs).
+      static const bool irqtrace = getenv("AXPBOX_IRQTRACE") != nullptr;
+      if (function == 0x0a && !irqtrace) {
+        const a64::Gp v = src_reg(rb, x1, false);
+        const a64::Gp x3 = a64::x3, w2 = a64::w2, w3 = a64::w3, w10 = a64::w10;
+        a.lsr(x2, v, imm(13));
+        a.and_(w3, w2, imm(1));
+        a.str(w3, fld(m_off.ier_asten, 2));
+        a.and_(w3, w2, imm(0xfffe));
+        a.str(w3, fld(m_off.ier_sien, 2));
+        a.lsr(x2, v, imm(29));
+        a.and_(w3, w2, imm(3));
+        a.str(w3, fld(m_off.ier_pcen, 2));
+        a.lsr(x2, v, imm(31));
+        a.and_(w3, w2, imm(1));
+        a.str(w3, fld(m_off.ier_cren, 2));
+        a.lsr(x2, v, imm(32));
+        a.and_(w3, w2, imm(1));
+        a.str(w3, fld(m_off.ier_slen, 2));
+        a.lsr(x2, v, imm(33));
+        a.and_(w3, w2, imm(0x3f)); // w3 = eien
+        a.str(w3, fld(m_off.ier_eien, 2));
+        (void)x3;
+        Label set_int = a.new_label(), no_int = a.new_label();
+        a.ldr(w10, fld(m_off.eir, 2)); // eien & eir
+        a.tst(w10, w3);
+        a.b_ne(set_int);
+        a.ldr(w10, fld(m_off.sir, 2)); // sien & sir
+        a.ldr(w11, fld(m_off.ier_sien, 2));
+        a.tst(w10, w11);
+        a.b_ne(set_int);
+        a.ldr(w10, fld(m_off.ier_asten, 2)); // asten && (aster & astrr &
+        a.cbz(w10, no_int);                  //   ((1 << (cm + 1)) - 1))
+        a.ldr(w10, fld(m_off.aster, 2));
+        a.ldr(w11, fld(m_off.astrr, 2));
+        a.and_(w10, w10, w11);
+        a.ldr(w11, fld(m_off.state_cm, 2));
+        a.add(w11, w11, imm(1));
+        a.mov(w12, imm(1));
+        a.lsl(w12, w12, w11);
+        a.sub(w12, w12, imm(1));
+        a.tst(w10, w12);
+        a.b_eq(no_int);
+        a.bind(set_int);
+        a.mov(w10, imm(1));
+        a.strb(w10, fld(m_off.check_int, 0));
+        a.bind(no_int);
+        continue;
+      }
       emit_call(
           hs.hw_mtpr_helper,
           {{JA_CPU, 0}, {JA_I32, (uint64_t)function}, {JA_GPZ, (uint64_t)rb}});
@@ -1107,7 +1196,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.ldr(w11, fld(m_off.state_cm, 2));
         a.cbz(w11, do_vector);
         emit_call(hs.opcdec_helper, {{JA_CPU, 0}, {JA_I64, cpc}});
-        a64_count_add(a, i + 1); // helper already wrote state.pc; x0 = count
+        a64_count_add(a, i + 1); // helper already wrote state.pc
+        a.mov(x0, a64::x27);     // done expects x0 = count
         a.b(done);
       }
       a.bind(do_vector);
@@ -1685,8 +1775,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // compiled, mapping this PC, and validated under the current epoch --
   // else record a link-patch request and fall through to lbl.
   const int32_t off_link = (int32_t)((char *)&b->link[0] - (char *)b);
-  const int32_t flush_rel =
-      (int32_t)((char *)&m_flush_gen - (char *)&m_itb_gen);
+  const int32_t epoch_rel = (int32_t)((char *)&m_epoch - (char *)&m_itb_gen);
   auto emit_chain = [&](const Label &lbl) {
     Label miss = a.new_label();
     a.mov(a64::x3, imm((uint64_t)b)); // this block: link table + miss record
@@ -1698,9 +1787,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.cbz(a64::w1, miss);
       a.bind(ok);
     }
-    a.ldr(a64::x10, a64::ptr(a64::x28));            // m_itb_gen
-    a.ldr(a64::x11, a64::ptr(a64::x28, flush_rel)); // m_flush_gen
-    a.add(a64::x10, a64::x10, a64::x11); // x10 = current epoch sum
+    a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // x10 = m_epoch
     for (int sl = 0; sl < kLinkSlots; ++sl) {
       Label nxt = (sl + 1 < kLinkSlots) ? a.new_label() : miss;
       a.ldr(a64::x0, a64::ptr(a64::x3, off_link + 8 * sl)); // b->link[sl]
@@ -1719,6 +1806,39 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     }
     a.bind(miss);
     a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
+  };
+  // Static successor: the next PC is a compile-time constant (x9 holds it), so
+  // it gets its own link slot -- no slot scan. The tag compare stays: a cache
+  // slot's JitBlock can be re-recorded for another PC under the same epoch. A
+  // miss records link_from = b | (slot + 1) so the dispatcher fills exactly
+  // this slot, then takes lbl (return to the dispatcher).
+  auto emit_static_exit = [&](uint64_t target, int slot, const Label &lbl) {
+    if (target == b->tag) {
+      a.b(body); // self-loop (the gate already ran)
+      return;
+    }
+    Label miss = a.new_label();
+    a.mov(a64::x3, imm((uint64_t)b));
+    if (target & 1) { // PALmode target needs SDE (shadow remap)
+      a.ldrb(a64::w1, a64_cpu_field(a, m_off.sde, 0));
+      a.cbz(a64::w1, miss);
+    }
+    a.ldr(a64::x0, a64::ptr(a64::x3, off_link + 8 * slot)); // b->link[slot]
+    a.cbz(a64::x0, miss);
+    a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_tag));
+    a.cmp(a64::x2, a64::x9);
+    a.b_ne(miss);
+    a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_vgen));
+    a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // m_epoch
+    a.cmp(a64::x2, a64::x10);
+    a.b_ne(miss);
+    a.ldr(a64::x1, a64::ptr(a64::x0, (int32_t)off_body));
+    a.cbz(a64::x1, miss);
+    a.br(a64::x1); // HIT: tail in (shared frame)
+    a.bind(miss);
+    a.orr(a64::x3, a64::x3, imm((uint64_t)(slot + 1)));
+    a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
+    a.b(lbl);
   };
 #endif
   if (terminator_jmp) {
@@ -1743,9 +1863,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.ldr(a64::x2, a64::ptr(a64::x1, ic_rel)); // tag
       a.cmp(a64::x2, a64::x9);
       a.b_ne(slow);
-      a.ldr(a64::x2, a64::ptr(a64::x28));            // m_itb_gen
-      a.ldr(a64::x3, a64::ptr(a64::x28, flush_rel)); // m_flush_gen
-      a.add(a64::x2, a64::x2, a64::x3);
+      a.ldr(a64::x2, a64::ptr(a64::x28, epoch_rel)); // m_epoch
       a.ldr(a64::x3, a64::ptr(a64::x1, ic_rel + 8)); // vgen
       a.cmp(a64::x2, a64::x3);
       a.b_ne(slow);
@@ -1757,7 +1875,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.mov(a64::x0, a64::x19); // cpu
     a.mov(a64::x1, a64::x9);  // target == state.pc
     a.mov(a64::x16, imm((uint64_t)hs.indirect_helper));
+    a64_spill_pins(a);
     a.blr(a64::x16); // jit_indirect(cpu, target) -> body | 0
+    a64_reload_pins(a);
     a.cbz(a64::x0, exit_chain);
     a.br(a64::x0);
     a.bind(exit_chain);
@@ -1766,14 +1886,35 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a64_count_add(a, plen); // x9 still holds the next PC
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
-    Label not_self = a.new_label();
     a64_emit_gate(a, m_off, exit_chain);
-    a.mov(a64::x0, imm(b->tag)); // self-loop: straight back into the body
-    a.cmp(a64::x9, a64::x0);
-    a.b_ne(not_self);
-    a.b(body);
-    a.bind(not_self);
-    emit_chain(exit_chain);
+    const uint32_t lw = words[plen - 1];
+    const uint32_t lopc = lw >> 26;
+    if (lopc >= 0x30 && lopc <= 0x3f) {
+      // PC-relative branch: both successors are constants. BR/BSR have one;
+      // the conditional forms left the taken target in x10 (see emit_op), so
+      // one compare picks the exit and each exit owns a link slot.
+      const uint64_t bfall = b->tag + 4 * (uint64_t)plen;
+      const int64_t bdisp = (int64_t)((uint64_t)(lw & 0x1FFFFF) << 43) >> 43;
+      const uint64_t btgt = bfall + (uint64_t)(bdisp * 4);
+      if (lopc == 0x30 || lopc == 0x34) {
+        emit_static_exit(btgt, 0, exit_chain);
+      } else {
+        Label not_taken = a.new_label();
+        a.cmp(a64::x9, a64::x10);
+        a.b_ne(not_taken);
+        emit_static_exit(btgt, 0, exit_chain);
+        a.bind(not_taken);
+        emit_static_exit(bfall, 1, exit_chain);
+      }
+    } else {
+      Label not_self = a.new_label();
+      a.mov(a64::x0, imm(b->tag)); // self-loop: straight back into the body
+      a.cmp(a64::x9, a64::x0);
+      a.b_ne(not_self);
+      a.b(body);
+      a.bind(not_self);
+      emit_chain(exit_chain);
+    }
     a.bind(exit_chain);
 #endif
   } else {
@@ -1783,7 +1924,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
     a64_emit_gate(a, m_off, exit_chain);
-    emit_chain(exit_chain);
+    emit_static_exit(b->tag + 4 * (uint64_t)plen, 0, exit_chain);
     a.bind(exit_chain);
 #endif
   }

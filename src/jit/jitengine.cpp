@@ -818,6 +818,7 @@ CJitEngine::CJitEngine(int cpu_id)
   memset(m_bail_kind, 0, sizeof(m_bail_kind));
   memset(m_hot_pc, 0, sizeof(m_hot_pc));
   memset(m_helper_n, 0, sizeof(m_helper_n));
+  memset(m_mtpr_rt, 0, sizeof(m_mtpr_rt));
   m_stat_wall_last_ns =
       (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
@@ -1060,12 +1061,14 @@ void CJitEngine::trace_selftest() {
   ok &= (trace_ok(&t, 999, d) ==
          false); // 2. head remap / ASN-recycle: live head phys differs -> drop
   ++m_itb_gen;   // 3. ITB-invalidate, bytes unchanged:
+  ++m_epoch;
   ok &= (trace_ok(&t, 0, d) ==
          true); //    epoch bumps, re-hash matches -> keep ...
   ok &= (t.vgen ==
          m_itb_gen + m_flush_gen); //    ... and re-stamped to the new epoch
   mem[5] = 0xDEADBEEF;
   ++m_flush_gen; // 4. SMC on interior seg1 + IMB (flush bump):
+  ++m_epoch;
   ok &= (trace_ok(&t, 0, d) == false); //    re-hash mismatch -> drop
   mem[5] = 0x66666666; // 5. restore the byte, epoch still bumped:
   ok &= (trace_ok(&t, 0, d) == true); //    re-hash matches again -> keep
@@ -1074,6 +1077,7 @@ void CJitEngine::trace_selftest() {
          m_cpu_id, ok ? "PASS" : "*** FAIL ***");
   m_itb_gen = save_itb;
   m_flush_gen = save_flush;
+  m_epoch = m_itb_gen + m_flush_gen;
 }
 #endif
 
@@ -1111,6 +1115,7 @@ void CJitEngine::flush() {
   // blocks miss in lookup() and revalidate_flushed() re-hashes their source
   // bytes before they run again.
   ++m_flush_gen;
+  ++m_epoch;
   if (m_rt && m_code_bytes >= kReclaimBytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
@@ -4139,6 +4144,26 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
              (unsigned long long)(fl - m_dpc_flush_last));
       m_dpc_flush_last = fl;
       memset(m_helper_n, 0, sizeof(m_helper_n));
+      uint64_t mt[256];
+      memcpy(mt, m_mtpr_rt, sizeof(mt));
+      len = snprintf(buf, sizeof(buf),
+                     "[JIT][STATS][CPU%d]   mtpr calls by IPR:", m_cpu_id);
+      for (int rank = 0; rank < 10 && len < (int)sizeof(buf) - 24; ++rank) {
+        int best = -1;
+        uint64_t bestv = 0;
+        for (int f = 0; f < 256; ++f)
+          if (mt[f] > bestv) {
+            bestv = mt[f];
+            best = f;
+          }
+        if (best < 0)
+          break;
+        len += snprintf(buf + len, sizeof(buf) - len, " 0x%02x=%llu", best,
+                        (unsigned long long)bestv);
+        mt[best] = 0;
+      }
+      printf("%s\n", buf);
+      memset(m_mtpr_rt, 0, sizeof(m_mtpr_rt));
     }
     memset(m_cold_n, 0, sizeof(m_cold_n));
     memset(m_cold_instr, 0, sizeof(m_cold_instr));
@@ -4269,11 +4294,11 @@ void CJitEngine::regprof_report() {
   printf("[JIT][REGPROF][CPU%d] exec-weighted expansion: %.1f x86-bytes/instr "
          "(hot path)\n",
          m_cpu_id, exec_instr ? (double)exec_bytes / (double)exec_instr : 0.0);
-  char buf[256];
+  char buf[512];
   int len =
       snprintf(buf, sizeof(buf),
                "[JIT][REGPROF][CPU%d] hot GPRs (exec x accesses):", m_cpu_id);
-  for (int rank = 0; rank < 8 && len < (int)sizeof(buf) - 24; ++rank) {
+  for (int rank = 0; rank < 16 && len < (int)sizeof(buf) - 24; ++rank) {
     int best = -1;
     uint64_t bestv = 0;
     for (int r = 0; r < 31; ++r)

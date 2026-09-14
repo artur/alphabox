@@ -191,6 +191,16 @@ void CAlphaCPU::init() {
     o.exc_addr = (uint32_t)((char *)&state.exc_addr - (char *)this);
     o.pal_base = (uint32_t)((char *)&state.pal_base - (char *)this);
     o.sde = (uint32_t)((char *)&state.sde - (char *)this);
+    o.ier_asten = (uint32_t)((char *)&state.asten - (char *)this);
+    o.ier_sien = (uint32_t)((char *)&state.sien - (char *)this);
+    o.ier_pcen = (uint32_t)((char *)&state.pcen - (char *)this);
+    o.ier_cren = (uint32_t)((char *)&state.cren - (char *)this);
+    o.ier_slen = (uint32_t)((char *)&state.slen - (char *)this);
+    o.ier_eien = (uint32_t)((char *)&state.eien - (char *)this);
+    o.sir = (uint32_t)((char *)&state.sir - (char *)this);
+    o.eir = (uint32_t)((char *)&state.eir - (char *)this);
+    o.aster = (uint32_t)((char *)&state.aster - (char *)this);
+    o.astrr = (uint32_t)((char *)&state.astrr - (char *)this);
     m_jit->set_offsets(o);
   }
 #endif
@@ -1183,18 +1193,27 @@ void CAlphaCPU::jit_run(int budget) {
       // here. Now that we know this block is live and compiled, patch its
       // successor pointer so it jumps straight in instead of returning
       if (m_link_from) {
+        // Low bits (JitBlock is 8-aligned): 0 = scan-style exit, round-robin
+        // into the slots; k = a static exit that owns slot k-1.
+        const uintptr_t lraw = (uintptr_t)m_link_from;
+        CJitEngine::JitBlock *lf =
+            (CJitEngine::JitBlock *)(lraw & ~(uintptr_t)7);
+        const unsigned exact = (unsigned)(lraw & 7);
         m_jit->note_link_bail();
-        m_jit->note_link_edge((CJitEngine::JitBlock *)m_link_from, b->tag);
-        CJitEngine::JitBlock *lf = (CJitEngine::JitBlock *)m_link_from;
-        bool in = false; // poly-link: cache b in the source's successor slots
-        for (int i = 0; i < CJitEngine::kLinkSlots; ++i)
-          if (lf->link[i] == b)
-            in = true; // skip if already cached (it just went stale)
-        if (!in) {
-          for (int i = CJitEngine::kLinkSlots - 1; i > 0; --i)
-            lf->link[i] = lf->link[i - 1];
-          lf->link[0] = b;
-        } // else round-robin insert
+        m_jit->note_link_edge(lf, b->tag);
+        if (exact && exact <= (unsigned)CJitEngine::kLinkSlots) {
+          lf->link[exact - 1] = b;
+        } else {
+          bool in = false; // poly-link: cache b in the source's successor slots
+          for (int i = 0; i < CJitEngine::kLinkSlots; ++i)
+            if (lf->link[i] == b)
+              in = true; // skip if already cached (it just went stale)
+          if (!in) {
+            for (int i = CJitEngine::kLinkSlots - 1; i > 0; --i)
+              lf->link[i] = lf->link[i - 1];
+            lf->link[0] = b;
+          } // else round-robin insert
+        }
         m_link_from = nullptr;
       }
       m_jit_budget =
@@ -2200,6 +2219,7 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
  * epoch). */
 void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
   cpu->m_jit->note_helper(CJitEngine::HK_MTPR);
+  cpu->m_jit->note_mtpr(function);
   // 0x40-0x7f bitmask group: ASTER/ASTRR/PPCEN/FPEN field stores (+check_int
   // for the AST bits). The ASN write (bit 0, dpc flush + asn-epoch bump) is
   // never compiled -- classify() routes it to OP_NONE.

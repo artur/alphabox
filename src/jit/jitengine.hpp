@@ -198,6 +198,11 @@ public:
     uint32_t jit_budget, check_int, check_timers, link_from;
     uint32_t exc_addr, pal_base,
         sde; // CALL_PAL: exc_addr save, PAL entry base, PALshadow enable
+    // Inline HW_MTPR IER (a64): the enable fields it stores and the request /
+    // AST fields int_deliverable() reads (all 32-bit ints; eir is
+    // std::atomic<int>).
+    uint32_t ier_asten, ier_sien, ier_pcen, ier_cren, ier_slen, ier_eien;
+    uint32_t sir, eir, aster, astrr;
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
   // Hotness threshold: a block is compiled only after it has been interpreted
@@ -274,9 +279,11 @@ public:
     m_hot_dram = dram;
   }
   inline void note_helper(int kind) { m_helper_n[kind]++; }
+  inline void note_mtpr(uint32_t fn) { m_mtpr_rt[fn & 0xff]++; }
   inline void set_dpc_flush_counter(const uint64_t *p) { m_dpc_flush_src = p; }
 #else
   inline void note_helper(int) {}
+  inline void note_mtpr(uint32_t) {}
   inline void set_dpc_flush_counter(const uint64_t *) {}
   inline void note_bail(bool, int) {}
 #endif
@@ -457,7 +464,10 @@ public:
   // (jit_indirect). Bumped on every I-stream TB invalidate (tbia/tbiap/tbis,
   // ACCESS_EXEC) ... those can remap a code page WITHOUT flushing the JIT, so a
   // chained block could run stale bytes.
-  inline void note_itb_invalidate() { ++m_itb_gen; }
+  inline void note_itb_invalidate() {
+    ++m_itb_gen;
+    ++m_epoch;
+  }
   // Record a validated computed-jump target for the inline cache (see
   // m_ind_cache). Non-global blocks are safe too: the entry comes from a
   // lookup under the current ASN, and an ASN change bumps the epoch
@@ -472,7 +482,7 @@ public:
     e.body = b->jit_body;
   }
   inline uint64_t vgen() const {
-    return m_itb_gen + m_flush_gen;
+    return m_epoch; // == m_itb_gen + m_flush_gen
   } // combined validation epoch
 
   // Bail-cause counters (JIT_STATS): why a compiled chain returned to the
@@ -530,6 +540,8 @@ private:
       0; // current ITB generation (bumped on every I-stream TB invalidate)
   uint64_t m_flush_gen = 0; // current icache-flush generation (bumped by
                             // flush(); lazy IC_FLUSH/IMB)
+  uint64_t m_epoch = 0; // m_itb_gen + m_flush_gen, kept in step with both so
+                        // compiled chain guards load one word
   // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
   // block validated for it, valid while its epoch (m_itb_gen + m_flush_gen at
   // validation, kept in vgen) is current; any ITB invalidate, ASN change or
@@ -582,6 +594,7 @@ private:
   const uint8_t *m_hot_dram = nullptr;
   uint64_t m_hot_win = 0;
   uint64_t m_helper_n[HK_COUNT];             // windowed: helper entries
+  uint64_t m_mtpr_rt[256]; // windowed: jit_hw_mtpr calls by IPR function
   const uint64_t *m_dpc_flush_src = nullptr; // CPU's data-page-cache flushes
   uint64_t m_dpc_flush_last = 0;             // ...at the previous window
   uint64_t m_stat_wall_last_ns; // steady_clock ns at the last window report
