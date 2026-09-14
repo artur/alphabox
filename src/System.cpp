@@ -1524,7 +1524,11 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
     state.cchip.csc |= (data & U64(0x0777777fff3f0000));
     return;
 
-  case 0x080:                                              // MISC
+  case 0x080: { // MISC
+    // Serialize with interrupt()/clear_ipi()/clear_clock_int(): an unlocked
+    // IPI ack on one CPU thread could otherwise erase an IPI another CPU
+    // thread is raising (irq_h's check-then-act), hanging the sender.
+    std::lock_guard<std::mutex> g(drir_lock);
     state.cchip.misc |= (data & U64(0x00000f0000f00000));  // W1S
     state.cchip.misc &= ~(data & U64(0x0000000010000ff0)); // W1C
     if (data & U64(0x0000000001000000)) {
@@ -1559,9 +1563,11 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
       for (int i = 0; i < iNumCPUs; i++) {
         if (data & (U64(0x100) << i)) {
           acCPUs[i]->irq_h(3, false, 0);
+#ifdef DEBUG_IPI
           printf("*** IP interrupt cleared for CPU %d from CPU %d(@ %" PRIx64
                  ").\n",
                  i, cpu->get_cpuid(), cpu->get_pc() - 4);
+#endif
         }
       }
     }
@@ -1572,15 +1578,16 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
         if (data & (U64(0x1000) << i)) {
           state.cchip.misc |= U64(0x100) << i;
           acCPUs[i]->irq_h(3, true, 0);
+#ifdef DEBUG_IPI
           printf("*** IP interrupt set for CPU %d from CPU %d(@ %" PRIx64 ")\n",
                  i, cpu->get_cpuid(), cpu->get_pc() - 4);
-
-          //          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+#endif
         }
       }
     }
 
     return;
+  }
 
   case 0x0c0: { // MPD
     // MPD: bit0=CKS (SCL driver: 1=release, 0=pull low)
@@ -1596,9 +1603,25 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
   case 0x200:
   case 0x240:
   case 0x600:
-  case 0x640:
-    state.cchip.dim[((a >> 10) & 2) | ((a >> 6) & 1)] = data;
+  case 0x640: {
+    // DIMn: serialize with interrupt(), and re-drive that CPU's device lines
+    // now -- the HAL may route (or mask) a device that is already asserted,
+    // and the next interrupt() call could be a long way off.
+    std::lock_guard<std::mutex> g(drir_lock);
+    const int n = ((a >> 10) & 2) | ((a >> 6) & 1);
+    state.cchip.dim[n] = data;
+    if (n < iNumCPUs) {
+      if (state.cchip.drir & state.cchip.dim[n] & U64(0x00ffffffffffffff))
+        acCPUs[n]->irq_h(1, true, 100);
+      else
+        acCPUs[n]->irq_h(1, false, 0);
+      if (state.cchip.drir & state.cchip.dim[n] & U64(0xfc00000000000000))
+        acCPUs[n]->irq_h(0, true, 100);
+      else
+        acCPUs[n]->irq_h(0, false, 0);
+    }
     return;
+  }
 
   default:
     printf("Unknown CCHIP CSR %07x write with %016" PRIx64 " attempted.\n", a,

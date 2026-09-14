@@ -480,6 +480,16 @@ void CAlphaCPU::jit_run(int budget) {
   // A link request from the previous batch's last chain is stale: interrupts
   // or the scheduler may have moved the PC since.
   m_link_from = nullptr;
+  // Another CPU flushed its instruction cache (IC_FLUSH / IMB after loading
+  // or changing code): drop this CPU's compiled blocks too. Lazy -- unchanged
+  // blocks are re-hashed and kept.
+  if (m_jit) {
+    const u64 cf = g_jit_code_flush.load(std::memory_order_relaxed);
+    if (cf != m_jit_code_seen) {
+      m_jit_code_seen = cf;
+      jit_flush_blocks();
+    }
+  }
   const auto now = std::chrono::steady_clock::now();
   cc_last_sync += std::chrono::nanoseconds(
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the

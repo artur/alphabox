@@ -41,6 +41,12 @@
 #include "cpu_defs.hpp"
 class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
 
+// Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
+// JIT compares it at the start of a dispatch batch and flushes its own block
+// cache when another CPU flushed: compiled blocks are per-CPU, but guest code
+// pages are shared, so new code loaded by one CPU must invalidate the others.
+inline std::atomic<u64> g_jit_code_flush{0};
+
 /// Number of entries in the Instruction Cache
 #define ICACHE_ENTRIES 1024
 // Size of Instruction Cache entries in DWORDS (instructions)
@@ -361,6 +367,7 @@ private:
   void *m_link_from =
       nullptr; // JitBlock* whose successor link the dispatcher should patch
   u64 m_link_target = 0; // a static exit's target PC, recorded with link_from
+  u64 m_jit_code_seen = 0;     // g_jit_code_flush at this CPU's last JIT flush
   void jit_run(int budget);    // drives the ES40_JIT lane via the interpreter
   void jit_flush_blocks();     // invalidate all discovered JIT blocks
   void jit_flush_blocks_asm(); // invalidate only !asm_global blocks (preserve
@@ -599,6 +606,7 @@ inline void CAlphaCPU::flush_icache() {
   break_seq_icache();
 #ifdef ES40_JIT
   jit_flush_blocks();
+  m_jit_code_seen = ++g_jit_code_flush; // our own flush is already done
 #endif
 }
 
