@@ -1090,6 +1090,11 @@ void CJitEngine::reclaim_code() {
   //        (unsigned long long) (m_code_bytes >> 20));
   delete (asmjit::JitRuntime *)m_rt;
   m_rt = new asmjit::JitRuntime();
+  m_call_thunk = nullptr; // lived in the runtime just deleted
+  ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
+  ++m_epoch;
+  m_exit_chunks.clear(); // exit records belong to the code just freed
+  m_exit_used = kExitChunk;
   m_code_bytes = 0;
 #ifdef JIT_STATS
   m_stat_reclaims++;
@@ -1132,6 +1137,9 @@ void CJitEngine::flush_non_global() {
     flush();
     return;
   }
+  // Soft-dropped bodies must not stay reachable through epoch-keyed data links.
+  ++m_itb_gen;
+  ++m_epoch;
   for (int i = 0; i < kCacheEntries; ++i) {
     if (!m_blocks[i].asm_global) {
       m_blocks[i].valid = false;

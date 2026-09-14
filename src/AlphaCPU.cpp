@@ -184,6 +184,7 @@ void CAlphaCPU::init() {
     o.check_int = (uint32_t)((char *)&state.check_int - (char *)this);
     o.check_timers = (uint32_t)((char *)&state.check_timers - (char *)this);
     o.link_from = (uint32_t)((char *)&m_link_from - (char *)this);
+    o.link_target = (uint32_t)((char *)&m_link_target - (char *)this);
     o.fpen = (uint32_t)((char *)&state.fpen - (char *)this);
     o.exc_sum = (uint32_t)((char *)&state.exc_sum - (char *)this);
     o.f_base = (uint32_t)((char *)&state.f[0] - (char *)this);
@@ -201,6 +202,17 @@ void CAlphaCPU::init() {
     o.eir = (uint32_t)((char *)&state.eir - (char *)this);
     o.aster = (uint32_t)((char *)&state.aster - (char *)this);
     o.astrr = (uint32_t)((char *)&state.astrr - (char *)this);
+    o.regs = (uint32_t)((char *)&state.r[0] - (char *)this);
+#ifdef JIT_STATS
+    if (state.iProcNum == 0)
+      printf("[JIT][STATS] offsets: dpc_virt_page=%u dpc_host=%u dpc_cm=%u "
+             "stride=%u write_row=%u state_cm=%u regs=%u dram_ptr=%u "
+             "dram_size=%u\n",
+             o.dpc_virt_page, o.dpc_host_base, o.dpc_cm, o.dpc_stride,
+             o.dpc_write_row, o.state_cm,
+             (uint32_t)((char *)&state.r[0] - (char *)this), o.dram_ptr,
+             o.dram_size);
+#endif
     m_jit->set_offsets(o);
   }
 #endif
@@ -465,6 +477,9 @@ void CAlphaCPU::jit_run(int budget) {
   if (m_jit)
     m_jit->reclaim_if_pending(); // deferred code reclaim, here at a safe point
                                  // (no compiled frame live)
+  // A link request from the previous batch's last chain is stale: interrupts
+  // or the scheduler may have moved the PC since.
+  m_link_from = nullptr;
   const auto now = std::chrono::steady_clock::now();
   cc_last_sync += std::chrono::nanoseconds(
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the
@@ -1196,14 +1211,26 @@ void CAlphaCPU::jit_run(int budget) {
         // Low bits (JitBlock is 8-aligned): 0 = scan-style exit, round-robin
         // into the slots; k = a static exit that owns slot k-1.
         const uintptr_t lraw = (uintptr_t)m_link_from;
-        CJitEngine::JitBlock *lf =
-            (CJitEngine::JitBlock *)(lraw & ~(uintptr_t)7);
         const unsigned exact = (unsigned)(lraw & 7);
         m_jit->note_link_bail();
-        m_jit->note_link_edge(lf, b->tag);
         if (exact && exact <= (unsigned)CJitEngine::kLinkSlots) {
-          lf->link[exact - 1] = b;
+          // A static exit's data link: the tagged pointer is that code's
+          // ExitRec. Cache only when b really is the exit's target (the
+          // request may predate an interrupt that moved the PC); b was just
+          // validated in this epoch (vgen stamped above) and is about to run.
+          CJitEngine::ExitRec *xr =
+              (CJitEngine::ExitRec *)(lraw & ~(uintptr_t)7);
+          if (b->tag == m_link_target && b->jit_body) {
+            xr->body[exact - 1] = b->jit_body;
+            xr->epoch[exact - 1] = m_jit->vgen();
+          } else {
+            xr->body[exact - 1] = nullptr;
+            xr->epoch[exact - 1] = ~(uint64_t)0;
+          }
         } else {
+          CJitEngine::JitBlock *lf =
+              (CJitEngine::JitBlock *)(lraw & ~(uintptr_t)7);
+          m_jit->note_link_edge(lf, b->tag);
           bool in = false; // poly-link: cache b in the source's successor slots
           for (int i = 0; i < CJitEngine::kLinkSlots; ++i)
             if (lf->link[i] == b)

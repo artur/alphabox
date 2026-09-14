@@ -15,6 +15,8 @@
 #include "../config_debug.hpp" // JIT_VERIFY
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <vector>
 #ifdef JIT_STATS
 #if defined(_M_X64) || defined(__x86_64__)
 #if defined(_MSC_VER)
@@ -196,6 +198,7 @@ public:
     // compiled epilogue checks before jumping on; link_from is where the
     // epilogue records a link-patch request.
     uint32_t jit_budget, check_int, check_timers, link_from;
+    uint32_t link_target; // static exit's target PC, recorded with link_from
     uint32_t exc_addr, pal_base,
         sde; // CALL_PAL: exc_addr save, PAL entry base, PALshadow enable
     // Inline HW_MTPR IER (a64): the enable fields it stores and the request /
@@ -203,6 +206,7 @@ public:
     // std::atomic<int>).
     uint32_t ier_asten, ier_sien, ier_pcen, ier_cren, ier_slen, ier_eien;
     uint32_t sir, eir, aster, astrr;
+    uint32_t regs; // state.r[0] (compiled code's x20 in production)
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
   // Hotness threshold: a block is compiled only after it has been interpreted
@@ -564,6 +568,38 @@ private:
   // out-of-line slow path (indexed m_cold_base + instruction index), and
   // assemble_block / assemble_trace re-run emit_op with m_cold_pass set to
   // emit those paths after the epilogue, off the fall-through hot path.
+  // a64 shared helper-call thunk (spill caller-saved pins, blr x16, reload),
+  // built lazily in the current code runtime; reclaim_code drops it.
+  void *m_call_thunk = nullptr;
+  void *a64_call_thunk();
+  // a64 static-exit data links. Each compiled block owns one ExitRec (its
+  // address is baked into that block's code); the dispatcher caches the
+  // successor's body and the epoch it was validated in. The record belongs to
+  // the code, not to the reusable JitBlock slot: a slot re-recorded for another
+  // PC leaves the old code (still reachable within the epoch) reading its own
+  // links. Freed with the code on reclaim.
+public: // the dispatcher fills these (AlphaCPU.cpp)
+  struct ExitRec {
+    void *body[kLinkSlots];
+    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch)
+  };
+
+private:
+  static constexpr size_t kExitChunk = 1u << 16;
+  std::vector<std::unique_ptr<ExitRec[]>> m_exit_chunks;
+  size_t m_exit_used = kExitChunk;
+  ExitRec *alloc_exit_rec() {
+    if (m_exit_used == kExitChunk) {
+      m_exit_chunks.emplace_back(new ExitRec[kExitChunk]);
+      m_exit_used = 0;
+    }
+    ExitRec *r = &m_exit_chunks.back()[m_exit_used++];
+    for (int i = 0; i < kLinkSlots; ++i) {
+      r->body[i] = nullptr;
+      r->epoch[i] = ~(uint64_t)0;
+    }
+    return r;
+  }
   static constexpr uint32_t kColdMax = 1024;
   uint32_t m_cold_slow[kColdMax];
   uint32_t m_cold_back[kColdMax];

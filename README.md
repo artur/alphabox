@@ -185,6 +185,7 @@ window or display server.
 | `AXPBOX_IDETRACE=1` | Timestamped IDE timeline: each command (opcode, drive, LBA/count), ATAPI packet opcode, bus-master start and interrupt (`IDET` lines). Separates guest-paced from emulator-paced I/O. |
 | `AXPBOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write (`USBT` lines). |
 | `AXPBOX_JIT_COMPILE_AFTER=<n>` | JIT builds: interpret a block `n` times before compiling it (default 1). |
+| `AXPBOX_JIT_NO_DLINK=1` | AArch64 JIT: use the tag-checked link scan for static block exits instead of epoch-keyed data links (A/B switch for chaining issues). |
 
 Key names for `AXPBOX_KEYSCRIPT`/`AXPBOX_KEYPIPE`: `a`–`z`, `0`–`9`,
 `enter`, `esc`, `tab`, `space`, `up`, `down`, `left`, `right`, `del`, `ins`,

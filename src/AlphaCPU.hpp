@@ -360,6 +360,7 @@ private:
   s64 m_jit_budget = 0; // instruction ceiling for a compiled chain
   void *m_link_from =
       nullptr; // JitBlock* whose successor link the dispatcher should patch
+  u64 m_link_target = 0; // a static exit's target PC, recorded with link_from
   void jit_run(int budget);    // drives the ES40_JIT lane via the interpreter
   void jit_flush_blocks();     // invalidate all discovered JIT blocks
   void jit_flush_blocks_asm(); // invalidate only !asm_global blocks (preserve

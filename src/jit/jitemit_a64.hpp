@@ -191,6 +191,38 @@ void a64_count_add(asmjit::a64::Assembler &a, uint32_t n) {
 
 } // namespace
 
+// Shared helper-call thunk, one per code runtime: store the caller-saved pins
+// to their guest slots, call x16, reload them. Call sites load x16 and blr
+// here instead of carrying 16 spill/reload instructions each. Arguments are
+// already in x0-x3 and the result comes back in x0; sp stays 16-aligned.
+void *CJitEngine::a64_call_thunk() {
+  if (m_call_thunk)
+    return m_call_thunk;
+  using namespace asmjit;
+  CodeHolder code;
+  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
+    return nullptr;
+  A64EmitErrors eh;
+  eh.cpu_id = m_cpu_id;
+  code.set_error_handler(&eh);
+  a64::Assembler a(&code);
+  a.sub(a64::sp, a64::sp, imm(16));
+  a.stp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
+  a64_spill_pins(a);
+  a.blr(a64::x16);
+  a64_reload_pins(a);
+  a.ldp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
+  a.add(a64::sp, a64::sp, imm(16));
+  a.ret(a64::x30);
+  if (eh.failed)
+    return nullptr;
+  JitFn fn = nullptr;
+  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+    return nullptr;
+  m_call_thunk = (void *)fn;
+  return m_call_thunk;
+}
+
 void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                          const HelperSet &hs, bool pal_block, JitBlock *b,
                          uint32_t ins, uint32_t i, RegAlloc &regalloc) {
@@ -393,9 +425,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         ++k;
       }
       a.mov(a64::x16, imm((uint64_t)fn));
-      a64_spill_pins(a);
-      a.blr(a64::x16);
-      a64_reload_pins(a);
+      if (void *thunk = a64_call_thunk()) {
+        a.mov(a64::x17, imm((uint64_t)thunk)); // spill / call x16 / reload
+        a.blr(a64::x17);
+      } else {
+        a64_spill_pins(a);
+        a.blr(a64::x16);
+        a64_reload_pins(a);
+      }
     };
     // Hot pass: defer this instruction's slow path (entered at `slow`, resuming
     // at `back`) to the cold pass. False when the table is full -- the caller
@@ -422,24 +459,42 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // tag, {cm,asn0}, MMIO/none) branch to slow. Clobbers x10-x12.
     const uint32_t dpc_cm_rel = m_off.dpc_cm - m_off.dpc_virt_page;
     const uint32_t dpc_host_rel = m_off.dpc_host_base - m_off.dpc_virt_page;
+    // {cm, asn0} key: one unscaled load off x20 (production x20 = state.r[0])
+    // when state.cm sits within its +-256 window, else via [cpu + off].
+    const int32_t key_rel = (int32_t)m_off.state_cm - (int32_t)m_off.regs;
+    const bool key_via_regs = key_rel >= -256 && key_rel <= 255;
     auto dpc_probe = [&](bool write_row, const Label &slow) {
+      const uint32_t row =
+          m_off.dpc_virt_page + (write_row ? m_off.dpc_write_row : 0);
       a.lsr(x10, x2, imm(13));
       a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
-      a.mov(x11, imm(m_off.dpc_stride));
-      a.mul(x10, x10, x11);
-      a.mov(x11, imm((uint64_t)m_off.dpc_virt_page +
-                     (write_row ? m_off.dpc_write_row : 0)));
-      a.add(x10, x10, x11);
-      a.add(x10, kCpu, x10); // x10 = &data_page_cache[row][dpc_index(va)]
+      int32_t base = 0; // row offset still to add in the field loads
+      if (m_off.dpc_stride == 40 && (row % 8) == 0 &&
+          row + dpc_host_rel <= 32760 && row + dpc_cm_rel <= 32760) {
+        // x10 = cpu + idx * 40 via two shifted adds (was mov/mul/mov/add/add);
+        // the row base folds into each field load's displacement.
+        a.add(x11, x10, x10, a64::lsl(2)); // idx * 5
+        a.add(x10, kCpu, x11, a64::lsl(3));
+        base = (int32_t)row;
+      } else {
+        a.mov(x11, imm(m_off.dpc_stride));
+        a.mul(x10, x10, x11);
+        a.mov(x11, imm((uint64_t)row));
+        a.add(x10, x10, x11);
+        a.add(x10, kCpu, x10); // x10 = &data_page_cache[row][dpc_index(va)]
+      }
       a.and_(x11, x2, imm(~(uint64_t)0x1FFF));
-      a.ldr(x12, a64::ptr(x10, 0)); // slot virt_page
+      a.ldr(x12, a64::ptr(x10, base)); // slot virt_page
       a.cmp(x12, x11);
       a.b_ne(slow);
-      a.ldr(x11, fld(m_off.state_cm, 3)); // {cm, asn0} (adjacent in state)
-      a.ldr(x12, a64::ptr(x10, (int32_t)dpc_cm_rel)); // vs slot {cm, asn}
+      if (key_via_regs) // {cm, asn0} (adjacent in state)
+        a.ldur(x11, a64::ptr(kRegs, key_rel));
+      else
+        a.ldr(x11, fld(m_off.state_cm, 3));
+      a.ldr(x12, a64::ptr(x10, base + (int32_t)dpc_cm_rel)); // slot {cm, asn}
       a.cmp(x12, x11);
       a.b_ne(slow);
-      a.ldr(x10, a64::ptr(x10, (int32_t)dpc_host_rel)); // 0 = MMIO / none
+      a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_host_rel)); // 0 = MMIO
       a.cbz(x10, slow);
       a.and_(x11, x2, imm(0x1FFF));
     };
@@ -1860,6 +1915,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // else record a link-patch request and fall through to lbl.
   const int32_t off_link = (int32_t)((char *)&b->link[0] - (char *)b);
   const int32_t epoch_rel = (int32_t)((char *)&m_epoch - (char *)&m_itb_gen);
+  ExitRec *xrec = nullptr; // this code's exit record (first static exit)
   auto emit_chain = [&](const Label &lbl) {
     Label miss = a.new_label();
     a.mov(a64::x3, imm((uint64_t)b)); // this block: link table + miss record
@@ -1901,27 +1957,38 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.b(body); // self-loop (the gate already ran)
       return;
     }
+    // AXPBOX_JIT_NO_DLINK=1: the tag-checked scan exit instead (A/B switch).
+    static const bool no_dlink = getenv("AXPBOX_JIT_NO_DLINK") != nullptr;
+    if (no_dlink) {
+      emit_chain(lbl);
+      a.b(lbl);
+      return;
+    }
     Label miss = a.new_label();
-    a.mov(a64::x3, imm((uint64_t)b));
+    if (!xrec)
+      xrec = alloc_exit_rec();
+    a.mov(a64::x3, imm((uint64_t)xrec)); // this code's exit record
     if (target & 1) { // PALmode target needs SDE (shadow remap)
       a.ldrb(a64::w1, a64_cpu_field(a, m_off.sde, 0));
       a.cbz(a64::w1, miss);
     }
-    a.ldr(a64::x0, a64::ptr(a64::x3, off_link + 8 * slot)); // b->link[slot]
-    a.cbz(a64::x0, miss);
-    a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_tag));
-    a.cmp(a64::x2, a64::x9);
-    a.b_ne(miss);
-    a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_vgen));
+    // Data link: the body cached for this slot is valid while the epoch it was
+    // cached in is current (no pointer chase, tag or vgen compare).
+    const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
+    const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
+    a.ldr(a64::x2, a64::ptr(a64::x3, off_lepoch + 8 * slot));
     a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // m_epoch
     a.cmp(a64::x2, a64::x10);
     a.b_ne(miss);
-    a.ldr(a64::x1, a64::ptr(a64::x0, (int32_t)off_body));
-    a.cbz(a64::x1, miss);
+    a.ldr(a64::x1, a64::ptr(a64::x3, off_lbody + 8 * slot));
     a.br(a64::x1); // HIT: tail in (shared frame)
     a.bind(miss);
     a.orr(a64::x3, a64::x3, imm((uint64_t)(slot + 1)));
     a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
+    // The target PC too: the dispatcher caches a data link only into a block
+    // with this tag (a pending request can outlive the chain, and a data link
+    // has no tag check of its own).
+    a.str(a64::x9, a64_cpu_field(a, m_off.link_target, 3));
     a.b(lbl);
   };
 #endif
@@ -1959,9 +2026,14 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.mov(a64::x0, a64::x19); // cpu
     a.mov(a64::x1, a64::x9);  // target == state.pc
     a.mov(a64::x16, imm((uint64_t)hs.indirect_helper));
-    a64_spill_pins(a);
-    a.blr(a64::x16); // jit_indirect(cpu, target) -> body | 0
-    a64_reload_pins(a);
+    if (void *thunk = a64_call_thunk()) {
+      a.mov(a64::x17, imm((uint64_t)thunk));
+      a.blr(a64::x17); // jit_indirect(cpu, target) -> body | 0
+    } else {
+      a64_spill_pins(a);
+      a.blr(a64::x16);
+      a64_reload_pins(a);
+    }
     a.cbz(a64::x0, exit_chain);
     a.br(a64::x0);
     a.bind(exit_chain);
