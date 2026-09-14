@@ -228,7 +228,7 @@ static bool host_has_popcnt() {
 // branch). pal_block enables PALmode-only ops (HW_MFPR): outside PALmode they'd
 // OPCDEC, so only compile them when the block is PALmode (the dispatcher keys
 // blocks by PC bit 0).
-static SafeOp classify_op(uint32_t ins, bool pal_block) {
+SafeOp classify(uint32_t ins, bool pal_block) {
   uint32_t opcode = ins >> 26;
   uint32_t func = (ins >> 5) & 0x7F;
   switch (opcode) {
@@ -750,48 +750,6 @@ static SafeOp classify_op(uint32_t ins, bool pal_block) {
     return OP_FBGT;
   }
   return OP_NONE;
-}
-
-#ifdef JIT_HOST_A64
-// AArch64 backend coverage: the inline IEEE FP paths are written against SSE
-// semantics (MXCSR rounding, cvt* indefinite results) and have no a64 port
-// yet, so they stay interpreted -- they end the compiled prefix like any other
-// uncompilable op. Everything else in classify_op() has an a64 emitter.
-static bool a64_supported(SafeOp op) {
-  switch (op) {
-  case OP_CVTQT:
-  case OP_CVTQS:
-  case OP_ADDT:
-  case OP_SUBT:
-  case OP_MULT:
-  case OP_DIVT:
-  case OP_CMPTUN:
-  case OP_CMPTEQ:
-  case OP_CMPTLT:
-  case OP_CMPTLE:
-  case OP_ADDS:
-  case OP_SUBS:
-  case OP_MULS:
-  case OP_DIVS:
-  case OP_CVTST:
-  case OP_CVTTS:
-  case OP_CVTTQ:
-  case OP_SQRTS:
-  case OP_SQRTT:
-    return false;
-  default:
-    return true;
-  }
-}
-#endif
-
-SafeOp classify(uint32_t ins, bool pal_block) {
-  const SafeOp op = classify_op(ins, pal_block);
-#ifdef JIT_HOST_A64
-  if (!a64_supported(op))
-    return OP_NONE;
-#endif
-  return op;
 }
 
 } // namespace

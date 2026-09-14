@@ -102,7 +102,7 @@ Please read the [Installation Guide](https://github.com/lenticularis39/axpbox/wi
 
 ### JIT
 
-An optional JIT (ported from [ES40-Emu/es40](https://github.com/ES40-Emu/es40), based on asmjit) can be enabled at build time on x86-64 and AArch64 (Apple Silicon, arm64 Linux) hosts. On AArch64 the inline IEEE floating-point fast paths are not ported yet and those instructions run in the interpreter:
+An optional JIT (ported from [ES40-Emu/es40](https://github.com/ES40-Emu/es40), based on asmjit) can be enabled at build time on x86-64 and AArch64 (Apple Silicon, arm64 Linux) hosts:
 
 ```
 git clone https://github.com/lenticularis39/axpbox

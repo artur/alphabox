@@ -52,8 +52,12 @@
 #include "cpu_vax.hpp"
 #include "diag_rpcc.hpp"
 #include "lockstep.hpp"
+#include <cstdlib>
+#include <vector>
 #if defined(_M_X64) || defined(__x86_64__)
 #include <xmmintrin.h> // _mm_setcsr: pin host MXCSR for the JIT SSE FP path
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#include <cfenv> // fesetenv: pin the host FPCR for the JIT FP path
 #endif
 
 void CAlphaCPU::release_threads() {
@@ -78,6 +82,10 @@ void CAlphaCPU::run() {
     // Pin host SSE state for the JIT FP path: round-nearest, exceptions masked,
     // FTZ/DAZ off (denormal results must materialize to hit the interp-bail).
     _mm_setcsr(0x1F80);
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    // Same for the AArch64 JIT FP path: the default FP environment is FPCR=0
+    // (round-nearest, traps off, flush-to-zero off).
+    std::fesetenv(FE_DFL_ENV);
 #endif
 
     // Re-base the timing-calibration epoch to when execution actually begins:
@@ -235,6 +243,11 @@ void CAlphaCPU::init() {
   seq_next_pc = 0;
 
   printf("%s(%d): $Id$\n", devid_string, state.iProcNum);
+
+#if defined(ES40_JIT) && defined(JIT_VERIFY)
+  if (state.iProcNum == 0 && getenv("AXPBOX_JIT_FPTEST"))
+    jit_fp_selftest(); // exits with the verdict
+#endif
 }
 
 void CAlphaCPU::ResetForSystemReset() {
@@ -2192,6 +2205,286 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_jmp_hit();
   return b->jit_body;
 }
+
+#ifdef JIT_VERIFY
+// Differential self-test of the compiled inline IEEE FP ops (FLTI 0x16 and the
+// ITFP SQRTs) against the interpreter -- SRM boot never executes them, so the
+// block verify can't reach them, and it skips its compare exactly when the
+// interpreter traps (where a missing compiled bail would hide). Each case
+// plants one instruction in a scratch page and runs it from identical state
+// through execute() and through a compiled one-instruction PALmode block. The
+// compiled contract: complete only with the interpreter's f[Fc], PC and
+// exc_sum and an unchanged FPCR (no trap, no new sticky bit); otherwise bail
+// with no side effect. AXPBOX_JIT_FPTEST=1 runs it from init() on CPU0 and
+// exits with the verdict (0 = pass).
+void CAlphaCPU::jit_fp_selftest() {
+  struct Variant {
+    const char *name;
+    u32 opc, func;
+    bool binary;
+    u64 native, bail, overbail, fail;
+  };
+  std::vector<Variant> vs;
+  static const struct {
+    const char *n;
+    u32 base;
+  } arith[] = {{"ADDS", 0x00}, {"SUBS", 0x01}, {"MULS", 0x02}, {"DIVS", 0x03},
+               {"ADDT", 0x20}, {"SUBT", 0x21}, {"MULT", 0x22}, {"DIVT", 0x23}};
+  // qualifiers: /N, /D, /UN, /UD, /SUN, /SUD, then /C and /SUID (interpreted)
+  static const u32 arith_q[] = {0x080, 0x0c0, 0x180, 0x1c0,
+                                0x580, 0x5c0, 0x000, 0x7c0};
+  for (const auto &o : arith)
+    for (u32 q : arith_q)
+      vs.push_back({o.n, 0x16, q | o.base, true, 0, 0, 0, 0});
+  static const struct {
+    const char *n;
+    u32 f;
+  } cmps[] = {{"CMPTUN", 0x0a4},
+              {"CMPTEQ", 0x0a5},
+              {"CMPTLT", 0x0a6},
+              {"CMPTLE", 0x0a7}};
+  for (const auto &c : cmps) {
+    vs.push_back({c.n, 0x16, c.f, true, 0, 0, 0, 0});
+    vs.push_back({c.n, 0x16, c.f | 0x500, true, 0, 0, 0, 0});
+  }
+  static const struct {
+    const char *n;
+    u32 opc, f;
+  } unary[] = {
+      {"CVTQS", 0x16, 0x0bc}, {"CVTQS", 0x16, 0x0fc}, {"CVTQT", 0x16, 0x0be},
+      {"CVTQT", 0x16, 0x0fe}, {"CVTTS", 0x16, 0x0ac}, {"CVTTS", 0x16, 0x0ec},
+      {"CVTTS", 0x16, 0x1ac}, {"CVTTS", 0x16, 0x5ac}, {"CVTST", 0x16, 0x2ac},
+      {"CVTST", 0x16, 0x6ac}, {"CVTTQ", 0x16, 0x02f}, {"CVTTQ", 0x16, 0x0af},
+      {"CVTTQ", 0x16, 0x0ef}, {"CVTTQ", 0x16, 0x12f}, {"CVTTQ", 0x16, 0x1af},
+      {"CVTTQ", 0x16, 0x1ef}, {"CVTTQ", 0x16, 0x52f}, {"CVTTQ", 0x16, 0x5af},
+      {"CVTTQ", 0x16, 0x5ef}, {"SQRTS", 0x14, 0x08b}, {"SQRTS", 0x14, 0x0cb},
+      {"SQRTS", 0x14, 0x18b}, {"SQRTS", 0x14, 0x58b}, {"SQRTT", 0x14, 0x0ab},
+      {"SQRTT", 0x14, 0x0eb}, {"SQRTT", 0x14, 0x1ab}, {"SQRTT", 0x14, 0x5ab}};
+  for (const auto &u : unary)
+    vs.push_back({u.n, u.opc, u.f, false, 0, 0, 0, 0});
+
+  auto dbits = [](double d) {
+    u64 v;
+    memcpy(&v, &d, 8);
+    return v;
+  };
+  auto fbits = [&](float f) { return dbits((double)f); };
+  std::vector<u64> fixed = {0,
+                            U64(0x8000000000000000),
+                            dbits(1.0),
+                            dbits(-1.0),
+                            dbits(2.0),
+                            dbits(0.5),
+                            dbits(3.0),
+                            dbits(0.1),
+                            dbits(1.0 / 3.0),
+                            dbits(-2.5),
+                            dbits(1.5),
+                            dbits(2.5),
+                            dbits(-0.5),
+                            dbits(10.0),
+                            dbits(1e10),
+                            dbits(1e-10),
+                            dbits(1e300),
+                            dbits(-1e300),
+                            dbits(1e-300),
+                            dbits(1e-160),
+                            dbits(1e160),
+                            U64(0x7FEFFFFFFFFFFFFF),
+                            U64(0x0010000000000000),
+                            U64(0x0010000000000001),
+                            U64(0x0000000000000001),
+                            U64(0x800FFFFFFFFFFFFF),
+                            U64(0x7FF0000000000000),
+                            U64(0xFFF0000000000000),
+                            U64(0x7FF8000000000000),
+                            U64(0x7FF0000000000001),
+                            U64(0xFFF8000000000001),
+                            dbits(9007199254740992.0),
+                            dbits(9007199254740994.0),
+                            U64(0x43E0000000000000),
+                            U64(0xC3E0000000000000),
+                            dbits(18446744073709551616.0),
+                            dbits(0.49999999999999994),
+                            dbits(4503599627370495.5),
+                            fbits(3.4028234663852886e38f),
+                            dbits(6.8e38),
+                            fbits(1.17549435e-38f),
+                            fbits(1.4e-45f),
+                            dbits(4.0e-46),
+                            fbits(1e-40f),
+                            dbits(16777217.0),
+                            fbits(1.0000001192092896f),
+                            dbits(1.00000000001),
+                            fbits(0.1f),
+                            fbits(-7.25f),
+                            U64(1),
+                            U64(2),
+                            U64(0xFFFFFFFFFFFFFFFF),
+                            U64(0x7FFFFFFFFFFFFFFF),
+                            U64(0x0020000000000001),
+                            U64(123456789),
+                            U64(0x7FFFFFFFFFFFFE00),
+                            U64(0x0000000100000001)};
+  u64 seed = U64(0x243F6A8885A308D3);
+  auto rnd = [&]() {
+    u64 z = (seed += U64(0x9E3779B97F4A7C15));
+    z = (z ^ (z >> 30)) * U64(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * U64(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+  };
+  auto rval = [&]() -> u64 {
+    const u64 r = rnd();
+    const u64 sign = r & U64(0x8000000000000000);
+    const u64 mant = rnd() & U64(0x000FFFFFFFFFFFFF);
+    switch (r % 7) {
+    case 0:
+      return rnd(); // arbitrary bits
+    case 1:
+      return sign | ((rnd() % 64) << 52) | mant; // underflow / denormal edge
+    case 2: {                                    // any single, widened
+      u32 b32 = (u32)rnd();
+      float f;
+      memcpy(&f, &b32, 4);
+      return fbits(f);
+    }
+    case 3:
+      return sign | ((u64)(1023 - 80 + rnd() % 160) << 52) | mant; // ~1.0
+    case 4:
+      return sign | ((u64)(2047 - 64 + rnd() % 65) << 52) |
+             mant; // overflow edge
+    case 5:
+      return (u64)((s64)rnd() >> (rnd() % 64)); // integer bits (CVTQx)
+    default:
+      return dbits((double)((s64)rnd() >> (rnd() % 64))); // integral doubles
+    }
+  };
+  static const u64 N = U64(2) << 58, INE = U64(1) << 56;
+  static const u64 fpcrs[] = {N,
+                              N | INE,
+                              INE,                       // DYN = chopped
+                              INE | (U64(3) << 58),      // DYN = +inf
+                              INE | (U64(1) << 58),      // DYN = -inf
+                              N | (U64(0x3f) << 52),     // all sticky bits set
+                              N | INE | (U64(1) << 48),  // DNZ
+                              N | INE | (U64(7) << 60),  // UNDZ | UNFD | INED
+                              N | INE | (U64(7) << 49)}; // INVD | DZED | OVFD
+
+  const u8 *dram = (const u8 *)dram_ptr;
+  const u64 page = (dram_size - 0x10000) & ~U64(0x1FFF);
+  u8 saved[4];
+  memcpy(saved, dram + page, 4);
+  const u64 pc0 = page | 1, next = (page + 4) | 1;
+  const u64 SENT = U64(0x5EA1ED0DDEADBEEF);
+  u64 total_fail = 0, total_cases = 0;
+  int printed = 0, skipped = 0;
+
+  setvbuf(stdout, nullptr, _IOLBF, 0); // progress + failures as they happen
+  for (Variant &v : vs) {
+    const u32 fa = v.binary ? 1 : 31;
+    const u32 ins = (v.opc << 26) | (fa << 21) | (2 << 16) | (v.func << 5) | 3;
+    memcpy((u8 *)dram_ptr + page, &ins, 4);
+    flush_icache(); // drop the stale fetch line; bumps the JIT flush gen too
+    CJitEngine::JitBlock *b = m_jit->record(pc0, page, 0, true, 1, dram);
+    if (!b->compiled)
+      m_jit->compile_block(
+          b, dram, dram_size, (void *)&CAlphaCPU::jit_read,
+          (void *)&CAlphaCPU::jit_write, (void *)&CAlphaCPU::jit_opcdec,
+          (void *)&CAlphaCPU::jit_hw_mfpr, (void *)&CAlphaCPU::jit_read_phys,
+          (void *)&CAlphaCPU::jit_hw_mtpr, (void *)&CAlphaCPU::jit_write_phys,
+          (void *)&CAlphaCPU::jit_indirect, (void *)&CAlphaCPU::jit_read_locked,
+          (void *)&CAlphaCPU::jit_stc, (void *)&CAlphaCPU::jit_misc,
+          (void *)&CAlphaCPU::jit_read_vpte, (void *)&CAlphaCPU::jit_read_wchk,
+          (void *)&CAlphaCPU::jit_itof, (void *)&CAlphaCPU::jit_ftoi,
+          (void *)&CAlphaCPU::jit_fltl, (void *)&CAlphaCPU::jit_fp_read,
+          (void *)&CAlphaCPU::jit_fp_write, (void *)&CAlphaCPU::jit_fltv);
+    if (!b->code || b->prefix_len != 1) {
+      skipped++; // classify() keeps this form interpreted
+      continue;
+    }
+
+    auto run_case = [&](u64 a, u64 bv, u64 fpcr, bool fpen) {
+      auto setup = [&]() {
+        state.pc = pc0;
+        state.fpen = fpen;
+        state.fpcr = fpcr;
+        state.exc_sum = U64(0x5A5A);
+        state.f[1] = a;
+        state.f[2] = bv;
+        state.f[3] = SENT;
+        state.f[31] = 0;
+      };
+      setup();
+      execute();
+      const u64 i_pc = state.pc, i_f3 = state.f[3], i_fpcr = state.fpcr,
+                i_exc = state.exc_sum;
+      setup();
+      const u32 done = b->code(this, state.r);
+      const u64 j_pc = state.pc, j_f3 = state.f[3], j_fpcr = state.fpcr,
+                j_exc = state.exc_sum;
+      const bool clean = i_pc == next && i_fpcr == fpcr;
+      bool ok = false;
+      if (done == 1) {
+        ok = clean && j_pc == next && j_f3 == i_f3 && j_fpcr == fpcr &&
+             j_exc == i_exc;
+        v.native += ok;
+      } else if (done == 0) {
+        ok = j_pc == pc0 && j_f3 == SENT && j_fpcr == fpcr;
+        v.bail += ok;
+        v.overbail += ok && clean;
+      }
+      total_cases++;
+      if (!ok) {
+        v.fail++;
+        total_fail++;
+        if (printed++ < 40)
+          printf("[JIT][FPTEST] FAIL %s func=%03x fa=%016llx fb=%016llx "
+                 "fpcr=%016llx fpen=%d | interp pc=%llx f3=%016llx "
+                 "fpcr=%016llx | jit done=%u pc=%llx f3=%016llx\n",
+                 v.name, v.func, (unsigned long long)a, (unsigned long long)bv,
+                 (unsigned long long)fpcr, (int)fpen, (unsigned long long)i_pc,
+                 (unsigned long long)i_f3, (unsigned long long)i_fpcr, done,
+                 (unsigned long long)j_pc, (unsigned long long)j_f3);
+      }
+    };
+
+    printf("[JIT][FPTEST] running %s func=%03x\n", v.name, v.func);
+    run_case(fixed[3], fixed[4], N | INE, false); // FP disabled: must bail
+    for (u64 fpcr : fpcrs) {
+      if (v.binary) {
+        for (u64 a : fixed)
+          for (u64 bv : fixed)
+            run_case(a, bv, fpcr, true);
+        for (int k = 0; k < 4000; ++k) {
+          const u64 a = rval();
+          run_case(a, rval(), fpcr, true);
+        }
+      } else {
+        for (u64 bv : fixed)
+          run_case(0, bv, fpcr, true);
+        for (int k = 0; k < 20000; ++k)
+          run_case(0, rval(), fpcr, true);
+      }
+    }
+  }
+
+  printf("[JIT][FPTEST] %-6s %4s %10s %10s %10s %6s\n", "op", "func", "native",
+         "bail", "overbail", "fail");
+  for (const Variant &v : vs)
+    if (v.native || v.bail || v.fail)
+      printf("[JIT][FPTEST] %-6s %03x  %10llu %10llu %10llu %6llu\n", v.name,
+             v.func, (unsigned long long)v.native, (unsigned long long)v.bail,
+             (unsigned long long)v.overbail, (unsigned long long)v.fail);
+  printf("[JIT][FPTEST] %llu cases, %d interpreted-only forms, %llu failures: "
+         "%s\n",
+         (unsigned long long)total_cases, skipped,
+         (unsigned long long)total_fail, total_fail ? "FAIL" : "PASS");
+  memcpy((u8 *)dram_ptr + page, saved, 4);
+  flush_icache();
+  fflush(stdout);
+  std::_Exit(total_fail ? 1 : 0);
+}
+#endif // JIT_VERIFY
 #endif
 
 /**

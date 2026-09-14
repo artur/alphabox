@@ -448,7 +448,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
      garbage estimate sends the correction loop below walking ~2^60 ULPs */
   zsig = udiv128to64(asig, 0, zsig << 32) + (zsig << 30);
   if ((zsig & 0x1FF) <= 5) {                          /* close to even? */
-    remh = uemul64(zsig, zsig, &reml);                /* result^2 */
+    reml = uemul64(zsig, zsig, &remh); /* result^2: low -> reml, high -> remh
+                                          (swapped before, which walked the
+                                          loop below for ~2^60 steps) */
     remh = (asig - remh - (reml ? 1 : 0)) & X64_QUAD; /* arg - result^2 */
     reml = NEG_Q(reml);
     while (Q_GETSIGN(remh) != 0) {      /* if arg < result^2 */

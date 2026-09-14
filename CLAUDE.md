@@ -87,7 +87,8 @@ CPU 0 fires the Cchip interval timer at dispatch-batch boundaries, and the
 JIT (`src/jit/jitengine.cpp`, `ES40_JIT` builds only): translates Alpha
 basic blocks to host code via asmjit -- x86-64 emitter in jitengine.cpp,
 AArch64 emitter in `src/jit/jitemit_a64.hpp` (same bail/chain/frame protocol;
-the inline IEEE FP ops are x86-only and interpreted on arm64), direct-mapped block cache keyed by
+`AXPBOX_JIT_FPTEST=1` on a `JIT_VERIFY` build self-tests the inline IEEE FP
+ops against the interpreter), direct-mapped block cache keyed by
 physical PC, poly-link direct chaining between blocks, register pinning;
 bails to the interpreter for anything hairy. The trace tier (`JIT_TRACES`)
 is deliberately dormant. `jit_run()` in AlphaCPU.cpp is the dispatch loop;

@@ -670,6 +670,294 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
+    // Inline IEEE FP (FLTI 0x16 and the ITFP SQRTs). Same contract as the x86
+    // emitter: complete natively only when the result is bit-exact with the
+    // interpreter AND the interpreter would neither trap nor set a new FPCR
+    // sticky bit (compiled code never writes FPCR); every other case bails to
+    // the interpreter at this instruction. The host FPCR is the AAPCS64
+    // default (round-to-nearest, no traps, no flush-to-zero; see
+    // CAlphaCPU::run). Beyond the x86 checks this also bails on:
+    //  - an underflow to zero (MUL/DIV/CVTTS with nonzero operands): the
+    //    interpreter sets UNF (and traps with /U) although no denormal appears;
+    //  - an S operand that isn't exactly representable in single precision
+    //    (the interpreter operates on the full register value);
+    //  - CVTTQ Inf/NaN operands up front, as fcvtz*/fcvtn* saturate (NaN -> 0)
+    //    instead of returning x86's integer-indefinite value.
+    if (op == OP_CVTQT || op == OP_CVTQS || op == OP_ADDT || op == OP_SUBT ||
+        op == OP_MULT || op == OP_DIVT || op == OP_CMPTUN || op == OP_CMPTEQ ||
+        op == OP_CMPTLT || op == OP_CMPTLE || op == OP_ADDS || op == OP_SUBS ||
+        op == OP_MULS || op == OP_DIVS || op == OP_CVTST || op == OP_CVTTS ||
+        op == OP_CVTTQ || op == OP_SQRTS || op == OP_SQRTT) {
+      const a64::Vec d0 = a64::d(0), d1 = a64::d(1), d2 = a64::d(2);
+      const a64::Vec s0 = a64::s(0), s1 = a64::s(1);
+      const bool dyn = ((ins >> 11) & 3) == 3; // /D: FPCR<59:58> rounding
+      const uint64_t kMag64 = ~((uint64_t)1 << 63);
+      Label fbail = a.new_label(), cont = a.new_label();
+      auto freg = [&](int r) {
+        return fld(m_off.f_base + 8u * (uint32_t)r, 3);
+      };
+      // FPCR gates. INE already sticky -> an inexact result changes nothing.
+      auto need_ine = [&]() {
+        a.ldr(x11, fld(m_off.fpcr, 3));
+        a.tbz(x11, imm(56), fbail);
+      };
+      auto need_nearest = [&]() {
+        a.ldr(x11, fld(m_off.fpcr, 3));
+        a.lsr(x11, x11, imm(58));
+        a.and_(x11, x11, imm(3));
+        a.cmp(x11, imm(2));
+        a.b_ne(fbail);
+      };
+      // Class checks on raw register bits (clobber x10/x11). Denormal always
+      // bails; chk also bails Inf/NaN.
+      auto dbl_bail = [&](const a64::Gp &v, bool chk) {
+        Label ok = a.new_label();
+        a.lsr(x11, v, imm(52));
+        a.and_(x11, x11, imm(0x7ff));
+        if (chk) {
+          a.cmp(x11, imm(0x7ff));
+          a.b_eq(fbail);
+        }
+        a.cbnz(x11, ok);
+        a.lsl(x10, v, imm(12));
+        a.cbnz(x10, fbail);
+        a.bind(ok);
+      };
+      auto sgl_bail = [&](const a64::Gp &v32, bool chk) {
+        Label ok = a.new_label();
+        a.lsr(a64::w11, v32, imm(23));
+        a.and_(a64::w11, a64::w11, imm(0xff));
+        if (chk) {
+          a.cmp(a64::w11, imm(0xff));
+          a.b_eq(fbail);
+        }
+        a.cbnz(a64::w11, ok);
+        a.lsl(a64::w10, v32, imm(9));
+        a.cbnz(a64::w10, fbail);
+        a.bind(ok);
+      };
+      // Compare operands: NaN or denormal bails; zero/Inf/normal compare.
+      auto cmp_bail = [&](const a64::Gp &v) {
+        Label ok = a.new_label(), special = a.new_label();
+        a.lsr(x11, v, imm(52));
+        a.and_(x11, x11, imm(0x7ff));
+        a.cmp(x11, imm(0x7ff));
+        a.b_eq(special);
+        a.cbnz(x11, ok);
+        a.bind(special);
+        a.lsl(x10, v, imm(12));
+        a.cbnz(x10, fbail);
+        a.bind(ok);
+      };
+      // vd <- v (register bits) narrowed to single in vs; bail unless exact.
+      auto narrow_exact = [&](const a64::Gp &v, const a64::Vec &vd,
+                              const a64::Vec &vs) {
+        a.fmov(vd, v);
+        a.fcvt(vs, vd);
+        a.fcvt(d2, vs);
+        a.fmov(x10, d2);
+        a.cmp(x10, v);
+        a.b_ne(fbail);
+      };
+
+      a.ldrb(w11, fld(m_off.fpen, 0)); // FPSTART: FP disabled -> FEN trap
+      a.cbz(w11, fbail);
+      a.str(a64::xzr, fld(m_off.exc_sum, 3));
+
+      switch (op) {
+      case OP_CVTQT:
+      case OP_CVTQS: { // f[Fc] = (T|S)(s64) f[Fb]
+        Label exact = a.new_label(), inexact = a.new_label();
+        if (dyn)
+          need_nearest();
+        if (rb == 31)
+          a.mov(x0, imm(0));
+        else
+          a.ldr(x0, freg(rb));
+        if (op == OP_CVTQT) {
+          a.scvtf(d0, x0);
+          a.fcvtzs(x1, d0);
+        } else {
+          a.scvtf(s0, x0);
+          a.fcvtzs(x1, s0);
+        }
+        a.cmp(x1, x0); // round trip equal -> exact ...
+        a.b_ne(inexact);
+        a.mov(x12, imm(kMag64)); // ... except INT64_MAX, which saturation
+        a.cmp(x0, x12);          // hides (2^63 is never exact)
+        a.b_ne(exact);
+        a.bind(inexact);
+        need_ine();
+        a.bind(exact);
+        if (op == OP_CVTQS)
+          a.fcvt(d0, s0);
+        a.fmov(x12, d0);
+        break;
+      }
+      case OP_ADDT:
+      case OP_SUBT:
+      case OP_MULT:
+      case OP_DIVT:
+      case OP_ADDS:
+      case OP_SUBS:
+      case OP_MULS:
+      case OP_DIVS: {
+        const bool sgl =
+            op == OP_ADDS || op == OP_SUBS || op == OP_MULS || op == OP_DIVS;
+        const bool mul = op == OP_MULT || op == OP_MULS;
+        const bool div = op == OP_DIVT || op == OP_DIVS;
+        need_ine();
+        if (dyn)
+          need_nearest();
+        a.ldr(x0, freg(ra));
+        a.ldr(x1, freg(rb));
+        dbl_bail(x0, false);
+        dbl_bail(x1, false);
+        if (sgl) {
+          narrow_exact(x0, d0, s0);
+          narrow_exact(x1, d1, s1);
+        } else {
+          a.fmov(d0, x0);
+          a.fmov(d1, x1);
+        }
+        const a64::Vec &l = sgl ? s0 : d0;
+        const a64::Vec &r = sgl ? s1 : d1;
+        if (op == OP_ADDT || op == OP_ADDS)
+          a.fadd(l, l, r);
+        else if (op == OP_SUBT || op == OP_SUBS)
+          a.fsub(l, l, r);
+        else if (mul)
+          a.fmul(l, l, r);
+        else
+          a.fdiv(l, l, r);
+        Label nz = a.new_label();
+        if (sgl) {
+          a.fmov(w12, s0);
+          sgl_bail(w12, true); // Inf/NaN/denormal result
+          a.tst(w12, imm(0x7fffffff));
+        } else {
+          a.fmov(x12, d0);
+          dbl_bail(x12, true);
+          a.tst(x12, imm(kMag64));
+        }
+        if (mul || div) { // zero result: underflow unless an operand is 0
+          a.b_ne(nz);
+          a.tst(x0, imm(kMag64));
+          a.b_eq(nz);
+          if (mul) {
+            a.tst(x1, imm(kMag64));
+            a.b_ne(fbail);
+          } else {
+            a.b(fbail);
+          }
+        }
+        a.bind(nz);
+        if (sgl) {
+          a.fcvt(d0, s0);
+          a.fmov(x12, d0);
+        }
+        break;
+      }
+      case OP_CMPTUN:
+      case OP_CMPTEQ:
+      case OP_CMPTLT:
+      case OP_CMPTLE: { // f[Fc] = (Fa cmp Fb) ? 2.0 : 0.0
+        a.ldr(x0, freg(ra));
+        a.ldr(x1, freg(rb));
+        cmp_bail(x0);
+        cmp_bail(x1);
+        if (op == OP_CMPTUN) {
+          a.mov(x12, imm(0)); // both ordered -> unordered is false
+        } else {
+          a.fmov(d0, x0);
+          a.fmov(d1, x1);
+          a.fcmp(d0, d1);
+          a.cset(x12, a64_cc(op == OP_CMPTEQ   ? CondCode::kEQ
+                             : op == OP_CMPTLT ? CondCode::kMI
+                                               : CondCode::kLS));
+          a.lsl(x12, x12, imm(62));
+        }
+        break;
+      }
+      case OP_CVTST: // zero/normal S bits are already valid T
+        a.ldr(x12, freg(rb));
+        dbl_bail(x12, true);
+        break;
+      case OP_CVTTS: { // T -> S narrow
+        Label nz = a.new_label();
+        need_ine();
+        if (dyn)
+          need_nearest();
+        a.ldr(x0, freg(rb));
+        dbl_bail(x0, false);
+        a.fmov(d0, x0);
+        a.fcvt(s0, d0);
+        a.fmov(w12, s0);
+        sgl_bail(w12, true);
+        a.tst(w12, imm(0x7fffffff)); // zero from a nonzero operand: underflow
+        a.b_ne(nz);
+        a.tst(x0, imm(kMag64));
+        a.b_ne(fbail);
+        a.bind(nz);
+        a.fcvt(d0, s0);
+        a.fmov(x12, d0);
+        break;
+      }
+      case OP_CVTTQ: { // T -> s64 bits
+        const bool chop = ((ins >> 11) & 3) == 0;
+        Label exact = a.new_label();
+        if (dyn)
+          need_nearest();
+        a.ldr(x0, freg(rb));
+        dbl_bail(x0, true);
+        a.fmov(d0, x0);
+        if (chop)
+          a.fcvtzs(x12, d0);
+        else
+          a.fcvtns(x12, d0); // nearest, ties to even (the interpreter's rule)
+        a.mov(x10, imm((uint64_t)1 << 63)); // saturated -> overflow (IOV)
+        a.cmp(x12, x10);
+        a.b_eq(fbail);
+        a.mvn(x10, x10);
+        a.cmp(x12, x10);
+        a.b_eq(fbail);
+        a.scvtf(d1, x12); // round trip == source -> exact
+        a.fcmp(d1, d0);
+        a.b_eq(exact);
+        need_ine();
+        a.bind(exact);
+        break;
+      }
+      default: { // OP_SQRTT / OP_SQRTS
+        need_ine();
+        if (dyn)
+          need_nearest();
+        a.ldr(x0, freg(rb));
+        dbl_bail(x0, false);
+        if (op == OP_SQRTT) {
+          a.fmov(d0, x0);
+          a.fsqrt(d0, d0);
+          a.fmov(x12, d0);
+          dbl_bail(x12, true); // Inf/NaN (negative operand)/denormal
+        } else {
+          narrow_exact(x0, d0, s0);
+          a.fsqrt(s0, s0);
+          a.fmov(w12, s0);
+          sgl_bail(w12, true);
+          a.fcvt(d0, s0);
+          a.fmov(x12, d0);
+        }
+        break;
+      }
+      }
+      a.str(x12, freg(rc));
+      a.b(cont);
+      a.bind(fbail);
+      bail(i);
+      a.bind(cont);
+      continue;
+    }
+
     // JMP/JSR/RET: Ra = PC+4; PC = Rb & ~3 (| current mode bits). x9 = target
     // for the epilogue's jit_indirect chain.
     if (op == OP_JMP) {

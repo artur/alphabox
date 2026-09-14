@@ -379,6 +379,10 @@ private:
   // Indirect jump (JMP/HW_RET): look up the target block; return its chained
   // re-entry or null.
   static void *jit_indirect(CAlphaCPU *cpu, u64 target);
+#ifdef JIT_VERIFY
+  // AXPBOX_JIT_FPTEST=1: compiled inline IEEE FP ops vs the interpreter
+  void jit_fp_selftest();
+#endif
   // MISC (0x18) state reads: sel 0=RPCC (cycle counter), 1=RC, 2=RS (read
   // interrupt flag + clear/set). Value the verify can't re-derive -> replayed
   // from the load log like a load.
