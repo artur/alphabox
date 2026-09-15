@@ -955,11 +955,14 @@ void CConfigurator::initialize() {
     break;
   }
 
+  // Synthesize mandatory system hardware omitted from the configuration.
   // The ES40 hardware always has two serial ports; SRM and guest OSes
-  // expect both UARTs to exist. Synthesize any port missing from the
-  // configuration as a null_attach (bit-bucket) port.
+  // expect both UARTs to exist, so a missing port becomes a null_attach
+  // (bit-bucket) port.  The floppy controller is integrated in the M1543C
+  // south bridge and always exists, even with no drives attached.
   if (myFlags & IS_CS) {
     bool have_serial[2] = {false, false};
+    bool have_fdc0 = false;
     for (i = 0; i < iNumChildren; i++) {
       if (!strcmp(pChildren[i]->get_myValue(), "serial")) {
         number = 0;
@@ -967,7 +970,27 @@ void CConfigurator::initialize() {
           number = atoi(&pChildren[i]->get_myName()[6]);
         if (number >= 0 && number < 2)
           have_serial[number] = true;
+      } else if (!strcmp(pChildren[i]->get_myValue(), "floppy") &&
+                 !strncmp(pChildren[i]->get_myName(), "fdc", 3) &&
+                 atoi(&pChildren[i]->get_myName()[3]) == 0) {
+        have_fdc0 = true;
       }
+    }
+
+    if (!have_fdc0) {
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE(Configuration, "No room to add default configuration for fdc0");
+
+      printf("%%SYS-I-DEFAULTFDC: fdc0 is not configured; "
+             "adding the built-in floppy controller.\n");
+
+      char *fname = (char *)malloc(5);
+      strcpy(fname, "fdc0");
+      char *fvalue = (char *)malloc(7);
+      strcpy(fvalue, "floppy");
+      char ftext[] = "";
+      pChildren[iNumChildren++] =
+          new CConfigurator(this, fname, fvalue, ftext, 0);
     }
 
     for (number = 0; number < 2; number++) {

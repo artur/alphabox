@@ -36,9 +36,15 @@
 #include "DMA.hpp"
 #include "DiskController.hpp"
 #include "SystemComponent.hpp"
+#include <mutex>
 
 /**
- * \brief Emulated floppy-drive controller.
+ * \brief Emulated floppy-drive controller (82077AA-compatible FDC of the
+ * ALi M1543C).
+ *
+ * Commands execute synchronously on the guest's port I/O thread; DMA data is
+ * moved in one CDMA::send_data()/recv_data() call, non-DMA (PIO) data one
+ * byte per data-register access.
  **/
 class CFloppyController : public CSystemComponent, public CDiskController {
 public:
@@ -51,11 +57,41 @@ public:
   virtual void init();
 
 private:
+  struct SFloppyGeometry {
+    int cylinders;
+    int heads;
+    int sectors;
+    u8 data_rate;
+    off_t_large byte_size;
+  };
+
+  void write_data(u8 data);
+  bool read_data(u8 *value);
+  void execute_command(int cmd);
+  void cmd_read_write(int cmd);
+  void cmd_format();
+  void reset_controller(bool raise_irq);
   void do_interrupt();
   void clear_interrupt();
   u8 get_status();
+  bool get_geometry(int drive, SFloppyGeometry *geometry);
+  void prepare_rw_result(int drive, int head, int eot,
+                         const SFloppyGeometry &geometry, bool multi_track,
+                         bool result_is_next, size_t count);
+  bool format_track(int drive, int head, u8 sector_size, u8 sector_count,
+                    u8 fill, const u8 *sector_ids, size_t id_bytes);
+  void finish_pio_transfer(bool ok);
 
-  struct {
+  /// Serializes guest port I/O (any CPU thread) and state save/restore.
+  /// Lock order: controller_mutex, then the DMA's own mutex.
+  std::mutex controller_mutex;
+
+  /// Scratch buffer for DMA transfers (not part of the saved state).
+  u8 xfer_buffer[65536];
+
+  /// The state structure contains all elements that need to be saved to the
+  /// statefile.
+  struct SFDC_state {
     struct {
       int seeking;
       int cylinder;
@@ -64,7 +100,7 @@ private:
 
     u8 write_precomp;
     u8 drive_select;
-    bool dma;
+    bool dma; ///< SPECIFY ND bit clear: execution phase uses DMA.
     u8 datarate;
 
     struct {
@@ -75,7 +111,6 @@ private:
       bool seeking[2];
     } status;
 
-    int busy;
     u8 cmd_parms[16];
     u8 cmd_parms_ptr;
     u8 cmd_res[16];
@@ -84,8 +119,26 @@ private:
 
     bool interrupt;
     u8 dor;
-    u8 reset_sense_cnt;
+    u8 reset_sense_cnt; ///< Pending post-reset Sense Interrupt Status polls.
+    u8 seek_st0; ///< ST0 of the last SEEK/RECALIBRATE, for Sense Interrupt.
 
+    /// Non-DMA execution phase.
+    struct {
+      bool active;
+      bool write;
+      bool format;
+      u8 drive;
+      u8 head;
+      u8 format_n;
+      u8 format_sc;
+      u8 format_fill;
+      off_t_large offset;
+      off_t_large second_offset;
+      u32 size;
+      u32 first_size;
+      u32 pos;
+      u8 data[65536];
+    } pio;
   } state;
 };
 
@@ -97,9 +150,7 @@ private:
 #define FDC_REG_COMMAND 5
 #define FDC_REG_DIR 7
 
-#define SEL_DRIVE state.drive[state.drive_select]
-#define SEL_FDISK get_disk(0, state.drive_select)
-#define DRIVE(i) state.drive[i]
+/// Disk attached to drive i (0-1), or NULL (also for i = 2-3).
 #define FDISK(i) get_disk(0, i)
 
 //

@@ -131,6 +131,9 @@
 // Define to if you want to enable DMA Controller debugging
 //#define DEBUG_DMA
 
+// Define to if you want to enable Floppy Disk Controller debugging
+//#define DEBUG_FDC
+
 // Define to 1 if you want to enable backtrace on SIGSEGV debugging
 #undef DEBUG_BACKTRACE
 

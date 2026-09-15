@@ -34,11 +34,14 @@
 #define INCLUDED_DMA_H
 
 #include "SystemComponent.hpp"
+#include <mutex>
 
 /**
- * \brief Emulated DMA controller.
+ * \brief Emulated DMA controller (two cascaded 8237s in the ALi M1543C).
+ *
+ * Devices move data with send_data()/recv_data() in one call per transfer;
+ * the controller is not clocked and no bus arbitration is modelled.
  **/
-
 class CDMA : public CSystemComponent {
 public:
   CDMA(CConfigurator *cfg, CSystem *c);
@@ -50,37 +53,63 @@ public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
 
-  void set_request(int index, int channel, int data);
-  void send_data(int channel, void *data, size_t length = 0);
-  void recv_data(int channel, void *data, size_t length = 0);
-  int get_count(int channel) { return state.channel[channel].count; };
-  size_t get_transfer_size(int channel) {
-    return (size_t)state.channel[channel].count + 1;
+  struct SDMA_result {
+    size_t transferred;  ///< Bytes moved to/from memory (0 for verify).
+    bool blocked;        ///< No service: registers and buffer are unchanged.
+    bool terminal_count; ///< This call exhausted the count (even w/ autoinit).
+    bool external_eop;   ///< This call honoured the device's EOP request.
+    bool verify;         ///< Verify mode: count advanced, memory untouched.
   };
 
+  // Buffers and lengths are in bytes; length 0 means "the current count".
+  // Channels 0-3 are byte channels, 5-7 word channels (length must be even);
+  // channel 4 is the cascade and cannot be used by a device.
+  // send: device -> memory (8237 "write"); recv: memory -> device ("read").
+  // A transfer is blocked when the owning controller is disabled, the channel
+  // is masked without a software request, the channel is in cascade mode, or
+  // the programmed transfer type is illegal or of the wrong direction.
+  // eop ends the transfer after the last unit of this call.  Terminal count or
+  // EOP sets the TC status bit, clears the software request, and then either
+  // reloads the base registers (autoinit) or masks the channel.
+  SDMA_result send_data(int channel, void *data, size_t length = 0,
+                        bool eop = false);
+  SDMA_result recv_data(int channel, void *data, size_t length = 0,
+                        bool eop = false);
+
+  /// Current count plus one, in bytes (device channels only).
+  size_t get_transfer_size(int channel);
+
 private:
-  void do_dma();
+  SDMA_result transfer(int channel, void *data, size_t length, bool eop,
+                       bool to_memory);
+  void set_request(int ctrlr, int channel, int data);
+  u8 get_requests(int ctrlr);
+  bool advance_transfer(int channel, size_t units, bool eop);
+  void complete_transfer(int channel);
+
+  /// Guest port I/O can arrive on any CPU thread while a device transfers.
+  std::mutex dma_mutex;
 
   /// The state structure contains all elements that need to be saved to the
   /// statefile.
   struct SDMA_state {
     /// DMA channel state
     struct SDMA_chan {
-      bool a_lobyte; // address lobyte expected
-      bool c_lobyte; // count lobyte expected
-      u16 current;
-      u16 base;
-      u16 pagebase;
-      u16 count;
+      u16 current;    ///< Current address register.
+      u16 base;       ///< Base address register (autoinit reload).
+      u16 pagebase;   ///< High page (bits 15-8) and low page (bits 7-0).
+      u16 count;      ///< Current count register.
+      u16 base_count; ///< Base count register (autoinit reload).
       u8 mode;
     } channel[8];
 
     /// DMA controller state
     struct SDMA_ctrl {
-      u8 status;
+      u8 status; ///< Terminal-count bits (cleared on read).
       u8 command;
-      u8 request;
+      u8 request; ///< Software request bits.
       u8 mask;
+      bool lobyte; ///< Flip-flop shared by address and count registers.
     } controller[2];
   } state;
 };
