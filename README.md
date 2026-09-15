@@ -161,6 +161,12 @@ The S3 Trio64 emulation (ported from [ES40-Emu/es40](https://github.com/ES40-Emu
   `mouse.invert_x`, `mouse.invert_y` in the `sdl` section tune it (see the
   WSLg note below). `video.scale_ratio` / `video.scale_change_enable`
   control window scaling (Ctrl+PageUp / Ctrl+PageDown at runtime).
+- **Hotkeys**: every GUI shortcut can be rebound with `hotkey.*` in the
+  `sdl` section (e.g. `hotkey.ctrl_alt_delete = "GUI+Shift+D";` on a Mac
+  keyboard without an End key); the active bindings are printed at startup
+  (`%SDL-I-HOTKEYS`) and shown in the window title. Defaults: Ctrl+F10
+  mouse, Ctrl+F11 / Ctrl+Shift+F11 media, Ctrl+Alt+End sends
+  Ctrl+Alt+Delete, Ctrl+Alt+Home resets the window size.
 - **CD images**: a cdrom `file` ending in `.cue` is parsed as a BIN/CUE
   image (multi-file, MODE1/MODE2/audio tracks); anything else is treated
   as a flat ISO. CD drives are read-only unless `read_only = false`, and

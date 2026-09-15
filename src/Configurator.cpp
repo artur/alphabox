@@ -609,15 +609,15 @@ static const char *const kv_disk_device[] = {
 static const char *const kv_disk_ram[] = {
     "size",       "file",    "model_number", "serial_number", "serial_num",
     "rev_number", "rev_num", "read_only",    "cdrom",         0};
-static const char *const kv_gui_sdl[] = {"keyboard.use_mapping",
-                                         "keyboard.map",
-                                         "mouse.speed",
-                                         "mouse.invert_x",
-                                         "mouse.invert_y",
-                                         "video.linear",
-                                         "video.scale_ratio",
-                                         "video.scale_change_enable",
-                                         0};
+static const char *const kv_gui_sdl[] = {
+    "keyboard.use_mapping", "keyboard.map",
+    "mouse.speed",          "mouse.invert_x",
+    "mouse.invert_y",       "video.linear",
+    "video.scale_ratio",    "video.scale_change_enable",
+    "hotkey.mouse_capture", "hotkey.media",
+    "hotkey.media_force",   "hotkey.ctrl_alt_delete",
+    "hotkey.reset_window",  "hotkey.scale_up",
+    "hotkey.scale_down",    0};
 static const char *const kv_gui_x11[] = {"keyboard.use_mapping", "keyboard.map",
                                          "private_colormap", 0};
 static const char *const kv_mpu401[] = {"midi_out", 0};
