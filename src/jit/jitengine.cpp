@@ -2173,6 +2173,32 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         break; // OP_DIVT
       }
       class_bail(x86::xmm0, true); // Inf/NaN/denormal result -> interp
+      if (op == OP_MULT || op == OP_DIVT) {
+        // Complete underflow rounds to +-0 with no denormal to catch, but
+        // ieee_rpack still sets FPCR.UNF (and the /U trap): a zero result bails
+        // unless an operand is +-0 or (DIV) the divisor is +-Inf -- exact
+        // signed zeros with no exception. ADD/SUB cannot underflow to zero.
+        Label nz = a.new_label();
+        a.movq(x86::rax, x86::xmm0);
+        a.add(x86::rax, x86::rax); // drop the sign bit
+        a.jnz(nz);
+        a.mov(x86::rax,
+              x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)ra));
+        a.add(x86::rax, x86::rax);
+        a.jz(nz); // Fa == +-0 -> exact zero
+        a.mov(x86::rax,
+              x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rb));
+        a.add(x86::rax, x86::rax);
+        if (op == OP_MULT) {
+          a.jz(nz); // Fb == +-0 -> exact zero
+        } else {
+          a.mov(x86::rcx, imm(0xFFE0000000000000ull)); // +-Inf << 1
+          a.cmp(x86::rax, x86::rcx);
+          a.je(nz); // finite / +-Inf -> exact zero
+        }
+        a.jmp(bail); // underflowed to zero
+        a.bind(nz);
+      }
       a.movq(x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rc),
              x86::xmm0); // f[Fc]
       a.jmp(cont);
@@ -2333,6 +2359,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       dbl_bail(x86::xmm0, false, bail); // denormal operand -> interp
       a.cvtsd2ss(x86::xmm0, x86::xmm0); // round to single
       sgl_bail(x86::xmm0, true, bail);  // Inf/NaN/denormal single -> interp
+      {
+        // Complete underflow to +-0: a nonzero double below the single range.
+        // The interpreter owns FPCR.UNF and the trap.
+        Label nz = a.new_label();
+        a.movd(x86::eax, x86::xmm0);
+        a.add(x86::eax, x86::eax); // drop the sign bit
+        a.jnz(nz);
+        a.mov(x86::rax,
+              x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rb));
+        a.add(x86::rax, x86::rax);
+        a.jz(nz); // Fb == +-0 -> exact zero
+        a.jmp(bail);
+        a.bind(nz);
+      }
       a.cvtss2sd(x86::xmm0, x86::xmm0); // -> double (register format)
       a.movq(x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rc),
              x86::xmm0);
@@ -2478,6 +2518,30 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
       sgl_bail(x86::xmm0, true,
                bail); // Inf/NaN/denormal single result -> interp
+      if (op == OP_MULS || op == OP_DIVS) {
+        // Complete underflow to +-0 (see MULT/DIVT): bail unless an operand is
+        // +-0 or (DIV) the divisor is +-Inf.
+        Label nz = a.new_label();
+        a.movd(x86::eax, x86::xmm0);
+        a.add(x86::eax, x86::eax); // drop the sign bit
+        a.jnz(nz);
+        a.mov(x86::rax,
+              x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)ra));
+        a.add(x86::rax, x86::rax);
+        a.jz(nz); // Fa == +-0 -> exact zero
+        a.mov(x86::rax,
+              x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rb));
+        a.add(x86::rax, x86::rax);
+        if (op == OP_MULS) {
+          a.jz(nz); // Fb == +-0 -> exact zero
+        } else {
+          a.mov(x86::rcx, imm(0xFFE0000000000000ull)); // +-Inf << 1
+          a.cmp(x86::rax, x86::rcx);
+          a.je(nz); // finite / +-Inf -> exact zero
+        }
+        a.jmp(bail); // underflowed to zero
+        a.bind(nz);
+      }
       a.cvtss2sd(x86::xmm0, x86::xmm0); // -> double (register format)
       a.movq(x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rc),
              x86::xmm0);
@@ -2513,6 +2577,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // -> set_pc, interp re-runs) / 2 arith trap (op ran + GO_PAL already set
     // state.pc -> return as-is).
     if (op == OP_FLTV) {
+      // A trap inside the helper (GO_PAL) takes EXC_ADDR from current_pc,
+      // which compiled code doesn't otherwise maintain.
+      a.mov(x86::r10, imm(b->tag + 4 * (uint64_t)i));
+      a.mov(x86::qword_ptr(x86::rbp, m_off.state_current_pc), x86::r10);
       emit_call(fltv_helper,
                 {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}}); // jit_fltv(cpu, ins)
       Label ok = a.new_label(), trapped = a.new_label();

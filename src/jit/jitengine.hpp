@@ -191,6 +191,7 @@ public:
     uint32_t dpc_write_row; // byte distance from read cache [0] to write cache
                             // [1] (store fast path)
     uint32_t state_cm, state_asn0, dram_ptr, dram_size, state_pc;
+    uint32_t state_current_pc; // GO_PAL takes EXC_ADDR from it (FLTV traps)
     uint32_t fpen, exc_sum, fpcr,
         f_base; // FP inline path: FPSTART gate + FPCR (rounding/INE) + f[] base
                 // (f[i] = f_base + i*8)

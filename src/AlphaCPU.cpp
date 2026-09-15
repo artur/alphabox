@@ -183,6 +183,7 @@ void CAlphaCPU::init() {
     o.dram_ptr = (uint32_t)((char *)&dram_ptr - (char *)this);
     o.dram_size = (uint32_t)((char *)&dram_size - (char *)this);
     o.state_pc = (uint32_t)((char *)&state.pc - (char *)this);
+    o.state_current_pc = (uint32_t)((char *)&state.current_pc - (char *)this);
     o.jit_budget = (uint32_t)((char *)&m_jit_budget - (char *)this);
     o.check_int = (uint32_t)((char *)&state.check_int - (char *)this);
     o.check_timers = (uint32_t)((char *)&state.check_timers - (char *)this);

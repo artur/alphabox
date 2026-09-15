@@ -987,6 +987,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // FLTV VAX: 0 ok / 1 FEN bail (op not run) / 2 arith trap (op ran, GO_PAL
     // already set state.pc -> count it and return as-is).
     if (op == OP_FLTV) {
+      // A trap inside the helper (GO_PAL) takes EXC_ADDR from current_pc,
+      // which compiled code doesn't otherwise maintain.
+      a.mov(x9, imm(b->tag + 4 * (uint64_t)i));
+      a.str(x9, fld(m_off.state_current_pc, 3));
       emit_call(hs.fltv_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
       Label ok = a.new_label(), trapped = a.new_label();
       a.cbz(w0, ok);
