@@ -82,20 +82,37 @@ private:
   u8 read_64();
   void write_64(u8 data);
   void resetinternals(bool powerup);
-  void enQ(u8 scancode);
-  void controller_enQ(u8 data, unsigned source);
+
+  /// Origin of a byte in the controller queue.
+  enum : u8 {
+    KBC_SRC_CTRL = 0,     ///< controller reply, keyboard channel (IRQ1)
+    KBC_SRC_CTRL_AUX = 1, ///< controller-generated aux byte (D3), IRQ12
+    KBC_SRC_KBD = 2,      ///< keyboard device reply
+    KBC_SRC_AUX = 3,      ///< mouse device reply
+  };
+
+  void kbd_enQ_sequence(const u8 *bytes, int count);
+  void kbd_response_enQ(u8 data);
+  void controller_enQ(u8 data, u8 source);
+  bool controller_deQ();
+  void load_output_buffer(u8 data, bool aux);
+  void deliver_kbd_byte();
+  void deliver_mouse_byte();
+  bool kbd_input_held() const;
+  bool mouse_input_held() const;
+  bool kbd_tail_pending() const;
+  bool mouse_tail_pending() const;
+  void drop_unsent_mouse_packets();
+  void discard_mouse_motion();
   void set_kbd_clock_enable(u8 value);
   void set_aux_clock_enable(u8 value);
   void ctrl_to_kbd(u8 value);
-  void enQ_imm(u8 val);
   void ctrl_to_mouse(u8 value);
-  bool mouse_enQ_packet(u8 b1, u8 b2, u8 b3, u8 b4);
-  void mouse_enQ(u8 mouse_data);
+  int build_mouse_packet(u8 *packet);
+  bool mouse_enQ_packet(const u8 *packet, int bytes);
   void kbd_update_irq();
   void kbd_service();
-
-  //  void kbd_clock();
-  void create_mouse_packet(bool force_enq);
+  void create_mouse_packet();
 
   /// The state structure contains all elements that need to be saved to the
   /// statefile.
@@ -121,17 +138,15 @@ private:
     bool allow_irq12;
     u8 kbd_output_buffer;
     u8 aux_output_buffer;
+    u8 last_kbd_byte; ///< last byte the keyboard sent (for FE resend)
+    u8 last_aux_byte; ///< last byte the mouse sent (for FE resend)
     u8 last_comm;
     u8 expecting_port60h;
     u8 expecting_mouse_parameter;
     u8 last_mouse_command;
-    u32 timer_pending;
-    bool irq1_requested;
-    bool irq12_requested;
     bool scancodes_translate;
     bool expecting_scancodes_set;
     u8 current_scancodes_set;
-    bool bat_in_progress;
 
     /// mouse status
     struct SAli_mouse {
@@ -185,12 +200,20 @@ private:
       u8 im_request;
       bool im_mode;
       bool data_pending;
+      u8 reported_buttons; ///< button state carried by the last packet
+      /// button states not yet packetized, oldest first (so a press and
+      /// release between two packets both reach the guest)
+#define BX_MOUSE_BUTTON_QSIZE 8
+      u8 button_queue[BX_MOUSE_BUTTON_QSIZE];
+      u8 button_queue_len;
     } mouse;
 
-    /// internal keyboard buffer
+    /// internal keyboard buffer (unsolicited keystrokes only; command replies
+    /// use the controller queue)
     struct SAli_kbdib {
       int num_elements;
       u8 buffer[BX_KBD_ELEMENTS];
+      bool seq_start[BX_KBD_ELEMENTS]; ///< first byte of a key event
       int head;
       bool expecting_typematic;
       bool expecting_led_write;
@@ -201,17 +224,21 @@ private:
       bool scanning_enabled;
     } kbd_internal_buffer;
 
-    /// internal mouse buffer
+    /// internal mouse buffer (unsolicited stream packets only; command
+    /// replies use the controller queue)
     struct SAli_mib {
       int num_elements;
       u8 buffer[BX_MOUSE_BUFF_SIZE];
+      bool pkt_start[BX_MOUSE_BUFF_SIZE]; ///< first byte of a packet
       int head;
     } mouse_internal_buffer;
 
-#define BX_KBD_CONTROLLER_QSIZE 5
+    /// Controller/response queue: controller replies and keyboard/mouse
+    /// command replies, each byte tagged with its KBC_SRC_* origin.
+#define BX_KBD_CONTROLLER_QSIZE 16
     u8 kbd_controller_Q[BX_KBD_CONTROLLER_QSIZE];
+    u8 kbd_controller_Qsrc[BX_KBD_CONTROLLER_QSIZE];
     unsigned kbd_controller_Qsize;
-    unsigned kbd_controller_Qsource; /**< 0=keyboard, 1=mouse */
   } state;
 };
 
