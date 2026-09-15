@@ -1532,8 +1532,9 @@ void CAlphaCPU::jit_run(int budget) {
                     : !b       ? CJitEngine::CR_NO_BLOCK
                     : !b->code ? (b->compiled ? CJitEngine::CR_UNCOMPILABLE
                                               : CJitEngine::CR_NOT_HOT)
-                    : b->phys != start_phys        ? CJitEngine::CR_STALE
-                    : state.check_int              ? CJitEngine::CR_INT
+                    : b->phys != start_phys ? CJitEngine::CR_STALE
+                    : state.check_int ? ((b->tag & 1) ? CJitEngine::CR_INT_PAL
+                                                      : CJitEngine::CR_INT)
                     : state.check_timers           ? CJitEngine::CR_TIMER
                     : ((b->tag & 1) && !state.sde) ? CJitEngine::CR_PAL_NOSDE
                                                    : CJitEngine::CR_BUDGET;

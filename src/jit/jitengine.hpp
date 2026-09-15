@@ -134,6 +134,12 @@ public:
                       // compile-time, exec-weighted at report
     uint32_t rp_csz;  // REGPROF: emitted x86 bytes for this block -- rp_hits x
                       // rp_csz = exec-weighted expansion
+    // REGPROF: inline memory ops in the block, and those following a memory op
+    // on the same base register and page-cache row with the probe state
+    // intact (DPC-reuse candidates); near = displacements within 8 KB.
+    uint32_t rp_memops;
+    uint32_t rp_dpc_pairs;
+    uint32_t rp_dpc_near;
 #endif
   };
 
@@ -223,7 +229,8 @@ public:
     CR_NOT_HOT,      // recorded, below the compile threshold
     CR_UNCOMPILABLE, // compiled, but its first instruction can't be
     CR_STALE,        // block's physical no longer matches the live mapping
-    CR_INT,          // interrupt pending (check_int)
+    CR_INT,          // interrupt pending (check_int), block not in PALmode
+    CR_INT_PAL,      // ...block in PALmode (can't take it before leaving PAL)
     CR_TIMER,        // delayed interrupt countdown pending (check_timers)
     CR_PAL_NOSDE,    // PALmode block while shadow registers are off
     CR_BUDGET,       // prefix longer than the remaining dispatch budget

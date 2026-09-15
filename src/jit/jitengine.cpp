@@ -1182,6 +1182,89 @@ static const bool g_zapnot_init = [] {
 }();
 
 #ifdef JIT_REGPROF
+// DPC-reuse eligibility: a block's inline memory ops, and those that follow an
+// earlier memory op on the same base register and page-cache row (read or
+// write) with nothing in between that writes the base or might disturb the
+// probe's scratch state -- the ops a cached page-cache probe could skip the
+// lookup for. near = such pairs whose displacements are within 8 KB (likely
+// the same page).
+struct RegprofDpc {
+  uint32_t memops = 0, pairs = 0, near = 0;
+};
+static RegprofDpc regprof_dpc(const uint32_t *w, uint32_t n) {
+  RegprofDpc r;
+  int prev_rb = -1; // base register of the live probe, -1 = none
+  bool prev_write = false;
+  int32_t prev_disp = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t ins = w[i];
+    const uint32_t op = ins >> 26;
+    const int ra = (ins >> 21) & 0x1f, rb = (ins >> 16) & 0x1f, rc = ins & 0x1f;
+    const int32_t disp = (int32_t)(int16_t)(ins & 0xffff);
+    bool mem = false, write = false;
+    switch (op) {
+    case 0x0a: // LDBU
+    case 0x0b: // LDQ_U
+    case 0x0c: // LDWU
+    case 0x28: // LDL
+    case 0x29: // LDQ
+    case 0x20: // LDF
+    case 0x21: // LDG
+    case 0x22: // LDS
+    case 0x23: // LDT
+      mem = true;
+      break;
+    case 0x0d: // STW
+    case 0x0e: // STB
+    case 0x0f: // STQ_U
+    case 0x2c: // STL
+    case 0x2d: // STQ
+    case 0x24: // STF
+    case 0x25: // STG
+    case 0x26: // STS
+    case 0x27: // STT
+      mem = write = true;
+      break;
+    default:
+      break;
+    }
+    if (mem) {
+      r.memops++;
+      if (prev_rb == rb && prev_write == write) {
+        r.pairs++;
+        const int32_t d = disp - prev_disp;
+        if (d > -0x2000 && d < 0x2000)
+          r.near++;
+      }
+      prev_rb = rb;
+      prev_write = write;
+      prev_disp = disp;
+      // An integer load into its own base register ends the chain (FP loads
+      // write an FP register).
+      const bool int_load =
+          op == 0x0a || op == 0x0b || op == 0x0c || op == 0x28 || op == 0x29;
+      if (int_load && ra == rb)
+        prev_rb = -1;
+      continue;
+    }
+    // Integer operate (0x10-0x12) and LDA/LDAH (0x08/0x09) keep the probe
+    // state unless they write the base; anything else (multiply, FP, HW,
+    // CALL_PAL, locked memory ops) counts as a reset.
+    if (op == 0x10 || op == 0x11 || op == 0x12) {
+      if (rc == prev_rb)
+        prev_rb = -1;
+      continue;
+    }
+    if (op == 0x08 || op == 0x09) {
+      if (ra == prev_rb)
+        prev_rb = -1;
+      continue;
+    }
+    prev_rb = -1;
+  }
+  return r;
+}
+
 // Bitmask of the Alpha integer GPRs a block's prefix touches (read or written),
 // for pin selection. Format-aware over the ops that drive the store-forward
 // chains -- integer operate, memory, branch, JMP, and the MISC state reads; FP
@@ -3288,6 +3371,12 @@ void CJitEngine::compile_block(
 #ifdef JIT_REGPROF
   b->rp_mask = regprof_mask(
       words, plen); // GPR-access fingerprint; exec-weighted at report time
+  {
+    const RegprofDpc dpc = regprof_dpc(words, plen);
+    b->rp_memops = dpc.memops;
+    b->rp_dpc_pairs = dpc.pairs;
+    b->rp_dpc_near = dpc.near;
+  }
 #endif
 
   const HelperSet hs = {
@@ -4129,8 +4218,8 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
   printf("%s\n", buf);
   {
     static const char *const kColdNames[CR_COUNT] = {
-        "nophys", "noblock", "nothot",  "uncompilable", "stale",
-        "int",    "timer",   "pal!sde", "budget",       "done0"};
+        "nophys",  "noblock", "nothot",  "uncompilable", "stale", "int",
+        "int-pal", "timer",   "pal!sde", "budget",       "done0"};
     len = snprintf(
         buf, sizeof(buf),
         "[JIT][STATS][CPU%d] cold-path instr/entries by reason:", m_cpu_id);
@@ -4383,6 +4472,7 @@ void CJitEngine::regprof_report() {
   uint64_t exec_instr = 0,
            exec_bytes =
                0; // exec-weighted: hot-path Alpha instrs and emitted x86 bytes
+  uint64_t exec_mem = 0, exec_pairs = 0, exec_near = 0; // DPC-reuse counts
   for (int s = 0; s < kCacheEntries; ++s) {
     const JitBlock &b = m_blocks[s];
     if (!b.valid || b.rp_hits == 0)
@@ -4392,7 +4482,18 @@ void CJitEngine::regprof_report() {
         hist[r] += b.rp_hits;
     exec_instr += b.rp_hits * (uint64_t)b.prefix_len;
     exec_bytes += b.rp_hits * (uint64_t)b.rp_csz;
+    exec_mem += b.rp_hits * (uint64_t)b.rp_memops;
+    exec_pairs += b.rp_hits * (uint64_t)b.rp_dpc_pairs;
+    exec_near += b.rp_hits * (uint64_t)b.rp_dpc_near;
   }
+  // DPC-reuse eligibility (exec-weighted): how much of the hot path is inline
+  // memory ops, and how many of those could reuse the previous op's probe.
+  printf("[JIT][REGPROF][CPU%d] memory ops %.1f%% of hot instrs; DPC-reuse "
+         "candidates %.1f%% of them (%.1f%% within 8 KB)\n",
+         m_cpu_id,
+         exec_instr ? 100.0 * (double)exec_mem / (double)exec_instr : 0.0,
+         exec_mem ? 100.0 * (double)exec_pairs / (double)exec_mem : 0.0,
+         exec_mem ? 100.0 * (double)exec_near / (double)exec_mem : 0.0);
   // Execution-weighted code expansion -- the HOT path, not the
   // cold-block-skewed static average. x86-instrs/instr ~= this / ~3.5; with
   // cycles/instr from the throughput line -> hot-path IPC.
