@@ -60,8 +60,8 @@ CDiskRam::~CDiskRam(void) {
 }
 
 bool CDiskRam::seek_byte(off_t_large byte) {
-  if (byte >= byte_size) {
-    FAILURE_1(InvalidArgument, "%s: Seek beyond end of file!\n", devid_string);
+  if (byte < 0 || byte >= byte_size) {
+    FAILURE_1(InvalidArgument, "%s: Seek outside disk image!\n", devid_string);
   }
 
   state.byte_pos = byte;
@@ -72,8 +72,12 @@ size_t CDiskRam::read_bytes(void *dest, size_t bytes) {
   if (state.byte_pos >= byte_size)
     return 0;
 
-  while (state.byte_pos + bytes >= byte_size)
-    bytes--;
+  // Clamp to the bytes left in the image. The old loop stopped one byte short
+  // (">="), so a transfer ending exactly at the end of the image lost its last
+  // byte.
+  const off_t_large available = byte_size - state.byte_pos;
+  if ((off_t_large)bytes > available)
+    bytes = (size_t)available;
 
   memcpy(dest, &(((char *)ramdisk)[state.byte_pos]), bytes);
   state.byte_pos += (unsigned long)bytes;
@@ -84,8 +88,12 @@ size_t CDiskRam::write_bytes(void *src, size_t bytes) {
   if (state.byte_pos >= byte_size)
     return 0;
 
-  while (state.byte_pos + bytes >= byte_size)
-    bytes--;
+  // Clamp to the bytes left in the image. The old loop stopped one byte short
+  // (">="), so a transfer ending exactly at the end of the image lost its last
+  // byte.
+  const off_t_large available = byte_size - state.byte_pos;
+  if ((off_t_large)bytes > available)
+    bytes = (size_t)available;
 
   memcpy(&(((char *)ramdisk)[state.byte_pos]), src, bytes);
   state.byte_pos += (unsigned long)bytes;
