@@ -46,9 +46,13 @@ see `src/config_debug.hpp` for all debug flags.
 cd test/rom && bash test.sh        # Linux: SRM firmware boot to P00>>> + console-log diff; expect "diff clean"
 ```
 
-On macOS `test.sh` can never pass (BSD sed rejects `\x00`); use the per-lane
-runner in the `srm-boot-test` skill, which also lists the lanes to run and
-the SRM probes (SMP init, memory layout, exit paths). Pitfalls: `test.sh`
+On macOS `test.sh` can never pass (BSD sed rejects `\x00`). The portable test
+tools live in `test/tools/`: `srm_run.sh` (per-lane SRM boot + log diff, own
+port per lane), `srm_probe.sh` (SMP init, memory layout, SCSI, exit-path
+probes), `win_bench.sh` (headless Windows guest boot + MIPS),
+`build_lanes.sh` / `build_revs.sh`. Their output goes to `$AXPBOX_WORK`
+(default `lab/`, git-excluded, which also holds guest images). See the
+`srm-boot-test`, `guest-boot-bench` and `build-lanes` skills. Pitfalls: `test.sh`
 deletes the tracked ROM files at the end — restore with
 `git checkout -- test/rom/` before committing. `test/rom/axp_correct.log`
 contains NUL bytes (grep needs `-a`; edit binary-safe).
@@ -61,7 +65,8 @@ memory pressure before starting large guests.
 Deeper verification (each has a skill with the full recipe): `boot-openvms`
 (full guest boot from `../run-axpbox` media — always copy disk images before
 booting them), `test-arc` (AlphaBIOS/ARC console via flash + S3),
-`verify-vga-sdl` (framebuffer inspection + input debugging), `srm-boot-test`.
+`verify-vga-sdl` (framebuffer inspection + input debugging), `srm-boot-test`,
+`guest-boot-bench` (Windows 2000 guest boots and the MIPS benchmark).
 For headless driving of the emulator (fb dumps, key/mouse injection,
 `SDL_VIDEO_DRIVER=offscreen`), the `AXPBOX_*` env hooks are documented in
 README "Headless testing".

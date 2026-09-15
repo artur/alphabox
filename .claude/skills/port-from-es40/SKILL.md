@@ -361,5 +361,4 @@ leave both alone). Trailer:
   autotools/Visual Studio/licence churn, the x64 engine split.
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
   rejects `\x00`) and leaks its emulator on timeout; use
-  `PORT=<port> lab/run_srm.sh <binary> <label>` (lab/ is git-excluded)
-  per lane instead.
+  `PORT=<port> test/tools/srm_run.sh <binary> <label>` per lane instead.

@@ -64,20 +64,12 @@ grep -rl ES40_JIT build-jit-verify/CMakeFiles/*/flags.make   # JIT lanes must de
 ## Build every lane
 
 ```bash
-#!/bin/bash
-lanes=(build build-default build-jit build-jit-verify build-jit-verify-x64 build-jit-x64
-       build-jit-stats build-jit-stats-sdl build-jit-verify-sdl build-jit-regprof-sdl
-       build-dbgflags-arm64 build-dbgflags-x86_64)
-for l in "${lanes[@]}"; do
-  [ -f "$l/CMakeCache.txt" ] || continue
-  cmake --build "$l" -j8 > "$l/last-build.log" 2>&1
-  rc=$?; printf '  %-24s rc=%s\n' "$l" "$rc"
-  [ $rc -ne 0 ] && grep -a 'error:' "$l/last-build.log" | head -5
-done
+test/tools/build_lanes.sh                 # every configured build*/ directory
+test/tools/build_lanes.sh build build-jit # just these
 ```
 
-Pitfall: a trailing `[ $rc -ne 0 ] && ...` makes the script exit 1 when the
-last lane succeeded. Read the rc column, not the exit code.
+One `rc=0` / `FAILED` line per lane (first errors shown, full log in
+`<lane>/build_lanes.log`); exit status 0 only when every lane built.
 
 Don't rebuild a lane whose binary a running test uses (the linker replaces
 the file under it): copy the binary first, or wait.
@@ -89,12 +81,7 @@ separate worktree with its own lanes:
 
 ```bash
 git worktree add ../axpbox-wt <base>           # once; configure lanes inside
-for rev in <sha1> <sha2> ...; do
-  git -C ../axpbox-wt checkout -q --detach "$rev"
-  for c in ../axpbox-wt/build*/CMakeCache.txt; do
-    cmake --build "$(dirname "$c")" -j8 > /dev/null 2>&1; echo "$rev $(dirname "$c") rc=$?"
-  done
-done
+WT=../axpbox-wt test/tools/build_revs.sh <sha1> <sha2> ...
 ```
 
 A detached checkout refuses while the worktree has local edits; compare

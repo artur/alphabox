@@ -25,37 +25,17 @@ no-VGA config (`test/rom/es40.cfg`), wait for `P00>>>` on the serial console
 
 ## Per-lane runner (macOS and Linux)
 
-Private run directory and telnet port per lane, so lanes can run in
-parallel and nothing touches `test/rom`:
-
 ```bash
-#!/bin/bash
-# usage: PORT=<port> run_srm.sh <axpbox-binary> <label> [timeout_s]
-export LC_ALL=C
-BIN=$1 LABEL=$2 TMO=${3:-300} PORT=${PORT:-21000}
-T=/path/to/axpbox/test/rom            # config, reference log
-D=/path/to/scratch/srm-$LABEL
-rm -rf "$D" && mkdir -p "$D"
-sed "s/port = 21000;/port = $PORT;/" "$T/es40.cfg" > "$D/es40.cfg"
-cp "$T/cl67srmrom.exe" "$D/"          # or download it once
-cd "$D" && : > axp.log
-"$BIN" run > axpbox.out 2>&1 & PID=$!
-sleep 5; nc -d -t 127.0.0.1 "$PORT" > axp.log & NC=$!
-t=0; status=timeout
-while [ $t -lt "$TMO" ]; do
-  [ "$(tr -d '\000' < axp.log | sed -n '$p')" == "P00>>>" ] && { status=prompt; break; }
-  kill -0 $PID 2>/dev/null || { status=died; break; }
-  sleep 1; t=$((t + 1))
-done
-echo "status=$status elapsed=${t}s"
-kill $NC $PID 2>/dev/null; wait $PID 2>/dev/null
-norm() { tr -d '\000' < "$1" | sed 's/CPU [0-9] speed is.*//'; }
-[ "$status" = prompt ] && diff -c <(norm "$T/axp_correct.log") <(norm axp.log) > diff.txt \
-  && echo "diff clean" || echo "DIFF or FAIL (see diff.txt)"
-echo "mismatch lines: $(grep -ac MISMATCH axpbox.out)"
+PORT=21300 test/tools/srm_run.sh build-jit/axpbox jit          # one lane
+PORT=21301 test/tools/srm_run.sh build-jit-verify/axpbox verify # in parallel: own PORT each
 ```
 
-A local copy lives in the git-excluded `lab/run_srm.sh`.
+It boots the test machine (config generated from `test/rom/es40.cfg` with
+that port) in `$AXPBOX_WORK/runs/srm-<label>` (`AXPBOX_WORK` defaults to
+`<repo>/lab`, git-excluded), waits for `P00>>>`, stops the emulator
+gracefully and prints `diff clean` (or the diff) and the JIT_VERIFY
+mismatch count. Exit status 0 = prompt, diff clean, 0 mismatches. Nothing
+in `test/rom` is touched.
 
 ## Which lanes
 
@@ -94,10 +74,23 @@ its own port. A healthy boot takes 15-35 s.
 
 ## SRM probes
 
-Same boot, different config, driven over telnet (a small Python client that
-waits for `P00>>>`, sends a command, waits again). Local scripts in `lab/`:
-`srm_device_probe.sh`, `srm_cmds.sh`, `srm_exit_probe.sh`,
-`srm_floppy_probe.sh`.
+`test/tools/srm_probe.sh` boots a variant of the test machine and runs
+console commands over telnet (`srm_console.py`), configured by environment
+variables (see the header of the script): `CPUS`, `MEMBITS`, `SCSI`,
+`IDE_CFG`, `FLOPPY` (`halt` generates the HALT boot floppy),
+`EXIT_ON_HALT`, `CPU_OPT`/`CPU1_OPT`, `CMDS="a|b|c"`, and
+`AFTER=sigterm|disconnect-sigterm|wait-exit|none`. Output in
+`$AXPBOX_WORK/runs/probe-<label>`.
+
+```bash
+PORT=21310 CPUS=4 SCSI=sym53c810 CMDS="show device|init|show device" CMD_TIMEOUT=300 \
+  test/tools/srm_probe.sh build-jit/axpbox smp4
+PORT=21311 MEMBITS=35 CMDS="show memory|show fru" test/tools/srm_probe.sh build-jit/axpbox mem32g
+PORT=21312 FLOPPY=halt EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit test/tools/srm_probe.sh build/axpbox halt
+PORT=21313 AFTER=disconnect-sigterm test/tools/srm_probe.sh build-jit/axpbox disconnect
+```
+
+What to expect:
 
 - **SMP / SCSI** (4-CPU config trimmed to N CPUs, Sym53C810 + disk):
   `show device`, `init`, `show device` with 1, 2 and 4 CPUs. After `init`
