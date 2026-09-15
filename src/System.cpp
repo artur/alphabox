@@ -64,6 +64,7 @@ CSystem::CSystem(CConfigurator *cfg) {
   iNumMemories = 0;
   iNumCPUs = 0;
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
+  m_exit_on_pal_halt = myCfg->get_bool_value("exit_on_pal_halt", false);
 
   // initialize SPD data according to configured memory size
   const uint32_t total_mb =
@@ -240,10 +241,11 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   return 0;
 }
 
-int got_sigint = 0;
+volatile sig_atomic_t got_sigint = 0;
 
 /**
- * Handle a SIGINT by setting a flag that terminates the emulator.
+ * Handle SIGINT (Ctrl-C) or SIGTERM by setting a flag that makes the main loop
+ * exit gracefully (threads stopped, flash and DPR saved).
  **/
 void sigint_handler(int signum) { got_sigint = 1; }
 
@@ -266,14 +268,18 @@ void CSystem::Run() {
   }
 #endif // defined(DUMP_MEMMAP)
 
-  /* catch CTRL-C and shutdown gracefully */
+  /* catch CTRL-C and SIGTERM and shut down gracefully */
   signal(SIGINT, &sigint_handler);
+  signal(SIGTERM, &sigint_handler);
 
   start_threads();
 
   for (k = 0;; k++) {
     if (got_sigint)
-      FAILURE(Graceful, "CTRL-C detected");
+      FAILURE(Graceful, "CTRL-C or SIGTERM detected");
+
+    if (m_pal_halt_exit.load(std::memory_order_relaxed))
+      FAILURE(Graceful, "HALT invoked, exit_on_pal_halt configured");
 
     if (ProcessPendingReset())
       continue;

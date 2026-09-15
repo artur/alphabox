@@ -550,10 +550,12 @@ SafeOp classify(uint32_t ins, bool pal_block) {
       return OP_RS; // RS (read & set soft-intr flag); Ra==31 -> set-only
     }
     break;
-  case 0x00: { // CALL_PAL: compile valid standard funcs (priv 0x00-0x3f, unpriv
+  case 0x00: { // CALL_PAL: compile valid standard funcs (priv 0x01-0x3f, unpriv
                // 0x80-0xbf)
     const uint32_t fn = ins & 0x1FFFFFFF;
-    if (fn <= 0x3F || (fn >= 0x80 && fn <= 0xBF))
+    // HALT (0x00) stays interpreted so DO_CALL_PAL can honour
+    // exit_on_pal_halt; it runs about once a session, so nothing is lost.
+    if ((fn >= 0x01 && fn <= 0x3F) || (fn >= 0x80 && fn <= 0xBF))
       return OP_CALL_PAL;
     break; // SRM specials (0x1234xx) / invalid ranges -> interpret
   }

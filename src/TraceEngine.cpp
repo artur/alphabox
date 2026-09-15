@@ -855,9 +855,10 @@ int CTraceEngine::parse(char command[100][100]) {
         printf("%%IDB-F-NOBRKP: No breakpoint set, press Ctrl-C to end run.\n");
 
         /* catch CTRL-C and shutdown gracefully */
-        extern int got_sigint;
+        extern volatile sig_atomic_t got_sigint;
         void sigint_handler(int);
         signal(SIGINT, &sigint_handler);
+        signal(SIGTERM, &sigint_handler);
         while (!got_sigint) {
           theSystem->SingleStep();
         }
@@ -917,10 +918,11 @@ int CTraceEngine::parse(char command[100][100]) {
 
         // break when the instruction matches.  Great for stopping when
         // pal_halt is called!
-        extern int got_sigint;
+        extern volatile sig_atomic_t got_sigint;
 
         void sigint_handler(int);
         signal(SIGINT, &sigint_handler);
+        signal(SIGTERM, &sigint_handler);
         while (1) {
           theSystem->SingleStep();
           if (theSystem->get_cpu(0)->get_last_instruction() ==
@@ -1207,9 +1209,10 @@ int CTraceEngine::parse(char command[100][100]) {
       } else {
         printf("%%IDB-I-RUNCYC: Running until max cycles reached.\n");
 
-        extern int got_sigint;
+        extern volatile sig_atomic_t got_sigint;
         void sigint_handler(int);
         signal(SIGINT, &sigint_handler);
+        signal(SIGTERM, &sigint_handler);
         for (i = 0; i < RunCycles; i++) {
           if (theSystem->SingleStep()) {
             printf("%%IDB-I-ABORT : Abort run requested (probably from serial "

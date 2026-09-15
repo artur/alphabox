@@ -159,6 +159,13 @@ public:
   bool ProcessPendingReset();
   void ResetChipsetState();
 
+  // exit_on_pal_halt: a kernel-mode CALL_PAL HALT asks the main loop (Run) to
+  // exit gracefully; the CPU carries on into the HALT until then.
+  bool exit_on_pal_halt() const { return m_exit_on_pal_halt; }
+  void RequestPalHaltExit() {
+    m_pal_halt_exit.store(true, std::memory_order_relaxed);
+  }
+
   // True while we are performing an in-process reset (stop/reset/start).
   // Devices (S3/SDL) use this to PAUSE instead of destroying the window.
   void SetResetInProgress(bool v) {
@@ -248,6 +255,9 @@ private:
 
   std::atomic<bool> m_reset_requested{false};
   std::atomic<bool> m_reset_in_progress{false};
+
+  bool m_exit_on_pal_halt = false;          // sys0 exit_on_pal_halt
+  std::atomic<bool> m_pal_halt_exit{false}; // set by a CPU on CALL_PAL HALT
 
   // Serializes drir RMW + delivery in interrupt() across device threads. On
   // CSystem (not in saved 'state'), so SaveState is unaffected.

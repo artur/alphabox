@@ -62,6 +62,8 @@
       ((function > 0x3f) && (function < 0x80)) || (function > 0xbf)) {         \
     UNKNOWN2                                                                   \
   } else {                                                                     \
+    if ((function == 0x00) && cSystem->exit_on_pal_halt())                     \
+      cSystem->RequestPalHaltExit(); /* main loop exits gracefully */          \
     if (state.pal_vms) {                                                       \
       switch (function) {                                                      \
       case 0x01: /* CFLUSH */                                                  \

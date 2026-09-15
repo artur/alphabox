@@ -657,7 +657,7 @@ void CSerial::execute() {
       size = read(connectSocket, recv_buf, FIFO_SIZE);
 #endif
 
-      extern int got_sigint;
+      extern volatile sig_atomic_t got_sigint;
       if (size <= 0 && !got_sigint) {
         printf("%%SRL-W-DISCONNECT: Write socket closed on other end for "
                "serial port %d.\n",
