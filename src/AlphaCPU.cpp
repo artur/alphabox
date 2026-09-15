@@ -287,6 +287,15 @@ void CAlphaCPU::init() {
 
   state.wait_for_start = (state.iProcNum == 0) ? false : true;
   skip_memtest_hack = myCfg->get_bool_value("skip_memtest_hack", false);
+#ifdef ES40_JIT
+  // The hack patches the SRM memory test at a few PCs as the interpreter
+  // reaches them; compiled blocks run the test loops without passing those
+  // PCs, so only part of the test gets skipped and SRM then reports memory
+  // errors (seen on a warm "init").
+  if (skip_memtest_hack && state.iProcNum == 0)
+    printf("%%CPU-W-MEMTEST: skip_memtest_hack is ignored in JIT builds.\n");
+  skip_memtest_hack = false;
+#endif
   icache_enabled = true;
   flush_icache();
 
