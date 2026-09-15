@@ -243,6 +243,7 @@
       state.pctr_ctl = state.r[REG_2] & U64(0xffffffffffffffdf);               \
       break;                                                                   \
                                                                                \
+    case 0x0f: /* EXC_SUM: read-only; beta NT PALs write 0 */                  \
     case 0x15: /* CLR_MAP */                                                   \
     case 0x17: /* SLEEP   */                                                   \
     case 0x27: /* MM_STAT */                                                   \
