@@ -2585,8 +2585,21 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           x86::qword_ptr(x86::rbp, m_off.f_base + 8u * (uint32_t)rb)); // f[Fb]
       dbl_bail(x86::xmm0, false, bail); // denormal operands -> interp
       dbl_bail(x86::xmm1, false, bail);
-      a.cvtsd2ss(x86::xmm0, x86::xmm0); // operands -> single (exact)
-      a.cvtsd2ss(x86::xmm1, x86::xmm1);
+      // The interpreter computes on the full register value, so an operand
+      // that isn't exactly representable in single precision (e.g. a T-value
+      // below the single range, which narrows to zero and would hide an
+      // underflow) must go to the interpreter: narrow, widen back and compare
+      // the bits. Mirrors narrow_exact in the AArch64 emitter.
+      auto narrow_exact = [&](const x86::Vec &v) {
+        a.movq(x86::rax, v); // register (T-format) bits
+        a.cvtsd2ss(v, v);    // -> single
+        a.cvtss2sd(x86::xmm2, v);
+        a.movq(x86::rcx, x86::xmm2);
+        a.cmp(x86::rcx, x86::rax);
+        a.jne(bail); // not exactly representable in single
+      };
+      narrow_exact(x86::xmm0); // operands -> single (now exact)
+      narrow_exact(x86::xmm1);
       switch (op) {
       case OP_ADDS:
         a.addss(x86::xmm0, x86::xmm1);
