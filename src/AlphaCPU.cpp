@@ -473,6 +473,47 @@ void CAlphaCPU::jit_flush_blocks_asm() {
     m_jit->flush_non_global();
 }
 
+// AXPBOX_NO_IDLE=1 disables idle pacing; AXPBOX_IDLESTATS=1 prints its
+// counters every 2000 visits to the idle-loop head.
+static const bool g_idle_pacing = getenv("AXPBOX_NO_IDLE") == nullptr;
+static const bool g_idle_stats = getenv("AXPBOX_IDLESTATS") != nullptr;
+
+// The head of Windows NT's idle loop (KiIdleLoop) on Alpha: CALL_PAL enable
+// interrupts, CALL_PAL disable interrupts, LDL t0, n(s0) (the PRCB's DPC
+// queue), BEQ t0. Matched by instruction words, not address, so any NT kernel
+// build is recognized.
+static inline bool nt_idle_head(const char *dram, u64 dram_size, u64 phys) {
+  if ((phys & 3) || phys + 16 > dram_size)
+    return false;
+  u32 w[4];
+  memcpy(w, dram + phys, sizeof(w));
+  return w[0] == 0x00000009 && w[1] == 0x00000008 && (w[2] >> 16) == 0xa029 &&
+         (w[3] >> 21) == 0x721;
+}
+
+// Sleep a CPU that is spinning in the idle loop until an interrupt is raised
+// for it (irq_h -> idle_wake: clock ticks, IPIs, devices) or 1 ms passes: the
+// loop also polls the DPC queue and NextThread, which another CPU may fill
+// without an IPI. CPU0 also wakes by its next interval-timer deadline, which
+// its own dispatch batches fire. Guest time is wall-clock based, so sleeping
+// only slows the spin.
+void CAlphaCPU::jit_idle_pause() {
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+  if (state.iProcNum == 0 && next_timer_fire < deadline)
+    deadline = next_timer_fire;
+  const auto t0 = std::chrono::steady_clock::now();
+  std::unique_lock<std::mutex> lk(m_idle_mx);
+  m_idle_sleeping.store(true);
+  if (!state.check_int && !state.check_timers)
+    m_idle_cv.wait_until(lk, deadline);
+  m_idle_sleeping.store(false);
+  ++m_idle_sleeps;
+  m_idle_slept_ns += (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - t0)
+                         .count();
+}
+
 void CAlphaCPU::jit_run(int budget) {
   if (m_jit)
     m_jit->reclaim_if_pending(); // deferred code reclaim, here at a safe point
@@ -576,6 +617,58 @@ void CAlphaCPU::jit_run(int budget) {
       else if (virt2phys(start_virt, &start_phys, ACCESS_EXEC | FAKE,
                          &start_asm, 0) != 0)
         have_phys = false;
+    }
+
+    // Idle pacing: the CPU keeps coming back to the NT idle-loop head. One pass
+    // of Windows 2000's idle loop runs a fixed ~8000-instruction wait between
+    // polls (measured with AXPBOX_IDLESTATS), so visits at most 16000
+    // instructions apart, four in a row, with no interrupt pending, mean the
+    // CPU is idle ->
+    // sleep (jit_idle_pause), then end the batch so the next one re-syncs RPCC
+    // and, on CPU0, fires the interval timer. Never sleep twice without running
+    // guest code in between (delta 0 right after a pause): the loop must keep
+    // polling the DPC queue and NextThread, which another CPU can fill without
+    // an IPI.
+    if (g_idle_pacing && have_phys && !(start_virt & 1)) {
+      if (m_idle_pc == 0 && nt_idle_head(dram_ptr, dram_size, start_phys)) {
+        m_idle_pc = start_virt;
+        printf("%%CPU-I-IDLE: CPU%d idle loop recognized at %016llx\n",
+               (int)state.iProcNum, (unsigned long long)start_virt);
+      }
+      if (start_virt == m_idle_pc) {
+        const u64 ic = state.instruction_count;
+        const u64 delta = ic - m_idle_last_icount;
+        if (g_idle_stats && (++m_idle_visits % 2000) == 0)
+          printf("%%CPU-I-IDLESTATS: CPU%d visits %llu near %llu zero %llu "
+                 "blocked int %llu timers %llu | sleeps %llu slept %.1f ms | "
+                 "last delta %llu\n",
+                 (int)state.iProcNum, (unsigned long long)m_idle_visits,
+                 (unsigned long long)m_idle_near,
+                 (unsigned long long)m_idle_zero,
+                 (unsigned long long)m_idle_blk_int,
+                 (unsigned long long)m_idle_blk_tmr,
+                 (unsigned long long)m_idle_sleeps, m_idle_slept_ns / 1e6,
+                 (unsigned long long)m_idle_last_delta);
+        if (delta) {
+          m_idle_last_delta = delta;
+          if (delta <= 16000)
+            ++m_idle_near;
+          m_idle_streak = (delta <= 16000) ? m_idle_streak + 1 : 0;
+          m_idle_last_icount = ic;
+          if (m_idle_streak >= 4) {
+            if (state.check_int)
+              ++m_idle_blk_int;
+            else if (state.check_timers)
+              ++m_idle_blk_tmr;
+            else {
+              jit_idle_pause();
+              return;
+            }
+          }
+        } else {
+          ++m_idle_zero;
+        }
+      }
     }
 
     // Side-effect-free exec virt -> live physical (icache probe, else FAKE

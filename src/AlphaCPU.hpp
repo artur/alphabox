@@ -35,6 +35,8 @@
 #define INCLUDED_ALPHACPU_H
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 #include "System.hpp"
 #include "SystemComponent.hpp"
@@ -368,6 +370,28 @@ private:
       nullptr; // JitBlock* whose successor link the dispatcher should patch
   u64 m_link_target = 0; // a static exit's target PC, recorded with link_from
   u64 m_jit_code_seen = 0;     // g_jit_code_flush at this CPU's last JIT flush
+  // Idle pacing (JIT dispatcher, see jit_idle_pause): a CPU spinning in the NT
+  // idle loop sleeps until irq_h raises an interrupt for it or 1 ms passes.
+  std::mutex m_idle_mx;
+  std::condition_variable m_idle_cv;
+  std::atomic<bool> m_idle_sleeping{false};
+  u64 m_idle_pc = 0;          // recognized idle-loop head (0 = not seen yet)
+  u64 m_idle_last_icount = 0; // instruction_count at the previous visit
+  u32 m_idle_streak = 0;      // consecutive tight visits to the head
+  u64 m_idle_sleeps = 0;      // pauses taken (diagnostics)
+  // AXPBOX_IDLESTATS=1 diagnostics: head visits, visits within the tight
+  // window, zero-delta visits, sleeps blocked by check_int / check_timers,
+  // host time slept, last visit delta.
+  u64 m_idle_visits = 0, m_idle_near = 0, m_idle_zero = 0;
+  u64 m_idle_blk_int = 0, m_idle_blk_tmr = 0, m_idle_slept_ns = 0;
+  u64 m_idle_last_delta = 0;
+  void jit_idle_pause();
+  void idle_wake() {
+    if (m_idle_sleeping.load()) {
+      std::lock_guard<std::mutex> g(m_idle_mx);
+      m_idle_cv.notify_all();
+    }
+  }
   void jit_run(int budget);    // drives the ES40_JIT lane via the interpreter
   void jit_flush_blocks();     // invalidate all discovered JIT blocks
   void jit_flush_blocks_asm(); // invalidate only !asm_global blocks (preserve
@@ -849,6 +873,9 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
       state.eir |= (U64(0x1) << number);
       state.check_int = true;
     }
+#ifdef ES40_JIT
+    idle_wake(); // after the flags: a sleeper that missed them is notified
+#endif
 
     return;
   }
