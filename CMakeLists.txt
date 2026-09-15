@@ -3,6 +3,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project(AXPBox VERSION 1.2.0)
 
+# Single-config generators (Makefiles, Ninja) default to an empty build type,
+# which compiles without optimization; default to Release instead.
+get_property(AXPBOX_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT AXPBOX_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING
+      "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
+endif()
+
 # JIT for x86-64 and AArch64 hosts (requires the asmjit sources in
 # third_party/asmjit; see README)
 option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)

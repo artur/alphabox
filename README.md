@@ -96,6 +96,8 @@ This creates a file named es40.cfg, which you can now modify (the generator UI d
 axpbox run
 ```
 
+`axpbox --version` prints the version, the commit and the optional features compiled in (JIT, SDL3, PCap, TAP). Ctrl-C or SIGTERM ends a run gracefully, saving the flash and DPR (NVRAM) images; with `exit_on_pal_halt = true` in the `sys0` section, a guest halt (an OS shutting down to the console) ends it the same way, which is handy for scripted runs.
+
 Please read the [Installation Guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide) for information to get OpenVMS installed in the emulator. A guide for NetBSD is [also available on the Wiki](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)
 
 

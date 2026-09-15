@@ -24,20 +24,65 @@
  */
 
 #include "config.hpp"
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 
 int main_sim(int argc, char *argv[]);
 int main_cfg(int argc, char *argv[]);
 
+/**
+ * Print the version, the commit and the optional features compiled in.
+ **/
+static void print_version() {
+#ifdef VERSION
+  printf("AXPbox %s", VERSION);
+#else
+  printf("AXPbox (unknown version)");
+#endif
+#ifdef PACKAGE_GITSHA
+  printf(" (commit %s)", PACKAGE_GITSHA);
+#endif
+  printf("\nFeatures:");
+  int features = 0;
+#if defined(ES40_JIT)
+#if defined(__aarch64__) || defined(_M_ARM64)
+  printf(" JIT(AArch64)");
+#else
+  printf(" JIT(x86-64)");
+#endif
+  features++;
+#endif
+#if defined(HAVE_SDL3)
+  printf(" SDL3");
+  features++;
+#endif
+#if defined(HAVE_PCAP)
+  printf(" PCap");
+  features++;
+#endif
+#if defined(__linux__)
+  printf(" TAP");
+  features++;
+#endif
+  printf("%s\n", features ? "" : " (none)");
+}
+
 int main(int argc, char **argv) {
+  if (argc == 2 &&
+      (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+    print_version();
+    return 0;
+  }
+
   if (argc <= 1 || (strcmp(argv[1], "run") && strcmp(argv[1], "configure"))) {
-    std::cerr << "AXPBox Alpha Emulator";
+    std::cerr << "AXPbox Alpha Emulator";
 #ifdef PACKAGE_GITSHA
     std::cerr << " (commit " << std::string(PACKAGE_GITSHA) << ")";
 #endif
     std::cerr << std::endl;
     std::cerr << "Usage: " << argv[0] << " run|configure <options>" << std::endl;
+    std::cerr << "       " << argv[0] << " --version" << std::endl;
     return 0;
   }
 
