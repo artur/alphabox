@@ -291,6 +291,16 @@ private:
   // catch-up so backlog repays at no more than 2x the nominal rate.
   std::chrono::steady_clock::time_point next_timer_fire;
   std::chrono::steady_clock::time_point tick_last_fire;
+  u32 tick_pace_lcg = 0x9e3779b9; // noise term of the catch-up gap modulation
+  u32 tick_fire_idx = 0;          // triangle-wave phase of that modulation
+  u64 tick_gap_ns = 0; // min spacing after tick_last_fire for the next fire
+                       // (0: the first fire is immediate)
+  u64 tick_last_icount = 0;     // instruction_count at the last observed tick
+  u32 tick_seen_seq = 0;        // last CSystem tick sequence this CPU observed
+  u64 m_max_instr_per_tick = 0; // timer.max_instr_per_tick (0 = pacing off)
+  u64 tick_next_gap_ns(u64 period_ns);
+  enum class TickHold { Ticked, Expired, Doorbell };
+  TickHold tick_hold(u64 period_ns);
 
   // Wall-clock RPCC: state.cc advances by real elapsed time * cpu_hz so it
   // tracks the configured CPU frequency regardless of how fast/bursty the JIT

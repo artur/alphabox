@@ -136,6 +136,11 @@ public:
   u64 PCI_Phys_direct_mapped(u32 address, u64 wsm, u64 tba);
   u64 PCI_Phys_scatter_gather(u32 address, u64 wsm, u64 tba);
   void interrupt(int number, bool assert);
+  // Interval-tick sequence, bumped on every Cchip timer tick (CPU
+  // instruction pacing, see CAlphaCPU::jit_run).
+  u32 get_tick_seq() const {
+    return m_tick_seq.load(std::memory_order_relaxed);
+  }
   int LoadROM();
   u64 ReadMem(u64 address, int dsize, CSystemComponent *source);
   void WriteMem(u64 address, int dsize, u64 data, CSystemComponent *source);
@@ -247,6 +252,7 @@ private:
   // Serializes drir RMW + delivery in interrupt() across device threads. On
   // CSystem (not in saved 'state'), so SaveState is unaffected.
   std::mutex drir_lock;
+  std::atomic<u32> m_tick_seq{0}; // interval-tick sequence
 
   int iNumCPUs;
   u64 cpu_lock_value[4]; // per-CPU LDx_L value, for same-address STx_C

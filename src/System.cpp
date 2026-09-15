@@ -2044,6 +2044,7 @@ void CSystem::interrupt(int number, bool assert) {
     state.cchip.misc |= 0xf0;
     for (i = 0; i < iNumCPUs; i++)
       acCPUs[i]->irq_h(2, true, 0); // timer interrupt is immediate
+    m_tick_seq.fetch_add(1, std::memory_order_relaxed);
   } else if (assert) {
 
     //    if (!(state.cchip.drir & (1i64<<number)))

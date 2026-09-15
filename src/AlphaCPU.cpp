@@ -136,6 +136,53 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
 /**
  * Initialize the CPU.
  **/
+/**
+ * Draw the minimum spacing before the next catch-up fire. Repay gaps are
+ * modulated so consecutive SRM cycles-per-tick windows (~100 ticks) never agree
+ * during a repay stretch: per-fire noise alone averages out over a window, the
+ * triangle wave's ~2.8-window wavelength survives the averaging, and the noise
+ * breaks symmetric-alignment ties. Always between half and ~1.2 periods.
+ **/
+u64 CAlphaCPU::tick_next_gap_ns(u64 period_ns) {
+  tick_fire_idx++;
+  const u32 ph = tick_fire_idx % 277;
+  const u32 tri = (ph <= 138) ? ph : (277 - ph);
+  tick_pace_lcg = tick_pace_lcg * 1664525u + 1013904223u;
+  return period_ns / 2 + period_ns * tri / 400 +
+         period_ns * ((tick_pace_lcg >> 24) & 0x3f) / 1024;
+}
+
+/**
+ * The instruction-paced envelope (timer.max_instr_per_tick) is full and the
+ * wall-clock interval tick isn't due yet: hold this CPU thread until the tick
+ * lands (or, on CPU0, until it must fire it), an interrupt is raised, or the
+ * thread is stopped.
+ **/
+CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
+  using namespace std::chrono;
+  const u32 seq = tick_seen_seq;
+  // Secondaries: backstop in case CPU0 is late firing the tick.
+  auto deadline = steady_clock::now() + nanoseconds(2 * period_ns);
+  if (state.iProcNum == 0) {
+    deadline = next_timer_fire;
+    if (tick_last_fire + nanoseconds(tick_gap_ns) > deadline)
+      deadline = tick_last_fire + nanoseconds(tick_gap_ns);
+  }
+  for (;;) {
+    if (cSystem->get_tick_seq() != seq)
+      return TickHold::Ticked;
+    if (state.check_int || StopThread || cSystem->IsSystemResetRequested())
+      return TickHold::Doorbell;
+    const auto now = steady_clock::now();
+    if (now >= deadline)
+      return state.iProcNum == 0 ? TickHold::Ticked : TickHold::Expired;
+    auto nap = deadline - now;
+    if (nap > microseconds(100))
+      nap = microseconds(100);
+    std::this_thread::sleep_for(nap);
+  }
+}
+
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
@@ -144,6 +191,11 @@ void CAlphaCPU::init() {
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
 
   cpu_hz = myCfg->get_num_value("speed", true, 500000000);
+  // Instruction-paced interval-timer cap (timer.max_instr_per_tick, 0 = off).
+  m_max_instr_per_tick =
+      myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
+  tick_last_icount = 0;
+  tick_seen_seq = 0;
 #ifdef ES40_JIT
   // With the JIT, PALcode runs natively (compiled like any other guest code)
   // rather than being shortcut by the high-level vmspal routines, so the
@@ -274,6 +326,10 @@ void CAlphaCPU::init() {
   seq_next_pc = 0;
 
   printf("%s(%d): $Id$\n", devid_string, state.iProcNum);
+  if (state.iProcNum == 0 && m_max_instr_per_tick)
+    printf("%%CPU-I-PACING: interval timer paced to %llu guest instructions "
+           "per tick\n",
+           (unsigned long long)m_max_instr_per_tick);
 
 #if defined(ES40_JIT) && defined(JIT_VERIFY)
   if (state.iProcNum == 0 && getenv("AXPBOX_JIT_FPTEST"))
@@ -292,6 +348,11 @@ void CAlphaCPU::ResetForSystemReset() {
   state.iProcNum = savedProcNum;
 
   cpu_hz = myCfg->get_num_value("speed", true, 500000000);
+  // Instruction-paced interval-timer cap (timer.max_instr_per_tick, 0 = off).
+  m_max_instr_per_tick =
+      myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
+  tick_last_icount = 0;
+  tick_seen_seq = 0;
 
   state.wait_for_start = (state.iProcNum == 0) ? false : true;
   icache_enabled = true;
@@ -581,9 +642,11 @@ void CAlphaCPU::jit_run(int budget) {
         // nominal, never a burst - burst/compressed ticks skew RPCC-vs-tick
         // calibrations). Backlog beyond 1s (debugger pause, host sleep) is
         // dropped.
-        if (now - tick_last_fire >= std::chrono::nanoseconds(period_ns / 2)) {
+        // Repay gaps are modulated (tick_next_gap_ns).
+        if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
           cSystem->interrupt(-1, true);
           tick_last_fire = now;
+          tick_gap_ns = tick_next_gap_ns(period_ns);
           next_timer_fire += std::chrono::nanoseconds(period_ns);
           if (now - next_timer_fire > std::chrono::seconds(1))
             next_timer_fire = now;
@@ -592,6 +655,36 @@ void CAlphaCPU::jit_run(int budget) {
         cSystem->interrupt(-1, true);
         tick_last_fire = now;
         next_timer_fire = now + std::chrono::seconds(1);
+      }
+    }
+  }
+
+  // Instruction-paced interval-tick envelope (timer.max_instr_per_tick; off by
+  // default), for every CPU. Not under the firmware/VMS PALcode (base 0x8000,
+  // or before PALcode is set up): SRM's speed calibration counts cycles per
+  // tick in a tight spin. A CPU that retires the envelope before the
+  // wall-clock tick is due is held until the tick lands, so the guest never
+  // sees more instructions per tick than configured; RPCC stays wall-clock.
+  const u64 pace_period_ns =
+      (m_max_instr_per_tick && theAli && state.pal_base &&
+       state.pal_base != U64(0x8000))
+          ? theAli->get_interval_period_ns()
+          : 0; // 0: pacing off, or the guest hasn't programmed the tick yet
+  if (pace_period_ns) {
+    const u64 ic = state.instruction_count;
+    const u32 seq = cSystem->get_tick_seq();
+    if (seq != tick_seen_seq) {
+      tick_seen_seq = seq;
+      tick_last_icount = ic;
+    } else if (ic - tick_last_icount >= m_max_instr_per_tick) {
+      switch (tick_hold(pace_period_ns)) {
+      case TickHold::Ticked: // landed, or CPU0 fires it on re-entry
+        return;
+      case TickHold::Expired: // secondary with CPU0 late: re-open the window
+        tick_last_icount = ic;
+        break;
+      case TickHold::Doorbell: // interrupt/stop/reset: run this batch
+        break;
       }
     }
   }
@@ -3006,9 +3099,11 @@ void CAlphaCPU::execute() {
           // (max 2x nominal, never a burst - burst/compressed ticks skew
           // RPCC-vs-tick calibrations). Backlog beyond 1s (debugger pause, host
           // sleep) is dropped.
-          if (now - tick_last_fire >= std::chrono::nanoseconds(period_ns / 2)) {
+          // Repay gaps are modulated (tick_next_gap_ns).
+          if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
             cSystem->interrupt(-1, true);
             tick_last_fire = now;
+            tick_gap_ns = tick_next_gap_ns(period_ns);
             next_timer_fire += std::chrono::nanoseconds(period_ns);
             if (now - next_timer_fire > std::chrono::seconds(1))
               next_timer_fire = now;
