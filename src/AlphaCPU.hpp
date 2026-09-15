@@ -376,6 +376,7 @@ private:
   std::condition_variable m_idle_cv;
   std::atomic<bool> m_idle_sleeping{false};
   u64 m_idle_pc = 0;          // recognized idle-loop head (0 = not seen yet)
+  u64 m_park_pc = 0;          // recognized HAL "wait to be started" loop head
   u64 m_idle_last_icount = 0; // instruction_count at the previous visit
   u32 m_idle_streak = 0;      // consecutive tight visits to the head
   u64 m_idle_sleeps = 0;      // pauses taken (diagnostics)

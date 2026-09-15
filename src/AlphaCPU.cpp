@@ -491,6 +491,23 @@ static inline bool nt_idle_head(const char *dram, u64 dram_size, u64 phys) {
          (w[3] >> 21) == 0x721;
 }
 
+// The head of the Windows 2000 Tsunami HAL's loop for a processor that has
+// not been started (with Professional's two-processor licence, any CPU past
+// the second waits here for good): LDL v0, 32(sp); LDL v0, 28(v0);
+// SLL v0, #55, v0; SRL v0, #63, v0 (the start bit); XOR v0, #1, v0; BEQ v0.
+// Every pass also calls a PAL routine that does an IC_FLUSH, which makes the
+// running CPUs flush their compiled blocks too, so pacing it matters for more
+// than the parked CPU's own host core. The BSR displacements that follow vary
+// with the HAL build and are not matched.
+static inline bool nt_park_head(const char *dram, u64 dram_size, u64 phys) {
+  if ((phys & 3) || phys + 24 > dram_size)
+    return false;
+  u32 w[6];
+  memcpy(w, dram + phys, sizeof(w));
+  return w[0] == 0xa01e0020 && w[1] == 0xa000001c && w[2] == 0x4806f720 &&
+         w[3] == 0x4807f680 && w[4] == 0x44003800 && (w[5] >> 21) == 0x720;
+}
+
 // Sleep a CPU that is spinning in the idle loop until an interrupt is raised
 // for it (irq_h -> idle_wake: clock ticks, IPIs, devices) or 1 ms passes: the
 // loop also polls the DPC queue and NextThread, which another CPU may fill
@@ -635,7 +652,15 @@ void CAlphaCPU::jit_run(int budget) {
         printf("%%CPU-I-IDLE: CPU%d idle loop recognized at %016llx\n",
                (int)state.iProcNum, (unsigned long long)start_virt);
       }
-      if (start_virt == m_idle_pc) {
+      if (m_park_pc == 0 && nt_park_head(dram_ptr, dram_size, start_phys)) {
+        m_park_pc = start_virt;
+        printf("%%CPU-I-IDLE: CPU%d parked-processor loop recognized at "
+               "%016llx\n",
+               (int)state.iProcNum, (unsigned long long)start_virt);
+      }
+      // A CPU is in only one of the two loops at a time; moving from one to the
+      // other takes many instructions, which resets the streak.
+      if (start_virt == m_idle_pc || start_virt == m_park_pc) {
         const u64 ic = state.instruction_count;
         const u64 delta = ic - m_idle_last_icount;
         if (g_idle_stats && (++m_idle_visits % 2000) == 0)

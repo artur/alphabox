@@ -186,7 +186,7 @@ window or display server.
 | `AXPBOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write (`USBT` lines). |
 | `AXPBOX_JIT_COMPILE_AFTER=<n>` | JIT builds: interpret a block `n` times before compiling it (default 1). |
 | `AXPBOX_JIT_NO_DLINK=1` | AArch64 JIT: use the tag-checked link scan for static block exits instead of epoch-keyed data links (A/B switch for chaining issues). |
-| `AXPBOX_NO_IDLE=1` | JIT builds: disable idle pacing. By default a CPU spinning in the Windows NT idle loop (recognized by its instructions) sleeps until an interrupt is raised for it or 1 ms passes, so an idle guest uses a few percent of a host core instead of 100% per emulated CPU. |
+| `AXPBOX_NO_IDLE=1` | JIT builds: disable idle pacing. By default a CPU spinning in the Windows NT idle loop, or in the Windows 2000 HAL's loop for a processor it has not started (both recognized by their instructions), sleeps until an interrupt is raised for it or 1 ms passes, so an idle guest uses a few percent of a host core instead of 100% per emulated CPU. |
 | `AXPBOX_IDLESTATS=1` | JIT builds: print idle-pacing counters (`%CPU-I-IDLESTATS`: idle-loop head visits, sleeps, time slept, blocked sleeps) every 2000 visits. |
 
 Key names for `AXPBOX_KEYSCRIPT`/`AXPBOX_KEYPIPE`: `a`–`z`, `0`–`9`,
