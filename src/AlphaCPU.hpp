@@ -881,6 +881,18 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
     return;
   }
 
+  if (assert && (state.eir & (U64(0x1) << number))) {
+    // A new request on a line that is already high (a second device asserting
+    // while the first is still being serviced): eir is already right, but
+    // check_int was consumed when the interrupt was dispatched and nothing
+    // re-polls after its REI. Re-kick it for the next dispatch boundary.
+    state.check_int = true;
+#ifdef ES40_JIT
+    idle_wake();
+#endif
+    return;
+  }
+
   if (!assert && active) {
     state.eir &= ~(U64(0x1) << number);
     state.irq_h_timer[number] = 0;

@@ -108,8 +108,11 @@ void CAlphaCPU::run() {
 #ifdef ES40_JIT
       jit_run(2000);
 #else
-      for (int i = 0; i < 2000; i++)
-        execute();
+      // execute() runs a 512-instruction batch itself; calling it 2000 times
+      // here made one scheduler turn ~1M instructions, starving the other CPUs
+      // and device threads.
+      execute();
+      std::this_thread::yield();
 #endif
       if (cSystem && cSystem->IsSystemResetRequested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -2372,7 +2375,9 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
   case 0xc3:
     return cpu->va_form(state.va_form_va, false); // VA_FORM
   }
-  return cur; // unknown IPR: DO_HW_MFPR's UNKNOWN2 leaves Ra unchanged
+  (void)cur;
+  return 0; // unknown IPR: read-zero, matching DO_HW_MFPR (classify() never
+            // compiles these)
 }
 
 /* HW_MTPR (PALmode): the IPR write selected by `function` (value = Rb). Mirrors
@@ -4165,6 +4170,16 @@ int CAlphaCPU::RestoreState(FILE *f) {
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
+  // RAM and TB state now belong to the restored state: drop the data page
+  // cache, the sequential icache cursor and every compiled block (the epoch
+  // bump makes them re-hash against the restored RAM before they run).
+  flush_data_page_cache();
+  break_seq_icache();
+#ifdef ES40_JIT
+  m_link_from = nullptr; // pending link request into pre-restore code
+  if (m_jit)
+    m_jit->flush();
+#endif
 
   return 0;
 }

@@ -371,6 +371,10 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     const uint32_t sb =
         f14 & 0x3f; // IEEE sqrt (source Fb): SQRTS 0x0b / SQRTT 0x2b
     if (sb == 0x0b || sb == 0x2b) {
+      if (((ins >> 21) & 0x1f) != 31)
+        return OP_NONE; // Ra must be R31 (else DO_SQRT* traps OPCDEC)
+      if (((f14 & 0x600) == 0x200) || ((f14 & 0x500) == 0x400))
+        return OP_NONE; // invalid qualifier -> interpreter's OPCDEC
       const uint32_t r = (f14 >> 6) & 3;
       if (r == 0 || r == 1)
         return OP_NONE; // /C, /M: SSE rounds nearest -> interpret
@@ -1975,8 +1979,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 
     // HW_MFPR (0x19, PALmode): read the IPR named by (ins>>8)&0xff into Ra. The
     // helper is an independent reimplementation of DO_HW_MFPR that RETURNS the
-    // value (it reads state only, never writes it). pass the current Ra as
-    // `cur` so an unknown IPR returns it unchanged (matching interp), and write
+    // value (it reads state only, never writes it). classify() compiles only
+    // the IPRs it implements (unknown ones interpret: read-zero), and write
     // reg(ra) here so the value lands in whichever regs[] array we hold. Every
     // MFPR IPR is a pure read
     if (op == OP_HW_MFPR) {
@@ -3134,7 +3138,13 @@ void CJitEngine::compile_block(
   uint64_t phys = b->phys;
   if (b->n_instr == 0 || phys + (uint64_t)b->n_instr * 4 > dram_size)
     return;
-  const uint32_t *words = (const uint32_t *)(dram + phys); // x86 LE == Alpha LE
+  // Compile from a snapshot of the source, not live guest RAM: another CPU can
+  // rewrite the page while this one assembles, and hashing the live bytes
+  // afterwards would stamp old code with the new bytes' fingerprint.
+  std::vector<uint32_t> source_words(b->n_instr);
+  memcpy(source_words.data(), dram + phys,
+         (size_t)b->n_instr * sizeof(uint32_t));
+  const uint32_t *words = source_words.data(); // x86 LE == Alpha LE
 
   // PALmode blocks (PC bit 0) remap R4-7/R20-23 to the shadow bank (see RREG);
   // reg() applies it.
@@ -3222,12 +3232,18 @@ void CJitEngine::compile_block(
   if (!assemble_block(b, words, plen, terminator_branch, terminator_jmp, hs,
                       &fn, &body_off, &csz))
     return;
+  // The source changed while assembling (SMP self-modifying code): never
+  // publish it. The unreferenced code is freed by the next reclaim.
+  if (memcmp(dram + phys, source_words.data(),
+             (size_t)b->n_instr * sizeof(uint32_t)) != 0)
+    return;
   b->code = fn;
   b->jit_body = (void *)((uint8_t *)(void *)fn +
                          body_off); // chained re-entry (past prologue)
   b->body_off = (uint32_t)body_off; // to restore jit_body on revalidate
-  b->src_sum = src_hash(
-      dram + phys, b->n_instr); // source fingerprint (revalidate vs self-mod)
+  b->src_sum =
+      src_hash((const uint8_t *)source_words.data(),
+               b->n_instr);     // source fingerprint (revalidate vs self-mod)
   b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
   b->prefix_len = plen;
   m_code_bytes += csz; // track for the reclaim threshold (see flush())

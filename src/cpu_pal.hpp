@@ -31,6 +31,21 @@
  * Contains code macros for the processor PALmode instructions.
  * Based on HRM.
  **/
+
+/* Unimplemented IPR index on HW_MFPR/HW_MTPR: EV6 reads zero and ignores the
+ * write. Warn once per index and continue instead of trapping OPCDEC (PALcode
+ * builds such as the Windows 2000 betas touch IPRs AXPbox doesn't model). */
+#define UNKNOWN_IPR(dir)                                                       \
+  do {                                                                         \
+    static bool warned_ipr[256];                                               \
+    if (!warned_ipr[function & 0xff]) {                                        \
+      warned_ipr[function & 0xff] = true;                                      \
+      printf("%%CPU-W-IPR: unimplemented HW_M" dir "PR index %02x at "         \
+             "pc=%016" PRIx64 " (ignored)\n",                                  \
+             (unsigned)function, state.current_pc);                            \
+    }                                                                          \
+  } while (0)
+
 #define DO_HW_MFPR                                                             \
   if ((function & 0xc0) == 0x40) { /* PCTX */                                  \
     state.r[REG_1] = ((u64)state.asn << 39) | ((u64)state.astrr << 9) |        \
@@ -131,7 +146,9 @@
       break;                                                                   \
                                                                                \
     default:                                                                   \
-      UNKNOWN2;                                                                \
+      UNKNOWN_IPR("F");                                                        \
+      state.r[REG_1] = 0;                                                      \
+      break;                                                                   \
     }                                                                          \
   }
 
@@ -243,6 +260,7 @@
       state.pctr_ctl = state.r[REG_2] & U64(0xffffffffffffffdf);               \
       break;                                                                   \
                                                                                \
+    case 0x08: /* IER_CM with neither field selected */                        \
     case 0x0f: /* EXC_SUM: read-only; beta NT PALs write 0 */                  \
     case 0x15: /* CLR_MAP */                                                   \
     case 0x17: /* SLEEP   */                                                   \
@@ -334,7 +352,8 @@
       break;                                                                   \
                                                                                \
     default:                                                                   \
-      UNKNOWN2;                                                                \
+      UNKNOWN_IPR("T");                                                        \
+      break;                                                                   \
     }                                                                          \
   }
 
