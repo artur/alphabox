@@ -1968,13 +1968,17 @@ void CAliM1543C_ide::execute(int index) {
               SEL_STATUS(index).CHK = (SEL_COMMAND(index).packet_sense != 0);
               SEL_STATUS(index).err = SEL_STATUS(index).CHK;
               if (SEL_STATUS(index).CHK) {
-                SEL_REGISTERS(index).error = SEL_COMMAND(index).packet_sense;
+                // ATAPI error register: sense key in bits 7-4 (as QEMU and
+                // Bochs report it).
+                u8 sense_key =
+                    SEL_DISK(index) ? SEL_DISK(index)->sense_key() : 0;
+                SEL_REGISTERS(index).error = (u8)(sense_key << 4);
                 printf("%%IDE-W-ATAPI: controller %d device %d packet command",
                        index, CONTROLLER(index).selected);
                 for (int i = 0; i < 12; i++)
                   printf(" %02x", SEL_COMMAND(index).packet_command[i]);
-                printf(" returned SCSI status %02x\n",
-                       SEL_COMMAND(index).packet_sense);
+                printf(" returned SCSI status %02x, sense key %x\n",
+                       SEL_COMMAND(index).packet_sense, sense_key);
               } else {
                 SEL_REGISTERS(index).error = 0;
               }
