@@ -649,11 +649,15 @@ void CAlphaCPU::jit_run(int budget) {
     if (g_idle_pacing && have_phys && !(start_virt & 1)) {
       if (m_idle_pc == 0 && nt_idle_head(dram_ptr, dram_size, start_phys)) {
         m_idle_pc = start_virt;
+        if (m_jit)
+          m_jit->note_itb_invalidate(); // new epoch: drop links into the head
         printf("%%CPU-I-IDLE: CPU%d idle loop recognized at %016llx\n",
                (int)state.iProcNum, (unsigned long long)start_virt);
       }
       if (m_park_pc == 0 && nt_park_head(dram_ptr, dram_size, start_phys)) {
         m_park_pc = start_virt;
+        if (m_jit)
+          m_jit->note_itb_invalidate(); // new epoch: drop links into the head
         printf("%%CPU-I-IDLE: CPU%d parked-processor loop recognized at "
                "%016llx\n",
                (int)state.iProcNum, (unsigned long long)start_virt);
@@ -1334,7 +1338,13 @@ void CAlphaCPU::jit_run(int budget) {
 #else
       // A predecessor block's epilogue cache-missed and asked to be linked
       // here. Now that we know this block is live and compiled, patch its
-      // successor pointer so it jumps straight in instead of returning
+      // successor pointer so it jumps straight in instead of returning. Never
+      // link into a learned idle/parked loop head: idle pacing (above) only
+      // sees passes that come back through here.
+      if (m_link_from && (start_virt == m_idle_pc || start_virt == m_park_pc)) {
+        m_jit->note_link_bail();
+        m_link_from = nullptr;
+      }
       if (m_link_from) {
         // Low bits (JitBlock is 8-aligned): 0 = scan-style exit, round-robin
         // into the slots; k = a static exit that owns slot k-1.
@@ -2513,6 +2523,11 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_helper(CJitEngine::HK_INDIRECT);
   CJitEngine::JitBlock *b = cpu->m_jit->lookup(target, (u32)cpu->state.asn);
   if (!b || !b->jit_body)
+    return nullptr;
+  // Idle pacing only sees passes through an idle/parked loop head that come
+  // back to the dispatcher (a beta 2 HAL's HalProcessorIdle returns into the
+  // head), so never chain into one.
+  if (target == cpu->m_idle_pc || target == cpu->m_park_pc)
     return nullptr;
   if (target & 1) {
     // PALmode target: the I-stream is physically addressed (not paged), so no
