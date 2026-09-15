@@ -108,6 +108,11 @@ public:
   u64 get_pal_base();
 
   void enable_icache();
+#ifdef ES40_JIT
+  // One jit_run dispatch batch for main-thread callers (LoadROM's SRM
+  // decompression runs before the CPU threads exist).
+  void jit_step(int budget) { jit_run(budget); }
+#endif
   void restore_icache();
 
   bool get_waiting() { return state.wait_for_start; };
