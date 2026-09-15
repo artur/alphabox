@@ -44,6 +44,10 @@ bool pic_messages = false;
 /* Timer Calibration: Instructions per Microsecond (assuming 1 clock = 1
  * instruction) */
 #define IPus 847
+#define PIT_CLOCK_HZ 1193182ULL // 8254 input clock
+#define REFRESH_TOGGLE_NS 15085ULL // port 61h bit 4 refresh half-period
+#define PIT_LATCH_VALID 0x00010000U     // pit_counter[c + PIT_OFFSET_LATCH]
+#define PIT_LATCH_HIGH_NEXT 0x00020000U // ...LSB of a latched count was read
 
 u32 ali_cfg_data[64] = {
     /*00*/ 0x153310b9, // CFID: vendor + device
@@ -547,24 +551,18 @@ void CAliM1543C::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
  * seem reasonable to the OS.
  */
 u8 CAliM1543C::reg_61_read() {
-#if 0
-	static long read_count = 0;
-	if (!(state.reg_61 & 0x20))
-	{
-		if (read_count % 1500 == 0)
-			state.reg_61 |= 0x20;
-	}
-	else
-	{
-		state.reg_61 &= ~0x20;
-	}
-
-	read_count++;
-#else
-  state.reg_61 &= ~0x20;
-  if (pit_out(2)) // analytic ch2 phase: pollers see jitter-free edges
+  // Bit 4: DRAM refresh request, toggling every ~15 us of wall-clock time
+  // (delay loops poll it). Bit 5: counter 2's output, from its analytic phase
+  // so pollers see jitter-free edges.
+  const u64 refresh_ns =
+      (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count();
+  state.reg_61 &= ~0x30;
+  if ((refresh_ns / REFRESH_TOGGLE_NS) & 1U)
+    state.reg_61 |= 0x10;
+  if (pit_out(2))
     state.reg_61 |= 0x20;
-#endif
   return state.reg_61;
 }
 
@@ -572,7 +570,28 @@ u8 CAliM1543C::reg_61_read() {
  * Write port 61h (speaker/ miscellaneous).
  **/
 void CAliM1543C::reg_61_write(u8 data) {
+  // Bit 0 is counter 2's GATE input.
+  const bool gate_was_high = (state.reg_61 & 0x01) != 0;
+  const bool gate_is_high = (data & 0x01) != 0;
   state.reg_61 = (state.reg_61 & 0xf0) | (((u8)data) & 0x0f);
+  const int mode = (state.pit_status[2] & 0x0e) >> 1;
+  if (gate_was_high && !gate_is_high && mode != 0)
+    state.pit_status[2] |= 0x80; // gate low forces OUT high in modes 1-5
+  if (!gate_was_high && gate_is_high) {
+    const auto now = std::chrono::steady_clock::now();
+    if (mode == 2 || mode == 3) { // rising gate restarts the count
+      state.pit_counter[2] = state.pit_counter[2 + PIT_OFFSET_MAX];
+      state.pit_status[2] |= 0x80;
+      m_pit_epoch[2] = now;
+    } else if (mode == 0 && state.pit_counter[2] != 0) {
+      // mode 0 resumes where it was suspended: rebase the phase reference
+      const u32 reload = state.pit_counter[2 + PIT_OFFSET_MAX];
+      const u32 elapsed =
+          reload > state.pit_counter[2] ? reload - state.pit_counter[2] : 0;
+      m_pit_epoch[2] = now - std::chrono::microseconds((u64)elapsed * 1000000ULL /
+                                                       PIT_CLOCK_HZ);
+    }
+  }
 }
 
 void CAliM1543C::superio_reset() {
@@ -1109,25 +1128,40 @@ void CAliM1543C::toy_write(u32 address, u8 data) {
         See sys/dev/ic/mc146818reg.h and sys/arch/alpha/alpha/mcclock.c in
         NetBSD
       */
-      static clock_t last_fire = 0;
-      clock_t now = clock();
-      double timedelta = (now - last_fire) / (double)CLOCKS_PER_SEC;
-      int rate_pow = state.toy_stored_data[0x0a] & 0x0f;
-      double period = (1 << rate_pow) / 65536.0;
 #define MC_BASE_32_KHz 0x20
 #define RTC_PF 0x40
-
+      // Periodic flag (reg C PF), paced by wall-clock time: PF sets once per
+      // elapsed rate period, counted against a fixed epoch, so a fast poller
+      // sees the true cadence (976.5625 us at the SRM's 1024 Hz) and a slow
+      // one coalesces missed periods into the single flag, as on the chip.
+      // (It used clock(), the process CPU time summed over every emulator
+      // thread, with a last-fire time shared by all instances.)
+      const int rate_pow = state.toy_stored_data[0x0a] & 0x0f;
+      u64 pf_freq = rate_pow ? (65536ull >> rate_pow) : 0;
       if (state.toy_stored_data[0x0a] & MC_BASE_32_KHz) {
-        if (rate_pow == 0x1) {
-          period = 1 / 256.0;
-        } else if (rate_pow == 0x2) {
-          period = 1 / 128.0;
-        }
+        if (rate_pow == 0x1)
+          pf_freq = 256;
+        else if (rate_pow == 0x2)
+          pf_freq = 128;
       }
-
-      if (rate_pow && (timedelta >= period)) {
-        state.toy_stored_data[0x0c] |= RTC_PF;
-        last_fire = now;
+      if (pf_freq) {
+        const auto now = std::chrono::steady_clock::now();
+        if (pf_freq != m_toy_pf_freq) { // rate change or first use: restart
+          m_toy_pf_freq = pf_freq;
+          m_toy_pf_epoch = now;
+          m_toy_pf_count = 0;
+        }
+        const u64 elapsed_ns =
+            (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now - m_toy_pf_epoch)
+                .count();
+        // 128-bit product: elapsed_ns * 32768 overflows 64 bits after ~6 days.
+        const u64 due =
+            (u64)((unsigned __int128)elapsed_ns * pf_freq / 1000000000ull);
+        if (due != m_toy_pf_count) {
+          state.toy_stored_data[0x0c] |= RTC_PF;
+          m_toy_pf_count = due;
+        }
       }
     }
 
@@ -1239,64 +1273,130 @@ void CAliM1543C::toy_write(u32 address, u8 data) {
  * PIT Write:  2, 13  = 1331
  **/
 u8 CAliM1543C::pit_read(u32 address) {
+  if (address >= 3)
+    return 0; // the control word is write-only
 
-  // printf("PIT Read: %02" PRIx64 " \n",address);
-  u8 data;
-  data = 0;
-  return data;
+  u32 &latch = state.pit_counter[address + PIT_OFFSET_LATCH];
+  const bool latched = (latch & PIT_LATCH_VALID) != 0;
+  const u16 count = latched ? (u16)latch : pit_count_now((int)address);
+  const int access = (state.pit_status[address] & 0x30) >> 4;
+
+  switch (access) {
+  case 1: // LSB only
+    if (latched)
+      latch = 0;
+    return (u8)count;
+
+  case 2: // MSB only
+    if (latched)
+      latch = 0;
+    return (u8)(count >> 8);
+
+  case 3: // LSB then MSB: hold the count until its MSB has been read
+    if ((latch & PIT_LATCH_HIGH_NEXT) == 0) {
+      latch = (u32)count | PIT_LATCH_VALID | PIT_LATCH_HIGH_NEXT;
+      return (u8)count;
+    }
+    latch = 0;
+    return (u8)(count >> 8);
+  }
+  return 0;
+}
+
+/**
+ * The counter's current count, derived from the wall-clock phase since its
+ * last load (as pit_out derives OUT), so a guest reading or latching the count
+ * -- delay-calibration loops do -- sees it move between pit_clock updates.
+ **/
+u16 CAliM1543C::pit_count_now(int c) {
+  const u32 n = state.pit_counter[c + PIT_OFFSET_MAX];
+  if ((state.pit_status[c] & 0x40) || !n ||
+      (c == 2 && (state.reg_61 & 0x01) == 0)) // unloaded, or gated off
+    return (u16)state.pit_counter[c];
+  const u64 clocks =
+      (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - m_pit_epoch[c])
+          .count() *
+      PIT_CLOCK_HZ / 1000000ull;
+  switch ((state.pit_status[c] & 0x0e) >> 1) {
+  case 0: // counts down from n and keeps wrapping past zero
+    return (u16)((u64)n - clocks);
+  case 2: // rate generator: n .. 1, reloading every n clocks
+    return (u16)(n - (u32)(clocks % n));
+  case 3: // square wave: counts down by two, reloading each half period
+    return (u16)((n - (u32)((clocks * 2) % n)) & ~1u);
+  default:
+    return (u16)state.pit_counter[c];
+  }
 }
 
 /**
  * Write to the programmable interrupt timer ports (40h-43h)
  **/
 void CAliM1543C::pit_write(u32 address, u8 data) {
-
-  // printf("PIT Write: %02" PRIx64 ", %02x \n",address,data);
-  if (address == 3) { // control
-    if (data != 0) {
-      state.pit_status[address] = data; // last command seen.
-      if ((data & 0xc0) >> 6 != 3) {
-        state.pit_status[(data & 0xc0) >> 6] = data & 0x3f;
-        state.pit_mode[(data & 0xc0) >> 6] = (data & 0x30) >> 4;
-      } else {                            // readback command 8254 only
-        state.pit_status[address] = 0xc0; // bogus :)
-      }
+  if (address == 3) { // control word
+    const int counter = (data >> 6) & 3;
+    if (counter == 3) { // read-back command (8254): not modelled
+      state.pit_status[3] = data;
+      return;
     }
-  } else { // a counter
-    m_pit_epoch[address] =
-        std::chrono::steady_clock::now(); // pit_out phase reference
-    switch (state.pit_mode[address]) {
-    case 0:
-      break;
+    const int access = (data >> 4) & 3;
+    if (access == 0) { // counter latch command; never replace an unread latch
+      u32 &latch = state.pit_counter[counter + PIT_OFFSET_LATCH];
+      if ((latch & PIT_LATCH_VALID) == 0)
+        latch = (u32)pit_count_now(counter) | PIT_LATCH_VALID;
+      return;
+    }
+    int mode = (data >> 1) & 7;
+    if (mode >= 6)
+      mode -= 4; // modes 6 and 7 alias 2 and 3
+    // status: access + BCD bits, mode, NULL COUNT (0x40); OUT (0x80) goes
+    // high after a control word in every mode but 0
+    state.pit_status[counter] = (u8)((data & 0x31) | (mode << 1) | 0x40);
+    if (mode != 0)
+      state.pit_status[counter] |= 0x80;
+    state.pit_mode[counter] = (u8)access; // write sequencing state
+    state.pit_counter[counter + PIT_OFFSET_LATCH] = 0;
+    return;
+  }
 
-    case 1:
-    case 3:
-      state.pit_counter[address] =
-          (state.pit_counter[address] & 0xff) | data << 8;
-      state.pit_counter[address + PIT_OFFSET_MAX] = state.pit_counter[address];
+  if (address < 3) { // count register
+    const int access = (state.pit_status[address] & 0x30) >> 4;
+    u32 count = 0;
+    switch (access) {
+    case 1: // LSB only
+      count = data;
+      break;
+    case 2: // MSB only
+      count = (u32)data << 8;
+      break;
+    case 3: // LSB then MSB: stash the LSB until the MSB arrives
       if (state.pit_mode[address] == 3) {
+        state.pit_counter[address + PIT_OFFSET_LATCH] = data;
         state.pit_mode[address] = 2;
-      } else
-        state.pit_status[address] &= ~0xc0; // no longer high, counter valid.
-      break;
-
-    case 2:
-      state.pit_counter[address] = (state.pit_counter[address] & 0xff00) | data;
-
-      // two bytes were written with 0x00, so its really 0x10000
-      if ((state.pit_status[address] & 0x30) >> 4 == 3 &&
-          state.pit_counter[address] == 0) {
-        state.pit_counter[address] = 65536;
+        return;
       }
-
-      state.pit_counter[address + PIT_OFFSET_MAX] = state.pit_counter[address];
-      state.pit_status[address] &= ~0xc0; // no longer high, counter valid.
+      count = (state.pit_counter[address + PIT_OFFSET_LATCH] & 0xFFU) |
+              ((u32)data << 8);
+      state.pit_mode[address] = 3;
       break;
+    default:
+      return;
     }
+    if (count == 0)
+      count = 65536; // a zero count means 2^16
+    state.pit_counter[address] = count;
+    state.pit_counter[address + PIT_OFFSET_MAX] = count;
+    state.pit_counter[address + PIT_OFFSET_LATCH] = 0;
+    state.pit_status[address] &= ~0x40; // count loaded
+    if (((state.pit_status[address] & 0x0e) >> 1) == 0)
+      state.pit_status[address] &= ~0x80; // mode 0: OUT low while counting
+    else
+      state.pit_status[address] |= 0x80;
+    m_pit_epoch[address] = std::chrono::steady_clock::now(); // phase reference
   }
 }
 
-#define PIT_CLOCK_HZ 1193182
 
 /**
  * Derive a counter's output pin from wall-clock phase since its last load.
@@ -1304,8 +1404,11 @@ void CAliM1543C::pit_write(u32 address, u8 data) {
  * edges quantized to the Ali thread's wakeup cadence.
  **/
 bool CAliM1543C::pit_out(int c) {
-  if (state.pit_status[c] & 0x40) // no count loaded: OUT idles high
-    return true;
+  const int mode = (state.pit_status[c] & 0x0e) >> 1;
+  if (state.pit_status[c] & 0x40) // control word written, no count loaded yet
+    return mode != 0;             // mode 0 starts low, the others high
+  if (c == 2 && (state.reg_61 & 0x01) == 0) // GATE2 low inhibits counter 2
+    return mode == 0 ? (state.pit_status[c] & 0x80) != 0 : true;
   const u32 n = state.pit_counter[c + PIT_OFFSET_MAX];
   if (!n)
     return true;
@@ -1356,6 +1459,8 @@ void CAliM1543C::pit_clock() {
 
   for (int i = 0; i < 3; i++) {
     if (state.pit_status[i] & 0x40)
+      continue;
+    if (i == 2 && (state.reg_61 & 0x01) == 0) // GATE2 low: counter 2 holds
       continue;
     switch ((state.pit_status[i] & 0x0e) >> 1) {
     case 0: // interrupt at terminal
@@ -1618,8 +1723,11 @@ void CAliM1543C::pic_update_output(int index) {
       }
       state.pic_last_irr[0] |= cascade_mask;
     } else {
-      if (is_level)
-        state.pic_irr[0] &= ~cascade_mask;
+      // The cascade request is derived from the slave output, so it must
+      // disappear with that output in either trigger mode. Keeping master
+      // IRQ2 after the slave request was cancelled gives a phantom IRQ15 and
+      // can leave master ISR2 in service for good.
+      state.pic_irr[0] &= ~cascade_mask;
       state.pic_last_irr[0] &= ~cascade_mask;
     }
     pic_update_output(0);
@@ -1945,8 +2053,8 @@ void CAliM1543C::pic_deassert(int index, int intno) {
  * IRR (debounced via last_irr so a held line yields one interrupt), and a
  * falling line RETRACTS IRR.  This intentionally differs from a stock 8259
  * which keeps an edge latched until INTA: a real 8259 has a wire whose source
- * holds it, but here the "wire" IS the output-buffer level and once the guest
- * empties the buffer there is nothing left to deliver.
+ * holds it, but here the "wire" IS the emulated device cause, and once that
+ * cause disappears there is nothing left to deliver.
  *
  * caller must hold picLock
  **/
@@ -1966,17 +2074,16 @@ void CAliM1543C::pic_set_line_inner(int index, int intno, bool active) {
       state.pic_last_irr[index] &= ~mask;
     }
   } else {
-    // Edge triggered: latch IRR only on the rising edge.  IRR is cleared at
-    // INTA, not here, so re-driving a held line produces no duplicate edge.
+    // Edge triggered: latch IRR only on the rising edge. A held line produces
+    // no duplicate edge; INTA consumes it unless the emulated cause falls
+    // first.
     if (active) {
       if ((state.pic_last_irr[index] & mask) == 0)
         state.pic_irr[index] |= mask;
       state.pic_last_irr[index] |= mask;
     } else {
-      // Line low — the output buffer emptied (normal read, drained read,
-      // or poll), so there is nothing left to deliver: retract the latched
-      // edge.  A stock 8259 keeps it until INTA, but here the line IS the
-      // buffer level.
+      // The emulated cause disappeared before INTA: retract the request and
+      // rearm edge detection.
       state.pic_irr[index] &= ~mask;
       state.pic_last_irr[index] &= ~mask;
     }

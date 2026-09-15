@@ -100,6 +100,7 @@ private:
   void pit_write(u32 address, u8 data);
   void pit_clock();
   bool pit_out(int c);
+  u16 pit_count_now(int c);
 
   // Wall-clock pacing for the 8254: elapsed host time is converted to
   // 1.193182 MHz input clocks; m_pit_acc carries the sub-clock remainder
@@ -110,6 +111,10 @@ private:
   std::chrono::steady_clock::time_point m_pit_last;
   std::chrono::steady_clock::time_point m_pit_epoch[3];
   u64 m_pit_acc;
+  // RTC periodic-flag (reg C PF) pacing; re-primed on a rate change.
+  std::chrono::steady_clock::time_point m_toy_pf_epoch;
+  u64 m_toy_pf_count = 0;
+  u64 m_toy_pf_freq = 0;
 
 public:
   // Period in ns of the MC146818 SQW output (rate from TOY reg A).
