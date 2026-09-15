@@ -64,10 +64,11 @@ CSystem::CSystem(CConfigurator *cfg) try {
   iNumMemories = 0;
   iNumCPUs = 0;
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
-  // A Typhoon array register describes 16 MB (24 bits) to 8 GB (33 bits).
-  if (iNumMemoryBits < 24 || iNumMemoryBits > 33)
+  // 64 MB (the smallest four-DIMM set the SPD model describes) to 32 GB (four
+  // Typhoon arrays of 8 GB each).
+  if (iNumMemoryBits < 26 || iNumMemoryBits > 35)
     FAILURE(Configuration,
-            "memory.bits must be between 24 (16 MB) and 33 (8 GB)");
+            "memory.bits must be between 26 (64 MB) and 35 (32 GB)");
   m_exit_on_pal_halt = myCfg->get_bool_value("exit_on_pal_halt", false);
 
   // initialize SPD data according to configured memory size
@@ -1496,16 +1497,19 @@ u64 CSystem::cchip_csr_read(u32 a, CSystemComponent *source) {
   }
 
   case 0x100:
-
-    // WE PUT ALL OUR MEMORY IN A SINGLE ARRAY FOR NOW...
-    return ((u64)(iNumMemoryBits - 23) << 12); // size
-
   case 0x140:
   case 0x180:
-  case 0x1c0:
-
-    // WE PUT ALL OUR MEMORY IN A SINGLE ARRAY FOR NOW...
-    return 0;
+  case 0x1c0: {
+    // AAR0-3: memory as up to 4 arrays of at most 8 GB each (ASIZ 1010 is
+    // the Typhoon maximum), array n based at n * 8 GB in ADDR<34:24>. Matches
+    // the DIMM model reported by the DPR (init_spd_from_config_mb).
+    const int arr = (int)((a >> 6) & 3);
+    const unsigned int arr_bits = (iNumMemoryBits > 33) ? 33 : iNumMemoryBits;
+    const int n_arr = 1 << (iNumMemoryBits - arr_bits);
+    if (arr >= n_arr)
+      return 0; // array not populated
+    return ((u64)arr << arr_bits) | ((u64)(arr_bits - 23) << 12);
+  }
 
   case 0x200:
   case 0x240:
@@ -2733,57 +2737,6 @@ void CSystem::clear_ipi(int ProcNum) {
 }
 
 /* ---------------- SPD generation + init ---------------- */
-std::vector<uint32_t> CSystem::split_mb_into_dimms(uint32_t total_mb) {
-  // ES40 prefers matched Registered ECC DIMMs for interleave.
-  // Try to form 4 identical sticks, else 2, else fall back to greedy.
-  const uint32_t choices[] = {1024, 512, 256, 128, 64};
-  auto fill_all = [&](uint32_t each, int n) -> std::vector<uint32_t> {
-    std::vector<uint32_t> v(4, 0);
-    for (int i = 0; i < n; ++i)
-      v[i] = each;
-    return v;
-  };
-
-  // 4-way match
-  for (uint32_t c : choices)
-    if (total_mb == 4 * c)
-      return fill_all(c, 4);
-
-  // 2-way match
-  for (uint32_t c : choices)
-    if (total_mb == 2 * c)
-      return fill_all(c, 2);
-
-  // Mixed but server-ish: try largest even pairs first, then greedy.
-  std::vector<uint32_t> out(4, 0);
-  uint32_t remain = total_mb;
-  for (uint32_t c : choices) {
-    while (remain >= 2 * c) {
-      for (int k = 0; k < 2; k++) {
-        for (int i = 0; i < 4; i++)
-          if (!out[i]) {
-            out[i] = c;
-            break;
-          }
-      }
-      remain -= 2 * c;
-    }
-  }
-
-  for (uint32_t c : choices) {
-    while (remain >= c) {
-      for (int i = 0; i < 4; i++)
-        if (!out[i]) {
-          out[i] = c;
-          break;
-        }
-      remain -= c;
-    }
-  }
-
-  return out;
-}
-
 std::vector<uint8_t> CSystem::build_sdram_spd(uint32_t mb,
                                               bool registered_ecc) {
   // ES40-typical: Registered ECC PC100 SDRAM (168-pin), CL=2/3 supported.
@@ -2793,6 +2746,12 @@ std::vector<uint8_t> CSystem::build_sdram_spd(uint32_t mb,
   } g{};
 
   switch (mb) {
+  case 16: // 16/32 MB DIMMs only occur in configurations below 256 MB
+    g = {11, 8, 1};
+    break;
+  case 32:
+    g = {11, 9, 1};
+    break;
   case 64:
     g = {12, 9, 1};
     break; // 8Mx8 devices, 1 rank
@@ -2847,14 +2806,29 @@ std::vector<uint8_t> CSystem::build_sdram_spd(uint32_t mb,
   return b;
 }
 
+/**
+ * Choose the modelled DIMM population and attach its SPD EEPROMs.
+ *
+ * Sets of 4 identical DIMMs fill one MMB's slot set (J1-J4, then J5-J8) and
+ * each populated MMB is one memory array (at most 8 DIMMs, within the
+ * Typhoon's 8 GB per array). The DIMM size is total/4 capped at 1 GB, so
+ * every configuration is at least one 4-DIMM set (4-way interleave) and
+ * memory above 4 GB spills into more sets and arrays. The DPR reports this
+ * layout (CDPR::init) and the Cchip array registers match it.
+ **/
 void CSystem::init_spd_from_config_mb(uint32_t total_mb) {
-  auto dimms = split_mb_into_dimms(total_mb);
-  for (int i = 0; i < 4; i++) {
-    if (!dimms[i])
-      continue;
-    auto image = build_sdram_spd(dimms[i], /*registered_ecc*/ true);
-    m_mpd_bus.attach(std::make_shared<Eeprom24C02>(uint8_t(0x50 + i), image));
-  }
+  m_dimm_layout.dimm_mb = (total_mb / 4 > 1024) ? 1024 : total_mb / 4;
+  const uint32_t n_dimms = total_mb / m_dimm_layout.dimm_mb;
+  m_dimm_layout.n_arrays = (int)((n_dimms + 7) / 8);
+  m_dimm_layout.dimms_per_array = (int)(n_dimms / m_dimm_layout.n_arrays);
+  m_dimm_spd = build_sdram_spd(m_dimm_layout.dimm_mb, /*registered_ecc*/ true);
+
+  // The I2C bus does not carry every DIMM (HRM 9.10): one representative
+  // EEPROM per 4-DIMM set, at 0x50 + array * 2 + set.
+  for (int a = 0; a < m_dimm_layout.n_arrays; a++)
+    for (int s = 0; s < m_dimm_layout.dimms_per_array / 4; s++)
+      m_mpd_bus.attach(
+          std::make_shared<Eeprom24C02>(uint8_t(0x50 + a * 2 + s), m_dimm_spd));
 }
 
 #if defined(PROFILE)

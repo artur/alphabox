@@ -187,6 +187,15 @@ public:
   CAlphaCPU *get_cpu(int cpunum) { return acCPUs[cpunum]; };
   int get_cpu_num() { return iNumCPUs; };
 
+  /// Modelled DIMM population (see init_spd_from_config_mb).
+  struct SDimmLayout {
+    int n_arrays = 1;        ///< populated arrays = populated MMBs (1, 2 or 4)
+    int dimms_per_array = 4; ///< 8 (twice-split) or 4 (lower slot set only)
+    uint32_t dimm_mb = 0;    ///< capacity of each (identical) DIMM
+  };
+  const SDimmLayout &get_dimm_layout() const { return m_dimm_layout; };
+  const std::vector<uint8_t> &get_dimm_spd() const { return m_dimm_spd; };
+
   virtual ~CSystem();
   unsigned int iNumMemoryBits;
 
@@ -251,7 +260,8 @@ private:
   void init_spd_from_config_mb(uint32_t total_mb);
   static std::vector<uint8_t> build_sdram_spd(uint32_t dimm_mb,
                                               bool registered_ecc = true);
-  static std::vector<uint32_t> split_mb_into_dimms(uint32_t total_mb);
+  SDimmLayout m_dimm_layout;
+  std::vector<uint8_t> m_dimm_spd; ///< SPD image shared by all modelled DIMMs
 
   std::atomic<bool> m_reset_requested{false};
   std::atomic<bool> m_reset_in_progress{false};

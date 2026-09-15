@@ -129,16 +129,27 @@ void CDPR::init() {
 
   state.ram[0xda] = 0xaa; // TIG load
 
-  // DIMM config
-  state.ram[0x80] = 0xf0; // twice-split 8 dimms array 0
-  state.ram[0x81] = 0x01; // 64 MB
+  // DIMM config, from the modelled population
+  // (CSystem::init_spd_from_config_mb): array a = MMB a, DIMMs in slots J1-J4
+  // (and J5-J8 when twice-split).
+  const CSystem::SDimmLayout &lay = cSystem->get_dimm_layout();
+  const std::vector<uint8_t> &spd = cSystem->get_dimm_spd();
+  for (int a = 0; a < lay.n_arrays; a++) {
+    // 0x80+2a <7:4>: F = twice-split (8 DIMMs), 4 = lower set only;
+    // <3:0> = array position. 0x81+2a: DIMM size in 64 MB units (the 16 and
+    // 32 MB DIMMs of configurations below 256 MB report 1).
+    state.ram[0x80 + 2 * a] =
+        (u8)(((lay.dimms_per_array == 8) ? 0xf0 : 0x40) | a);
+    const u8 size_units = (u8)(lay.dimm_mb / 64);
+    state.ram[0x81 + 2 * a] = size_units ? size_units : 1;
+  }
 
-  //    state.ram[0x82] = 0xf1; // twice-split 8 dimms array 1
-  //    state.ram[0x83] = 0x01; // 64 MB
-  //    state.ram[0x84] = 0xf2; // twice-split 8 dimms array 2
-  //    state.ram[0x85] = 0x01; // 64 MB
-  //    state.ram[0x86] = 0xf3; // twice-split 8 dimms array 3
-  //    state.ram[0x87] = 0x01; // 64 MB
+  // RMC-cached SPD contents, one 256-byte region per installed DIMM: MMB m
+  // slot Jd at 0x100 * (m * 8 + d), d = 1..8.
+  for (int a = 0; a < lay.n_arrays; a++)
+    for (int d = 1; d <= lay.dimms_per_array; d++)
+      memcpy(&state.ram[0x100 * (a * 8 + d)], spd.data(),
+             spd.size() < 0x100 ? spd.size() : 0x100);
   // powerup failure bits
   state.ram[0x88] = 0;    // each bit is one DIMM on MMB0
   state.ram[0x89] = 0x00; // MMB1
@@ -173,11 +184,13 @@ void CDPR::init() {
 
   state.ram[0xaa] = 0x00; // fans good
 
-  // RMC read failure DIMM bits
-  state.ram[0xab] = 0;    // each bit is one DIMM on MMB0
-  state.ram[0xac] = 0xff; // MMB1
-  state.ram[0xad] = 0xff; // MMB2
-  state.ram[0xae] = 0xff; // MMB3
+  // RMC read failure DIMM bits, one byte per MMB (bit d-1 = slot Jd; set =
+  // no SPD to read): MMB m carries array m's DIMMs.
+  {
+    const u8 installed = (lay.dimms_per_array == 8) ? 0xff : 0x0f;
+    for (int m = 0; m < 4; m++)
+      state.ram[0xab + m] = (u8)((m < lay.n_arrays) ? ~installed : 0xff);
+  }
   switch (cSystem->get_cpu_num()) {
   case 1:
     state.ram[0xaf] = 0x0e; // all MMB I2C's read + CPU 0
@@ -235,38 +248,10 @@ void CDPR::init() {
   // EEROMs
 
   /*
-     100: MMB0 DIMM 2
-     200: MMB0 DIMM 3
-     300: MMB0 DIMM 4
-     400: MMB0 DIMM 5
-     500: MMB0 DIMM 6
-     600: MMB0 DIMM 7
-     700: MMB0 DIMM 8
-     800: MMB0 DIMM 1
-     900: MMB1 DIMM 2
-     a00: MMB1 DIMM 3
-     b00: MMB1 DIMM 4
-     c00: MMB1 DIMM 5
-     d00: MMB1 DIMM 6
-     e00: MMB1 DIMM 7
-     f00: MMB1 DIMM 8
-     1000: MMB1 DIMM 1
-     1100: MMB2 DIMM 2
-     1200: MMB2 DIMM 3
-     1300: MMB2 DIMM 4
-     1400: MMB2 DIMM 5
-     1500: MMB2 DIMM 6
-     1600: MMB2 DIMM 7
-     1700: MMB2 DIMM 8
-     1800: MMB2 DIMM 1
-     1900: MMB3 DIMM 2
-     1a00: MMB3 DIMM 3
-     1b00: MMB3 DIMM 4
-     1c00: MMB3 DIMM 5
-     1d00: MMB3 DIMM 6
-     1e00: MMB3 DIMM 7
-     1f00: MMB3 DIMM 8
-     2000: MMB3 DIMM 1
+     100-800: MMB0 DIMM 1-8   (0x100 * (m * 8 + d) for MMB m, DIMM Jd;
+     900-1000: MMB1 DIMM 1-8   SRM's "show fru" lists the DIMMs whose SPD
+     1100-1800: MMB2 DIMM 1-8  is cached here as SMB0.MMBm.DIMd)
+     1900-2000: MMB3 DIMM 1-8
      2100: CPU0
      2200: CPU1
      2300: CPU2
@@ -347,8 +332,12 @@ void CDPR::init() {
   //     34A8:34AF SROM Repeat for Array 1 of Array 0 34A0:34A7
   //     34B0:34B7 SROM Repeat for Array 2 of Array 0 34A0:34A7
   //     34B8:34CF SROM Repeat for Array 3 of Array 0 34A0:34A7
-  for (i = 0; i < 0x20; i++)
-    state.ram[0x34a0 + i] = i;
+  // Entry j of array a: slot J(j+1) on MMB a; status 1 = expected missing.
+  for (int a = 0; a < 4; a++)
+    for (int j = 0; j < 8; j++) {
+      const u8 status = (a < lay.n_arrays && j < lay.dimms_per_array) ? 0 : 1;
+      state.ram[0x34a0 + a * 8 + j] = (u8)((status << 5) | (a << 3) | j);
+    }
 
   //    34C0:34FF       Used as scratch area for SROM
   //    3500:35FF       Used as the dedicated buffer in which SRM writes OCP or
@@ -472,6 +461,30 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
       case 6:
       case 7:
       case 8:
+      case 0x09: // MMB1..MMB3 DIMM regions (0x900-0x20ff, see the map above)
+      case 0x0a:
+      case 0x0b:
+      case 0x0c:
+      case 0x0d:
+      case 0x0e:
+      case 0x0f:
+      case 0x10:
+      case 0x11:
+      case 0x12:
+      case 0x13:
+      case 0x14:
+      case 0x15:
+      case 0x16:
+      case 0x17:
+      case 0x18:
+      case 0x19:
+      case 0x1a:
+      case 0x1b:
+      case 0x1c:
+      case 0x1d:
+      case 0x1e:
+      case 0x1f:
+      case 0x20:
       case 0x25:
       case 0x26:
       case 0x27:
@@ -486,7 +499,10 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
       case 0x3d:
       case 0x3e:
       case 0x3f:
-        for (i = 0; i < state.ram[0xf9] + 1; i++) {
+        // Each FRU region is 256 bytes: a write that runs past its end stops
+        // there (for qualifier 0x3f it would run past the DPR RAM).
+        for (i = 0; i < state.ram[0xf9] + 1 && state.ram[0xfa] + i < 0x100;
+             i++) {
           state.ram[state.ram[0xfb] * 0x100 + state.ram[0xfa] + i] =
               state.ram[0x3500 + state.ram[0xfa] + i];
 #if defined(DEBUG_DPR)
