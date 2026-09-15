@@ -37,6 +37,10 @@
 #include "PCIDevice.hpp"
 #include "SCSIDevice.hpp"
 
+#include <condition_variable>
+#include <mutex>
+#include <string>
+
 /**
  * \brief Symbios Sym53C810 SCSI disk controller.
  *
@@ -94,6 +98,12 @@ private:
 
   void post_dsp_write();
 
+  void start_scripts();
+  void run_scripts_inline();
+  bool inline_can_execute_next();
+  void step_scripts();
+  void halt_scripts_on_failure(const std::string &msg);
+
   int check_phase(int chk_phase);
   void execute_io_op();
   void execute_rw_op();
@@ -109,9 +119,21 @@ private:
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
-  CSemaphore mySemaphore;
-  CMutex *myRegLock;
-  bool StopThread;
+
+  /// Serializes the register file and SCRIPTS execution. Recursive because
+  /// SCRIPTS Load/Store and R/W instructions re-enter ReadMem_Bar/WriteMem_Bar
+  /// (and through DSP/ISTAT/DCNTL writes, the start logic) with it held.
+  std::recursive_mutex myRegLock;
+  /// Wakes the SCRIPTS thread; predicate is StopThread || state.executing.
+  std::condition_variable_any scriptsWake;
+  bool StopThread = false;      ///< guarded by myRegLock
+  bool scripts_running = false; ///< a SCRIPTS instruction is executing on the
+                                ///< thread holding myRegLock
+  std::string scripts_error;    ///< SCRIPTS failure for check_state() to raise
+#if defined(DEBUG_SYM_START)
+  unsigned long dbg_sigp_not_waiting = 0;
+  unsigned long dbg_inline_handoffs = 0;
+#endif
 
   /// The state structure contains all elements that need to be saved to the
   /// statefile.

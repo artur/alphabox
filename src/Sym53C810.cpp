@@ -36,9 +36,16 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
-// SCRIPTS runaway guard — maximum instructions per execution burst
-// (between semaphore wakes). Real drivers never approach this.
+// SCRIPTS runaway guard — maximum instructions per guest-initiated start
+// (DSP write, DCNTL.STD, SIGP resume). Real drivers never approach this.
 #define SYM_MAX_INSN_PER_BURST 100000
+
+// Maximum instructions run inline on the register-writing (CPU) thread
+// before handing SCRIPTS to the device thread; see run_scripts_inline().
+#define SYM_INLINE_INSN_LIMIT 256
+
+// Build with -DDEBUG_SYM_START to log SIGP writes that find no WAIT RESELECT
+// and inline->thread handoffs (the header adds counters for it).
 
 /// Register 00: SCNTL0: SCSI Control 0
 #define R_SCNTL0 0x00
@@ -559,26 +566,20 @@ static u32 osym_cfg_mask[64] = {
  **/
 void CSym53C810::run() {
   try {
+    std::unique_lock<std::recursive_mutex> lock(myRegLock);
     for (;;) {
-      mySemaphore.wait();
+      scriptsWake.wait(lock, [this] { return StopThread || state.executing; });
       if (StopThread)
         return;
-      state.insn_processed = 0; // fresh budget per SCRIPTS wake
-      while (state.executing) {
-        myRegLock->lock();
-        try {
-          execute();
-        } catch (...) {
-          MUTEX_UNLOCK(myRegLock);
-          throw;
-        }
-        MUTEX_UNLOCK(myRegLock);
+      step_scripts();
+      if (state.executing) {
+        // Let register accesses interleave between instructions.
+        lock.unlock();
+        lock.lock();
       }
     }
-  }
-
-  catch (CException &e) {
-    printf("Exception in SYM thread: %s.\n", e.displayText().c_str());
+  } catch (std::exception &e) {
+    printf("Exception in SYM thread: %s.\n", e.what());
     myThreadDead.store(true);
 
     // Let the thread die...
@@ -592,8 +593,7 @@ void CSym53C810::run() {
  * CSym53C895::init.
  **/
 CSym53C810::CSym53C810(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
-    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(1, 7),
-      mySemaphore(0, 1) {
+    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(1, 7) {
 
   // create scsi bus
   CSCSIBus *a = new CSCSIBus(cfg, c);
@@ -610,9 +610,10 @@ void CSym53C810::init() {
 
   ResetPCI();
 
+  // chip_reset() only lowers the PCI line if irq_asserted says it is up, so
+  // start from a known state rather than whatever the allocation held.
+  memset(&state, 0, sizeof(state));
   chip_reset();
-
-  myRegLock = new CMutex("sym-reg");
 
   myThread = nullptr;
 
@@ -625,10 +626,13 @@ void CSym53C810::init() {
 void CSym53C810::start_threads() {
   if (!myThread) {
     printf(" sym");
-    StopThread = false;
+    {
+      std::lock_guard<std::recursive_mutex> lock(myRegLock);
+      StopThread = false;
+    }
+    // The thread checks state.executing before its first wait, so a restored
+    // running SCRIPTS program resumes without an explicit wake.
     myThread = std::make_unique<std::thread>([this]() { this->run(); });
-    if (state.executing)
-      mySemaphore.set();
   }
 }
 
@@ -636,10 +640,13 @@ void CSym53C810::start_threads() {
  * Stop and destroy the thread.
  **/
 void CSym53C810::stop_threads() {
-  StopThread = true;
+  {
+    std::lock_guard<std::recursive_mutex> lock(myRegLock);
+    StopThread = true;
+  }
+  scriptsWake.notify_all();
   if (myThread) {
     printf(" sym");
-    mySemaphore.set();
     myThread->join();
     myThread = nullptr;
   }
@@ -661,11 +668,28 @@ CSym53C810::~CSym53C810() {
  * Initialize all registers to their default values.
  **/
 void CSym53C810::chip_reset() {
+  // SCRIPTS bookkeeping lives outside the register array and must survive
+  // neither power-on initialization nor an ISTAT software reset: stale
+  // stacked interrupts would drain into SIST0/DSTAT, and a stale disconnect
+  // countdown would raise a false UDC from check_state().
   state.executing = false;
   state.wait_reselect = false;
-  state.irq_asserted = false;
+  state.select_timeout = false;
+  state.disconnected = 0;
+  state.wait_jump = 0;
+  state.alu.carry = false;
+  state.dstat_stack = 0;
+  state.sist0_stack = 0;
+  state.sist1_stack = 0;
   state.gen_timer = 0;
   state.insn_processed = 0;
+  state.scsi_phase = SCSI_PHASE_FREE;
+  state.status = 0;
+  memset(state.msg, 0, sizeof(state.msg));
+  state.msg_len = 0;
+  state.msg_action = 0;
+  state.current_lun = 0;
+  state.command_complete = 0;
   memset(state.regs.reg32, 0, sizeof(state.regs.reg32));
   R8(SCNTL0) = R_SCNTL0_ARB1 | R_SCNTL0_ARB0; // 810
   R8(DSTAT) = R_DSTAT_DFE;                    // DMA FIFO empty // 810
@@ -678,6 +702,13 @@ void CSym53C810::chip_reset() {
   R8(MACNTL) = 0x40;                                         // 810 type ID
   R8(GPCNTL) = 0x0F;                                         // 810
   R8(STEST0) = 0x03;                                         // 810
+
+  // Reset clears the interrupt state, so the IRQ/ pin must drop as well;
+  // eval_interrupts() only signals level changes and would otherwise leave
+  // the line stuck high.
+  if (state.irq_asserted)
+    do_pci_interrupt(0, false);
+  state.irq_asserted = false;
 }
 
 /**
@@ -774,19 +805,23 @@ void CSym53C810::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                               u32 data) {
   void *p;
 
+  // One PCI transaction = one critical section: a 16/32-bit access must not
+  // interleave with a SCRIPTS step between its byte lanes (e.g. DSP must not
+  // start SCRIPTS before all four bytes are committed). This also covers the
+  // PCI config-space reflection, which calls in with the full width.
+  std::lock_guard<std::recursive_mutex> lock(myRegLock);
+
   switch (bar) {
   case 0:
   case 1:
     address &= 0x7f;
     switch (dsize) {
     case 8:
-      MUTEX_LOCK(myRegLock);
 #if defined(DEBUG_SYM_REGS)
       printf("SYM: Write to register %02x: %02x.   \n", address, data);
 #endif
       if (address >= R_SCRATCHB) {
         state.regs.reg8[address] = (u8)data;
-        MUTEX_UNLOCK(myRegLock);
         break;
       }
 
@@ -940,7 +975,6 @@ void CSym53C810::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                data);
       }
 
-      MUTEX_UNLOCK(myRegLock);
       break;
 
     case 16:
@@ -981,16 +1015,18 @@ u32 CSym53C810::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   u32 data = 0;
   void *p;
 
+  // Whole-transaction lock: no torn DSP/DSPS/TEMP/DBC reads against a
+  // concurrent SCRIPTS step (see WriteMem_Bar).
+  std::lock_guard<std::recursive_mutex> lock(myRegLock);
+
   switch (bar) {
   case 0:
   case 1:
     address &= 0x7f;
     switch (dsize) {
     case 8:
-      MUTEX_LOCK(myRegLock);
       if (address >= R_SCRATCHB) {
         data = state.regs.reg8[address];
-        MUTEX_UNLOCK(myRegLock);
         break;
       }
 
@@ -1139,7 +1175,6 @@ u32 CSym53C810::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
             dsize, address);
       }
 
-      MUTEX_UNLOCK(myRegLock);
 #if defined(DEBUG_SYM_REGS)
       printf("SYM: Read from register %02x: %02x.   \n", address, data);
 #endif
@@ -1309,18 +1344,30 @@ void CSym53C810::write_b_istat(u8 value) {
   //    printf("SYM: SEM %s.\n",old_sem?"reset":"set");
   //  if (TB_R8(ISTAT,SIGP) != old_sigp)
   //    printf("SYM: SIGP %s.\n",old_sigp?"reset":"set");
+  bool resumed = false;
   if (TB_R8(ISTAT, SIGP)) {
     if (state.wait_reselect) {
 
       //      printf("SYM: SIGP while wait_reselect. Jumping...\n");
       R32(DSP) = state.wait_jump;
       state.wait_reselect = false;
-      state.executing = true;
-      mySemaphore.set();
+      start_scripts();
+      resumed = true;
     }
+#if defined(DEBUG_SYM_START)
+    else if (!old_sigp)
+      printf("SYM: SIGP set while not in WAIT RESELECT (executing %d, #%lu)\n",
+             state.executing, ++dbg_sigp_not_waiting);
+#endif
   }
 
   eval_interrupts();
+
+  // Run after eval_interrupts() so a pending fatal interrupt still halts the
+  // resumed program before it executes, as it did when the start was
+  // deferred to the thread.
+  if (resumed)
+    run_scripts_inline();
 }
 
 /**
@@ -1458,8 +1505,8 @@ u8 CSym53C810::read_b_sist(int id) {
  * This is implemented as a separate function, because there are
  * some side-effects.
  *
- * STD (Start DMA Operation): Start executing SCSI SCRIPT. Needs to
- * wake the thread.
+ * STD (Start DMA Operation): Start executing SCSI SCRIPT (inline burst,
+ * then the thread).
  *
  * IRQD (IRQ Disable): disables the IRQ pin. Requires interrupt
  * re-evaluation.
@@ -1468,13 +1515,14 @@ void CSym53C810::write_b_dcntl(u8 value) {
   WRM_R8(DCNTL, value);
 
   // start operation
-  if (value & R_DCNTL_STD) {
-    state.executing = true;
-    mySemaphore.set();
-  }
+  if (value & R_DCNTL_STD)
+    start_scripts();
 
   // IRQD bit...
   eval_interrupts();
+
+  if (value & R_DCNTL_STD)
+    run_scripts_inline();
 }
 
 /**
@@ -1514,15 +1562,126 @@ void CSym53C810::write_b_stest3(u8 value) {
 /**
  * Called after the DMA Scripts Pointer register has been written.
  *
- * Start executing SCSI SCRIPT. Needs to wake the thread.
+ * Start executing SCSI SCRIPT (inline burst, then the thread).
  **/
 void CSym53C810::post_dsp_write() {
   if (!TB_R8(DMODE, MAN)) {
-    state.executing = true;
-    mySemaphore.set();
+    start_scripts();
+    run_scripts_inline();
 
     // printf("SYM: Execution started @ %08x.\n",R32(DSP));
   }
+}
+
+/**
+ * Mark SCRIPTS as executing. Caller holds myRegLock.
+ *
+ * A guest-initiated start (DSP write, DCNTL.STD, SIGP resume of WAIT
+ * RESELECT) gets a fresh runaway budget. When the write comes from SCRIPTS
+ * itself (Load/Store or R/W into DSP/DCNTL), the running program simply
+ * continues from the new DSP and keeps its budget, so a self-restarting loop
+ * is still caught.
+ **/
+void CSym53C810::start_scripts() {
+  state.executing = true;
+  if (!scripts_running)
+    state.insn_processed = 0;
+}
+
+/**
+ * Execute a bounded SCRIPTS burst on the register-writing thread.
+ * Caller holds myRegLock.
+ *
+ * The real controller starts fetching as soon as DSP or STD is written.
+ * Deferring every fetch to the device thread left a window in which a later
+ * SIGP write (or a CTEST2 read clearing SIGP) could overtake the start before
+ * SCRIPTS reached WAIT RESELECT (upstream ES40 issue #133; worse with SMP).
+ *
+ * The burst stops when SCRIPTS halt or park in WAIT RESELECT, before any
+ * Block Move or Memory Move (target data transfer / disk I/O, bulk DMA), or
+ * after SYM_INLINE_INSN_LIMIT instructions; the device thread takes over from
+ * there. Nested calls from SCRIPTS itself are no-ops.
+ **/
+void CSym53C810::run_scripts_inline() {
+  if (scripts_running || !state.executing)
+    return;
+
+  int n = 0;
+  while (state.executing && n < SYM_INLINE_INSN_LIMIT &&
+         inline_can_execute_next()) {
+    step_scripts();
+    n++;
+  }
+
+  if (state.executing) {
+#if defined(DEBUG_SYM_START)
+    printf("SYM: inline start handed to thread at DSP %08x after %d insns "
+           "(#%lu)\n",
+           R32(DSP), n, ++dbg_inline_handoffs);
+#endif
+    scriptsWake.notify_one();
+  }
+}
+
+/**
+ * Peek at the next SCRIPTS instruction: may it run inline?
+ *
+ * Block Moves hand data to the SCSI target (scsi_xfer_done() performs the
+ * disk I/O) and Memory Moves copy up to 1 MiB of guest memory; neither
+ * belongs on a CPU thread inside an MMIO write. Everything else (I/O,
+ * R/W, Transfer Control, Load/Store) only touches controller and bus state.
+ **/
+bool CSym53C810::inline_can_execute_next() {
+  u32 insn;
+  try {
+    do_pci_read(R32(DSP), &insn, 4, 1);
+  } catch (...) {
+    return false; // let the thread's execute() hit and report it
+  }
+
+  u8 dcmd = (u8)(insn >> 24);
+  switch ((dcmd >> 6) & 3) {
+  case 0: // Block Move
+    return false;
+  case 3: // Memory Move (bit 5 clear) or Load/Store
+    return (dcmd & 0x20) != 0;
+  default: // I/O, R/W, Transfer Control
+    return true;
+  }
+}
+
+/**
+ * Execute one SCRIPTS instruction. Caller holds myRegLock.
+ *
+ * Exceptions never propagate: this may run on a CPU (interpreter/JIT) thread
+ * inside an MMIO write. SCRIPTS are halted and the failure is raised by
+ * check_state() on the main thread.
+ **/
+void CSym53C810::step_scripts() {
+  scripts_running = true;
+  try {
+    execute();
+  } catch (CException &e) {
+    halt_scripts_on_failure(e.displayText());
+  } catch (std::exception &e) {
+    halt_scripts_on_failure(e.what());
+  } catch (...) {
+    halt_scripts_on_failure("unknown exception");
+  }
+  scripts_running = false;
+}
+
+/**
+ * Halt SCRIPTS after an exception and record it for check_state().
+ * Caller holds myRegLock.
+ **/
+void CSym53C810::halt_scripts_on_failure(const std::string &msg) {
+  printf("SYM: exception while executing SCRIPTS at DSP %08x: %s\n", R32(DSP),
+         msg.c_str());
+  state.executing = false;
+  state.wait_reselect = false;
+  if (scripts_error.empty())
+    scripts_error = msg;
 }
 
 /**
@@ -1532,10 +1691,16 @@ void CSym53C810::check_state() {
   if (myThreadDead.load())
     FAILURE(Thread, "SYM thread has died");
 
-  // Runs on the clock thread: take myRegLock so the GP-timer RAISE() below
-  // doesn't race the SCRIPTS thread's eval_interrupts(). RAII unlock covers
-  // the early returns below.
-  CScopedLock<CMutex> regLock(myRegLock);
+  // Runs on the main thread: take myRegLock so the GP-timer RAISE() below
+  // doesn't race SCRIPTS' eval_interrupts(). RAII unlock covers the early
+  // returns (and the throw) below.
+  std::lock_guard<std::recursive_mutex> regLock(myRegLock);
+
+  if (!scripts_error.empty()) {
+    std::string msg;
+    msg.swap(scripts_error);
+    FAILURE_1(Thread, "SYM SCRIPTS failed: %.1024s", msg.c_str());
+  }
 
   if (state.gen_timer) {
     state.gen_timer--;
