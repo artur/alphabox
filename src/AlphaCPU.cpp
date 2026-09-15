@@ -600,6 +600,11 @@ void CAlphaCPU::jit_run(int budget) {
     const u64 start_virt = state.pc;
     const u32 start_asn = (u32)state.asn;
 
+    // PAL reset-vector entry (firmware updater rewrote the image in place, or a
+    // restart): drop stale icache lines and compiled blocks first.
+    if (start_virt == (state.pal_base | 1))
+      flush_icache();
+
     // Resolve the block's physical start side-effect-free (FAKE = no fault, no
     // TB fill) so execute() stays the sole I-stream fetcher; covers
     // superpage/KSEG (no TB entry). phys validates a compiled block vs the live
@@ -1453,9 +1458,32 @@ void CAlphaCPU::jit_run(int budget) {
                                              // to the wall-clock RPCC
     m_jit->note_cold(cold_reason, n, cold_first_op);
 #endif
+    // The span just interpreted came from icache lines whose bytes no longer
+    // match RAM (an in-place rewrite the icache hasn't seen): don't record a
+    // block for it, or it would be hashed against the new bytes.
+    bool src_stale = false;
+    if (icache_enabled && have_phys) {
+      const u64 vs = start_virt & ~U64(3);
+      const u64 ve = vs + 4 * (u64)n;
+      for (u64 v = vs & ~U64(0x7ff); v < ve && !src_stale; v += 0x800) {
+        const int li = (int)((v >> 11) & (ICACHE_ENTRIES - 1));
+        const auto &line = state.icache[li];
+        if (line.valid && (line.asn == state.asn || line.asm_bit) &&
+            line.address == ((v | (start_virt & 1)) & ICACHE_MATCH_MASK)) {
+          const u64 lo = (v > vs) ? v : vs;
+          const u64 hi = (v + 0x800 < ve) ? v + 0x800 : ve;
+          const u64 poff = line.p_address + (lo - v);
+          if (poff + (hi - lo) <= dram_size &&
+              memcmp((const uint8_t *)dram_ptr + poff,
+                     (const uint8_t *)line.data + (lo - v),
+                     (size_t)(hi - lo)) != 0)
+            src_stale = true;
+        }
+      }
+    }
     // Record only translatable block starts (a translation miss left have_phys
     // false).
-    if (have_phys && state.pc != expected) {
+    if (have_phys && !src_stale && state.pc != expected) {
       CJitEngine::JitBlock *nb =
           m_jit->record(start_virt, start_phys, start_asn, start_asm, n,
                         (const uint8_t *)dram_ptr);
@@ -2517,6 +2545,9 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
 void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_jmp_attempt();
   cpu->m_jit->note_helper(CJitEngine::HK_INDIRECT);
+  // PAL reset-vector entry: never chain in, so the dispatcher's flush runs.
+  if (target == (cpu->state.pal_base | 1))
+    return nullptr;
   CJitEngine::JitBlock *b = cpu->m_jit->lookup(target, (u32)cpu->state.asn);
   if (!b || !b->jit_body)
     return nullptr;
@@ -3254,6 +3285,10 @@ _next_instruction:
       current_pc_physical = state.pc_phys;
 #endif
     } else {
+      // PAL reset-vector entry: drop stale icache lines (in-place image
+      // rewrite by the firmware updater)
+      if (state.pc == (state.pal_base | 1))
+        flush_icache();
       // Full icache lookup
       if (get_icache(state.pc, &ins))
         goto _next_instruction;
@@ -3288,6 +3323,9 @@ _next_instruction:
       seq_remaining--;
       seq_next_pc += 4;
     } else {
+      // PAL reset-vector entry: drop stale icache lines
+      if (state.pc == (state.pal_base | 1))
+        flush_icache();
       if (get_icache(state.pc, &ins))
         return;
 
