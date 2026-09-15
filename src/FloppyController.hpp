@@ -34,6 +34,7 @@
 #define INCLUDED_FLOPPYCONTROLLER_H
 
 #include "DMA.hpp"
+#include "Disk.hpp"
 #include "DiskController.hpp"
 #include "SystemComponent.hpp"
 #include <mutex>
@@ -55,6 +56,7 @@ public:
   virtual int RestoreState(FILE *f);
   virtual int SaveState(FILE *f);
   virtual void init();
+  virtual void check_state();
 
 private:
   struct SFloppyGeometry {
@@ -85,6 +87,10 @@ private:
   /// Serializes guest port I/O (any CPU thread) and state save/restore.
   /// Lock order: controller_mutex, then the DMA's own mutex.
   std::mutex controller_mutex;
+
+  /// Media replaced at a safe point while controller_mutex is held; moved
+  /// into a local by the locking function so it is closed after unlocking.
+  MediaRelease media_release[2];
 
   /// Scratch buffer for DMA transfers (not part of the saved state).
   u8 xfer_buffer[65536];

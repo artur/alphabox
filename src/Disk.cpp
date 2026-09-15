@@ -34,10 +34,6 @@
 #include "DiskFile.hpp"
 #include "StdAfx.hpp"
 
-#include <vector>
-
-extern std::vector<CDiskFile *> cd_diskfiles;
-
 /**
  * \brief Constructor.
  **/
@@ -71,12 +67,17 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
       "serial_number", myCfg->get_text_value("serial_num", "ES40EM00000"));
   revision_number = myCfg->get_text_value(
       "rev_number", myCfg->get_text_value("rev_num", "0.0"));
-  read_only = myCfg->get_bool_value("read_only");
   is_cdrom = myCfg->get_bool_value("cdrom");
+  // CD-ROM media is read-only unless explicitly configured otherwise, so a
+  // read-only ISO file opens without extra configuration.
+  read_only = myCfg->get_bool_value("read_only", is_cdrom);
+  is_removable = is_cdrom;
+  byte_size = 0;
 
   state.block_size = is_cdrom ? 2048 : 512;
   state.scsi.sense.available = false;
   state.scsi.media_changed = 0;
+  set_locked(false);
 
   myCtrl->register_disk(this, myBus, myDev);
 }
@@ -192,6 +193,16 @@ int CDisk::RestoreState(FILE *f) {
     printf("%s: MAGIC 1 does not match!\n", devid_string);
     return -1;
   }
+
+  // Older state files stored 1/-1/0 here; anything outside the flag bits is
+  // dropped. Neither the media nor the tray position is saved, so the
+  // tray-open flag never survives a restore; the lock is kept, and a
+  // present/absent mismatch is reported through the normal sense paths.
+  if (state.scsi.media_changed < 0 ||
+      state.scsi.media_changed > MEDIA_FLAGS_MASK)
+    state.scsi.media_changed = 0;
+  state.scsi.media_changed &= ~MEDIA_TRAY_OPEN;
+  set_locked(state.scsi.locked);
 
   // calc_cylinders(); // state.block_size may have changed.
   determine_layout();
@@ -457,6 +468,7 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSICMD_SYNCHRONIZE_CACHE 0x35
 
 #define SCSICMD_GET_EVENT_STATUS_NOTIFICATION 0x4a
+#define SCSICMD_GET_CONFIGURATION 0x46
 
 //  SCSI block device commands:
 #define SCSIBLOCKCMD_READ_CAPACITY 0x25
@@ -506,6 +518,11 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSI_MEDIA_CHANGE -5  /* Media changed */
 #define SCSI_MEDIA_REMOVED -6 /* Media removed */
 #define SCSI_INVALID_LUN -7   /* Invalid LUN */
+
+#define SCSI_NO_MEDIA_TRAY_CLOSED -8 /* 02/3A/01 */
+#define SCSI_NO_MEDIA_TRAY_OPEN -9   /* 02/3A/02 */
+#define SCSI_MEDIA_LOCKED -10        /* 05/53/02 medium removal prevented */
+#define SCSI_READ_ERROR -11          /* 03/11/00 unrecovered read error */
 
 void CDisk::do_scsi_error(int errcode, int info) {
   state.scsi.stat.available = 1;
@@ -587,8 +604,24 @@ void CDisk::do_scsi_error(int errcode, int info) {
     break;
 
   case SCSI_MEDIA_REMOVED:
+  case SCSI_NO_MEDIA_TRAY_CLOSED:
+  case SCSI_NO_MEDIA_TRAY_OPEN:
     state.scsi.sense.data[2] = 0x02;  // not ready
     state.scsi.sense.data[12] = 0x3a; // media not present
+    state.scsi.sense.data[13] = errcode == SCSI_NO_MEDIA_TRAY_OPEN     ? 0x02
+                                : errcode == SCSI_NO_MEDIA_TRAY_CLOSED ? 0x01
+                                                                       : 0x00;
+    break;
+
+  case SCSI_MEDIA_LOCKED:
+    state.scsi.sense.data[2] = 0x05;  // illegal request
+    state.scsi.sense.data[12] = 0x53; // media load or eject failed
+    state.scsi.sense.data[13] = 0x02; // medium removal prevented
+    break;
+
+  case SCSI_READ_ERROR:
+    state.scsi.sense.data[2] = 0x03;  // medium error
+    state.scsi.sense.data[12] = 0x11; // unrecovered read error
     state.scsi.sense.data[13] = 0x00;
     break;
 
@@ -696,6 +729,30 @@ static inline int cdb_len_for_opcode(u8 op) {
     return 12;
   }
   return -1; // unknown/unsupported
+}
+
+/// Commands that access the medium and fail with NOT READY / MEDIUM NOT
+/// PRESENT on an empty removable drive.
+static inline bool cmd_needs_media(u8 op) {
+  switch (op) {
+  case SCSICMD_TEST_UNIT_READY:
+  case SCSICMD_READ:
+  case SCSICMD_READ_10:
+  case SCSICMD_READ_12:
+  case SCSICMD_READ_CD:
+  case SCSICMD_READ_LONG:
+  case SCSICMD_VERIFY_10:
+  case SCSICMD_WRITE:
+  case SCSICMD_WRITE_10:
+  case SCSICMD_WRITE_12:
+  case SCSIBLOCKCMD_READ_CAPACITY:
+  case SCSIBLOCKCMD_SEEK:
+  case SCSICDROM_READ_TOC:
+  case SCSICDROM_READ_SUBCHANNEL:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static inline void put_be16(u8 *p, u16 v) {
@@ -917,25 +974,33 @@ int CDisk::do_scsi_command() {
     return 0;
   }
 
+  // Removable media: a pending unit attention is reported by the first
+  // command other than the ones that must work through it; after that,
+  // media-access commands on an empty drive fail with NOT READY.
+  if (removable()) {
+    const u8 op = state.scsi.cmd.data[0];
+    if ((state.scsi.media_changed & MEDIA_UNIT_ATTENTION) &&
+        op != SCSICMD_INQUIRY && op != SCSICMD_REQUEST_SENSE &&
+        op != SCSICMD_GET_CONFIGURATION &&
+        op != SCSICMD_GET_EVENT_STATUS_NOTIFICATION) {
+      state.scsi.media_changed &= ~MEDIA_UNIT_ATTENTION;
+      do_scsi_error(SCSI_MEDIA_CHANGE);
+      return 0;
+    }
+    if (!media_present() && cmd_needs_media(op)) {
+      do_scsi_error((state.scsi.media_changed & MEDIA_TRAY_OPEN)
+                        ? SCSI_NO_MEDIA_TRAY_OPEN
+                        : SCSI_NO_MEDIA_TRAY_CLOSED);
+      return 0;
+    }
+  }
+
   switch (state.scsi.cmd.data[0]) {
   case SCSICMD_TEST_UNIT_READY:
 #if defined(DEBUG_SCSI)
     printf("%s: TEST UNIT READY.\n", devid_string);
 #endif
-
-    // unit is always ready...
-    // ...unless it's a cdrom and the media was changed.
-    if (cdrom()) {
-      if (state.scsi.media_changed == 1) {
-        do_scsi_error(SCSI_MEDIA_REMOVED);
-        state.scsi.media_changed = -1;
-        break;
-      } else if (state.scsi.media_changed == -1) {
-        do_scsi_error(SCSI_MEDIA_CHANGE);
-        state.scsi.media_changed = 0;
-        break;
-      }
-    }
+    // Unit attention and "no medium" were handled above.
     do_scsi_error(SCSI_OK);
     break;
 
@@ -969,24 +1034,29 @@ int CDisk::do_scsi_command() {
     bool polled = (state.scsi.cmd.data[1] & (1 << 0)) > 0;
     int event_length, request = state.scsi.cmd.data[4];
     uint16_t alloc_length = read_16bit(state.scsi.cmd.data + 7);
-    bool inserted = true;
+    bool inserted = media_present();
+    bool tray_open = (state.scsi.media_changed & MEDIA_TRAY_OPEN) != 0;
     if (polled) {
       // we currently only support the MEDIA event (bit 4)
-      if (request == (1 << 4)) {
+      if (request & (1 << 4)) {
+        bool event = (state.scsi.media_changed & MEDIA_GESN_EVENT) != 0;
         state.scsi.dati.data[0] = 0;
         state.scsi.dati.data[1] = 4;            // MEDIA event is 4 bytes long
         state.scsi.dati.data[2] = (0 << 7) | 4; // 4 = MEDIA event
         state.scsi.dati.data[3] =
             (1 << 4); // we only support the MEDIA event (bit 4)
         state.scsi.dati.data[4] =
-            (!state.scsi.media_changed) ? 0 : // Event code: 0 = no change
-                (inserted) ? 4
-                           : 3; // Event code: 4 = media changed, 3 = removed
+            !event ? 0 :            // Event code: 0 = no change,
+                (inserted ? 2 : 3); // 2 = new media, 3 = media removal
         state.scsi.dati.data[5] =
-            (inserted) ? (1 << 1) : 0; // Media Status (bit 1 = Media Present)
+            (inserted ? (1 << 1) : 0) | // Media Status: bit 1 = Media Present
+            (tray_open ? (1 << 0) : 0); //               bit 0 = Door Open
         state.scsi.dati.data[6] = 0;
         state.scsi.dati.data[7] = 0;
         event_length = (alloc_length <= 4) ? 4 : 8;
+        // The event is consumed once it has actually been returned.
+        if (event && event_length == 8)
+          state.scsi.media_changed &= ~MEDIA_GESN_EVENT;
       } else {
         state.scsi.dati.data[0] = 0;
         state.scsi.dati.data[1] = 0;
@@ -1009,6 +1079,14 @@ int CDisk::do_scsi_command() {
     printf("%s: REQUEST SENSE.\n", devid_string);
 #endif
     retlen = state.scsi.cmd.data[4];
+
+    // With no other sense pending, REQUEST SENSE reports (and consumes) a
+    // pending unit attention.
+    if (!state.scsi.sense.available && removable() &&
+        (state.scsi.media_changed & MEDIA_UNIT_ATTENTION)) {
+      state.scsi.media_changed &= ~MEDIA_UNIT_ATTENTION;
+      do_scsi_error(SCSI_MEDIA_CHANGE); // fills sense; status reset below
+    }
 
     //    FAILURE("Sense requested");
     if (!state.scsi.sense.available) {
@@ -1050,9 +1128,9 @@ int CDisk::do_scsi_command() {
     for (unsigned int x2 = state.scsi.sense.available; x2 < retlen; x2++)
       state.scsi.dati.data[x2] = 0;
 
-    if (state.scsi.sense.data[2] == 0x06) {
-      state.scsi.sense.data[2] = 0x00;
-    }
+    // Sense data is reported once: a later REQUEST SENSE without a new error
+    // returns NO SENSE instead of a stale condition.
+    state.scsi.sense.available = 0;
 
     do_scsi_error(SCSI_OK);
     break;
@@ -1151,8 +1229,9 @@ int CDisk::do_scsi_command() {
   } break;
 
   // Also from Bochs.
-  case 0x46: // get configuration (mmc4r05a.pdf, page 286) (pages are physical
-             // pdf pages, not page numbers listed on specific page)
+  case SCSICMD_GET_CONFIGURATION: // (mmc4r05a.pdf, page 286) (pages are
+                                  // physical pdf pages, not page numbers
+                                  // listed on specific page)
   {
     //                Bit8u rt = (state.scsi.dati.data[1] & (3<<0));
     if (!cdrom()) {
@@ -1162,7 +1241,7 @@ int CDisk::do_scsi_command() {
     uint16_t start_feature = read_16bit(state.scsi.cmd.data + 2);
     uint16_t alloc_length = read_16bit(state.scsi.cmd.data + 7);
     uint8_t *feature_ptr = state.scsi.dati.data;
-    bool inserted = true;
+    bool inserted = media_present();
 
     // The controller buffer is guaranteed to be at least 2048 bytes.
     // The largest return for this command is guaranteed to be less than 1024
@@ -1177,8 +1256,8 @@ int CDisk::do_scsi_command() {
       // state.scsi.dati.data[3] = 0;
       state.scsi.dati.data[4] = 0; // reserved
       state.scsi.dati.data[5] = 0; // reserved
-      state.scsi.dati.data[6] = 0; // we only support profile 8 (cd-rom)
-      state.scsi.dati.data[7] = 8; //
+      state.scsi.dati.data[6] = 0; // current profile: 8 (cd-rom) when a
+      state.scsi.dati.data[7] = inserted ? 8 : 0; // disc is loaded, else none
       feature_ptr += 8;
 
       // page: 238
@@ -1243,10 +1322,10 @@ int CDisk::do_scsi_command() {
         feature_ptr[2] = (0 << 6) | (0 << 2) | (1 << 1) |
                          (1 << 0);   // version 0, persistent = 1, current = 1
         feature_ptr[3] = 4;          // additional length = 4
-        feature_ptr[4] = (0 << 5)    // Loading Mech type: 0
-                         | (0 << 3)  // No Eject Mech
+        feature_ptr[4] = (1 << 5)    // Loading Mech type: 1 = tray
+                         | (1 << 3)  // Eject: START STOP UNIT can eject
                          | (1 << 2)  // No Pvnt Jumper
-                         | (0 << 0); // Lock = 0 (no locking mechanism)
+                         | (1 << 0); // Lock: PREVENT/ALLOW is honoured
         feature_ptr[5] = 0;          //
         feature_ptr[6] = 0;          //
         feature_ptr[7] = 0;          //
@@ -1258,7 +1337,7 @@ int CDisk::do_scsi_command() {
         feature_ptr[0] = 0x00; // Feature Code 0x010
         feature_ptr[1] = 0x10;
         feature_ptr[2] = (0 << 6) | (0 << 2) | (1 << 1) |
-                         (1 << 0);  // version 0, persistent = 1, current = 1
+                         inserted;  // version 0, persistent = 1, current = disc
         feature_ptr[3] = 8;         // additional length = 8
         feature_ptr[4] = 0x00;      // Logical Block Size:
         feature_ptr[5] = 0x00;      //   2048 (0x800)
@@ -1276,7 +1355,7 @@ int CDisk::do_scsi_command() {
         feature_ptr[0] = 0x00; // Feature Code 0x01E
         feature_ptr[1] = 0x1E;
         feature_ptr[2] = (0 << 6) | (2 << 2) | (1 << 1) |
-                         (1 << 0); // version 2, persistent = 1, current = 1
+                         inserted; // version 2, persistent = 1, current = disc
         feature_ptr[3] = 4;        // additional length = 4
         feature_ptr[4] = (0 << 7) | (0 << 1) |
                          (0 << 0); // DAP = 0, C2 Flags = 0, CD-Text = 0
@@ -1320,14 +1399,26 @@ int CDisk::do_scsi_command() {
     }
   } break;
 
-  case SCSICMD_START_STOP_UNIT:
-    // Accept and ignore start/stop/eject requests (AXPbox workaround for
-    // guests that issue 0x1B against emulated disks).
+  case SCSICMD_START_STOP_UNIT: {
 #if defined(DEBUG_SCSI)
     printf("%s: START STOP UNIT.\n", devid_string);
 #endif
+    const bool load_eject = (state.scsi.cmd.data[4] & 0x02) != 0;
+    const bool start = (state.scsi.cmd.data[4] & 0x01) != 0;
+
+    // CD-ROM tray: LoEj=1 Start=0 opens it, LoEj=1 Start=1 closes it.
+    // Everything else (spin up/down, and all requests to other disks) is
+    // accepted and ignored, as guests issue 0x1B against emulated disks.
+    if (cdrom() && load_eject) {
+      if (!start && state.scsi.locked) {
+        do_scsi_error(SCSI_MEDIA_LOCKED);
+        break;
+      }
+      guest_tray(start);
+    }
     do_scsi_error(SCSI_OK);
     break;
+  }
 
   case SCSICMD_MODE_SENSE:
   case SCSICMD_MODE_SENSE_10:
@@ -1783,12 +1874,12 @@ int CDisk::do_scsi_command() {
 
   case SCSICMD_PREVENT_ALLOW_REMOVE:
     if (state.scsi.cmd.data[4] & 1) {
-      state.scsi.locked = true;
+      set_locked(true);
 #if defined(DEBUG_SCSI)
       printf("%s: PREVENT MEDIA REMOVAL.\n", devid_string);
 #endif
     } else {
-      state.scsi.locked = false;
+      set_locked(false);
 #if defined(DEBUG_SCSI)
       printf("%s: ALLOW MEDIA REMOVAL.\n", devid_string);
 #endif
@@ -1890,11 +1981,10 @@ int CDisk::do_scsi_command() {
   case SCSIBLOCKCMD_SEEK: {
     auto ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
                (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-    if (ofs >= get_lba_size()) {
+    if (ofs >= get_lba_size() || !seek_block(ofs)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
-    seek_block(ofs);
     do_scsi_error(SCSI_OK);
     break;
   }
@@ -2047,8 +2137,16 @@ int CDisk::do_scsi_command() {
     }
 
     //  Return data:
-    seek_block(ofs);
-    read_blocks(state.scsi.dati.data, retlen);
+    if (retlen > 0) {
+      if (!seek_block(ofs)) {
+        do_scsi_error(SCSI_LBA_RANGE);
+        break;
+      }
+      if (read_blocks(state.scsi.dati.data, retlen) != retlen) {
+        do_scsi_error(SCSI_READ_ERROR, ofs);
+        break;
+      }
+    }
     state.scsi.dati.read = 0;
     state.scsi.dati.available = retlen * get_block_size();
 
@@ -2102,8 +2200,14 @@ int CDisk::do_scsi_command() {
     }
 
     //  Return data:
-    seek_block(ofs);
-    read_blocks(state.scsi.dati.data, 1);
+    if (!seek_block(ofs)) {
+      do_scsi_error(SCSI_LBA_RANGE);
+      break;
+    }
+    if (read_blocks(state.scsi.dati.data, 1) != 1) {
+      do_scsi_error(SCSI_READ_ERROR, ofs);
+      break;
+    }
     for (unsigned int x1 = get_block_size(); x1 < retlen; x1++)
       state.scsi.dati.data[x1] = 0; // set ECC bytes to 0.
     state.scsi.dati.read = 0;
@@ -2169,7 +2273,10 @@ int CDisk::do_scsi_command() {
       return 2;
 
     //  Write data
-    seek_block(ofs);
+    if (retlen > 0 && !seek_block(ofs)) {
+      do_scsi_error(SCSI_LBA_RANGE);
+      break;
+    }
     write_blocks(state.scsi.dato.data, retlen);
 
 #if defined(DEBUG_SCSI)
@@ -2587,6 +2694,15 @@ void CDisk::determine_layout() {
   long c_heads = 0;
   bool b;
   int prime;
+
+  // No medium (or less than one block): nothing to lay out, and get_primes()
+  // would never terminate on 0.
+  if (get_lba_size() == 0) {
+    heads = 1;
+    sectors = 1;
+    cylinders = 0;
+    return;
+  }
 
   get_primes(get_lba_size(), disk_primes);
 

@@ -408,6 +408,7 @@ void CFloppyController::finish_pio_transfer(bool ok) {
 }
 
 void CFloppyController::WriteMem(int index, u64 address, int dsize, u64 data) {
+  MediaRelease released[2]; // destroyed after the lock below is released
   std::lock_guard<std::mutex> lock(controller_mutex);
 
   if (index == 1537)
@@ -484,6 +485,9 @@ void CFloppyController::WriteMem(int index, u64 address, int dsize, u64 data) {
     FDC_DEBUG("FDC: data rate %s\n", datarate_name[state.datarate]);
     break;
   }
+
+  released[0] = std::move(media_release[0]);
+  released[1] = std::move(media_release[1]);
 }
 
 /**
@@ -542,6 +546,12 @@ void CFloppyController::write_data(u8 data) {
 }
 
 void CFloppyController::execute_command(int cmd) {
+  // A command is starting and no data transfer is in flight: a safe point to
+  // apply pending operator media changes (they set the disk-change line).
+  for (int i = 0; i < 2; i++)
+    if (CDisk *d = FDISK(i))
+      media_release[i] = d->service_media_request();
+
   // The post-reset polling interrupts are only reported until the guest
   // starts issuing other commands; abandoning them also drops their INT.
   if (cmd != 8 && state.reset_sense_cnt > 0) {
@@ -1042,6 +1052,7 @@ bool CFloppyController::read_data(u8 *value) {
 }
 
 u64 CFloppyController::ReadMem(int index, u64 address, int dsize) {
+  MediaRelease released[2]; // destroyed after the lock below is released
   std::lock_guard<std::mutex> lock(controller_mutex);
 
   u64 data = 0;
@@ -1079,6 +1090,11 @@ u64 CFloppyController::ReadMem(int index, u64 address, int dsize) {
     //    bit 1 = datarate select 0
     //    bit 0 = high density select
     CDisk *disk = FDISK(state.drive_select & 3);
+    // DIR polls are how guests notice a media change: apply pending ones
+    // here too, unless a command is being received or a non-DMA transfer
+    // is still using the image.
+    if (disk != NULL && !state.pio.active && state.cmd_parms_ptr == 0)
+      media_release[state.drive_select & 1] = disk->service_media_request();
     if (disk != NULL && disk->media_present())
       data = disk->media_change_pending() ? 0x80 : 0x00;
     else
@@ -1087,6 +1103,8 @@ u64 CFloppyController::ReadMem(int index, u64 address, int dsize) {
   }
   }
 
+  released[0] = std::move(media_release[0]);
+  released[1] = std::move(media_release[1]);
   return data;
 }
 
@@ -1181,6 +1199,21 @@ void CFloppyController::init() {
     bool hasB = (FDISK(1) != NULL);
     theAli->set_floppy_presence(hasA, hasB);
   }
+}
+
+/**
+ * Idle check (main thread, ~10 Hz): apply pending operator media changes when
+ * the controller is between commands, so a change lands even while the guest
+ * is not polling the drive.
+ **/
+void CFloppyController::check_state() {
+  MediaRelease released[2]; // destroyed after the lock below is released
+  std::lock_guard<std::mutex> lock(controller_mutex);
+  if (state.pio.active || state.cmd_parms_ptr != 0)
+    return;
+  for (int i = 0; i < 2; i++)
+    if (CDisk *d = FDISK(i))
+      released[i] = d->service_media_request();
 }
 
 void CFloppyController::do_interrupt() {

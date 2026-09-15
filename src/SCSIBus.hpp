@@ -35,6 +35,7 @@
 
 #include "SCSIDevice.hpp"
 #include "SystemComponent.hpp"
+#include <atomic>
 
 /**
  * \brief Emulated SCSI bus.
@@ -71,7 +72,10 @@ public:
   struct SSCSI_state {
     int initiator; /**< SCSI id of the initiator. **/
     int target;    /**< SCSI id of the target. **/
-    int phase;     /**< SCSI bus phase. **/
+    /// SCSI bus phase. Atomic because removable-media swaps poll it from the
+    /// main thread (CDiskFile::check_state) to find a bus-free safe point; it
+    /// has the same size and layout as int, so the state file is unchanged.
+    std::atomic<int> phase;
   } state;
 };
 

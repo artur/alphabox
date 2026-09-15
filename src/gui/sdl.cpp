@@ -612,6 +612,45 @@ static u32 sdl_debug_key_lookup(const char *name) {
   return 0;
 }
 
+// Ctrl+F11 (interim media hotkey): pick an image and insert it into the first
+// CD-ROM image drive. The request is validated on the dialog's thread and
+// applied by the drive at its next safe point; Ctrl+Shift+F11 overrides a
+// guest PREVENT MEDIUM REMOVAL lock.
+static const SDL_DialogFileFilter sdl_media_filters[] = {
+    {"ISO files", "iso"}, {"CUE files", "cue"}, {"All files", "*"}};
+
+static void SDLCALL sdl_media_file_chosen(void *userdata,
+                                          const char *const *filelist,
+                                          int filter) {
+  const bool force = userdata != nullptr;
+  if (!filelist) {
+    printf("%%MEDIA-W-DIALOG: file dialog failed: %s\n", SDL_GetError());
+    return;
+  }
+  if (!*filelist)
+    return; // cancelled
+
+  // Resolved through the registry at callback time (this may run on SDL's
+  // dialog thread, possibly while the drives are being torn down).
+  MediaResult r =
+      RemovableMedia::insert_into_first_cdrom(filelist[0], true, force);
+  if (r.ok)
+    printf("%%MEDIA-I-INSERT: %s%s\n", r.message.c_str(),
+           force ? " (forced)" : "");
+  else if (r.locked)
+    printf("%%MEDIA-W-LOCKED: %s; Ctrl+Shift+F11 forces the change\n",
+           r.message.c_str());
+  else
+    printf("%%MEDIA-W-REFUSED: %s\n", r.message.c_str());
+  fflush(stdout);
+}
+
+static void sdl_select_media_file(bool force) {
+  SDL_ShowOpenFileDialog(sdl_media_file_chosen, force ? (void *)1 : nullptr,
+                         sdl_window, sdl_media_filters,
+                         SDL_arraysize(sdl_media_filters), nullptr, false);
+}
+
 void bx_sdl_gui_c::handle_events(void) {
   if (sdl_deferred())
     return; // macOS: events are pumped by main_thread_pump()
@@ -900,26 +939,21 @@ void bx_sdl_gui_c::handle_events(void) {
         sdl_swallow_keys = true; // eat subsequent releases
         break;
       }
-#ifdef _WIN32
-      extern void win32_select_file(HWND hwnd);
-#else
-      extern void sdl_select_file(SDL_Window *);
-#endif
+      // Ctrl+F11: insert a CD image; Ctrl+Shift+F11: same, forced
       if (sdl_event.key.key == SDLK_F11 &&
           (sdl_event.key.mod & SDL_KMOD_CTRL)) {
+        const bool force = (sdl_event.key.mod & SDL_KMOD_SHIFT) != 0;
         theKeyboard->gen_scancode(BX_KEY_CTRL_L | BX_KEY_RELEASED);
         theKeyboard->gen_scancode(BX_KEY_CTRL_R | BX_KEY_RELEASED);
+        if (force) {
+          theKeyboard->gen_scancode(BX_KEY_SHIFT_L | BX_KEY_RELEASED);
+          theKeyboard->gen_scancode(BX_KEY_SHIFT_R | BX_KEY_RELEASED);
+        }
 
         if (sdl_grab)
           bx_gui->mouse_enabled_changed(false);
 
-#ifdef _WIN32
-        win32_select_file((HWND)SDL_GetPointerProperty(
-            SDL_GetWindowProperties(sdl_window),
-            SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
-#else
-        sdl_select_file(sdl_window);
-#endif
+        sdl_select_media_file(force);
 
         sdl_swallow_keys = true; // eat subsequent releases
         break;

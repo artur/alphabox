@@ -36,9 +36,31 @@
 #include "DiskController.hpp"
 #include "SCSIBus.hpp"
 #include "SCSIDevice.hpp"
+#include <atomic>
+#include <memory>
+
+struct MediaImage;
+/// Deleter defined in DiskFile.cpp, so a MediaRelease can be held and
+/// destroyed where MediaImage is incomplete.
+struct MediaImageDeleter {
+  void operator()(MediaImage *image) const;
+};
+/// Media removed by a swap, handed back so the caller closes it after
+/// releasing its own locks.
+using MediaRelease = std::unique_ptr<MediaImage, MediaImageDeleter>;
 
 #define DATO_BUFSZ (256 * 1024)
 #define DATI_BUFSZ (256 * 1024)
+
+/// Removable-media flags, packed into SDisk_state::scsi.media_changed so the
+/// state file layout is unchanged.
+enum {
+  MEDIA_UNIT_ATTENTION = 0x01, ///< Report 06/28/00 on the next command.
+  MEDIA_CHANGE_LINE = 0x02,    ///< Floppy disk-change line (DIR bit 7).
+  MEDIA_GESN_EVENT = 0x04,     ///< Media event for GET EVENT STATUS NOTIF.
+  MEDIA_TRAY_OPEN = 0x08,      ///< The guest opened the tray.
+  MEDIA_FLAGS_MASK = 0x0f
+};
 
 /**
  * \brief Abstract base class for disks (connects to a CDiskController)
@@ -100,13 +122,48 @@ public:
   bool ro() { return read_only; };
   bool rw() { return !read_only; };
   bool cdrom() { return is_cdrom; };
+  bool removable() const { return is_removable; };
   bool media_present() const { return byte_size > 0; };
-  bool media_change_pending() const { return state.scsi.media_changed != 0; };
-  void acknowledge_media_change() { state.scsi.media_changed = 0; };
+  bool media_change_pending() const {
+    return (state.scsi.media_changed & MEDIA_CHANGE_LINE) != 0;
+  };
+  void acknowledge_media_change() {
+    state.scsi.media_changed &= ~MEDIA_CHANGE_LINE;
+  };
+  /// Guest PREVENT MEDIUM REMOVAL state; safe to read from any thread.
+  bool media_locked() const { return lock_mirror.load(); };
+  /// Sense key of the last CHECK CONDITION (0 when no sense is pending).
+  u8 sense_key() const {
+    return state.scsi.sense.available ? (state.scsi.sense.data[2] & 0x0f) : 0;
+  };
+
+  /**
+   * \brief Apply a pending operator media change (safe point).
+   *
+   * Called by the thread that owns guest I/O for this drive when no
+   * command is in flight (the FDC, under its controller mutex). Returns the
+   * replaced media, to be destroyed after the caller drops its locks. No-op
+   * for disks without removable image support.
+   **/
+  virtual MediaRelease service_media_request() { return MediaRelease(); };
 
   void calc_cylinders();
 
 protected:
+  /**
+   * \brief Guest START STOP UNIT with LoEj=1 on a CD-ROM.
+   *
+   * load=false opens the tray, load=true closes it. Runs on the guest I/O
+   * thread inside the command; the lock check is done by the caller.
+   * Default: accept and ignore (disks without a tray model).
+   **/
+  virtual void guest_tray(bool load){};
+
+  void set_locked(bool locked) {
+    state.scsi.locked = locked;
+    lock_mirror.store(locked);
+  };
+
   CConfigurator *myCfg;
   CDiskController *myCtrl;
   int myBus;
@@ -118,6 +175,8 @@ protected:
 
   bool read_only;
   bool is_cdrom;
+  bool is_removable; ///< CD-ROM or floppy: may be empty, reports media state.
+  std::atomic<bool> lock_mirror{false};
 
   off_t_large byte_size;
   off_t_large cylinders;

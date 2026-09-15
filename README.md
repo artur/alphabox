@@ -161,7 +161,16 @@ The S3 Trio64 emulation (ported from [ES40-Emu/es40](https://github.com/ES40-Emu
   control window scaling (Ctrl+PageUp / Ctrl+PageDown at runtime).
 - **CD images**: a cdrom `file` ending in `.cue` is parsed as a BIN/CUE
   image (multi-file, MODE1/MODE2/audio tracks); anything else is treated
-  as a flat ISO.
+  as a flat ISO. CD drives are read-only unless `read_only = false`, and
+  a CD or floppy drive with no `file` (or a file that cannot be opened)
+  starts empty. **Ctrl+F11** opens a file picker and inserts the chosen
+  image into the first CD drive: the image is opened and checked right
+  away (a bad file is reported on the console and the current disc stays),
+  then swapped in between guest commands, and the guest sees a normal
+  "medium changed" notification. If the guest has locked the drive
+  (PREVENT MEDIUM REMOVAL) the change is refused; **Ctrl+Shift+F11** forces
+  it. Guests can open and close the tray themselves unless
+  `allow_guest_eject = false`.
 
 ### Headless testing and input-injection hooks
 
@@ -183,6 +192,7 @@ window or display server.
 | `AXPBOX_IRQSTATS=1` | Every 5 s, print interrupt rates: CPU interrupt entries by source (external lines, software interrupts, ASTs), Cchip interval-timer ticks, 8259 edges/acknowledges per ISA IRQ and Cchip DRIR rises. Spots interrupt storms. |
 | `AXPBOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39` together with the IER/SIRR/CM writes and ISUM reads between them (`IRQT` lines). |
 | `AXPBOX_IDETRACE=1` | Timestamped IDE timeline: each command (opcode, drive, LBA/count), ATAPI packet opcode, bus-master start and interrupt (`IDET` lines). Separates guest-paced from emulator-paced I/O. |
+| `AXPBOX_MEDIA_SWAP=<image1>:<image2>:<ms>` | Media-change stress test (all builds, including headless): every `<ms>` milliseconds insert `<image1>` / `<image2>` alternately into the first CD drive, forced past a guest lock. Each swap is applied only between guest commands; failures and every 50th swap are logged. |
 | `AXPBOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write (`USBT` lines). |
 | `AXPBOX_JIT_COMPILE_AFTER=<n>` | JIT builds: interpret a block `n` times before compiling it (default 1). |
 | `AXPBOX_JIT_NO_DLINK=1` | AArch64 JIT: use the tag-checked link scan for static block exits instead of epoch-keyed data links (A/B switch for chaining issues). |

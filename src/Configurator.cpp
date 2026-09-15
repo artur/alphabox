@@ -590,9 +590,17 @@ static const char *const kv_dec21143[] = {
     "adapter",       "mac",        "queue",   "crc",
     "trace_packets", "type",       "host_ip", "bridge",
     "uplink",        "tap_create", 0};
-static const char *const kv_disk_file[] = {
-    "file",    "model_number", "serial_number", "serial_num",      "rev_number",
-    "rev_num", "read_only",    "cdrom",         "autocreate_size", 0};
+static const char *const kv_disk_file[] = {"file",
+                                           "model_number",
+                                           "serial_number",
+                                           "serial_num",
+                                           "rev_number",
+                                           "rev_num",
+                                           "read_only",
+                                           "cdrom",
+                                           "autocreate_size",
+                                           "allow_guest_eject",
+                                           0};
 static const char *const kv_disk_device[] = {
     "device",     "model_number", "serial_number",
     "serial_num", "rev_number",   "rev_num",

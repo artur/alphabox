@@ -31,7 +31,8 @@
  * Contains definitions for BIN/CUE CD image support within CDiskFile.
  *              Supports: single/multi-file BIN/CUE images,
  *              MODE1/2048, MODE1/2352, MODE2/2336, MODE2/2352, AUDIO tracks.
- *              Falls back gracefully to raw image on parse failure.
+ *              A .cue that cannot be parsed is rejected (the drive keeps
+ *              its current media, or starts empty).
  *              Cross-platform: OpenVMS, Windows, Linux, macOS.
  **/
 
