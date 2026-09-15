@@ -263,6 +263,7 @@ private:
   void dchip_csr_write(u32 address, u8 data);
   u8 tig_read(u32 address);
   void tig_write(u32 address, u8 data);
+  void tig_update_halt_lines();
 
   // --- MPD / SPD wiring ---
   MPDState m_mpd;
@@ -323,6 +324,7 @@ private:
       u8 HaltA;
       u8 HaltB;
       u8 ModInfo;
+      u8 ipcr[5]; ///< ipcr0-4 (0xa00-0xb00): PALcode MP restart handshake
     } tig;
 
     /**

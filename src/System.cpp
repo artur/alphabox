@@ -104,6 +104,7 @@ CSystem::CSystem(CConfigurator *cfg) try {
   state.tig.FwWrite = 0;
   state.tig.HaltA = 0;
   state.tig.HaltB = 0;
+  memset(state.tig.ipcr, 0, sizeof(state.tig.ipcr));
 
   state.cpu_lock_flags = 0;
 
@@ -1719,16 +1720,37 @@ u8 CSystem::tig_read(u32 a) {
     return state.tig.ModInfo;
   case 0x300003c0: // ttcr
     return state.tig.HaltA;
+  case 0x30000440: // clr_irq4: latch clear; our IRQ4 is level-driven
   case 0x30000480: // clr_pwr_flt_det
     return 0;
   case 0x300005c0: // ev6_halt
     return state.tig.HaltB;
+  case 0x30000a00: // ipcr0-4: PALcode MP restart handshake
+  case 0x30000a40:
+  case 0x30000a80:
+  case 0x30000ac0:
+  case 0x30000b00:
+    return state.tig.ipcr[(a - 0x30000a00) >> 6];
   case 0x38000180: // Arbiter revision
     return 0xfe;
   default:
     printf("Unknown TIG %08x read attempted.\n", a);
     return 0;
   }
+}
+
+/**
+ * Drive each CPU's IRQ4 (halt / MP work request) line from the TIG halt
+ * registers: bit n of (ttcr | ev6_halt) is CPU n's line, level-triggered. The
+ * PALcode's MP work request sets the target's bit, and the target's halt
+ * interrupt handler clears it again, which drops the line. Serialized with
+ * interrupt(): the writing CPU changes other CPUs' interrupt state.
+ **/
+void CSystem::tig_update_halt_lines() {
+  std::lock_guard<std::mutex> g(drir_lock);
+  const u8 lines = state.tig.HaltA | state.tig.HaltB;
+  for (int i = 0; i < iNumCPUs; i++)
+    acCPUs[i]->irq_h(4, (lines >> i) & 1, 0);
 }
 
 void CSystem::tig_write(u32 a, u8 data) {
@@ -1743,11 +1765,21 @@ void CSystem::tig_write(u32 a, u8 data) {
     return;
   case 0x300003c0: // ttcr
     state.tig.HaltA = data;
+    tig_update_halt_lines();
     return;
+  case 0x30000440: // clr_irq4: latch clear; our IRQ4 is level-driven
   case 0x30000480: // clr_pwr_flt_det
     return;
   case 0x300005c0: // ev6_halt
     state.tig.HaltB = data;
+    tig_update_halt_lines();
+    return;
+  case 0x30000a00: // ipcr0-4: PALcode MP restart handshake
+  case 0x30000a40:
+  case 0x30000a80:
+  case 0x30000ac0:
+  case 0x30000b00:
+    state.tig.ipcr[(a - 0x30000a00) >> 6] = data;
     return;
   case 0x30000600: // srcr0
   case 0x30000640: // srcr1
@@ -2484,6 +2516,7 @@ void CSystem::ResetChipsetState() {
   state.tig.FwWrite = 0;
   state.tig.HaltA = 0;
   state.tig.HaltB = 0;
+  memset(state.tig.ipcr, 0, sizeof(state.tig.ipcr));
   state.tig.ModInfo = 0;
 
   memset(state.cf8_address, 0, sizeof(state.cf8_address));
@@ -2506,7 +2539,7 @@ void CSystem::SaveState(const char *fn) {
   if (f) {
     temp_32 = 0xa1fae540; // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
     fwrite(&temp_32, sizeof(u32), 1, f);
-    temp_32 = 0x00020001; // File Format Version 2.1
+    temp_32 = 0x00020002; // File Format Version 2.2 (2.2: TIG IPCRs)
     fwrite(&temp_32, sizeof(u32), 1, f);
 
     // memory: a non-zero int is written as is; a run of zero ints as one 0
@@ -2566,7 +2599,7 @@ void CSystem::RestoreState(const char *fn) {
   }
 
   if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
-      temp_32 != 0x00020001) // File Format Version 2.1
+      temp_32 != 0x00020002) // File Format Version 2.2 (2.2: TIG IPCRs)
   {
     printf("%%SYS-I-VERSION: State file %s is a different version.\n", fn);
     fclose(f);

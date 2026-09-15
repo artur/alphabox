@@ -586,31 +586,25 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
     break;
 
   case 0x3428:
-    // start cpu 1
-    if (cSystem->get_cpu_num() > 1) {
-      printf("*** DPR *** Starting CPU 1 ***\n");
-      cSystem->get_cpu(1)->set_pc(0x8001); // should come from dpr...
-      cSystem->get_cpu(1)->stop_waiting();
-    }
-    break;
-
   case 0x3438:
-    // start cpu 2
-    if (cSystem->get_cpu_num() > 2) {
-      printf("*** DPR *** Starting CPU 2 ***\n");
-      cSystem->get_cpu(2)->set_pc(0x8001); // should come from dpr...
-      cSystem->get_cpu(2)->stop_waiting();
+  case 0x3448: {
+    // Start CPU n (1..3): its waiting-to-jump flag at 0x3418 + 0x10 * n.
+    const int n = (int)((a - 0x3418) >> 4);
+    if (cSystem->get_cpu_num() > n) {
+      CAlphaCPU *cpu = cSystem->get_cpu(n);
+      // Only a CPU still parked since power-up is launched: setting the PC of
+      // a running CPU from this (another CPU's) thread would corrupt it.
+      if (cpu->get_waiting()) {
+        printf("*** DPR *** Starting CPU %d ***\n", n);
+        cpu->set_pc(0x8001); // should come from dpr...
+        cpu->stop_waiting();
+      } else {
+        printf("*** DPR *** CPU %d is already running, not redirected ***\n",
+               n);
+      }
     }
     break;
-
-  case 0x3448:
-    // start cpu 3
-    if (cSystem->get_cpu_num() > 3) {
-      printf("*** DPR *** Starting CPU 3 ***\n");
-      cSystem->get_cpu(3)->set_pc(0x8001); // should come from dpr...
-      cSystem->get_cpu(3)->stop_waiting();
-    }
-    break;
+  }
   }
 
   return;
