@@ -241,8 +241,10 @@ void CSerial::stop_threads() {
   if (myThread) {
     sprintf(buffer, "srl%d", state.iNumber);
     printf(" %s", buffer);
-    if (!acceptingSocket)
-      myThread->join();
+    // Always join: the thread notices StopThread within 200 ms, also while it
+    // waits for a telnet connection (see WaitForConnection). Destroying a
+    // joinable std::thread would terminate the process.
+    myThread->join();
     myThread = nullptr;
   }
 }
@@ -942,13 +944,26 @@ void CSerial::WaitForConnection() {
   Address.sin_port = htons((u16)listenPort);
   Address.sin_family = AF_INET;
 
-  //  Wait until we have a connection
+  //  Wait until we have a connection. Poll rather than block in accept(), so
+  //  that stop_threads() can join the serial thread while it waits for a
+  //  reconnect; without a connection the thread just returns.
   connectSocket = INVALID_SOCKET;
   while (connectSocket == INVALID_SOCKET) {
-    acceptingSocket = true;
+    if (StopThread)
+      return;
+    fd_set readset;
+    struct timeval tv;
+    FD_ZERO(&readset);
+    FD_SET(listenSocket, &readset);
+    tv.tv_sec = 0;
+    tv.tv_usec = 200000;
+    int ready = select((int)listenSocket + 1, &readset, NULL, NULL, &tv);
+    if (ready < 0) // EINTR or a broken listener: don't spin
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (ready <= 0)
+      continue;
     connectSocket =
         (int)accept(listenSocket, (struct sockaddr *)&Address, &nAddressSize);
-    acceptingSocket = false;
   }
 
   iac_carry_len = 0;

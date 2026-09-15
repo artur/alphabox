@@ -70,9 +70,8 @@ private:
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
-  bool StopThread = false;
+  std::atomic_bool StopThread{false};
   bool breakHit = false;
-  bool acceptingSocket = false;
   const char *listenAddress = nullptr;
 
   unsigned char
