@@ -292,6 +292,54 @@ private:
   // runs. This is the last sync timestamp; the delta since it (when cc_ena) is
   // added to state.cc each jit_run, then it's reset to now.
   std::chrono::steady_clock::time_point cc_last_sync;
+  u64 cc_wall_remainder = 0; // sub-cycle numerator carried across syncs (/1e9)
+  u64 cc_last_read = 0; // last RPCC value returned (forward-progress floor)
+  u64 cc_borrow = 0;    // cycles lent to that floor, repaid from wall progress
+
+  // Advance the wall-clock cc to now. Called at dispatch-batch boundaries and
+  // on every guest RPCC read: a stale batch-start value makes NetBSD's PCC
+  // timecounter see time go backwards (negative ping times).
+  void sync_cc_wallclock() {
+    const auto now = std::chrono::steady_clock::now();
+    if (cc_last_sync > now)
+      cc_last_sync = now; // a stall can't exceed real elapsed; never bill
+                          // negative
+    auto cc_delta = now - cc_last_sync;
+    cc_last_sync = now;
+    if (state.cc_ena) {
+      // Cap (not drop) odd deltas at 1s: dropping made the cc run slow through
+      // early-boot device-init stalls, and SRM's cycles-per-tick calibration
+      // locked that in as a too-low CPU speed (the 357MHz bug).
+      if (cc_delta > std::chrono::seconds(1))
+        cc_delta = std::chrono::seconds(1);
+      const u64 ns =
+          (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(cc_delta)
+              .count();
+      const u64 scaled = ns * cpu_hz + cc_wall_remainder; // keep sub-cycles
+      u64 add = scaled / 1000000000ULL;
+      cc_wall_remainder = scaled % 1000000000ULL;
+      if (cc_borrow) { // repay the floor by withholding progress, never going
+                       // backwards
+        const u64 repay = cc_borrow < add ? cc_borrow : add;
+        add -= repay;
+        cc_borrow -= repay;
+      }
+      state.cc += add;
+    }
+  }
+
+  // RPCC read with forward progress: the real counter advances every cycle,
+  // so two reads never return the same value, even when the host clock hasn't
+  // moved between them.
+  u64 rpcc_read() {
+    sync_cc_wallclock();
+    if (state.cc_ena && state.cc <= cc_last_read) {
+      cc_borrow += cc_last_read + 1 - state.cc;
+      state.cc = cc_last_read + 1;
+    }
+    cc_last_read = state.cc;
+    return ((u64)state.cc_offset) << 32 | (state.cc & U64(0xffffffff));
+  }
 
   // DRAM fast-path cache
   char *dram_ptr; // cSystem->PtrToMem(0) - host pointer to base es40 ram array

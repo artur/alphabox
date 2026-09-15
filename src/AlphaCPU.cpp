@@ -138,6 +138,9 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
  **/
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
+  cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
+  cc_borrow = 0;
+  cc_wall_remainder = 0;
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
 
   cpu_hz = myCfg->get_num_value("speed", true, 500000000);
@@ -282,6 +285,9 @@ void CAlphaCPU::ResetForSystemReset() {
   const int savedProcNum = state.iProcNum;
 
   memset(&state, 0, sizeof(state));
+  cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
+  cc_borrow = 0;
+  cc_wall_remainder = 0;
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
   state.iProcNum = savedProcNum;
 
@@ -557,25 +563,10 @@ void CAlphaCPU::jit_run(int budget) {
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the
                            // RPCC (diag_rpcc.h)
   g_diag_excluded_ns = 0;
-  if (cc_last_sync > now)
-    cc_last_sync = now; // a stall can't exceed the batch's real elapsed; never
-                        // bill negative
-  auto cc_delta = now - cc_last_sync;
-  cc_last_sync = now;
   // Wall-clock RPCC: advance the cycle counter by real elapsed time * cpu_hz
-  // (when enabled) so it tracks the configured CPU frequency no matter how
-  // fast/bursty the JIT runs. Cap (not drop) odd deltas at 1s: dropping made
-  // the cc run slow through early-boot device-init stalls, and SRM's
-  // cycles-per-tick calibration locked that in as a too-low CPU speed (the
-  // 357MHz bug).
-  if (state.cc_ena) {
-    if (cc_delta > std::chrono::seconds(1))
-      cc_delta = std::chrono::seconds(1);
-    state.cc +=
-        (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(cc_delta)
-            .count() *
-        cpu_hz / 1000000000ULL;
-  }
+  // so it tracks the configured CPU frequency no matter how fast/bursty the
+  // JIT runs (see sync_cc_wallclock; guest RPCC reads sync it too).
+  sync_cc_wallclock();
 
   // Drive the Cchip interval timer once per dispatch batch (CPU0 only), not
   // once per instruction the way the in-execute() poll did.
@@ -1693,9 +1684,8 @@ u64 CAlphaCPU::jit_misc(CAlphaCPU *cpu, u32 sel) {
                                                  // double side effect
 
   switch (sel) {
-  case 0: // RPCC: Ra = cc_offset : cc[31:0]
-    return ((u64)cpu->state.cc_offset << 32) |
-           (cpu->state.cc & U64(0xffffffff));
+  case 0: // RPCC: Ra = cc_offset : cc[31:0], synced to now at each read
+    return cpu->rpcc_read();
   case 1: // RC: Ra = bIntrFlag; bIntrFlag = false
   {
     u64 v = cpu->state.bIntrFlag ? 1 : 0;
@@ -2970,18 +2960,7 @@ void CAlphaCPU::execute() {
     // lags real time while the check_state feedback converges; SRM's
     // cycles-per-tick speed calibration measured that lag consistently and
     // locked in a low CPU speed.
-    if (cc_last_sync > now)
-      cc_last_sync = now;
-    auto cc_delta = now - cc_last_sync;
-    cc_last_sync = now;
-    if (state.cc_ena) {
-      if (cc_delta > std::chrono::seconds(1))
-        cc_delta = std::chrono::seconds(1);
-      state.cc +=
-          (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(cc_delta)
-              .count() *
-          cpu_hz / 1000000000ULL;
-    }
+    sync_cc_wallclock();
 
     // Poll the wall-clock Cchip interval timer once per execute() batch
     // (~512 instructions) rather than every 32;
@@ -4171,6 +4150,13 @@ int CAlphaCPU::RestoreState(FILE *f) {
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
+  // The RPCC floor isn't part of the save-state format: rebase it on the
+  // restored counter and a fresh host epoch so a restore can't jump the clock
+  // or bill the paused wall time.
+  cc_last_read = state.cc;
+  cc_borrow = 0;
+  cc_wall_remainder = 0;
+  cc_last_sync = std::chrono::steady_clock::now();
   // RAM and TB state now belong to the restored state: drop the data page
   // cache, the sequential icache cursor and every compiled block (the epoch
   // bump makes them re-hash against the restored RAM before they run).
