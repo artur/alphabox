@@ -309,7 +309,14 @@ leave both alone). Trailer:
   8254 read-back with a live count, keyboard queuing with upstream's
   output-buffer purge rewritten, S3 LFB config widths, PMU datasheet
   values); 4 storage (DiskRam fixes; Sym53C810/895 race fixes adapted;
-  removable media redesigned rather than taking upstream's mailbox).
+  removable media redesigned rather than taking upstream's mailbox);
+  5 host/network (SIGTERM graceful exit, exit_on_pal_halt via a CSystem
+  flag instead of a throw on the CPU thread, --version with features,
+  Release build default, set-3 backslash scancode, DEC21143 RU latch and
+  missed-frame counting, user-configurable SDL hotkeys plus our
+  hotkey.media_force; found and fixed a Serial stop_threads abort on the
+  way; deferred: DEC21143 SE-on-BME-off and the TAP wake thread, untestable
+  without host networking).
   Not taken: upstream's own AArch64 JIT (ideas only), version bumps,
   autotools/Visual Studio/licence churn, the x64 engine split.
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
