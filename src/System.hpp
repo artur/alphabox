@@ -159,6 +159,18 @@ public:
   bool ProcessPendingReset();
   void ResetChipsetState();
 
+  // Native PALcode for every CPU: requested while the CPUs are constructed if
+  // any of them sets palcode.vms.nohle (always in JIT builds), so that no CPU
+  // runs the vmspal replacement routines while another runs native PALcode.
+  void request_native_pal(const char *why) {
+    if (!m_native_pal)
+      printf("%%SYS-I-NATIVEPAL: %s: native PALcode on all CPUs (vmspal "
+             "replacement routines disabled).\n",
+             why);
+    m_native_pal = true;
+  }
+  bool native_pal_requested() const { return m_native_pal; }
+
   // exit_on_pal_halt: a kernel-mode CALL_PAL HALT asks the main loop (Run) to
   // exit gracefully; the CPU carries on into the HALT until then.
   bool exit_on_pal_halt() const { return m_exit_on_pal_halt; }
@@ -266,6 +278,7 @@ private:
   std::atomic<bool> m_reset_requested{false};
   std::atomic<bool> m_reset_in_progress{false};
 
+  bool m_native_pal = false;                // see request_native_pal()
   bool m_exit_on_pal_halt = false;          // sys0 exit_on_pal_halt
   std::atomic<bool> m_pal_halt_exit{false}; // set by a CPU on CALL_PAL HALT
 

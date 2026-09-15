@@ -131,7 +131,22 @@ void CAlphaCPU::run() {
  * Constructor.
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
-    : CSystemComponent(cfg, system), mySemaphore(0, 1) {}
+    : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+  // Native PALcode vs the vmspal replacement routines is a system-wide choice
+  // (mixing them across CPUs in SMP is unsafe), decided while the CPUs are
+  // constructed and read back in init(), which runs after all of them.
+#ifdef ES40_JIT
+  // The JIT compiles PALcode like any other guest code: no vmspal shortcuts.
+  system->request_native_pal("JIT build");
+#else
+  if (cfg->get_bool_value("palcode.vms.nohle", false)) {
+    char why[96];
+    snprintf(why, sizeof(why), "palcode.vms.nohle set on %s",
+             cfg->get_myName());
+    system->request_native_pal(why);
+  }
+#endif
+}
 
 /**
  * Initialize the CPU.
@@ -196,14 +211,8 @@ void CAlphaCPU::init() {
       myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
   tick_last_icount = 0;
   tick_seen_seq = 0;
-#ifdef ES40_JIT
-  // With the JIT, PALcode runs natively (compiled like any other guest code)
-  // rather than being shortcut by the high-level vmspal routines, so the
-  // replacement is force-disabled
-  vmspal_lle_enabled = true;
-#else
-  vmspal_lle_enabled = myCfg->get_bool_value("palcode.vms.nohle", false);
-#endif
+  // Decided for all CPUs at construction (see the constructor).
+  vmspal_lle_enabled = cSystem->native_pal_requested();
 
   state.iProcNum = cSystem->RegisterCPU(this);
 

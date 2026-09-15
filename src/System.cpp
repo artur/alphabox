@@ -2383,6 +2383,9 @@ u64 CSystem::PCI_Phys_scatter_gather(u32 address, u64 wsm, u64 tba) {
  * Initialize all devices.
  **/
 void CSystem::init() {
+  if (!m_native_pal)
+    printf("%%SYS-I-VMSPAL: vmspal PALcode replacement routines on all CPUs "
+           "(palcode.vms.nohle = true on any CPU selects native PALcode).\n");
   for (int i = 0; i < iNumComponents; i++)
     acComponents[i]->init();
 }
