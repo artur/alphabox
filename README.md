@@ -243,7 +243,7 @@ lines with `grab=1` mean host input reaches the guest; none after a
 ## What doesn't work (also see issues)
 
 - Some guest operating systems (see [Guest support](https://github.com/lenticularis39/axpbox/wiki/Guest-support))
-- Multiple CPU system emulation is experimental: Windows 2000 RC2 (multiprocessor HAL) boots to the desktop with two CPUs (`cpu1 = ev68cb` in `es40.cfg`) on the AArch64 JIT build, and SRM starts the second CPU; other guests are untested with more than one CPU
+- Multiple CPU system emulation is experimental: SRM boots to `P00>>>` with up to four CPUs (`cpu1`..`cpu3 = ev68cb` in `es40.cfg`), and Windows 2000 RC2 (multiprocessor HAL) runs on two CPUs on the AArch64 JIT build; other guests are untested with more than one CPU
 - Running on big endian platforms
 - Some SCSI and IDE commands
 - Copying large files between IDE CD-ROM to IDE hard drive (this usually doesn't affect OpenVMS installation)

@@ -1499,13 +1499,13 @@ u64 CSystem::cchip_csr_read(u32 a, CSystemComponent *source) {
   case 0x240:
   case 0x600:
   case 0x640:
-    return state.cchip.dim[((a >> 10) & 2) | ((a >> 6) & 1)];
+    return state.cchip.dim[((a >> 9) & 2) | ((a >> 6) & 1)];
 
   case 0x280:
   case 0x2c0:
   case 0x680:
   case 0x6c0:
-    return state.cchip.drir & state.cchip.dim[((a >> 10) & 2) | ((a >> 6) & 1)];
+    return state.cchip.drir & state.cchip.dim[((a >> 9) & 2) | ((a >> 6) & 1)];
 
   case 0x300:
     return state.cchip.drir;
@@ -1608,7 +1608,7 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
     // now -- the HAL may route (or mask) a device that is already asserted,
     // and the next interrupt() call could be a long way off.
     std::lock_guard<std::mutex> g(drir_lock);
-    const int n = ((a >> 10) & 2) | ((a >> 6) & 1);
+    const int n = ((a >> 9) & 2) | ((a >> 6) & 1);
     state.cchip.dim[n] = data;
     if (n < iNumCPUs) {
       if (state.cchip.drir & state.cchip.dim[n] & U64(0x00ffffffffffffff))

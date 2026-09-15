@@ -2828,9 +2828,11 @@ void CAlphaCPU::check_state() {
   // poll (~100 ms) -- identifies guest-side hangs/loops on headless runs.
   static const char *pc_sample = getenv("AXPBOX_PC_SAMPLE");
   if (pc_sample && *pc_sample == '1')
-    fprintf(stderr, "PCSAMPLE cpu%d pc=%016llx icount=%llu\n",
+    // ra/pv locate the caller of a hot helper (lock, timer, wait loop).
+    fprintf(stderr, "PCSAMPLE cpu%d pc=%016llx icount=%llu ra=%llx pv=%llx\n",
             (int)state.iProcNum, (unsigned long long)state.pc,
-            (unsigned long long)state.instruction_count);
+            (unsigned long long)state.instruction_count,
+            (unsigned long long)state.r[26], (unsigned long long)state.r[27]);
 
 #if !defined(CONSTANT_TIME_FACTOR)
   if (state.instruction_count > 0) {
