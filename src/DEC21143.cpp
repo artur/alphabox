@@ -657,6 +657,11 @@ u32 CDEC21143::nic_read(u32 address, int dsize) {
 
   if ((address & 7) == 0 && regnr < 32) {
     data = state.reg[regnr];
+    // The CSR8 counters clear when read; drivers accumulate them (Linux tulip
+    // adds CSR8 & 0xffff to rx_missed_errors on every statistics read). The
+    // top three bits keep their reset value.
+    if (regnr == CSR_MISSED / 8)
+      state.reg[regnr] &= 0xE0000000;
   } else
     printf("dec21143: WARNING! unaligned access (0x%x) \n", (int)address);
 #if defined(DEBUG_NIC)
@@ -1218,6 +1223,17 @@ unavailable if (state.reg[CSR_OPMODE/8] & OPMODE_SR) {	// if receive start
  *  arrived ones. If the current packet couldn't be fully transfered the
  *  last time, then continue on that packet.)
  **/
+/**
+ * Count one missed frame in CSR8: the 16-bit counter saturates and sets the
+ * overflow bit (MFO).
+ **/
+static inline void count_missed_frame(u32 &csr8) {
+  if ((csr8 & MISSED_MFC) == MISSED_MFC)
+    csr8 |= MISSED_MFO;
+  else
+    csr8++;
+}
+
 int CDEC21143::dec21143_rx() {
   static u32 descr[4];
   static u32 &rdes0 = descr[0];
@@ -1291,10 +1307,20 @@ int CDEC21143::dec21143_rx() {
 
   /*  Only use descriptors owned by the 21143:  */
   if (!(rdes0 & TDSTAT_OWN)) {
-
-    // set recive buffers unavailable and receive state to suspended
+    // No receive buffer: like the chip, discard the arriving frame and count
+    // it in CSR8 instead of holding it back until the driver refills the
+    // ring. RU is raised only on the change into the suspended state;
+    // raising it on every poll re-asserts the interrupt the driver has just
+    // acknowledged.
+    const bool was_suspended =
+        (state.reg[CSR_STATUS / 8] & STATUS_RS) == STATUS_RS_SUSPENDED;
+    if (state.rx.current.used < state.rx.current.len) {
+      state.rx.current.used = state.rx.current.len;
+      count_missed_frame(state.reg[CSR_MISSED / 8]);
+    }
     state.reg[CSR_STATUS / 8] = (state.reg[CSR_STATUS / 8] & ~STATUS_RS) |
-                                STATUS_RU | STATUS_RS_SUSPENDED;
+                                (was_suspended ? 0 : STATUS_RU) |
+                                STATUS_RS_SUSPENDED;
     return 0; // indicate nothing was processed
   }
 
