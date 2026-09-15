@@ -349,7 +349,14 @@ leave both alone). Trailer:
   SPD cache slot map; DPR quiet-period/reset/exit saves with atomic flags;
   nohle system-wide; DPR CPU start only for parked CPUs, TIG halt lines +
   IPCRs, IRQ4 under vmspal; found on the way: a throwing CSystem constructor
-  left theSystem dangling and main_sim's failure handler crashed).
+  left theSystem dangling and main_sim's failure handler crashed); 7 JIT
+  performance ideas from upstream's own AArch64 engine, measured rather than
+  taken on faith (skip_memtest_hack ignored in JIT builds; chain gates
+  dropped on forward-only exits, gated per exit on AArch64, +1-1.5% MIPS;
+  PALmode interrupt deferral and data-page-cache probe reuse instrumented
+  and rejected -- ~10 interpreted instructions per 100M and 0.1-0.4% reuse
+  candidates. Caveat: the RC2 NO_IDLE steady state is the NT idle loop, so
+  later perf work needs a real guest workload).
   Not taken: upstream's own AArch64 JIT (ideas only), version bumps,
   autotools/Visual Studio/licence churn, the x64 engine split.
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
