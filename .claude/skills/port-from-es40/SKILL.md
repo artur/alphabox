@@ -316,7 +316,14 @@ leave both alone). Trailer:
   missed-frame counting, user-configurable SDL hotkeys plus our
   hotkey.media_force; found and fixed a Serial stop_threads abort on the
   way; deferred: DEC21143 SE-on-BME-off and the TAP wake thread, untestable
-  without host networking).
+  without host networking); 6 SMP/memory (64-bit memory sizes with
+  memory.bits bounded 26..35 and bounds-checked state files; Typhoon AAR
+  multi-array plus one DIMM model driving SPD EEPROMs and the DPR memory
+  bytes -- SRM show memory/fru verified 64 MB..32 GB, which also settled the
+  SPD cache slot map; DPR quiet-period/reset/exit saves with atomic flags;
+  nohle system-wide; DPR CPU start only for parked CPUs, TIG halt lines +
+  IPCRs, IRQ4 under vmspal; found on the way: a throwing CSystem constructor
+  left theSystem dangling and main_sim's failure handler crashed).
   Not taken: upstream's own AArch64 JIT (ideas only), version bumps,
   autotools/Visual Studio/licence churn, the x64 engine split.
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
