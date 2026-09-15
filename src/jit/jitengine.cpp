@@ -3559,7 +3559,18 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
     Label not_self = a.new_label();
-    emit_gate(exit_chain);
+    {
+      // A PC-relative branch with a non-negative displacement has only forward
+      // successors: no gate. Every guest cycle still passes a gated backward
+      // branch, a computed jump or a return to the dispatcher (see the AArch64
+      // emitter, which gates per exit).
+      const uint32_t lw = words[plen - 1];
+      const uint32_t lopc = lw >> 26;
+      const bool forward_only =
+          lopc >= 0x30 && lopc <= 0x3f && !(lw & 0x100000); // disp21 sign
+      if (!forward_only)
+        emit_gate(exit_chain);
+    }
     // Self-loop fast path: a taken branch back to our own start (r10 == b->tag)
     // jumps straight into the body, skipping the resolver call entirely.
     a.mov(x86::rax, imm(b->tag)); // tag may exceed imm32
@@ -3576,7 +3587,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.add(x86::qword_ptr(x86::rsp, 40), imm(plen));
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
-    emit_gate(exit_chain);
+    // A fall-through only moves forward: no gate.
     emit_chain(exit_chain);
     a.bind(exit_chain);
 #endif

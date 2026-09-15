@@ -2046,27 +2046,39 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a64_count_add(a, plen); // x9 still holds the next PC
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
-    a64_emit_gate(a, m_off, exit_chain);
     const uint32_t lw = words[plen - 1];
     const uint32_t lopc = lw >> 26;
     if (lopc >= 0x30 && lopc <= 0x3f) {
       // PC-relative branch: both successors are constants. BR/BSR have one;
       // the conditional forms left the taken target in x10 (see emit_op), so
       // one compare picks the exit and each exit owns a link slot.
+      //
+      // Only an exit that can go backward (target <= the branch itself) is
+      // gated. Every guest cycle still passes a gated backward branch, a
+      // computed jump (JMP/HW_RET) or a return to the dispatcher, so budget
+      // overshoot and interrupt latency stay bounded by one forward-only run.
+      // The self-loop exit (target == tag) is backward, hence gated.
+      const uint64_t bpc = b->tag + 4 * (uint64_t)(plen - 1);
       const uint64_t bfall = b->tag + 4 * (uint64_t)plen;
       const int64_t bdisp = (int64_t)((uint64_t)(lw & 0x1FFFFF) << 43) >> 43;
       const uint64_t btgt = bfall + (uint64_t)(bdisp * 4);
+      const bool taken_backward = btgt <= bpc;
       if (lopc == 0x30 || lopc == 0x34) {
+        if (taken_backward)
+          a64_emit_gate(a, m_off, exit_chain);
         emit_static_exit(btgt, 0, exit_chain);
       } else {
         Label not_taken = a.new_label();
         a.cmp(a64::x9, a64::x10);
         a.b_ne(not_taken);
+        if (taken_backward) // the gate clobbers only x1/x17 (and flags)
+          a64_emit_gate(a, m_off, exit_chain);
         emit_static_exit(btgt, 0, exit_chain);
         a.bind(not_taken);
-        emit_static_exit(bfall, 1, exit_chain);
+        emit_static_exit(bfall, 1, exit_chain); // forward: no gate
       }
     } else {
+      a64_emit_gate(a, m_off, exit_chain);
       Label not_self = a.new_label();
       a.mov(a64::x0, imm(b->tag)); // self-loop: straight back into the body
       a.cmp(a64::x9, a64::x0);
@@ -2083,7 +2095,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a64_count_add(a, plen);
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
-    a64_emit_gate(a, m_off, exit_chain);
+    // A fall-through only moves forward: no gate (see the branch exits).
     emit_static_exit(b->tag + 4 * (uint64_t)plen, 0, exit_chain);
     a.bind(exit_chain);
 #endif
