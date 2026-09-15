@@ -209,8 +209,12 @@ window or display server.
 
 Key names for `AXPBOX_KEYSCRIPT`/`AXPBOX_KEYPIPE`: `a`–`z`, `0`–`9`,
 `enter`, `esc`, `tab`, `space`, `up`, `down`, `left`, `right`, `del`, `ins`,
-`home`, `end`, `bksp`, `bslash`, `dot`, `minus`, `equals`, `f1`–`f12`,
-`pgup`, `pgdn`.
+`home`, `end`, `bksp`, `bslash`, `dot`, `minus`, `equals`, `comma`, `slash`,
+`semicolon`, `quote`, `lbracket`, `rbracket`, `grave`, `f1`–`f12`, `pgup`,
+`pgdn`, `win`, `menu`, `ctrl`, `shift`, `alt`. Prefix a key with modifiers
+joined by `-` to press a chord: `win-r`, `shift-5` (`%` on a US layout),
+`ctrl-alt-del`. `test/tools/keys_for.py "<text>"` turns a line of text into
+tokens for a US keyboard layout.
 
 A typical fully headless firmware run:
 

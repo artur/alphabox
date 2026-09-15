@@ -4,6 +4,7 @@ build**/
 # ...but not the build-lanes skill, which the pattern above also matches
 !.claude/skills/build-lanes/
 .idea/
+__pycache__/
 .vs/
 CMakeSettings.json
 run/

@@ -67,6 +67,23 @@ catch regressions in dispatch and chaining, not to judge optimizations of
 real guest code: for those, measure a workload that keeps the guest busy
 (the boot phase, or a CPU-bound program run inside the guest).
 
+## Real-workload benchmark
+
+```bash
+test/tools/win_workload.sh <label> build-jit/axpbox win2k-installed es40-window-smp.cfg \
+  "cmd /c for /l %i in (1,1,N) do @rem"
+```
+
+Boots the RC2 guest headless (idle pacing on), waits for the desktop in the
+frame dumps plus `SETTLE` seconds (default 60), opens Start > Run with
+`win-r`, types the command through `AXPBOX_KEYPIPE` and prints
+`workload_seconds=<n>`: the time from the console window opening to closing,
+read from the frame dump modification times (about 2 s resolution). This
+times guest code, not the idle loop. Compare binaries with the same command
+on a quiet host, a few runs each; size N so the command runs 100 s or more.
+The guest keyboard layout must be US (`test/tools/keys_for.py`), which rules
+out the Japanese beta.
+
 JIT counters on the same run: a `build-jit-stats-sdl` log carries per-window
 throughput, cold-path reasons (`int`, `int-pal`, `budget`, ...) and bail
 causes; `build-jit-regprof-sdl` adds exec-weighted code expansion, hot

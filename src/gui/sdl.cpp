@@ -1001,11 +1001,69 @@ static u32 sdl_debug_key_lookup(const char *name) {
       {"9", BX_KEY_9},
       {"pgdn", BX_KEY_PAGE_DOWN},
       {"pgup", BX_KEY_PAGE_UP},
+      {"comma", BX_KEY_COMMA},
+      {"slash", BX_KEY_SLASH},
+      {"semicolon", BX_KEY_SEMICOLON},
+      {"quote", BX_KEY_SINGLE_QUOTE},
+      {"lbracket", BX_KEY_LEFT_BRACKET},
+      {"rbracket", BX_KEY_RIGHT_BRACKET},
+      {"grave", BX_KEY_GRAVE},
+      {"win", BX_KEY_WIN_L},
+      {"menu", BX_KEY_MENU},
+      {"ctrl", BX_KEY_CTRL_L},
+      {"shift", BX_KEY_SHIFT_L},
+      {"alt", BX_KEY_ALT_L},
   };
   for (const auto &m : ks_map)
     if (!strcmp(name, m.name))
       return m.key;
   return 0;
+}
+
+// One AXPBOX_KEYSCRIPT/AXPBOX_KEYPIPE token: a key name, optionally preceded
+// by modifiers joined with '-' ("win-r", "shift-5", "ctrl-alt-del"). The
+// modifiers are held around the key and released in reverse order. With
+// press=false the token is only validated. Returns false for an unknown name.
+static bool sdl_debug_press(const char *token, bool press) {
+  static const struct {
+    const char *name;
+    u32 key;
+  } mods[] = {{"ctrl", BX_KEY_CTRL_L},
+              {"shift", BX_KEY_SHIFT_L},
+              {"alt", BX_KEY_ALT_L},
+              {"win", BX_KEY_WIN_L}};
+  u32 held[4];
+  int n = 0;
+  const char *p = token;
+  for (;;) {
+    const char *dash = strchr(p, '-');
+    if (!dash || dash == p || dash[1] == 0)
+      break;
+    const size_t len = (size_t)(dash - p);
+    bool is_mod = false;
+    for (const auto &m : mods)
+      if (strlen(m.name) == len && !strncmp(p, m.name, len)) {
+        if (n < 4)
+          held[n++] = m.key;
+        is_mod = true;
+        break;
+      }
+    if (!is_mod)
+      break;
+    p = dash + 1;
+  }
+  const u32 k = sdl_debug_key_lookup(p);
+  if (!k)
+    return false;
+  if (press) {
+    for (int i = 0; i < n; i++)
+      theKeyboard->gen_scancode(held[i]);
+    theKeyboard->gen_scancode(k);
+    theKeyboard->gen_scancode(k | BX_KEY_RELEASED);
+    for (int i = n - 1; i >= 0; i--)
+      theKeyboard->gen_scancode(held[i] | BX_KEY_RELEASED);
+  }
+  return true;
 }
 
 // Ctrl+F11 (interim media hotkey): pick an image and insert it into the first
@@ -1089,20 +1147,21 @@ void bx_sdl_gui_c::handle_events(void) {
     }
   }
 
-  // Debug aid: AXPBOX_KEYSCRIPT="35:enter,50:f2,52:down,..." injects named
-  // keys at the given second offsets (headless firmware/menu navigation).
+  // Debug aid: AXPBOX_KEYSCRIPT="35:enter,50:f2,52:win-r,..." injects keys
+  // (names or modifier chords, see sdl_debug_press) at the given second
+  // offsets (headless firmware/menu navigation).
   static const char *keyscript = getenv("AXPBOX_KEYSCRIPT");
   if (keyscript && theKeyboard) {
     struct KScriptEvent {
       Uint64 t_ms;
-      u32 key;
+      std::string token;
     };
     static std::vector<KScriptEvent> ks_events;
     static size_t ks_next = 0;
     static bool ks_parsed = false;
     if (!ks_parsed) {
       ks_parsed = true;
-      char buf[1024];
+      char buf[4096];
       strncpy(buf, keyscript, sizeof(buf) - 1);
       buf[sizeof(buf) - 1] = 0;
       for (char *tok = strtok(buf, ","); tok; tok = strtok(nullptr, ",")) {
@@ -1111,20 +1170,19 @@ void bx_sdl_gui_c::handle_events(void) {
           continue;
         *colon = 0;
         Uint64 at = (Uint64)(atof(tok) * 1000.0);
-        u32 k = sdl_debug_key_lookup(colon + 1);
-        if (k)
-          ks_events.push_back({at, k});
+        if (sdl_debug_press(colon + 1, false))
+          ks_events.push_back({at, colon + 1});
+        else
+          printf("%%SDL-W-KEYSCRIPT: unknown key \"%s\"\n", colon + 1);
       }
       printf("%%SDL-I-KEYSCRIPT: %zu scripted key events armed.\n",
              ks_events.size());
     }
     Uint64 ks_now = SDL_GetTicks();
     while (ks_next < ks_events.size() && ks_events[ks_next].t_ms <= ks_now) {
-      u32 k = ks_events[ks_next].key;
-      printf("%%SDL-I-KEYSCRIPT: injecting key %u at t=%llums\n", k,
-             (unsigned long long)ks_now);
-      theKeyboard->gen_scancode(k);
-      theKeyboard->gen_scancode(k | BX_KEY_RELEASED);
+      printf("%%SDL-I-KEYSCRIPT: injecting \"%s\" at t=%llums\n",
+             ks_events[ks_next].token.c_str(), (unsigned long long)ks_now);
+      sdl_debug_press(ks_events[ks_next].token.c_str(), true);
       ks_next++;
     }
   }
@@ -1132,7 +1190,7 @@ void bx_sdl_gui_c::handle_events(void) {
   // Debug aid: AXPBOX_KEYPIPE=<file> injects named keys appended to <file>
   // while the emulator runs (interactive headless menu navigation):
   //   echo "f2 down enter" >> keys.txt
-  // Tokens are whitespace-separated key names (same names as
+  // Tokens are whitespace-separated key names or modifier chords (same as
   // AXPBOX_KEYSCRIPT); each token is pressed+released ~120 ms apart.
   static const char *keypipe = getenv("AXPBOX_KEYPIPE");
   if (keypipe && theKeyboard) {
@@ -1151,11 +1209,8 @@ void bx_sdl_gui_c::handle_events(void) {
           if (fscanf(f, "%63s", tok) == 1) {
             kp_offset = ftell(f);
             kp_last = kp_now;
-            u32 k = sdl_debug_key_lookup(tok);
-            if (k) {
+            if (sdl_debug_press(tok, true)) {
               printf("%%SDL-I-KEYPIPE: injecting \"%s\"\n", tok);
-              theKeyboard->gen_scancode(k);
-              theKeyboard->gen_scancode(k | BX_KEY_RELEASED);
             } else {
               printf("%%SDL-W-KEYPIPE: unknown key \"%s\"\n", tok);
             }
