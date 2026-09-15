@@ -52,7 +52,7 @@ char *dbg_strptr = debug_string;
 /**
  * Constructor.
  **/
-CSystem::CSystem(CConfigurator *cfg) {
+CSystem::CSystem(CConfigurator *cfg) try {
   int i;
 
   if (theSystem != 0)
@@ -64,6 +64,10 @@ CSystem::CSystem(CConfigurator *cfg) {
   iNumMemories = 0;
   iNumCPUs = 0;
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
+  // A Typhoon array register describes 16 MB (24 bits) to 8 GB (33 bits).
+  if (iNumMemoryBits < 24 || iNumMemoryBits > 33)
+    FAILURE(Configuration,
+            "memory.bits must be between 24 (16 MB) and 33 (8 GB)");
   m_exit_on_pal_halt = myCfg->get_bool_value("exit_on_pal_halt", false);
 
   // initialize SPD data according to configured memory size
@@ -102,17 +106,19 @@ CSystem::CSystem(CConfigurator *cfg) {
 
   state.cpu_lock_flags = 0;
 
-  if (iNumMemoryBits > 30) {
-
-    // size_t may not be big enough, and makes 2^31 negative, so the
-    // alloc fails.  We're going to allocate the memory in
-    //  2^(iNumMemoryBits-10) chunks of 2^10.
-    CHECK_ALLOCATION(memory = calloc(1 << (iNumMemoryBits - 10), 1 << 10));
-  } else
-    CHECK_ALLOCATION(memory = calloc(1 << iNumMemoryBits, 1));
+  // A host whose size_t can't hold the memory size (32-bit) must refuse it
+  // rather than allocate less.
+  if (iNumMemoryBits >= sizeof(size_t) * 8)
+    FAILURE(Configuration, "memory.bits is too large for this host");
+  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
 
   printf("%s(%s): $Id: System.cpp,v 1.79 2008/06/12 07:29:44 iamcamiel Exp $\n",
          cfg->get_myName(), cfg->get_myValue());
+} catch (...) {
+  // A constructor that throws leaves no object behind: don't leave theSystem
+  // pointing at it for main_sim's failure handler (the exception propagates).
+  if (theSystem == this)
+    theSystem = 0;
 }
 
 /**
@@ -139,7 +145,7 @@ CSystem::~CSystem() {
 void CSystem::ResetMem(unsigned int membits) {
   free(memory);
   iNumMemoryBits = membits;
-  CHECK_ALLOCATION(memory = calloc(1 << iNumMemoryBits, 1));
+  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
 }
 
 /**
@@ -167,7 +173,7 @@ char *CSystem::PtrToMem(u64 address) {
   if (address >> iNumMemoryBits) // Non Memory
     return 0;
 
-  return &(((char *)memory)[(int)address]);
+  return (char *)memory + address;
 }
 
 /**
@@ -2480,11 +2486,11 @@ void CSystem::ResetChipsetState() {
 void CSystem::SaveState(const char *fn) {
   FILE *f;
   int i;
-  unsigned int m;
+  u64 m;
   unsigned int j;
   int *mem = (int *)memory;
   int int0 = 0;
-  unsigned int memints = (1 << iNumMemoryBits) / (unsigned int)sizeof(int);
+  const u64 memints = (U64(1) << iNumMemoryBits) / sizeof(int);
   u32 temp_32;
 
   f = fopen(fn, "wb");
@@ -2494,25 +2500,21 @@ void CSystem::SaveState(const char *fn) {
     temp_32 = 0x00020001; // File Format Version 2.1
     fwrite(&temp_32, sizeof(u32), 1, f);
 
-    // memory
+    // memory: a non-zero int is written as is; a run of zero ints as one 0
+    // followed by the number of further zero ints (at most 0xffffffff, so
+    // longer runs continue in the next record).
     for (m = 0; m < memints; m++) {
       if (mem[m]) {
         fwrite(&(mem[m]), 1, sizeof(int), f);
-      } else {
-        j = 0;
-        m++;
-        while (!mem[m] && (m < memints)) {
-          m++;
-          j++;
-          if ((int)j == -1)
-            break;
-        }
-
-        if (mem[m])
-          m--;
-        fwrite(&int0, 1, sizeof(int), f);
-        fwrite(&j, 1, sizeof(int), f);
+        continue;
       }
+      j = 0;
+      while (m + 1 < memints && !mem[m + 1] && j != 0xffffffff) {
+        m++;
+        j++;
+      }
+      fwrite(&int0, 1, sizeof(int), f);
+      fwrite(&j, 1, sizeof(int), f);
     }
 
     fwrite(&state, sizeof(state), 1, f);
@@ -2534,10 +2536,10 @@ void CSystem::SaveState(const char *fn) {
 void CSystem::RestoreState(const char *fn) {
   FILE *f;
   int i;
-  unsigned int m;
+  u64 m;
   unsigned int j;
   int *mem = (int *)memory;
-  unsigned int memints = (1 << iNumMemoryBits) / (unsigned int)sizeof(int);
+  const u64 memints = (U64(1) << iNumMemoryBits) / sizeof(int);
   u32 temp_32;
 
   f = fopen(fn, "rb");
@@ -2546,33 +2548,38 @@ void CSystem::RestoreState(const char *fn) {
     return;
   }
 
-  (void)!fread(&temp_32, sizeof(u32), 1, f);
-  if (temp_32 != 0xa1fae540) // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
+  if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
+      temp_32 != 0xa1fae540) // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
   {
     printf("%%SYS-F-FORMAT: %s does not appear to be a state file.\n", fn);
+    fclose(f);
     return;
   }
 
-  (void)!fread(&temp_32, sizeof(u32), 1, f);
-
-  if (temp_32 != 0x00020001) // File Format Version 2.1
+  if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
+      temp_32 != 0x00020001) // File Format Version 2.1
   {
     printf("%%SYS-I-VERSION: State file %s is a different version.\n", fn);
+    fclose(f);
     return;
   }
 
-  // memory
+  // memory (see SaveState for the zero-run encoding)
   for (m = 0; m < memints; m++) {
-    (void)!fread(&(mem[m]), 1, sizeof(int), f);
+    if (fread(&(mem[m]), sizeof(int), 1, f) != 1)
+      FAILURE(Runtime, "State file is truncated in the memory image");
     if (!mem[m]) {
-      (void)!fread(&j, 1, sizeof(int), f);
-      while (j--) {
+      if (fread(&j, sizeof(int), 1, f) != 1)
+        FAILURE(Runtime, "State file is truncated in the memory image");
+      if (j >= memints - m)
+        FAILURE(Runtime, "State file holds more memory than memory.bits");
+      while (j--)
         mem[++m] = 0;
-      }
     }
   }
 
-  (void)!fread(&state, sizeof(state), 1, f);
+  if (fread(&state, sizeof(state), 1, f) != 1)
+    FAILURE(Runtime, "State file is truncated in the system state");
 
   // components
   //
@@ -2592,19 +2599,21 @@ void CSystem::RestoreState(const char *fn) {
  **/
 void CSystem::DumpMemory(unsigned int filenum) {
   char file[100];
-  int x;
+  u64 x;
   int *mem = (int *)memory;
   FILE *f;
 
   sprintf(file, "memory_%012d.dmp", filenum);
   f = fopen(file, "wb");
+  if (!f)
+    return;
 
-  x = (1 << iNumMemoryBits) / (unsigned int)sizeof(int) / 2;
+  x = (U64(1) << iNumMemoryBits) / sizeof(int) / 2;
 
-  while (!mem[x - 1])
+  while (x > 0 && !mem[x - 1])
     x--;
 
-  fwrite(mem, 1, x * sizeof(int), f);
+  fwrite(mem, 1, (size_t)(x * sizeof(int)), f);
   fclose(f);
 }
 
