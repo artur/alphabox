@@ -216,49 +216,75 @@ column padding is strlen-based and multi-byte UTF-8 breaks alignment.
 
 ## Step 5 — verification gates (run in this order)
 
-1. **Build all lanes** (see the build-lanes skill): `build` (default),
-   `build-jit` (`-DES40_DISABLE_ASMJIT=OFF`, asmjit pinned
-   `0bd5787b` in `third_party/asmjit`), `build-nosdl`
-   (`-DDISABLE_SDL=yes`). All three after every commit.
-2. **SRM regression** (see srm-boot-test skill): `cd test/rom && bash
-   test.sh` — expect literal `diff clean`. Run against build-jit too
-   (copy test.sh and point it at `../../build-jit/axpbox`).
-   Pitfalls: `test.sh` DELETES the tracked `cl67srmrom.exe`,
-   `flash.rom`, `decompressed.rom` at the end — restore with
-   `git checkout -- test/rom/` before committing. `axp_correct.log`
+1. **Build all lanes** (see the `build-lanes` skill): at least an
+   interpreter, a JIT and a headless lane; on the development Mac the full
+   set, including the JIT_VERIFY, JIT_STATS/REGPROF, x86-64 and debug-flag
+   lanes. Check the rc of every lane, and that JIT lanes really define
+   `ES40_JIT` (the zsh word-splitting trap).
+2. **SRM regression** (see the `srm-boot-test` skill): one run per lane,
+   each on its own port, expecting `diff clean`. On Linux `test/rom/test.sh`
+   works (it deletes the tracked ROM files at the end — `git checkout --
+   test/rom/`); on macOS use the per-lane runner. `axp_correct.log`
    contains NUL bytes (grep needs `-a`) and embeds the serial telnet
    greeting — if you change that greeting, patch the expected log
    binary-safely (python bytes replace, not sed).
-3. **JIT differential check** after ANY jit/ or AlphaCPU change:
-   ```bash
-   cmake -S . -B /tmp/build-verify -DCMAKE_BUILD_TYPE=Release \
-     -DES40_DISABLE_ASMJIT=OFF -DCMAKE_CXX_FLAGS="-DJIT_VERIFY"
-   cmake --build /tmp/build-verify -j$(nproc)
-   # run the SRM test against it; the log must show
-   # "[JIT][VERIFY] ... 0 mismatches" lines and end at P00>>>
-   ```
-   Also do one throwaway compile with
-   `-DCMAKE_CXX_FLAGS="-DJIT_TRACES -DJIT_STATS"` so the dormant trace
-   tier doesn't rot.
-4. **Config-warning sweep**: for each of `test/rom`, `test/vms`,
-   `test/nt`, `test/arc` and a scratch dir holding the root
-   `es40.cfg`:
-   ```bash
-   (cd <dir> && timeout 8 stdbuf -oL <repo>/build/axpbox run > w.log 2>&1; \
-    grep -aE "SYS-W" w.log | sort -u)
-   ```
-   Expected: nothing except `%SYS-W-NOSERIAL` on configs that omit
-   serial1. NOTE: output MUST go to a file (`stdbuf` + redirect) —
-   piping `timeout`'d output loses everything to stdio buffering.
-5. **OpenVMS boot** after CPU/disk/timing changes (see boot-openvms
-   skill) — run on both build and build-jit lanes; expect
-   `RESULT: SUCCESS: login prompt reached` and OPCOM timestamps
-   consistent with the date the script answers.
-6. **ARC smoke** after RTC/superio/VGA changes (see test-arc skill).
-7. **Configurator smoke**: `printf 'no\n' | build/axpbox configure`
+3. **JIT differential check** after ANY jit/ or AlphaCPU change: the SRM
+   run on `build-jit-verify` and `build-jit-verify-x64` must show
+   `[JIT][VERIFY] ... 0 mismatches`. JIT_VERIFY compiles the chain gates
+   and inline page-cache fast paths out: changes there also need
+   `build-jit-x64` (SRM), guest boots and, for performance work, the
+   benchmark below.
+4. **Config-warning sweep**: start the emulator from each directory whose
+   config you touched (and a scratch dir holding the root `es40.cfg`),
+   output redirected to a file, and look for `SYS-W` lines (expected:
+   only `%SYS-W-NOSERIAL` on configs without serial1). Stop it gracefully
+   after `P00>>>` (or wait for startup to finish): a signal during startup
+   loses buffered stdout, and macOS has no `timeout`/`stdbuf` by default.
+5. **Probes and guests for the area you changed**: SRM probes from the
+   `srm-boot-test` skill (SMP `init` with 1/2/4 CPUs, `show memory`/
+   `show fru` across `memory.bits`, exit paths); Windows 2000 guests
+   booted headless on an APFS clone of the install with a final screenshot
+   (RC2 to the desktop, the Japanese beta to its logon screen, both on 2
+   CPUs); `AXPBOX_IRQSTATS=1` for interrupt changes.
+6. **Benchmark** for JIT/dispatch changes: Windows 2000 RC2, 2 CPUs,
+   `build-jit-stats-sdl`, `AXPBOX_NO_IDLE=1`, 300 s, per-CPU MIPS p50
+   compared with a baseline measured the same way on the parent commit.
+7. **OpenVMS boot** after CPU/disk/timing changes (see boot-openvms
+   skill, when its media is available) — run on both interpreter and JIT
+   lanes; expect `RESULT: SUCCESS: login prompt reached` and OPCOM
+   timestamps consistent with the date the script answers.
+8. **ARC smoke** after RTC/superio/VGA changes (see test-arc skill).
+9. **Configurator smoke**: `printf 'no\n' | build/axpbox configure`
    shows the AXPbox banner and exits cleanly.
-8. Kill strays ONLY with `pkill -x axpbox` (never `pkill -f` — it
-   matches the invoking shell's own command line).
+
+Never `pkill`/`killall axpbox` — other sessions on the host may be running
+guest installs. Stop only the PIDs your own tests started.
+
+## Phase workflow (large ranges)
+
+What worked for the 9f7554d..2aa5e11 review (phases 1-7):
+
+1. **Triage first, read-only.** For each phase, have an agent compare the
+   upstream commits with axpbox's code and report per commit: what it
+   does, axpbox status with file:line, merit (including bugs in the
+   upstream change itself), a take/adapt/reject verdict, tests. Decide
+   from the report; verify its key claims in the code before editing.
+2. **One branch per phase** (`port/phaseN-<area>`) off the integration
+   branch (`arm64-jit`). **One commit per theme**; when two themes touch
+   the same file, finish and commit the first before editing for the
+   second (or stage an index blob with the other hunk reverted) instead
+   of splitting hunks at the end.
+3. **Commit message** = what changed and why, which upstream commits were
+   reviewed and what was taken, adapted or rejected, and a `Verified:`
+   paragraph stating the tests actually run and their results (write it
+   from the test output, never ahead of it).
+4. **Tests from frozen copies** of test scripts (editing a script a
+   background job is running corrupts that run), with a memory-pressure
+   check before guest boots.
+5. **Every intermediate commit builds**: build each commit of the phase in
+   a separate worktree (see `build-lanes`) before fast-forwarding.
+6. **Fast-forward the integration branch and push** after each phase, then
+   record the phase in the port history below.
 
 ## Step 6 — commit conventions
 

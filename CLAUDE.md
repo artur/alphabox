@@ -17,15 +17,20 @@ the goal is the best code, not parity (see the `port-from-es40` skill).
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 ```
 
-Three lanes must always compile (see the `build-lanes` skill):
+At least three configurations must always compile (see the `build-lanes`
+skill for the full lane set, JIT_VERIFY/JIT_STATS/x86-64 lanes, and the zsh
+word-splitting trap when configuring):
 
-- `build` — interpreter, SDL3 GUI (default). SDL3 comes from the system
+- an interpreter lane, with SDL3 GUI by default. SDL3 comes from the system
   when available, else built statically from the `third_party/SDL`
   submodule (`git submodule update --init`)
-- `build-jit` — `-DES40_DISABLE_ASMJIT=OFF`; needs asmjit cloned at pin
+- a JIT lane — `-DES40_DISABLE_ASMJIT=OFF`; needs asmjit cloned at pin
   `0bd5787b54b575ed94bf32ac452153b34385c514` into `third_party/asmjit`
   (gitignored plain clone)
-- `build-nosdl` — `-DDISABLE_SDL=yes`; headless/CI
+- a headless lane — `-DDISABLE_SDL=yes`
+
+Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `axpbox --version`
+prints the version, commit and compiled-in features.
 
 Single executable `axpbox` with subcommands: `axpbox run` (main_sim in
 AlphaSim.cpp) and `axpbox configure` (main_cfg in es40-cfg.cpp). Sources are
@@ -38,13 +43,20 @@ see `src/config_debug.hpp` for all debug flags.
 ## Test
 
 ```bash
-cd test/rom && bash test.sh        # SRM firmware boot to P00>>> + console-log diff; expect "diff clean"
+cd test/rom && bash test.sh        # Linux: SRM firmware boot to P00>>> + console-log diff; expect "diff clean"
 ```
 
-Pitfalls: `test.sh` deletes the tracked ROM files at the end — restore with
+On macOS `test.sh` can never pass (BSD sed rejects `\x00`); use the per-lane
+runner in the `srm-boot-test` skill, which also lists the lanes to run and
+the SRM probes (SMP init, memory layout, exit paths). Pitfalls: `test.sh`
+deletes the tracked ROM files at the end — restore with
 `git checkout -- test/rom/` before committing. `test/rom/axp_correct.log`
-contains NUL bytes (grep needs `-a`; edit binary-safe). Kill stray emulators
-with `pkill -x axpbox` only (never `pkill -f`).
+contains NUL bytes (grep needs `-a`; edit binary-safe).
+
+Never `pkill`/`killall axpbox`: other sessions on the same host may be
+running long guest installs. Stop only the emulator PID you started (SIGTERM
+exits gracefully once the main loop runs, saving flash and DPR), and check
+memory pressure before starting large guests.
 
 Deeper verification (each has a skill with the full recipe): `boot-openvms`
 (full guest boot from `../run-axpbox` media — always copy disk images before
@@ -54,8 +66,11 @@ For headless driving of the emulator (fb dumps, key/mouse injection,
 `SDL_VIDEO_DRIVER=offscreen`), the `AXPBOX_*` env hooks are documented in
 README "Headless testing".
 
-Formatting: `clang-format-14 -i --style=file <changed files>` (repo LLVM
-style; the binary on this host is `clang-format-14`, not `clang-format`).
+Formatting: repo LLVM style via `.clang-format`; format only changed lines
+with `git clang-format --binary <clang-format> --diff HEAD -- src`.
+`clang-format-14` matches the existing code exactly; a newer clang-format
+(e.g. Homebrew LLVM on macOS) differs in a few spots — keep the existing
+form where they disagree.
 
 ## Architecture
 

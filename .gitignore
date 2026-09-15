@@ -1,6 +1,8 @@
 cmake-build-debug/
 cmake-build-release/
 build**/
+# ...but not the build-lanes skill, which the pattern above also matches
+!.claude/skills/build-lanes/
 .idea/
 .vs/
 CMakeSettings.json
