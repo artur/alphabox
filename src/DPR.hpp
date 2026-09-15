@@ -34,6 +34,8 @@
 #define INCLUDED_DPR_H
 
 #include "SystemComponent.hpp"
+#include <atomic>
+#include <ctime>
 
 /**
  * \brief Emulated dual-port RAM and management controller.
@@ -43,16 +45,23 @@ public:
   CDPR(CConfigurator *cfg, class CSystem *c);
   virtual ~CDPR();
   virtual void init();
+  virtual void check_state();
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
   void SaveStateF();
   void RestoreStateF();
-  void SaveStateF(char *fn);
+  void SaveStateF(char *fn, bool verbose = true);
   void RestoreStateF(char *fn);
+  void FlushIfDirty();
 
 protected:
+  // Guest writes since the last save to the DPR file (set on CPU threads,
+  // flushed from the main thread).
+  std::atomic<bool> dirty{false};
+  std::atomic<time_t> last_dirty{0};
+
   /// The state structure contains all elements that need to be saved to the
   /// statefile.
   struct SDPR_state {

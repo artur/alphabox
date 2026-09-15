@@ -2438,6 +2438,8 @@ bool CSystem::ProcessPendingReset() {
   printf("\n%%SYS-I-RESET: System reset requested by firmware.\n");
   if (theSROM)
     theSROM->FlushIfDirty();
+  if (theDPR)
+    theDPR->FlushIfDirty();
 
   ResetInProgressGuard rip(this);
   stop_threads();

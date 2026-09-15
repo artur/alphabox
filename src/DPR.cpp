@@ -353,7 +353,28 @@ void CDPR::init() {
 /**
  * Destructor.
  **/
-CDPR::~CDPR() {}
+CDPR::~CDPR() { FlushIfDirty(); }
+
+/**
+ * Save the DPR to its file if the guest changed it since the last save. The
+ * flag is cleared first, so a write that races with the save is flushed next
+ * time.
+ **/
+void CDPR::FlushIfDirty() {
+  if (!dirty.exchange(false))
+    return;
+  SaveStateF(myCfg->get_text_value("rom.dpr", "dpr.rom"), false);
+}
+
+/**
+ * Flush the DPR once guest writes have been quiet for a couple of seconds, so
+ * console state survives a run that ends without a graceful exit.
+ **/
+void CDPR::check_state() {
+  const time_t QUIESCE_SECS = 2;
+  if (dirty.load() && time(nullptr) - last_dirty.load() >= QUIESCE_SECS)
+    FlushIfDirty();
+}
 u64 CDPR::ReadMem(int index, u64 address, int dsize) {
   u64 data = 0;
   int a = (int)(address >> 6);
@@ -385,6 +406,8 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
   // EEPROM 02:        update baud rate 03:        write to OCP F0: update RMC
   // flash
   state.ram[a] = (char)data;
+  last_dirty.store(time(nullptr));
+  dirty.store(true);
   switch (a) {
   case 0xff:
 
@@ -596,13 +619,14 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
 /**
  * Save state to a DPR rom file.
  **/
-void CDPR::SaveStateF(char *fn) {
+void CDPR::SaveStateF(char *fn, bool verbose) {
   FILE *ff;
   ff = fopen(fn, "wb");
   if (ff) {
     SaveState(ff);
     fclose(ff);
-    printf("%%DPR-I-SAVEST: DPR state saved to %s\n", fn);
+    if (verbose)
+      printf("%%DPR-I-SAVEST: DPR state saved to %s\n", fn);
   } else {
     printf("%%DPR-F-NOSAVE: DPR could not be saved to %s\n", fn);
   }
@@ -622,9 +646,16 @@ void CDPR::RestoreStateF(char *fn) {
   FILE *ff;
   ff = fopen(fn, "rb");
   if (ff) {
-    RestoreState(ff);
+    const int rc = RestoreState(ff);
     fclose(ff);
-    printf("%%DPR-I-RESTST: DPR state restored from %s\n", fn);
+    if (rc) {
+      // Don't keep the part of a truncated or foreign file read so far.
+      memset(&state, 0, sizeof(state));
+      printf("%%DPR-W-BADREST: %s is not a valid DPR file; starting from "
+             "defaults\n",
+             fn);
+    } else
+      printf("%%DPR-I-RESTST: DPR state restored from %s\n", fn);
   } else {
     printf("%%DPR-F-NOREST: DPR could not be restored from %s\n", fn);
   }
@@ -643,7 +674,6 @@ int CDPR::SaveState(FILE *f) {
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
   fwrite(&dpr_magic2, sizeof(u32), 1, f);
-  printf("dpr: %ld bytes saved.\n", ss);
   return 0;
 }
 
@@ -667,7 +697,7 @@ int CDPR::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&ss, sizeof(long), 1, f);
+  r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", "dpr");
     return -1;
@@ -678,7 +708,7 @@ int CDPR::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&state, sizeof(state), 1, f);
+  r = fread(&state, sizeof(state), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", "dpr");
     return -1;
