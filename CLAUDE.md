@@ -4,10 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AXPbox emulates an HP/DEC AlphaServer ES40 (Alpha EV68 CPU + Tsunami/Typhoon
 chipset) well enough to boot OpenVMS, Tru64, NetBSD, and Windows NT/2000.
-It is a modernized fork of the es40 emulator and tracks the upstream
-[ES40-Emu/es40](https://github.com/ES40-Emu/es40) revival, whose changes are
-periodically ported in (see the `port-from-es40` skill; local upstream clone
-at `../es40`).
+It is a modernized fork of the es40 emulator, evolving as its own project
+(fork remote `origin` = github.com/artur/axpbox, `upstream` =
+lenticularis39/axpbox). The [ES40-Emu/es40](https://github.com/ES40-Emu/es40)
+revival is a source of candidate fixes, not a source of truth: each upstream
+change is reviewed on its merits and adopted, adapted, improved or rejected --
+the goal is the best code, not parity (see the `port-from-es40` skill).
 
 ## Build
 

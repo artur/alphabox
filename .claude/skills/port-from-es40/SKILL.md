@@ -1,17 +1,21 @@
 ---
 name: port-from-es40
-description: Port upstream ES40-Emu commits into axpbox. Use whenever the user asks to bring in, sync, or port changes from the es40 repo (github ES40-Emu/es40, local clone to /tmp/es40). Covers delta computation, wholesale-replace vs manual patching, the axpbox invariants (std:: threading, .hpp, clang-format, rebrand), and the verification gates.
+description: Evaluate upstream ES40-Emu changes and selectively adopt the good ones into axpbox. Use whenever the user asks to compare with, bring in, or port changes from the es40 repo (github ES40-Emu/es40). Covers triage and critical review, delta computation, manual adoption vs reviewed whole-file takes, the axpbox invariants (std:: threading, .hpp, clang-format, rebrand), and the verification gates.
 ---
 
 
-# Porting upstream ES40-Emu changes into axpbox
+# Evaluating and adopting ES40-Emu changes in axpbox
 
-axpbox (this repo) tracks the upstream ES40-Emu emulator. Upstream
-lives in a sibling repo https://github.com/ES40-Emu/es40 (git clone that locally to /tmp/es40/). Ported ranges
-so far: everything up to upstream `7d94c9e` (2026-07-05), then
-`7d94c9e..7140555` = v0.75.1 (2026-07-09). When asked to port "new
-upstream changes", the base of the new range is the tip of the last
-ported range — check this file's history section (bottom) and
+axpbox (this repo) is its own project; the ES40-Emu emulator
+(https://github.com/ES40-Emu/es40, clone it locally, e.g. to /tmp/es40/)
+is a source of candidate fixes. **Neither upstream nor axpbox is the source
+of truth -- the goal is the best code, not parity.** For every upstream
+change: review it critically against axpbox's code (and the hardware
+datasheets), then adopt it, adapt it, improve on both, or reject it, and say
+which (and why) in the commit message. Never take a change just because
+upstream made it; skip version bumps and churn. When asked to look at "new
+upstream changes", the base of the range is the tip of the last reviewed
+range -- check this file's history section (bottom) and
 `git -C /tmp/es40 log --oneline` to find it.
 
 **NEVER `git apply` / `git cherry-pick` upstream patches.** They never
@@ -30,8 +34,14 @@ git -C $E diff --stat $BASE..HEAD      # list files touched
 ```
 
 Group the commits into themes (JIT, timing, disk, net, config, GUI,
-build, docs). Plan roughly one axpbox commit per theme. Every commit
-must build in all lanes and pass the SRM test.
+build, docs) and triage each: what it fixes, whether axpbox already has it
+or an equivalent, value, conflict risk with axpbox-only work, effort, and a
+verdict (adopt / adapt / improve / reject / already-have). Verify the
+claimed bugs in axpbox's own source before acting. For large rewrites, do a
+critical code review (correctness vs hardware, threading, savestates, debug
+noise, dead code) before deciding what to take. Plan roughly one axpbox
+commit per theme. Every commit must build in all lanes and pass the SRM
+test.
 
 Files to ALWAYS skip (axpbox does not have them):
 `src/Visual Studio/*`, `configure.ac`, `config_vms.h`,
@@ -82,8 +92,10 @@ Pick the strategy:
 - **Manual edit (M)** — when (a) is small (< ~100 changed lines).
   Apply upstream's hunks by hand with the Edit tool onto the current
   axpbox file, translating style (see Step 3).
-- **Wholesale replace (W)** — when (a) is large (hundreds+ of lines,
-  many commits of churn) AND (b) is small/enumerable. Recipe:
+- **Reviewed whole-file take (W)** — only when a critical review found
+  upstream's version better overall, (a) is large (hundreds+ of lines, many
+  commits of churn) AND (b) is small/enumerable. Trim what the review
+  rejected (unused layers, debug noise) and fix what it found. Recipe:
   1. `git -C $E show HEAD:src/F > src/F` (into axpbox).
   2. `sed`-rename every `#include "X.h"` to `"X.hpp"`. Verify none
      remain: `grep -n '\.h"' src/F | grep -v '\.hpp"'`.
@@ -285,3 +297,22 @@ leave both alone). Trailer:
   AXPBOX_AUTOMOUSE, AXPBOX_MOUSE_DEBUG + aux-cmd trace in
   Keyboard.cpp), the focus-bounce re-grab in sdl.cpp, README
   "Headless testing" + "Mouse on WSLg" sections.
+- `9f7554d..2aa5e11` (v0.75.4→v0.85, 254 commits) -- reviewed on merit
+  (2026-09-15), on branch arm64-jit (fork artur/axpbox), in phases:
+  1 latent CPU/JIT bugs (SQRT classify, compile snapshot, irq_h re-kick,
+  RestoreState flush, unknown IPR read-zero, interpreter run loop, FLTV
+  current_pc, x64 underflow bails); 2 timing (RPCC per-read sync + floor,
+  PAL reset-vector icache flush, JIT-batched ROM decompress, per-tick
+  instruction pacing -- shipped OFF by default, timer.max_instr_per_tick);
+  3 chipset (merged DMA core without upstream's unused service layer, FDC
+  based on upstream with extra fixes, ALi PIC cascade / wall-clock RTC PF /
+  8254 read-back with a live count, keyboard queuing with upstream's
+  output-buffer purge rewritten, S3 LFB config widths, PMU datasheet
+  values); 4 storage (DiskRam fixes; Sym53C810/895 race fixes adapted;
+  removable media redesigned rather than taking upstream's mailbox).
+  Not taken: upstream's own AArch64 JIT (ideas only), version bumps,
+  autotools/Visual Studio/licence churn, the x64 engine split.
+- macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
+  rejects `\x00`) and leaks its emulator on timeout; use
+  `PORT=<port> lab/run_srm.sh <binary> <label>` (lab/ is git-excluded)
+  per lane instead.
