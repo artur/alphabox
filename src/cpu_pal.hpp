@@ -491,27 +491,10 @@
   case 2: /* longword physical conditional */                                  \
     phys_address = state.r[REG_2] + DISP_12;                                   \
     {                                                                          \
-      u64 _stc_exp = 0;                                                        \
-      bool _stc_same_address = false;                                          \
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
-      if (cSystem->cpu_take_lock(state.iProcNum, phys_address, &_stc_exp,      \
-                                 &_stc_same_address)) {                        \
-        if (phys_address < dram_size) {                                        \
-          if (_stc_same_address)                                               \
-            state.r[REG_1] =                                                   \
-                dram_cas(dram_ptr, phys_address, _stc_exp, state.r[REG_1], 32) \
-                    ? 1                                                        \
-                    : 0;                                                       \
-          else {                                                               \
-            dram_write(dram_ptr, phys_address, 32, state.r[REG_1]);            \
-            state.r[REG_1] = 1;                                                \
-          }                                                                    \
-        } else {                                                               \
-          cSystem->WriteMem(phys_address, 32, state.r[REG_1], this);           \
-          state.r[REG_1] = 1;                                                  \
-        }                                                                      \
-      } else                                                                   \
-        state.r[REG_1] = 0;                                                    \
+      state.r[REG_1] =                                                         \
+          cSystem->cpu_stx_c(state.iProcNum, phys_address, 32, state.r[REG_1], \
+                             dram_ptr, dram_size, this);                       \
     }                                                                          \
     break;                                                                     \
                                                                                \
@@ -542,27 +525,10 @@
   case 3: /* quadword physical conditional */                                  \
     phys_address = state.r[REG_2] + DISP_12;                                   \
     {                                                                          \
-      u64 _stc_exp = 0;                                                        \
-      bool _stc_same_address = false;                                          \
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
-      if (cSystem->cpu_take_lock(state.iProcNum, phys_address, &_stc_exp,      \
-                                 &_stc_same_address)) {                        \
-        if (phys_address < dram_size) {                                        \
-          if (_stc_same_address)                                               \
-            state.r[REG_1] =                                                   \
-                dram_cas(dram_ptr, phys_address, _stc_exp, state.r[REG_1], 64) \
-                    ? 1                                                        \
-                    : 0;                                                       \
-          else {                                                               \
-            dram_write(dram_ptr, phys_address, 64, state.r[REG_1]);            \
-            state.r[REG_1] = 1;                                                \
-          }                                                                    \
-        } else {                                                               \
-          cSystem->WriteMem(phys_address, 64, state.r[REG_1], this);           \
-          state.r[REG_1] = 1;                                                  \
-        }                                                                      \
-      } else                                                                   \
-        state.r[REG_1] = 0;                                                    \
+      state.r[REG_1] =                                                         \
+          cSystem->cpu_stx_c(state.iProcNum, phys_address, 64, state.r[REG_1], \
+                             dram_ptr, dram_size, this);                       \
     }                                                                          \
     break;                                                                     \
                                                                                \

@@ -251,6 +251,9 @@ public:
   // LDx_L: record locked range + loaded value
   void cpu_lock(int cpuid, u64 address, u64 value);
   bool cpu_take_lock(int cpuid, u64 address, u64 *expected, bool *same_address);
+  // STx_C: consume this CPU's lock and do the conditional store (1 = success).
+  u64 cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value, char *dram,
+                u64 dram_sz, CSystemComponent *source);
   // exception/interrupt: drop the lock
   void cpu_clear_lock(int cpuid);
 
@@ -289,6 +292,14 @@ private:
   std::atomic<u32> m_tick_seq{0}; // interval-tick sequence
 
   int iNumCPUs;
+  // ABA guard: a per-cache-line STx_C sequence number. The value compare in
+  // cpu_stx_c cannot see another CPU writing a different value and putting the
+  // old one back between our LDx_L and STx_C; a changed sequence can.
+  static const u32 kLLBuckets = 65536; // 64-byte line hash, power of two
+  std::atomic<u32> m_ll_seq[kLLBuckets];
+  std::atomic<u8> m_ll_lock[kLLBuckets]; // seq check + CAS + bump, per bucket
+  u32 m_ll_seq_snap[4];                  // per-CPU sequence at LDx_L time
+
   u64 cpu_lock_value[4]; // per-CPU LDx_L value, for same-address STx_C
 
   // writer bit + active LL/SC operation count

@@ -591,11 +591,9 @@ void CPCIDevice::do_pci_read(u32 address, void *dest, size_t element_size,
   u64 phys_addr = cSystem->PCI_Phys(myPCIBus, address);
 
   // if there is only one element to read, this is a simple ReadMem operation.
+  // A DMA read changes no memory, so it neither takes the DMA writer gate nor
+  // invalidates CPU load-locked reservations (see do_pci_write).
   if (element_count == 1) {
-    const bool writes_ram =
-        pci_dma_targets_ram(cSystem, phys_addr, element_size);
-    CSystem::CPCIDMAWriteGuard dma_guard(cSystem, writes_ram);
-    dma_guard.invalidate(phys_addr, element_size);
     switch (element_size) {
     case 1:
       *(u8 *)dest = (u8)cSystem->ReadMem(phys_addr, 8, this);

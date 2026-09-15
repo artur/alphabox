@@ -451,7 +451,51 @@ void CSystem::pci_dma_write_leave() {
 void CSystem::cpu_lock(int cpuid, u64 address, u64 value) {
   state.cpu_lock_address[cpuid] = address;
   cpu_lock_value[cpuid] = value;
+  // ABA guard: remember the line's STx_C sequence as of this LDx_L.
+  m_ll_seq_snap[cpuid] =
+      m_ll_seq[(u32)((address >> 6) & (kLLBuckets - 1))].load(
+          std::memory_order_acquire);
   state.cpu_lock_flags |= (1 << cpuid); // atomic fetch_or
+}
+
+/**
+ * STx_C: consume this CPU's lock and perform the conditional store.
+ *
+ * Returns 1 when the store happened. The caller holds the LL/SC reader guard
+ * (CLLSCDRAMGuard), which keeps a DMA write from slipping between the checks
+ * and the store.
+ **/
+u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
+                       char *dram, u64 dram_sz, CSystemComponent *source) {
+  u64 expected = 0;
+  bool same_address = false;
+  if (!cpu_take_lock(cpuid, phys, &expected, &same_address))
+    return 0; // reservation lost -> SC fails
+
+  if (phys >= dram_sz) {
+    WriteMem(phys, size_bits, value, source); // I/O-space conditional store
+    return 1;
+  }
+
+  const u32 b = (u32)((phys >> 6) & (kLLBuckets - 1));
+  for (int spins = 0; m_ll_lock[b].exchange(1, std::memory_order_acquire);
+       spins++)
+    if ((spins & 0x3f) == 0x3f)
+      std::this_thread::yield();
+  u64 ok;
+  if (m_ll_seq[b].load(std::memory_order_relaxed) != m_ll_seq_snap[cpuid])
+    ok = 0; // another STx_C wrote this line since our LDx_L (ABA)
+  else if (same_address)
+    ok = dram_cas(dram, phys, expected, value, size_bits) ? 1 : 0;
+  else {
+    // STx_C to another quadword of the locked line: no value to compare.
+    dram_write(dram, phys, size_bits, value);
+    ok = 1;
+  }
+  if (ok)
+    m_ll_seq[b].fetch_add(1, std::memory_order_relaxed);
+  m_ll_lock[b].store(0, std::memory_order_release);
+  return ok;
 }
 
 bool CSystem::cpu_take_lock(int cpuid, u64 address, u64 *expected,

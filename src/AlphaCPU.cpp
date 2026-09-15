@@ -2404,20 +2404,11 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     dpc.valid = true;
   }
 
-  u64 expected = 0;
-  bool same_address = false;
+  // Shared LL/SC path: consumes the reservation, applies the ABA sequence
+  // guard, then CASes RAM or does the MMIO conditional store.
   CSystem::CLLSCDRAMGuard llsc_guard(cpu->cSystem, phys < cpu->dram_size);
-  if (!cpu->cSystem->cpu_take_lock(cpu->state.iProcNum, phys, &expected,
-                                   &same_address))
-    return 0; // lock lost -> SC fails
-  if (phys < cpu->dram_size) {
-    if (same_address)
-      return dram_cas(cpu->dram_ptr, phys, expected, value, size_bits) ? 1 : 0;
-    dram_write(cpu->dram_ptr, phys, size_bits, value);
-    return 1;
-  }
-  cpu->cSystem->WriteMem(phys, size_bits, value, cpu); // MMIO conditional store
-  return 1;
+  return cpu->cSystem->cpu_stx_c(cpu->state.iProcNum, phys, size_bits, value,
+                                 cpu->dram_ptr, cpu->dram_size, cpu);
 }
 
 /* CALL_PAL OPCDEC trap: a privileged function (< 0x40) attempted in user mode.
