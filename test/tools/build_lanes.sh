@@ -20,7 +20,19 @@ for l in "${lanes[@]}"; do
     failed=1
     continue
   fi
-  if cmake --build "$l" -j"$JOBS" > "$l/build_lanes.log" 2>&1; then
+  # file(GLOB) is evaluated at CONFIGURE time, so a source file added, moved
+  # or deleted since the last configure is invisible to `cmake --build`,
+  # which then fails on the vanished path. CMake re-configures by itself when
+  # CMakeLists.txt changes but cannot see a bare `git mv`, so do it here; it
+  # is a fast no-op when nothing changed, and keeps each lane's cached
+  # options (ES40_DISABLE_ASMJIT, CMAKE_CXX_FLAGS, ...).
+  if ! cmake -S "$R" -B "$l" > "$l/build_lanes.log" 2>&1; then
+    printf '  %-26s CONFIGURE FAILED (see %s/build_lanes.log)\n' "$l" "$l"
+    grep -aE 'CMake Error|error:' "$l/build_lanes.log" | head -5 | sed 's/^/    /'
+    failed=1
+    continue
+  fi
+  if cmake --build "$l" -j"$JOBS" >> "$l/build_lanes.log" 2>&1; then
     printf '  %-26s rc=0\n' "$l"
   else
     printf '  %-26s FAILED (see %s/build_lanes.log)\n' "$l" "$l"
