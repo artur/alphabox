@@ -615,12 +615,30 @@ private:
   uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
   // Interpreted passes before a block compiles (AXPBOX_JIT_COMPILE_AFTER
-  // overrides). 2 rather than 1: compiling after a single pass also compiles
-  // the long tail of blocks that run once or twice, which costs compile time
-  // and evicts hot blocks from the direct-mapped cache. Measured on a
-  // Windows 2000 guest, 2 was ~6% faster on a tight arithmetic loop and ~17%
-  // faster on an I/O-heavy one, with boot time unchanged.
-  uint32_t m_compile_after = 2;
+  // overrides). Measured on a Windows 2000 guest with interleaved boots (one
+  // run per boot, arms alternating), 16 beat 2 on both workloads with no
+  // overlap -- about 2% on a tight arithmetic loop and 27% on an I/O-heavy
+  // one -- and reached the desktop 2s sooner.
+  //
+  // What JIT_STATS says is happening, which is not what one might assume:
+  // compiling eagerly does not fill the code cache, it churns it. At 2 the
+  // cache held 19.8 MB with 12 reclaims and 101810 recompiles (fresh-cause
+  // asn 61703, cold 28467) -- blocks compiled, discarded and compiled again.
+  // At 16 it held 313.8 MB with zero reclaims: blocks that survive to the
+  // threshold are hot enough to stay resident. The extra interpretation this
+  // costs (nothot: 2.08M instructions over 227658 entries) is smaller than
+  // the churn it avoids.
+  //
+  // 16 is better than 2; it is not proven optimal. The curve must turn
+  // somewhere above it, because never compiling is pure interpretation.
+#ifdef JIT_VERIFY
+  // Verify builds want differential coverage rather than speed: at 16 far
+  // fewer blocks ever compile, so far less of the JIT is checked against the
+  // interpreter.
+  uint32_t m_compile_after = 1;
+#else
+  uint32_t m_compile_after = 16;
+#endif
 #ifdef JIT_DISASM
   FILE *m_disasm_fp =
       nullptr; // per-CPU disassembly trace file (jit_disasm_cpuN.txt)
