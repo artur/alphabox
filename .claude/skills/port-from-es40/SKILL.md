@@ -53,18 +53,37 @@ in CMakeLists.txt) — NEVER adopt upstream's version number.
 
 ## Step 1 — file mapping (upstream path → axpbox path)
 
-- `src/X.cpp` → `src/X.cpp` (same name).
-- `src/X.h` → `src/X.hpp` (ALL headers).
+Upstream keeps every source in a flat `src/`; axpbox does not (reorganized
+2026-09-16). Never assume a path — find the axpbox home of a file with
+`git ls-files 'src/**/X.*'` — then:
+
+- `src/X.h` → `X.hpp` (ALL headers, wherever the file now lives).
+- Device models → `src/devices/<area>/`: `isa/` (AliM1543C and its
+  `_ide`/`_usb`/`_pmu` functions, DMA, FloppyController, Keyboard,
+  Serial, MPU401), `pci/` (PCIDevice, DEC21143, ES1370, Sym53C810/895,
+  SCSIBus, SCSIDevice), `storage/` (Disk, DiskController, DiskDevice,
+  DiskFile, DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the
+  MAME shims), `net/` (Ethernet, NetworkBackend/Pcap/Tap).
+- CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). Chipset,
+  config and firmware NVRAM → `src/system/` (System, SystemComponent,
+  Configurator, DPR, Flash, Port80, i2c_spd, TraceEngine). Shared
+  headers → `src/common/` (StdAfx, datatypes, es40_debug, es40_endian,
+  config_debug, banner, telnet, lockstep).
 - `src/es40.cfg` → repo-root `es40.cfg` (plus per-test copies in
   `test/rom/`, `test/vms/`, `test/nt/`, `test/arc/`).
-- `src/es40-cfg.cpp` → `src/es40-cfg.cpp`, but its `main()` is named
-  `main_cfg()` (single `axpbox` binary; `src/Main.cpp` dispatches
-  `axpbox run` → `main_sim`, `axpbox configure` → `main_cfg`).
-- New upstream headers: create as `.hpp`, rename the include guard
-  (`__X_H__` → `__X_HPP__`), give it the axpbox license header (see
-  Step 4), and add nothing to CMake — `file(GLOB ...)` picks up
-  sources automatically (re-run the cmake *configure* step after
-  adding a new `.cpp`).
+- `src/es40-cfg.cpp` → `src/es40-cfg.cpp` — entry points stay at `src/`
+  root — but its `main()` is named `main_cfg()` (single `axpbox` binary;
+  `src/Main.cpp` dispatches `axpbox run` → `main_sim`,
+  `axpbox configure` → `main_cfg`).
+- Includes are unqualified (`#include "System.hpp"`): every source
+  directory is on the include path, so never write `../` paths.
+- New upstream headers: create as `.hpp` in the matching directory,
+  rename the include guard (`__X_H__` → `__X_HPP__`), and give it the
+  axpbox license header (see Step 4). A new `.cpp` in an EXISTING
+  directory is picked up by that directory's glob (re-run the cmake
+  *configure* step); a new DIRECTORY must be added to the glob list AND
+  to `target_include_directories` in CMakeLists.txt, or it is silently
+  ignored.
 
 ## Step 2 — choose a strategy per file
 
@@ -96,7 +115,8 @@ Pick the strategy:
   upstream's version better overall, (a) is large (hundreds+ of lines, many
   commits of churn) AND (b) is small/enumerable. Trim what the review
   rejected (unused layers, debug noise) and fix what it found. Recipe:
-  1. `git -C $E show HEAD:src/F > src/F` (into axpbox).
+  1. `git -C $E show HEAD:src/F > <axpbox path of F>` (see Step 1 — it
+     is not `src/F` any more).
   2. `sed`-rename every `#include "X.h"` to `"X.hpp"`. Verify none
      remain: `grep -n '\.h"' src/F | grep -v '\.hpp"'`.
   3. Re-apply the axpbox delta. Fastest reliable way: save diff (b) to
@@ -163,13 +183,13 @@ Pick the strategy:
      vmspal guard cover the early-boot transient.
    - mouse is always present/captured (no `mouse.enabled`).
 4. **Configurator allow-lists** (`kv_*[]` arrays in
-   src/Configurator.cpp): any NEW config key a ported device reads
+   `src/system/Configurator.cpp`): any NEW config key a ported device reads
    must be added to that device's list, and axpbox-only keys must
    never be lost: `skip_memtest_hack` (kv_ev68cb), `timezone`
    (kv_ali), `rom.decompressed` (kv_tsunami), `address` (kv_serial).
    Audit after porting:
    ```bash
-   grep -rn 'myCfg->get_\(text\|num\|bool\)_value("' src/*.cpp src/gui/*.cpp \
+   grep -rn 'myCfg->get_\(text\|num\|bool\)_value("' src --include='*.cpp' \
      | grep -o 'value("[^"]*"' | sort -u
    ```
    then start the emulator once with every shipped config and require
@@ -179,7 +199,7 @@ Pick the strategy:
 
 All HOST-side user-visible text says **AXPbox**, never ES40:
 window titles (sdl/x11/win32), the startup banner
-(`src/banner.hpp` — `print_axpbox_banner`, shows axpbox's own
+(`src/common/banner.hpp` — `print_axpbox_banner`, shows axpbox's own
 `VERSION`, credits authors by era: Camiel Vanderhoeven 2007-2010,
 Tim Stark/fsword7 2018, Tomas Glozar 2020-2023, Remy van Elst
 2020-2026, gdwnldsKSC 2023-2026), configurator wizard text,
@@ -314,7 +334,7 @@ leave both alone). Trailer:
   NOTE: the DEC21143/NetworkBackend area diverges from ES40-Emu since
   the lenticularis TAP/TUN merge (NetworkPcap/NetworkTap/NetworkFilter
   live only in axpbox+lenticularis) — port upstream DEC21143 pcap
-  changes into src/NetworkPcap.cpp instead.
+  changes into src/devices/net/NetworkPcap.cpp instead.
 - Pitfall: piping `bash test.sh | tail` can hang even after the test
   finishes (a lingering child keeps the pipe open) — redirect test.sh
   output to a file instead, then read the file.
@@ -373,3 +393,10 @@ leave both alone). Trailer:
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
   rejects `\x00`) and leaks its emulator on timeout; use
   `PORT=<port> test/tools/srm_run.sh <binary> <label>` per lane instead.
+- Source reorganization (2026-09-16): `src/` was split into `cpu/`,
+  `system/`, `common/` and `devices/{isa,pci,storage,video,net}/`
+  alongside the existing `base/`, `gui/`, `jit/`. Renames only — the
+  `../X.hpp` includes in gui/jit/base were flattened in a separate
+  commit first so rename detection (and `log --follow`) survives it.
+  Upstream diffs are still against its flat `src/`, so map every path
+  through Step 1 rather than pasting upstream paths.

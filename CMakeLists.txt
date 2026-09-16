@@ -15,15 +15,34 @@ endif()
 # third_party/asmjit; see README)
 option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
 
-# Source files
-file(GLOB srcs src/*.cpp src/base/*.cpp src/gui/*.cpp)
+# Source files. One glob per source directory: a NEW directory must be added
+# both here and to target_include_directories below, or its .cpp files are
+# silently left out of the build.
+file(GLOB srcs
+    src/*.cpp
+    src/cpu/*.cpp
+    src/system/*.cpp
+    src/common/*.cpp
+    src/devices/isa/*.cpp
+    src/devices/pci/*.cpp
+    src/devices/storage/*.cpp
+    src/devices/video/*.cpp
+    src/devices/net/*.cpp
+    src/base/*.cpp
+    src/gui/*.cpp)
 file(GLOB include_sources src/base/*WIN32.cpp src/base/*POSIX.cpp)
 list(REMOVE_ITEM srcs ${include_sources})
 # Cirrus is not ported to the MAME-derived VGA core (disabled upstream too)
-list(REMOVE_ITEM srcs ${CMAKE_SOURCE_DIR}/src/Cirrus.cpp)
+list(REMOVE_ITEM srcs ${CMAKE_SOURCE_DIR}/src/devices/video/Cirrus.cpp)
 
 add_executable(axpbox ${srcs} src/Main.cpp)
-target_include_directories(axpbox PRIVATE src src/base src/gui ${CMAKE_BINARY_DIR}/src)
+# Headers are included unqualified ("System.hpp"), so every source directory
+# is on the include path and a moved file needs no include changes.
+target_include_directories(axpbox PRIVATE
+    src src/cpu src/system src/common
+    src/devices/isa src/devices/pci src/devices/storage
+    src/devices/video src/devices/net
+    src/base src/gui ${CMAKE_BINARY_DIR}/src)
 
 if (NOT ES40_DISABLE_ASMJIT)
     if (NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/asmjit/CMakeLists.txt)

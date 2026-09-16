@@ -33,12 +33,15 @@ Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `axpbox --version`
 prints the version, commit and compiled-in features.
 
 Single executable `axpbox` with subcommands: `axpbox run` (main_sim in
-AlphaSim.cpp) and `axpbox configure` (main_cfg in es40-cfg.cpp). Sources are
-collected by `file(GLOB ...)` — re-run the cmake configure step after adding
-files. C++17. Debug builds of the JIT: add
+`src/AlphaSim.cpp`) and `axpbox configure` (main_cfg in `src/es40-cfg.cpp`).
+Sources are collected by one `file(GLOB ...)` entry per source directory —
+re-run the cmake *configure* step after adding files, and note that a new
+*directory* must be added to that glob list and to
+`target_include_directories` in CMakeLists.txt, or its `.cpp` files are
+silently left out. C++17. Debug builds of the JIT: add
 `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` (differential check of every compiled
 block against the interpreter; expect 0 mismatches) or `-DJIT_STATS`;
-see `src/config_debug.hpp` for all debug flags.
+see `src/common/config_debug.hpp` for all debug flags.
 
 ## Test
 
@@ -79,16 +82,38 @@ form where they disagree.
 
 ## Architecture
 
-Everything hangs off `CSystem` (System.cpp), which owns physical memory and
-the Tsunami chipset model (Cchip/Dchip/Pchip: memory routing, PCI windows,
-interrupts via `cSystem->interrupt()`). Devices derive from
-`CSystemComponent` (base class in SystemComponent.cpp), register memory
-ranges with the system, and implement `ReadMem`/`WriteMem`, optional
+Source layout under `src/`:
+
+| Directory | Contents |
+| --- | --- |
+| `cpu/` | `AlphaCPU*`, the `cpu_*.hpp` opcode headers, vmspal, IEEE/VAX FP |
+| `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
+| `system/` | `System`, `SystemComponent`, `Configurator`, `DPR`, `Flash`, `Port80`, `i2c_spd`, `TraceEngine` |
+| `devices/isa/` | `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
+| `devices/pci/` | `PCIDevice`, `DEC21143`, `ES1370`, `Sym53C810/895`, `SCSIBus`, `SCSIDevice` |
+| `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
+| `devices/video/` | `S3Trio64`, `VGA`, `ibm8514a`, `Cirrus`, MAME-derived shims |
+| `devices/net/` | `Ethernet`, `NetworkBackend`, `NetworkPcap`, `NetworkTap` |
+| `gui/` | `bx_gui` backends; SDL3 (`sdl.cpp`) is the maintained one |
+| `base/` | inherited Poco-style wrappers — do NOT use in new code |
+| `common/` | `StdAfx`, `datatypes`, `es40_debug`, `es40_endian`, `config_debug`, `banner`, `telnet`, `lockstep` |
+| `src/*` | entry points `Main.cpp`, `AlphaSim.cpp`, `es40-cfg.cpp` (+ its `*Question.hpp`), and `config.hpp.in` |
+
+Headers are included unqualified (`#include "System.hpp"`) — every source
+directory is on the include path, so moving a file needs no include changes.
+`AliM1543C_ide` sits in `devices/isa/` with the rest of the ALi chip even
+though it is a PCI function: these are grouped by chip, not strictly by bus.
+
+Everything hangs off `CSystem` (`system/System.cpp`), which owns physical
+memory and the Tsunami chipset model (Cchip/Dchip/Pchip: memory routing, PCI
+windows, interrupts via `cSystem->interrupt()`). Devices derive from
+`CSystemComponent` (base class in `system/SystemComponent.cpp`), register
+memory ranges with the system, and implement `ReadMem`/`WriteMem`, optional
 `init()`/`start_threads()`/`stop_threads()`/`check_state()`, and
 `SaveState`/`RestoreState`. PCI devices derive from `CPCIDevice`
 (config space, BARs); disk controllers from `CDiskController` with `CDisk`
 children (`CDiskFile`/`CDiskDevice`/`CDiskRam`, BIN/CUE support in
-DiskFileBinCue.hpp).
+`devices/storage/DiskFileBinCue.hpp`).
 
 Major devices: `CAliM1543C` (ISA bridge: PIT/RTC-TOY/PIC/DMA + SuperIO) with
 separate `_ide`/`_usb`/`_pmu` PCI functions, `CSerial` (telnet or
@@ -97,14 +122,15 @@ null_attach UARTs), `CKeyboard` (KBC + PS/2 aux mouse, Bochs-derived),
 MAME-derived rendering into the `bx_gui` plugin layer (`src/gui/`, SDL3 is
 the maintained backend), `CFlash`+`CDPR` (firmware NVRAM).
 
-CPU: `CAlphaCPU` (AlphaCPU.cpp) is a per-instruction interpreter
-(`execute()`, opcode implementations in `cpu_*.hpp` headers included into
-it); `AlphaCPU_vmspal.cpp` is a native fast-path reimplementation of OpenVMS
-PALcode entry points; `AlphaCPU_ieeefloat/vaxfloat` implement FP.
-`state` struct = the whole architectural state (savefile format). Guest
+CPU: `CAlphaCPU` (`cpu/AlphaCPU.cpp`) is a per-instruction interpreter
+(`execute()`, opcode implementations in `cpu/cpu_*.hpp` headers included
+into it); `cpu/AlphaCPU_vmspal.cpp` is a native fast-path reimplementation
+of OpenVMS PALcode entry points; `cpu/AlphaCPU_ieeefloat/vaxfloat` implement
+FP. `state` struct = the whole architectural state (savefile format). Guest
 timing is wall-clock based: `state.cc` (RPCC) advances by real elapsed time,
 CPU 0 fires the Cchip interval timer at dispatch-batch boundaries, and the
-8254 PIT/TOY in AliM1543C are wall-clock paced (see AlphaCPU.hpp comments).
+8254 PIT/TOY in AliM1543C are wall-clock paced (see `cpu/AlphaCPU.hpp`
+comments).
 
 JIT (`src/jit/jitengine.cpp`, `ES40_JIT` builds only): translates Alpha
 basic blocks to host code via asmjit -- x86-64 emitter in jitengine.cpp,
@@ -113,11 +139,11 @@ AArch64 emitter in `src/jit/jitemit_a64.hpp` (same bail/chain/frame protocol;
 ops against the interpreter), direct-mapped block cache keyed by
 physical PC, poly-link direct chaining between blocks, register pinning;
 bails to the interpreter for anything hairy. The trace tier (`JIT_TRACES`)
-is deliberately dormant. `jit_run()` in AlphaCPU.cpp is the dispatch loop;
-memory access goes through `jit_read/jit_write` helpers that mirror
-`cpu_memory.hpp` semantics.
+is deliberately dormant. `jit_run()` in `cpu/AlphaCPU.cpp` is the dispatch
+loop; memory access goes through `jit_read/jit_write` helpers that mirror
+`cpu/cpu_memory.hpp` semantics.
 
-Configuration: `CConfigurator` (Configurator.cpp) parses `es40.cfg` into a
+Configuration: `CConfigurator` (`system/Configurator.cpp`) parses `es40.cfg` into a
 tree and instantiates the device graph; each device class has an allow-list
 (`kv_*[]`) of the config values it reads — unknown values warn at startup
 (`%SYS-W-UNKNOWNCFG`), so add new config keys to the matching list. The
@@ -138,7 +164,7 @@ equivalents (hard project rule).
 - icache is hardcoded ON, the mouse is always present/captured, and the
   first interval-timer tick fires immediately — these mirror upstream
   0.75.1 and were deliberate; don't reintroduce the config options.
-- User-facing text says "AXPbox" (banner in `src/banner.hpp` with the
+- User-facing text says "AXPbox" (banner in `src/common/banner.hpp` with the
   author-era credits); guest-visible identifiers deliberately keep their
   ES40 names (`ES40EM00000` disk serial, `ES40RAMDISK`, MAC seed "ES40",
   the `es40.cfg` filename).
