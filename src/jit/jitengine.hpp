@@ -614,8 +614,13 @@ private:
   bool m_cold_used[kColdMax] = {};
   uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
-  uint32_t m_compile_after = 1; // interpreted passes before a block compiles
-                                // (AXPBOX_JIT_COMPILE_AFTER overrides)
+  // Interpreted passes before a block compiles (AXPBOX_JIT_COMPILE_AFTER
+  // overrides). 2 rather than 1: compiling after a single pass also compiles
+  // the long tail of blocks that run once or twice, which costs compile time
+  // and evicts hot blocks from the direct-mapped cache. Measured on a
+  // Windows 2000 guest, 2 was ~6% faster on a tight arithmetic loop and ~17%
+  // faster on an I/O-heavy one, with boot time unchanged.
+  uint32_t m_compile_after = 2;
 #ifdef JIT_DISASM
   FILE *m_disasm_fp =
       nullptr; // per-CPU disassembly trace file (jit_disasm_cpuN.txt)
