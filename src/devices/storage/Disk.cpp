@@ -190,8 +190,26 @@ int CDisk::RestoreState(FILE *f) {
   }
 
   if (m2 != disk_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
+  }
+
+  // The image itself is reattached from the configuration, not from the state
+  // file -- byte_size is recomputed when it is opened -- so a state file saved
+  // against a different or resized image can carry values that do not fit the
+  // one now attached.
+  if (state.block_size == 0) {
+    // Used as a divisor by get_lba_size() and calc_cylinders().
+    printf("%s: restored block size is 0; refusing the state file.\n",
+           devid_string);
+    return -1;
+  }
+
+  if (byte_size > 0 && state.byte_pos > byte_size) {
+    printf("%s: restored position %" PRId64 " is past the end of the %" PRId64
+           "-byte image; rewinding to 0.\n",
+           devid_string, (s64)state.byte_pos, (s64)byte_size);
+    state.byte_pos = 0;
   }
 
   // Older state files stored 1/-1/0 here; anything outside the flag bits is

@@ -2579,40 +2579,69 @@ void CSystem::SaveState(const char *fn) {
   const u64 memints = (U64(1) << iNumMemoryBits) / sizeof(int);
   u32 temp_32;
 
-  f = fopen(fn, "wb");
-  if (f) {
-    temp_32 = 0xa1fae540; // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
-    fwrite(&temp_32, sizeof(u32), 1, f);
-    temp_32 = 0x00020002; // File Format Version 2.2 (2.2: TIG IPCRs)
-    fwrite(&temp_32, sizeof(u32), 1, f);
+  // Write to a temporary file and rename it into place. A save that fails
+  // part-way -- out of space, or the emulator dying during the memory image,
+  // which is by far the largest part -- used to leave a truncated file where
+  // the last good state file had been. Now the previous one survives intact.
+  // The byte format is unchanged, so existing state files still restore.
+  char tmpname[1024];
+  snprintf(tmpname, sizeof(tmpname), "%s.tmp", fn);
 
-    // memory: a non-zero int is written as is; a run of zero ints as one 0
-    // followed by the number of further zero ints (at most 0xffffffff, so
-    // longer runs continue in the next record).
-    for (m = 0; m < memints; m++) {
-      if (mem[m]) {
-        fwrite(&(mem[m]), 1, sizeof(int), f);
-        continue;
-      }
-      j = 0;
-      while (m + 1 < memints && !mem[m + 1] && j != 0xffffffff) {
-        m++;
-        j++;
-      }
-      fwrite(&int0, 1, sizeof(int), f);
-      fwrite(&j, 1, sizeof(int), f);
+  f = fopen(tmpname, "wb");
+  if (!f) {
+    printf("%%SYS-F-SAVESTATE: cannot create %s: %s\n", tmpname,
+           strerror(errno));
+    return;
+  }
+
+  temp_32 = 0xa1fae540; // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
+  fwrite(&temp_32, sizeof(u32), 1, f);
+  temp_32 = 0x00020002; // File Format Version 2.2 (2.2: TIG IPCRs)
+  fwrite(&temp_32, sizeof(u32), 1, f);
+
+  // memory: a non-zero int is written as is; a run of zero ints as one 0
+  // followed by the number of further zero ints (at most 0xffffffff, so
+  // longer runs continue in the next record).
+  for (m = 0; m < memints; m++) {
+    if (mem[m]) {
+      fwrite(&(mem[m]), 1, sizeof(int), f);
+      continue;
     }
+    j = 0;
+    while (m + 1 < memints && !mem[m + 1] && j != 0xffffffff) {
+      m++;
+      j++;
+    }
+    fwrite(&int0, 1, sizeof(int), f);
+    fwrite(&j, 1, sizeof(int), f);
+  }
 
-    fwrite(&state, sizeof(state), 1, f);
+  fwrite(&state, sizeof(state), 1, f);
 
-    // components
-    //
-    //  Components should also save any non-initial memory-registrations and
-    //  re-register upon restore!
-    //
-    for (i = 0; i < iNumComponents; i++)
-      acComponents[i]->SaveState(f);
-    fclose(f);
+  // components
+  //
+  //  Components should also save any non-initial memory-registrations and
+  //  re-register upon restore!
+  //
+  for (i = 0; i < iNumComponents; i++)
+    acComponents[i]->SaveState(f);
+
+  // stdio latches its error flag, so this one check covers every write above,
+  // the components' writes included.
+  const bool write_failed = (ferror(f) != 0);
+  const bool close_failed = (fclose(f) != 0);
+  if (write_failed || close_failed) {
+    printf("%%SYS-F-SAVESTATE: writing %s failed: %s. %s is left unchanged.\n",
+           tmpname, strerror(errno), fn);
+    remove(tmpname);
+    return;
+  }
+
+  if (rename(tmpname, fn) != 0) {
+    printf("%%SYS-F-SAVESTATE: cannot rename %s to %s: %s\n", tmpname, fn,
+           strerror(errno));
+    remove(tmpname);
+    return;
   }
 }
 
