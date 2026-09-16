@@ -359,6 +359,17 @@ leave both alone). Trailer:
   later perf work needs a real guest workload).
   Not taken: upstream's own AArch64 JIT (ideas only), version bumps,
   autotools/Visual Studio/licence churn, the x64 engine split.
+- Post-review fixes (2026-09-16), from the open-issue list rather than a
+  range: upstream `1136df9` (LL/SC ABA guard) adopted as
+  `CSystem::cpu_stx_c`, the single STx_C path for the interpreter, PALcode
+  and JIT, with our DMA reader guard kept around it and a page-crossing
+  STx_C still consuming the reservation. Found while reviewing it: our own
+  port of upstream `1111047` (c3e9c8b) had put the DMA writer gate and
+  reservation clearing on `do_pci_read` as well, where upstream guards only
+  writes -- removed, a DMA read changes no memory. Also fixed on our side:
+  the x86-64 S-float emitter narrowed operands with cvtsd2ss and so hid
+  underflow traps (AXPBOX_JIT_FPTEST 42104 failures -> 0), and expected
+  ATAPI probe results (sense keys 5/6) no longer print warnings.
 - macOS pitfall: `test/rom/test.sh` can never pass on macOS (BSD sed
   rejects `\x00`) and leaks its emulator on timeout; use
   `PORT=<port> test/tools/srm_run.sh <binary> <label>` per lane instead.
