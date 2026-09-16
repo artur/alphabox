@@ -1961,9 +1961,19 @@ int CDEC21143::SaveState(FILE *f) {
   if ((res = CPCIDevice::SaveState(f)))
     return res;
 
+  // state carries two heap pointers (tx/rx cur_buf) that mean nothing
+  // outside this process, so write them as null with the partial frame they
+  // describe dropped. A restore then cannot install a foreign address, and
+  // the file no longer leaks one.
+  SNIC_state saved = state;
+  saved.tx.cur_buf = nullptr;
+  saved.tx.cur_buf_len = 0;
+  saved.rx.cur_buf = nullptr;
+  saved.rx.cur_buf_len = 0;
+
   fwrite(&nic_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
-  fwrite(&state, sizeof(state), 1, f);
+  fwrite(&saved, sizeof(saved), 1, f);
   fwrite(&nic_magic2, sizeof(u32), 1, f);
   printf("%s: %li bytes saved.\n", devid_string, ss);
   return 0;
@@ -1993,7 +2003,7 @@ int CDEC21143::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&ss, sizeof(long), 1, f);
+  r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -2004,11 +2014,23 @@ int CDEC21143::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&state, sizeof(state), 1, f);
+  // Keep this process's own buffers: tx.cur_buf is the lifetime allocation
+  // made in init(), while the pointers in the file belong to whichever
+  // process wrote it (files written before this fix hold a real address).
+  // An in-flight partial frame is dropped rather than restored.
+  unsigned char *tx_buf = state.tx.cur_buf;
+  unsigned char *rx_buf = state.rx.cur_buf;
+
+  r = fread(&state, sizeof(state), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
   }
+
+  state.tx.cur_buf = tx_buf;
+  state.tx.cur_buf_len = 0;
+  state.rx.cur_buf = rx_buf;
+  state.rx.cur_buf_len = 0;
 
   r = fread(&m2, sizeof(u32), 1, f);
   if (r != 1) {
@@ -2017,7 +2039,7 @@ int CDEC21143::RestoreState(FILE *f) {
   }
 
   if (m2 != nic_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
 

@@ -3793,9 +3793,18 @@ int CS3Trio64::SaveState(FILE *f) {
   if ((res = CPCIDevice::SaveState(f)))
     return res;
 
+  // state.memory and state.memsize are vestigial, inherited from the Cirrus
+  // state struct: nothing in this device assigns or reads them, as the real
+  // VRAM is vga.memory (allocated in init, and not part of the savefile).
+  // They are therefore uninitialized -- write them as zero so state files
+  // are deterministic instead of carrying stray heap bytes.
+  SS3_state saved = state;
+  saved.memory = nullptr;
+  saved.memsize = 0;
+
   fwrite(&s3_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
-  fwrite(&state, sizeof(state), 1, f);
+  fwrite(&saved, sizeof(saved), 1, f);
   fwrite(&s3_magic2, sizeof(u32), 1, f);
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
@@ -3825,7 +3834,7 @@ int CS3Trio64::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&ss, sizeof(long), 1, f);
+  r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -3836,11 +3845,16 @@ int CS3Trio64::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&state, sizeof(state), 1, f);
+  r = fread(&state, sizeof(state), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
   }
+
+  // Never let a pointer out of the file reach this process, even though
+  // nothing reads these two today (see SaveState).
+  state.memory = nullptr;
+  state.memsize = 0;
 
   r = fread(&m2, sizeof(u32), 1, f);
   if (r != 1) {
@@ -3849,7 +3863,7 @@ int CS3Trio64::RestoreState(FILE *f) {
   }
 
   if (m2 != s3_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
 
