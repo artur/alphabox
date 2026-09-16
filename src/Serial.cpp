@@ -454,7 +454,11 @@ void CSerial::eval_interrupts() {
 void CSerial::write(const char *s, int dsize) {
   if (disabled || null_attach)
     return; // null_attach: drop TX silently; no socket to send on
-  int val = send(connectSocket, s, dsize, 0);
+  // The result is dropped on purpose: with SIGPIPE ignored (see main_sim) a
+  // telnet client that vanished turns this into EPIPE, and console output
+  // for a peer that is gone has nowhere to go. execute() spots the closed
+  // socket and goes back to waiting for a new connection.
+  (void)send(connectSocket, s, dsize, 0);
 }
 
 void CSerial::write_cstr(const char *s) { write(s, (int)strlen(s)); }

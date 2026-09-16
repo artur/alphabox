@@ -105,6 +105,15 @@ int main_sim(int argc, char *argv[]) {
 
   print_axpbox_banner("AXPbox Alpha Emulator");
 
+#if !defined(_WIN32)
+  // A telnet client that goes away must not take the emulator with it: the
+  // default action for SIGPIPE is to terminate the process, and the serial
+  // console writes to that socket. Ignoring it turns the write into a plain
+  // EPIPE return, and the receive path already notices the closed peer and
+  // goes back to waiting for a new connection.
+  signal(SIGPIPE, SIG_IGN);
+#endif
+
 #ifdef HAS_BACKTRACE
   signal(SIGSEGV, &segv_handler);
   signal(SIGUSR1, &segv_handler);
