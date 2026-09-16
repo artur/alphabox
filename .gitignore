@@ -17,3 +17,6 @@ test/**/*.png
 test/vms/*.log
 test/arc/*.log
 test/arc/*.out
+
+# 86Box ROM set: copyrighted firmware staged locally, never committed
+roms/
