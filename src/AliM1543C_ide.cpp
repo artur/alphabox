@@ -1973,12 +1973,21 @@ void CAliM1543C_ide::execute(int index) {
                 u8 sense_key =
                     SEL_DISK(index) ? SEL_DISK(index)->sense_key() : 0;
                 SEL_REGISTERS(index).error = (u8)(sense_key << 4);
-                printf("%%IDE-W-ATAPI: controller %d device %d packet command",
-                       index, CONTROLLER(index).selected);
-                for (int i = 0; i < 12; i++)
-                  printf(" %02x", SEL_COMMAND(index).packet_command[i]);
-                printf(" returned SCSI status %02x, sense key %x\n",
-                       SEL_COMMAND(index).packet_sense, sense_key);
+                // ILLEGAL REQUEST (5) is how drivers probe optional commands
+                // and mode pages, and UNIT ATTENTION (6) is the expected answer
+                // after a media change: both are normal traffic, so report only
+                // the sense keys that mean something went wrong (or everything
+                // with the IDE trace hook).
+                static const bool ide_trace = getenv("AXPBOX_IDETRACE") != 0;
+                if (ide_trace || (sense_key != 5 && sense_key != 6)) {
+                  printf(
+                      "%%IDE-W-ATAPI: controller %d device %d packet command",
+                      index, CONTROLLER(index).selected);
+                  for (int i = 0; i < 12; i++)
+                    printf(" %02x", SEL_COMMAND(index).packet_command[i]);
+                  printf(" returned SCSI status %02x, sense key %x\n",
+                         SEL_COMMAND(index).packet_sense, sense_key);
+                }
               } else {
                 SEL_REGISTERS(index).error = 0;
               }

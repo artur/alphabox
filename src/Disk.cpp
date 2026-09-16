@@ -1665,10 +1665,13 @@ int CDisk::do_scsi_command() {
         // SPC: an unsupported page in MODE SENSE returns CHECK CONDITION
         // with sense ILLEGAL REQUEST / INVALID FIELD IN CDB. Drivers
         // (Win2K cdrom.sys/atapi.sys among them) probe optional pages
-        // via this exact mechanism — the error path is the contract.
+        // via this exact mechanism — the error path is the contract, so
+        // this is normal traffic, not a warning.
+#if defined(DEBUG_SCSI)
         printf(
             "%s: MODE_SENSE page 0x%02x unsupported -> INVALID FIELD IN CDB\n",
             devid_string, pagecode);
+#endif
         do_scsi_error(SCSI_INVALID_FIELD);
         return 0;
       }
