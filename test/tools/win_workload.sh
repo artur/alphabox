@@ -10,7 +10,9 @@
 #                "cmd /c for /l %i in (1,1,300000) do @rem"
 #   VAR=value    extra environment for the emulator
 # Tunables (environment): SETTLE=<s> after the desktop appears (default 60),
-#   BOOT_TIMEOUT (400), RUN_TIMEOUT (900).
+#   BOOT_TIMEOUT (400), RUN_TIMEOUT (900), REPEATS=<n> runs of the command in
+#   one boot (default 1; compare medians -- this removes boot-to-boot
+#   variance, the dominant noise), BETWEEN=<s> between repeats (default 10).
 #
 # Idle pacing stays on, so the guest's idle CPU sleeps and the timing reflects
 # the command's code. The guest keyboard layout must be US (keys_for.py).
@@ -42,7 +44,8 @@ P=$!
 echo "== $LABEL: pid $P, $(basename "$BIN") on $INST/$CFG: $CMD"
 python3 "$T/win_workload.py" --fb fb --keypipe keys.txt --command "$CMD" --pid $P \
   --settle "${SETTLE:-60}" --boot-timeout "${BOOT_TIMEOUT:-400}" \
-  --run-timeout "${RUN_TIMEOUT:-900}" | sed 's/^/  /'
+  --run-timeout "${RUN_TIMEOUT:-900}" --repeats "${REPEATS:-1}" \
+  --between "${BETWEEN:-10}" | sed 's/^/  /'
 rc=${PIPESTATUS[0]}
 last=$(ls -t fb 2>/dev/null | grep ppm | head -1)
 [ -n "$last" ] && python3 "$T/ppm2png.py" "fb/$last" last.png && echo "  last screen: $D/last.png"
