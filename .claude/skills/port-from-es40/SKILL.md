@@ -58,12 +58,14 @@ Upstream keeps every source in a flat `src/`; axpbox does not (reorganized
 `git ls-files 'src/**/X.*'` — then:
 
 - `src/X.h` → `X.hpp` (ALL headers, wherever the file now lives).
-- Device models → `src/devices/<area>/`: `isa/` (AliM1543C and its
-  `_ide`/`_usb`/`_pmu` functions, DMA, FloppyController, Keyboard,
-  Serial, MPU401), `pci/` (PCIDevice, DEC21143, ES1370, Sym53C810/895,
-  SCSIBus, SCSIDevice), `storage/` (Disk, DiskController, DiskDevice,
-  DiskFile, DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the
-  MAME shims), `net/` (Ethernet, NetworkBackend/Pcap/Tap).
+- Device models → `src/devices/<area>/`, grouped by bus: `pci/`
+  (PCIDevice, all four AliM1543C components — the bridge and its
+  `_ide`/`_usb`/`_pmu` functions are all PCI functions — DEC21143,
+  ES1370, Sym53C810/895, SCSIBus, SCSIDevice), `isa/` (only the legacy
+  devices behind the bridge: DMA, FloppyController, Keyboard, Serial,
+  MPU401), `storage/` (Disk, DiskController, DiskDevice, DiskFile,
+  DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the MAME shims),
+  `net/` (Ethernet, NetworkBackend/Pcap/Tap).
 - CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). Chipset,
   config and firmware NVRAM → `src/system/` (System, SystemComponent,
   Configurator, DPR, Flash, Port80, i2c_spd, TraceEngine). Shared
@@ -80,10 +82,13 @@ Upstream keeps every source in a flat `src/`; axpbox does not (reorganized
 - New upstream headers: create as `.hpp` in the matching directory,
   rename the include guard (`__X_H__` → `__X_HPP__`), and give it the
   axpbox license header (see Step 4). A new `.cpp` in an EXISTING
-  directory is picked up by that directory's glob (re-run the cmake
-  *configure* step); a new DIRECTORY must be added to the glob list AND
-  to `target_include_directories` in CMakeLists.txt, or it is silently
-  ignored.
+  directory is picked up by that directory's glob, but GLOB runs at
+  *configure* time: after adding, MOVING or deleting a source file,
+  re-configure each lane (`cmake -S . -B <lane>` keeps its cached
+  options) — `cmake --build` alone reuses the stale list and fails with
+  `no such file or directory` for the old path. A new DIRECTORY must
+  also be added to the glob list AND to `target_include_directories` in
+  CMakeLists.txt, or it is silently ignored.
 
 ## Step 2 — choose a strategy per file
 

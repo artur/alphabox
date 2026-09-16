@@ -34,11 +34,15 @@ prints the version, commit and compiled-in features.
 
 Single executable `axpbox` with subcommands: `axpbox run` (main_sim in
 `src/AlphaSim.cpp`) and `axpbox configure` (main_cfg in `src/es40-cfg.cpp`).
-Sources are collected by one `file(GLOB ...)` entry per source directory —
-re-run the cmake *configure* step after adding files, and note that a new
-*directory* must be added to that glob list and to
-`target_include_directories` in CMakeLists.txt, or its `.cpp` files are
-silently left out. C++17. Debug builds of the JIT: add
+Sources are collected by one `file(GLOB ...)` entry per source directory.
+GLOB is evaluated at *configure* time, so after adding, **moving** or
+deleting a source file re-run the configure step (`cmake -S . -B <lane>`,
+which keeps that lane's cached options) — `cmake --build` alone reuses the
+stale file list and fails with `no such file or directory` for the old
+path. Editing CMakeLists.txt re-triggers configure on its own; a plain
+`git mv` does not. A new *directory* must also be added to that glob list
+and to `target_include_directories` in CMakeLists.txt, or its `.cpp` files
+are silently left out. C++17. Debug builds of the JIT: add
 `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` (differential check of every compiled
 block against the interpreter; expect 0 mismatches) or `-DJIT_STATS`;
 see `src/common/config_debug.hpp` for all debug flags.
@@ -89,8 +93,8 @@ Source layout under `src/`:
 | `cpu/` | `AlphaCPU*`, the `cpu_*.hpp` opcode headers, vmspal, IEEE/VAX FP |
 | `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
 | `system/` | `System`, `SystemComponent`, `Configurator`, `DPR`, `Flash`, `Port80`, `i2c_spd`, `TraceEngine` |
-| `devices/isa/` | `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
-| `devices/pci/` | `PCIDevice`, `DEC21143`, `ES1370`, `Sym53C810/895`, `SCSIBus`, `SCSIDevice` |
+| `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
+| `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `Sym53C810/895`, `SCSIBus`, `SCSIDevice` |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
 | `devices/video/` | `S3Trio64`, `VGA`, `ibm8514a`, `Cirrus`, MAME-derived shims |
 | `devices/net/` | `Ethernet`, `NetworkBackend`, `NetworkPcap`, `NetworkTap` |
@@ -101,8 +105,10 @@ Source layout under `src/`:
 
 Headers are included unqualified (`#include "System.hpp"`) — every source
 directory is on the include path, so moving a file needs no include changes.
-`AliM1543C_ide` sits in `devices/isa/` with the rest of the ALi chip even
-though it is a PCI function: these are grouped by chip, not strictly by bus.
+Devices are grouped by bus, not by chip: all four `AliM1543C*` components
+are PCI functions (each calls `add_function()`, and the Configurator marks
+every one `IS_PCI`), so they live in `devices/pci/` even though the M1543C
+is the ISA bridge; `devices/isa/` holds only the devices behind it.
 
 Everything hangs off `CSystem` (`system/System.cpp`), which owns physical
 memory and the Tsunami chipset model (Cchip/Dchip/Pchip: memory routing, PCI
