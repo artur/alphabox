@@ -12,7 +12,7 @@
 
 #ifdef ES40_JIT
 
-#include "../config_debug.hpp" // JIT_VERIFY
+#include "config_debug.hpp" // JIT_VERIFY
 #include <cstddef>
 #include <cstdint>
 #include <memory>

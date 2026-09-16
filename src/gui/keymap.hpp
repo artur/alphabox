@@ -36,7 +36,7 @@
  * Contains the definitions for the bx_keymap_c class used for keyboard
  * interfacing with SDL and other device interfaces.
  **/
-#include "../Configurator.hpp"
+#include "Configurator.hpp"
 
 // In case of unknown symbol
 #define BX_KEYMAP_UNKNOWN 0xFFFFFFFF

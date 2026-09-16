@@ -56,14 +56,14 @@
  *      Initial version for ES40 emulator.
  *
  **/
-#include "../StdAfx.hpp"
+#include "StdAfx.hpp"
 
 #if defined(_WIN32)
 #include <process.h>
 
-#include "../Configurator.hpp"
-#include "../Keyboard.hpp"
-#include "../VGA.hpp"
+#include "Configurator.hpp"
+#include "Keyboard.hpp"
+#include "VGA.hpp"
 #include "gui_win32_font.hpp"
 #include "keymap.hpp"
 

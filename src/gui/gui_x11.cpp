@@ -35,12 +35,12 @@
 #define XK_PUBLISHING
 #define XK_TECHNICAL
 
-#include "../StdAfx.hpp"
+#include "StdAfx.hpp"
 
 #if defined(HAVE_X11)
-#include "../Configurator.hpp"
-#include "../Keyboard.hpp"
-#include "../VGA.hpp"
+#include "Configurator.hpp"
+#include "Keyboard.hpp"
+#include "VGA.hpp"
 #include "gui.hpp"
 #include "keymap.hpp"
 

@@ -80,7 +80,7 @@
 // Placeholder
 #define CURRENT_THREAD_NAME "<thread>"
 
-#include "../es40_debug.hpp"
+#include "es40_debug.hpp"
 #include "Exception.hpp"
 #include "Foundation.hpp"
 #include "ScopedLock.hpp"

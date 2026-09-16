@@ -40,13 +40,13 @@
 //#define DEBUG_LOCKS
 //#define NO_LOCK_TIMEOUTS
 
-#include "../StdAfx.hpp"
+#include "StdAfx.hpp"
 
 #include <signal.h>
 
 #include "gui.hpp"
 
-#include "../Keyboard.hpp"
+#include "Keyboard.hpp"
 
 bx_gui_c *bx_gui = NULL;
 

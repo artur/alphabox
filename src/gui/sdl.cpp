@@ -34,20 +34,20 @@
  * Contains the code for the bx_sdl_gui_c class used for interfacing with
  * SDL.
  **/
-#include "../StdAfx.hpp"
+#include "StdAfx.hpp"
 
 #if defined(HAVE_SDL)
-#include "../System.hpp"
-#include "../VGA.hpp"
+#include "System.hpp"
+#include "VGA.hpp"
 #include "gui.hpp"
 #include "keymap.hpp"
 
-//#include "../AliM1543C.hpp"
-#include "../Configurator.hpp"
-#include "../Keyboard.hpp"
+//#include "AliM1543C.hpp"
+#include "Configurator.hpp"
+#include "Keyboard.hpp"
 
-#include "../Disk.hpp"
-#include "../DiskFile.hpp"
+#include "Disk.hpp"
+#include "DiskFile.hpp"
 
 #define _MULTI_THREAD
 

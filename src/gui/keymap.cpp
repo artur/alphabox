@@ -37,8 +37,8 @@
  * interfacing with SDL and other device interfaces.
  **/
 #include "keymap.hpp"
-#include "../StdAfx.hpp"
-#include "../System.hpp"
+#include "StdAfx.hpp"
+#include "System.hpp"
 #include "gui.hpp"
 
 const char *bx_key_symbol[BX_KEY_NBKEYS] = {

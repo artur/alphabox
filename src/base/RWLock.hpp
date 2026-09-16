@@ -69,7 +69,7 @@
 #ifndef Foundation_RWLock_INCLUDED
 #define Foundation_RWLock_INCLUDED
 
-#include "../es40_debug.hpp"
+#include "es40_debug.hpp"
 #include "Exception.hpp"
 #include "Foundation.hpp"
 #include "Mutex.hpp"

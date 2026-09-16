@@ -36,7 +36,7 @@
  * Contains scancodes used to translate host keys to scancodes for the
  * emulated keyboard controller.
  **/
-#include "../StdAfx.hpp"
+#include "StdAfx.hpp"
 
 //#include "bochs.hpp"
 #include "scancodes.hpp"
