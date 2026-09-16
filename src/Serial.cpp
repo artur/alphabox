@@ -157,9 +157,8 @@ void CSerial::init() {
   socklen_t nAddressSize = sizeof(struct sockaddr_in);
 
   listenSocket = (int)socket(AF_INET, SOCK_STREAM, 0);
-  if (listenSocket == INVALID_SOCKET) {
-    printf("Could not open socket to listen on!\n");
-  }
+  if (listenSocket == INVALID_SOCKET)
+    FAILURE_1(Runtime, "Serial: can't create a socket: %s\n", strerror(errno));
 
   Address.sin_addr.s_addr = inet_addr(listenAddress);
   if (Address.sin_addr.s_addr == INADDR_NONE)
@@ -170,8 +169,15 @@ void CSerial::init() {
   int optval = 1;
   setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, (char *)&optval,
              sizeof(optval));
-  bind(listenSocket, (struct sockaddr *)&Address, sizeof(Address));
-  listen(listenSocket, 8);
+  // Without these checks a busy port went unnoticed: listen() on an unbound
+  // socket binds an ephemeral one, so the emulator announced the configured
+  // port and then waited for a connection that could never arrive.
+  if (bind(listenSocket, (struct sockaddr *)&Address, sizeof(Address)))
+    FAILURE_2(Runtime, "Serial: can't bind port %d: %s\n", listenPort,
+              strerror(errno));
+  if (listen(listenSocket, 8))
+    FAILURE_2(Runtime, "Serial: can't listen on port %d: %s\n", listenPort,
+              strerror(errno));
 
   printf("%s: Waiting for connection on port %d.\n", devid_string, listenPort);
 
@@ -576,6 +582,15 @@ void CSerial::serial_menu() {
 #else
     size = read(connectSocket, &buffer, FIFO_SIZE);
 #endif
+    if (size <= 0) {
+      // The peer closed (or errored) while the menu was open: nothing was
+      // read, so buffer[0] is stale -- acting on it could exit the emulator.
+      // Report on our own stdout: there is no reader left on the socket, and
+      // writing to a closed peer is what raises SIGPIPE.
+      printf("%%SRL-I-CONTINUE: serial connection lost, continuing "
+             "emulation.\n");
+      break;
+    }
     switch (buffer[0]) {
     case '0':
       write_cstr("%SRL-I-CONTINUE: continuing emulation.\r\n");

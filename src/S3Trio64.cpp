@@ -1933,8 +1933,14 @@ static inline u8 s3_cursor_ab(const u8 *vram, u32 vram_mask, u32 src_base,
  **/
 void CS3Trio64::run() {
   try {
-    // initialize the GUI (and let it know our tilesize)
-    bx_gui->init(state.x_tilesize, state.y_tilesize);
+    // Initialize the GUI once (and let it know our tilesize). The serial
+    // BREAK menu stops and restarts the device threads around every
+    // interaction, so this runs again on "continue" -- and a second
+    // SDL_Init/window creation is not what the GUI expects.
+    if (!gui_initialized) {
+      bx_gui->init(state.x_tilesize, state.y_tilesize);
+      gui_initialized = true;
+    }
     bool was_paused = false;
     PauseAck.store(false, std::memory_order_release);
     for (;;) {

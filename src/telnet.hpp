@@ -120,7 +120,9 @@ typedef unsigned int socklen_t;
 #define TELOPT_LFLOW 33 /* remote flow control */
 
 #else // defined(_WIN32) || defined(__VMS)
-#define INVALID_SOCKET 1
+// socket() reports failure as -1 on POSIX; 1 is stdout, so the old value made
+// every "socket == INVALID_SOCKET" check useless (and true for a real fd).
+#define INVALID_SOCKET -1
 #endif // defined (_WIN32) || defined(__VMS)
 
 /* inet_aton -- Emulate BSD inet_aton via inet_addr.

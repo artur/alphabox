@@ -396,6 +396,9 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   bool StopThread;
+  /// The GUI is initialized once, not on every thread (re)start: the serial
+  /// BREAK menu stops and restarts the device threads (see CS3Trio64::run).
+  bool gui_initialized = false;
 
   /// The state structure contains all elements that need to be saved to the
   /// statefile.

@@ -182,8 +182,11 @@ int main_sim(int argc, char *argv[]) {
     theSystem->stop_threads();
 
     // save flash and dpr rom only if not terminated with a fatal error
-    theSROM->SaveStateF();
-    theDPR->SaveStateF();
+    // (a failure early in startup can leave either unconstructed)
+    if (theSROM)
+      theSROM->SaveStateF();
+    if (theDPR)
+      theDPR->SaveStateF();
 
 #if defined(PROFILE)
     {
