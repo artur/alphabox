@@ -188,7 +188,7 @@ int CSCSIBus::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&ss, sizeof(long), 1, f);
+  r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -199,7 +199,7 @@ int CSCSIBus::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&state, sizeof(state), 1, f);
+  r = fread(&state, sizeof(state), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -212,7 +212,7 @@ int CSCSIBus::RestoreState(FILE *f) {
   }
 
   if (m2 != scsi_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
 

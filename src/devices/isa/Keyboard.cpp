@@ -1833,7 +1833,7 @@ int CKeyboard::RestoreState(FILE *f) {
   }
 
   if (m2 != kb_magic2) {
-    printf("kbc: MAGIC 1 does not match!\n");
+    printf("kbc: MAGIC 2 does not match!\n");
     return -1;
   }
 

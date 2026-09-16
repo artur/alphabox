@@ -4300,7 +4300,7 @@ int CAlphaCPU::RestoreState(FILE *f) {
   }
 
   if (m2 != cpu_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
 

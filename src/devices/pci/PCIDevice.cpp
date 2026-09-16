@@ -519,7 +519,7 @@ int CPCIDevice::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&ss, sizeof(long), 1, f);
+  r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -530,7 +530,7 @@ int CPCIDevice::RestoreState(FILE *f) {
     return -1;
   }
 
-  fread(&pci_state, sizeof(pci_state), 1, f);
+  r = fread(&pci_state, sizeof(pci_state), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -543,7 +543,7 @@ int CPCIDevice::RestoreState(FILE *f) {
   }
 
   if (m2 != pci_magic2) {
-    printf("%s: PCI MAGIC 1 does not match!\n", devid_string);
+    printf("%s: PCI MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
 

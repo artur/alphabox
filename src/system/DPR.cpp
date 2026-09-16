@@ -715,7 +715,7 @@ int CDPR::RestoreState(FILE *f) {
   }
 
   if (m2 != dpr_magic2) {
-    printf("%s: MAGIC 1 does not match!\n", "dpr");
+    printf("%s: MAGIC 2 does not match!\n", "dpr");
     return -1;
   }
 
