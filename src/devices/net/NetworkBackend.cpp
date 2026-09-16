@@ -30,8 +30,17 @@
 #include "NetworkTap.hpp"
 #endif
 
+#include "NetworkNull.hpp"
+
 CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   char *type = cfg->get_text_value("type");
+
+  // Not connected to anything: the NIC exists and behaves, but transmits go
+  // nowhere and nothing is ever received. Always available, because it needs
+  // no host privileges -- pcap capture wants root and TAP is Linux-only,
+  // and a backend that cannot be created is fatal at device construction.
+  if (type && strcasecmp(type, "null") == 0)
+    return new CNetworkNull();
 
   if (type && strcasecmp(type, "tap") == 0) {
 #if defined(__linux__)
