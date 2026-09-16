@@ -503,6 +503,7 @@ uint64_t CES1370::es1370_read(void *opaque, u64 addr, unsigned size) {
 }
 
 u32 CES1370::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
+  std::lock_guard<std::recursive_mutex> lock(device_lock);
   if (bar != 0)
     return ~0U;
   if (dsize < 32) {
@@ -531,6 +532,7 @@ u32 CES1370::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 
 void CES1370::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                            u32 data) {
+  std::lock_guard<std::recursive_mutex> lock(device_lock);
   if (bar != 0)
     return;
 
@@ -564,93 +566,105 @@ void CES1370::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 void CES1370::es1370_transfer_audio(ES1370State *s, struct chan *d,
                                     int loop_sel, int maxb, bool *irq) {
   uint8_t tmpbuf[4096];
-  size_t to_transfer;
-  uint32_t addr = d->frame_addr;
-  int sc = d->scount & 0xffff;
-  int csc = d->scount >> 16;
-  int csc_bytes = (csc + 1) << d->shift;
-  int cnt = d->frame_cnt >> 16;
-  int size = d->frame_cnt & 0xffff;
-  if (size < cnt) {
-    return;
-  }
-  int left = ((size - cnt + 1) << 2) + d->leftover;
-  int transferred = 0;
-  int index = d - &s->chan[0];
+  const int index = d - &s->chan[0];
+  const int sc = d->scount & 0xffff;
+  int csc_bytes = ((d->scount >> 16) + 1) << d->shift;
+  const bool nonloop = (s->sctl & loop_sel) != 0;
+  int remaining = maxb;
+  bool completed_period = false;
 
-  to_transfer = MIN(maxb, MIN(left, csc_bytes));
-  addr += (cnt << 2) + d->leftover;
+  /*
+   * SDL asks for one refill of `maxb` bytes. Filling only up to the end of
+   * the current sample period left the stream short whenever a refill
+   * spanned a period boundary, so keep going until SDL's request is
+   * satisfied (or the guest buffer / the stream runs out), re-reading the
+   * frame counter each pass because the guest may advance it underneath us.
+   */
+  while (remaining > 0) {
+    int cnt = d->frame_cnt >> 16;
+    const int size = d->frame_cnt & 0xffff;
+    if (size < cnt)
+      break;
 
-  if (index == ADC_CHANNEL) {
-    while (to_transfer > 0) {
-      int acquired, to_copy;
+    /*
+     * Bytes left in the guest's buffer. `leftover` is the partial-dword
+     * offset already included in the address below, so it ADDS to the span
+     * that remains -- upstream subtracts it here, which under-counts by up
+     * to 3 bytes and can end the refill early.
+     */
+    const int left = ((size - cnt + 1) << 2) + (int)d->leftover;
+    if (left <= 0)
+      break;
 
-      to_copy = MIN(to_transfer, sizeof(tmpbuf));
-      // acquired = audio_be_read(s->audio_be, s->adc_voice, tmpbuf, to_copy);
-      acquired = SDL_GetAudioStreamData(s->adc_voice, tmpbuf, to_copy);
-      if (!acquired || acquired == -1) {
-        break;
+    const int target = MIN(remaining, MIN(left, csc_bytes));
+    if (target <= 0)
+      break;
+
+    uint32_t addr = d->frame_addr + (cnt << 2) + d->leftover;
+    int transferred = 0;
+
+    while (transferred < target) {
+      const int to_copy = MIN(target - transferred, (int)sizeof(tmpbuf));
+      int copied;
+
+      if (index == ADC_CHANNEL) {
+        copied = SDL_GetAudioStreamData(s->adc_voice, tmpbuf, to_copy);
+        if (copied <= 0)
+          break;
+        do_pci_write(addr, tmpbuf, 1, copied);
+      } else {
+        do_pci_read(addr, tmpbuf, 1, to_copy);
+        copied =
+            SDL_PutAudioStreamData(s->dac_voice[index], tmpbuf, to_copy)
+                ? to_copy
+                : 0;
+        if (!copied)
+          break;
       }
-      do_pci_write(addr, tmpbuf, 1, acquired);
-
-      to_transfer -= acquired;
-      addr += acquired;
-      transferred += acquired;
-    }
-  } else {
-    SDL_AudioStream *voice = s->dac_voice[index];
-
-    while (to_transfer > 0) {
-      int copied, to_copy;
-
-      to_copy = MIN(to_transfer, sizeof(tmpbuf));
-      // pci_dma_read(&s->dev, addr, tmpbuf, to_copy);
-      do_pci_read(addr, tmpbuf, 1, to_copy);
-      copied = SDL_PutAudioStreamData(voice, tmpbuf, to_copy) ? to_copy : 0;
-      if (!copied) {
-        break;
-      }
-      to_transfer -= copied;
       addr += copied;
       transferred += copied;
     }
-  }
 
-  if (csc_bytes == transferred) {
-    if (*irq) {
-      // trace_es1370_lost_interrupt(index);
+    remaining -= transferred;
+    csc_bytes -= transferred;
+    if (csc_bytes <= 0) {
+      /* A sample period finished: the guest gets an interrupt for it. */
+      completed_period = true;
+      csc_bytes = (sc + 1) << d->shift;
     }
-    *irq = true;
-    d->scount = sc | (sc << 16);
-  } else {
-    *irq = false;
-    d->scount = sc | (((csc_bytes - transferred - 1) >> d->shift) << 16);
-  }
+    d->scount = sc | (((csc_bytes - 1) >> d->shift) << 16);
 
-  cnt += (transferred + d->leftover) >> 2;
-
-  if (s->sctl & loop_sel) {
-    /*
-     * loop_sel tells us which bit in the SCTL register to look at
-     * (either P1_LOOP_SEL, P2_LOOP_SEL or R1_LOOP_SEL). The sense
-     * of these bits is 0 for loop mode (set interrupt and keep recording
-     * when the sample count reaches zero) or 1 for stop mode (set
-     * interrupt and stop recording).
-     */
-    // warn_report("es1370: non looping mode");
-  } else {
-    d->frame_cnt = size;
-
-    if ((uint32_t)cnt <= d->frame_cnt) {
-      d->frame_cnt |= cnt << 16;
+    cnt += (transferred + d->leftover) >> 2;
+    if (!nonloop) {
+      /*
+       * loop_sel picks this channel's bit in SCTL: 0 means loop (interrupt
+       * and keep going at the end of the buffer), 1 means stop.
+       */
+      d->frame_cnt = size;
+      if (cnt <= size)
+        d->frame_cnt |= cnt << 16;
     }
+    d->leftover = (transferred + d->leftover) & 3;
+
+    /* SDL refused more data, the capture queue ran dry, or we must stop. */
+    if (transferred < target || nonloop)
+      break;
   }
 
-  d->leftover = (transferred + d->leftover) & 3;
+  /*
+   * Report the interrupt for this refill only. Upstream latches it true and
+   * never clears it, which leaves a completed period permanently sticky
+   * once es1370_run_channel seeds *irq from the status register.
+   */
+  *irq = completed_period;
 }
 
 void CES1370::es1370_run_channel(ES1370State *s, size_t chan,
                                  int free_or_avail) {
+  /* SDL's audio thread enters here; the guest's CPU threads enter through
+     ReadMem_Bar/WriteMem_Bar. Both touch chan[] and s->status. */
+  std::lock_guard<std::recursive_mutex> lock(device_lock);
+
   uint32_t new_status = s->status;
   int max_bytes;
   bool irq;
@@ -663,7 +677,7 @@ void CES1370::es1370_run_channel(ES1370State *s, size_t chan,
 
   max_bytes = free_or_avail;
   max_bytes &= ~((1 << d->shift) - 1);
-  if (!max_bytes) {
+  if (max_bytes <= 0) { /* SDL can hand us 0 or a negative amount */
     return;
   }
 

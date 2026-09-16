@@ -7,6 +7,7 @@
 #include "SystemComponent.hpp"
 
 #include <SDL3/SDL.h>
+#include <mutex>
 /* Start blatant GPL violation */
 
 #define ES1370_REG_CONTROL 0x00
@@ -133,6 +134,13 @@ public:
   virtual ~CES1370();
 
 private:
+  /// Serializes the device against SDL's audio callback thread, which runs
+  /// es1370_run_channel() concurrently with guest MMIO from the CPU threads:
+  /// both mutate chan[] (frame_cnt/scount/leftover) and s->status, and the
+  /// callback DMAs into guest memory. Recursive because ReadMem_Bar calls
+  /// itself for sub-32-bit accesses and WriteMem_Bar calls both.
+  std::recursive_mutex device_lock;
+
   struct chan {
     uint32_t shift;
     uint32_t leftover;
