@@ -216,8 +216,11 @@ default `"ES40EM00000"`, ramdisk model `"ES40RAMDISK"`, the MAC seed
 references ("AlphaServer ES40" is the emulated machine — keep), state
 file magics, include guards.
 
-License header for files whose axpbox copy already has it, and for
-new files:
+License headers state who wrote the code, so pick by lineage -- never
+stamp the fork-lineage header onto code nobody in that lineage wrote.
+
+For a file PORTED from, or derived from, upstream ES40 / lenticularis
+axpbox, keep the lineage header its axpbox copy already carries:
 
 ```
 /* AXPbox Alpha Emulator
@@ -227,6 +230,19 @@ new files:
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
  * Copyright (C) 2007 by Camiel Vanderhoeven
+ * ... (GPL v2 boilerplate as in existing files)
+ */
+```
+
+For a NEW file written for this fork, containing no upstream code, the
+copyright is this fork's and there is no "Forked from" line. GPL v2 is
+kept, since the file links into a GPL v2 program:
+
+```
+/* AXPbox Alpha Emulator
+ * Copyright (C) <year> Artur Goulão
+ * Website: https://github.com/artur/axpbox
+ *
  * ... (GPL v2 boilerplate as in existing files)
  */
 ```

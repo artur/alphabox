@@ -1,7 +1,9 @@
 /* ES40 emulator.
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
+ * Copyright (C) 2026 Artur Goulão
  *
  * WWW    : http://es40.org
+ *          https://github.com/artur/axpbox
  * E-mail : camiel@camicom.com
  *
  *  This file is based upon Bochs.

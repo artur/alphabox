@@ -20,6 +20,9 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
+ *
+ * Modifications copyright (C) 2026 Artur Goulão
+ * Website: https://github.com/artur/axpbox
  */
 // Straight port to es40 by Cacodemon345.
 #include "StdAfx.hpp"
