@@ -55,6 +55,9 @@
 #include "diag_rpcc.hpp"
 #include "lockstep.hpp"
 #include <cstdlib>
+#include <mutex>
+#include <set>
+#include <utility>
 #include <vector>
 #if defined(_M_X64) || defined(__x86_64__)
 #include <xmmintrin.h> // _mm_setcsr: pin host MXCSR for the JIT SSE FP path
@@ -71,6 +74,29 @@ void CAlphaCPU::release_threads() {
 }
 
 thread_local CAlphaCPU *t_running_cpu = nullptr;
+
+bool CAlphaCPU::s_trace_calls = false;
+
+/**
+ * Report a subroutine call, the first time each call site reaches each
+ * routine (ALPHABOX_TRACE_CALLS).
+ *
+ * Bringing up a console is largely the question "which of its routines ran,
+ * and which did not": a firmware image carries a name for every routine
+ * (docs/platforms/ds10.md shows how to recover them), so this reads as the
+ * console's own call graph. One line per pair keeps a whole boot readable.
+ * Interpreter only -- compiled blocks do not pass through here.
+ **/
+void CAlphaCPU::trace_call(u64 from, u64 to) {
+  static std::mutex lock;
+  static std::set<std::pair<u64, u64>> seen;
+
+  std::lock_guard<std::mutex> guard(lock);
+  if (!seen.insert(std::make_pair(from, to)).second)
+    return;
+  printf("%%CPU-T-CALL: cpu%d %011" PRIx64 " -> %011" PRIx64 "\n", get_cpuid(),
+         from, to);
+}
 
 void CAlphaCPU::run() {
   try {
@@ -137,6 +163,7 @@ void CAlphaCPU::run() {
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
     : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+  s_trace_calls = getenv("ALPHABOX_TRACE_CALLS") != nullptr;
   // The configuration class names the part ("ev68cb").
   m_model = find_cpu_model(cfg->get_myValue());
   if (!m_model)

@@ -109,6 +109,13 @@ public:
   CAlphaCPU(CConfigurator *cfg, CSystem *system);
   virtual ~CAlphaCPU();
   u64 get_r(int i, bool translate);
+
+  /// Whether ALPHABOX_TRACE_CALLS asked for the subroutine-call trace.
+  /// Read once at startup: this sits in the interpreter's hot path.
+  static bool trace_calls_on() { return s_trace_calls; }
+  /// Report a call the first time this site reaches this routine.
+  void trace_call(u64 from, u64 to);
+  static bool s_trace_calls;
   u64 get_f(int i);
   void set_r(int reg, u64 val);
   void set_f(int reg, u64 val);

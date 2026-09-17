@@ -75,13 +75,24 @@
     add_pc(DISP_21 * 4);                                                       \
   }
 
-#define DO_BSR DO_BR
+/* BSR and JSR are the calls: with ALPHABOX_TRACE_CALLS they report the site
+   and the routine entered, which is how a console's own call graph is read
+   when bringing up a machine (docs/platforms.md). */
+#define DO_BSR                                                                 \
+  {                                                                            \
+    state.r[REG_1] = state.pc & ~U64(0x3);                                     \
+    add_pc(DISP_21 * 4);                                                       \
+    if (trace_calls_on())                                                      \
+      trace_call(state.r[REG_1] - 4, state.pc & ~U64(0x3));                    \
+  }
 
 #define DO_JMP                                                                 \
   {                                                                            \
     temp_64 = state.r[REG_2] & ~U64(0x3);                                      \
     state.r[REG_1] = state.pc & ~U64(0x3);                                     \
     set_pc(temp_64 | (state.pc & 3));                                          \
+    if (trace_calls_on() && ((ins >> 14) & 3) == 1)                            \
+      trace_call(state.r[REG_1] - 4, temp_64);                                 \
   }
 
 // JSR, RET and JSR_COROUTINE is really JMP, just with different prediction
