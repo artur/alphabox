@@ -87,16 +87,36 @@ proves nothing.
 
 ## Pitfalls seen so far
 
-- **Console images come in two formats**: an update bundle (the ES40's
-  `cl67srmrom.exe`) and a raw image behind the standard ROM header
-  (`c3c3 5a5a 3c3c a5a5`, 0x38 bytes, load address 0x900000) as on the
-  firmware CD. The board row says which; only the bundle is implemented.
-- **The console polls its own devices.** Console tests passing does not mean
-  interrupt routing is right -- a deliberately broken routing still booted.
-  Use a guest driver (the Windows storage check) to test interrupts.
-- **Slot numbering and interrupt wiring are board facts**, not chipset
-  facts: they live in the board row, and the firmware's own assignment
-  (the interrupt line it writes to each device's configuration space) is
-  the check.
+- **Firmware comes in three forms**, and the board row says which:
+  a console behind the standard ROM header (`c3c3 5a5a 3c3c a5a5`); a
+  console behind a fixed wrapper (the ES40's `cl67srmrom.exe`); and, for
+  most machines on the firmware CD, **an update utility with no header at
+  all**. The last is not a console: run it, let it install the console into
+  the flash, stop the emulator so the flash is saved, then boot again
+  without naming an image -- the flash is searched for a console and it is
+  started. That is how the DS20L came up.
+- **Consoles differ in how they start other processors.** The ES40's starts
+  them itself through the management processor, so ours wait for it; the
+  DS20E expects them to be running already and asserts a halt line
+  (`ALPHABOX_TRACE_MP=1` shows this). Getting it wrong looks exactly like
+  "the console sees one processor". It is a board row property.
+- **Consoles differ in which PCI device numbers they scan.** The DS20E
+  looks at devices 0 to 10 only; devices where the ES40 keeps its own (15,
+  19) are invisible there. A device the console does not list may be a
+  numbering difference, not a fault.
+- **A wrong interrupt map is quiet.** The console polls, so it reaches its
+  prompt and lists a controller with the wiring wrong; the disk behind it
+  is what goes missing. Check interrupts with a guest driver (the Windows
+  storage check) or an operation that waits for one. The interrupt number
+  the console writes into a device's configuration space is the answer key.
+- **One firmware serves several machines.** The DS20/DS20E console holds a
+  table of machine names and codes and picks by a code it reads from the
+  board; ours falls back to the first entry, so it calls itself "AlphaPC
+  264DP". The name a console prints is a machine fact, not a verdict on the
+  emulation.
 - **Processor identity is visible**: the console prints the processor's name
   from the chip identification, so a wrong value shows up at L3.
+- **Say when a value is a guess.** The DS20E packet recorded a flash that
+  turned out to be a diagnostic display; the correction cost nothing
+  because the guess was labelled. An unlabelled guess would have become
+  folklore.

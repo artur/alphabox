@@ -74,6 +74,37 @@ it. That is how the DS20L was brought up
 ([its packet](platforms/ds20l.md) has the exact steps), and it is the way
 in for every machine on the CD that ships only an update file.
 
+## What these consoles have taught us
+
+Facts that cost time to find and apply to the next machine:
+
+- **The console is the specification, and it disagrees with documents.**
+  Every board fact below was settled by watching what the firmware did, not
+  by reading a table: the DS20E's interrupt map was confirmed by the
+  interrupt numbers its console assigned, and a guess about its flash was
+  disproved by disassembling the code that wrote it.
+- **Machines differ in how they start their other processors.** The ES40's
+  console starts them itself through the management processor, so they wait
+  for it; the DS20E has none and expects every processor to be running
+  already, asserting a halt line and waiting for an answer. Getting this
+  wrong looks exactly like "the console only sees one processor".
+- **Machines differ in which PCI device numbers they look at.** The DS20E's
+  console scans devices 0 to 10 and no further, so devices at 15 and 19 --
+  where the ES40 keeps its own -- are invisible on it. A device the console
+  does not list may be a numbering difference, not a broken device.
+- **A wrong interrupt map is quiet.** The console polls its own devices, so
+  it reaches its prompt and lists a controller with the wiring wrong; what
+  fails is the disk behind it. Test interrupts with a guest driver, or with
+  a console operation that waits for one.
+- **One firmware serves many machines.** The DS20/DS20E console carries a
+  table of machine names and codes and picks by a code it reads from the
+  board; without it, it falls back to the first entry and calls itself
+  something else. The name a console prints is a machine fact, not proof
+  that the emulation is right.
+- **Consoles are tolerant.** All three machines run with hardware they
+  cannot find, printing a complaint and continuing. A trace of unclaimed
+  accesses (below) shows what they wanted; most of it does not matter.
+
 ## The work packet
 
 One machine, one file in `docs/platforms/<name>.md`, written from
