@@ -274,8 +274,11 @@ void CSystem::trace_unknown(const char *space, u64 address, int dsize,
   // says which device.
   char from[128] = "";
   if (t_running_cpu)
-    snprintf(from, sizeof(from), " from cpu%d pc=%016" PRIx64,
-             t_running_cpu->get_cpuid(), t_running_cpu->get_pc());
+    // The return address too: firmware reaches hardware through access
+    // helpers, so the instruction is rarely the interesting caller.
+    snprintf(from, sizeof(from), " from cpu%d pc=%016" PRIx64 " ra=%016" PRIx64,
+             t_running_cpu->get_cpuid(), t_running_cpu->get_pc(),
+             t_running_cpu->get_r(26, true));
   else if (source)
     snprintf(from, sizeof(from), " from %s", source->devid_string);
 
@@ -1819,6 +1822,7 @@ u8 CSystem::tig_read(u32 a) {
     return 0xfe;
   default:
     printf("Unknown TIG %08x read attempted.\n", a);
+    trace_unknown("TIG register", a, 8, false, 0, nullptr);
     return 0;
   }
 }
@@ -1877,6 +1881,7 @@ void CSystem::tig_write(u32 a, u8 data) {
     return;
   default:
     printf("Unknown TIG %07x write with %02x attempted.\n", a, data);
+    trace_unknown("TIG register", a, 8, true, data, nullptr);
   }
 }
 

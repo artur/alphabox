@@ -127,6 +127,42 @@ configuration reads any bus scan makes, and byte writes at PCI memory
 at a flash this board carries in PCI memory, where the ES40's sits on the
 TIG bus. The firmware tolerates the writes going nowhere.
 
+**The second processor, investigated (2026-09-17).** Three things were
+ruled out:
+
+- *The I2C bus is untouched.* With `ALPHABOX_TRACE_I2C=1` this console
+  never addresses the chipset's I2C bus at all, so neither the processor
+  data it wants (`iic_cpu0`) nor processor presence arrives that way.
+- *The processor does run.* Letting the second processor run from reset
+  instead of waiting to be started (which is how the ES40's management
+  processor brings it up, and this board has none) gets it executing --
+  `*** CPU1 *** STARTING ***` -- but the console still lists one processor.
+  That experiment was reverted: it changed nothing and had no evidence
+  behind it.
+- *It is not the unmodelled TIG registers.* The console reads TIG
+  `0x38000140` four times and `0x380001c0` twice and writes `0x38000100`;
+  feeding those reads 0xff instead of 0 changes nothing.
+
+So processor discovery happens somewhere else, and finding it is the next
+piece of work.
+
+**How to read this firmware** (the technique, for the other open items).
+The trace names the instruction and the return address of an access nothing
+claims:
+
+```
+%SYS-T-UNKNOWN: read 8 bits at 00038000140 (TIG register) from cpu0 pc=...1b5018 ra=...82da0
+```
+
+Those land in access helpers: `0x1b5014` reads a quadword, `0x1b50ac`
+writes one, and `0x82d60`/`0x82db8` are the TIG wrappers, which build the
+address as the TIG base plus the register index times 0x40 (so index
+0xe00004 is register `0x38000100`). Searching the decompressed image for
+the instruction that loads a given index finds the callers: `0x38000100` is
+written with 1 at `0x7f728` and with 0 at `0x81cfc`. The emulator writes
+the decompressed console out (`rom.decompressed`), the image starts 16
+bytes into that file at address 0, and `lab/alphadis.py` disassembles it.
+
 **Not yet proven:** everything above is the console's own account of itself.
 Without the reference listing from a real DS20E, L3 is not claimed.
 

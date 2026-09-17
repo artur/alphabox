@@ -84,6 +84,12 @@ it:
 %SYS-T-UNKNOWN: read  32 bits at 803fe002800 (PCI configuration) from cpu0 pc=00000000001a1358
 ```
 
+The instruction is rarely the interesting one -- firmware reaches hardware
+through access helpers -- so the return address is reported with it.
+
+`ALPHABOX_TRACE_I2C=1` does the same for the chipset's I2C bus, reporting
+every address the firmware puts on it and whether anything answered.
+
 A firmware scanning empty configuration space produces these normally; the
-trace matters when a machine's firmware wants hardware that is not
-emulated yet (see [platforms.md](platforms.md)).
+traces matter when a machine's firmware wants hardware that is not emulated
+yet (see [platforms.md](platforms.md)).

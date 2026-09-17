@@ -28,6 +28,8 @@
 
 #include "i2c_spd.hpp"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 /* ===== I2CDevice defaults ===== */
 void I2CDevice::on_start() {}
@@ -59,17 +61,38 @@ void I2CBus::recompute_lines() {
   line_sda_ = host_sda_ && !dev_sda_pull;
 }
 
+bool I2CBus::trace_on() {
+  static const bool on = getenv("ALPHABOX_TRACE_I2C") != nullptr;
+  return on;
+}
+
 void I2CBus::notify_start() {
+  trace_bits_ = 0;
+  trace_byte_ = 0;
   for (auto &d : devs_)
     d->on_start();
 }
 void I2CBus::notify_stop() {
+  trace_bits_ = -1;
   for (auto &d : devs_)
     d->on_stop();
 }
 void I2CBus::notify_scl_rise() {
   for (auto &d : devs_)
     d->on_scl_rise(line_sda_);
+
+  if (trace_bits_ < 0 || !trace_on())
+    return;
+  if (trace_bits_ < 8) {
+    trace_byte_ = uint8_t(trace_byte_ << 1 | (line_sda_ ? 1 : 0));
+    trace_bits_++;
+    return;
+  }
+  // The ninth clock: a device that recognises the address holds SDA low.
+  printf("%%SYS-T-I2C: address %02x %s %s\n", trace_byte_ >> 1,
+         (trace_byte_ & 1) ? "read " : "write",
+         line_sda_ ? "-- nobody answered" : "acknowledged");
+  trace_bits_ = -1;
 }
 void I2CBus::notify_scl_fall() {
   for (auto &d : devs_)

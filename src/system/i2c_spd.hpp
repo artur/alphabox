@@ -57,6 +57,12 @@ public:
 
   void attach(const std::shared_ptr<I2CDevice> &dev);
 
+  /// Report every addressing phase on the bus -- which address, which
+  /// direction, and whether anything answered -- when ALPHABOX_TRACE_I2C
+  /// is set in the environment. Firmware looks for the parts a board
+  /// carries by addressing them (docs/platforms.md).
+  static bool trace_on();
+
   // Host drives via MPD (1 = release/pull-up, 0 = pull low).
   void drive_from_host(bool scl_release, bool sda_release);
 
@@ -65,6 +71,10 @@ public:
   bool sda() const;
 
 private:
+  // Address-phase shadow, for the trace only.
+  int trace_bits_ = -1; ///< bits shifted since START, -1 when not addressing
+  uint8_t trace_byte_ = 0;
+
   bool host_scl_; // host driver: 1=released, 0=low
   bool host_sda_;
   bool line_scl_; // actual line level after wired-AND (1=high)
