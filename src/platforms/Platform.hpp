@@ -83,11 +83,11 @@ struct platform_config {
    * Where the board's I2C bus controller answers, or 0 when the board has
    * none that the console reaches this way.
    *
-   * The DS10 has a PCF8584 at PCI 0 memory 0xffff0000 -- its console
-   * initialises it and then waits for the bus to go free before it reads
-   * the machine's serial ROMs (docs/platforms/ds10.md). The ES40 and the
-   * DS20E instead drive their I2C bus from the Cchip's own pins, which the
-   * chipset model already provides.
+   * The DS10 has a PCF8584 at PCI 0 memory 0xffff0000 and the DS20E one at
+   * 0xfff80000 -- each console initialises it and then waits for the bus
+   * to go free before it reads the machine's serial ROMs. The ES40 instead
+   * drives its I2C bus from the Cchip's own pins, which the chipset model
+   * already provides (docs/platforms/ds10.md, ds20e.md).
    */
   u64 i2c_controller;
 

@@ -125,14 +125,18 @@ refinement, not a prerequisite.
 configuration reads any bus scan makes, and byte writes at PCI memory
 `0xfff80000` and `+1`.
 
-Those writes are **a diagnostic display, not flash** -- an earlier guess in
-this packet said flash, and reading the code disproved it. They come from
-PALcode (the addresses are inside PAL space), which builds the target as
-PCI memory `0xfff80000`, writes one byte, and then reads I/O port `0x80`
-to push the write out. The byte at `+0` counts up (0x14, 0x5b, 0x73 in one
-boot) and `+1` takes fixed values (0x20, 0x80, 0xc0, 0xc3): progress codes
-for a board display. Nothing reads them back, so not modelling them costs
-nothing; a board device that swallows them would only quiet the trace.
+Those writes are **this machine's I2C bus controller** -- a PCF8584, the
+same part the DS10 has at `0xffff0000`. This packet guessed twice before
+getting there: first "flash", then "a diagnostic display", the second
+because the writes come from PALcode and nothing read them back. What
+settled it was the DS10 packet, where the console's own code named the
+part: the byte values are its initialisation sequence (0x80 and 0x00 to
+the control register, 0x5b its own address, 0x20, the clock 0x15, then
+0xc0), and PALcode writes them because PALcode initialises the bus.
+
+With the controller modelled, the console stops writing into nothing and
+starts a bus: it addresses parts at 0x27, 0x4f and 0x60 to 0x67, the same
+block of serial ROMs the DS10 reads.
 
 **The second processor: found, and fixed (2026-09-17).** Tracing the
 registers a console uses to bring processors up (`ALPHABOX_TRACE_MP=1`)
@@ -209,19 +213,24 @@ AlphaStation DS20E" (0x796, 0x797, 0x798, 0x7ac). So one firmware serves
 all of them and picks by a code it reads somewhere; ours falls to the
 first entry, which is why it says "AlphaPC 264DP".
 
-Where that code comes from is still open. Ruled out by tracing what the
-console actually reads: the I2C bus (never used), the Dchip (only its
-revision register), the Cchip (its configuration, interrupt and memory
-registers, nothing identity-shaped), the three unmodelled TIG registers
-(different values change nothing) and the console's own environment (it has
-no machine-type variable).
+**Where that code comes from: the I2C bus** (2026-09-18). The earlier
+search ruled out the Dchip, the Cchip, the TIG registers and the console's
+environment, and concluded "the I2C bus is never used" -- which was true
+only because the bus controller was not modelled, so the console's writes
+went nowhere. With the PCF8584 in place and parts answering, the console
+reads a machine code and names itself a DS20E variant ("COMPAQ
+AlphaStation DS20E") instead of falling back to "AlphaPC 264DP".
 
-What is left, and what fits the other symptoms, is the data a processor's
-SROM leaves behind on a real machine: this console prints a garbled "SROM
-Revision", says it could not read `iic_cpu0`, and reports the cache
-disabled where the ES40's console reports 8 MB from the same chipset
-registers. Finding the handoff structure the SROM fills, and filling it,
-is the next piece of work -- and it may settle the machine name too.
+**That name is not yet evidence.** The serial ROMs are erased parts (0xff
+throughout), as on the DS10, because what a real machine records in them
+is unknown; and the two parts at 0x27 and 0x4f are not known to be serial
+ROMs at all -- erased ROMs stand in so the bus answers. Which DS20E
+variant the console names therefore follows from the stand-in data, not
+from anything established. A real machine's I2C contents would settle it.
+
+Still unfixed, and probably from the same source: the garbled "SROM
+Revision", the "file open failed for iic_cpu0", and the cache reported
+disabled.
 
 **What the garbled SROM revision actually is (2026-09-17).** The console
 prints three bytes, `a8 ca 1c`. Dumping guest memory

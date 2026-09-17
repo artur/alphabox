@@ -133,6 +133,27 @@ static void ds10_i2c_devices(I2CBus &bus) {
     bus.attach(std::make_shared<Eeprom24C02>(a, std::vector<uint8_t>()));
 }
 
+/**
+ * The parts the DS20E hangs on its I2C bus.
+ *
+ * Its console addresses the same block of serial ROMs as the DS10's (0x60
+ * to 0x67), and two more parts at 0x27 and 0x4f whose identity is not
+ * known. The ROMs are erased -- every byte 0xff -- for the same reason as
+ * the DS10's: what a real machine records there is not ours to invent.
+ */
+static void ds20e_i2c_devices(I2CBus &bus) {
+  for (uint8_t a = 0x60; a <= 0x67; a++)
+    bus.attach(std::make_shared<Eeprom24C02>(a, std::vector<uint8_t>()));
+  // Two more parts its console addresses, whose identity is NOT known:
+  // erased serial ROMs stand in for them so the bus answers. That is a
+  // modelling choice, not a fact -- with them present the console reads a
+  // machine code and names itself a DS20E variant instead of falling back
+  // to the first entry of its table, but which variant follows from the
+  // erased data (docs/platforms/ds20e.md).
+  bus.attach(std::make_shared<Eeprom24C02>(0x27, std::vector<uint8_t>()));
+  bus.attach(std::make_shared<Eeprom24C02>(0x4f, std::vector<uint8_t>()));
+}
+
 /// DS10 slots: the board wires 9, 11 and 14 to 17, with the ISA bridge at 7.
 static const char *ds10_slot_refusal(int hose, int slot) {
   if (hose != 0)
@@ -161,8 +182,8 @@ static const platform_config platforms[] = {
     // EV67 and EV68AL, so the console will name the processor wrongly
     // until its row exists.
     {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
-     FW_ROM_HEADER, 2, false, 0, nullptr, ds20e_pci_interrupt,
-     ds20e_slot_refusal},
+     FW_ROM_HEADER, 2, false, U64(0x00000800fff80000), ds20e_i2c_devices,
+     ds20e_pci_interrupt, ds20e_slot_refusal},
     // Under construction (docs/platforms/ds10.md): one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E. The
     // I2C controller is at PCI 0 memory 0xffff0000, which is where the
