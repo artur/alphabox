@@ -62,8 +62,15 @@ machine state to `autosave.axp`, or load it back.
 
 ## Networking
 
-The DEC 21143 NIC (`pci0.4 = dec21143`) connects to the host through one of
-three backends, selected with `type`:
+Two NIC families are available, each in any free PCI slot:
+
+- `dec21143`: the DEC 21143 (Tulip, DE500-BA); the console calls it `ewa0`.
+- `de600`: the DE600-AA, an Intel 82559 board, which the console calls
+  `eia0` and shows by name; `i82557`, `i82558` and `i82559` are Intel's
+  own PRO/100 boards with those controllers.
+
+Either connects to the host through one of four backends, selected with
+`type`:
 
 - `type = "pcap"` (default): captures on an existing host interface. Set
   `adapter = "eth0";` (Linux) or the `\Device\NPF_{...}` name
@@ -79,15 +86,18 @@ three backends, selected with `type`:
   - `host_ip = "10.0.0.1/24";`;
   - `bridge = "br0";`;
   - `uplink = "eno1";`.
+- `type = "udp"`: a point-to-point link to another program, one Ethernet
+  frame per UDP datagram (the framing of QEMU's `-netdev dgram`). Set
+  `udp_local = "127.0.0.1:5555";` (where the NIC listens) and
+  `udp_remote = "127.0.0.1:5556";` (where its frames go). The peer can be a
+  second Alphabox, a QEMU guest, or `test/tools/net_peer.py`, which answers
+  ARP, BOOTP and TFTP so the console can network-boot. Needs no privileges.
 - `type = "null"`: the NIC is present but nothing is ever received and
   transmissions are discarded. Needs no privileges; useful for tests.
 
-All backends also take:
-
-- `mac`: default `08-00-2B-E5-40-<nic#>`;
-- `queue`: receive queue depth, default 1024;
-- `crc`;
-- `trace_packets`.
+Every NIC takes `mac` (default `08-00-2B-E5-40-<n>`, `n` counting the NICs
+in the machine). The `dec21143` also takes `queue` (receive queue depth,
+default 1024), `crc` and `trace_packets`.
 
 ## Sound
 

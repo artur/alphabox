@@ -29,7 +29,8 @@ They stop only the emulator processes they started.
 | Tool | Purpose |
 |---|---|
 | `srm_run.sh` | SRM firmware boot to `P00>>>` for one build, with a console-log diff against `test/rom/axp_correct.log` and the JIT_VERIFY mismatch count. Give each build its own `PORT` to run several at once. |
-| `srm_probe.sh` | SRM probes: CPU count, `memory.bits`, SCSI/IDE/floppy drives, console commands, and the SIGTERM, disconnect and halt exit paths. |
+| `srm_probe.sh` | SRM probes: CPU count, `memory.bits`, SCSI/IDE/floppy drives, a NIC (`NIC=<class>`, optionally on a UDP link to `net_peer.py` with `NET_PEER=<nic port>:<peer port>`), console commands, and the SIGTERM, disconnect and halt exit paths. |
+| `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image, so `boot eia0`/`boot ewa0` exercises a full network boot. |
 | `vga_boot.sh` | SRM on the S3 or Cirrus VGA console (`CARD=s3\|cirrus`, `CHIP=gd5430\|gd5434`), window-less; reports the hashes of the frames the screen settles on. The known sets are in the script header. |
 | `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. |
 | `win_workload.sh` | Times a CPU-bound command inside a booted Windows guest (a real-workload benchmark). |

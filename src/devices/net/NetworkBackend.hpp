@@ -46,7 +46,8 @@ struct NetworkFilter {
  * \brief Abstract network backend interface.
  *
  * Separates the emulated NIC (DEC21143) from the host networking method.
- * Implementations: CNetworkPcap (libpcap), CNetworkTap (Linux TAP/TUN).
+ * Implementations: CNetworkPcap (libpcap), CNetworkTap (Linux TAP/TUN),
+ * CNetworkUdp (frames in UDP datagrams), CNetworkNull (not connected).
  */
 class CNetworkBackend {
 public:
@@ -86,7 +87,7 @@ public:
 
 /**
  * Factory: create the appropriate backend based on config.
- * Reads "type" config value: "pcap" (default) or "tap".
+ * Reads "type" config value: "pcap" (default), "tap", "udp" or "null".
  */
 CNetworkBackend *create_network_backend(CConfigurator *cfg);
 

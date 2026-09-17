@@ -6,6 +6,10 @@
 #   CPUS=1..4            number of CPUs (default 1)
 #   MEMBITS=<n>          memory.bits (default: the test machine's 26)
 #   SCSI=sym53c810|825|875|895 add the controller with a 1 GB disk + RAM disk
+#   NIC=dec21143|de600|i82557|i82558|i82559  add the NIC (null backend)
+#   NET_PEER=N:P         with NIC: UDP backend on port N, and net_peer.py on
+#                        port P answering ARP/BOOTP/TFTP (log: peer.log);
+#                        NET_PEER_OPT="..." adds net_peer.py options
 #   IDE_CFG=<file>       drives for the ali_ide block
 #   FLOPPY=<image>|halt  fdc0 with this image; "halt" generates the CALL_PAL
 #                        HALT boot-block floppy (make_halt_floppy.py)
@@ -28,7 +32,7 @@ set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { sed -n '2,31p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,35p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
@@ -47,6 +51,8 @@ cp "$R/test/rom/cl67srmrom.exe" "$D/"
 cfg=(--out "$D/es40.cfg" --port "$PORT" --cpus "${CPUS:-1}")
 [ -n "${MEMBITS:-}" ] && cfg+=(--membits "$MEMBITS")
 [ -n "${SCSI:-}" ] && cfg+=(--scsi "$SCSI")
+[ -n "${NIC:-}" ] && cfg+=(--nic "$NIC")
+[ -n "${NET_PEER:-}" ] && cfg+=(--nic-udp "$NET_PEER")
 [ -n "${IDE_CFG:-}" ] && cfg+=(--ide-cfg "$IDE_CFG")
 [ "${EXIT_ON_HALT:-0}" = 1 ] && cfg+=(--exit-on-halt)
 for o in ${CPU_OPT:-}; do cfg+=(--cpu-opt "$o"); done
@@ -68,6 +74,13 @@ cmds=()
 for c in ${cmds[@]+"${cmds[@]}"}; do [ -n "$c" ] && con+=(--cmd "$c"); done
 
 cd "$D" || exit 2
+PEER=
+if [ -n "${NET_PEER:-}" ]; then
+  # shellcheck disable=SC2086
+  python3 "$T/net_peer.py" --nic "${NET_PEER%%:*}" --listen "${NET_PEER##*:}" \
+    --timeout "$TMO" ${NET_PEER_OPT:-} > peer.log 2>&1 &
+  PEER=$!
+fi
 "$BIN" run > alphabox.out 2>&1 &
 PID=$!
 con+=(--pid "$PID")
@@ -79,9 +92,14 @@ if kill -0 $PID 2>/dev/null; then
 fi
 wait $PID 2>/dev/null
 echo "  emulator exit code: $?"
+[ -n "$PEER" ] && { kill $PEER 2>/dev/null; wait $PEER 2>/dev/null; }
 
 echo "== $LABEL: command output"
 [ -s cmds.txt ] && tr -d '\r' < cmds.txt | grep -av '^[[:space:]]*$' | head -80 | sed 's/^/  /'
+if [ -n "$PEER" ]; then
+  echo "== $LABEL: network peer"
+  grep -E 'RRQ|complete|error|summary' peer.log | head -10 | sed 's/^/  /'
+fi
 echo "== $LABEL: CPUs seen by SRM"
 tr -d '\000\r' < console.log | grep -aE 'CPU [0-9] speed|starting console on CPU' | sort | uniq -c | sed 's/^/  /'
 echo "== $LABEL: emulator messages"

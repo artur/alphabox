@@ -78,8 +78,6 @@ public:
   void update_irq();
 
 private:
-  static int nic_num;
-
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   bool StopThread;

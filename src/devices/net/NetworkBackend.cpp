@@ -31,6 +31,7 @@
 #endif
 
 #include "NetworkNull.hpp"
+#include "NetworkUdp.hpp"
 
 CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   char *type = cfg->get_text_value("type");
@@ -41,6 +42,10 @@ CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   // and a backend that cannot be created is fatal at device construction.
   if (type && strcasecmp(type, "null") == 0)
     return new CNetworkNull();
+
+  // A point-to-point link over UDP to another program; no privileges.
+  if (type && strcasecmp(type, "udp") == 0)
+    return new CNetworkUdp();
 
   if (type && strcasecmp(type, "tap") == 0) {
 #if defined(__linux__)

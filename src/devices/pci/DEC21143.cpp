@@ -38,6 +38,7 @@
 
 #if defined(HAVE_PCAP) || defined(__linux__)
 #include "DEC21143.hpp"
+#include "NicAddress.hpp"
 #include "System.hpp"
 #include <string.h>
 
@@ -375,8 +376,6 @@ u32 dec21143_cfg_mask[64] = {
     0,
     0};
 
-int CDEC21143::nic_num = 0;
-
 /**
  * Constructor.
  **/
@@ -396,61 +395,7 @@ void CDEC21143::init() {
   if (!net_backend->init(devid_string, myCfg))
     FAILURE(Runtime, "Failed to initialize network backend");
 
-  // set default mac = Digital ethernet prefix: 08-00-2B + hexified "ES40" + nic
-  // number
-  state.mac[0] = 0x08;
-  state.mac[1] = 0x00;
-  state.mac[2] = 0x2B;
-  state.mac[3] = 0xE5;
-  state.mac[4] = 0x40;
-  state.mac[5] = nic_num++;
-
-  // set assigned mac
-  char *cfg = myCfg->get_text_value("mac");
-  if (cfg) {
-    const char *mac_chars = "0123456789abcdefABCDEF-.:";
-    const char *hex_chars = "0123456789abcdefABCDEF";
-    const char *hex_scanf = "%hx";
-    bool mac_replaced = false;
-    if ((strlen(cfg) == 17) && (strspn(cfg, mac_chars) == 17)) {
-      char newmac[18];
-      strcpy(newmac, cfg);
-      newmac[2] = newmac[5] = newmac[8] = newmac[11] = newmac[14] = 0;
-      if ((strspn(&newmac[0], hex_chars) == 2) &&
-          (strspn(&newmac[3], hex_chars) == 2) &&
-          (strspn(&newmac[6], hex_chars) == 2) &&
-          (strspn(&newmac[9], hex_chars) == 2) &&
-          (strspn(&newmac[12], hex_chars) == 2) &&
-          (strspn(&newmac[15], hex_chars) == 2)) {
-        short unsigned int num;
-        sscanf(&newmac[0], hex_scanf, &num);
-        state.mac[0] = num & 0xff;
-        sscanf(&newmac[3], hex_scanf, &num);
-        state.mac[1] = num & 0xff;
-        sscanf(&newmac[6], hex_scanf, &num);
-        state.mac[2] = num & 0xff;
-        sscanf(&newmac[9], hex_scanf, &num);
-        state.mac[3] = num & 0xff;
-        sscanf(&newmac[12], hex_scanf, &num);
-        state.mac[4] = num & 0xff;
-        sscanf(&newmac[15], hex_scanf, &num);
-        state.mac[5] = num & 0xff;
-        mac_replaced = true;
-      }
-    }
-
-    if (mac_replaced) {
-      printf("%s: MAC set to %s\n", devid_string, cfg);
-    } else {
-      FAILURE_1(Configuration,
-                "MAC address (%s) should have xx-xx-xx-xx-xx-xx format", cfg);
-    }
-  } else {
-    char mac[18];
-    sprintf(mac, "%02X-%02X-%02X-%02X-%02X-%02X", state.mac[0], state.mac[1],
-            state.mac[2], state.mac[3], state.mac[4], state.mac[5]);
-    printf("%s: MAC defaulted to %s\n", devid_string, mac);
-  }
+  nic_station_address(myCfg, devid_string, state.mac);
 
   rx_queue = new CPacketQueue("rx_queue",
                               (int)myCfg->get_num_value("queue", false, 1024));

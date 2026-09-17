@@ -56,6 +56,7 @@
 #include "DEC21143.hpp"
 #endif
 #include "ES1370.hpp"
+#include "I8255x.hpp"
 #include "MPU401.hpp"
 #include "Sym53C8xx.hpp"
 
@@ -589,9 +590,12 @@ static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_dec21143[] = {
-    "adapter",       "mac",        "queue",   "crc",
-    "trace_packets", "type",       "host_ip", "bridge",
-    "uplink",        "tap_create", 0};
+    "adapter",   "mac",        "queue",  "crc",    "trace_packets",
+    "type",      "host_ip",    "bridge", "uplink", "tap_create",
+    "udp_local", "udp_remote", 0};
+static const char *const kv_i8255x[] = {
+    "adapter", "mac",        "type",      "host_ip",    "bridge",
+    "uplink",  "tap_create", "udp_local", "udp_remote", 0};
 static const char *const kv_disk_file[] = {"file",
                                            "model_number",
                                            "serial_number",
@@ -634,6 +638,10 @@ classinfo classes[] = {
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"dec21143", c_dec21143, IS_PCI | IS_NIC, kv_dec21143},
+    {"de600", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"i82557", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"i82558", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"i82559", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"sym53c810", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c825", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c875", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
@@ -887,6 +895,12 @@ void CConfigurator::initialize() {
         new CDEC21143(this, (CSystem *)pParent->get_device(), pcibus, pcidev);
     break;
 #endif
+
+  case c_i8255x:
+    // The class name ("de600", "i82558") names the board.
+    myDevice = new CI8255x(this, (CSystem *)pParent->get_device(), pcibus,
+                           pcidev, *CI8255x::find_chip(myValue));
+    break;
 
   case c_sym53c8xx:
     /* For disk controllers, myDevice points to the

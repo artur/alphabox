@@ -43,7 +43,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
 | Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT) |
-| Network | DEC 21143 (Tulip) — host access through pcap, TUN/TAP (Linux) or a null back end |
+| Network | DEC 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 |
 | Other | OHCI USB, 2 × 16550 serial ports (telnet or unconnected), keyboard and PS/2 mouse, flash and NVRAM persistence |
 

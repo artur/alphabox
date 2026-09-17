@@ -41,6 +41,9 @@
 #define ETH_MAX_PACKET_RAW 1514
 #define ETH_MAX_PACKET_CRC 1518
 
+/// IEEE 802.3 CRC-32 of `len` bytes, continuing from `crc` (0 to start).
+u32 eth_crc32(u32 crc, const void *vbuf, int len);
+
 struct eth_frame { // ethernet (wire) frame
   u8 src[6];       // source address
   u8 dst[6];       // destination address
