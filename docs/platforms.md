@@ -19,13 +19,24 @@ Three layers, each added in a different way:
 | Chipset | memory and I/O decoding, the PCI hoses and their DMA translation, the interrupt controller, the interval timer, multiprocessor support | a module: Tsunami/Typhoon today, Titan (ES45, DS25) or Pyxis (EV5 workstations) next |
 | Board | the machine around the chipset: which CPUs and how many, memory limits, the PCI slots and how their interrupts are wired, the on-board devices, the console firmware image and how it loads, the machine's own registers (flash, management processor, memory serial-presence data) | mostly a data descriptor plus a few hooks, selected with `platform = "<name>";` in the machine block |
 
-Today all three are implicit: the CPU identity is compile-time constants in
-`cpu/cpu_defs.hpp`, `CSystem` *is* the Tsunami chipset, and the ES40's board
-facts are spread between `PCIDevice.cpp` (interrupt wiring), `Configurator.cpp`
-(reserved slots), `System.cpp` (firmware image and its decompression) and the
-board devices that are always present. Making these three layers explicit is
-the work that has to happen before a second machine is worth starting; it must
-not change what the ES40 does, and the ES40's reference logs prove that.
+### What exists today
+
+- **Processor**: a row per part in `cpu/CpuModel.hpp` and `cpu/CpuModels.cpp`,
+  chosen by the configuration class. Only the EV68CB, whose values are
+  established; the JIT emits them per processor.
+- **Board**: a row per machine in `platforms/Platform.hpp` and
+  `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
+  `es40`). It carries the processor and CPU count, the memory limits, the
+  slot-to-interrupt wiring that the PCI code asks for, the slots that refuse
+  add-in devices, and the firmware image and its format.
+- **Chipset**: still `CSystem` itself. Separating it earns nothing until a
+  machine needs a different one (Titan, for the ES45 and DS25), and it is
+  the riskiest of the three, so it waits for that machine rather than being
+  done on speculation.
+- **The trace**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
+  claimed, with the instruction that made it.
+- **The tools**: `PLATFORM=` selects the machine in `srm_probe.sh`, and the
+  `onboard-platform` skill carries the process.
 
 ## Where the firmware comes from
 
@@ -95,10 +106,10 @@ device or an absent CPU.
 
 ## Order of work
 
-1. **Make the layers explicit** (no behaviour change): CPU model rows, a
-   board descriptor for the ES40, the Tsunami chipset separated from the
-   generic system, the trace, the `PLATFORM=` selector, this template and the
-   skills that go with it.
+1. ~~**Make the layers explicit**~~ (done, no behaviour change): CPU model
+   rows, a board descriptor for the ES40, the trace, the `PLATFORM=`
+   selector, the template and the skill. Separating the chipset is left for
+   the first machine that needs a different one.
 2. **Pilot: DS20E** ([packet](platforms/ds20e.md)). Same chipset and CPU
    family, its own firmware and board: it tests the contract with the least
    new hardware.
