@@ -96,7 +96,7 @@ Source layout under `src/`:
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
 | `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `Sym53C810/895`, `SCSIBus`, `SCSIDevice` |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
-| `devices/video/` | `S3Trio64`, `VGA`, `ibm8514a`, `Cirrus`, MAME-derived shims |
+| `devices/video/` | `VGA` (MAME-derived core), `ibm8514a`, `Cirrus`, MAME-derived shims; one subdirectory per card family (`s3/` = `S3Trio64`) |
 | `devices/net/` | `Ethernet`, `NetworkBackend`, `NetworkPcap`, `NetworkTap` |
 | `gui/` | `bx_gui` backends; SDL3 (`sdl.cpp`) is the maintained one |
 | `base/` | inherited Poco-style wrappers — do NOT use in new code |
