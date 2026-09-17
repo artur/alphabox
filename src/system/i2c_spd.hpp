@@ -115,6 +115,10 @@ private:
   bool rw_;         // 0=write, 1=read
   bool ack_pull_;   // pulls SDA low when we ACK or transmit a '0' bit
   bool addr_match_;
+  /* The acknowledge lives on the ninth clock: the part drives it while SCL
+     is low and holds it until that clock has come and gone, so the state
+     machine may only move on once the ninth rising edge has been seen. */
+  bool ack_seen_;
 
   // Internal helpers
   void enter_addr();

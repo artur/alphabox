@@ -132,8 +132,8 @@ void I2CBus::drive_from_host(bool scl_release, bool sda_release) {
 /* ===== Eeprom24C02 (read-only SPD) ===== */
 Eeprom24C02::Eeprom24C02(uint8_t addr7, const std::vector<uint8_t> &image)
     : addr7_(addr7), mem_(image), st_(IDLE), ack_phase_(NONE), shreg_(0),
-      bitpos_(0), wordptr_(0), rw_(false), ack_pull_(false),
-      addr_match_(false) {
+      bitpos_(0), wordptr_(0), rw_(false), ack_pull_(false), addr_match_(false),
+      ack_seen_(false) {
   if (mem_.size() < 256)
     mem_.resize(256, 0xff);
 }
@@ -147,6 +147,7 @@ void Eeprom24C02::enter_idle() {
   bitpos_ = 0;
   ack_pull_ = false;
   addr_match_ = false;
+  ack_seen_ = false;
 }
 
 void Eeprom24C02::enter_addr() {
@@ -156,6 +157,7 @@ void Eeprom24C02::enter_addr() {
   ack_phase_ = ACK_ADDR;
   ack_pull_ = false;
   addr_match_ = false;
+  ack_seen_ = false;
 }
 
 void Eeprom24C02::enter_word() {
@@ -164,12 +166,14 @@ void Eeprom24C02::enter_word() {
   bitpos_ = 0;
   ack_phase_ = ACK_WORD;
   ack_pull_ = false;
+  ack_seen_ = false;
 }
 
 void Eeprom24C02::enter_xmit() {
   st_ = XMIT;
   bitpos_ = 0;
   ack_phase_ = ACK_DATA;
+  ack_seen_ = false;
   // Prepare first data bit while SCL is low (caller ensures this is called on
   // SCL low path)
   shreg_ = mem_[wordptr_++];
@@ -223,6 +227,7 @@ void Eeprom24C02::on_scl_rise(bool sda_line) {
 
   case RECV_ACK:
     // Host drives ACK/NACK (low/high) on this 9th rising edge.
+    ack_seen_ = true;
     if (ack_phase_ == ACK_DATA) {
       // If NACK, stop transmitting; if ACK, continue reading
       bool host_ack = (sda_line == false);
@@ -249,7 +254,12 @@ void Eeprom24C02::prepare_next_tx_bit() {
 void Eeprom24C02::on_scl_fall(bool /*sda_line*/) {
   switch (st_) {
   case RECV_ACK:
-    // Transition to next state after the ACK bit low-to-high phase.
+    // Transition to next state after the ACK bit low-to-high phase. The
+    // falling edge that ends the eighth clock comes first: the acknowledge
+    // has to stay on the wire until the ninth clock has been taken.
+    if (!ack_seen_)
+      break;
+
     if (!addr_match_) {
       enter_idle();
       break;
