@@ -29,6 +29,10 @@ import sys
 import time
 
 PROMPT = b"P00>>>"
+# A single-processor console prints a bare ">>>" instead. Only at the end of
+# what has arrived, and only on a line of its own: the consoles also write
+# ">>>init" inside sentences telling you what to type.
+PROMPT_ALT = b"\n>>>"
 
 
 def alive(pid):
@@ -91,7 +95,7 @@ def main():
                 sink.write(d)
                 sink.flush()
             buf += d
-            if PROMPT in buf[-64:]:
+            if PROMPT in buf[-64:] or buf[-64:].rstrip().endswith(PROMPT_ALT):
                 return True
         return False
 

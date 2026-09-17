@@ -80,6 +80,21 @@ struct platform_config {
   bool console_starts_secondaries;
 
   /**
+   * Where the board's I2C bus controller answers, or 0 when the board has
+   * none that the console reaches this way.
+   *
+   * The DS10 has a PCF8584 at PCI 0 memory 0xffff0000 -- its console
+   * initialises it and then waits for the bus to go free before it reads
+   * the machine's serial ROMs (docs/platforms/ds10.md). The ES40 and the
+   * DS20E instead drive their I2C bus from the Cchip's own pins, which the
+   * chipset model already provides.
+   */
+  u64 i2c_controller;
+
+  /// The parts the board hangs on that bus, or nullptr when it hangs none.
+  void (*i2c_devices)(class I2CBus &bus);
+
+  /**
    * The interrupt input a device's pin reaches, or -1 when the slot has no
    * interrupt. `hose` and `slot` are the device's place on the machine's
    * own buses (behind a bridge, the outermost bridge's slot), and `intx`

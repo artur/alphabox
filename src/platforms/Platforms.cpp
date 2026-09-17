@@ -28,6 +28,10 @@
 #include "StdAfx.hpp"
 
 #include "Platform.hpp"
+#include "i2c_spd.hpp"
+
+#include <memory>
+#include <vector>
 
 /**
  * ES40 interrupts: the chipset's 64 interrupt inputs are wired to the PCI
@@ -107,6 +111,28 @@ static int ds10_pci_interrupt(int hose, int slot, int intx) {
   return -1; // the ISA bridge and anything the board does not wire
 }
 
+/**
+ * What the DS10 hangs on its I2C bus.
+ *
+ * The console addresses 0x38, 0x39, 0x4f, 0x51 and 0x60 to 0x67, and names
+ * the last eight `iic_rcm_nvram0` to `iic_rcm_nvram7`: the non-volatile
+ * memory of the machine's remote management controller. It reads byte 17 of
+ * the first one to decide which machine of the family it is, and -- because
+ * it does not check whether the file opened -- faults if the part is not
+ * there at all (docs/platforms/ds10.md).
+ *
+ * These are erased parts: every byte 0xff, which is what an unprogrammed
+ * serial ROM reads as. What a real machine's holds we do not know, and it
+ * is not ours to invent: the console's own table treats a code of 6 or more
+ * as no code, so an erased part reads as "nothing recorded" and the console
+ * names itself from the first entry of its table. The other four addresses
+ * are left unanswered, since neither the parts nor their contents are known.
+ */
+static void ds10_i2c_devices(I2CBus &bus) {
+  for (uint8_t a = 0x60; a <= 0x67; a++)
+    bus.attach(std::make_shared<Eeprom24C02>(a, std::vector<uint8_t>()));
+}
+
 /// DS10 slots: the board wires 9, 11 and 14 to 17, with the ISA bridge at 7.
 static const char *ds10_slot_refusal(int hose, int slot) {
   if (hose != 0)
@@ -129,21 +155,26 @@ static const char *ds20l_slot_refusal(int hose, int slot) { return nullptr; }
 
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
-     FW_LFU_BUNDLE, 2, true, es40_pci_interrupt, es40_slot_refusal},
+     FW_LFU_BUNDLE, 2, true, 0, nullptr, es40_pci_interrupt, es40_slot_refusal},
     // Under construction (docs/platforms/ds20e.md). The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
     // until its row exists.
     {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
-     FW_ROM_HEADER, 2, false, ds20e_pci_interrupt, ds20e_slot_refusal},
+     FW_ROM_HEADER, 2, false, 0, nullptr, ds20e_pci_interrupt,
+     ds20e_slot_refusal},
     // Under construction (docs/platforms/ds10.md): one processor, one PCI
-    // bus. The processor row is the EV68CB for now, as on the DS20E.
+    // bus. The processor row is the EV68CB for now, as on the DS20E. The
+    // I2C controller is at PCI 0 memory 0xffff0000, which is where the
+    // console's own iic_read_csr/iic_write_csr address it.
     {"ds10", "AlphaServer DS10", "ev68cb", 1, 26, 31, "DS10SRM.ROM",
-     FW_ROM_HEADER, 1, false, ds10_pci_interrupt, ds10_slot_refusal},
-    // Under construction: its console image comes as an update file, with
-    // no header in front of it.
+     FW_ROM_HEADER, 1, false, U64(0x00000800ffff0000), ds10_i2c_devices,
+     ds10_pci_interrupt, ds10_slot_refusal},
+    // Under construction (docs/platforms/ds20l.md): its console image comes
+    // as an update file, with no header in front of it.
     {"ds20l", "AlphaServer DS20L", "ev68cb", 2, 26, 32, "DS20L_V6_6.EXE",
-     FW_RAW_IMAGE, 2, false, ds20l_pci_interrupt, ds20l_slot_refusal},
+     FW_RAW_IMAGE, 2, false, 0, nullptr, ds20l_pci_interrupt,
+     ds20l_slot_refusal},
 };
 
 const platform_config *find_platform(const char *name) {

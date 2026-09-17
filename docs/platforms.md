@@ -33,8 +33,11 @@ Three layers, each added in a different way:
   machine needs a different one (Titan, for the ES45 and DS25), and it is
   the riskiest of the three, so it waits for that machine rather than being
   done on speculation.
-- **The trace**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
-  claimed, with the instruction that made it.
+- **The traces**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
+  claimed, with the instruction that made it, and `ALPHABOX_TRACE_CALLS=1`
+  reports the firmware's own subroutine calls, each site-to-routine pair
+  once. The second answers "which of its routines ran", which is the
+  question a console that fails silently leaves you with.
 - **The tools**: `PLATFORM=` and `ROM=` select the machine and its firmware
   in `srm_probe.sh`, and the `onboard-platform` skill carries the process.
 
@@ -44,7 +47,7 @@ Three layers, each added in a different way:
 | --- | --- |
 | AlphaServer ES40 | emulated: the machine this project is about |
 | AlphaServer DS20E | under construction: its console runs, finds both processors, drives disks and network-boots ([packet](platforms/ds20e.md)) |
-| AlphaServer DS10 | started: its console loads and runs but stops in its own file layer ([packet](platforms/ds10.md)) |
+| AlphaServer DS10 | under construction: its console runs and names the machine, once the board's I2C bus controller was modelled ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | under construction: its own update utility installs its console, which then runs to the prompt and names itself correctly ([packet](platforms/ds20l.md)) |
 
 ## Where the firmware comes from
@@ -162,7 +165,7 @@ device or an absent CPU.
    console runs (L2). What remains is the machine's own hardware -- how it
    finds a second processor, the processor SROM data it reads, its flash --
    and a real machine's listing to check against.
-3. **The rest of the Tsunami family**: DS10 (started), DS20L (running),
+3. **The rest of the Tsunami family**: DS10 and DS20L (their consoles run),
    DS20, and the UP2000 and XP1000 boards.
 4. **Titan** (ES45, DS25) with EV67/EV68 rows.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core

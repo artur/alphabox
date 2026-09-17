@@ -46,6 +46,7 @@
 #include "Flash.hpp"
 #include "FloppyController.hpp"
 #include "Keyboard.hpp"
+#include "PCF8584.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
 #include "Serial.hpp"
@@ -838,6 +839,15 @@ void CConfigurator::initialize() {
     myDevice = new CSystem(this);
     new CDPR(this, (CSystem *)myDevice);
     new CFlash(this, (CSystem *)myDevice);
+    // The board's own I2C bus controller, where it has one the console
+    // reaches directly (Platform.hpp).
+    if (((CSystem *)myDevice)->platform().i2c_controller) {
+      CPCF8584 *i2c =
+          new CPCF8584(this, (CSystem *)myDevice,
+                       ((CSystem *)myDevice)->platform().i2c_controller);
+      if (((CSystem *)myDevice)->platform().i2c_devices)
+        ((CSystem *)myDevice)->platform().i2c_devices(i2c->bus());
+    }
     break;
 
   case c_ev68cb:
