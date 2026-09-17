@@ -2,10 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-AXPbox emulates an HP/DEC AlphaServer ES40 (Alpha EV68 CPU + Tsunami/Typhoon
+Alphabox emulates an HP/DEC AlphaServer ES40 (Alpha EV68 CPU + Tsunami/Typhoon
 chipset) well enough to boot OpenVMS, Tru64, NetBSD, and Windows NT/2000.
 It is a modernized fork of the es40 emulator, evolving as its own project
-(fork remote `origin` = github.com/artur/axpbox, `upstream` =
+(fork remote `origin` = github.com/artur/alphabox, `upstream` =
 lenticularis39/axpbox). The [ES40-Emu/es40](https://github.com/ES40-Emu/es40)
 revival is a source of candidate fixes, not a source of truth: each upstream
 change is reviewed on its merits and adopted, adapted, improved or rejected --
@@ -29,11 +29,11 @@ word-splitting trap when configuring):
   (gitignored plain clone)
 - a headless lane — `-DDISABLE_SDL=yes`
 
-Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `axpbox --version`
+Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `alphabox --version`
 prints the version, commit and compiled-in features.
 
-Single executable `axpbox` with subcommands: `axpbox run` (main_sim in
-`src/AlphaSim.cpp`) and `axpbox configure` (main_cfg in `src/es40-cfg.cpp`).
+Single executable `alphabox` with subcommands: `alphabox run` (main_sim in
+`src/AlphaSim.cpp`) and `alphabox configure` (main_cfg in `src/es40-cfg.cpp`).
 Sources are collected by one `file(GLOB ...)` entry per source directory.
 GLOB is evaluated at *configure* time, so after adding, **moving** or
 deleting a source file re-run the configure step (`cmake -S . -B <lane>`,
@@ -58,25 +58,25 @@ tools live in `test/tools/`: `srm_run.sh` (per-lane SRM boot + log diff, own
 port per lane), `srm_probe.sh` (SMP init, memory layout, SCSI, exit-path
 probes), `win_bench.sh` (headless Windows guest boot + MIPS), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
-`build_lanes.sh` / `build_revs.sh`. Their output goes to `$AXPBOX_WORK`
+`build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`
 (default `lab/`, git-excluded, which also holds guest images). See the
 `srm-boot-test`, `guest-boot-bench` and `build-lanes` skills. Pitfalls: `test.sh`
 deletes the tracked ROM files at the end — restore with
 `git checkout -- test/rom/` before committing. `test/rom/axp_correct.log`
 contains NUL bytes (grep needs `-a`; edit binary-safe).
 
-Never `pkill`/`killall axpbox`: other sessions on the same host may be
+Never `pkill`/`killall alphabox`: other sessions on the same host may be
 running long guest installs. Stop only the emulator PID you started (SIGTERM
 exits gracefully once the main loop runs, saving flash and DPR), and check
 memory pressure before starting large guests.
 
 Deeper verification (each has a skill with the full recipe): `boot-openvms`
-(full guest boot from `../run-axpbox` media — always copy disk images before
+(full guest boot from `../run-alphabox` media — always copy disk images before
 booting them), `test-arc` (AlphaBIOS/ARC console via flash + S3),
 `verify-vga-sdl` (framebuffer inspection + input debugging), `srm-boot-test`,
 `guest-boot-bench` (Windows 2000 guest boots and the MIPS benchmark).
 For headless driving of the emulator (fb dumps, key/mouse injection,
-`SDL_VIDEO_DRIVER=dummy`), the `AXPBOX_*` env hooks are documented in
+`SDL_VIDEO_DRIVER=dummy`), the `ALPHABOX_*` env hooks are documented in
 `docs/headless.md`.
 
 Formatting: repo LLVM style via `.clang-format`; format only changed lines
@@ -144,7 +144,7 @@ comments).
 JIT (`src/jit/jitengine.cpp`, `ES40_JIT` builds only): translates Alpha
 basic blocks to host code via asmjit -- x86-64 emitter in jitengine.cpp,
 AArch64 emitter in `src/jit/jitemit_a64.hpp` (same bail/chain/frame protocol;
-`AXPBOX_JIT_FPTEST=1` on a `JIT_VERIFY` build self-tests the inline IEEE FP
+`ALPHABOX_JIT_FPTEST=1` on a `JIT_VERIFY` build self-tests the inline IEEE FP
 ops against the interpreter), direct-mapped block cache keyed by
 physical PC, poly-link direct chaining between blocks, register pinning;
 bails to the interpreter for anything hairy. The trace tier (`JIT_TRACES`)
@@ -167,18 +167,22 @@ equivalents (hard project rule).
 
 ## Project rules and settled decisions
 
+- The project was renamed from AXPbox to Alphabox in September 2026
+  (binary `alphabox`, env hooks `ALPHABOX_*`, repository
+  github.com/artur/alphabox). Historical references to AXPbox (credits,
+  the lenticularis39/axpbox upstream, port history) keep the old name.
 - Headers are `.hpp`; upstream es40 patches never apply textually (see the
   `port-from-es40` skill for the porting recipe and the list of
-  axpbox-specific code to preserve).
+  alphabox-specific code to preserve).
 - icache is hardcoded ON, the mouse is always present/captured, and the
   first interval-timer tick fires immediately — these mirror upstream
   0.75.1 and were deliberate; don't reintroduce the config options.
-- User-facing text says "AXPbox" (banner in `src/common/banner.hpp` with the
+- User-facing text says "Alphabox" (banner in `src/common/banner.hpp` with the
   author-era credits); guest-visible identifiers deliberately keep their
   ES40 names (`ES40EM00000` disk serial, `ES40RAMDISK`, MAC seed "ES40",
   the `es40.cfg` filename).
-- AXPbox versions itself via `project(AXPBox VERSION x.y.z)` in
+- Alphabox versions itself via `project(Alphabox VERSION x.y.z)` in
   CMakeLists.txt — never adopt upstream's version number.
 - In `src/gui/sdl.cpp`, keep the focus-bounce re-grab logic (WSLg
-  compositors bounce focus when the mouse grab engages) and the `AXPBOX_*`
+  compositors bounce focus when the mouse grab engages) and the `ALPHABOX_*`
   debug hooks when merging upstream GUI changes.

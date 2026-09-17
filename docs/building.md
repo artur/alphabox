@@ -1,4 +1,4 @@
-# Building AXPbox
+# Building Alphabox
 
 There are no binary packages of this project. The packages in
 [T2 SDE](http://t2sde.org/packages/axpbox) and
@@ -14,12 +14,12 @@ You need CMake and a C++17 compiler. Optional:
 - **asmjit** for the JIT.
 
 ```
-git clone --recurse-submodules https://github.com/artur/axpbox
-cd axpbox
+git clone --recurse-submodules https://github.com/artur/alphabox
+cd alphabox
 # existing clone: git submodule update --init
 ```
 
-Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `axpbox --version`
+Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `alphabox --version`
 prints the version, the commit and the compiled-in features.
 
 Sources are collected at *configure* time. After adding, moving or deleting a
@@ -38,7 +38,7 @@ cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
 
-The binary is `build/axpbox`.
+The binary is `build/alphabox`.
 
 - Headless build: add `-DDISABLE_SDL=yes -DDISABLE_X11=yes`.
 - Without networking: add `-DDISABLE_PCAP=yes`.
@@ -47,7 +47,7 @@ To use a NIC with the pcap backend without running as root, grant capture
 permission once:
 
 ```
-sudo setcap cap_net_raw,cap_net_admin+eip ./build/axpbox
+sudo setcap cap_net_raw,cap_net_admin+eip ./build/alphabox
 ```
 
 ## macOS
@@ -75,7 +75,7 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
 cmake --build build --config Release
 ```
 
-The binary is `build\Release\axpbox.exe`.
+The binary is `build\Release\alphabox.exe`.
 
 ## JIT
 
@@ -94,7 +94,7 @@ Diagnostic JIT builds, used while developing:
 
 | Flag | Effect |
 |---|---|
-| `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` | Re-runs every compiled block in the interpreter and reports any difference; expect `0 mismatches`. Verify builds compile every block on its first run, for maximum coverage. With `AXPBOX_JIT_FPTEST=1`, the build also self-tests the inline IEEE floating-point ops against the interpreter (about 8.5 M cases). |
+| `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` | Re-runs every compiled block in the interpreter and reports any difference; expect `0 mismatches`. Verify builds compile every block on its first run, for maximum coverage. With `ALPHABOX_JIT_FPTEST=1`, the build also self-tests the inline IEEE floating-point ops against the interpreter (about 8.5 M cases). |
 | `-DCMAKE_CXX_FLAGS="-DJIT_STATS"` | Adds throughput, cold-path and bail counters. |
 
 `src/common/config_debug.hpp` lists the other debug flags.

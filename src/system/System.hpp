@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -39,7 +39,7 @@
 #define MAX_COMPONENTS 100
 
 // Interrupt-rate counters: bumped where interrupts are raised and taken,
-// printed and reset every 5 s by the Ali thread under AXPBOX_IRQSTATS=1.
+// printed and reset every 5 s by the Ali thread under ALPHABOX_IRQSTATS=1.
 struct SIrqStats {
   std::atomic<u64> cpu_int{0};      // CPU interrupt entries (PAL INTERRUPT)
   std::atomic<u64> cpu_eir[6]{};    // ...by EIR & EIEN bit pending at entry

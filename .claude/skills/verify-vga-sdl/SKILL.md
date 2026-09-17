@@ -7,14 +7,14 @@ description: Visually verify the S3/VGA/SDL render pipeline (framebuffer dumps, 
 
 ## Framebuffer dumps (works everywhere)
 
-The SDL backend has a debug hook: `AXPBOX_DUMP_FB=<prefix>` writes the
+The SDL backend has a debug hook: `ALPHABOX_DUMP_FB=<prefix>` writes the
 frame the SDL renderer actually receives as a PPM every ~2 s, numbered:
 `<prefix>-NNN-<w>x<h>.ppm` (in `src/gui/sdl.cpp`
 `graphics_frame_update`). This verifies the S3 → SDL pixel pipeline
 without any host display tooling.
 
 ```bash
-AXPBOX_DUMP_FB=fb ./build/axpbox run &
+ALPHABOX_DUMP_FB=fb ./build/alphabox run &
 # later: convert to PNG. PIL is not installed everywhere (it is missing on
 # the macOS host); test/tools/ppm2png.py needs only the stdlib.
 python3 test/tools/ppm2png.py fb-055-720x400.ppm frame.png
@@ -80,22 +80,22 @@ any blank guest screen is then the guest's doing, not a render bug.
 All hooks live in `bx_sdl_gui_c::handle_events` (src/gui/sdl.cpp) and
 are documented user-facing in docs/headless.md:
 
-- `AXPBOX_AUTOKEY_ENTER=<sec>` — Enter every N seconds. Mind the
+- `ALPHABOX_AUTOKEY_ENTER=<sec>` — Enter every N seconds. Mind the
   timing: keystrokes during SRM's nvram script abort the script (see
   the test-arc skill).
-- `AXPBOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` — named keys at fixed
+- `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` — named keys at fixed
   second offsets (timed from GUI start, which is AFTER any serial-port
   wait). Full letter/digit/f-key/navigation name set.
-- `AXPBOX_KEYPIPE=<file>` — interactive: `echo "f2 down enter" >> file`
+- `ALPHABOX_KEYPIPE=<file>` — interactive: `echo "f2 down enter" >> file`
   while running; one token consumed per ~120 ms.
-- `AXPBOX_AUTOMOUSE=<sec>` — synthetic PS/2 mouse motion (square + a
+- `ALPHABOX_AUTOMOUSE=<sec>` — synthetic PS/2 mouse motion (square + a
   periodic click) injected guest-side from N seconds in. Moves the
   guest cursor with zero host input: separates guest-side mouse
   problems from host event delivery.
 
 ## Mouse verification and the WSLg pitfalls (found 2026-07-10)
 
-Trace with `AXPBOX_MOUSE_DEBUG=1` (stderr):
+Trace with `ALPHABOX_MOUSE_DEBUG=1` (stderr):
 - `MOUSEDBG motion xrel=.. yrel=.. grab=N` — host motion events.
 - `MOUSEDBG grab -> 0/1`, `focus lost/gained` — grab lifecycle.
 - `MOUSEDBG aux cmd XX (enable=..)` — every command the guest sends to

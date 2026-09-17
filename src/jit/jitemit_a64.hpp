@@ -1,6 +1,6 @@
-/* AXPbox Alpha Emulator -- JIT engine, AArch64 backend.
+/* Alphabox Alpha Emulator -- JIT engine, AArch64 backend.
  * Copyright (C) 2026 Artur Goulão
- * Website: https://github.com/artur/axpbox
+ * Website: https://github.com/artur/alphabox
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -816,8 +816,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // instructions under Windows, 99.9% of HW_MTPR helper calls). Mirrors
       // jit_hw_mtpr case 0x0a: store the enable fields, then set check_int if
       // int_deliverable(). The verify lane snapshots these fields, so it
-      // checks this path too. AXPBOX_IRQTRACE keeps the helper (it logs).
-      static const bool irqtrace = getenv("AXPBOX_IRQTRACE") != nullptr;
+      // checks this path too. ALPHABOX_IRQTRACE keeps the helper (it logs).
+      static const bool irqtrace = getenv("ALPHABOX_IRQTRACE") != nullptr;
       if (function == 0x0a && !irqtrace) {
         const a64::Gp v = src_reg(rb, x1, false);
         const a64::Gp x3 = a64::x3, w2 = a64::w2, w3 = a64::w3, w10 = a64::w10;
@@ -1978,8 +1978,8 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.b(body); // self-loop (the gate already ran)
       return;
     }
-    // AXPBOX_JIT_NO_DLINK=1: the tag-checked scan exit instead (A/B switch).
-    static const bool no_dlink = getenv("AXPBOX_JIT_NO_DLINK") != nullptr;
+    // ALPHABOX_JIT_NO_DLINK=1: the tag-checked scan exit instead (A/B switch).
+    static const bool no_dlink = getenv("ALPHABOX_JIT_NO_DLINK") != nullptr;
     if (no_dlink) {
       emit_chain(lbl);
       a.b(lbl);

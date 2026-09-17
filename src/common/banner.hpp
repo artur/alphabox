@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -28,7 +28,7 @@
 
 /**
  * \file
- * Startup banner shared by the axpbox run and configure subcommands. Padding
+ * Startup banner shared by the alphabox run and configure subcommands. Padding
  * is computed at runtime, so the border stays aligned no matter how long
  * VERSION (or any other line) gets.
  **/
@@ -62,7 +62,7 @@ static inline void banner_line(const char *text, bool centered) {
   printf("   ||%*s%.*s%*s||\n", lpad, "", len, text, rpad, "");
 }
 
-static inline void print_axpbox_banner(const char *title) {
+static inline void print_alphabox_banner(const char *title) {
   printf("\n\n");
   banner_border();
   banner_line(title, true);
@@ -77,7 +77,7 @@ static inline void print_axpbox_banner(const char *title) {
   banner_line("  2023-2026  gdwnldsKSC and the ES40-Emu project", false);
   banner_line("  2026       Artur Goulao", false);
   banner_line("", false);
-  banner_line("Website: https://github.com/artur/axpbox", false);
+  banner_line("Website: https://github.com/artur/alphabox", false);
   banner_line("  based on https://github.com/lenticularis39/axpbox", false);
   banner_line("", false);
   banner_line("This program is free software; you can redistribute it and/or",

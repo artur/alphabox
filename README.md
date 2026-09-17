@@ -1,11 +1,11 @@
-# AXPbox
+# Alphabox
 
-**An AlphaServer ES40 emulator.**
+**An AlphaServer ES40 emulator** (formerly AXPbox).
 
-[![Build](https://github.com/artur/axpbox/actions/workflows/build-test-and-artifact.yml/badge.svg)](https://github.com/artur/axpbox/actions/workflows/build-test-and-artifact.yml)
+[![Build](https://github.com/artur/alphabox/actions/workflows/build-test-and-artifact.yml/badge.svg)](https://github.com/artur/alphabox/actions/workflows/build-test-and-artifact.yml)
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
-AXPbox emulates an HP/DEC AlphaServer ES40 — one to four Alpha EV68 CPUs on
+Alphabox emulates an HP/DEC AlphaServer ES40 — one to four Alpha EV68 CPUs on
 the Tsunami/Typhoon chipset — well enough to run the operating systems of the
 Alpha era: OpenVMS, Tru64 UNIX, NetBSD and Windows NT/2000. It runs on x86-64
 and AArch64 hosts under Linux, macOS and Windows.
@@ -65,12 +65,12 @@ page.
 ## Quick start
 
 ```
-git clone --recurse-submodules https://github.com/artur/axpbox
-cd axpbox
+git clone --recurse-submodules https://github.com/artur/alphabox
+cd alphabox
 cmake -S . -B build
 cmake --build build -j
-./build/axpbox configure    # writes es40.cfg
-./build/axpbox run
+./build/alphabox configure    # writes es40.cfg
+./build/alphabox run
 ```
 
 You also need an SRM console ROM image, and a VGA BIOS for the graphics card.
@@ -104,7 +104,7 @@ core.
 
 ## History and acknowledgements
 
-AXPbox began as **es40**, the emulator by **Camiel Vanderhoeven** and the
+Alphabox began as **es40**, the emulator by **Camiel Vanderhoeven** and the
 ES40 Emulator Project (2007–2010), with later work by **Tim Stark**
 (fsword7). **Tomáš Glozar** revived it as
 [AXPbox](https://github.com/lenticularis39/axpbox) — CMake, a single binary,
@@ -113,12 +113,13 @@ modern C++ threading and many crash fixes — with **Remy van Elst**. The
 es40 in parallel and is a welcome source of ideas: each of its changes is
 reviewed on its merits here and adopted, adapted or improved.
 
-This repository continues AXPbox as its own project. Its work includes the
+This repository continued AXPbox as its own project and was renamed Alphabox
+in 2026. Its work includes the
 AArch64 JIT, idle pacing, SMP and memory fixes, the Cirrus Logic cards and
 their blitter, removable-media handling, configurable hotkeys, and the
 headless test tooling.
 
-AXPbox builds on the work of others:
+Alphabox builds on the work of others:
 
 - **MAME** — the VGA core and IBM 8514/A emulation (Barry Rodewald, Aaron
   Giles, Vas Crabb, Olivier Galibert; BSD-3-Clause).

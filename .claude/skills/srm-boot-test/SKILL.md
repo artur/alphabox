@@ -12,7 +12,7 @@ no-VGA config (`test/rom/es40.cfg`), wait for `P00>>>` on the serial console
 
 ## Ground rules
 
-- **Never `pkill`/`killall axpbox`.** Other sessions on this host run long
+- **Never `pkill`/`killall alphabox`.** Other sessions on this host run long
   guest installs. Stop only the PID you started (`kill $PID`), and check
   `sysctl -n kern.memorystatus_vm_pressure_level` before starting guests
   (4 = critical: wait).
@@ -26,12 +26,12 @@ no-VGA config (`test/rom/es40.cfg`), wait for `P00>>>` on the serial console
 ## Per-lane runner (macOS and Linux)
 
 ```bash
-PORT=21300 test/tools/srm_run.sh build-jit/axpbox jit          # one lane
-PORT=21301 test/tools/srm_run.sh build-jit-verify/axpbox verify # in parallel: own PORT each
+PORT=21300 test/tools/srm_run.sh build-jit/alphabox jit          # one lane
+PORT=21301 test/tools/srm_run.sh build-jit-verify/alphabox verify # in parallel: own PORT each
 ```
 
 It boots the test machine (config generated from `test/rom/es40.cfg` with
-that port) in `$AXPBOX_WORK/runs/srm-<label>` (`AXPBOX_WORK` defaults to
+that port) in `$ALPHABOX_WORK/runs/srm-<label>` (`ALPHABOX_WORK` defaults to
 `<repo>/lab`, git-excluded), waits for `P00>>>`, stops the emulator
 gracefully and prints `diff clean` (or the diff) and the JIT_VERIFY
 mismatch count. Exit status 0 = prompt, diff clean, 0 mismatches. Nothing
@@ -80,14 +80,14 @@ variables (see the header of the script): `CPUS`, `MEMBITS`, `SCSI`,
 `IDE_CFG`, `FLOPPY` (`halt` generates the HALT boot floppy),
 `EXIT_ON_HALT`, `CPU_OPT`/`CPU1_OPT`, `CMDS="a|b|c"`, and
 `AFTER=sigterm|disconnect-sigterm|wait-exit|none`. Output in
-`$AXPBOX_WORK/runs/probe-<label>`.
+`$ALPHABOX_WORK/runs/probe-<label>`.
 
 ```bash
 PORT=21310 CPUS=4 SCSI=sym53c810 CMDS="show device|init|show device" CMD_TIMEOUT=300 \
-  test/tools/srm_probe.sh build-jit/axpbox smp4
-PORT=21311 MEMBITS=35 CMDS="show memory|show fru" test/tools/srm_probe.sh build-jit/axpbox mem32g
-PORT=21312 FLOPPY=halt EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit test/tools/srm_probe.sh build/axpbox halt
-PORT=21313 AFTER=disconnect-sigterm test/tools/srm_probe.sh build-jit/axpbox disconnect
+  test/tools/srm_probe.sh build-jit/alphabox smp4
+PORT=21311 MEMBITS=35 CMDS="show memory|show fru" test/tools/srm_probe.sh build-jit/alphabox mem32g
+PORT=21312 FLOPPY=halt EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit test/tools/srm_probe.sh build/alphabox halt
+PORT=21313 AFTER=disconnect-sigterm test/tools/srm_probe.sh build-jit/alphabox disconnect
 ```
 
 What to expect:
@@ -119,7 +119,7 @@ What to expect:
 
 ```bash
 cd <run dir with es40.cfg + cl67srmrom.exe>
-/path/to/build/axpbox run > run.log 2>&1 & PID=$!
+/path/to/build/alphabox run > run.log 2>&1 & PID=$!
 sleep 6; nc -t 127.0.0.1 <port> > axp.log &
 # poll: LC_ALL=C sed -n '$p' axp.log | tr -d '\000'  == "P00>>>"
 kill $PID   # graceful: flash.rom and dpr.rom are saved
@@ -127,9 +127,9 @@ kill $PID   # graceful: flash.rom and dpr.rom are saved
 
 ## Debugging a boot hang
 
-- `AXPBOX_PC_SAMPLE=1` prints every CPU's PC each check_state pass;
-  `AXPBOX_IRQSTATS=1` prints interrupt rates every 5 s.
-- Debugger: attach as the parent (`lldb -- build/axpbox run` on macOS,
+- `ALPHABOX_PC_SAMPLE=1` prints every CPU's PC each check_state pass;
+  `ALPHABOX_IRQSTATS=1` prints interrupt rates every 5 s.
+- Debugger: attach as the parent (`lldb -- build/alphabox run` on macOS,
   `gdb -batch -ex run -ex 'thread apply all bt 14' --args ...` on Linux).
 - A guest spinning on garbage usually means a runaway PC: anything that
   writes `state.pc` directly must reset the fetch cursor via

@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Artur Goulão
  *
  * WWW    : http://es40.org
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  * E-mail : camiel@camicom.com
  *
  *  This file is based upon Bochs.
@@ -428,12 +428,12 @@ void bx_sdl_gui_c::build_window_titles() {
     if (binding.enabled)
       title += " - " + binding.display + " " + what;
   };
-  window_title = "AXPbox Alpha Emulator";
+  window_title = "Alphabox Alpha Emulator";
   append_hint(window_title, hotkey_media, "media");
   append_hint(window_title, hotkey_ctrl_alt_delete, "sends Ctrl+Alt+Del");
   append_hint(window_title, hotkey_reset_window, "resets window");
 
-  window_title_grabbed = "AXPbox Alpha Emulator";
+  window_title_grabbed = "Alphabox Alpha Emulator";
   append_hint(window_title_grabbed, hotkey_mouse_capture, "releases mouse");
   append_hint(window_title_grabbed, hotkey_media, "media");
   append_hint(window_title_grabbed, hotkey_ctrl_alt_delete,
@@ -626,9 +626,9 @@ void bx_sdl_gui_c::graphics_frame_update(const u32 *pixels, unsigned width,
   if (!sdl_deferred() && (!sdl_texture || !sdl_renderer))
     return;
 
-  // Debug aid: AXPBOX_DUMP_FB=<path-prefix> writes the frame as a PPM every
+  // Debug aid: ALPHABOX_DUMP_FB=<path-prefix> writes the frame as a PPM every
   // ~2 seconds (verifies the S3 -> SDL pixel pipeline on headless setups).
-  static const char *dump_prefix = getenv("AXPBOX_DUMP_FB");
+  static const char *dump_prefix = getenv("ALPHABOX_DUMP_FB");
   if (dump_prefix) {
     static Uint64 last_dump = 0;
     Uint64 now = SDL_GetTicks();
@@ -929,7 +929,7 @@ static u32 sdl_scan_to_bx_key(SDL_Scancode sym) {
   }
 }
 
-// Name -> BX key code map shared by the AXPBOX_KEYSCRIPT and AXPBOX_KEYPIPE
+// Name -> BX key code map shared by the ALPHABOX_KEYSCRIPT and ALPHABOX_KEYPIPE
 // debug hooks. Returns 0 for unknown names.
 static u32 sdl_debug_key_lookup(const char *name) {
   static const struct {
@@ -1022,9 +1022,9 @@ static u32 sdl_debug_key_lookup(const char *name) {
   return 0;
 }
 
-// One AXPBOX_KEYSCRIPT/AXPBOX_KEYPIPE token: a key name, optionally preceded
-// by modifiers joined with '-' ("win-r", "shift-5", "ctrl-alt-del"). The
-// modifiers are held around the key and released in reverse order. With
+// One ALPHABOX_KEYSCRIPT/ALPHABOX_KEYPIPE token: a key name, optionally
+// preceded by modifiers joined with '-' ("win-r", "shift-5", "ctrl-alt-del").
+// The modifiers are held around the key and released in reverse order. With
 // press=false the token is only validated. Returns false for an unknown name.
 static bool sdl_debug_press(const char *token, bool press) {
   static const struct {
@@ -1111,9 +1111,9 @@ void bx_sdl_gui_c::handle_events(void) {
   if (sdl_deferred())
     return; // macOS: events are pumped by main_thread_pump()
 
-  // Debug aid: AXPBOX_AUTOKEY_ENTER=<seconds> presses Enter once every
+  // Debug aid: ALPHABOX_AUTOKEY_ENTER=<seconds> presses Enter once every
   // <seconds> (drives firmware prompts on headless/scripted runs).
-  static const char *autokey = getenv("AXPBOX_AUTOKEY_ENTER");
+  static const char *autokey = getenv("ALPHABOX_AUTOKEY_ENTER");
   if (autokey && theKeyboard) {
     static Uint64 ak_last = 0;
     Uint64 ak_period = (Uint64)atol(autokey) * 1000;
@@ -1125,13 +1125,13 @@ void bx_sdl_gui_c::handle_events(void) {
     }
   }
 
-  // Debug aid: AXPBOX_AUTOMOUSE=<seconds> injects synthetic mouse motion
+  // Debug aid: ALPHABOX_AUTOMOUSE=<seconds> injects synthetic mouse motion
   // straight into the guest PS/2 path starting <seconds> in, tracing a
   // square (2 s per side), plus a left click every full lap. Verifies the
   // guest-side mouse plumbing (KBC aux, IRQ12, guest driver) with no host
   // input; if the guest cursor moves with this but not with the real mouse,
   // the problem is host-side SDL event delivery.
-  static const char *automouse = getenv("AXPBOX_AUTOMOUSE");
+  static const char *automouse = getenv("ALPHABOX_AUTOMOUSE");
   if (automouse && theKeyboard) {
     static Uint64 am_epoch = SDL_GetTicks();
     static Uint64 am_last = 0;
@@ -1149,10 +1149,10 @@ void bx_sdl_gui_c::handle_events(void) {
     }
   }
 
-  // Debug aid: AXPBOX_KEYSCRIPT="35:enter,50:f2,52:win-r,..." injects keys
+  // Debug aid: ALPHABOX_KEYSCRIPT="35:enter,50:f2,52:win-r,..." injects keys
   // (names or modifier chords, see sdl_debug_press) at the given second
   // offsets (headless firmware/menu navigation).
-  static const char *keyscript = getenv("AXPBOX_KEYSCRIPT");
+  static const char *keyscript = getenv("ALPHABOX_KEYSCRIPT");
   if (keyscript && theKeyboard) {
     struct KScriptEvent {
       Uint64 t_ms;
@@ -1189,12 +1189,12 @@ void bx_sdl_gui_c::handle_events(void) {
     }
   }
 
-  // Debug aid: AXPBOX_KEYPIPE=<file> injects named keys appended to <file>
+  // Debug aid: ALPHABOX_KEYPIPE=<file> injects named keys appended to <file>
   // while the emulator runs (interactive headless menu navigation):
   //   echo "f2 down enter" >> keys.txt
   // Tokens are whitespace-separated key names or modifier chords (same as
-  // AXPBOX_KEYSCRIPT); each token is pressed+released ~120 ms apart.
-  static const char *keypipe = getenv("AXPBOX_KEYPIPE");
+  // ALPHABOX_KEYSCRIPT); each token is pressed+released ~120 ms apart.
+  static const char *keypipe = getenv("ALPHABOX_KEYPIPE");
   if (keypipe && theKeyboard) {
     static long kp_offset = 0;
     static Uint64 kp_last = 0;
@@ -1247,9 +1247,9 @@ void bx_sdl_gui_c::handle_events(void) {
       break;
 
     case SDL_EVENT_MOUSE_MOTION:
-      // Debug aid: AXPBOX_MOUSE_DEBUG=1 traces every host motion event and
+      // Debug aid: ALPHABOX_MOUSE_DEBUG=1 traces every host motion event and
       // grab transition to stderr (diagnoses host-side delivery problems).
-      if (getenv("AXPBOX_MOUSE_DEBUG"))
+      if (getenv("ALPHABOX_MOUSE_DEBUG"))
         fprintf(stderr, "MOUSEDBG motion xrel=%d yrel=%d grab=%d\n",
                 (int)sdl_event.motion.xrel, (int)sdl_event.motion.yrel,
                 sdl_grab);
@@ -1322,7 +1322,7 @@ void bx_sdl_gui_c::handle_events(void) {
       // Releases of keys held while focus leaves never arrive here.
       release_all_guest_keys();
       memset(swallowed_hotkey_releases, 0, sizeof(swallowed_hotkey_releases));
-      if (getenv("AXPBOX_MOUSE_DEBUG"))
+      if (getenv("ALPHABOX_MOUSE_DEBUG"))
         fprintf(stderr, "MOUSEDBG focus lost (grab=%d)\n", sdl_grab);
       if (sdl_grab) {
         // Some compositors (WSLg/Wayland) bounce window focus when the
@@ -1339,7 +1339,7 @@ void bx_sdl_gui_c::handle_events(void) {
       break;
     }
     case SDL_EVENT_WINDOW_FOCUS_GAINED: {
-      if (getenv("AXPBOX_MOUSE_DEBUG"))
+      if (getenv("ALPHABOX_MOUSE_DEBUG"))
         fprintf(stderr, "MOUSEDBG focus gained (regrab=%d)\n",
                 (int)sdl_regrab_on_focus);
       if (sdl_regrab_on_focus) {
@@ -1591,14 +1591,14 @@ void bx_sdl_gui_c::adjust_window_scale(int delta) {
 }
 
 void bx_sdl_gui_c::mouse_enabled_changed_specific(bool val) {
-  if (getenv("AXPBOX_MOUSE_DEBUG"))
+  if (getenv("ALPHABOX_MOUSE_DEBUG"))
     fprintf(stderr, "MOUSEDBG grab -> %d (window=%p)\n", (int)val,
             (void *)sdl_window);
   if (val) {
     SDL_HideCursor();
     if (sdl_window) {
       if (!SDL_SetWindowRelativeMouseMode(sdl_window, true) &&
-          getenv("AXPBOX_MOUSE_DEBUG"))
+          getenv("ALPHABOX_MOUSE_DEBUG"))
         fprintf(stderr, "MOUSEDBG relative-mode enable failed: %s\n",
                 SDL_GetError());
       SDL_SetWindowKeyboardGrab(sdl_window, true);

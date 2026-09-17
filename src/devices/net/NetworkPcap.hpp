@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -31,7 +31,7 @@
 #if defined(_WIN32)
 /* wpcap.dll is loaded at run time from the Npcap install directory, so the
  * executable does not require Npcap at load time and works with Npcap
- * installed outside WinPcap-compatibility mode. All pcap calls in AXPbox go
+ * installed outside WinPcap-compatibility mode. All pcap calls in Alphabox go
  * through these pointers (the defines below remap the pcap_* names). */
 bool load_wpcap();
 

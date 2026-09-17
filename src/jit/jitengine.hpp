@@ -1,9 +1,9 @@
-/* AXPbox Alpha Emulator -- JIT engine.
+/* Alphabox Alpha Emulator -- JIT engine.
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
  * Copyright (C) 2026 Artur Goulão
- * Website: https://github.com/artur/axpbox
+ * Website: https://github.com/artur/alphabox
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -634,7 +634,7 @@ private:
   bool m_cold_used[kColdMax] = {};
   uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
-  // Interpreted passes before a block compiles (AXPBOX_JIT_COMPILE_AFTER
+  // Interpreted passes before a block compiles (ALPHABOX_JIT_COMPILE_AFTER
   // overrides). Measured on a Windows 2000 guest with interleaved boots (one
   // run per boot, arms alternating), 16 beat 2 on both workloads with no
   // overlap -- about 2% on a tight arithmetic loop and 27% on an I/O-heavy

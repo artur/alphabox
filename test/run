@@ -26,7 +26,7 @@ function run_test() {
   fi
 }
 
-message "[test] This is the AXPbox test script"
+message "[test] This is the Alphabox test script"
 
 run_test rom
 run_test disk/unwritable

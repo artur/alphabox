@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build AXPbox build lanes and print one rc line per lane.
+# Build Alphabox build lanes and print one rc line per lane.
 # usage: build_lanes.sh [lane ...]
 #   With no arguments, every configured build*/ directory in the repo root.
 #   Lanes are configured beforehand (see the build-lanes skill).

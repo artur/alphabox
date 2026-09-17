@@ -22,7 +22,7 @@
  * THE SOFTWARE.
  *
  * Modifications copyright (C) 2026 Artur Goulão
- * Website: https://github.com/artur/axpbox
+ * Website: https://github.com/artur/alphabox
  */
 // Straight port to es40 by Cacodemon345.
 #include "StdAfx.hpp"

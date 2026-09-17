@@ -1,8 +1,8 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -209,10 +209,10 @@ void CAliM1543C_usb::WriteMem_Bar(int func, int bar, u32 address, int dsize,
   return;
 }
 
-// AXPBOX_USBTRACE=1: log each OHCI register write with the per-register read
+// ALPHABOX_USBTRACE=1: log each OHCI register write with the per-register read
 // counts since the previous write, plus a read summary every 20000 reads
 // (driver-polling diagnosis).
-static const bool g_usbtrace = getenv("AXPBOX_USBTRACE") != nullptr;
+static const bool g_usbtrace = getenv("ALPHABOX_USBTRACE") != nullptr;
 static const auto g_usbtrace_t0 = std::chrono::steady_clock::now();
 static u64 g_usb_reads[0x110 / 4 + 1];
 static u64 g_usb_reads_total;

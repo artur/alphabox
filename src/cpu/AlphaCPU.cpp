@@ -3,7 +3,7 @@
  * Copyright (C) 2026 Artur Goulão
  *
  * WWW    : http://www.es40.org
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  * E-mail : camiel@es40.org
  *
  * This program is free software; you can redistribute it and/or
@@ -352,7 +352,7 @@ void CAlphaCPU::init() {
            (unsigned long long)m_max_instr_per_tick);
 
 #if defined(ES40_JIT) && defined(JIT_VERIFY)
-  if (state.iProcNum == 0 && getenv("AXPBOX_JIT_FPTEST"))
+  if (state.iProcNum == 0 && getenv("ALPHABOX_JIT_FPTEST"))
     jit_fp_selftest(); // exits with the verdict
 #endif
 }
@@ -564,10 +564,10 @@ void CAlphaCPU::jit_flush_blocks_asm() {
     m_jit->flush_non_global();
 }
 
-// AXPBOX_NO_IDLE=1 disables idle pacing; AXPBOX_IDLESTATS=1 prints its
+// ALPHABOX_NO_IDLE=1 disables idle pacing; ALPHABOX_IDLESTATS=1 prints its
 // counters every 2000 visits to the idle-loop head.
-static const bool g_idle_pacing = getenv("AXPBOX_NO_IDLE") == nullptr;
-static const bool g_idle_stats = getenv("AXPBOX_IDLESTATS") != nullptr;
+static const bool g_idle_pacing = getenv("ALPHABOX_NO_IDLE") == nullptr;
+static const bool g_idle_stats = getenv("ALPHABOX_IDLESTATS") != nullptr;
 
 // The head of Windows NT's idle loop (KiIdleLoop) on Alpha: CALL_PAL enable
 // interrupts, CALL_PAL disable interrupts, LDL t0, n(s0) (the PRCB's DPC
@@ -751,7 +751,7 @@ void CAlphaCPU::jit_run(int budget) {
 
     // Idle pacing: the CPU keeps coming back to the NT idle-loop head. One pass
     // of Windows 2000's idle loop runs a fixed ~8000-instruction wait between
-    // polls (measured with AXPBOX_IDLESTATS), so visits at most 16000
+    // polls (measured with ALPHABOX_IDLESTATS), so visits at most 16000
     // instructions apart, four in a row, with no interrupt pending, mean the
     // CPU is idle ->
     // sleep (jit_idle_pause), then end the batch so the next one re-syncs RPCC
@@ -2715,7 +2715,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
 // through execute() and through a compiled one-instruction PALmode block. The
 // compiled contract: complete only with the interpreter's f[Fc], PC and
 // exc_sum and an unchanged FPCR (no trap, no new sticky bit); otherwise bail
-// with no side effect. AXPBOX_JIT_FPTEST=1 runs it from init() on CPU0 and
+// with no side effect. ALPHABOX_JIT_FPTEST=1 runs it from init() on CPU0 and
 // exits with the verdict (0 = pass).
 void CAlphaCPU::jit_fp_selftest() {
   struct Variant {
@@ -2996,9 +2996,9 @@ void CAlphaCPU::check_state() {
   if (myThreadDead.load())
     FAILURE(Thread, "CPU thread has died");
 
-  // Debug aid: AXPBOX_PC_SAMPLE=1 prints the guest PC on every check_state
+  // Debug aid: ALPHABOX_PC_SAMPLE=1 prints the guest PC on every check_state
   // poll (~100 ms) -- identifies guest-side hangs/loops on headless runs.
-  static const char *pc_sample = getenv("AXPBOX_PC_SAMPLE");
+  static const char *pc_sample = getenv("ALPHABOX_PC_SAMPLE");
   if (pc_sample && *pc_sample == '1')
     // ra/pv locate the caller of a hot helper (lock, timer, wait loop).
     fprintf(stderr, "PCSAMPLE cpu%d pc=%016llx icount=%llu ra=%llx pv=%llx\n",
@@ -3154,7 +3154,7 @@ _next_instruction:
         max_mips = mips;
       if (min_mips > mips)
         min_mips = mips;
-      printf("AXPbox MIPS (%3.1f sec):: current: %5.3f, min: %5.3f, max: "
+      printf("Alphabox MIPS (%3.1f sec):: current: %5.3f, min: %5.3f, max: "
              "%5.3f\n",
              secs, mips, min_mips, max_mips);
     }
@@ -3356,7 +3356,7 @@ _next_instruction:
         if ((state.eien & state.eir) || (state.sien & state.sir) ||
             (state.asten &&
              (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
-          { // AXPBOX_IRQSTATS: what the guest is taking interrupts for
+          { // ALPHABOX_IRQSTATS: what the guest is taking interrupts for
             const u64 pend = (u64)(state.eien & state.eir);
             for (int b = 0; b < 6; b++)
               if (pend & (U64(1) << b))
@@ -4390,10 +4390,10 @@ static inline bool alpha_valid_va_form(u64 virt, bool va48) {
   return (va48 ? sext_u64_48(virt) : alpha_sext_u64_43(virt)) == virt;
 }
 
-// AXPBOX_IRQTRACE=<n>: log interrupt entries n..n+39 and the IER/SIRR/CM
+// ALPHABOX_IRQTRACE=<n>: log interrupt entries n..n+39 and the IER/SIRR/CM
 // writes and ISUM reads between them (interrupt-storm diagnosis).
 static const long long g_irqtrace_start = [] {
-  const char *e = getenv("AXPBOX_IRQTRACE");
+  const char *e = getenv("ALPHABOX_IRQTRACE");
   return e ? atoll(e) : -1LL;
 }();
 static std::atomic<long long> g_irqtrace_entries{0};

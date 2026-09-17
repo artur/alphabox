@@ -1,9 +1,9 @@
-/* AXPbox Alpha Emulator -- JIT engine implementation.
+/* Alphabox Alpha Emulator -- JIT engine implementation.
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
  * Copyright (C) 2026 Artur Goulão
- * Website: https://github.com/artur/axpbox
+ * Website: https://github.com/artur/alphabox
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -823,7 +823,7 @@ CJitEngine::CJitEngine(int cpu_id)
   m_traces_enabled = false;
 #endif
   m_rt = new asmjit::JitRuntime();
-  if (const char *ca = getenv("AXPBOX_JIT_COMPILE_AFTER")) {
+  if (const char *ca = getenv("ALPHABOX_JIT_COMPILE_AFTER")) {
     const long v = atol(ca);
     if (v >= 1 && v <= 1000000)
       m_compile_after = (uint32_t)v;

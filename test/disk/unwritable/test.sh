@@ -8,13 +8,13 @@ if [[ ! -f "cl67srmrom.exe" ]]; then
   wget 'http://raymii.org/s/inc/downloads/es40-srmon/cl67srmrom.exe'
 fi
 
-# Start AXPbox
-if [[ -f ../../../build/axpbox ]]; then
-  ../../../build/axpbox run | tee axp.log
-elif [[ -f ../../../../build/axpbox ]]; then
-  ../../../../build/axpbox run | tee axp.log;
+# Start Alphabox
+if [[ -f ../../../build/alphabox ]]; then
+  ../../../build/alphabox run | tee axp.log
+elif [[ -f ../../../../build/alphabox ]]; then
+  ../../../../build/alphabox run | tee axp.log;
 else
-   ../../build/axpbox run | tee axp.log
+   ../../build/alphabox run | tee axp.log
 fi
 
 chmod 700 disk-unwritable.img

@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -595,9 +595,9 @@ u32 CAliM1543C_ide::ide_command_read(int index, u32 address, int dsize) {
   return data;
 }
 
-// AXPBOX_IDETRACE=1: timestamped command / ATAPI packet / bus-master start /
+// ALPHABOX_IDETRACE=1: timestamped command / ATAPI packet / bus-master start /
 // interrupt timeline (I/O pacing diagnosis).
-static const bool g_idetrace = getenv("AXPBOX_IDETRACE") != nullptr;
+static const bool g_idetrace = getenv("ALPHABOX_IDETRACE") != nullptr;
 static const auto g_idetrace_t0 = std::chrono::steady_clock::now();
 static double idetrace_ms() {
   return std::chrono::duration<double, std::milli>(
@@ -1978,7 +1978,7 @@ void CAliM1543C_ide::execute(int index) {
                 // after a media change: both are normal traffic, so report only
                 // the sense keys that mean something went wrong (or everything
                 // with the IDE trace hook).
-                static const bool ide_trace = getenv("AXPBOX_IDETRACE") != 0;
+                static const bool ide_trace = getenv("ALPHABOX_IDETRACE") != 0;
                 if (ide_trace || (sense_key != 5 && sense_key != 6)) {
                   printf(
                       "%%IDE-W-ATAPI: controller %d device %d packet command",

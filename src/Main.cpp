@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2020 Remy van Elst
  * Website: https://github.com/lenticularis39/axpbox
@@ -36,9 +36,9 @@ int main_cfg(int argc, char *argv[]);
  **/
 static void print_version() {
 #ifdef VERSION
-  printf("AXPbox %s", VERSION);
+  printf("Alphabox %s", VERSION);
 #else
-  printf("AXPbox (unknown version)");
+  printf("Alphabox (unknown version)");
 #endif
 #ifdef PACKAGE_GITSHA
   printf(" (commit %s)", PACKAGE_GITSHA);
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
   }
 
   if (argc <= 1 || (strcmp(argv[1], "run") && strcmp(argv[1], "configure"))) {
-    std::cerr << "AXPbox Alpha Emulator";
+    std::cerr << "Alphabox Alpha Emulator";
 #ifdef PACKAGE_GITSHA
     std::cerr << " (commit " << std::string(PACKAGE_GITSHA) << ")";
 #endif

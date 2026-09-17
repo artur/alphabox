@@ -3,8 +3,8 @@
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
 # usage: [CARD=s3|cirrus] [CHIP=gd5430|gd5434] [ROM=<bios>] \
-#          vga_boot.sh <axpbox-binary> <label> [seconds]
-#   Runs in $AXPBOX_WORK/runs/vga-<label> (AXPBOX_WORK defaults to <repo>/lab).
+#          vga_boot.sh <alphabox-binary> <label> [seconds]
+#   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP (cirrus only) to gd5434.
 #   ROM defaults to test/arc/86c764x1.bin (s3), or for cirrus to the 86Box
 #   ROM set (not in git): roms/video/cirruslogic/gd5434.BIN (gd5434) or
@@ -24,7 +24,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus] [ROM=<bios>] $0 <axpbox-binary> <label> [seconds]"; exit 2; }
+[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
 [ -x "$1" ] || { echo "vga_boot: $1 is not executable"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
@@ -45,7 +45,7 @@ cirrus)
 *) echo "vga_boot: CARD must be s3 or cirrus"; exit 2 ;;
 esac
 [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }
-WORK=${AXPBOX_WORK:-$R/lab}
+WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/runs/vga-$LABEL
 
 rm -rf "$D" && mkdir -p "$D/fb" || exit 2
@@ -96,7 +96,7 @@ sys0 = tsunami
 }
 CFG
 cd "$D" || exit 2
-SDL_VIDEO_DRIVER=dummy AXPBOX_DUMP_FB=fb/fb "$BIN" run > run.out 2>&1 &
+SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb "$BIN" run > run.out 2>&1 &
 P=$!
 sleep "$SECS"
 kill "$P" 2>/dev/null # our own emulator only

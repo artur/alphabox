@@ -1,11 +1,11 @@
 ---
 name: boot-openvms
-description: Boot OpenVMS from the disk image in test/run-axpbox to verify end-to-end guest operation (SRM boot command, bootstrap, SYSINIT, startup to login). Use for deep verification after CPU/disk/timing changes.
+description: Boot OpenVMS from the disk image in test/run-alphabox to verify end-to-end guest operation (SRM boot command, bootstrap, SYSINIT, startup to login). Use for deep verification after CPU/disk/timing changes.
 ---
 
 # Boot OpenVMS (full-guest verification)
 
-Media lives in `test/run-axpbox/`:
+Media lives in `test/run-alphabox/`:
 - `openvms8.4-ww-welkom012.img` — 6 GB pre-installed OpenVMS 8.4-2L1
   system disk (boots from IDE as `dqa0`)
 - `ALPHA0842L1.ISO` — OpenVMS 8.4 install CD (attach as ATAPI CD,
@@ -18,7 +18,7 @@ system disk. Copy it first:
 
 ```bash
 mkdir -p test/vms && cd test/vms
-cp ../../test/run-axpbox/openvms8.4-ww-welkom012.img vms-disk.img
+cp ../../test/run-alphabox/openvms8.4-ww-welkom012.img vms-disk.img
 ```
 
 Config: `test/vms/es40.cfg` (memory.bits=28, ali_ide disk0.0 =
@@ -32,12 +32,12 @@ vms-disk.img, disk1.0 = the ISO read-only as cdrom, serial on
 (`DD-MMM-YYYY HH:MM`), and waits for a login-ish marker.
 
 ```bash
-cd test/vms && pkill -9 -x axpbox; sleep 1
+cd test/vms && pkill -9 -x alphabox; sleep 1
 [ -f cl67srmrom.exe ] || wget -q -O cl67srmrom.exe 'http://raymii.org/s/inc/downloads/es40-srmon/cl67srmrom.exe'
-../../build/axpbox run > vmsrun.log 2>&1 &
+../../build/alphabox run > vmsrun.log 2>&1 &
 sleep 6
 python3 bootvms2.py dqa0 900 vmscon.log     # ~4 min to full startup
-pkill -9 -x axpbox
+pkill -9 -x alphabox
 sed 's/\x00//g' vmscon.log | tail -30
 ```
 

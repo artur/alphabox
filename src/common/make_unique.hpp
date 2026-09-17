@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2020  Remy van Elst
  * Website: https://github.com/lenticularis39/axpbox
@@ -23,8 +23,8 @@
  * serve the general public.
  */
 
-#ifndef AXPBOX_MAKE_UNIQUE_H
-#define AXPBOX_MAKE_UNIQUE_H
+#ifndef ALPHABOX_MAKE_UNIQUE_H
+#define ALPHABOX_MAKE_UNIQUE_H
 #include <memory>
 /* Allow C++11 code to use std::make_unique
  * example ifdef:  #if __cplusplus < 201402L
@@ -37,4 +37,4 @@ std::unique_ptr<T> make_unique( Args&& ...args )
   return std::unique_ptr<T>( new T( std::forward<Args>(args)... ) );
 }
 }
-#endif // AXPBOX_MAKE_UNIQUE_H
+#endif // ALPHABOX_MAKE_UNIQUE_H

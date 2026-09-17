@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.10)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-project(AXPBox VERSION 1.2.0)
+project(Alphabox VERSION 1.2.0)
 
 # Single-config generators (Makefiles, Ninja) default to an empty build type,
 # which compiles without optimization; default to Release instead.
-get_property(AXPBOX_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(NOT AXPBOX_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
+get_property(ALPHABOX_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT ALPHABOX_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING
       "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
 endif()
@@ -38,10 +38,10 @@ list(REMOVE_ITEM srcs ${include_sources})
 # Cirrus is not ported to the MAME-derived VGA core (disabled upstream too)
 list(REMOVE_ITEM srcs ${CMAKE_SOURCE_DIR}/src/devices/video/Cirrus.cpp)
 
-add_executable(axpbox ${srcs} src/Main.cpp)
+add_executable(alphabox ${srcs} src/Main.cpp)
 # Headers are included unqualified ("System.hpp"), so every source directory
 # is on the include path and a moved file needs no include changes.
-target_include_directories(axpbox PRIVATE
+target_include_directories(alphabox PRIVATE
     src src/cpu src/system src/common
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/storage
@@ -57,10 +57,10 @@ if (NOT ES40_DISABLE_ASMJIT)
     endif()
     set(ASMJIT_NO_INSTALL ON)
     add_subdirectory(third_party/asmjit)
-    target_sources(axpbox PRIVATE src/jit/jitengine.cpp)
-    target_compile_definitions(axpbox PRIVATE ES40_JIT)
-    target_include_directories(axpbox PRIVATE ${CMAKE_SOURCE_DIR}/third_party/asmjit/src)
-    target_link_libraries(axpbox asmjit)
+    target_sources(alphabox PRIVATE src/jit/jitengine.cpp)
+    target_compile_definitions(alphabox PRIVATE ES40_JIT)
+    target_include_directories(alphabox PRIVATE ${CMAKE_SOURCE_DIR}/third_party/asmjit/src)
+    target_link_libraries(alphabox asmjit)
     message(STATUS "asmjit JIT enabled")
 endif()
 
@@ -79,7 +79,7 @@ if (CMAKE_GENERATOR MATCHES "Visual Studio")
 endif()
 
 find_package(Threads REQUIRED)
-target_link_libraries(axpbox Threads::Threads)
+target_link_libraries(alphabox Threads::Threads)
 
 # Configuration options
 include(CheckSymbolExists)
@@ -171,7 +171,7 @@ check_symbol_exists(_stricmp "string.h" HAVE__STRICMP)
 # Features
 check_include_file("X11/X.h" HAVE_X11)
 # Large file support (fopen64 / disk files > 2 GB)
-AXPBOX_TEST_LARGE_FILES(HAVE_LARGE_FILES)
+ALPHABOX_TEST_LARGE_FILES(HAVE_LARGE_FILES)
 
 if (DISABLE_PCAP STREQUAL "yes")
     set(WANT_PCAP 0)
@@ -185,7 +185,7 @@ if(WANT_PCAP)
         message(STATUS "pcap found. Networking support enabled")
         set(HAVE_PCAP 1)
         include_directories(${PCAP_INCLUDE_DIR})
-        target_link_libraries(axpbox ${PCAP_LIBRARY})
+        target_link_libraries(alphabox ${PCAP_LIBRARY})
     else()
         message(STATUS "pcap not found. Networking support disabled")
     endif()
@@ -220,7 +220,7 @@ if (DISABLE_X11 STREQUAL "yes")
 endif()
 
 if(HAVE_SDL)
-    target_link_libraries(axpbox SDL3::SDL3)
+    target_link_libraries(alphabox SDL3::SDL3)
     message(STATUS "SDL3 found. SDL graphics support enabled")
 else()
     message(WARNING "SDL3 not found (no system SDL3 and third_party/SDL "
@@ -228,7 +228,7 @@ else()
                     "--init). Building without SDL graphics support")
 endif()
 if(HAVE_X11)
-    target_link_libraries(axpbox X11)
+    target_link_libraries(alphabox X11)
     message(STATUS "x11 found. x11 graphics support enabled")
 else()
     message(WARNING "x11 not found. Building without x11 graphics support")
@@ -276,7 +276,7 @@ set(PACKAGE_NAME string(TOLOWER ${PROJECT_NAME}))
 set(PACKAGE_VERSION ${PROJECT_VERSION})
 set(PACKAGE_STRING ${PACKAGE_NAME}-${PACKAGE_VERSION})
 set(PACKAGE_TARNAME ${PACKAGE_STRING}.tar.gz)
-set(PACKAGE_URL "http://github.com/lenticularis39/axpbox")
+set(PACKAGE_URL "https://github.com/artur/alphabox")
 
 set(PTHREAD_CREATE_JOINABLE "PTHREAD_CREATE_JOINABLE")
 set(SELECT_TYPE_ARG1 "int")
@@ -288,7 +288,7 @@ check_include_files("time.h;sys/time.h" TIME_WITH_SYS_TIME)
 
 configure_file(src/config.hpp.in src/config.hpp)
 
-install(TARGETS axpbox DESTINATION bin)
+install(TARGETS alphabox DESTINATION bin)
 
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")

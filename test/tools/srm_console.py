@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the SRM console of a running AXPbox over its telnet serial port.
+"""Drive the SRM console of a running Alphabox over its telnet serial port.
 
 Connects, waits for the P00>>> prompt, runs console commands one by one, then
 optionally stops the emulator. Everything received (NULs removed) goes to the

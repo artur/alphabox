@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -103,7 +103,7 @@ int main_sim(int argc, char *argv[]) {
   const char *filename = 0;
   FILE *f;
 
-  print_axpbox_banner("AXPbox Alpha Emulator");
+  print_alphabox_banner("Alphabox Alpha Emulator");
 
 #if !defined(_WIN32)
   // A telnet client that goes away must not take the emulator with it: the

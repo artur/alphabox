@@ -69,13 +69,13 @@ def make(args):
     bs = PART_START * SECTOR
     boot = bytearray(SECTOR)
     boot[0:3] = b"\xeb\x3c\x90"
-    boot[3:11] = b"AXPBOX  "
+    boot[3:11] = b"ALPHABOX  "
     struct.pack_into("<HBHBHHBHHHII", boot, 11, SECTOR, SEC_PER_CLUSTER, RESERVED,
                      NUM_FATS, ROOT_ENTRIES, 0 if part_sectors > 0xFFFF else part_sectors,
                      0xF8, fat_sectors, 63, 255, PART_START,
                      part_sectors if part_sectors > 0xFFFF else 0)
     struct.pack_into("<BBBI11s8s", boot, 36, 0x80, 0, 0x29, 0x1234ABCD,
-                     b"AXPBOXTEST ", b"FAT16   ")
+                     b"ALPHABOXTEST ", b"FAT16   ")
     boot[510:512] = b"\x55\xaa"
     img[bs:bs + SECTOR] = boot
 
@@ -83,7 +83,7 @@ def make(args):
     fat = bytearray(fat_sectors * SECTOR)
     struct.pack_into("<HH", fat, 0, 0xFFF8, 0xFFFF)
     root = bytearray(ROOT_ENTRIES * 32)
-    root[0:11] = b"AXPBOXTEST "
+    root[0:11] = b"ALPHABOXTEST "
     root[11] = 0x08  # volume label
     next_cluster = [2]
 
@@ -103,7 +103,7 @@ def make(args):
         root[e + 11] = 0x20
         struct.pack_into("<HHHI", root, e + 22, 0, 0x5A21, first, len(content))
 
-    add_file(1, "HELLO.TXT", b"Hello from the AXPbox storage test.\r\n")
+    add_file(1, "HELLO.TXT", b"Hello from the Alphabox storage test.\r\n")
     rnd = random.Random(args.seed)
     add_file(2, "DATA.BIN", bytes(rnd.getrandbits(8) for _ in range(args.data_kb * 1024)))
 

@@ -1,9 +1,9 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2020 Remy van Elst
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -744,18 +744,18 @@ void CDiskFile::guest_tray(bool load) {
 }
 
 // ===========================================================================
-//  AXPBOX_MEDIA_SWAP stress hook
+//  ALPHABOX_MEDIA_SWAP stress hook
 // ===========================================================================
 
 /**
- * AXPBOX_MEDIA_SWAP=<image1>:<image2>:<ms> alternates two images on the first
+ * ALPHABOX_MEDIA_SWAP=<image1>:<image2>:<ms> alternates two images on the first
  * CD-ROM drive every <ms> milliseconds (forced, ignoring the guest lock).
  * <ms> is the text after the last ':'. The first other ':' separates the two
  * images, except a Windows drive-letter colon: a single letter that starts a
  * path (at the start of the value or right after a separator ':').
  **/
 void CDiskFile::start_threads() {
-  const char *spec = getenv("AXPBOX_MEDIA_SWAP");
+  const char *spec = getenv("ALPHABOX_MEDIA_SWAP");
   if (!spec || !*spec || swap_thread || RemovableMedia::first_cdrom() != this)
     return;
 
@@ -780,7 +780,7 @@ void CDiskFile::start_threads() {
       ms = 0;
   }
   if (mid == std::string::npos || mid == 0 || mid + 1 >= last || ms <= 0) {
-    printf("%s: AXPBOX_MEDIA_SWAP ignored: expected <image1>:<image2>:<ms>\n",
+    printf("%s: ALPHABOX_MEDIA_SWAP ignored: expected <image1>:<image2>:<ms>\n",
            devid_string);
     return;
   }
@@ -818,7 +818,7 @@ void CDiskFile::swap_stress_loop(std::string first, std::string second,
     MediaResult r = request_insert(path, true, true);
     count++;
     if (!r.ok || count <= 2 || count % 50 == 0)
-      printf("%s: AXPBOX_MEDIA_SWAP #%lu: %s\n", devid_string, count,
+      printf("%s: ALPHABOX_MEDIA_SWAP #%lu: %s\n", devid_string, count,
              r.message.c_str());
   }
 }

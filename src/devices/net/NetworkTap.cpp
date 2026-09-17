@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -75,8 +75,9 @@ bool CNetworkTap::tap_create(const char *devid_string, const char *name) {
     if (errno == EPERM) {
       printf("%s: Creating a TAP device requires CAP_NET_ADMIN or root.\n",
              devid_string);
-      printf("%s: Either run as root, use 'setcap cap_net_admin+ep axpbox',\n",
-             devid_string);
+      printf(
+          "%s: Either run as root, use 'setcap cap_net_admin+ep alphabox',\n",
+          devid_string);
       printf("%s: or pre-create the TAP interface:\n", devid_string);
       printf("%s:   ip tuntap add %s mode tap user $USER\n", devid_string,
              name ? name : "tap0");

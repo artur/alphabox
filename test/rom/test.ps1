@@ -1,10 +1,10 @@
 # Download the firmware
 Invoke-WebRequest -Uri 'http://raymii.org/s/inc/downloads/es40-srmon/cl67srmrom.exe' -OutFile 'cl67srmrom.exe'
 
-# Start AXPbox
-Start-Process '..\..\..\build\Release\axpbox' -ArgumentList 'run' -NoNewWindow  -RedirectStandardOutput stdout.txt -RedirectStandardError stderr.txt
+# Start Alphabox
+Start-Process '..\..\..\build\Release\alphabox' -ArgumentList 'run' -NoNewWindow  -RedirectStandardOutput stdout.txt -RedirectStandardError stderr.txt
 
-# Wait for AXPbox to start
+# Wait for Alphabox to start
 Start-Sleep -Seconds 5
 
 # Connect to terminal

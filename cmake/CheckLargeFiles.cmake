@@ -1,20 +1,20 @@
 # Via: https://github.com/uclouvain/openjpeg/blob/master/cmake/TestLargeFiles.cmake
 # - Define macro to check large file support
 #
-#  AXPBOX_TEST_LARGE_FILES(VARIABLE)
+#  ALPHABOX_TEST_LARGE_FILES(VARIABLE)
 #
 #  VARIABLE will be set to true if off_t is 64 bits, and fseeko/ftello present.
 #  This macro will also defines the necessary variable enable large file support, for instance
 #  _LARGE_FILES
 #  _LARGEFILE_SOURCE
 #  _FILE_OFFSET_BITS 64
-#  AXPBOX_HAVE_FSEEKO
+#  ALPHABOX_HAVE_FSEEKO
 #
 #  Adapted from Gromacs project (http://www.gromacs.org/)
 #  by Julien Malik
 #
 
-macro(AXPBOX_TEST_LARGE_FILES VARIABLE)
+macro(ALPHABOX_TEST_LARGE_FILES VARIABLE)
     if(NOT DEFINED ${VARIABLE})
 
         # On most platforms it is probably overkill to first test the flags for 64-bit off_t,
@@ -111,10 +111,10 @@ macro(AXPBOX_TEST_LARGE_FILES VARIABLE)
         endif()
 
         if(FSEEKO_COMPILE_OK)
-            set(AXPBOX_HAVE_FSEEKO ON CACHE INTERNAL "Result of test for fseeko/ftello")
+            set(ALPHABOX_HAVE_FSEEKO ON CACHE INTERNAL "Result of test for fseeko/ftello")
         else()
             message(STATUS "Checking for fseeko/ftello - not found")
-            set(AXPBOX_HAVE_FSEEKO OFF CACHE INTERNAL "Result of test for fseeko/ftello")
+            set(ALPHABOX_HAVE_FSEEKO OFF CACHE INTERNAL "Result of test for fseeko/ftello")
         endif()
 
         if(FILE64_OK AND FSEEKO_COMPILE_OK)

@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2021 Dietmar M. Zettl
  * Website: https://github.com/lenticularis39/axpbox

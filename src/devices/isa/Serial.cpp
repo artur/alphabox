@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -1019,7 +1019,7 @@ void CSerial::WaitForConnection() {
     write((const char *)opt_do_binary, 3);
     write((const char *)opt_will_binary, 3);
 
-    sprintf(s, "This is serial port #%d on AXPbox Alpha Emulator\r\n",
+    sprintf(s, "This is serial port #%d on Alphabox Alpha Emulator\r\n",
             state.iNumber);
     write_cstr(s);
   }

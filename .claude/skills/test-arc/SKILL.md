@@ -36,9 +36,9 @@ serial on 21000.
 ## Run
 
 ```bash
-cd test/arc && pkill -9 -x axpbox; sleep 1
+cd test/arc && pkill -9 -x alphabox; sleep 1
 rm -f decompressed.rom dpr.rom                 # force fresh flash boot
-AXPBOX_DUMP_FB=fb ../../build/axpbox run > arcrun.log 2>&1 &
+ALPHABOX_DUMP_FB=fb ../../build/alphabox run > arcrun.log 2>&1 &
 ```
 
 ## What happens (verified behavior)
@@ -60,7 +60,7 @@ AXPBOX_DUMP_FB=fb ../../build/axpbox run > arcrun.log 2>&1 &
 
 Getting past the blue screen needs Enter/F2 **in the SDL window** at
 the right moment. For headless runs there is a debug hook:
-`AXPBOX_AUTOKEY_ENTER=<seconds>` presses Enter every N seconds via the
+`ALPHABOX_AUTOKEY_ENTER=<seconds>` presses Enter every N seconds via the
 emulated keyboard.
 
 **Timing pitfall:** an Enter press while SRM is still running the

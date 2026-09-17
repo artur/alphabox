@@ -1,15 +1,15 @@
-# Running and configuring AXPbox
+# Running and configuring Alphabox
 
 ```
-axpbox configure     # interactive generator, writes es40.cfg
-axpbox run           # start the machine (reads es40.cfg)
-axpbox run my.cfg    # ... or another configuration file
-axpbox --version     # version, commit and compiled-in features
+alphabox configure     # interactive generator, writes es40.cfg
+alphabox run           # start the machine (reads es40.cfg)
+alphabox run my.cfg    # ... or another configuration file
+alphabox --version     # version, commit and compiled-in features
 ```
 
 The sample [es40.cfg](../es40.cfg) documents every configuration value; the
 generator covers the common ones. If a section contains a value that its
-device doesn't use, AXPbox warns at startup (`%SYS-W-UNKNOWNCFG`).
+device doesn't use, Alphabox warns at startup (`%SYS-W-UNKNOWNCFG`).
 
 ## Firmware
 
@@ -119,13 +119,13 @@ while the mouse is grabbed: the grab succeeds but the guest pointer never
 moves. Run through XWayland instead:
 
 ```
-SDL_VIDEO_DRIVER=x11 DISPLAY=:0 SDL_RENDER_DRIVER=software axpbox run
+SDL_VIDEO_DRIVER=x11 DISPLAY=:0 SDL_RENDER_DRIVER=software alphabox run
 ```
 
 `SDL_RENDER_DRIVER=software` avoids a fatal GLX error under WSLg's
 XWayland.
 
-To diagnose, set `AXPBOX_MOUSE_DEBUG=1`:
+To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
 
 - Motion lines with `grab=1` mean host input reaches the guest.
 - No motion lines after a `grab -> 1` line mean the host backend isn't

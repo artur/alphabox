@@ -1,8 +1,8 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -87,7 +87,7 @@ public:
   virtual int RestoreState(FILE *f);
   void irq_h(int number, bool assert, int delay);
   inline bool int_deliverable() const;
-  void irq_trace_entry(); // AXPBOX_IRQTRACE: interrupt-storm diagnosis
+  void irq_trace_entry(); // ALPHABOX_IRQTRACE: interrupt-storm diagnosis
   void irq_trace_ipr(const char *what, u32 fn, u64 val);
   int get_cpuid();
   void flush_icache();
@@ -445,7 +445,7 @@ private:
   u64 m_idle_last_icount = 0; // instruction_count at the previous visit
   u32 m_idle_streak = 0;      // consecutive tight visits to the head
   u64 m_idle_sleeps = 0;      // pauses taken (diagnostics)
-  // AXPBOX_IDLESTATS=1 diagnostics: head visits, visits within the tight
+  // ALPHABOX_IDLESTATS=1 diagnostics: head visits, visits within the tight
   // window, zero-delta visits, sleeps blocked by check_int / check_timers,
   // host time slept, last visit delta.
   u64 m_idle_visits = 0, m_idle_near = 0, m_idle_zero = 0;
@@ -498,7 +498,7 @@ private:
   // re-entry or null.
   static void *jit_indirect(CAlphaCPU *cpu, u64 target);
 #ifdef JIT_VERIFY
-  // AXPBOX_JIT_FPTEST=1: compiled inline IEEE FP ops vs the interpreter
+  // ALPHABOX_JIT_FPTEST=1: compiled inline IEEE FP ops vs the interpreter
   void jit_fp_selftest();
 #endif
   // MISC (0x18) state reads: sel 0=RPCC (cycle counter), 1=RC, 2=RS (read

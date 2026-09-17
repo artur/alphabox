@@ -29,7 +29,7 @@
 #cmakedefine _FILE_OFFSET_BITS @_FILE_OFFSET_BITS@
 
 /* Define to 1 if you have large file support */
-#cmakedefine AXPBOX_HAVE_FSEEKO @AXPBOX_HAVE_FSEEKO@
+#cmakedefine ALPHABOX_HAVE_FSEEKO @ALPHABOX_HAVE_FSEEKO@
 
 /* Define to 1 if you have the <fcntl.h> header file. */
 #cmakedefine HAVE_FCNTL_H

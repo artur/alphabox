@@ -1,6 +1,6 @@
 ---
 name: build-lanes
-description: Configure, build and sanity-check AXPbox's build lanes (interpreter, JIT, JIT_VERIFY, JIT_STATS/JIT_REGPROF, x86-64 via Rosetta, headless) and check that every commit of a series builds. Use before committing C++ changes, when adding or reconfiguring a lane, or when a lane's results look suspicious.
+description: Configure, build and sanity-check Alphabox's build lanes (interpreter, JIT, JIT_VERIFY, JIT_STATS/JIT_REGPROF, x86-64 via Rosetta, headless) and check that every commit of a series builds. Use before committing C++ changes, when adding or reconfiguring a lane, or when a lane's results look suspicious.
 ---
 
 # Build lanes
@@ -38,7 +38,7 @@ must compile. The set kept configured on the macOS/arm64 development host:
 
 What a verify lane cannot see: the chain gates and the inline data-page-cache
 fast paths are compiled out under `JIT_VERIFY`, so changes there need guest
-boots (and `build-jit-x64` for the x86-64 side). `AXPBOX_JIT_FPTEST=1` on a
+boots (and `build-jit-x64` for the x86-64 side). `ALPHABOX_JIT_FPTEST=1` on a
 verify build self-tests the inline IEEE FP ops.
 
 ## Configure (bash, not zsh)
@@ -80,8 +80,8 @@ Before fast-forwarding a branch, build each intermediate commit in a
 separate worktree with its own lanes:
 
 ```bash
-git worktree add ../axpbox-wt <base>           # once; configure lanes inside
-WT=../axpbox-wt test/tools/build_revs.sh <sha1> <sha2> ...
+git worktree add ../alphabox-wt <base>           # once; configure lanes inside
+WT=../alphabox-wt test/tools/build_revs.sh <sha1> <sha2> ...
 ```
 
 A detached checkout refuses while the worktree has local edits; compare

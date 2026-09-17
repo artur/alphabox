@@ -12,11 +12,11 @@ screen as a PNG, host CPU% near the end, per-CPU MIPS (JIT_STATS builds),
 idle-loop recognition and notable warnings.
 
 ```bash
-test/tools/win_bench.sh <label> <axpbox-binary> <install-dir> <cfg> <seconds> [VAR=value ...]
-# output: $AXPBOX_WORK/bench-<label>/ (bench.log, last.png, fb/)
+test/tools/win_bench.sh <label> <alphabox-binary> <install-dir> <cfg> <seconds> [VAR=value ...]
+# output: $ALPHABOX_WORK/bench-<label>/ (bench.log, last.png, fb/)
 ```
 
-`AXPBOX_WORK` defaults to `<repo>/lab` (git-excluded), where the guest
+`ALPHABOX_WORK` defaults to `<repo>/lab` (git-excluded), where the guest
 installs live. Never boot the original install directory by hand: always
 work on a clone or copy.
 
@@ -44,15 +44,15 @@ the EXC_SUM MTPR fix. Ctrl+Alt+Delete is Ctrl+Alt+End, or a
 3. **Warnings**: no `Emulator Failure`, `OPCDEC`, `SYS-W-UNKNOWNCFG` or
    `Unknown TIG` lines.
 
-Useful extra environment: `AXPBOX_IRQSTATS=1` (interrupt rates every 5 s,
-e.g. `eir 4:N` halt-line interrupts), `AXPBOX_MEDIA_SWAP=<iso1>:<iso2>:<ms>`
-(CD change stress), `AXPBOX_KEYSCRIPT` / `AXPBOX_AUTOMOUSE` (input
+Useful extra environment: `ALPHABOX_IRQSTATS=1` (interrupt rates every 5 s,
+e.g. `eir 4:N` halt-line interrupts), `ALPHABOX_MEDIA_SWAP=<iso1>:<iso2>:<ms>`
+(CD change stress), `ALPHABOX_KEYSCRIPT` / `ALPHABOX_AUTOMOUSE` (input
 injection, see docs/headless.md).
 
 ## MIPS benchmark
 
 ```bash
-test/tools/win_bench.sh rc2-mips build-jit-stats-sdl/axpbox win2k-installed es40-window-smp.cfg 300 AXPBOX_NO_IDLE=1
+test/tools/win_bench.sh rc2-mips build-jit-stats-sdl/alphabox win2k-installed es40-window-smp.cfg 300 ALPHABOX_NO_IDLE=1
 ```
 
 Compare per-CPU p50 against a run of the parent commit made the same way,
@@ -70,13 +70,13 @@ real guest code: for those, measure a workload that keeps the guest busy
 ## Real-workload benchmark
 
 ```bash
-test/tools/win_workload.sh <label> build-jit/axpbox win2k-installed es40-window-smp.cfg \
+test/tools/win_workload.sh <label> build-jit/alphabox win2k-installed es40-window-smp.cfg \
   "cmd /c for /l %i in (1,1,N) do @rem"
 ```
 
 Boots the RC2 guest headless (idle pacing on), waits for the desktop in the
 frame dumps plus `SETTLE` seconds (default 60), opens Start > Run with
-`win-r`, types the command through `AXPBOX_KEYPIPE` and prints
+`win-r`, types the command through `ALPHABOX_KEYPIPE` and prints
 `workload_seconds=<n>`: the time from the console window opening to closing,
 read from the frame dump modification times (about 2 s resolution). This
 times guest code, not the idle loop. Compare binaries with the same command

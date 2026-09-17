@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -301,7 +301,7 @@ protected:
 //   static bx_sdl_gui_c *theGui;
 #define IMPLEMENT_GUI_PLUGIN_CODE(gui_name)                                    \
   int lib##gui_name##_LTX_plugin_init(CConfigurator *cfg) {                    \
-    printf("%%GUI-I-INS: Installing %s module as the AXPbox GUI\n",            \
+    printf("%%GUI-I-INS: Installing %s module as the Alphabox GUI\n",          \
            #gui_name);                                                         \
     theGui = new bx_##gui_name##_gui_c(cfg);                                   \
     bx_gui = theGui;                                                           \

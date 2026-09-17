@@ -35,15 +35,15 @@ jobs:
         MAKEFLAGS: "-j2"
 
     - name: Run test scripts
-      working-directory: ${{runner.workspace}}/axpbox
+      working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: ${{runner.workspace}}/axpbox/test/run
+      run: ${{runner.workspace}}/alphabox/test/run
 
-    - name: Upload AXPbox binary
+    - name: Upload Alphabox binary
       uses: actions/upload-artifact@v4
       with:
-        name: AXPbox-linux-x86-clang-${{ env.BUILD_DATE }}
-        path: ${{runner.workspace}}/build/axpbox 
+        name: Alphabox-linux-x86-clang-${{ env.BUILD_DATE }}
+        path: ${{runner.workspace}}/build/alphabox 
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }}
 
@@ -81,15 +81,15 @@ jobs:
         MAKEFLAGS: "-j2"
 
     - name: Run test scripts
-      working-directory: ${{runner.workspace}}/axpbox
+      working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: ${{runner.workspace}}/axpbox/test/run
+      run: ${{runner.workspace}}/alphabox/test/run
 
-    - name: Upload AXPbox binary
+    - name: Upload Alphabox binary
       uses: actions/upload-artifact@v4
       with:
-        name: AXPbox-linux-x86-gcc-${{ env.BUILD_DATE }}
-        path: ${{runner.workspace}}/build/axpbox
+        name: Alphabox-linux-x86-gcc-${{ env.BUILD_DATE }}
+        path: ${{runner.workspace}}/build/alphabox
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }} 
 
@@ -123,20 +123,20 @@ jobs:
         MAKEFLAGS: "-j2"
 
     - name: Run binary
-      working-directory: ${{runner.workspace}}/axpbox
+      working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: ${{runner.workspace}}/build/axpbox
+      run: ${{runner.workspace}}/build/alphabox
 
     - name: Binary info
-      working-directory: ${{runner.workspace}}/axpbox
+      working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: file ${{runner.workspace}}/build/axpbox
+      run: file ${{runner.workspace}}/build/alphabox
 
-    - name: Upload AXPbox binary
+    - name: Upload Alphabox binary
       uses: actions/upload-artifact@v4
       with:
-        name: AXPbox-linux-ARM-gcc-${{ env.BUILD_DATE }}
-        path: ${{runner.workspace}}/build/axpbox
+        name: Alphabox-linux-ARM-gcc-${{ env.BUILD_DATE }}
+        path: ${{runner.workspace}}/build/alphabox
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }}        
 
@@ -180,13 +180,13 @@ jobs:
 
     - name: Test run
       working-directory: ${{runner.workspace}}\build
-      run: ${{runner.workspace}}\build\Release\axpbox.exe
+      run: ${{runner.workspace}}\build\Release\alphabox.exe
 
-    - name: Upload AXPbox Binary
+    - name: Upload Alphabox Binary
       uses: actions/upload-artifact@v4
       with:
-        name: AXPbox-windows-x86-msvc-${{ env.BUILD_DATE }}.exe
-        path: ${{runner.workspace}}\build\Release\axpbox.exe
+        name: Alphabox-windows-x86-msvc-${{ env.BUILD_DATE }}.exe
+        path: ${{runner.workspace}}\build\Release\alphabox.exe
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }}
 
@@ -220,11 +220,11 @@ jobs:
       env:
         MAKEFLAGS: "-j3"
 
-    - name: Upload AXPbox Binary
+    - name: Upload Alphabox Binary
       uses: actions/upload-artifact@v4
       with:
-        name: AXPbox-macos-arm64-appleclang-${{ env.BUILD_DATE }}
-        path: ${{runner.workspace}}/build/axpbox
+        name: Alphabox-macos-arm64-appleclang-${{ env.BUILD_DATE }}
+        path: ${{runner.workspace}}/build/alphabox
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }} 
 

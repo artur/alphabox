@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -631,8 +631,8 @@ void CTraceEngine::run_script(const char *filename) {
       return;
     }
   } else {
-    printf("This is the AXPbox interactive debugger. To start "
-           "non-interactively, run axpbox,\n");
+    printf("This is the Alphabox interactive debugger. To start "
+           "non-interactively, run alphabox,\n");
     printf("Or run this executable with a last argument of "
            "@<script-file>\n");
     f = stdin;

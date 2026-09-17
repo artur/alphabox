@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -293,7 +293,7 @@ int main_cfg(int argc, char *argv[]) {
     return -1;
   }
 #endif
-  print_axpbox_banner("AXPbox Alpha Emulator configuration utility");
+  print_alphabox_banner("Alphabox Alpha Emulator configuration utility");
 
   /* Explanation
    */

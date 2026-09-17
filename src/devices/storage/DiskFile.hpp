@@ -1,9 +1,9 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2020 Remy van Elst
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -187,7 +187,7 @@ private:
   bool allow_guest_eject = true;
   std::string defaultFilename;
 
-  // AXPBOX_MEDIA_SWAP stress hook
+  // ALPHABOX_MEDIA_SWAP stress hook
   std::unique_ptr<std::thread> swap_thread;
   std::mutex swap_wait_mutex;
   std::condition_variable swap_wait;

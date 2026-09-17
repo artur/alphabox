@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -34,7 +34,7 @@
 
 /* Unimplemented IPR index on HW_MFPR/HW_MTPR: EV6 reads zero and ignores the
  * write. Warn once per index and continue instead of trapping OPCDEC (PALcode
- * builds such as the Windows 2000 betas touch IPRs AXPbox doesn't model). */
+ * builds such as the Windows 2000 betas touch IPRs Alphabox doesn't model). */
 #define UNKNOWN_IPR(dir)                                                       \
   do {                                                                         \
     static bool warned_ipr[256];                                               \

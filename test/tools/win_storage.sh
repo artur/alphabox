@@ -3,7 +3,7 @@
 # with a FAT16 test disk, boot, have Windows copy DATA.BIN to COPY.BIN on
 # that disk, stop, and compare the two files on the host.
 #
-# usage: CTRL=<config class> win_storage.sh <label> <axpbox-binary> \
+# usage: CTRL=<config class> win_storage.sh <label> <alphabox-binary> \
 #            <install-dir> <cfg> [boots] [VAR=value ...]
 #   CTRL      controller class, e.g. sym53c810 (placed at pci0.3)
 #   CTRL_OPTS extra lines for the controller section, e.g. 'chip = "x";'
@@ -11,14 +11,14 @@
 #             for new hardware on the first boot and may only use it on the
 #             next one.
 #   The install directory is never modified: the run works on a clone in
-#   $AXPBOX_WORK/storage-<label> (kept, for inspection; delete it after).
+#   $ALPHABOX_WORK/storage-<label> (kept, for inspection; delete it after).
 #
 # Prints, per boot, whether COPY.BIN appeared and matches DATA.BIN, and the
 # path of the last screenshot. Exit status 0 when a boot produced a match.
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-WORK=${AXPBOX_WORK:-$R/lab}
+WORK=${ALPHABOX_WORK:-$R/lab}
 [ $# -ge 4 ] || { sed -n '2,19p' "$0"; exit 2; }
 LABEL=$1 BIN=$2 INST=$3 CFG=$4 BOOTS=${5:-2}
 shift $(($# < 5 ? 4 : 5))
@@ -51,7 +51,7 @@ PY
 ok=1
 for boot in $(seq 1 "$BOOTS"); do
   rm -rf fb && mkdir fb && : > keys
-  env "$@" SDL_VIDEO_DRIVER=dummy AXPBOX_DUMP_FB=fb/fb AXPBOX_KEYPIPE=keys \
+  env "$@" SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb ALPHABOX_KEYPIPE=keys \
     "$BIN" run storage.cfg > boot$boot.log 2>&1 &
   P=$!
   # desktop after ~2.5 min (one frame every ~2 s)

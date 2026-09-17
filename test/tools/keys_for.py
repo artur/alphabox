@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Turn text into AXPBOX_KEYPIPE / AXPBOX_KEYSCRIPT key tokens (US layout).
+"""Turn text into ALPHABOX_KEYPIPE / ALPHABOX_KEYSCRIPT key tokens (US layout).
 
 usage: keys_for.py [--enter] "<text>"
   Prints space-separated tokens, e.g.
     keys_for.py --enter "cmd /c dir"  ->  c m d space slash c space d i r enter
-  Append to an AXPBOX_KEYPIPE file to type the text into the guest. The guest
+  Append to an ALPHABOX_KEYPIPE file to type the text into the guest. The guest
   keyboard layout must be US for the shifted symbols to come out right.
 """
 import sys

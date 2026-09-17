@@ -1,10 +1,10 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2020 Martin Vorländer
  * Copyright (C) 2012 Dmitry Kalinkin
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -191,7 +191,7 @@ void CAliM1543C::init() {
     time(&host_now);
     state.toy_offset = (long)(set_time - host_now);
   } else {
-    // AXPbox 'timezone' option: seed the TOY offset so the guest clock
+    // Alphabox 'timezone' option: seed the TOY offset so the guest clock
     // shows host local time by default ("local"), UTC ("utc"), or either
     // with a POSIX-style offset appended: "+<n>s|m|h|d|M|y"
     // (e.g. "local+2h", "utc+20y"). Guest TOY writes and the sys0 'time'
@@ -1505,7 +1505,7 @@ void CAliM1543C::pit_clock() {
   }
 }
 
-// AXPBOX_IRQSTATS: print (and reset) the interrupt counters.
+// ALPHABOX_IRQSTATS: print (and reset) the interrupt counters.
 static void print_irqstats(double secs) {
   SIrqStats &s = g_irqstats;
   char buf[1400];
@@ -1541,7 +1541,7 @@ static void print_irqstats(double secs) {
  * Thread entry point.
  **/
 void CAliM1543C::run() {
-  const bool irqstats = getenv("AXPBOX_IRQSTATS") != nullptr;
+  const bool irqstats = getenv("ALPHABOX_IRQSTATS") != nullptr;
   auto irq_last = std::chrono::steady_clock::now();
   try {
     for (;;) {

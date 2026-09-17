@@ -1,7 +1,7 @@
 #!/bin/bash
 # SRM probe: boot a variant of the test machine and run console commands.
 #
-# usage: [VAR=value ...] srm_probe.sh <axpbox-binary> <label> [timeout_s]
+# usage: [VAR=value ...] srm_probe.sh <alphabox-binary> <label> [timeout_s]
 #   PORT=<n>             telnet port (default 21100; one per parallel probe)
 #   CPUS=1..4            number of CPUs (default 1)
 #   MEMBITS=<n>          memory.bits (default: the test machine's 26)
@@ -15,15 +15,15 @@
 #   CMD_TIMEOUT=<s>      per command (default 60)
 #   AFTER=sigterm|disconnect-sigterm|wait-exit|none   (default sigterm)
 #
-# Output in $AXPBOX_WORK/runs/probe-<label> (AXPBOX_WORK defaults to
+# Output in $ALPHABOX_WORK/runs/probe-<label> (ALPHABOX_WORK defaults to
 # <repo>/lab): es40.cfg, console.log (whole session), cmds.txt (the commands'
-# output), axpbox.out. Prints the status lines, the command output and the
+# output), alphabox.out. Prints the status lines, the command output and the
 # emulator messages that matter for SMP, memory, PAL and exit-path checks.
 #
 # Examples:
-#   CPUS=4 SCSI=sym53c810 CMDS="show device|init|show device" srm_probe.sh build-jit/axpbox smp4
-#   MEMBITS=35 CMDS="show memory|show fru" srm_probe.sh build-jit/axpbox mem32g
-#   FLOPPY=halt EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit srm_probe.sh build/axpbox halt
+#   CPUS=4 SCSI=sym53c810 CMDS="show device|init|show device" srm_probe.sh build-jit/alphabox smp4
+#   MEMBITS=35 CMDS="show memory|show fru" srm_probe.sh build-jit/alphabox mem32g
+#   FLOPPY=halt EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit srm_probe.sh build/alphabox halt
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -33,7 +33,7 @@ BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
 PORT=${PORT:-21100}
-WORK=${AXPBOX_WORK:-$R/lab}
+WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/runs/probe-$LABEL
 
 [ -x "$BIN" ] || { echo "srm_probe: $BIN is not executable"; exit 2; }
@@ -68,7 +68,7 @@ cmds=()
 for c in ${cmds[@]+"${cmds[@]}"}; do [ -n "$c" ] && con+=(--cmd "$c"); done
 
 cd "$D" || exit 2
-"$BIN" run > axpbox.out 2>&1 &
+"$BIN" run > alphabox.out 2>&1 &
 PID=$!
 con+=(--pid "$PID")
 python3 "$T/srm_console.py" "${con[@]}" | sed 's/^/  /'
@@ -85,6 +85,6 @@ echo "== $LABEL: command output"
 echo "== $LABEL: CPUs seen by SRM"
 tr -d '\000\r' < console.log | grep -aE 'CPU [0-9] speed|starting console on CPU' | sort | uniq -c | sed 's/^/  /'
 echo "== $LABEL: emulator messages"
-grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|NATIVEPAL|VMSPAL|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating' axpbox.out |
+grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|NATIVEPAL|VMSPAL|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating' alphabox.out |
   sort | uniq -c | head -20 | sed 's/^/  /'
 exit 0

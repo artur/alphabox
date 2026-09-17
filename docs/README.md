@@ -1,4 +1,4 @@
-# AXPbox documentation
+# Alphabox documentation
 
 - [Building](building.md): Linux, macOS, Windows, the JIT, and diagnostic
   builds.

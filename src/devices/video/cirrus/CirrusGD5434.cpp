@@ -1,6 +1,6 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2026 Artur Goulão
- * Website: https://github.com/artur/axpbox
+ * Website: https://github.com/artur/alphabox
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

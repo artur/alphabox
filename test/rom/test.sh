@@ -6,16 +6,16 @@ export LC_ALL=C
 # Download the firmware
 wget 'http://raymii.org/s/inc/downloads/es40-srmon/cl67srmrom.exe'
 
-# Start AXPbox
-if [[ -f ../../../build/axpbox ]]; then
-  ../../../build/axpbox run &
-  AXPBOX_PID=$!
+# Start Alphabox
+if [[ -f ../../../build/alphabox ]]; then
+  ../../../build/alphabox run &
+  ALPHABOX_PID=$!
 else # Travis
-  ../../build/axpbox run &
-  AXPBOX_PID=$!
+  ../../build/alphabox run &
+  ALPHABOX_PID=$!
 fi
 
-# Wait for AXPbox to start
+# Wait for Alphabox to start
 sleep 5
 
 # Connect to terminal
@@ -44,7 +44,7 @@ do
 done
 
 kill $NETCAT_PID
-kill $AXPBOX_PID
+kill $ALPHABOX_PID
 
 echo -n -e '\033[1;31m'
 # The CPU speed line is measured from host wall-clock performance since the

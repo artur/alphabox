@@ -180,8 +180,8 @@
 //#define S3_LFB_TRACE
 
 // Comment out to disable bypassing SRM memory checks (doesn't work well down
-// near SRM 7.0 ranges) SRM memory-test skipping is a runtime option in AXPbox:
-// set skip_memtest_hack = true; in the cpu config section.
+// near SRM 7.0 ranges) SRM memory-test skipping is a runtime option in
+// Alphabox: set skip_memtest_hack = true; in the cpu config section.
 
 // Define to verify JIT-generated code against a C reference on each compiled
 // block (ES40_JIT builds only).

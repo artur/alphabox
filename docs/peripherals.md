@@ -4,7 +4,7 @@ The ES40 SRM console (V7.3-1, `test/rom/cl67srmrom.exe`) carries a table of
 the PCI devices it recognises by name, and a separate set of console
 drivers for the ones it can *use* (boot from, or print to). That list is a
 good definition of "a peripheral an ES40 could really have", so it is the
-list AXPbox works from.
+list Alphabox works from.
 
 Two kinds of recognition matter:
 
@@ -23,7 +23,7 @@ The names below were extracted from the decompressed image with
 
 ## Emulated today
 
-| Firmware name | AXPbox class | Notes |
+| Firmware name | Alphabox class | Notes |
 | --- | --- | --- |
 | Acer Labs M1543C | `ali` | ISA bridge: PIT, PIC, DMA, RTC/TOY, keyboard/mouse, COM1/COM2, LPT1, floppy |
 | Acer Labs M1543C IDE | `ali_ide` | bootable (IDE disks and CD-ROMs) |

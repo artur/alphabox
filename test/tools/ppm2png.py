@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ppm2png.py in.ppm out.png -- convert an AXPBOX_DUMP_FB P6 dump to PNG
+# ppm2png.py in.ppm out.png -- convert an ALPHABOX_DUMP_FB P6 dump to PNG
 import sys, zlib, struct
 d = open(sys.argv[1], 'rb').read()
 p = d.split(b'\n', 3)

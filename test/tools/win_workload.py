@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run a command inside a booted Windows 2000 guest and time it.
 
-Called by win_workload.sh while the emulator runs with AXPBOX_DUMP_FB (frames
-every ~2 s) and AXPBOX_KEYPIPE. Steps:
+Called by win_workload.sh while the emulator runs with ALPHABOX_DUMP_FB (frames
+every ~2 s) and ALPHABOX_KEYPIPE. Steps:
   1. wait for the desktop: a light-gray taskbar row near the bottom and a
      mostly blue frame, seen in several consecutive dumps;
   2. wait --settle seconds (startup programs finish);

@@ -23,7 +23,7 @@ Poco-style wrappers in `src/base/`. Format changed lines with the repository's
 ## Test tools
 
 The scripts in `test/tools/` find the repository from their own location and
-write their output to `$AXPBOX_WORK` (default `lab/`, which git ignores).
+write their output to `$ALPHABOX_WORK` (default `lab/`, which git ignores).
 They stop only the emulator processes they started.
 
 | Tool | Purpose |
@@ -60,4 +60,4 @@ A change is ready when:
 ## Peripherals
 
 [peripherals.md](peripherals.md) lists the PCI devices the ES40 firmware
-knows, what AXPbox emulates, and the order in which more are being added.
+knows, what Alphabox emulates, and the order in which more are being added.

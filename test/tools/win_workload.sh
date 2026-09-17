@@ -3,9 +3,9 @@
 # throwaway clone, run a CPU-bound command in it through the Run dialog, and
 # time the command from its console window opening to closing.
 #
-# usage: win_workload.sh <label> <axpbox-binary> <install-dir> <cfg> "<command>" [VAR=value ...]
-#   install-dir  relative paths are under $AXPBOX_WORK (default <repo>/lab);
-#                the install is cloned to $AXPBOX_WORK/work-<label>
+# usage: win_workload.sh <label> <alphabox-binary> <install-dir> <cfg> "<command>" [VAR=value ...]
+#   install-dir  relative paths are under $ALPHABOX_WORK (default <repo>/lab);
+#                the install is cloned to $ALPHABOX_WORK/work-<label>
 #   command      typed into Start > Run, e.g.
 #                "cmd /c for /l %i in (1,1,300000) do @rem"
 #   VAR=value    extra environment for the emulator
@@ -21,7 +21,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-WORK=${AXPBOX_WORK:-$R/lab}
+WORK=${ALPHABOX_WORK:-$R/lab}
 [ $# -ge 5 ] || { sed -n '2,20p' "$0"; exit 2; }
 LABEL=$1 BIN=$2 INST=$3 CFG=$4 CMD=$5
 shift 5
@@ -38,7 +38,7 @@ rm -rf "$D"
 cp -c -R "$SRC" "$D" 2>/dev/null || cp -R "$SRC" "$D" || exit 2
 rm -rf "$D/fb" && mkdir -p "$D/fb" && : > "$D/keys.txt"
 cd "$D" || exit 2
-env "$@" SDL_VIDEO_DRIVER=dummy AXPBOX_DUMP_FB=fb/fb AXPBOX_KEYPIPE=keys.txt \
+env "$@" SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb ALPHABOX_KEYPIPE=keys.txt \
   "$BIN" run "$CFG" > run.log 2>&1 &
 P=$!
 echo "== $LABEL: pid $P, $(basename "$BIN") on $INST/$CFG: $CMD"

@@ -1,8 +1,8 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -41,9 +41,9 @@
 #include "gui/keymap.hpp"
 #include "gui/scancodes.hpp"
 
-/// AXPBOX_MOUSE_DEBUG=1 traces guest aux commands and discarded mouse data.
+/// ALPHABOX_MOUSE_DEBUG=1 traces guest aux commands and discarded mouse data.
 static bool mouse_debug() {
-  static const bool on = getenv("AXPBOX_MOUSE_DEBUG") != nullptr;
+  static const bool on = getenv("ALPHABOX_MOUSE_DEBUG") != nullptr;
   return on;
 }
 
@@ -1251,7 +1251,7 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
   BX_DEBUG(("  allow_irq12 = %u", (unsigned)state.allow_irq12));
   BX_DEBUG(("  aux_clock_enabled = %u", (unsigned)state.aux_clock_enabled));
 #endif
-  // Debug aid: AXPBOX_MOUSE_DEBUG=1 traces every command the guest sends to
+  // Debug aid: ALPHABOX_MOUSE_DEBUG=1 traces every command the guest sends to
   // the PS/2 aux device — shows whether a guest driver ever detects and
   // enables the mouse (0xf4 = enable stream mode).
   if (mouse_debug())

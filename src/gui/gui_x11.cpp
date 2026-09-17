@@ -1,4 +1,4 @@
-/* AXPbox Alpha Emulator
+/* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
@@ -258,7 +258,7 @@ void bx_x11_gui_c::specific_init(unsigned tilewidth, unsigned tileheight) {
   int x;
   int y;                         /* window position */
   unsigned int border_width = 4; /* four pixels */
-  const char *window_name = "AXPbox Alpha Emulator";
+  const char *window_name = "Alphabox Alpha Emulator";
   const char *icon_name = "ES40";
   XSizeHints size_hints;
   char *display_name = NULL;
@@ -423,7 +423,7 @@ void bx_x11_gui_c::specific_init(unsigned tilewidth, unsigned tileheight) {
     wm_hints.initial_state = NormalState;
     wm_hints.input = True;
     class_hints.res_name = progname;
-    class_hints.res_class = (char *)"AXPbox Alpha Emulator";
+    class_hints.res_class = (char *)"Alphabox Alpha Emulator";
 
     XSetWMProperties(bx_x_display, win, &windowName, &iconName, NULL /*argv*/,
                      0 /*argc*/, &size_hints, &wm_hints, &class_hints);
