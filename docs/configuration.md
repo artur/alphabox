@@ -60,6 +60,27 @@ The emulator then **waits at startup** until a client connects
 Sending a telnet BREAK opens a small menu: continue, exit, abort, save the
 machine state to `autosave.axp`, or load it back.
 
+## Machines
+
+`platform` in the machine block selects which machine is emulated:
+
+```
+sys0 = tsunami {
+  platform = "es40";
+}
+```
+
+- `es40` (the default): the AlphaServer ES40.
+- `ds20e`: the AlphaServer DS20E, under construction. Its console runs and
+  lists its configuration, but the board's own hardware is not modelled yet;
+  [platforms.md](platforms.md) and its
+  [work packet](platforms/ds20e.md) say what is missing.
+
+A machine expects its own console firmware, named with `rom.srm` (each
+machine's default is its usual file name). Images come from the firmware
+media you own; Alphabox reads both the update-bundle form and the raw form
+behind the standard Alpha ROM header.
+
 ## Networking
 
 Two NIC families are available, each in any free PCI slot:

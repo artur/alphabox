@@ -37,6 +37,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 
 | Area | Devices |
 |---|---|
+| Machine | AlphaServer ES40 (AlphaServer DS20E under construction, see [docs/platforms.md](docs/platforms.md)) |
 | CPU | 1–4 × Alpha EV68CB (21264) |
 | Chipset | Tsunami/Typhoon: Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC |
 | Memory | 64 MB – 32 GB |

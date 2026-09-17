@@ -35,8 +35,15 @@ Three layers, each added in a different way:
   done on speculation.
 - **The trace**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
   claimed, with the instruction that made it.
-- **The tools**: `PLATFORM=` selects the machine in `srm_probe.sh`, and the
-  `onboard-platform` skill carries the process.
+- **The tools**: `PLATFORM=` and `ROM=` select the machine and its firmware
+  in `srm_probe.sh`, and the `onboard-platform` skill carries the process.
+
+### Which machines run
+
+| Machine | State |
+| --- | --- |
+| AlphaServer ES40 | emulated: the machine this project is about |
+| AlphaServer DS20E | under construction: its console reaches `P00>>>` and lists its configuration, with the differences still open in its [packet](platforms/ds20e.md) |
 
 ## Where the firmware comes from
 
@@ -54,8 +61,8 @@ Two image formats appear:
 - an update bundle ("LFU APU") holding several images, which is what the
   ES40's `cl67srmrom.exe` and the CD's `*_V7_3.EXE` files are.
 
-Alphabox reads the ES40 bundle today; the raw form needs a loader, which is
-a first work item for the pilot.
+Alphabox reads both: the board's descriptor says which form its firmware
+takes, and a raw image is loaded where its header says.
 
 ## The work packet
 
@@ -110,9 +117,10 @@ device or an absent CPU.
    rows, a board descriptor for the ES40, the trace, the `PLATFORM=`
    selector, the template and the skill. Separating the chipset is left for
    the first machine that needs a different one.
-2. **Pilot: DS20E** ([packet](platforms/ds20e.md)). Same chipset and CPU
-   family, its own firmware and board: it tests the contract with the least
-   new hardware.
+2. **Pilot: DS20E** ([packet](platforms/ds20e.md)), in progress: the
+   console runs (L2). What remains is the machine's own hardware -- how it
+   finds a second processor, the processor SROM data it reads, its flash --
+   and a real machine's listing to check against.
 3. **The rest of the Tsunami family**: DS10, DS20, DS20L, and the UP2000 and
    XP1000 boards.
 4. **Titan** (ES45, DS25) with EV67/EV68 rows.
