@@ -84,14 +84,29 @@ public:
   int pci_bus() const { return myPCIBus; }
   int pci_dev() const { return myPCIDev; }
 
+  /// The PCI-PCI bridge this device sits behind, or nullptr on a hose's
+  /// root bus. myPCIBus is always the hose (Pchip) number; the bus number
+  /// a configuration cycle carries is the bridge's secondary bus.
+  class CPCIBridge *upstream_bridge() const { return myBridge; }
+
+  /// (Re)place the configuration-space windows at the current bus number:
+  /// 0 on the root bus, the upstream bridge's secondary bus otherwise
+  /// (unmapped while the firmware has not numbered it yet).
+  void map_config_space();
+
 protected:
   bool do_pci_interrupt(int func, bool asserted);
   void add_function(int func, u32 data[64], u32 mask[64]);
   void add_legacy_io(int id, u32 base, u32 length);
   void add_legacy_mem(int id, u32 base, u32 length);
 
+  /// A type 1 (PCI-PCI bridge) header: two BARs, then bus numbers and
+  /// forwarding windows instead of BARs 2-5, and the ROM BAR at 0x38.
+  bool bridge_header(int func) const;
+
   int myPCIBus;
   int myPCIDev;
+  class CPCIBridge *myBridge = nullptr;
 
   u32 std_config_data[8][64];
   u32 std_config_mask[8][64];

@@ -58,6 +58,7 @@
 #include "ES1370.hpp"
 #include "I8255x.hpp"
 #include "MPU401.hpp"
+#include "PCIBridge.hpp"
 #include "Sym53C8xx.hpp"
 
 /**
@@ -564,6 +565,7 @@ u64 CConfigurator::get_num_value(const char *n, bool decimal, u64 def) {
 #define IS_NIC 1024
 
 #define N_P 2048 // no parent
+#define ON_BOARD 4096 // only inside the board of the same name (see ports)
 typedef struct {
   const char *name;
   classid id;
@@ -639,6 +641,15 @@ classinfo classes[] = {
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"dec21143", c_dec21143, IS_PCI | IS_NIC, kv_dec21143},
     {"de600", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"de602_port", c_i8255x, IS_PCI | IS_NIC | ON_BOARD, kv_i8255x},
+    {"de602b_port", c_i8255x, IS_PCI | IS_NIC | ON_BOARD, kv_i8255x},
+    {"dec21050", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"dec21052", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"dec21152", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"dec21153", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"dec21154", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"de602", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
+    {"de602b", c_pci_bridge, IS_PCI | HAS_PCI, kv_none},
     {"i82557", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82558", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82559", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
@@ -744,21 +755,42 @@ void CConfigurator::initialize() {
                 myValue, myName);
     }
 
+    const bool behind_bridge = pParent->get_class_id() == c_pci_bridge;
     pt = &myName[3];
     pcibus = atoi(pt);
     pt = strchr(pt, '.');
-    if (!pt)
-      FAILURE_2(Configuration,
-                "Name %s for class %s should be pci<bus>.<device>", myName,
-                myValue);
+    if (!pt || (behind_bridge && pt != &myName[3]))
+      FAILURE_3(Configuration, "Name %s for class %s should be %s", myName,
+                myValue,
+                behind_bridge ? "pci.<device> (inside a bridge)"
+                              : "pci<bus>.<device>");
     pt++;
     pcidev = atoi(pt);
+
+    if (behind_bridge) {
+      // The secondary bus: same hose, devices 0-15 (IDSEL on AD16-AD31).
+      pcibus = ((CPCIDevice *)(CPCIBridge *)pParent->get_device())->pci_bus();
+      if (pcidev < 0 || pcidev > 15)
+        FAILURE_2(Configuration,
+                  "%s (%s): a device behind a bridge must be pci.0 to pci.15",
+                  myName, myValue);
+    }
+    if (myFlags & ON_BOARD) {
+      const pci_bridge_config *board =
+          behind_bridge ? CPCIBridge::find_chip(pParent->get_myValue())
+                        : nullptr;
+      if (!board || !board->port_class || strcmp(board->port_class, myValue))
+        FAILURE_2(Configuration,
+                  "%s (%s) is a port of a multi-port board and belongs "
+                  "inside that board's block",
+                  myName, myValue);
+    }
 
     // Validate PCI slot assignments. On the Tsunami chipset, certain
     // pci0 slots are reserved for system-internal devices. Placing an
     // add-in device on one of those slots causes the SRM firmware to
     // malfunction (e.g. SCSI disks not detected, device conflicts).
-    if (pcibus == 0) {
+    if (pcibus == 0 && !behind_bridge) {
       bool is_system_device =
           (myClassId == c_ali || myClassId == c_ali_ide ||
            myClassId == c_ali_usb || myClassId == c_ali_pmu);
@@ -842,39 +874,34 @@ void CConfigurator::initialize() {
      * CDiskController part of the class as it's used
      * to register disks to.
      */
-    myDevice = (CDiskController *)new CAliM1543C_ide(
-        this, (CSystem *)pParent->get_device(), pcibus, pcidev);
+    myDevice =
+        (CDiskController *)new CAliM1543C_ide(this, theSystem, pcibus, pcidev);
     break;
 
   case c_ali_usb:
-    myDevice = new CAliM1543C_usb(this, (CSystem *)pParent->get_device(),
-                                  pcibus, pcidev);
+    myDevice = new CAliM1543C_usb(this, theSystem, pcibus, pcidev);
     break;
 
 #ifdef _WIN32
   case c_mpu401:
-    myDevice = (void *)new CMPU401(this, (CSystem *)pParent->get_device());
+    myDevice = (void *)new CMPU401(this, theSystem);
     break;
 #endif
 
   case c_ali_pmu:
-    myDevice = new CAliM1543C_pmu(this, (CSystem *)pParent->get_device(),
-                                  pcibus, pcidev);
+    myDevice = new CAliM1543C_pmu(this, theSystem, pcibus, pcidev);
     break;
 
   case c_s3:
-    myDevice =
-        new CS3Trio64(this, (CSystem *)pParent->get_device(), pcibus, pcidev);
+    myDevice = new CS3Trio64(this, theSystem, pcibus, pcidev);
     break;
 
   case c_cirrus: {
     const std::string chip = get_text_value("chip", "gd5434");
     if (chip == "gd5434")
-      myDevice = new CCirrusGD5434(this, (CSystem *)pParent->get_device(),
-                                   pcibus, pcidev);
+      myDevice = new CCirrusGD5434(this, theSystem, pcibus, pcidev);
     else if (chip == "gd5430")
-      myDevice = new CCirrusGD5430(this, (CSystem *)pParent->get_device(),
-                                   pcibus, pcidev);
+      myDevice = new CCirrusGD5430(this, theSystem, pcibus, pcidev);
     else
       FAILURE_1(Configuration, "cirrus: unknown chip \"%s\" (gd5430, gd5434)",
                 chip.c_str());
@@ -883,23 +910,26 @@ void CConfigurator::initialize() {
 
 #if defined(HAVE_SDL)
   case c_es1370:
-    myDevice =
-        new CES1370(this, (CSystem *)pParent->get_device(), pcibus, pcidev);
+    myDevice = new CES1370(this, theSystem, pcibus, pcidev);
     break;
 #endif
 
 #if defined(HAVE_PCAP) || defined(__linux__)
 
   case c_dec21143:
-    myDevice =
-        new CDEC21143(this, (CSystem *)pParent->get_device(), pcibus, pcidev);
+    myDevice = new CDEC21143(this, theSystem, pcibus, pcidev);
     break;
 #endif
 
   case c_i8255x:
     // The class name ("de600", "i82558") names the board.
-    myDevice = new CI8255x(this, (CSystem *)pParent->get_device(), pcibus,
-                           pcidev, *CI8255x::find_chip(myValue));
+    myDevice = new CI8255x(this, theSystem, pcibus, pcidev,
+                           *CI8255x::find_chip(myValue));
+    break;
+
+  case c_pci_bridge:
+    myDevice = new CPCIBridge(this, theSystem, pcibus, pcidev,
+                              *CPCIBridge::find_chip(myValue));
     break;
 
   case c_sym53c8xx:
@@ -909,7 +939,7 @@ void CConfigurator::initialize() {
      * names the part.
      */
     myDevice = (CDiskController *)new CSym53C8xx(
-        this, (CSystem *)pParent->get_device(), pcibus, pcidev,
+        this, theSystem, pcibus, pcidev,
         *CSym53C8xx::find_chip(myValue + strlen("sym53c")));
     break;
 
@@ -1034,6 +1064,29 @@ void CConfigurator::initialize() {
       char stext[] = "null_attach=true;";
       pChildren[iNumChildren++] =
           new CConfigurator(this, sname, svalue, stext, strlen(stext));
+    }
+  }
+
+  // A multi-port board always carries its ports; the ones the
+  // configuration leaves out are added unconnected.
+  if (myClassId == c_pci_bridge) {
+    const pci_bridge_config *board = CPCIBridge::find_chip(myValue);
+    for (number = 0; board && number < board->ports; number++) {
+      char name[16];
+      snprintf(name, sizeof(name), "pci.%d", number);
+      bool have = false;
+      for (i = 0; i < iNumChildren; i++)
+        have |= !strcmp(pChildren[i]->get_myName(), name);
+      if (have)
+        continue;
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE_2(Configuration, "No room to add %s to %s", name, myName);
+      printf("%%SYS-I-DEFAULTPORT: %s(%s): port %s is not configured; "
+             "adding it unconnected (type = \"null\").\n",
+             myName, myValue, name);
+      char ptext[] = "type=\"null\";";
+      pChildren[iNumChildren++] = new CConfigurator(
+          this, strdup(name), strdup(board->port_class), ptext, strlen(ptext));
     }
   }
 

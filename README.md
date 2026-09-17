@@ -45,6 +45,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 | Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT) |
 | Network | DEC 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 |
+| Expansion | DECchip 21050/21052/21152/21153/21154 PCI-PCI bridges (nested buses, multi-port boards) |
 | Other | OHCI USB, 2 × 16550 serial ports (telnet or unconnected), keyboard and PS/2 mouse, flash and NVRAM persistence |
 
 [docs/peripherals.md](docs/peripherals.md) lists every device the ES40

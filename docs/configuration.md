@@ -99,6 +99,30 @@ Every NIC takes `mac` (default `08-00-2B-E5-40-<n>`, `n` counting the NICs
 in the machine). The `dec21143` also takes `queue` (receive queue depth,
 default 1024), `crc` and `trace_packets`.
 
+## PCI-PCI bridges and multi-port boards
+
+A bridge takes a PCI slot and opens a second bus behind it; the devices on
+that bus go inside the bridge's block, named `pci.<device>` (0-15):
+
+```
+pci0.3 = dec21152 {
+  pci.0 = sym53c875 { disk0.0 = file { file = "disk.img"; } }
+  pci.1 = de600 { type = "null"; }
+}
+```
+
+The bridge classes are the ones the ES40 console names: `dec21050`,
+`dec21052`, `dec21152`, `dec21153` and `dec21154`. Bridges nest. The
+console numbers the buses (the first bridge's bus is 2; bus 1 is ISA) and
+shows the devices as `eia0.0.0.2001.0` and so on; interrupts reach the
+bridge's slot with the usual rotation by device number.
+
+The dual-port DE602 boards are bridge classes too: `de602` (DE602-AA:
+a 21152 and two 82558 ports) and `de602b` (DE602-B*: an Intel 21154 and two
+82559 ports). Their ports are `pci.0` and `pci.1` of class `de602_port` or
+`de602b_port`, which take the NIC options above; a port left out is added
+unconnected (`type = "null"`).
+
 ## Sound
 
 `pci1.1 = es1370 {}` adds an Ensoniq AudioPCI ES1370 (SDL builds only).

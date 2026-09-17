@@ -35,6 +35,8 @@ The names below were extracted from the decompressed image with
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test |
+| DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | `ei` console driver: network boot on either port |
+| DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | PCI-PCI bridges; the console numbers and probes the buses behind them, nested too; Windows 2000 drives a 53C810 behind one |
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
 | Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
 | Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; Windows 2000 draws its desktop through the BitBLT engine |
@@ -60,8 +62,8 @@ on-board firmware or a large command set.
 | --- | --- | --- |
 | QLogic ISP10x0 (`isp1020`, KZPBA) | L | the standard ES40 SCSI adapter; bootable; drivers in OpenVMS, Tru64, NetBSD, Linux and NT. The command interface runs through on-board RISC firmware, so it's a mailbox/IOCB model, not a register model |
 | DECchip ZLXp 21030 (TGA) | L | DEC's own 2D/3D workstation graphics; DECwindows/CDE on OpenVMS and Tru64 expect it; NetBSD has a driver |
-| DE602-AA/-B*/-F*/-T* (dual Intel 8255x) | S | the dual-port DE602 is two 8255x functions behind a PCI-PCI bridge: comes with the bridges |
-| DECchip 21052/21152/21153/21154 (PCI-PCI bridges) | M | more slots, a second bus, and the multi-port cards built on them (for example a quad 21143 behind a 21152) |
+| DE602-F*/-T* (DE602 add-on modules) | S | extra ports for a DE602 |
+| DE504-BA and other quad 21143 boards | S | four `dec21143` behind a bridge: already possible by hand; a board class would name them |
 | ATI Mach64 | M–L | common workstation card for NT and the free Unixes |
 
 ### 3. Storage beyond SCSI-2 parallel
@@ -114,7 +116,9 @@ change what a guest can do on an emulated ES40.
    remain.
 3. ~~Intel 8255x~~: the DE600 and Intel's 82557/82558/82559 boards are
    done; the dual-port DE602 waits for the bridges.
-4. PCI-PCI bridge (21152/21154): unlocks multi-function cards and more slots.
+4. ~~PCI-PCI bridges~~: the 21050/21052/21152/21153/21154 and the DE602
+   boards are done; the forwarding windows are not modelled (devices behind
+   a bridge claim their BARs on the hose directly).
 5. QLogic ISP1040 (KZPBA): the ES40's reference SCSI adapter.
 6. TGA (ZLXp 21030): native DECwindows/CDE graphics.
 

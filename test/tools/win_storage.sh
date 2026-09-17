@@ -7,6 +7,8 @@
 #            <install-dir> <cfg> [boots] [VAR=value ...]
 #   CTRL      controller class, e.g. sym53c810 (placed at pci0.3)
 #   CTRL_OPTS extra lines for the controller section, e.g. 'chip = "x";'
+#   BRIDGE    put the controller behind a PCI-PCI bridge of this class
+#             (at pci0.3), as device BRIDGE_DEV (default 2) on its bus
 #   boots     how many boots to try (default 2): Windows installs the driver
 #             for new hardware on the first boot and may only use it on the
 #             next one.
@@ -19,7 +21,7 @@ set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
 WORK=${ALPHABOX_WORK:-$R/lab}
-[ $# -ge 4 ] || { sed -n '2,19p' "$0"; exit 2; }
+[ $# -ge 4 ] || { sed -n '2,21p' "$0"; exit 2; }
 LABEL=$1 BIN=$2 INST=$3 CFG=$4 BOOTS=${5:-2}
 shift $(($# < 5 ? 4 : 5))
 : "${CTRL:?set CTRL to the controller class}"
@@ -37,14 +39,18 @@ rm -rf "$D"
 cp -c -R "$SRC" "$D" 2>/dev/null || cp -R "$SRC" "$D" || exit 2
 cd "$D" || exit 2
 python3 "$T/fat_disk.py" make scsi0.img --size-mb 64 --data-kb 2048 > /dev/null || exit 2
-python3 - "$CFG" "$CTRL" "${CTRL_OPTS:-}" > storage.cfg <<'PY' || exit 2
+python3 - "$CFG" "$CTRL" "${CTRL_OPTS:-}" "${BRIDGE:-}" "${BRIDGE_DEV:-2}" > storage.cfg <<'PY' || exit 2
 import sys
-cfg, ctrl, opts = sys.argv[1:4]
+cfg, ctrl, opts, bridge, bridge_dev = sys.argv[1:6]
 t = open(cfg).read()
 anchor = "  pci0.15 = ali_ide"
 assert anchor in t, "no ali_ide section to anchor on"
 sec = "  pci0.3 = %s\n  {\n%s    disk0.0 = file\n    {\n      file = \"scsi0.img\";\n    }\n  }\n\n" % (
     ctrl, ("    " + opts + "\n") if opts else "")
+if bridge:
+    inner = sec.replace("  pci0.3 = ", "  pci.%s = " % bridge_dev, 1)
+    inner = "".join("  " + l if l.strip() else l for l in inner.splitlines(True))
+    sec = "  pci0.3 = %s\n  {\n%s  }\n\n" % (bridge, inner.rstrip("\n") + "\n")
 print(t.replace(anchor, sec + anchor, 1), end="")
 PY
 

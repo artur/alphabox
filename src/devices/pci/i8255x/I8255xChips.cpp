@@ -36,6 +36,11 @@
 static const i8255x_chip_config chips[] = {
     // name     part     device  rev   subsystem vendor, id    gen  PMC
     {"de600", "82559", 0x1229, 0x08, PCI_VENDOR_COMPAQ, 0xb144, 9, 0x7e21},
+    // The ports of the dual-port DE602 boards (see PCIBridgeChips.cpp).
+    {"de602_port", "82558B", 0x1229, 0x05, PCI_VENDOR_COMPAQ, 0xb0dd, 8,
+     0x7e21},
+    {"de602b_port", "82559", 0x1229, 0x08, PCI_VENDOR_COMPAQ, 0xb163, 9,
+     0x7e21},
     {"i82557", "82557C", 0x1229, 0x03, 0, 0, 7, 0},
     {"i82558", "82558B", 0x1229, 0x05, PCI_VENDOR_INTEL, 0x0009, 8, 0x7e21},
     {"i82559", "82559", 0x1229, 0x08, PCI_VENDOR_INTEL, 0x000c, 9, 0x7e21},

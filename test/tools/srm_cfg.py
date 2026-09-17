@@ -19,6 +19,8 @@ change it for the SRM probes:
                         dropped; needs no host privileges)
   --nic-udp N:P         put that NIC on the UDP backend instead: listening
                         on 127.0.0.1:N, sending to 127.0.0.1:P (net_peer.py)
+  --extra-cfg FILE      configuration text added inside the machine block
+                        (bridges, more PCI devices, ...)
   --ide-cfg FILE        body of the pci0.15 ali_ide block (drives)
   --floppy IMAGE        fdc0 with disk0.0 = IMAGE
   --exit-on-halt        sys0 exit_on_pal_halt = true
@@ -46,6 +48,7 @@ def main():
     ap.add_argument("--scsi", choices=["sym53c810", "sym53c825", "sym53c875", "sym53c895"])
     ap.add_argument("--nic", choices=["dec21143", "de600", "i82557", "i82558", "i82559"])
     ap.add_argument("--nic-udp")
+    ap.add_argument("--extra-cfg")
     ap.add_argument("--ide-cfg")
     ap.add_argument("--floppy")
     ap.add_argument("--exit-on-halt", action="store_true")
@@ -108,6 +111,8 @@ def main():
         else:
             backend = "    type = \"null\";\n"
         extra += "\n  pci0.4 = %s\n  {\n%s  }\n" % (args.nic, backend)
+    if args.extra_cfg:
+        extra += "\n" + open(args.extra_cfg).read()
     if args.floppy:
         extra += ("\n  fdc0 = floppy\n  {\n    disk0.0 = file\n    {\n"
                   "      file = \"%s\";\n      read_only = false;\n    }\n  }\n") % args.floppy

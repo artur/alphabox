@@ -1,6 +1,8 @@
 /* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -32,6 +34,7 @@
  *
  **/
 #include "PCIDevice.hpp"
+#include "PCIBridge.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "diag_rpcc.hpp"
@@ -88,6 +91,40 @@ CPCIDevice::CPCIDevice(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
 
   myPCIBus = pcibus;
   myPCIDev = pcidev;
+
+  // A device declared inside a bridge's block sits on its secondary bus.
+  CConfigurator *parent = cfg->get_myParent();
+  if (parent && parent->get_class_id() == c_pci_bridge)
+    myBridge = static_cast<CPCIBridge *>(parent->get_device());
+  if (myBridge)
+    myBridge->attach(this);
+}
+
+bool CPCIDevice::bridge_header(int func) const {
+  return ((std_config_data[func][3] >> 16) & 0x7f) == 1;
+}
+
+void CPCIDevice::map_config_space() {
+  int bus = 0;
+  bool mapped = true;
+  if (myBridge) {
+    bus = myBridge->secondary_bus();
+    mapped = bus != 0; // bus 0 is the root bus
+  }
+
+  for (int i = 0; i < 8; i++) {
+    if (!device_at[i])
+      continue;
+    // A zero-length range never decodes: the device is unreachable until
+    // its bus has a number.
+    cSystem->RegisterMemory(this, PCI_RANGE_BASE + (i * 8) + 7,
+                            U64(0x00000801fe000000) +
+                                (U64(0x0000000200000000) * myPCIBus) +
+                                (U64(0x0000000000010000) * bus) +
+                                (U64(0x0000000000000800) * myPCIDev) +
+                                (U64(0x0000000000000100) * i),
+                            mapped ? 0x100 : 0);
+  }
 }
 
 CPCIDevice::~CPCIDevice(void) {}
@@ -195,7 +232,8 @@ void CPCIDevice::config_write(int func, u32 address, int dsize, u32 data) {
     break;
   }
 
-  if (dsize == 32 && ((data & mask) != mask) && ((data & mask) != 0)) {
+  if (dsize == 32 && ((data & mask) != mask) && ((data & mask) != 0) &&
+      !(bridge_header(func) && address > 0x14)) {
     switch (address) {
     case 0x10:
     case 0x14:
@@ -291,19 +329,16 @@ void CPCIDevice::register_bar(int func, int bar, u32 data, u32 mask) {
 void CPCIDevice::ResetPCI() {
   int i;
 
+  map_config_space();
   for (i = 0; i < 8; i++) {
     if (device_at[i]) {
-      cSystem->RegisterMemory(this, PCI_RANGE_BASE + (i * 8) + 7,
-                              U64(0x00000801fe000000) +
-                                  (U64(0x0000000200000000) * myPCIBus) +
-                                  (U64(0x0000000000000800) * myPCIDev) +
-                                  (U64(0x0000000000000100) * i),
-                              0x100);
       memcpy(pci_state.config_data[i], std_config_data[i], 64 * sizeof(u32));
       memcpy(pci_state.config_mask[i], std_config_mask[i], 64 * sizeof(u32));
 
       config_write(i, 0x10, 32, endian_32(pci_state.config_data[i][4]));
       config_write(i, 0x14, 32, endian_32(pci_state.config_data[i][5]));
+      if (bridge_header(i))
+        continue;
       config_write(i, 0x18, 32, endian_32(pci_state.config_data[i][6]));
       config_write(i, 0x1c, 32, endian_32(pci_state.config_data[i][7]));
       config_write(i, 0x20, 32, endian_32(pci_state.config_data[i][8]));
@@ -468,8 +503,16 @@ bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
   if (pin == 0)
     return false;
 
-  const int intx = (pin - 1) & 0x3;
-  const int slot = myPCIDev & 0x1f;
+  // Behind bridges, INTx rotates by the device number at every level (the
+  // PCI-PCI bridge "swizzle") until it reaches the slot the outermost bridge
+  // occupies.
+  int intx = (pin - 1) & 0x3;
+  int dev = myPCIDev;
+  for (const CPCIBridge *b = myBridge; b; b = b->upstream_bridge()) {
+    intx = (intx + dev) & 0x3;
+    dev = b->pci_dev();
+  }
+  const int slot = dev & 0x1f;
   const int bus_offset = (myPCIBus & 0x3) * 0x10;
   const int drir_bit = ((slot + 1) * 4 + bus_offset + intx) & 0x3f;
 

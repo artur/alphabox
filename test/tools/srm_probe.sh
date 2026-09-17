@@ -10,6 +10,7 @@
 #   NET_PEER=N:P         with NIC: UDP backend on port N, and net_peer.py on
 #                        port P answering ARP/BOOTP/TFTP (log: peer.log);
 #                        NET_PEER_OPT="..." adds net_peer.py options
+#   EXTRA_CFG=<file>     configuration text for the machine block
 #   IDE_CFG=<file>       drives for the ali_ide block
 #   FLOPPY=<image>|halt  fdc0 with this image; "halt" generates the CALL_PAL
 #                        HALT boot-block floppy (make_halt_floppy.py)
@@ -32,7 +33,7 @@ set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { sed -n '2,35p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,36p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
@@ -53,6 +54,7 @@ cfg=(--out "$D/es40.cfg" --port "$PORT" --cpus "${CPUS:-1}")
 [ -n "${SCSI:-}" ] && cfg+=(--scsi "$SCSI")
 [ -n "${NIC:-}" ] && cfg+=(--nic "$NIC")
 [ -n "${NET_PEER:-}" ] && cfg+=(--nic-udp "$NET_PEER")
+[ -n "${EXTRA_CFG:-}" ] && cfg+=(--extra-cfg "$(cd "$(dirname "$EXTRA_CFG")" && pwd)/$(basename "$EXTRA_CFG")")
 [ -n "${IDE_CFG:-}" ] && cfg+=(--ide-cfg "$IDE_CFG")
 [ "${EXIT_ON_HALT:-0}" = 1 ] && cfg+=(--exit-on-halt)
 for o in ${CPU_OPT:-}; do cfg+=(--cpu-opt "$o"); done

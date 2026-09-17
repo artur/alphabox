@@ -95,7 +95,7 @@ Source layout under `src/`:
 | `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
 | `system/` | `System`, `SystemComponent`, `Configurator`, `DPR`, `Flash`, `Port80`, `i2c_spd`, `TraceEngine` |
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
-| `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`) |
+| `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`) |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
 | `devices/video/` | `VGA` (MAME-derived core), `VGACard` (shared card plumbing + standard VGA registers), `ibm8514a`, MAME-derived shims, the dead pre-MAME `Cirrus`; one subdirectory per card family: `s3/` (`S3Trio64`), `cirrus/` (`CirrusGD54xx` split by concern, the device-independent `CirrusBlitter`, `CirrusGD5430`/`CirrusGD5434`) |
 | `devices/net/` | `Ethernet`, `NicAddress` (shared station-address default), `NetworkBackend` and its backends `NetworkPcap`, `NetworkTap`, `NetworkUdp`, `NetworkNull` |
@@ -118,7 +118,9 @@ windows, interrupts via `cSystem->interrupt()`). Devices derive from
 memory ranges with the system, and implement `ReadMem`/`WriteMem`, optional
 `init()`/`start_threads()`/`stop_threads()`/`check_state()`, and
 `SaveState`/`RestoreState`. PCI devices derive from `CPCIDevice`
-(config space, BARs); disk controllers from `CDiskController` with `CDisk`
+(config space, BARs; `myPCIBus` is the hose, and a device declared inside a
+bridge's block as `pci.<dev>` sits on its secondary bus: config space at the
+bus number the firmware assigns, INTx rotated onto the bridge's slot); disk controllers from `CDiskController` with `CDisk`
 children (`CDiskFile`/`CDiskDevice`/`CDiskRam`, BIN/CUE support in
 `devices/storage/DiskFileBinCue.hpp`).
 
