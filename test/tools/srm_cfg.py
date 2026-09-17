@@ -11,7 +11,7 @@ change it for the SRM probes:
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
                         e.g. palcode.vms.nohle=true
   --cpu1-opt KEY=VALUE  extra setting on cpu1 only (repeatable)
-  --scsi CTRL           pci0.3 = sym53c810|sym53c895 with disk0.0 = a sparse
+  --scsi CTRL           pci0.3 = sym53c810|825|875|895 with disk0.0 = a sparse
                         1 GB image (dka0.img, created in --dir) and
                         disk0.5 = a 10 MB RAM disk
   --ide-cfg FILE        body of the pci0.15 ali_ide block (drives)
@@ -38,7 +38,7 @@ def main():
     ap.add_argument("--membits", type=int)
     ap.add_argument("--cpu-opt", action="append", default=[])
     ap.add_argument("--cpu1-opt", action="append", default=[])
-    ap.add_argument("--scsi", choices=["sym53c810", "sym53c895"])
+    ap.add_argument("--scsi", choices=["sym53c810", "sym53c825", "sym53c875", "sym53c895"])
     ap.add_argument("--ide-cfg")
     ap.add_argument("--floppy")
     ap.add_argument("--exit-on-halt", action="store_true")

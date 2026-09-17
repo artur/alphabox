@@ -115,12 +115,13 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
         break;
 
       case R_SCNTL2: // 02
-        WRM_R8(SCNTL2, (u8)data);
+        // WSS/WSR (wide parts) are cleared by writing 1
+        WRMW1C_R8(SCNTL2, (u8)data);
         break;
 
       case R_SCNTL3: // 03
         // side effects: clearing EWS
-        WRM_R8(SCNTL3, (u8)data);
+        write_b_scntl3((u8)data);
         break;
 
       case R_SCID: // 04
@@ -196,16 +197,26 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
         write_b_stest3((u8)data);
         break;
 
+      case R_CTEST2: // 1A
+        // Read only, except SRTCH on the parts with SCRIPTS RAM.
+        if (m_chip.ram_bytes)
+          SB_R8(CTEST2, SRTCH, (data & R_CTEST2_SRTCH) != 0);
+        break;
+
+      case R_RESPID + 1: // 4B
+        // RESPID1: reselection IDs 8-15 on wide parts
+        if (m_chip.id_mask == 0x0f)
+          state.regs.reg8[address] = (u8)data;
+        break;
+
       case R_DSTAT:  // 0C
       case R_SSTAT0: // 0D
       case R_SSTAT1: // 0E
       case R_SSTAT2: // 0F
-      case R_CTEST2: // 1A
         // printf("SYM: Write to read-only register at %02x. FreeBSD driver
         // cache test.\n", address);
         break;
 
-      case 0x4b: // ??? Linux wants this
       case 0x15: // ??? NT wants this
       case 0x16: // ??? NT wants this
       case 0x17: // ??? NT wants this
@@ -235,6 +246,9 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
     break;
 
   case 2:
+    // SCRIPTS RAM; accesses past its end are not decoded.
+    if (address + dsize / 8 > sizeof(state.ram))
+      break;
     p = (u8 *)state.ram + address;
     switch (dsize) {
     case 8:
@@ -268,7 +282,7 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
     address &= 0x7f;
     switch (dsize) {
     case 8:
-      if (address >= R_SCRATCHB) {
+      if (address >= R_SCRATCHB + 4) {
         data = state.regs.reg8[address];
         break;
       }
@@ -305,8 +319,15 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
       case R_DSA + 1: // 11
       case R_DSA + 2: // 12
       case R_DSA + 3: // 13
-      case R_ISTAT:   // 14
         data = state.regs.reg8[address];
+        break;
+
+      case R_ISTAT: // 14
+        // CON mirrors the connection state (SCNTL1 CON). Drivers check it
+        // in their interrupt handlers: the Windows 2000 symc8xx driver
+        // resets the bus on a message interrupt that finds it clear.
+        data =
+            (R8(ISTAT) & ~R_ISTAT_CON) | (TB_R8(SCNTL1, CON) ? R_ISTAT_CON : 0);
         break;
 
       case R_CTEST0: // 18
@@ -337,10 +358,6 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
       case R_DSPS + 1:     // 31
       case R_DSPS + 2:     // 32
       case R_DSPS + 3:     // 33
-      case R_SCRATCHA:     // 34
-      case R_SCRATCHA + 1: // 35
-      case R_SCRATCHA + 2: // 36
-      case R_SCRATCHA + 3: // 37
       case R_DMODE:        // 38
       case R_DIEN:         // 39
       case R_SBR:          // 3A     // 810
@@ -389,11 +406,28 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
         data = read_b_sist(address - R_SIST0);
         break;
 
+      case R_SCRATCHA:     // 34
+      case R_SCRATCHA + 1: // 35
+      case R_SCRATCHA + 2: // 36
+      case R_SCRATCHA + 3: // 37
+      case R_SCRATCHB:     // 5C
+      case R_SCRATCHB + 1: // 5D
+      case R_SCRATCHB + 2: // 5E
+      case R_SCRATCHB + 3: // 5F
+        data = read_b_scratch(address);
+        break;
+
+      case R_RESPID + 1: // 4B
+        data = (m_chip.id_mask == 0x0f) ? state.regs.reg8[address] : 0;
+        break;
+
+      case R_STEST4: // 52
+        data = m_chip.stest4;
+        break;
+
       case 0x15: // ??? NT wants this
       case 0x16: // ??? NT wants this
       case 0x17: // ??? Linux wants this.
-      case 0x4b: // ??? Linux wants this
-      case 0x52: // ??? Linux wants this.
       case 0x59: // ??? Linux wants this.
       case 0x23: // CTEST6 NT wants this.
       case 0x44: // SLPAR NT wants this.
@@ -438,6 +472,8 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
     break;
 
   case 2:
+    if (address + dsize / 8 > sizeof(state.ram))
+      return 0;
     p = (u8 *)state.ram + address;
     switch (dsize) {
     case 8:
@@ -518,8 +554,14 @@ void CSym53C8xx::write_b_scntl1(u8 value) {
     SB_R8(SSTAT0, RST, !old_rst);
 
     //    printf("SYM: %s SCSI bus reset.\n",old_rst?"end":"start");
-    if (!old_rst)
+    if (!old_rst) {
+      // A bus reset ends any connection: the target drops off and CON
+      // clears (drivers write SCNTL1 back read-modify-write, so a stale
+      // CON would otherwise survive the reset).
+      scsi_bus[0]->reset_bus();
+      SB_R8(SCNTL1, CON, false);
       RAISE(SIST0, RST);
+    }
   }
 }
 
@@ -764,6 +806,35 @@ void CSym53C8xx::write_b_stest2(u8 value) {
 }
 
 /**
+ * Write a byte to the SCSI Control 3 register.
+ *
+ * Disabling wide SCSI (EWS) also clears the Wide SCSI Receive flag.
+ **/
+void CSym53C8xx::write_b_scntl3(u8 value) {
+  WRM_R8(SCNTL3, value);
+
+  if (m_chip.id_mask == 0x0f && !TB_R8(SCNTL3, EWS))
+    SB_R8(SCNTL2, WSR, false);
+}
+
+/**
+ * Read a byte of SCRATCHA or SCRATCHB.
+ *
+ * With CTEST2 SRTCH set (parts with SCRIPTS RAM only), SCRATCHA reads the
+ * memory-mapped base of the operating registers (BAR1) and SCRATCHB the
+ * base of the RAM (BAR2); the scratch contents are kept.
+ **/
+u8 CSym53C8xx::read_b_scratch(u32 address) {
+  if (m_chip.ram_bytes && TB_R8(CTEST2, SRTCH)) {
+    const bool a = address < R_SCRATCHB;
+    const int byte = int(address - (a ? R_SCRATCHA : R_SCRATCHB));
+    const u32 bar = pci_state.config_data[0][a ? 5 : 6];
+    return u8(bar >> (byte * 8));
+  }
+  return state.regs.reg8[address];
+}
+
+/**
  * Write a byte to the SCSI Test 3 register.
  *
  * This is implemented as a separate function, because there are
@@ -773,6 +844,8 @@ void CSym53C8xx::write_b_stest2(u8 value) {
 void CSym53C8xx::write_b_stest3(u8 value) {
   WRM_R8(STEST3, value);
 
-  //  if (value & R_STEST3_CSF)
-  //    printf("SYM: Don't know how to clear the SCSI fifo.\n");
+  // CSF (Clear SCSI FIFO) clears itself once the FIFO is empty, which with
+  // no modelled FIFO is at once. Drivers poll for it: the Windows 2000
+  // symc8xx driver resets the chip when it stays set.
+  SB_R8(STEST3, CSF, false);
 }

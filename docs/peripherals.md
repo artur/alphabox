@@ -30,7 +30,9 @@ The names below were extracted from the decompressed image with
 | Acer Labs M1543C USB | `ali_usb` | OHCI host-controller registers only; no USB devices attach |
 | Acer Labs M1543C PMU | `ali_pmu` | |
 | NCR 53C810 | `sym53c810` | `n810` console driver: bootable |
-| NCR 53C895 | `sym53c895` | `n810` console driver: bootable |
+| NCR 53C825 (825A) | `sym53c825` | `n810` console driver: bootable; wide, 4 KB SCRIPTS RAM |
+| NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM |
+| NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
 | Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
@@ -48,7 +50,7 @@ on-board firmware or a large command set.
 
 | Firmware name | Effort | Why |
 | --- | --- | --- |
-| NCR 53C825, 53C875, 53C895A, 53C896 | S | same `n810` driver and register set as the 810/895; mostly PCI ids, FIFO size and wide-bus bits |
+| NCR 53C895A, 53C896 | S–M | same `n810` driver; the 895A has 8 KB of RAM and a 256-byte register window, the 896 is two channels as two PCI functions |
 | DECchip 21040/21041/21140, DE500-AA/-FA/-XA | S–M | older Tulips on the same driver; the 21140 matters for Windows NT and old Tru64 |
 
 ### 2. New devices with high payoff
@@ -107,7 +109,8 @@ change what a guest can do on an emulated ES40.
 
 1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done; screen-to-system
    blits are still ignored).
-2. 53C8xx variants: cheap, bootable, broad guest coverage.
+2. ~~53C8xx variants~~: the 825, 875 and 895 are done; the 895A and 896
+   remain.
 3. Intel 8255x (DE600/DE602): a second NIC family on a well-documented chip.
 4. PCI-PCI bridge (21152/21154): unlocks multi-function cards and more slots.
 5. QLogic ISP1040 (KZPBA): the ES40's reference SCSI adapter.

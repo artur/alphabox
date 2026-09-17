@@ -40,7 +40,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 | CPU | 1–4 × Alpha EV68CB (21264) |
 | Chipset | Tsunami/Typhoon: Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC |
 | Memory | 64 MB – 32 GB |
-| Storage | Symbios 53C810 / 53C895 SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
+| Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
 | Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT) |
 | Network | DEC 21143 (Tulip) — host access through pcap, TUN/TAP (Linux) or a null back end |

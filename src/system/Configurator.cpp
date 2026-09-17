@@ -57,7 +57,6 @@
 #endif
 #include "ES1370.hpp"
 #include "MPU401.hpp"
-#include "Sym53C895.hpp"
 #include "Sym53C8xx.hpp"
 
 /**
@@ -635,8 +634,10 @@ classinfo classes[] = {
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"dec21143", c_dec21143, IS_PCI | IS_NIC, kv_dec21143},
-    {"sym53c895", c_sym53c895, IS_PCI | HAS_DISK, kv_none},
-    {"sym53c810", c_sym53c810, IS_PCI | HAS_DISK, kv_none},
+    {"sym53c810", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
+    {"sym53c825", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
+    {"sym53c875", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
+    {"sym53c895", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"floppy", c_floppy, ON_CS | HAS_DISK, kv_none},
     {"file", c_file, IS_DISK, kv_disk_file},
     {"device", c_device, IS_DISK, kv_disk_device},
@@ -887,23 +888,15 @@ void CConfigurator::initialize() {
     break;
 #endif
 
-  case c_sym53c895:
+  case c_sym53c8xx:
     /* For disk controllers, myDevice points to the
      * CDiskController part of the class as it's used
-     * to register disks to.
-     */
-    myDevice = (CDiskController *)new CSym53C895(
-        this, (CSystem *)pParent->get_device(), pcibus, pcidev);
-    break;
-
-  case c_sym53c810:
-    /* For disk controllers, myDevice points to the
-     * CDiskController part of the class as it's used
-     * to register disks to.
+     * to register disks to. The class name ("sym53c875")
+     * names the part.
      */
     myDevice = (CDiskController *)new CSym53C8xx(
         this, (CSystem *)pParent->get_device(), pcibus, pcidev,
-        *CSym53C8xx::find_chip("810"));
+        *CSym53C8xx::find_chip(myValue + strlen("sym53c")));
     break;
 
   case c_file:

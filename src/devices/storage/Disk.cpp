@@ -2637,11 +2637,16 @@ int CDisk::do_scsi_message() {
 #if defined(DEBUG_SCSI)
           printf("WDTR.\n");
 #endif
-          state.scsi.msgi.available = msglen + 2;
-          state.scsi.msgi.data[0] = 0x01;
-          state.scsi.msgi.data[1] = msglen;
-          for (unsigned int x = 0; x < msglen; x++)
-            state.scsi.msgi.data[2 + x] = state.scsi.msgo.data[msg + x];
+          // These disks are narrow (INQUIRY does not report WBus16), so they
+          // answer a wide-transfer request with an 8-bit width, as SCSI-2
+          // requires. Echoing the initiator's 16-bit offer contradicted the
+          // INQUIRY data, and the Windows 2000 symc8xx driver rejects that
+          // reply and resets the bus.
+          state.scsi.msgi.available = 4;
+          state.scsi.msgi.data[0] = 0x01; // extended message
+          state.scsi.msgi.data[1] = 0x02; // length
+          state.scsi.msgi.data[2] = 0x03; // WDTR
+          state.scsi.msgi.data[3] = 0x00; // 8-bit transfers
         } break;
 
         default:

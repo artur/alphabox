@@ -75,7 +75,7 @@ void CSym53C8xx::run() {
  * Constructor.
  *
  * Set up the SCSI bus, and defer the rest of initialization to
- * CSym53C895::init.
+ * CSym53C8xx::init.
  **/
 CSym53C8xx::CSym53C8xx(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
                        const sym_chip_config &chip)

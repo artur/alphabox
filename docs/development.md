@@ -33,8 +33,9 @@ They stop only the emulator processes they started.
 | `vga_boot.sh` | SRM on the S3 or Cirrus VGA console (`CARD=s3\|cirrus`, `CHIP=gd5430\|gd5434`), window-less; reports the hashes of the frames the screen settles on. The known sets are in the script header. |
 | `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. |
 | `win_workload.sh` | Times a CPU-bound command inside a booted Windows guest (a real-workload benchmark). |
+| `win_storage.sh` | Adds a storage controller (`CTRL=<class>`) with a FAT16 test disk to a clone of an installed Windows guest, has Windows copy a file on it, and checks the copy on the host. |
 | `build_lanes.sh`, `build_revs.sh` | Build every configured build directory, or every commit of a series in a worktree. |
-| `ppm2png.py`, `keys_for.py`, `mips_summary.py` | Helpers: frame-dump conversion, key tokens for a line of text, MIPS summaries. |
+| `ppm2png.py`, `keys_for.py`, `mips_summary.py`, `fat_disk.py` | Helpers: frame-dump conversion, key tokens for a line of text, MIPS summaries, FAT16 test disks. |
 
 On Linux, `cd test/rom && bash test.sh` is the original firmware regression
 test; it cannot pass on macOS (BSD `sed`). It deletes the tracked ROM files at

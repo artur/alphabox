@@ -82,6 +82,7 @@ struct sym_chip_config {
   u8 stest1_mask;
   u8 stest2_mask;
   u8 stest3_mask;
+  u8 stest4; ///< STEST4 read value (Ultra2 parts; 0 where absent)
 };
 
 /**
@@ -141,6 +142,8 @@ private:
   void write_b_ctest5(u8 value);
   void write_b_stest2(u8 value);
   void write_b_stest3(u8 value);
+  void write_b_scntl3(u8 value);
+  u8 read_b_scratch(u32 address);
   u8 read_b_dstat();
   u8 read_b_sist(int id);
   void write_b_dcntl(u8 value);

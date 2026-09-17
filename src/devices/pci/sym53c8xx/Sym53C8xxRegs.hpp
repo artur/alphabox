@@ -66,11 +66,14 @@
 /// Register 02: SCNTL2: SCSI Control 2
 #define R_SCNTL2 0x02
 #define R_SCNTL2_SDU 0x80
+#define R_SCNTL2_WSS 0x08
+#define R_SCNTL2_WSR 0x01
 #define SCNTL2_MASK (m_chip.scntl2_mask)
 #define SCNTL2_W1C (m_chip.scntl2_w1c)
 
 /// Register 03: SCNTL3: SCSI Control 3
 #define R_SCNTL3 0x03
+#define R_SCNTL3_EWS 0x08
 #define SCNTL3_MASK (m_chip.scntl3_mask)
 
 /// Register 04: SCID: SCSI Chip ID
@@ -177,6 +180,7 @@
 #define R_CTEST2_SIGP 0x40
 #define R_CTEST2_CIO 0x20
 #define R_CTEST2_CM 0x10
+#define R_CTEST2_SRTCH 0x08
 #define R_CTEST2_TEOP 0x04
 #define R_CTEST2_DREQ 0x02
 #define R_CTEST2_DACK 0x01
@@ -321,6 +325,9 @@
 
 /// Register 50: SIDL
 #define R_SIDL 0x50
+
+/// Register 52: STEST4: SCSI Test 4 (Ultra2 parts)
+#define R_STEST4 0x52
 
 /// Register 54: SODL
 #define R_SODL 0x54

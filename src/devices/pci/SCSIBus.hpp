@@ -60,6 +60,7 @@ public:
 
   /**< Get current SCSI bus phase **/
   void free_bus(int initiator);
+  void reset_bus();
 
   CSCSIDevice *targets[16]; /**< pointers to the SCSI devices that respond to
                                the 15 possible target id's. **/

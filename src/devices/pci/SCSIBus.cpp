@@ -151,6 +151,13 @@ void CSCSIBus::free_bus(int initiator) {
   state.phase = SCSI_PHASE_FREE;
 }
 
+/**
+ * \brief Reset the SCSI bus (RST asserted).
+ *
+ * Every device releases the bus, whoever held it.
+ **/
+void CSCSIBus::reset_bus() { state.phase = SCSI_PHASE_FREE; }
+
 static u32 scsi_magic1 = 0x5C510123;
 static u32 scsi_magic2 = 0x32105c51;
 
