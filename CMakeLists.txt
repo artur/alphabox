@@ -28,6 +28,7 @@ file(GLOB srcs
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
     src/devices/video/s3/*.cpp
+    src/devices/video/cirrus/*.cpp
     src/devices/net/*.cpp
     src/base/*.cpp
     src/gui/*.cpp)
@@ -42,7 +43,8 @@ add_executable(axpbox ${srcs} src/Main.cpp)
 target_include_directories(axpbox PRIVATE
     src src/cpu src/system src/common
     src/devices/isa src/devices/pci src/devices/storage
-    src/devices/video src/devices/video/s3 src/devices/net
+    src/devices/video src/devices/video/s3 src/devices/video/cirrus
+    src/devices/net
     src/base src/gui ${CMAKE_BINARY_DIR}/src)
 
 if (NOT ES40_DISABLE_ASMJIT)

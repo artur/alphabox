@@ -38,7 +38,7 @@ instead of 100% per emulated CPU (`AXPBOX_NO_IDLE=1` disables this).
 | Storage | Sym53C810 / Sym53C895 SCSI, ALi M1543C IDE (disks + ATAPI CD-ROM), 82077AA floppy, RAM disk, raw and BIN/CUE images |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC/TOY, 8237 DMA, SuperIO, PMU |
 | Input | i8042 keyboard controller with PS/2 keyboard and mouse |
-| Graphics | S3 Trio64 (+ IBM 8514/A) with the real VGA BIOS, rendered through SDL3 |
+| Graphics | S3 Trio64 (+ IBM 8514/A) or Cirrus Logic CL-GD5434, with the real VGA BIOS, rendered through SDL3 |
 | Network | DEC 21143 (Tulip) over pcap, or TUN/TAP on Linux |
 | Sound | Ensoniq AudioPCI ES1370 |
 | Other | OHCI USB, 2 × 16550 serial (telnet or bit-bucket), flash and DPR NVRAM persistence |

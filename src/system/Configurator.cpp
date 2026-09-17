@@ -36,20 +36,20 @@
 #include "AliM1543C_pmu.hpp"
 #include "AliM1543C_usb.hpp"
 #include "AlphaCPU.hpp"
+#include "CirrusGD5434.hpp"
 #include "DMA.hpp"
 #include "DPR.hpp"
 #include "DiskDevice.hpp"
 #include "DiskFile.hpp"
 #include "DiskRam.hpp"
 #include "Flash.hpp"
+#include "FloppyController.hpp"
 #include "Keyboard.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
-//#include "Cirrus.hpp" // to be re-added and fixed in the future
-#include "FloppyController.hpp"
 #include "gui/plugin.hpp"
 #if defined(HAVE_PCAP) || defined(__linux__)
 #include "DEC21143.hpp"
@@ -857,16 +857,10 @@ void CConfigurator::initialize() {
     break;
 
   case c_cirrus:
-    // Cirrus is not ported to the MAME-derived VGA core (disabled in
-    // ES40-Emu upstream as well). Use the S3 Trio64 instead.
-    FAILURE(Configuration,
-            "cirrus is currently unavailable; use an s3 vga section instead");
+    myDevice = new CCirrusGD5434(this, (CSystem *)pParent->get_device(), pcibus,
+                                 pcidev);
     break;
 
-    // i broke this, my bad. To be restored in the future.
-//	case c_cirrus:
-//		myDevice = new CCirrus(this, (CSystem*)pParent->get_device(),
-// pcibus, 			pcidev); 		break;
 #if defined(HAVE_SDL)
   case c_es1370:
     myDevice =
