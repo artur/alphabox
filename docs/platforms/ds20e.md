@@ -67,8 +67,8 @@ such) the structure of the ES40 listing with DS20E slot names.
 | 3 | CPU model row(s): EV67 and/or EV68AL identity values | L1 | not needed yet: the firmware accepts the EV68CB row |
 | 4 | Run with the unknown-access trace; catalogue what the firmware touches that the ES40 model does not provide | L1 | done, see Findings |
 | 5 | Second processor: this firmware does not find one | L2 | done: it finds both |
-| 6 | Processor SROM data, so the console stops printing rubbish for it | L2 | open |
-| 7 | The board's flash, at PCI memory 0xfff80000 | L2 | open |
+| 6 | Processor SROM data: the revision, the cache size, and probably the machine's own name | L2 | open, investigated |
+| 7 | The bytes PALcode writes at PCI memory 0xfff80000 | L2 | answered: a diagnostic display, nothing reads it back |
 | 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | done, confirmed against the console |
 | 9 | Why the IDE and USB functions are not listed | L3 | answered: the console looks no further than device 10 |
 | 10 | Console listings compared with the reference | L3 | blocked: no reference yet |
@@ -123,9 +123,16 @@ refinement, not a prerequisite.
 
 **Accesses nothing claims** (`ALPHABOX_TRACE_UNKNOWN=1`): the empty-slot
 configuration reads any bus scan makes, and byte writes at PCI memory
-`0xfff80001` with values 0x20, 0x80, 0xc0, 0xc3 -- a flash command sequence
-at a flash this board carries in PCI memory, where the ES40's sits on the
-TIG bus. The firmware tolerates the writes going nowhere.
+`0xfff80000` and `+1`.
+
+Those writes are **a diagnostic display, not flash** -- an earlier guess in
+this packet said flash, and reading the code disproved it. They come from
+PALcode (the addresses are inside PAL space), which builds the target as
+PCI memory `0xfff80000`, writes one byte, and then reads I/O port `0x80`
+to push the write out. The byte at `+0` counts up (0x14, 0x5b, 0x73 in one
+boot) and `+1` takes fixed values (0x20, 0x80, 0xc0, 0xc3): progress codes
+for a board display. Nothing reads them back, so not modelling them costs
+nothing; a board device that swallows them would only quiet the trace.
 
 **The second processor: found, and fixed (2026-09-17).** Tracing the
 registers a console uses to bring processors up (`ALPHABOX_TRACE_MP=1`)
@@ -193,6 +200,31 @@ appeared; with this one, `show device` lists the disk (`dka0`, an RZ58).
 **Network boot works (L4).** With a DE600 at device 9 on the UDP backend,
 `boot eia0 -protocols bootp` gets its address, transfers the image over
 TFTP and runs it to the halt, the same as on the ES40.
+
+**The machine's own name is data in the firmware (2026-09-17).** The
+console's string table holds a table of machines, each a name and a code:
+"AlphaPC 264DP" (0x72e), "AlphaServer DS20" (0x730, 0x780), "COMPAQ
+AlphaServer DS20E" (0x781, 0x793, 0x794, 0x795, 0x7be, 0x7bf) and "COMPAQ
+AlphaStation DS20E" (0x796, 0x797, 0x798, 0x7ac). So one firmware serves
+all of them and picks by a code it reads somewhere; ours falls to the
+first entry, which is why it says "AlphaPC 264DP".
+
+Where that code comes from is still open. Ruled out by tracing what the
+console actually reads: the I2C bus (never used), the Dchip (only its
+revision register), the Cchip (its configuration, interrupt and memory
+registers, nothing identity-shaped), the three unmodelled TIG registers
+(different values change nothing) and the console's own environment (it has
+no machine-type variable).
+
+What is left, and what fits the other symptoms, is the data a processor's
+SROM leaves behind on a real machine: this console prints a garbled "SROM
+Revision", says it could not read `iic_cpu0`, and reports the cache
+disabled where the ES40's console reports 8 MB from the same chipset
+registers. Finding the handoff structure the SROM fills, and filling it,
+is the next piece of work -- and it may settle the machine name too.
+
+**Console settings do persist**: `set`, `init`, `show` keeps the value, so
+this machine's non-volatile storage already works.
 
 **Not yet proven:** everything above is the console's own account of itself.
 Without the reference listing from a real DS20E, L3 is not claimed.
