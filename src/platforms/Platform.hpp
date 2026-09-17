@@ -46,9 +46,12 @@ enum firmware_format {
   /// cl67srmrom.exe is: Alphabox finds the console inside it.
   FW_LFU_BUNDLE,
   /// A raw image behind the standard Alpha ROM header (c3c3 5a5a 3c3c
-  /// a5a5), as the firmware CD's PC264SRM.ROM and DS10SRM.ROM are. Not
-  /// implemented yet: the first work item of the DS20E packet.
+  /// a5a5), as the firmware CD's PC264SRM.ROM and DS10SRM.ROM are.
   FW_ROM_HEADER,
+  /// The console image with nothing in front of it, as the firmware CD's
+  /// update files (DS20L_V6_6.EXE and the other *_V7_3.EXE) are: they
+  /// start directly with the console's self-decompressor.
+  FW_RAW_IMAGE,
 };
 
 struct platform_config {

@@ -114,6 +114,19 @@ static const char *ds10_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
+/**
+ * DS20L interrupts: the ES40's wiring. Linux drives this board with the
+ * same table it uses for the ES40 ("Sharks strongly resemble Clipper, at
+ * least as far as interrupt routing"), so until this machine's own console
+ * says otherwise, that is what it gets.
+ */
+static int ds20l_pci_interrupt(int hose, int slot, int intx) {
+  return es40_pci_interrupt(hose, slot, intx);
+}
+
+/// DS20L slots: not yet known; nothing is refused.
+static const char *ds20l_slot_refusal(int hose, int slot) { return nullptr; }
+
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
      FW_LFU_BUNDLE, 2, true, es40_pci_interrupt, es40_slot_refusal},
@@ -127,6 +140,10 @@ static const platform_config platforms[] = {
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", "ev68cb", 1, 26, 31, "DS10SRM.ROM",
      FW_ROM_HEADER, 1, false, ds10_pci_interrupt, ds10_slot_refusal},
+    // Under construction: its console image comes as an update file, with
+    // no header in front of it.
+    {"ds20l", "AlphaServer DS20L", "ev68cb", 2, 26, 32, "DS20L_V6_6.EXE",
+     FW_RAW_IMAGE, 2, false, ds20l_pci_interrupt, ds20l_slot_refusal},
 };
 
 const platform_config *find_platform(const char *name) {

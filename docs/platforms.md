@@ -45,6 +45,7 @@ Three layers, each added in a different way:
 | AlphaServer ES40 | emulated: the machine this project is about |
 | AlphaServer DS20E | under construction: its console runs, finds both processors, drives disks and network-boots ([packet](platforms/ds20e.md)) |
 | AlphaServer DS10 | started: its console loads and runs but stops in its own file layer ([packet](platforms/ds10.md)) |
+| AlphaServer DS20L | under construction: its own update utility installs its console, which then runs to the prompt and names itself correctly ([packet](platforms/ds20l.md)) |
 
 ## Where the firmware comes from
 
@@ -54,16 +55,24 @@ AlphaServer 4x00. Images are never downloaded by us or by an agent: they are
 copied from media you own into the git-ignored `roms/` directory, and a
 packet names the file it needs.
 
-Two image formats appear:
+Three forms appear, and the board's descriptor says which one its firmware
+takes:
 
-- a raw console image starting with the standard Alpha firmware ROM header
-  (`c3c3 5a5a 3c3c a5a5`, 0x38 bytes, destination 0x900000), which is what
-  `PC264SRM.ROM` (DS20/DS20E) and `DS10SRM.ROM` are;
-- an update bundle ("LFU APU") holding several images, which is what the
-  ES40's `cl67srmrom.exe` and the CD's `*_V7_3.EXE` files are.
+- **a console image behind the standard Alpha ROM header** (`c3c3 5a5a 3c3c
+  a5a5`, header size and load address in the header): `PC264SRM.ROM`
+  (DS20/DS20E) and `DS10SRM.ROM`;
+- **a console image behind a fixed wrapper**: the ES40's `cl67srmrom.exe`;
+- **a firmware update utility with no header at all**, starting directly
+  with its self-decompressor: the CD's `*_V7_3.EXE` and `*_V6_6.EXE` files,
+  which is how most machines ship.
 
-Alphabox reads both: the board's descriptor says which form its firmware
-takes, and a raw image is loaded where its header says.
+The third form is not a console: it is the utility a real machine runs to
+**install** its console into the flash. Run it once, answer its questions,
+stop the emulator so the flash is saved, and boot again without naming a
+firmware image: Alphabox searches the flash for a console image and starts
+it. That is how the DS20L was brought up
+([its packet](platforms/ds20l.md) has the exact steps), and it is the way
+in for every machine on the CD that ships only an update file.
 
 ## The work packet
 
@@ -122,10 +131,8 @@ device or an absent CPU.
    console runs (L2). What remains is the machine's own hardware -- how it
    finds a second processor, the processor SROM data it reads, its flash --
    and a real machine's listing to check against.
-3. **The rest of the Tsunami family**: DS10 (started), DS20, DS20L, and the
-   UP2000 and XP1000 boards. Only some have a raw console image on the
-   firmware CD; the others ship as update bundles, which needs a reader for
-   that format.
+3. **The rest of the Tsunami family**: DS10 (started), DS20L (running),
+   DS20, and the UP2000 and XP1000 boards.
 4. **Titan** (ES45, DS25) with EV67/EV68 rows.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7

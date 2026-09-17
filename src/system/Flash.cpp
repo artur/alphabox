@@ -90,6 +90,30 @@ bool CFlash::HasBootFirmware() const {
 
 const u8 *CFlash::GetFlashBytes() const { return state.Flash; }
 
+bool CFlash::FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
+                              u64 *load_address) const {
+  const u32 size = (u32)sizeof(state.Flash);
+
+  for (u32 off = 0; off + 0x38 <= size; off += 0x40) {
+    u32 w[7];
+    memcpy(w, state.Flash + off, sizeof(w));
+    for (u32 &x : w)
+      x = endian_32(x);
+    if (w[0] != 0x5a5ac3c3 || w[1] != 0xa5a53c3c)
+      continue;
+    // A console image loads into memory and is larger than its header; the
+    // small headers a machine keeps for its other partitions are not.
+    if (w[6] == 0 || w[4] <= w[2] || off + w[2] + w[4] > size)
+      continue;
+    *offset = off;
+    *header_size = w[2];
+    *image_size = w[4];
+    *load_address = w[6];
+    return true;
+  }
+  return false;
+}
+
 void CFlash::FlushIfDirty() {
   if (!dirty)
     return;

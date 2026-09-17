@@ -1979,6 +1979,11 @@ int CSystem::LoadROM() {
   // If flash.rom contains a partitioned ES40 image (CPQ header at the SRM
   // partition), execute its embedded self-decompressor to inflate the console
   // into low RAM just like the cl67srmrom.exe path would.
+  u32 fl_off = 0;
+  u32 fl_hdr = 0;
+  u32 fl_size = 0;
+  u64 fl_base = 0;
+
   if (theSROM && theSROM->HasBootFirmware()) {
     printf("%%SYS-I-READFLASH: Reading boot ROM image from %s.\n",
            myCfg->get_text_value("rom.flash", "flash.rom"));
@@ -2038,6 +2043,49 @@ int CSystem::LoadROM() {
     }
   }
 
+  // A machine whose own update utility installed its console leaves it in
+  // the flash behind a standard ROM header, wherever that machine keeps it.
+  if (!loadedFromFlash && theSROM &&
+      theSROM->FindConsoleImage(&fl_off, &fl_hdr, &fl_size, &fl_base) &&
+      PtrToMem(fl_base)) {
+    printf("%%SYS-I-READFLASH: Console image in flash at %x, %u bytes, "
+           "loaded at %" PRIx64 ".\n",
+           fl_off, fl_size, fl_base);
+    printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
+    fflush(stdout);
+
+    memcpy(PtrToMem(fl_base), theSROM->GetFlashBytes() + fl_off + fl_hdr,
+           fl_size);
+    acCPUs[0]->set_pc(fl_base | 1);
+    acCPUs[0]->set_PAL_BASE(fl_base);
+    acCPUs[0]->enable_icache();
+
+    bool decomp_ok = true;
+    j = 0;
+    while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
+      srm_decomp_chunk(this, acCPUs[0]);
+      if (++j > 500) {
+        printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
+               "memory.\n");
+        decomp_ok = false;
+        break;
+      }
+      printf(".");
+      fflush(stdout);
+    }
+    printf("100%%\n");
+    acCPUs[0]->restore_icache();
+
+    if (decomp_ok) {
+      for (i = 0; i < iNumCPUs; i++) {
+        acCPUs[i]->set_pc(acCPUs[0]->get_pc());
+        acCPUs[i]->set_PAL_BASE(acCPUs[0]->get_pal_base());
+      }
+      start_secondaries();
+      loadedFromFlash = true;
+    }
+  }
+
   if (!loadedFromFlash) {
     f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
               "rb");
@@ -2055,7 +2103,9 @@ int CSystem::LoadROM() {
       // machine loads it (docs/platforms.md).
       size_t skip = 0x240;
       u64 rom_base = U64(0x900000);
-      if (m_platform->firmware == FW_ROM_HEADER) {
+      if (m_platform->firmware == FW_RAW_IMAGE) {
+        skip = 0; // the console's own first instruction
+      } else if (m_platform->firmware == FW_ROM_HEADER) {
         u32 header[14];
         if (fread(header, sizeof(u32), 14, f) != 14)
           FAILURE(Runtime, "File is too short to be a SRM ROM image");

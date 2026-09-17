@@ -44,6 +44,18 @@
 class CFlash : public CSystemComponent {
 public:
   static bool trace_on();
+
+  /**
+   * Find a console image in the flash: a standard Alpha ROM header
+   * (validation pattern, header size, image size, load address) with a
+   * load address in memory. A machine's own firmware update utility
+   * leaves one behind, wherever that machine keeps it, so it is searched
+   * for rather than expected at a fixed place.
+   *
+   * Returns false when the flash holds no such image.
+   */
+  bool FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
+                        u64 *load_address) const;
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
   CFlash(CConfigurator *cfg, class CSystem *c);
