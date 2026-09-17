@@ -23,8 +23,8 @@
 
 
 %FLS-I-CREATE: Blank 2 MiB flash image created at flash.rom
+%SYS-I-DEFAULTFDC: fdc0 is not configured; adding the built-in floppy controller.
 %SYS-W-NOSERIAL: serial1 is not configured; defaulting to null_attach mode.
-pci0.15(ali_ide).disk0.0(file): Could not open file disk-unwritable.img!
-Emulator Failure: Runtime exception: pci0.15(ali_ide).disk0.0(file): File does not exist and could not be created: DiskFile.cpp, line L
+Emulator Failure: Runtime exception: pci0.15(ali_ide).disk0.0(file): cannot open disk-unwritable.img for writing: Permission denied: DiskFile.cpp, line L
 Stop threads:
 Freeing memory in use by system...

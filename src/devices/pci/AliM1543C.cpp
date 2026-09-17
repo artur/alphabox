@@ -1158,9 +1158,12 @@ void CAliM1543C::toy_write(u32 address, u8 data) {
             (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
                 now - m_toy_pf_epoch)
                 .count();
-        // 128-bit product: elapsed_ns * 32768 overflows 64 bits after ~6 days.
-        const u64 due =
-            (u64)((unsigned __int128)elapsed_ns * pf_freq / 1000000000ull);
+        // elapsed_ns * 32768 overflows 64 bits after ~6 days, so split off
+        // whole seconds: floor((q * 1e9 + r) * f / 1e9) = q * f + r * f / 1e9
+        // exactly, and r * f stays below 2^45. (No __int128: 32-bit and
+        // MSVC builds have none.)
+        const u64 due = (elapsed_ns / 1000000000ull) * pf_freq +
+                        (elapsed_ns % 1000000000ull) * pf_freq / 1000000000ull;
         if (due != m_toy_pf_count) {
           state.toy_stored_data[0x0c] |= RTC_PF;
           m_toy_pf_count = due;
