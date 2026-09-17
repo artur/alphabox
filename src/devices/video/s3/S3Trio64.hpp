@@ -33,14 +33,13 @@
 #if !defined(INCLUDED_S3Trio64_H_)
 #define INCLUDED_S3Trio64_H_
 
-#include "VGA.hpp"
+#include "VGACard.hpp"
 #include "address_map.hpp"
 #include "attotime.hpp"
 #include "coretmpl.hpp"
 #include "gui/vga.hpp"
 #include "ibm8514a.hpp"
 #include "mame_shims.hpp"
-#include <atomic>
 
 /* video card has 4M of ram */
 #define VIDEO_RAM_SIZE 22
@@ -54,11 +53,8 @@
  *   (http://home.worldonline.dk/~finth/)
  *  .
  **/
-class CS3Trio64 : public CVGA, public mame_machine_provider {
+class CS3Trio64 : public CVGACard {
 public:
-  virtual int SaveState(FILE *f) override;
-  virtual int RestoreState(FILE *f) override;
-  virtual void check_state() override;
   virtual void WriteMem_Legacy(int index, u32 address, int dsize,
                                u32 data) override;
   virtual u32 ReadMem_Legacy(int index, u32 address, int dsize) override;
@@ -94,18 +90,18 @@ public:
   CS3Trio64(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
   virtual ~CS3Trio64();
 
-  void update(void);
-  void run(void);
-
-  virtual u8 get_actl_palette_idx(u8 index) override;
-  virtual void redraw_area(unsigned x0, unsigned y0, unsigned width,
-                           unsigned height) override;
-
   virtual void init() override;
-  virtual void start_threads() override;
-  virtual void stop_threads() override;
 
 protected:
+  // CVGACard hooks
+  const char *card_name() const override { return "S3"; }
+  const char *thread_tag() const override { return " s3"; }
+  u32 state_magic1() const override { return 0x53338811; }
+  u32 state_magic2() const override { return 0x88115333; }
+  uint64_t hw_cursor_signature() const override;
+  bool display_enabled() const override { return m_vga_subsys_enable; }
+  void apply_extended_timing(int &h, int &v) override;
+
   virtual u16 line_compare_mask() override;
 
   // MAME S3 state
@@ -203,45 +199,16 @@ protected:
                 // overrides it with the version we have
   virtual bool get_interlace_mode() override { return BIT(s3.cr42, 5); }
 
-  virtual void palette_update() override;
   virtual void s3_define_video_mode(void);
 
   nop_callback m_vsync_cb;
 
-  address_map m_crtc_map{256};
-  address_map m_seq_map{256};
-  address_map m_gc_map{256};
-  address_map m_atc_map{64};
-
-  address_map &space(int spacenum) override {
-    switch (spacenum) {
-    case CRTC_REG:
-      return m_crtc_map;
-    case GC_REG:
-      return m_gc_map;
-    case SEQ_REG:
-      return m_seq_map;
-    case ATC_REG:
-      return m_atc_map;
-    default:
-      FAILURE_1(NotImplemented, "Unknown register space %d", spacenum);
-      // return m_crtc_map; // unreachable
-    }
-  }
-
-  void crtc_map(address_map &map);
-  void sequencer_map(address_map &map);
-  void gc_map(address_map &map);
-  void attribute_map(address_map &map);
+  void crtc_map(address_map &map) override;
+  void sequencer_map(address_map &map) override;
+  void gc_map(address_map &map) override;
+  void attribute_map(address_map &map) override;
 
   void recompute_params() override;
-
-  void init_maps() {
-    crtc_map(m_crtc_map);
-    sequencer_map(m_seq_map);
-    gc_map(m_gc_map);
-    attribute_map(m_atc_map);
-  }
 
   // Video mode detection (MAME: svga_device::pc_vga_choosevideomode)
   uint8_t get_video_depth();
@@ -291,21 +258,6 @@ private:
   u32 mem_read(u32 address, int dsize);
   void mem_write(u32 address, int dsize, u32 data);
 
-  // Keep SDL window alive across firmware reset:
-  //  - PauseThread is set by stop_threads() when system reset is in progress
-  //  - PauseAck is raised by the S3 thread once it is safely paused
-  std::atomic<bool> PauseThread{false};
-  std::atomic<bool> PauseAck{false};
-
-  // screen refresh stuff
-  std::chrono::steady_clock::time_point m_last_refresh_time;
-  // Dirty-gate state: skip the per-refresh rasterize + GPU upload when nothing
-  // visible changed.
-  uint64_t m_last_cursor_sig = 0; // HW-cursor (mode/pos/data-addr) folded in --
-                                  // not tracked by vga_mem_updated
-  int m_frames_since_render = 0;  // forced-refresh counter so cursor/text blink
-                                  // still animate when static
-
   // accel I/O (S3 Trio uses 0x42E8/0x4AE8)
   void AccelIOWrite(u32 port, u8 data);
   u8 AccelIORead(u32 port);
@@ -335,10 +287,6 @@ private:
   u32 legacy_read(u32 address, int dsize);
   void legacy_write(u32 address, int dsize, u32 data);
 
-  u32 rom_read(u32 address, int dsize);
-
-  void determine_screen_dimensions(unsigned *piHeight, unsigned *piWidth);
-
   char bios_message[200];
   int bios_message_size;
 
@@ -359,12 +307,6 @@ private:
   }
   inline bool seq_reset1() const { return (vga.sequencer.data[0] & 0x01) != 0; }
   inline bool seq_reset2() const { return (vga.sequencer.data[0] & 0x02) != 0; }
-  inline bool seq_dotperchar() const {
-    return (vga.sequencer.data[1] & 0x01) != 0;
-  }
-  inline bool x_dotclockdiv2() const {
-    return (vga.sequencer.data[1] & 0x08) != 0;
-  }
 
   // cached state for LFB
   u32 lfb_base_ = 0;
@@ -393,25 +335,8 @@ private:
   uint32_t lfb_trace_base_prev = 0;
   uint32_t lfb_trace_size_prev = 0;
 
-  std::unique_ptr<std::thread> myThread;
-  std::atomic_bool myThreadDead{false};
-  bool StopThread;
-  /// The GUI is initialized once, not on every thread (re)start: the serial
-  /// BREAK menu stops and restarts the device threads (see CS3Trio64::run).
-  bool gui_initialized = false;
-
-  /// The state structure contains all elements that need to be saved to the
-  /// statefile.
-  struct SS3_state {
-    // SDL/GUI dirty tracking
-    bool vga_mem_updated;
-    unsigned x_tilesize;
-    unsigned y_tilesize;
-    u8 last_bpp;
-
-    u8 *memory; // the actual vram... probably should have notated this earlier
-    u32 memsize;
-  } state;
+  /// The state file layout is the base's; the name stays for S3 code.
+  using SS3_state = SVGACard_state;
 
   // TODO: migrate all  usage and then remove state.sequencer entirely.
 
@@ -433,9 +358,6 @@ private:
   inline u8 seq_mclkn() const { return s3.sr10 & 0x1f; }
   inline u8 seq_mclkr() const { return s3.sr10 >> 5; }
   inline u8 seq_mclkm() const { return s3.sr11; }
-
-  // ATC index 0x00..0x0F: Palette registers
-  inline u8 atc_palette(u8 idx) const { return vga.attribute.data[idx & 0x0f]; }
 
   // ATC index 0x10: Mode Control (decomposed bit accessors)
   inline bool atc_graphics_alpha() const {
@@ -476,26 +398,10 @@ private:
   // ATC index 0x14: Color Select
   inline u8 atc_color_select() const { return vga.attribute.data[0x14] & 0x0f; }
 
-  // Video output enabled (ATC index byte bit 5 = palette address source)
-  // MAME: this is the "prot_bit" / palette RAM address source.
-  // When 0, video output is disabled (CPU can access palette RAM).
-  // When 1, video output is enabled (ATC drives display).
-  inline bool atc_video_enabled() const { return BIT(vga.attribute.index, 5); }
-
   // Flip-flop state (0=index phase, nonzero=data phase)
   inline bool atc_flip_flop() const { return vga.attribute.state != 0; }
 
   inline uint32_t s3_lfb_base_from_regs();
-
-  // computed video timing, MAME screen().configure() parameters
-  struct {
-    int pixel_clock_hz = 0;       // computed pixel clock in Hz
-    int xtal_hz = 0;              // base or PLL-derived crystal frequency
-    int divisor = 1;              // VCLK divisor from color mode
-    double dclk_freq_mhz = 0.0;   // PLL output frequency in MHz (for debug)
-    double vrefresh_hz;           // vertical refresh rate derived from CRTC
-    uint64_t refresh_interval_ms; // milliseconds between redraws
-  } timing;
 
   inline uint32_t s3_mmio_base_off(SS3_state &s);
   void accel_reset();

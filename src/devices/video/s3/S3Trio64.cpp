@@ -1,6 +1,8 @@
 /* AXPbox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
+ *          https://github.com/artur/axpbox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -99,11 +101,6 @@ enum {
 #define TLINES (LINES)
 #define TGA_COLUMNS (EGA_COLUMNS)
 #define TGA_LINE_LENGTH (vga.crtc.offset << 3)
-
-static unsigned old_iHeight = 0, old_iWidth = 0, old_MSL = 0;
-
-static int s3_diag_update_counter = 0;
-static int s3_diag_frame_counter = 0;
 
 // MAME FUNCTIONS - not all present yet
 
@@ -1921,76 +1918,6 @@ static inline u8 s3_cursor_ab(const u8 *vram, u32 vram_mask, u32 src_base,
   }
 }
 
-/**
- * Thread entry point.
- *
- * The thread first initializes the GUI, and then starts looping the
- * following actions until interrupted (by StopThread being set to true)
- *   - Handle any GUI events (mouse moves, keypresses)
- *   - Update the GUI to match the screen buffer
- *   - Flush the updated GUI content to the screen
- *   .
- **/
-void CS3Trio64::run() {
-  try {
-    // Initialize the GUI once (and let it know our tilesize). The serial
-    // BREAK menu stops and restarts the device threads around every
-    // interaction, so this runs again on "continue" -- and a second
-    // SDL_Init/window creation is not what the GUI expects.
-    if (!gui_initialized) {
-      bx_gui->init(state.x_tilesize, state.y_tilesize);
-      gui_initialized = true;
-    }
-    bool was_paused = false;
-    PauseAck.store(false, std::memory_order_release);
-    for (;;) {
-      // Terminate thread if StopThread is set to true
-      if (StopThread)
-        return;
-      // Handle GUI events (50 times per second)
-      bx_gui->lock();
-      bx_gui->handle_events();
-      bx_gui->unlock();
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-      // During firmware reset: keep pumping events (window stays alive),
-      // but do NOT touch emulated VGA state.
-      if (PauseThread.load(std::memory_order_acquire)) {
-        if (!was_paused) {
-          bx_gui->lock();
-          bx_gui->clear_screen(); // optional; comment out if you want last
-                                  // frame to remain
-          bx_gui->unlock();
-          was_paused = true;
-        }
-        PauseAck.store(true, std::memory_order_release);
-        continue;
-      }
-      PauseAck.store(false, std::memory_order_release);
-      was_paused = false;
-
-      // Update the screen (50 times per second)
-      bx_gui->lock();
-      update();
-      bx_gui->flush();
-      bx_gui->unlock();
-    }
-  }
-
-  catch (CException &e) {
-    printf("Exception in S3 thread: %s.\n", e.displayText().c_str());
-    myThreadDead.store(true);
-
-    // Let the thread die...
-  }
-}
-
-/** Size of ROM image */
-static unsigned int rom_max;
-
-/** ROM image */
-static u8 option_rom[65536];
-
 /** PCI Configuration Space data block */
 static u32 s3_cfg_data[64] = {
     /*00*/ 0x88115333, // CFID: vendor + device
@@ -2131,7 +2058,7 @@ static u32 s3_cfg_mask[64] = {
  * Don't do anything, the real initialization is done by init()
  **/
 CS3Trio64::CS3Trio64(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
-    : CVGA(cfg, c, pcibus, pcidev) {}
+    : CVGACard(cfg, c, pcibus, pcidev) {}
 
 // --- S3 CR36 -----------------------------------------------------------------
 // CR36 (Reset State Read 1) encodes DRAM type in the low and the actual VRAM
@@ -2335,17 +2262,7 @@ void CS3Trio64::init() {
 
   /* The configuration file variable "rom" should point to a VGA BIOS
      image. If not, try "vgabios.bin". */
-  FILE *rom = fopen(myCfg->get_text_value("rom", "vgabios.bin"), "rb");
-  if (!rom) {
-    FAILURE_1(FileNotFound, "s3 rom file %s not found",
-              myCfg->get_text_value("rom", "vgabios.bin"));
-  }
-
-  rom_max = (unsigned)fread(option_rom, 1, 65536, rom);
-  fclose(rom);
-
-  // Option ROM address space: C0000
-  add_legacy_mem(5, 0xc0000, rom_max);
+  load_option_rom("vgabios.bin", 5);
 
   vga.attribute.state = 1;
 
@@ -2749,53 +2666,8 @@ void CS3Trio64::recompute_params_clock(int divisor, int xtal) {
 }
 
 /**
- * Create and start thread.
- **/
-void CS3Trio64::start_threads() {
-  // Resume after reset if the thread already exists
-  PauseThread.store(false, std::memory_order_release);
-
-  if (!myThread) {
-    printf(" s3");
-    StopThread = false;
-    myThread = std::make_unique<std::thread>([this]() { this->run(); });
-  }
-}
-
-/**
- * Stop and destroy thread.
- **/
-void CS3Trio64::stop_threads() {
-  // During firmware reset, do NOT kill the S3 thread (it owns the SDL window).
-  // Just pause it so the window stays alive.
-  if (cSystem && cSystem->IsResetInProgress()) {
-    PauseThread.store(true, std::memory_order_release);
-
-    // Wait briefly until the S3 thread acknowledges pause
-    if (myThread) {
-      for (int spin = 0; spin < 600; spin++) // up to ~600ms
-      {
-        if (PauseAck.load(std::memory_order_acquire))
-          break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-      // Make it visible in the log whether we paused or stopped
-      printf(" s3(pause)");
-    }
-    return;
-  }
-
-  // Normal shutdown: actually stop the thread.
-  StopThread = true;
-  if (myThread) {
-    printf(" s3");
-    myThread->join();
-    myThread = nullptr;
-  }
-}
-
-/**
- * Destructor.
+ * Destructor. Stops the render thread while this object is still whole: the
+ * thread calls this card's hooks (see CVGACard::~CVGACard).
  **/
 CS3Trio64::~CS3Trio64() { stop_threads(); }
 
@@ -3773,105 +3645,6 @@ void CS3Trio64::lfb_recalc_and_cache() {
 }
 
 /**
- * Check if threads are still running.
- **/
-void CS3Trio64::check_state() {
-  if (myThreadDead.load())
-    FAILURE(Thread, "S3 thread has died");
-}
-
-static u32 s3_magic1 = 0x53338811;
-static u32 s3_magic2 = 0x88115333;
-
-/**
- * Save state to a Virtual Machine State file.
- **/
-int CS3Trio64::SaveState(FILE *f) {
-  long ss = sizeof(state);
-  int res;
-
-  if ((res = CPCIDevice::SaveState(f)))
-    return res;
-
-  // state.memory and state.memsize are vestigial, inherited from the Cirrus
-  // state struct: nothing in this device assigns or reads them, as the real
-  // VRAM is vga.memory (allocated in init, and not part of the savefile).
-  // They are therefore uninitialized -- write them as zero so state files
-  // are deterministic instead of carrying stray heap bytes.
-  SS3_state saved = state;
-  saved.memory = nullptr;
-  saved.memsize = 0;
-
-  fwrite(&s3_magic1, sizeof(u32), 1, f);
-  fwrite(&ss, sizeof(long), 1, f);
-  fwrite(&saved, sizeof(saved), 1, f);
-  fwrite(&s3_magic2, sizeof(u32), 1, f);
-  printf("%s: %d bytes saved.\n", devid_string, (int)ss);
-  return 0;
-}
-
-/**
- * Restore state from a Virtual Machine State file.
- **/
-int CS3Trio64::RestoreState(FILE *f) {
-  long ss;
-  u32 m1;
-  u32 m2;
-  int res;
-  size_t r;
-
-  if ((res = CPCIDevice::RestoreState(f)))
-    return res;
-
-  r = fread(&m1, sizeof(u32), 1, f);
-  if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
-    return -1;
-  }
-
-  if (m1 != s3_magic1) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
-    return -1;
-  }
-
-  r = fread(&ss, sizeof(long), 1, f);
-  if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
-    return -1;
-  }
-
-  if (ss != sizeof(state)) {
-    printf("%s: STRUCT SIZE does not match!\n", devid_string);
-    return -1;
-  }
-
-  r = fread(&state, sizeof(state), 1, f);
-  if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
-    return -1;
-  }
-
-  // Never let a pointer out of the file reach this process, even though
-  // nothing reads these two today (see SaveState).
-  state.memory = nullptr;
-  state.memsize = 0;
-
-  r = fread(&m2, sizeof(u32), 1, f);
-  if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
-    return -1;
-  }
-
-  if (m2 != s3_magic2) {
-    printf("%s: MAGIC 2 does not match!\n", devid_string);
-    return -1;
-  }
-
-  printf("%s: %d bytes restored.\n", devid_string, (int)ss);
-  return 0;
-}
-
-/**
  * Read from Framebuffer.
  *
  * Not functional.
@@ -4032,37 +3805,6 @@ void CS3Trio64::legacy_write(u32 address, int dsize, u32 data) {
   default:
     FAILURE(InvalidArgument, "Unsupported dsize");
   }
-}
-
-/**
- * Read from Option ROM
- */
-u32 CS3Trio64::rom_read(u32 address, int dsize) {
-  u32 data = 0x00;
-  u8 *x = (u8 *)option_rom;
-  if (address <= rom_max) {
-    x += address;
-    switch (dsize) {
-    case 8:
-      data = (u32)endian_8((*((u8 *)x)) & 0xff);
-      break;
-    case 16:
-      data = (u32)endian_16((*((u16 *)x)) & 0xffff);
-      break;
-    case 32:
-      data = (u32)endian_32((*((u32 *)x)) & 0xffffffff);
-      break;
-    }
-
-    // printf("S3 rom read: %" PRIx64 ", %d, %" PRIx64 "\n", address,
-    // dsize,data);
-  } else {
-
-    // printf("S3 (BAD) rom read: %" PRIx64 ", %d, %" PRIx64 "\n", address,
-    // dsize,data);
-  }
-
-  return data;
 }
 
 /**
@@ -4531,174 +4273,27 @@ u8 CS3Trio64::read_b_3c3() {
 
 u8 CS3Trio64::read_b_3ca() { return 0; }
 
-u8 CS3Trio64::get_actl_palette_idx(u8 index) { return atc_palette(index); }
-
-void CS3Trio64::redraw_area(unsigned x0, unsigned y0, unsigned width,
-                            unsigned height) {
-  if ((width == 0) || (height == 0))
-    return;
-
-  state.vga_mem_updated = 1;
+// The hardware cursor is not flagged by vga_mem_updated; its mode, position
+// and pattern address feed the refresh dirty-gate instead.
+uint64_t CS3Trio64::hw_cursor_signature() const {
+  return ((uint64_t)s3.cursor_mode << 56) |
+         ((uint64_t)s3.cursor_start_addr << 24) |
+         ((uint64_t)(s3.cursor_x & 0x7FF) << 12) |
+         (uint64_t)(s3.cursor_y & 0x7FF);
 }
 
-void CS3Trio64::update(void) {
-  unsigned iWidth = 0, iHeight = 0;
-
-  /* no screen update necessary
-     Trio32/Trio64: SR0 reset bits are not functional
-     Gate on ATC video enable and SR1 "Screen Off" */
-  if (!m_vga_subsys_enable || !atc_video_enabled())
-    return;
-
-  const bool screen_off = (vga.sequencer.data[1] & 0x20) != 0; // SR1 bit5
-  if (screen_off)
-    return;
-
-  auto now = std::chrono::steady_clock::now();
-  auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - m_last_refresh_time)
-                        .count();
-
-  if (elapsed_ms < (long long)timing.refresh_interval_ms)
-    return;
-  m_last_refresh_time = now;
-
-  const uint8_t cur_mode = pc_vga_choosevideomode();
-
-  if (cur_mode == SCREEN_OFF) {
-    state.vga_mem_updated = 0;
-    return;
-  }
-
-  // Dirty-gate: re-rasterize + re-upload only when something visible changed.
-  // vga_mem_updated covers VRAM + CRTC text-cursor + palette + mode writes; the
-  // S3 hardware cursor (mode/pos/data-addr) is not flagged, so fold it into a
-  // signature. Force a refresh every few frames so the cursor / blinking text
-  // still animate on an otherwise static screen; tick_frame() keeps the blink
-  // counter advancing on the skip path so blink timing stays correct.
-  const int kBlinkRefreshFrames =
-      8; // >= 2x the ~1.9 Hz VGA blink toggle at a 60 Hz refresh
-  const uint64_t cursor_sig = ((uint64_t)s3.cursor_mode << 56) |
-                              ((uint64_t)s3.cursor_start_addr << 24) |
-                              ((uint64_t)(s3.cursor_x & 0x7FF) << 12) |
-                              (uint64_t)(s3.cursor_y & 0x7FF);
-  if (!state.vga_mem_updated && cursor_sig == m_last_cursor_sig &&
-      ++m_frames_since_render < kBlinkRefreshFrames) {
-    screen().tick_frame(); // keep cursor/text-blink timing alive while skipping
-                           // the render
-    return;
-  }
-  m_frames_since_render = 0;
-  m_last_cursor_sig = cursor_sig;
-
-  vga.crtc.start_addr =
-      vga.crtc.start_addr_latch; // FIXME: Figure out proper handling, but makes
-                                 // BSD happy again....
-  vga.attribute.pel_shift = vga.attribute.pel_shift_latch;
-
-  determine_screen_dimensions(&iHeight, &iWidth);
-
-  if (iWidth == 0 || iHeight == 0)
-    return;
-
-  // Update screen shim's visible area
-  screen().set_visible_area(iWidth, iHeight);
-
-  // Ensure bitmap is large enough
-  m_render_bitmap.allocate(iWidth, iHeight);
-
-  // Render via MAME's screen_update pipeline
-  rectangle clip = m_render_bitmap.cliprect();
-  screen_update(m_render_bitmap, clip);
-
-  // Tick the frame counter (for cursor blink)
-  screen().tick_frame();
-
-  // MAME always produces ARGB32 — tell SDL we're in 32bpp mode.
-  if (state.last_bpp != 32 || iWidth != old_iWidth || iHeight != old_iHeight) {
-    bx_gui->dimension_update(iWidth, iHeight, 0, 0, 32);
-    old_iWidth = iWidth;
-    old_iHeight = iHeight;
-    state.last_bpp = 32;
-  }
-
-  bx_gui->graphics_frame_update(m_render_bitmap.raw(), iWidth, iHeight);
-
-  state.vga_mem_updated = 0;
-}
-
-void CS3Trio64::determine_screen_dimensions(unsigned *piHeight,
-                                            unsigned *piWidth) {
-  int ai[0x20];
-  int i;
-  int h;
-  int v;
-  for (i = 0; i < 0x20; i++)
-    ai[i] = m_crtc_map.read_byte(i);
-
-  h = (ai[1] + 1) * (seq_dotperchar() ? 8 : 9) / timing.divisor;
-  v = (ai[18] | ((ai[7] & 0x02) << 7) | ((ai[7] & 0x40) << 3)) + 1;
-  // S3 CR5D extends H* with bit8 (0x100) and CR5E extends V* with bit10 (0x400)
+// S3 CR5D extends H* with bit8 (0x100) and CR5E extends V* with bit10 (0x400)
+void CS3Trio64::apply_extended_timing(int &h, int &v) {
   if (m_crtc_map.read_byte(0x5D) & 0x02)
     h |= 0x400; // multiplied by 8/2 = 4
   if (m_crtc_map.read_byte(0x5E) & 0x02)
     v |= 0x400;
-  v *= (get_interlace_mode() + 1); // interlaced mode
-
-  if (vga.gc.shift256) {
-    // was shift_reg == 2 mode 13h / 256-color byte mode
-    // chain_four vs modeX
-    *piWidth = h;
-    *piHeight = v;
-  } else if (vga.gc.shift_reg) {
-    // was shift_reg == 1 CGA 4-color interleave
-    if (x_dotclockdiv2())
-      h <<= 1;
-    *piWidth = h;
-    *piHeight = v;
-  } else {
-    // was shift_reg == 0 standard VGA planar / EGA
-    *piWidth = 640;
-    *piHeight = 480;
-    if (m_crtc_map.read_byte(0x06) == 0xBF) {
-      if (m_crtc_map.read_byte(0x17) == 0xA3 &&
-          m_crtc_map.read_byte(0x14) == 0x40 &&
-          m_crtc_map.read_byte(0x09) == 0x41) {
-        *piWidth = 320;
-        *piHeight = 240;
-      } else {
-        if (x_dotclockdiv2())
-          h <<= 1;
-        *piWidth = h;
-        *piHeight = v;
-      }
-    } else if ((h >= 640) && (v >= 480)) {
-      *piWidth = h;
-      *piHeight = v;
-    }
-  }
 }
 
 inline uint32_t CS3Trio64::s3_vram_mask() const {
   const uint32_t sz =
       vga.svga_intf.vram_size ? vga.svga_intf.vram_size : (8u * 1024u * 1024u);
   return sz - 1u;
-}
-
-void CS3Trio64::palette_update() {
-  CVGA::palette_update();
-
-  for (int i = 0; i < 256; i++) {
-    // pal6bit: expand 6-bit color to 8-bit
-    u8 r = (vga.dac.color[3 * (i & vga.dac.mask) + 0] & 0x3f);
-    u8 g = (vga.dac.color[3 * (i & vga.dac.mask) + 1] & 0x3f);
-    u8 b = (vga.dac.color[3 * (i & vga.dac.mask) + 2] & 0x3f);
-    // Expand 6-bit to 8-bit: (val << 2) | (val >> 4)
-    r = (r << 2) | (r >> 4);
-    g = (g << 2) | (g >> 4);
-    b = (b << 2) | (b >> 4);
-    bx_gui->palette_change((unsigned)i, (unsigned)r, (unsigned)g, (unsigned)b);
-  }
 }
 
 uint8_t CS3Trio64::get_video_depth() {
