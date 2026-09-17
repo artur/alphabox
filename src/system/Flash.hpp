@@ -43,6 +43,7 @@
  **/
 class CFlash : public CSystemComponent {
 public:
+  static bool trace_on();
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
   CFlash(CConfigurator *cfg, class CSystem *c);

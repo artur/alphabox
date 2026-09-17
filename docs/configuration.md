@@ -71,7 +71,9 @@ sys0 = tsunami {
 ```
 
 - `es40` (the default): the AlphaServer ES40.
-- `ds20e`: the AlphaServer DS20E, under construction. Its console runs and
+- `ds20e`: the AlphaServer DS20E, under construction.
+- `ds10`: the AlphaServer DS10, started; its console does not reach the
+  prompt yet. Its console runs and
   lists its configuration, but the board's own hardware is not modelled yet;
   [platforms.md](platforms.md) and its
   [work packet](platforms/ds20e.md) say what is missing.

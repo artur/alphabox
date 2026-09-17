@@ -43,7 +43,8 @@ Three layers, each added in a different way:
 | Machine | State |
 | --- | --- |
 | AlphaServer ES40 | emulated: the machine this project is about |
-| AlphaServer DS20E | under construction: its console reaches `P00>>>` and lists its configuration, with the differences still open in its [packet](platforms/ds20e.md) |
+| AlphaServer DS20E | under construction: its console runs, finds both processors, drives disks and network-boots ([packet](platforms/ds20e.md)) |
+| AlphaServer DS10 | started: its console loads and runs but stops in its own file layer ([packet](platforms/ds10.md)) |
 
 ## Where the firmware comes from
 
@@ -121,8 +122,10 @@ device or an absent CPU.
    console runs (L2). What remains is the machine's own hardware -- how it
    finds a second processor, the processor SROM data it reads, its flash --
    and a real machine's listing to check against.
-3. **The rest of the Tsunami family**: DS10, DS20, DS20L, and the UP2000 and
-   XP1000 boards.
+3. **The rest of the Tsunami family**: DS10 (started), DS20, DS20L, and the
+   UP2000 and XP1000 boards. Only some have a raw console image on the
+   firmware CD; the others ship as update bundles, which needs a reader for
+   that format.
 4. **Titan** (ES45, DS25) with EV67/EV68 rows.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7

@@ -114,9 +114,17 @@ void CFlash::check_state() {
  * Normally, this returns one byte from flash, however, after some commands
  * sent to the flash-rom, this returns identification or status information.
  **/
+/// Report the commands firmware sends the flash (ALPHABOX_TRACE_FLASH).
+bool CFlash::trace_on() {
+  static const bool on = getenv("ALPHABOX_TRACE_FLASH") != nullptr;
+  return on;
+}
+
 u64 CFlash::ReadMem(int index, u64 address, int dsize) {
   u64 data = 0;
   int a = (int)(address >> 6);
+  if (trace_on() && state.mode != MODE_READ)
+    printf("%%FLS-T-TRACE: read  %08x (state %d)\n", a, state.mode);
 
   // TIGbus flash is an 8-bit device on a wider bus. Only the low 32-bit lane is
   // wired. Ignore reads from the upper lane (addr & 0x4) to match real ES40
@@ -212,6 +220,11 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
  * \endcode
  **/
 void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
+  // Firmware drives flash as a state machine; seeing the commands is how
+  // to tell "it never found the part" from "it read what it wanted".
+  if (trace_on())
+    printf("%%FLS-T-TRACE: write %08x = %02x (state %d)\n", (int)(address >> 6),
+           (u8)data, state.mode);
   // Flash is mapped with 64-byte spacing, so byte index is address >> 6.
   const int a = (int)(address >> 6);
   const int ad = a & 0xffff;

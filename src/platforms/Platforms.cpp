@@ -90,6 +90,30 @@ static const char *ds20e_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
+/**
+ * DS10 interrupts. A single-processor board: its two on-board network
+ * controllers sit at devices 9 and 11 with one interrupt input each, and
+ * its four slots at devices 14 to 17, whose pins count down from the
+ * slot's own base. Device 7 is the ISA bridge. (Linux carries the same
+ * table as `webbrick_map_irq`.)
+ */
+static int ds10_pci_interrupt(int hose, int slot, int intx) {
+  if (slot == 9)
+    return 29; // on-board network
+  if (slot == 11)
+    return 30; // second on-board network
+  if (slot >= 14 && slot <= 17)
+    return 32 + 4 * (slot - 14) + (3 - intx);
+  return -1; // the ISA bridge and anything the board does not wire
+}
+
+/// DS10 slots: the board wires 9, 11 and 14 to 17, with the ISA bridge at 7.
+static const char *ds10_slot_refusal(int hose, int slot) {
+  if (hose != 0)
+    return "this machine has one PCI bus";
+  return nullptr;
+}
+
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
      FW_LFU_BUNDLE, 2, true, es40_pci_interrupt, es40_slot_refusal},
@@ -99,6 +123,10 @@ static const platform_config platforms[] = {
     // until its row exists.
     {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
      FW_ROM_HEADER, 2, false, ds20e_pci_interrupt, ds20e_slot_refusal},
+    // Under construction (docs/platforms/ds10.md): one processor, one PCI
+    // bus. The processor row is the EV68CB for now, as on the DS20E.
+    {"ds10", "AlphaServer DS10", "ev68cb", 1, 26, 31, "DS10SRM.ROM",
+     FW_ROM_HEADER, 1, false, ds10_pci_interrupt, ds10_slot_refusal},
 };
 
 const platform_config *find_platform(const char *name) {
