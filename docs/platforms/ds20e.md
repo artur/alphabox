@@ -66,7 +66,7 @@ such) the structure of the ES40 listing with DS20E slot names.
 | 2 | `platform = "ds20e"` descriptor: CPUs, memory limits, slots, firmware | L1 | done (slots and interrupts still the ES40's, assumed) |
 | 3 | CPU model row(s): EV67 and/or EV68AL identity values | L1 | not needed yet: the firmware accepts the EV68CB row |
 | 4 | Run with the unknown-access trace; catalogue what the firmware touches that the ES40 model does not provide | L1 | done, see Findings |
-| 5 | Second processor: this firmware does not find one | L2 | open |
+| 5 | Second processor: this firmware does not find one | L2 | done: it finds both |
 | 6 | Processor SROM data, so the console stops printing rubbish for it | L2 | open |
 | 7 | The board's flash, at PCI memory 0xfff80000 | L2 | open |
 | 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | open |
@@ -127,8 +127,21 @@ configuration reads any bus scan makes, and byte writes at PCI memory
 at a flash this board carries in PCI memory, where the ES40's sits on the
 TIG bus. The firmware tolerates the writes going nowhere.
 
-**The second processor, investigated (2026-09-17).** Three things were
-ruled out:
+**The second processor: found, and fixed (2026-09-17).** Tracing the
+registers a console uses to bring processors up (`ALPHABOX_TRACE_MP=1`)
+showed this console *does* try: it writes the halt register for processor 1
+(TIG `0x300005c0`, bit 1) and its handshake register, then gives up. Our
+second processor was parked waiting to be started, so nothing answered.
+
+The ES40's console starts its processors itself through the management
+processor, and they wait until it does. This board has none: every
+processor must already be running PALcode when the console asks. Releasing
+the secondary at the PALcode reset entry -- where the ES40's management
+processor puts one too -- makes it answer, and `show config` lists both
+processors. That is now a board property (`console_starts_secondaries`),
+not a guess: the console's own attempt is the evidence.
+
+Three things were ruled out along the way:
 
 - *The I2C bus is untouched.* With `ALPHABOX_TRACE_I2C=1` this console
   never addresses the chipset's I2C bus at all, so neither the processor
@@ -143,8 +156,7 @@ ruled out:
   `0x38000140` four times and `0x380001c0` twice and writes `0x38000100`;
   feeding those reads 0xff instead of 0 changes nothing.
 
-So processor discovery happens somewhere else, and finding it is the next
-piece of work.
+Processor discovery turned out to be the halt-line handshake above.
 
 **How to read this firmware** (the technique, for the other open items).
 The trace names the instruction and the return address of an access nothing

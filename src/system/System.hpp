@@ -210,6 +210,15 @@ public:
                      u64 data, CSystemComponent *source);
   static bool trace_unknown_on();
 
+  /**
+   * Report the registers a console uses to start other processors and hand
+   * work to them, when ALPHABOX_TRACE_MP is set: how a machine brings its
+   * processors up is board-specific (docs/platforms.md).
+   */
+  void start_secondaries();
+  void trace_mp(const char *what, u32 reg, u64 value);
+  static bool trace_mp_on();
+
   CSystem(CConfigurator *cfg);
   void ResetMem(unsigned int membits);
 

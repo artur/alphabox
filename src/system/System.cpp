@@ -260,6 +260,47 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   return 0;
 }
 
+/**
+ * Processors other than the first, on a machine whose console expects them
+ * to be running already.
+ *
+ * The ES40's console starts them itself, through the management processor,
+ * and they wait until it does. A board without one -- the DS20E -- instead
+ * asserts a processor's halt line and waits for it to answer: its console
+ * writes the halt register for processor 1 and gives up when nothing
+ * replies. Such a processor is released here at the PALcode reset entry,
+ * which is where the ES40's management processor puts one too.
+ *
+ * (Found by tracing the console's own attempt: docs/platforms/ds20e.md.)
+ */
+void CSystem::start_secondaries() {
+  if (m_platform->console_starts_secondaries)
+    return;
+  for (int i = 1; i < iNumCPUs; i++) {
+    if (!acCPUs[i]->get_waiting())
+      continue;
+    printf("%%SYS-I-SECONDARY: releasing CPU %d at the PALcode reset entry.\n",
+           i);
+    acCPUs[i]->set_pc(0x8001);
+    acCPUs[i]->stop_waiting();
+  }
+}
+
+bool CSystem::trace_mp_on() {
+  static const bool on = getenv("ALPHABOX_TRACE_MP") != nullptr;
+  return on;
+}
+
+void CSystem::trace_mp(const char *what, u32 reg, u64 value) {
+  if (!trace_mp_on())
+    return;
+  printf("%%SYS-T-MP: %s %08x = %016" PRIx64 "%s\n", what, reg, value,
+         t_running_cpu ? "" : " (device)");
+  if (t_running_cpu)
+    printf("            from cpu%d pc=%016" PRIx64 "\n",
+           t_running_cpu->get_cpuid(), t_running_cpu->get_pc());
+}
+
 bool CSystem::trace_unknown_on() {
   static const bool on = getenv("ALPHABOX_TRACE_UNKNOWN") != nullptr;
   return on;
@@ -1629,6 +1670,9 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
     return;
 
   case 0x080: { // MISC
+    // Interprocessor interrupt requests and arbitration live here.
+    if (data & U64(0x0000000000000ff0))
+      trace_mp("Cchip MISC write", 0x080, data);
     // Serialize with interrupt()/clear_ipi()/clear_clock_int(): an unlocked
     // IPI ack on one CPU thread could otherwise erase an IPI another CPU
     // thread is raising (irq_h's check-then-act), hanging the sender.
@@ -1842,6 +1886,10 @@ void CSystem::tig_update_halt_lines() {
 }
 
 void CSystem::tig_write(u32 a, u8 data) {
+  // The registers a console uses to wake and hand work to other processors.
+  if (a == 0x300003c0 || a == 0x300005c0 ||
+      (a >= 0x30000a00 && a <= 0x30000b00))
+    trace_mp("TIG write", a, data);
   switch (a) {
   case 0x30000000: // trr
     return;
@@ -1976,6 +2024,7 @@ int CSystem::LoadROM() {
         acCPUs[i]->set_pc(acCPUs[0]->get_pc());
       for (i = 0; i < iNumCPUs; i++)
         acCPUs[i]->set_PAL_BASE(acCPUs[0]->get_pal_base());
+      start_secondaries();
 
       loadedFromFlash = true;
     }
@@ -2044,6 +2093,7 @@ int CSystem::LoadROM() {
 
       printf("100%%\n");
       acCPUs[0]->restore_icache();
+      start_secondaries();
 
       f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
                 "wb");

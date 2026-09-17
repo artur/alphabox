@@ -90,6 +90,10 @@ through access helpers -- so the return address is reported with it.
 `ALPHABOX_TRACE_I2C=1` does the same for the chipset's I2C bus, reporting
 every address the firmware puts on it and whether anything answered.
 
+`ALPHABOX_TRACE_MP=1` reports the registers a console uses to start other
+processors and hand work to them -- how a machine brings its processors up
+differs from board to board.
+
 A firmware scanning empty configuration space produces these normally; the
 traces matter when a machine's firmware wants hardware that is not emulated
 yet (see [platforms.md](platforms.md)).

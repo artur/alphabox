@@ -67,6 +67,16 @@ struct platform_config {
   int pci_hoses; ///< PCI buses out of the chipset
 
   /**
+   * Whether the console starts the other processors itself.
+   *
+   * The ES40's does, through the management processor, so they wait until
+   * it says so. The DS20E has no such processor: its console asserts a
+   * processor's halt line and expects an answer, so every processor must
+   * already be running PALcode when the console looks.
+   */
+  bool console_starts_secondaries;
+
+  /**
    * The interrupt input a device's pin reaches, or -1 when the slot has no
    * interrupt. `hose` and `slot` are the device's place on the machine's
    * own buses (behind a bridge, the outermost bridge's slot), and `intx`
