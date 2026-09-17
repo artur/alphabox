@@ -59,9 +59,29 @@ static const char *es40_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
+/**
+ * DS20E interrupts: ASSUMED to be the ES40's wiring until the firmware
+ * says otherwise. It almost certainly is not -- Linux carries a different
+ * interrupt table for every Tsunami board -- so this is a placeholder that
+ * lets the machine boot far enough to be observed, and the console's own
+ * assignment is what corrects it (docs/platforms/ds20e.md, question 1).
+ */
+static int ds20e_pci_interrupt(int hose, int slot, int intx) {
+  return es40_pci_interrupt(hose, slot, intx);
+}
+
+/// DS20E slots: which ones the board keeps is not known yet.
+static const char *ds20e_slot_refusal(int hose, int slot) { return nullptr; }
+
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
      FW_LFU_BUNDLE, 2, es40_pci_interrupt, es40_slot_refusal},
+    // Under construction (docs/platforms/ds20e.md). The processor is the
+    // EV68CB row because it is the only one there; the board took EV6,
+    // EV67 and EV68AL, so the console will name the processor wrongly
+    // until its row exists.
+    {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
+     FW_ROM_HEADER, 2, ds20e_pci_interrupt, ds20e_slot_refusal},
 };
 
 const platform_config *find_platform(const char *name) {

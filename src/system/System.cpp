@@ -1982,31 +1982,48 @@ int CSystem::LoadROM() {
     if (!f) {
       const char *srm =
           myCfg->get_text_value("rom.srm", m_platform->firmware_file);
-      if (m_platform->firmware != FW_LFU_BUNDLE)
-        FAILURE_1(NotImplemented,
-                  "%s: console images behind the standard ROM header are not "
-                  "loaded yet (docs/platforms.md)",
-                  m_platform->description);
       f = fopen(srm, "rb");
       if (!f)
         FAILURE(Runtime, "No original or decompressed SRM ROM image found");
       printf("%%SYS-I-READROM: Reading original ROM image from %s.\n", srm);
-      for (i = 0; i < 0x240; i++) {
-        if (feof(f))
-          break;
-        (void)!fread(&scratch, 1, 1, f);
+
+      // Where the console's own code starts in the file, and where it runs.
+      // An update bundle carries the console behind a fixed wrapper; a raw
+      // image carries the standard Alpha ROM header, which says where the
+      // machine loads it (docs/platforms.md).
+      size_t skip = 0x240;
+      u64 rom_base = U64(0x900000);
+      if (m_platform->firmware == FW_ROM_HEADER) {
+        u32 header[14];
+        if (fread(header, sizeof(u32), 14, f) != 14)
+          FAILURE(Runtime, "File is too short to be a SRM ROM image");
+        for (i = 0; i < 14; i++)
+          header[i] = endian_32(header[i]);
+        if (header[0] != 0x5a5ac3c3 || header[1] != 0xa5a53c3c)
+          FAILURE_1(Runtime, "%s does not carry an Alpha ROM header", srm);
+        skip = header[2];
+        rom_base = header[6];
+        printf("%%SYS-I-ROMHEADER: %s: %u bytes, loaded at %" PRIx64 ".\n", srm,
+               header[4], rom_base);
+        if (!PtrToMem(rom_base))
+          FAILURE_1(Runtime, "ROM load address %" PRIx64 " is outside memory",
+                    rom_base);
       }
 
-      if (feof(f))
+      fseek(f, 0, SEEK_END);
+      const long file_size = ftell(f);
+      if (file_size <= (long)skip)
         FAILURE(Runtime, "File is too short to be a SRM ROM image");
-      buffer = PtrToMem(0x900000);
+      fseek(f, (long)skip, SEEK_SET);
+      buffer = PtrToMem(rom_base);
       while (!feof(f))
         (void)!fread(buffer++, 1, 1, f);
       fclose(f);
 
       printf("%%SYS-I-DECOMP: Decompressing ROM image.\n0%%");
-      acCPUs[0]->set_pc(0x900001);
-      acCPUs[0]->set_PAL_BASE(0x900000);
+      // PALmode entry at the image's first instruction.
+      acCPUs[0]->set_pc(rom_base + 1);
+      acCPUs[0]->set_PAL_BASE(rom_base);
       acCPUs[0]->enable_icache();
 
       j = 0;

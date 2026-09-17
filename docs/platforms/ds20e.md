@@ -6,7 +6,7 @@ machine-independent structure rather than new hardware. See
 [platforms.md](../platforms.md) for the layers and the acceptance ladder.
 
 **Branch**: `platform/ds20e` (own worktree) · **Config**: `platform = "ds20e";`
-· **Status**: not started
+· **Status**: L2 (console prompt reached)
 
 ## The machine
 
@@ -62,16 +62,19 @@ such) the structure of the ES40 listing with DS20E slot names.
 
 | # | Item | Level | Status |
 | --- | --- | --- | --- |
-| 1 | Raw ROM-header image loader, selected by the platform descriptor | L1 | |
-| 2 | `platform = "ds20e"` descriptor: CPUs, memory limits, slots, firmware | L1 | |
-| 3 | CPU model row(s): EV67 and/or EV68AL identity values | L1 | |
-| 4 | Run with the unknown-access trace; catalogue what the firmware touches that the ES40 model does not provide | L1 | |
-| 5 | Board registers and devices the trace turned up | L2 | |
-| 6 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L2 | |
-| 7 | Console listings compared with the reference | L3 | |
-| 8 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | |
-| 9 | Guest boot, media permitting | L5 | |
-| 10 | ES40 regression sweep and JIT cross-check | L6 | |
+| 1 | Raw ROM-header image loader, selected by the platform descriptor | L1 | done |
+| 2 | `platform = "ds20e"` descriptor: CPUs, memory limits, slots, firmware | L1 | done (slots and interrupts still the ES40's, assumed) |
+| 3 | CPU model row(s): EV67 and/or EV68AL identity values | L1 | not needed yet: the firmware accepts the EV68CB row |
+| 4 | Run with the unknown-access trace; catalogue what the firmware touches that the ES40 model does not provide | L1 | done, see Findings |
+| 5 | Second processor: this firmware does not find one | L2 | open |
+| 6 | Processor SROM data, so the console stops printing rubbish for it | L2 | open |
+| 7 | The board's flash, at PCI memory 0xfff80000 | L2 | open |
+| 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | open |
+| 9 | Why the IDE and USB functions are not listed | L3 | open |
+| 10 | Console listings compared with the reference | L3 | blocked: no reference yet |
+| 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | |
+| 12 | Guest boot, media permitting | L5 | |
+| 13 | ES40 regression sweep and JIT cross-check | L6 | |
 
 ## Open questions
 
@@ -87,7 +90,45 @@ such) the structure of the ES40 listing with DS20E slot names.
 
 ## Findings
 
-_(append as the work proceeds)_
+**The firmware runs, first try (2026-09-17).** With the ROM-header loader,
+the `ds20e` descriptor and the existing ES40 hardware model,
+`PC264SRM.ROM` reaches `P00>>>`. That settles the shape of the work: this
+board is close enough to the ES40 that the remaining items are differences,
+not a bring-up.
+
+**It calls itself "AlphaPC 264DP 800 MHz", console V7.3-1**, with OpenVMS
+PALcode V1.98-79 and Tru64 PALcode V1.92-74 -- the revisions the CD's
+`FWREADME.TXT` lists for DS20/DS20E. So this image is the DP264 firmware,
+the design the DS20 and DS20E are built on, which is evidence for open
+question 1 but not an answer: the machine type and variation it records for
+the operating system still has to be read out.
+
+**The processor row was accepted**: the console prints "Alpha EV68CB pass
+4.0 800 MHz" from our EV68CB identity, so an EV67 or EV68AL row is a
+refinement, not a prerequisite.
+
+**Differences from the ES40 already visible:**
+
+- "Bcache is disabled", where the ES40 reports 8 MB.
+- "SROM Revision:" prints rubbish, and the console says `file open failed
+  for iic_cpu0`: it wants per-processor SROM data this machine does not have.
+- The floppy is `dva0.0.0.0.0`, not the ES40's `dva0.0.0.1000.0`.
+- `show config` lists the M1543C bridge at hose 0 slot 7 but neither the IDE
+  nor the USB function that the configuration provides at slots 15 and 19.
+- A second configured processor is not found: no "CPU 1" line, and the
+  console never starts on it. Processor presence is discovered differently
+  here than on the ES40.
+- The TIG reports revision 7.30 and an arbiter revision appears, neither of
+  which the ES40 listing has.
+
+**Accesses nothing claims** (`ALPHABOX_TRACE_UNKNOWN=1`): the empty-slot
+configuration reads any bus scan makes, and byte writes at PCI memory
+`0xfff80001` with values 0x20, 0x80, 0xc0, 0xc3 -- a flash command sequence
+at a flash this board carries in PCI memory, where the ES40's sits on the
+TIG bus. The firmware tolerates the writes going nowhere.
+
+**Not yet proven:** everything above is the console's own account of itself.
+Without the reference listing from a real DS20E, L3 is not claimed.
 
 ## Rules
 
