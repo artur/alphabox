@@ -1,6 +1,8 @@
 /* AXPbox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
+ *          https://github.com/artur/axpbox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -26,23 +28,64 @@
  * serve the general public.
  */
 
-/**
- * \file
- * Contains the definitions for the emulated Symbios SCSI controller.
- **/
-#if !defined(INCLUDED_SYM53C810_H_)
-#define INCLUDED_SYM53C810_H_
+/* Symbios (NCR/LSI) 53C8xx PCI-SCSI I/O processor family.
+ *
+ * One SCRIPTS processor and register file for every part; the differences
+ * between parts (wide SCSI, on-chip RAM, register masks, PCI identity) are
+ * data in a sym_chip_config, so a chip is a table row (Sym53C8xxChips.cpp).
+ * The code is split by concern:
+ *
+ *   Sym53C8xx.cpp            construction, PCI header, threads, reset,
+ *                            state file, main-thread timers
+ *   Sym53C8xxRegisters.cpp   the register file and its side effects
+ *   Sym53C8xxScripts.cpp     the SCRIPTS processor
+ *   Sym53C8xxInterrupts.cpp  interrupt raising, stacking, the IRQ line
+ *   Sym53C8xxRegs.hpp        register definitions (family units only)
+ *   Sym53C8xxChips.cpp       the parts
+ */
+#if !defined(INCLUDED_SYM53C8XX_H_)
+#define INCLUDED_SYM53C8XX_H_
 
 #include "DiskController.hpp"
 #include "PCIDevice.hpp"
 #include "SCSIDevice.hpp"
 
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <string>
 
 /**
- * \brief Symbios Sym53C810 SCSI disk controller.
+ * \brief What distinguishes one 53C8xx part from another.
+ **/
+struct sym_chip_config {
+  const char *name;  ///< part name for messages, e.g. "53C810"
+  u16 pci_device_id; ///< PCI config 0x02
+  u8 pci_revision;   ///< PCI config 0x08; its low nibble also reads in CTEST3
+  u8 macntl;         ///< MACNTL reset value (bits 7..4: chip type)
+  u32 ram_bytes;     ///< on-chip SCRIPTS RAM behind BAR2 (0: none)
+
+  // SCSI IDs: 3 bits on narrow parts, 4 on wide ones.
+  u8 id_mask;
+
+  // Writable bits of the registers whose layout differs between parts.
+  u8 scntl2_mask;
+  u8 scntl2_w1c;
+  u8 scntl3_mask;
+  u8 scid_mask;
+  u8 gpreg_mask;
+  u8 ctest5_mask;
+  u8 sien1_mask;
+  u8 sist1_rc;    ///< SIST1 bits cleared by reading
+  u8 sist1_fatal; ///< SIST1 bits that interrupt even when masked
+  u8 stime1_mask;
+  u8 stest1_mask;
+  u8 stest2_mask;
+  u8 stest3_mask;
+};
+
+/**
+ * \brief Symbios 53C8xx SCSI disk controller.
  *
  * \bug Exception below ASTDEL during OpenVMS boot when booting from SCSI.
  *
@@ -56,7 +99,7 @@
  *(http://la.causeuse.org/hauke/macbsd/symbios_53cXXX_doc/lsilogic-53cXXX-scripts.pdf)
  *  .
  **/
-class CSym53C810 : public CPCIDevice,
+class CSym53C8xx : public CPCIDevice,
                    public CDiskController,
                    public CSCSIDevice {
 public:
@@ -79,10 +122,16 @@ public:
 
   virtual void register_disk(class CDisk *dsk, int bus, int dev);
 
-  CSym53C810(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
-  virtual ~CSym53C810();
+  CSym53C8xx(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
+             const sym_chip_config &chip);
+  virtual ~CSym53C8xx();
+
+  /// The part named `name` ("810", "895", ...), or nullptr.
+  static const sym_chip_config *find_chip(const char *name);
 
 private:
+  const sym_chip_config m_chip;
+
   void write_b_scntl0(u8 value);
   void write_b_scntl1(u8 value);
   void write_b_istat(u8 value);
@@ -189,4 +238,4 @@ private:
     int command_complete;
   } state;
 };
-#endif // !defined(INCLUDED_SYM_H)
+#endif // !defined(INCLUDED_SYM53C8XX_H_)

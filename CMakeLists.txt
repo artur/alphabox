@@ -25,6 +25,7 @@ file(GLOB srcs
     src/common/*.cpp
     src/devices/isa/*.cpp
     src/devices/pci/*.cpp
+    src/devices/pci/sym53c8xx/*.cpp
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
     src/devices/video/s3/*.cpp
@@ -42,7 +43,8 @@ add_executable(axpbox ${srcs} src/Main.cpp)
 # is on the include path and a moved file needs no include changes.
 target_include_directories(axpbox PRIVATE
     src src/cpu src/system src/common
-    src/devices/isa src/devices/pci src/devices/storage
+    src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
+    src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
     src/devices/net
     src/base src/gui ${CMAKE_BINARY_DIR}/src)

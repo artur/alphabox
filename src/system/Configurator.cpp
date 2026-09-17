@@ -57,8 +57,8 @@
 #endif
 #include "ES1370.hpp"
 #include "MPU401.hpp"
-#include "Sym53C810.hpp"
 #include "Sym53C895.hpp"
+#include "Sym53C8xx.hpp"
 
 /**
  * Constructor.
@@ -901,8 +901,9 @@ void CConfigurator::initialize() {
      * CDiskController part of the class as it's used
      * to register disks to.
      */
-    myDevice = (CDiskController *)new CSym53C810(
-        this, (CSystem *)pParent->get_device(), pcibus, pcidev);
+    myDevice = (CDiskController *)new CSym53C8xx(
+        this, (CSystem *)pParent->get_device(), pcibus, pcidev,
+        *CSym53C8xx::find_chip("810"));
     break;
 
   case c_file:
