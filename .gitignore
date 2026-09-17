@@ -20,3 +20,6 @@ test/arc/*.out
 
 # 86Box ROM set: copyrighted firmware staged locally, never committed
 roms/
+
+# Agent worktrees (created by Claude Code, never part of the tree)
+.claude/worktrees/
