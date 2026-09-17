@@ -15,13 +15,25 @@ without any host display tooling.
 
 ```bash
 AXPBOX_DUMP_FB=fb ./build/axpbox run &
-# later: convert with PIL (PIL is installed; ImageMagick may not be)
-python3 -c "from PIL import Image; Image.open('fb-055-720x400.ppm').save('frame.png')"
+# later: convert to PNG. PIL is not installed everywhere (it is missing on
+# the macOS host); test/tools/ppm2png.py needs only the stdlib.
+python3 test/tools/ppm2png.py fb-055-720x400.ppm frame.png
 ```
 
 Fully window-less operation (no display server needed, nothing pops up
-on the user's desktop): add `SDL_VIDEO_DRIVER=offscreen`. Rendering,
-fb dumps, and the key-injection hooks all still work.
+on the user's desktop): set `SDL_VIDEO_DRIVER`. Rendering, fb dumps, and
+the key-injection hooks all still work.
+- `dummy` works on every host tried (Linux/WSLg and macOS).
+- `offscreen` works on Linux but fails on macOS with "Unable to create
+  SDL3 window ... Could not initialize OpenGL / GLES library", and the
+  emulator then renders nothing. Prefer `dummy`.
+
+`[CARD=s3|cirrus] test/tools/vga_boot.sh <sdl-binary> <label> [seconds]`
+does all of the below for either card: SRM on the VGA console, window-less,
+frame hashes, `last.png`. The screen settles on two frames (text cursor
+on/off); the script header lists the known sets, and a
+behaviour-preserving change must reproduce them. The Cirrus run needs the
+86Box ROM set in `roms/` (not in git).
 
 Deduplicate a long run to find the distinct screens:
 
