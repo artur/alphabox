@@ -108,6 +108,9 @@ Cypress 82C693 and CMD CSA-6730 USB (other Alpha systems), DPT PM3755 and
 AMI 431 RAID, Compaq 2000/P and 1280/P, Toshiba Meteor. Few of these would
 change what a guest can do on an emulated ES40.
 
+Other machines (a DS20E, an ES45, an EV7 system) are a different axis of
+work: see [platforms.md](platforms.md).
+
 ## Suggested order
 
 1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done; screen-to-system
