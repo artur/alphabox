@@ -2170,6 +2170,46 @@ void CS3Trio64::on_crtc_linear_regs_changed() {
   trace_lfb_if_changed("CR58/59/5A");
 }
 
+/** The S3's own legacy I/O ranges, beyond the standard VGA ones. */
+static const struct {
+  int id;
+  u32 port;
+  u32 length;
+} s3_legacy_ports[] = {
+    {32, 0x0102, 1}, // Setup Option Select
+    {10, 0x42E8, 2}, // SUBSYS_CNTL/STAT
+    {11, 0x4AE8, 2}, // ADVFUNC_CNTL
+    {12, 0x46E8, 2}, // MODE_SETUP / video subsystem enable
+    {13, 0x4EE8, 2}, // legacy compatibility stub
+    {14, 0x86E8, 2}, // CUR_X
+    {15, 0x8EE8, 2}, // DESTX_DIASTP
+    {16, 0x96E8, 2}, // MAJ_AXIS_PCNT
+    {17, 0x9AE8, 2}, // CMD
+    {18, 0xA2E8, 4}, // BKGD_COLOR
+    {19, 0xA6E8, 4}, // FRGD_COLOR
+    {20, 0xAAE8, 4}, // WRT_MASK
+    {21, 0xAEE8, 4}, // RD_MASK
+    {22, 0xB6E8, 2}, // BKGD_MIX
+    {23, 0xBAE8, 2}, // FRGD_MIX
+    {24, 0xE2E8, 8}, // PIX_TRANS (0xE2E8..0xE2EF)
+    {25, 0xB2E8, 4}, // PIX_CNTL or ALT PIX_TRANS (gated by MULTIFUNC[E].bit8)
+    {26, 0xBEE8, 2}, // MULTIFUNC_CNTL (word)
+    {27, 0xD2E8, 2}, // ROP_MIX       (word; some paths read this)
+    {28, 0x9EE8, 2}, // SHORT_STROKE  (word; latch)
+    {29, 0xCAE8, 2}, // DESTY/AXSTP alias (might be wrong)
+    {30, 0x82E8, 2}, // CUR_Y
+    {31, 0x92E8, 2}, // ERR_TERM
+    {33, 0x8AE8, 2}, // DESTY_AXSTP
+};
+
+/** Base port of one of the S3's own legacy ranges, or 0 if not ours. */
+static u32 s3_legacy_port(int index) {
+  for (const auto &r : s3_legacy_ports)
+    if (r.id == index)
+      return r.port;
+  return 0;
+}
+
 /**
  * Initialize the S3 device.
  **/
@@ -2193,13 +2233,8 @@ void CS3Trio64::init() {
   memset(vga.dac.color, 0, sizeof(vga.dac.color));
   memset(vga.dac.loading, 0, sizeof(vga.dac.loading));
 
-  // Register VGA I/O ports at 3b4, 3b5, 3ba, 3c0..cf, 3d4, 3d5, 3da
-  add_legacy_io(1, 0x3b4, 2);
-  add_legacy_io(3, 0x3ba, 2);
-  add_legacy_io(2, 0x3c0, 16);
-  add_legacy_io(8, 0x3d4, 2);
-  add_legacy_io(9, 0x3da, 1);
-  add_legacy_io(32, 0x102, 1);
+  // Standard VGA ports, BIOS message port and the 0xa0000 window
+  add_vga_legacy_ranges();
 
   // Register CRTC address-map handlers.  Must be called before any
   // m_crtc_map.write_byte() so that writes dispatch through handlers
@@ -2214,41 +2249,10 @@ void CS3Trio64::init() {
   vga.sequencer.char_sel.base[0] = 0x20000; // font B (attr bit3=0)
   vga.sequencer.char_sel.base[1] = 0x20000; // font A (attr bit3=1)
 
-  // 8514/A-style S3 accel ports (byte-wide) - always register;
-  // runtime gating is done via CR40 (state.accel.enabled).
-  add_legacy_io(10, 0x42E8, 2); // SUBSYS_CNTL/STAT
-  add_legacy_io(11, 0x4AE8, 2); // ADVFUNC_CNTL
-  add_legacy_io(12, 0x46E8, 2); // MODE_SETUP / video subsystem enable
-  add_legacy_io(13, 0x4EE8, 2); // legacy compatibility stub
-  add_legacy_io(14, 0x86E8, 2); // CUR_X
-  add_legacy_io(15, 0x8EE8, 2); // DESTX_DIASTP
-  add_legacy_io(16, 0x96E8, 2); // MAJ_AXIS_PCNT
-  add_legacy_io(17, 0x9AE8, 2); // CMD
-  add_legacy_io(18, 0xA2E8, 4); // BKGD_COLOR
-  add_legacy_io(19, 0xA6E8, 4); // FRGD_COLOR
-  add_legacy_io(20, 0xAAE8, 4); // WRT_MASK
-  add_legacy_io(21, 0xAEE8, 4); // RD_MASK
-  add_legacy_io(22, 0xB6E8, 2); // BKGD_MIX
-  add_legacy_io(23, 0xBAE8, 2); // FRGD_MIX
-  add_legacy_io(24, 0xE2E8, 8); // PIX_TRANS (0xE2E8..0xE2EF)
-  add_legacy_io(25, 0xB2E8,
-                4); // PIX_CNTL or ALT PIX_TRANS (gated by MULTIFUNC[E].bit8)
-  add_legacy_io(26, 0xBEE8, 2); // MULTIFUNC_CNTL (word)
-  add_legacy_io(27, 0xD2E8, 2); // ROP_MIX       (word; some paths read this)
-  add_legacy_io(28, 0x9EE8, 2); // SHORT_STROKE  (word; latch)
-  add_legacy_io(29, 0xCAE8, 2); // DESTY/AXSTP alias (might be wrong)
-  add_legacy_io(30, 0x82E8, 2); // CUR_Y
-  add_legacy_io(31, 0x92E8, 2); // ERR_TERM
-  add_legacy_io(33, 0x8AE8, 2); // DESTY_AXSTP
-
-  /* The VGA BIOS we use sends text messages to port 0x500.
-     We listen for these messages at port 500. */
-  add_legacy_io(7, 0x500, 1);
-  bios_message_size = 0;
-  bios_message[0] = '\0';
-
-  // Legacy video address space: A0000 -> bffff
-  add_legacy_mem(4, 0xa0000, 128 * 1024);
+  // S3 setup (0x102) and 8514/A-style accel ports (byte-wide) - always
+  // register; runtime gating of the accel block is done via CR40.
+  for (const auto &r : s3_legacy_ports)
+    add_legacy_io(r.id, r.port, r.length);
 
   // Default: no linear window until guest enables CR58 bit 0.
   // Seed base/size from PCI config defaults; CR58/59 will override when
@@ -2262,7 +2266,7 @@ void CS3Trio64::init() {
 
   /* The configuration file variable "rom" should point to a VGA BIOS
      image. If not, try "vgabios.bin". */
-  load_option_rom("vgabios.bin", 5);
+  load_option_rom("vgabios.bin");
 
   vga.attribute.state = 1;
 
@@ -2671,248 +2675,15 @@ void CS3Trio64::recompute_params_clock(int divisor, int xtal) {
  **/
 CS3Trio64::~CS3Trio64() { stop_threads(); }
 
-/**
- * Read from one of the Legacy (fixed-address) memory ranges.
- **/
-u32 CS3Trio64::ReadMem_Legacy(int index, u32 address, int dsize) {
-  u32 data = 0;
-  switch (index) {
-    // IO Port 0x3b4
-  case 1:
-    data = io_read(address + 0x3b4, dsize);
-    break;
-
-    // IO Port 0x3c0..0x3cf
-  case 2:
-    data = io_read(address + 0x3c0, dsize);
-    break;
-
-    // IO Port 0x3ba
-  case 3:
-    data = io_read(address + 0x3ba, dsize);
-    break;
-
-    // VGA Memory
-  case 4:
-    data = legacy_read(address, dsize);
-    break;
-
-    // ROM
-  case 5:
-    data = rom_read(address, dsize);
-    break;
-
-    // IO Port 0x3d4
-  case 8:
-    data = io_read(address + 0x3d4, dsize);
-    break;
-
-    // IO Port 0x3da
-  case 9:
-    data = io_read(address + 0x3da, dsize);
-    break;
-
-  case 10:
-    data = io_read(address + 0x42E8, dsize);
-    break;
-  case 11:
-    data = io_read(address + 0x4AE8, dsize);
-    break;
-  case 12:
-    data = io_read(address + 0x46E8, dsize);
-    break;
-  case 13:
-    data = io_read(address + 0x4EE8, dsize);
-    break;
-  case 14:
-    data = io_read(address + 0x86E8, dsize);
-    break;
-  case 15:
-    data = io_read(address + 0x8EE8, dsize);
-    break;
-  case 16:
-    data = io_read(address + 0x96E8, dsize);
-    break;
-  case 17:
-    data = io_read(address + 0x9AE8, dsize);
-    break;
-  case 18:
-    data = io_read(address + 0xA2E8, dsize);
-    break; // BKGD_COLOR
-  case 19:
-    data = io_read(address + 0xA6E8, dsize);
-    break; // FRGD_COLOR
-  case 20:
-    data = io_read(address + 0xAAE8, dsize);
-    break; // WRT_MASK
-  case 21:
-    data = io_read(address + 0xAEE8, dsize);
-    break; // RD_MASK
-  case 22:
-    data = io_read(address + 0xB6E8, dsize);
-    break; // BKGD_MIX
-  case 23:
-    data = io_read(address + 0xBAE8, dsize);
-    break; // FRGD_MIX
-  case 24:
-    data = io_read(address + 0xE2E8, dsize);
-    break; // PIX_TRANS (8 bytes)
-  case 25:
-    data = io_read(address + 0xB2E8, dsize);
-    break;
-  case 26:
-    data = io_read(address + 0xBEE8, dsize);
-    break;
-  case 27:
-    data = io_read(address + 0xD2E8, dsize);
-    break;
-  case 28:
-    data = io_read(address + 0x9EE8, dsize);
-    break;
-  case 29:
-    data = io_read(address + 0xCAE8, dsize);
-    break;
-  case 30:
-    data = io_read(address + 0x82E8, dsize);
-    break;
-  case 31:
-    data = io_read(address + 0x92E8, dsize);
-    break;
-  case 33:
-    data = io_read(address + 0x8AE8, dsize);
-    break;
-
-  case 32:
-    data = io_read(address + 0x102, dsize);
-    break;
-  }
-
-  return data;
+u32 CS3Trio64::card_legacy_read(int index, u32 address, int dsize) {
+  const u32 port = s3_legacy_port(index);
+  return port ? io_read(address + port, dsize) : 0;
 }
 
-/**
- * Write to one of the Legacy (fixed-address) memory ranges.
- **/
-void CS3Trio64::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
-  switch (index) {
-    // IO Port 0x3b4
-  case 1:
-    io_write(address + 0x3b4, dsize, data);
-    return;
-
-    // IO Port 0x3c0..0x3cf
-  case 2:
-    io_write(address + 0x3c0, dsize, data);
-    return;
-
-    // IO Port 0x3ba
-  case 3:
-    io_write(address + 0x3ba, dsize, data);
-    return;
-
-    // VGA Memory
-  case 4:
-    legacy_write(address, dsize, data);
-    return;
-
-    // BIOS Message IO Port (0x500)
-  case 7:
-    bios_message[bios_message_size++] = (char)data & 0xff;
-    if (((data & 0xff) == 0x0a) || ((data & 0xff) == 0x0d)) {
-      if (bios_message_size > 1) {
-        bios_message[bios_message_size - 1] = '\0';
-        printf("s3: %s\n", bios_message);
-      }
-
-      bios_message_size = 0;
-    }
-
-    return;
-
-    // IO Port 0x3d4
-  case 8:
-    io_write(address + 0x3d4, dsize, data);
-    return;
-
-    // IO Port 0x3da
-  case 9:
-    io_write(address + 0x3da, dsize, data);
-    return;
-
-  case 10:
-    io_write(address + 0x42E8, dsize, data);
-    break;
-  case 11:
-    io_write(address + 0x4AE8, dsize, data);
-    break;
-  case 12:
-    io_write(address + 0x46E8, dsize, data);
-    break;
-  case 13:
-    io_write(address + 0x4EE8, dsize, data);
-    break;
-  case 14:
-    io_write(address + 0x86E8, dsize, data);
-    break;
-  case 15:
-    io_write(address + 0x8EE8, dsize, data);
-    break;
-  case 16:
-    io_write(address + 0x96E8, dsize, data);
-    break;
-  case 17:
-    io_write(address + 0x9AE8, dsize, data);
-    break;
-  case 18:
-    io_write(address + 0xA2E8, dsize, data);
-    break; // BKGD_COLOR
-  case 19:
-    io_write(address + 0xA6E8, dsize, data);
-    break; // FRGD_COLOR
-  case 20:
-    io_write(address + 0xAAE8, dsize, data);
-    break; // WRT_MASK
-  case 21:
-    io_write(address + 0xAEE8, dsize, data);
-    break; // RD_MASK
-  case 22:
-    io_write(address + 0xB6E8, dsize, data);
-    break; // BKGD_MIX
-  case 23:
-    io_write(address + 0xBAE8, dsize, data);
-    break; // FRGD_MIX
-  case 24:
-    io_write(address + 0xE2E8, dsize, data);
-    break; // PIX_TRANS (8 bytes)
-  case 25:
-    io_write(address + 0xB2E8, dsize, data);
-    break;
-  case 26:
-    io_write(address + 0xBEE8, dsize, data);
-    break;
-  case 27:
-    io_write(address + 0xD2E8, dsize, data);
-    break;
-  case 28:
-    io_write(address + 0x9EE8, dsize, data);
-    break;
-  case 29:
-    io_write(address + 0xCAE8, dsize, data);
-    break;
-  case 30:
-    io_write(address + 0x82E8, dsize, data);
-    break;
-  case 31:
-    io_write(address + 0x92E8, dsize, data);
-    break;
-  case 33:
-    io_write(address + 0x8AE8, dsize, data);
-    break;
-
-  case 32:
-    io_write(address + 0x102, dsize, data);
-    return;
-  }
+void CS3Trio64::card_legacy_write(int index, u32 address, int dsize, u32 data) {
+  const u32 port = s3_legacy_port(index);
+  if (port)
+    io_write(address + port, dsize, data);
 }
 
 int CS3Trio64::BytesPerPixel() const {
@@ -3759,59 +3530,13 @@ u32 CS3Trio64::legacy_read(u32 address, int dsize) {
     }
   }
 
-  u32 data = 0;
-  switch (dsize) {
-  case 32:
-    data |= (u32)mem_r(address + 3) << 24;
-    data |= (u32)mem_r(address + 2) << 16;
-    [[fallthrough]];
-  case 16:
-    data |= (u32)mem_r(address + 1) << 8;
-    [[fallthrough]];
-  case 8:
-    data |= (u32)mem_r(address + 0);
-    break;
-  default:
-    FAILURE(InvalidArgument, "Unsupported dsize");
-  }
-
-  return data;
-}
-
-/**
- * Write to Legacy VGA Memory
- *
- * Calls vga_mem_write to write the data 1 byte at a time.
- **/
-// --- Legacy VGA memory write with S3 MMIO alias support ---
-void CS3Trio64::legacy_write(u32 address, int dsize, u32 data) {
-  switch (dsize) {
-  case 8:
-    mem_w(address, (u8)data);
-    break;
-
-  case 16:
-    mem_w(address, (u8)data);
-    mem_w(address + 1, (u8)(data >> 8));
-    break;
-
-  case 32:
-    mem_w(address, (u8)data);
-    mem_w(address + 1, (u8)(data >> 8));
-    mem_w(address + 2, (u8)(data >> 16));
-    mem_w(address + 3, (u8)(data >> 24));
-    break;
-
-  default:
-    FAILURE(InvalidArgument, "Unsupported dsize");
-  }
+  return CVGACard::legacy_read(address, dsize);
 }
 
 /**
  * Read from I/O Port
  */
 u32 CS3Trio64::io_read(u32 address, int dsize) {
-  u32 data = 0;
   // Always intercept S3 8514/A-style ports. If the port block is not enabled
   // yet (CR40 == 0), hardware behaves benignly: reads return bus pull-ups,
   // writes are ignored.
@@ -3847,129 +3572,31 @@ u32 CS3Trio64::io_read(u32 address, int dsize) {
     }
   }
 
-  if (dsize != 8)
-    FAILURE(InvalidArgument, "Unsupported dsize");
+  return CVGACard::io_read(address, dsize);
+}
 
+/**
+ * Read one byte from an I/O port: the S3's own ports and gates, then the
+ * standard VGA ones.
+ **/
+u8 CS3Trio64::io_read_b(u32 address) {
   switch (address) {
-  case 0x3c0:
-    data = atc_address_r(0);
-    break;
-
-  case 0x3c1:
-    data = atc_data_r(0);
-    break;
-
-  case 0x3c2:
-    data = read_b_3c2();
-    break;
-
   case 0x3c3:
-    data = m_vga_subsys_enable ? 0x01 : 0x00;
-    break;
-
-  case 0x3c4:
-    data = sequencer_address_r(0);
-    break;
+    return m_vga_subsys_enable ? 0x01 : 0x00;
 
   case 0x3c5:
+    // PLL lock gate: SR09+ reads raw unless SR08 == 0x06
     if (vga.sequencer.index > 0x08 && vga.sequencer.data[0x08] != 0x06)
-      data = vga.sequencer.data[vga.sequencer.index];
-    else
-      data = sequencer_data_r(0);
-    break;
-
-  case 0x3c6:
-    data = ramdac_mask_r(0);
-    break;
-
-  case 0x3c7:
-    data = ramdac_state_r(0);
-    break;
-
-  case 0x3c8:
-    data = ramdac_write_index_r(0);
-    break;
-
-  case 0x3c9:
-    data = ramdac_data_r(0);
-    break;
-
-  case 0x3ca:
-    data = read_b_3ca();
-    break;
-
-  case 0x3cc:
-    data = miscellaneous_output_r(0);
-    break;
-
-  case 0x3ce:
-    data = gc_address_r(0);
-    break;
-
-  case 0x3cf:
-    data = gc_data_r(0);
-    break;
-
-  case 0x3b4:
-  case 0x3d4:
-    data = crtc_address_r(0);
-    break;
-
-  case 0x3b5:
-  case 0x3d5:
-    data = crtc_data_r(0);
-    break;
-
-  case 0x3ba:
-  case 0x3da: {
-    // Input Status Register 1 — ES40 wall-clock vblank (no CRT timing engine)
-    using clock = std::chrono::steady_clock;
-    static auto t0 = clock::now();
-    auto ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0)
-            .count();
-
-    const int frame_ms = 1000 / 70; // ~70Hz
-    const int vblank_ms = 1;
-
-    data = 0;
-    if ((ms % frame_ms) < vblank_ms)
-      data |= 0x08 | 0x01;
-
-    vga.attribute.state = 0; // ATC flip-flop reset
-    break;
-  }
-
-  case 0x3bb: /* Feature Control (mono) readback; mirror 3CA behavior */
-    data = read_b_3ca();
-    break;
-  case 0x3db: /* Feature Control (color) readback; same treatment */
-    data = read_b_3ca();
-    break;
-
-  case 0x3b6:
-  case 0x3b7:
-  case 0x3b8:
-  case 0x3b9:
-  case 0x3d6:
-  case 0x3d7:
-  case 0x3d8:
-  case 0x3d9:
-    data = 0xFF; // open bus
+      return vga.sequencer.data[vga.sequencer.index];
     break;
 
   case 0x46E8:
-    data = m_video_subsys_enable_46e8;
-    break;
+    return m_video_subsys_enable_46e8;
+
   case 0x0102:
-    data = m_setup_option_select_0102;
-    break;
-
-  default:
-    printf("S3: Unhandled io port %x read\n", address);
+    return m_setup_option_select_0102;
   }
-
-  return data;
+  return CVGACard::io_read_b(address);
 }
 
 /**
@@ -4009,147 +3636,40 @@ void CS3Trio64::io_write(u32 address, int dsize, u32 data) {
     }
   }
 
-  //  printf("S3 io write: %" PRIx64 ", %d, %" PRIx64 "   \n", address+VGA_BASE,
-  //  dsize, data);
-  switch (dsize) {
-  case 8:
-    io_write_b(address, (u8)data);
-    break;
-
-  case 16:
-    io_write_b(address, (u8)data);
-    io_write_b(address + 1, (u8)(data >> 8));
-    break;
-
-  case 32:
-    printf("S3 Weird Size io write: %" PRIx32 ", %d, %" PRIx32 "   \n", address,
-           dsize, data);
-    io_write_b(address, (u8)data);
-    io_write_b(address + 1, (u8)(data >> 8));
-    io_write_b(address + 2, (u8)(data >> 16));
-    io_write_b(address + 3, (u8)(data >> 24));
-    break;
-
-  default:
-#ifdef DEBUG_VGA
-    printf("S3 Weird Size io write: %" PRIx32 ", %d, %" PRIx32 "   \n", address,
-           dsize, data);
-#endif
-    FAILURE(InvalidArgument, "Weird IO size");
-  }
+  CVGACard::io_write(address, dsize, data);
 }
 
 /**
- * Write one byte to a VGA I/O port.
+ * Write one byte to an I/O port: the S3's own ports and gates, then the
+ * standard VGA ones.
  **/
 void CS3Trio64::io_write_b(u32 address, u8 data) {
   switch (address) {
-  case 0x3c0: {
-    bool was_index_phase = (vga.attribute.state == 0);
-    // Snapshot previous video-enabled state BEFORE the MAME canonical write
-    bool prev_ve = atc_video_enabled();
-    atc_address_data_w(0, data);
-    if (was_index_phase) {
-      // Detect video enable/disable transitions from MAME canonical source
-      bool new_ve = atc_video_enabled();
-      if (!new_ve && prev_ve) {
-        bx_gui->lock();
-        bx_gui->clear_screen();
-        bx_gui->unlock();
-      } else if (new_ve && !prev_ve) {
-        redraw_area(0, 0, old_iWidth, old_iHeight);
-      }
-    }
-    break;
-  }
-
-  case 0x3c2:
-    write_b_3c2(data);
-    m_ioas = bool(BIT(data, 0));
-    break;
-
   case 0x3c3:
     m_vga_subsys_enable = (data & 0x01) != 0;
-    break;
-
-  case 0x3c4:
-    sequencer_address_w(0, data);
-    break;
+    return;
 
   case 0x3c5:
     // PLL lock gate: SR09+ requires SR08 == 0x06
     if (vga.sequencer.index > 0x08 && vga.sequencer.data[0x08] != 0x06)
-      break;
+      return;
     // SR1A/SR1B: not in sequencer_map, but in 86box
     if (vga.sequencer.index == 0x1a) {
       s3.sr1a = data;
-      break;
+      return;
     }
     if (vga.sequencer.index == 0x1b) {
       s3.sr1b = data;
-      break;
+      return;
     }
-    sequencer_data_w(0, data);
     break;
 
   case 0x3c6:
-    if (m_crtc_map.read_byte(0x33) & 0x10)
-      break;
-    ramdac_mask_w(0, data);
-    break;
-
-  case 0x3c7:
-    ramdac_read_index_w(0, data);
-    break;
-
   case 0x3c8:
-    if (m_crtc_map.read_byte(0x33) & 0x10)
-      break;
-    ramdac_write_index_w(0, data);
-    break;
-
   case 0x3c9:
+    // CR33 bit 4 locks the RAMDAC write registers
     if (m_crtc_map.read_byte(0x33) & 0x10)
-      break;
-    ramdac_data_w(0, data);
-    break;
-
-  case 0x3ce:
-    gc_address_w(0, data);
-    break;
-
-  case 0x3cf:
-    gc_data_w(0, data);
-    break;
-
-  case 0x3ba:
-  case 0x3da:
-    feature_control_w(0, data);
-    break;
-
-  case 0x3b4:
-  case 0x3d4:
-    vga.crtc.index = data & 0x7f;
-    break;
-
-  case 0x3b5:
-  case 0x3d5:
-    crtc_data_w(0, data);
-    break;
-
-  case 0x3bb:
-    break;
-
-  case 0x3b6:
-  case 0x3b7:
-  case 0x3b8:
-  case 0x3b9:
-  case 0x3d6:
-  case 0x3d7:
-  case 0x3d8:
-  case 0x3d9:
-    // Dead ports — 32-bit writes to the CRTC pair (3D4/3D5) spill here.
-    // Real hardware silently ignores them.
+      return;
     break;
 
   case 0x46E8:
@@ -4157,106 +3677,25 @@ void CS3Trio64::io_write_b(u32 address, u8 data) {
     // bit3 AD_DEC: enable video I/O+memory decode
     // bit4 EN_SUP: setup enable
     m_video_subsys_enable_46e8 = data;
-    break;
+    return;
+
   case 0x0102:
     // Setup Option Select (used in chip-wakeup sequences)
     m_setup_option_select_0102 = data;
-    break;
-
-  default:
-#ifdef DEBUG_VGA
-    printf("\nFAILURE ON BELOW LISTED PORT BINARY "
-           "VALUE=" PRINTF_BINARY_PATTERN_INT8 " HEX VALUE=0x%02x\n",
-           PRINTF_BYTE_TO_BINARY_INT8(data), data);
-#endif
-    FAILURE_1(NotImplemented, "Unhandled port %x write", address);
+    return;
   }
+  CVGACard::io_write_b(address, data);
 }
 
 /**
- * Write to the VGA Miscellaneous Output Register (0x3c2)
- *
- * \code
- * +-+-+-+-+---+-+-+
- * |7|6|5| |3 2|1|0|
- * +-+-+-+-+---+-+-+
- *  ^ ^ ^    ^  ^ ^
- *  | | |    |  | +- 0: I/OAS -- Input/Output Address Select: Selects the CRT
- *  | | |    |  |       controller addresses.
- *  | | |    |  |         0: Compatibility with monochrome adapter
- *  | | |    |  |            (0x3b4,0x3b5,0x03ba)
- *  | | |    |  |         1: Compatibility with color graphics adapter (CGA)
- *  | | |    |  |            (0x3d4,0x3d5,0x03da)
- *  | | |    |  +--- 1: RAM Enable: Controls access from the system:
- *  | | |    |            0: Disables access to the display buffer
- *  | | |    |            1: Enables access to the display buffer
- *  | | |    +--- 2..3: Clock Select: Controls the selection of the dot clocks
- *  | | |               used in driving the display timing:
- *  | | |                 00: Select 25 Mhz clock (320/640 pixel wide modes)
- *  | | |                 01: Select 28 Mhz clock (360/720 pixel wide modes)
- *  | | |                 10: Undefined (possible external clock)
- *  | | |                 11: Undefined (possible external clock)
- *  | | +----------- 5: Odd/Even Page Select: Selects the upper/lower 64K page
- *  | |                 of memory when the system is in an even/odd mode.
- *  | |                   0: Selects the low page.
- *  | |                   1: Selects the high page.
- *  | +------------- 6: Horizontal Sync Polarity
- *  |                     0: Positive sync pulse.
- *  |                     1: Negative sync pulse.
- *  +--------------- 7: Vertical Sync Polarity
- *                        0: Positive sync pulse.
- *                        1: Negative sync pulse.
- * \endcode
+ * Miscellaneous Output (0x3c2): CR34 bit 7 locks the clock select bits.
  **/
 void CS3Trio64::write_b_3c2(u8 value) {
-  // ES40 extension: CR34 bit7 locks clock select bits
   if (m_crtc_map.read_byte(0x34) & 0x80) {
     // Preserve current clock_select (bits 3:2), take everything else from value
     value = (value & ~0x0C) | (vga.miscellaneous_output & 0x0C);
   }
-
-  // MAME canonical store (flat byte)
-  vga.miscellaneous_output = value;
-
-#if DEBUG_VGA_NOISY
-  printf("io write 3c2: misc_output = 0x%02x\n", value);
-  printf("  color_emulation = %u, enable_ram = %u, clock_select = %u\n",
-         (unsigned)state.misc_output.color_emulation,
-         (unsigned)state.misc_output.enable_ram,
-         (unsigned)state.misc_output.clock_select);
-  printf("  select_high_bank = %u, horiz_sync_pol = %u, vert_sync_pol = %u\n",
-         (unsigned)state.misc_output.select_high_bank,
-         (unsigned)state.misc_output.horiz_sync_pol,
-         (unsigned)state.misc_output.vert_sync_pol);
-#endif
-}
-
-/**
- * Read from the VGA Input Status register (0x3c2)
- *
- * \code
- * +-----+-+-------+
- * |     |4|       |
- * +-----+-+-------+
- *        ^
- *        +--------- 4: Switch Sense:
- *                      Returns the status of the four sense switches as
- *selected by the Clock Select field of the Miscellaneous Output Register (See
- *                      CCirrus::write_b_3c2)
- * \endcode
- **/
-u8 CS3Trio64::read_b_3c2() {
-  u8 res = 0x60; // is VGA (bits 5-6 set)
-
-  // Sense bit readback: select which of 4 sense switches based on clock select
-  // MAME: const u8 sense_bit = (3 - (vga.miscellaneous_output >> 2)) & 3;
-  //        if(BIT(m_input_sense->read(), sense_bit)) res |= 0x10;
-  const u8 sense_bit = (3 - ((vga.miscellaneous_output >> 2) & 3)) & 3;
-  if (BIT(0x0F, sense_bit)) // all sense pins active
-    res |= 0x10;
-
-  res |= vga.crtc.irq_latch << 7;
-  return res;
+  CVGACard::write_b_3c2(value);
 }
 
 /**
@@ -4270,8 +3709,6 @@ u8 CS3Trio64::read_b_3c3() {
 #endif
   return vga_enabled();
 }
-
-u8 CS3Trio64::read_b_3ca() { return 0; }
 
 // The hardware cursor is not flagged by vga_mem_updated; its mode, position
 // and pattern address feed the refresh dirty-gate instead.

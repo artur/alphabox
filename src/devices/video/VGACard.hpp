@@ -67,6 +67,13 @@ public:
   virtual int SaveState(FILE *f) override;
   virtual int RestoreState(FILE *f) override;
 
+  // --- legacy (fixed-address) ranges -------------------------------------
+  /// Dispatches the standard VGA ranges (see LegacyRange) and hands every
+  /// other id to card_legacy_read/write.
+  virtual u32 ReadMem_Legacy(int index, u32 address, int dsize) override;
+  virtual void WriteMem_Legacy(int index, u32 address, int dsize,
+                               u32 data) override;
+
   // --- CVGA contract (shared) --------------------------------------------
   virtual u8 get_actl_palette_idx(u8 index) override;
   virtual void redraw_area(unsigned x0, unsigned y0, unsigned width,
@@ -88,6 +95,20 @@ public:
   }
 
 protected:
+  /// Range ids the base registers and dispatches. Every other id (6, and
+  /// LEGACY_CARD_FIRST upward) is the card's.
+  enum LegacyRange {
+    LEGACY_IO_3B4 = 1,
+    LEGACY_IO_3C0 = 2,
+    LEGACY_IO_3BA = 3,
+    LEGACY_MEM_VGA = 4,
+    LEGACY_MEM_ROM = 5,
+    LEGACY_IO_BIOS_MSG = 7,
+    LEGACY_IO_3D4 = 8,
+    LEGACY_IO_3DA = 9,
+    LEGACY_CARD_FIRST = 10
+  };
+
   // --- chip hooks ----------------------------------------------------------
 
   /// Short name for messages ("S3", "Cirrus") and the tag printed by
@@ -119,16 +140,42 @@ protected:
   /// Cirrus CR1A/CR1B). Called with the standard-VGA values.
   virtual void apply_extended_timing(int &h, int &v) {}
 
+  /// The card's own legacy ranges. Unclaimed reads return 0 and writes are
+  /// ignored, as an undecoded range would.
+  virtual u32 card_legacy_read(int index, u32 address, int dsize) { return 0; }
+  virtual void card_legacy_write(int index, u32 address, int dsize, u32 data) {}
+
+  /// I/O ports. io_read/io_write split a multi-byte access into bytes
+  /// (little-endian); io_read_b/io_write_b implement the standard VGA
+  /// ports. A card overrides the byte handlers to claim its own ports or
+  /// gate standard ones, and falls back to these for the rest.
+  virtual u32 io_read(u32 address, int dsize);
+  virtual void io_write(u32 address, int dsize, u32 data);
+  virtual u8 io_read_b(u32 address);
+  virtual void io_write_b(u32 address, u8 data);
+
+  /// Miscellaneous Output (0x3c2) write; a card may gate bits first.
+  virtual void write_b_3c2(u8 value);
+  u8 read_b_3c2();
+  u8 read_b_3ca() { return 0; }
+
+  /// The 0xa0000 window, one byte at a time through mem_r/mem_w.
+  virtual u32 legacy_read(u32 address, int dsize);
+  virtual void legacy_write(u32 address, int dsize, u32 data);
+
   // --- shared machinery ----------------------------------------------------
   void init_maps();
+
+  /// Register the standard VGA ports (0x3b4, 0x3ba, 0x3c0-0x3cf, 0x3d4,
+  /// 0x3da), the VGA BIOS message port (0x500) and the 0xa0000 window.
+  void add_vga_legacy_ranges();
   void update();
   void determine_screen_dimensions(unsigned *piHeight, unsigned *piWidth);
   virtual void palette_update() override;
 
   /// Load the card's option ROM (its x86 VGA BIOS, executed by SRM) from
-  /// the "rom" config value and map it at 0xc0000 as legacy memory
-  /// `legacy_id`.
-  void load_option_rom(const char *default_name, int legacy_id);
+  /// the "rom" config value and map it at 0xc0000.
+  void load_option_rom(const char *default_name);
   u32 rom_read(u32 address, int dsize);
 
   // --- generic VGA field helpers used by the shared render path -----------
@@ -180,6 +227,10 @@ protected:
   unsigned rom_max = 0;
   unsigned old_iWidth = 0;
   unsigned old_iHeight = 0;
+
+  /// VGA BIOS debug output (port 0x500), printed a line at a time.
+  char bios_message[200] = {};
+  size_t bios_message_size = 0;
 
   std::chrono::steady_clock::time_point m_last_refresh_time;
   uint64_t m_last_cursor_sig = 0;

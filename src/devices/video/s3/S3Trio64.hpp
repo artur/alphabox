@@ -55,10 +55,6 @@
  **/
 class CS3Trio64 : public CVGACard {
 public:
-  virtual void WriteMem_Legacy(int index, u32 address, int dsize,
-                               u32 data) override;
-  virtual u32 ReadMem_Legacy(int index, u32 address, int dsize) override;
-
   virtual void WriteMem_Bar(int func, int bar, u32 address, int dsize,
                             u32 data) override;
   virtual u32 ReadMem_Bar(int func, int bar, u32 address, int dsize) override;
@@ -101,6 +97,14 @@ protected:
   uint64_t hw_cursor_signature() const override;
   bool display_enabled() const override { return m_vga_subsys_enable; }
   void apply_extended_timing(int &h, int &v) override;
+  u32 card_legacy_read(int index, u32 address, int dsize) override;
+  void card_legacy_write(int index, u32 address, int dsize, u32 data) override;
+  u32 io_read(u32 address, int dsize) override;
+  void io_write(u32 address, int dsize, u32 data) override;
+  u8 io_read_b(u32 address) override;
+  void io_write_b(u32 address, u8 data) override;
+  void write_b_3c2(u8 value) override;
+  u32 legacy_read(u32 address, int dsize) override;
 
   virtual u16 line_compare_mask() override;
 
@@ -273,22 +277,7 @@ private:
   void update_linear_mapping();
   void on_crtc_linear_regs_changed();
 
-  u32 io_read(u32 address, int dsize);
-  void io_write(u32 address, int dsize, u32 data);
-
-  void io_write_b(u32 address, u8 data);
-
-  void write_b_3c2(u8 data);
-
-  u8 read_b_3c2();
   u8 read_b_3c3();
-  u8 read_b_3ca();
-
-  u32 legacy_read(u32 address, int dsize);
-  void legacy_write(u32 address, int dsize, u32 data);
-
-  char bios_message[200];
-  int bios_message_size;
 
   inline uint32_t s3_vram_mask() const;
 

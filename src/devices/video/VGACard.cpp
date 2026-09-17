@@ -53,6 +53,444 @@ void CVGACard::init_maps() {
   attribute_map(m_atc_map);
 }
 
+void CVGACard::add_vga_legacy_ranges() {
+  add_legacy_io(LEGACY_IO_3B4, 0x3b4, 2);
+  add_legacy_io(LEGACY_IO_3BA, 0x3ba, 2);
+  add_legacy_io(LEGACY_IO_3C0, 0x3c0, 16);
+  add_legacy_io(LEGACY_IO_3D4, 0x3d4, 2);
+  add_legacy_io(LEGACY_IO_3DA, 0x3da, 1);
+
+  /* The VGA BIOS we use sends text messages to port 0x500.
+     We listen for these messages at port 500. */
+  add_legacy_io(LEGACY_IO_BIOS_MSG, 0x500, 1);
+  bios_message_size = 0;
+  bios_message[0] = '\0';
+
+  // Legacy video address space: A0000 -> bffff
+  add_legacy_mem(LEGACY_MEM_VGA, 0xa0000, 128 * 1024);
+}
+
+/**
+ * Read from one of the Legacy (fixed-address) memory ranges.
+ **/
+u32 CVGACard::ReadMem_Legacy(int index, u32 address, int dsize) {
+  switch (index) {
+  case LEGACY_IO_3B4:
+    return io_read(address + 0x3b4, dsize);
+  case LEGACY_IO_3C0:
+    return io_read(address + 0x3c0, dsize);
+  case LEGACY_IO_3BA:
+    return io_read(address + 0x3ba, dsize);
+  case LEGACY_MEM_VGA:
+    return legacy_read(address, dsize);
+  case LEGACY_MEM_ROM:
+    return rom_read(address, dsize);
+  case LEGACY_IO_BIOS_MSG:
+    return 0;
+  case LEGACY_IO_3D4:
+    return io_read(address + 0x3d4, dsize);
+  case LEGACY_IO_3DA:
+    return io_read(address + 0x3da, dsize);
+  default:
+    return card_legacy_read(index, address, dsize);
+  }
+}
+
+/**
+ * Write to one of the Legacy (fixed-address) memory ranges.
+ **/
+void CVGACard::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
+  switch (index) {
+  case LEGACY_IO_3B4:
+    io_write(address + 0x3b4, dsize, data);
+    return;
+  case LEGACY_IO_3C0:
+    io_write(address + 0x3c0, dsize, data);
+    return;
+  case LEGACY_IO_3BA:
+    io_write(address + 0x3ba, dsize, data);
+    return;
+  case LEGACY_MEM_VGA:
+    legacy_write(address, dsize, data);
+    return;
+  case LEGACY_MEM_ROM:
+    return;
+  case LEGACY_IO_BIOS_MSG: {
+    const char c = (char)(data & 0xff);
+    // A full buffer is flushed as a line rather than overrun.
+    if (bios_message_size >= sizeof(bios_message) - 1 || c == '\n' ||
+        c == '\r') {
+      if (bios_message_size > 0) {
+        bios_message[bios_message_size] = '\0';
+        printf("%s: %s\n", thread_tag() + 1, bios_message);
+      }
+      bios_message_size = 0;
+      if (c == '\n' || c == '\r')
+        return;
+    }
+    bios_message[bios_message_size++] = c;
+    return;
+  }
+  case LEGACY_IO_3D4:
+    io_write(address + 0x3d4, dsize, data);
+    return;
+  case LEGACY_IO_3DA:
+    io_write(address + 0x3da, dsize, data);
+    return;
+  default:
+    card_legacy_write(index, address, dsize, data);
+    return;
+  }
+}
+
+/**
+ * Read from I/O ports, one byte at a time.
+ **/
+u32 CVGACard::io_read(u32 address, int dsize) {
+  switch (dsize) {
+  case 8:
+    return io_read_b(address);
+  case 16:
+    return (u32)io_read_b(address) | ((u32)io_read_b(address + 1) << 8);
+  case 32:
+    return (u32)io_read_b(address) | ((u32)io_read_b(address + 1) << 8) |
+           ((u32)io_read_b(address + 2) << 16) |
+           ((u32)io_read_b(address + 3) << 24);
+  default:
+    FAILURE(InvalidArgument, "Unsupported dsize");
+  }
+}
+
+/**
+ * Write to I/O ports, one byte at a time.
+ **/
+void CVGACard::io_write(u32 address, int dsize, u32 data) {
+  switch (dsize) {
+  case 8:
+    io_write_b(address, (u8)data);
+    break;
+
+  case 16:
+    io_write_b(address, (u8)data);
+    io_write_b(address + 1, (u8)(data >> 8));
+    break;
+
+  case 32:
+    printf("%s Weird Size io write: %" PRIx32 ", %d, %" PRIx32 "   \n",
+           card_name(), address, dsize, data);
+    io_write_b(address, (u8)data);
+    io_write_b(address + 1, (u8)(data >> 8));
+    io_write_b(address + 2, (u8)(data >> 16));
+    io_write_b(address + 3, (u8)(data >> 24));
+    break;
+
+  default:
+    FAILURE(InvalidArgument, "Weird IO size");
+  }
+}
+
+/**
+ * Read one byte from a standard VGA I/O port.
+ **/
+u8 CVGACard::io_read_b(u32 address) {
+  switch (address) {
+  case 0x3c0:
+    return atc_address_r(0);
+
+  case 0x3c1:
+    return atc_data_r(0);
+
+  case 0x3c2:
+    return read_b_3c2();
+
+  case 0x3c4:
+    return sequencer_address_r(0);
+
+  case 0x3c5:
+    return sequencer_data_r(0);
+
+  case 0x3c6:
+    return ramdac_mask_r(0);
+
+  case 0x3c7:
+    return ramdac_state_r(0);
+
+  case 0x3c8:
+    return ramdac_write_index_r(0);
+
+  case 0x3c9:
+    return ramdac_data_r(0);
+
+  case 0x3ca:
+    return read_b_3ca();
+
+  case 0x3cc:
+    return miscellaneous_output_r(0);
+
+  case 0x3ce:
+    return gc_address_r(0);
+
+  case 0x3cf:
+    return gc_data_r(0);
+
+  case 0x3b4:
+  case 0x3d4:
+    return crtc_address_r(0);
+
+  case 0x3b5:
+  case 0x3d5:
+    return crtc_data_r(0);
+
+  case 0x3ba:
+  case 0x3da: {
+    // Input Status Register 1 — wall-clock vblank (no CRT timing engine)
+    using clock = std::chrono::steady_clock;
+    static auto t0 = clock::now();
+    auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0)
+            .count();
+
+    const int frame_ms = 1000 / 70; // ~70Hz
+    const int vblank_ms = 1;
+
+    u8 data = 0;
+    if ((ms % frame_ms) < vblank_ms)
+      data |= 0x08 | 0x01;
+
+    vga.attribute.state = 0; // ATC flip-flop reset
+    return data;
+  }
+
+  case 0x3bb: /* Feature Control (mono) readback; mirror 3CA behavior */
+  case 0x3db: /* Feature Control (color) readback; same treatment */
+    return read_b_3ca();
+
+  case 0x3b6:
+  case 0x3b7:
+  case 0x3b8:
+  case 0x3b9:
+  case 0x3d6:
+  case 0x3d7:
+  case 0x3d8:
+  case 0x3d9:
+    return 0xFF; // open bus
+
+  default:
+    printf("%s: Unhandled io port %x read\n", card_name(), address);
+    return 0;
+  }
+}
+
+/**
+ * Write one byte to a standard VGA I/O port.
+ **/
+void CVGACard::io_write_b(u32 address, u8 data) {
+  switch (address) {
+  case 0x3c0: {
+    bool was_index_phase = (vga.attribute.state == 0);
+    // Snapshot previous video-enabled state BEFORE the MAME canonical write
+    bool prev_ve = atc_video_enabled();
+    atc_address_data_w(0, data);
+    if (was_index_phase) {
+      // Detect video enable/disable transitions from MAME canonical source
+      bool new_ve = atc_video_enabled();
+      if (!new_ve && prev_ve) {
+        bx_gui->lock();
+        bx_gui->clear_screen();
+        bx_gui->unlock();
+      } else if (new_ve && !prev_ve) {
+        redraw_area(0, 0, old_iWidth, old_iHeight);
+      }
+    }
+    break;
+  }
+
+  case 0x3c2:
+    write_b_3c2(data);
+    m_ioas = bool(BIT(data, 0));
+    break;
+
+  case 0x3c4:
+    sequencer_address_w(0, data);
+    break;
+
+  case 0x3c5:
+    sequencer_data_w(0, data);
+    break;
+
+  case 0x3c6:
+    ramdac_mask_w(0, data);
+    break;
+
+  case 0x3c7:
+    ramdac_read_index_w(0, data);
+    break;
+
+  case 0x3c8:
+    ramdac_write_index_w(0, data);
+    break;
+
+  case 0x3c9:
+    ramdac_data_w(0, data);
+    break;
+
+  case 0x3ce:
+    gc_address_w(0, data);
+    break;
+
+  case 0x3cf:
+    gc_data_w(0, data);
+    break;
+
+  case 0x3ba:
+  case 0x3da:
+    feature_control_w(0, data);
+    break;
+
+  case 0x3b4:
+  case 0x3d4:
+    vga.crtc.index = data & 0x7f;
+    break;
+
+  case 0x3b5:
+  case 0x3d5:
+    crtc_data_w(0, data);
+    break;
+
+  case 0x3bb:
+    break;
+
+  case 0x3b6:
+  case 0x3b7:
+  case 0x3b8:
+  case 0x3b9:
+  case 0x3d6:
+  case 0x3d7:
+  case 0x3d8:
+  case 0x3d9:
+    // Dead ports — 32-bit writes to the CRTC pair (3D4/3D5) spill here.
+    // Real hardware silently ignores them.
+    break;
+
+  default:
+    FAILURE_1(NotImplemented, "Unhandled port %x write", address);
+  }
+}
+
+/**
+ * Write to the VGA Miscellaneous Output Register (0x3c2)
+ *
+ * \code
+ * +-+-+-+-+---+-+-+
+ * |7|6|5| |3 2|1|0|
+ * +-+-+-+-+---+-+-+
+ *  ^ ^ ^    ^  ^ ^
+ *  | | |    |  | +- 0: I/OAS -- Input/Output Address Select: Selects the CRT
+ *  | | |    |  |       controller addresses.
+ *  | | |    |  |         0: Compatibility with monochrome adapter
+ *  | | |    |  |            (0x3b4,0x3b5,0x03ba)
+ *  | | |    |  |         1: Compatibility with color graphics adapter (CGA)
+ *  | | |    |  |            (0x3d4,0x3d5,0x03da)
+ *  | | |    |  +--- 1: RAM Enable: Controls access from the system:
+ *  | | |    |            0: Disables access to the display buffer
+ *  | | |    |            1: Enables access to the display buffer
+ *  | | |    +--- 2..3: Clock Select: Controls the selection of the dot clocks
+ *  | | |               used in driving the display timing:
+ *  | | |                 00: Select 25 Mhz clock (320/640 pixel wide modes)
+ *  | | |                 01: Select 28 Mhz clock (360/720 pixel wide modes)
+ *  | | |                 10: Undefined (possible external clock)
+ *  | | |                 11: Undefined (possible external clock)
+ *  | | +----------- 5: Odd/Even Page Select: Selects the upper/lower 64K page
+ *  | |                 of memory when the system is in an even/odd mode.
+ *  | |                   0: Selects the low page.
+ *  | |                   1: Selects the high page.
+ *  | +------------- 6: Horizontal Sync Polarity
+ *  |                     0: Positive sync pulse.
+ *  |                     1: Negative sync pulse.
+ *  +--------------- 7: Vertical Sync Polarity
+ *                        0: Positive sync pulse.
+ *                        1: Negative sync pulse.
+ * \endcode
+ **/
+void CVGACard::write_b_3c2(u8 value) { vga.miscellaneous_output = value; }
+
+/**
+ * Read from the VGA Input Status register (0x3c2)
+ *
+ * \code
+ * +-----+-+-------+
+ * |     |4|       |
+ * +-----+-+-------+
+ *        ^
+ *        +--------- 4: Switch Sense:
+ *                      Returns the status of the four sense switches as
+ *                      selected by the Clock Select field of the
+ *                      Miscellaneous Output Register (see write_b_3c2)
+ * \endcode
+ **/
+u8 CVGACard::read_b_3c2() {
+  u8 res = 0x60; // is VGA (bits 5-6 set)
+
+  // Sense bit readback: select which of 4 sense switches based on clock select
+  // MAME: const u8 sense_bit = (3 - (vga.miscellaneous_output >> 2)) & 3;
+  //        if(BIT(m_input_sense->read(), sense_bit)) res |= 0x10;
+  const u8 sense_bit = (3 - ((vga.miscellaneous_output >> 2) & 3)) & 3;
+  if (BIT(0x0F, sense_bit)) // all sense pins active
+    res |= 0x10;
+
+  res |= vga.crtc.irq_latch << 7;
+  return res;
+}
+
+/**
+ * Read from the 0xa0000 window, one byte at a time.
+ **/
+u32 CVGACard::legacy_read(u32 address, int dsize) {
+  u32 data = 0;
+  switch (dsize) {
+  case 32:
+    data |= (u32)mem_r(address + 3) << 24;
+    data |= (u32)mem_r(address + 2) << 16;
+    [[fallthrough]];
+  case 16:
+    data |= (u32)mem_r(address + 1) << 8;
+    [[fallthrough]];
+  case 8:
+    data |= (u32)mem_r(address + 0);
+    break;
+  default:
+    FAILURE(InvalidArgument, "Unsupported dsize");
+  }
+
+  return data;
+}
+
+/**
+ * Write to the 0xa0000 window, one byte at a time.
+ **/
+void CVGACard::legacy_write(u32 address, int dsize, u32 data) {
+  switch (dsize) {
+  case 8:
+    mem_w(address, (u8)data);
+    break;
+
+  case 16:
+    mem_w(address, (u8)data);
+    mem_w(address + 1, (u8)(data >> 8));
+    break;
+
+  case 32:
+    mem_w(address, (u8)data);
+    mem_w(address + 1, (u8)(data >> 8));
+    mem_w(address + 2, (u8)(data >> 16));
+    mem_w(address + 3, (u8)(data >> 24));
+    break;
+
+  default:
+    FAILURE(InvalidArgument, "Unsupported dsize");
+  }
+}
+
 /**
  * Thread entry point.
  *
@@ -263,7 +701,7 @@ int CVGACard::RestoreState(FILE *f) {
 /**
  * Load the option ROM named by the "rom" config value.
  **/
-void CVGACard::load_option_rom(const char *default_name, int legacy_id) {
+void CVGACard::load_option_rom(const char *default_name) {
   const char *name = myCfg->get_text_value("rom", default_name);
   FILE *rom = fopen(name, "rb");
   if (!rom) {
@@ -274,7 +712,7 @@ void CVGACard::load_option_rom(const char *default_name, int legacy_id) {
   fclose(rom);
 
   // Option ROM address space: C0000
-  add_legacy_mem(legacy_id, 0xc0000, rom_max);
+  add_legacy_mem(LEGACY_MEM_ROM, 0xc0000, rom_max);
 }
 
 /**
