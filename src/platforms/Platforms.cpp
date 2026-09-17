@@ -60,18 +60,35 @@ static const char *es40_slot_refusal(int hose, int slot) {
 }
 
 /**
- * DS20E interrupts: ASSUMED to be the ES40's wiring until the firmware
- * says otherwise. It almost certainly is not -- Linux carries a different
- * interrupt table for every Tsunami board -- so this is a placeholder that
- * lets the machine boot far enough to be observed, and the console's own
- * assignment is what corrects it (docs/platforms/ds20e.md, question 1).
+ * DS20E interrupts. The board's devices live at device numbers 5 to 10 --
+ * the console scans no further -- and each one's pins reach a fixed set of
+ * chipset interrupt inputs, counting down from 15 as the device number
+ * rises. Device 5 is the ISA bridge, whose devices interrupt through it;
+ * device 6 is the board's own SCSI.
+ *
+ * Confirmed against the console: it gives a controller at device 6 pin A
+ * input 16+3 and at device 8 pin A input 16+11, which is what this returns.
+ * (Linux carries the same table as `dp264_map_irq`.)
  */
 static int ds20e_pci_interrupt(int hose, int slot, int intx) {
-  return es40_pci_interrupt(hose, slot, intx);
+  int input;
+  if (slot == 6)
+    input = intx == 0 ? 3 : 2; // the board's own SCSI
+  else if (slot >= 7 && slot <= 10)
+    input = 15 - 4 * (slot - 7) - intx;
+  else
+    return -1; // the ISA bridge and anything the board does not wire
+
+  return 16 + 16 * (hose & 1) + input;
 }
 
-/// DS20E slots: which ones the board keeps is not known yet.
-static const char *ds20e_slot_refusal(int hose, int slot) { return nullptr; }
+/// DS20E slots: the console looks at device numbers 0 to 10 and the board
+/// wires 5 to 10; the ISA bridge belongs at 5.
+static const char *ds20e_slot_refusal(int hose, int slot) {
+  if (slot > 10)
+    return "this machine's console does not look beyond PCI device 10";
+  return nullptr;
+}
 
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",

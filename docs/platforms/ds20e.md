@@ -6,7 +6,7 @@ machine-independent structure rather than new hardware. See
 [platforms.md](../platforms.md) for the layers and the acceptance ladder.
 
 **Branch**: `platform/ds20e` (own worktree) · **Config**: `platform = "ds20e";`
-· **Status**: L2 (console prompt reached)
+· **Status**: L4 (console prompt, devices, network boot)
 
 ## The machine
 
@@ -69,10 +69,10 @@ such) the structure of the ES40 listing with DS20E slot names.
 | 5 | Second processor: this firmware does not find one | L2 | done: it finds both |
 | 6 | Processor SROM data, so the console stops printing rubbish for it | L2 | open |
 | 7 | The board's flash, at PCI memory 0xfff80000 | L2 | open |
-| 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | open |
-| 9 | Why the IDE and USB functions are not listed | L3 | open |
+| 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | done, confirmed against the console |
+| 9 | Why the IDE and USB functions are not listed | L3 | answered: the console looks no further than device 10 |
 | 10 | Console listings compared with the reference | L3 | blocked: no reference yet |
-| 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | |
+| 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | network boot passes; disk boot needs media |
 | 12 | Guest boot, media permitting | L5 | |
 | 13 | ES40 regression sweep and JIT cross-check | L6 | |
 
@@ -174,6 +174,25 @@ the instruction that loads a given index finds the callers: `0x38000100` is
 written with 1 at `0x7f728` and with 0 at `0x81cfc`. The emulator writes
 the decompressed console out (`rom.decompressed`), the image starts 16
 bytes into that file at address 0, and `lab/alphadis.py` disassembles it.
+
+**Where this machine's devices live, and how they interrupt
+(2026-09-17).** The console scans PCI device numbers 0 to 10 and no
+further, which is why the IDE and USB functions at 15 and 19 never
+appeared: they are outside the machine's own numbering, not broken. A SCSI
+controller at device 8 is found and listed.
+
+Its interrupt wiring is not the ES40's. The board's devices sit at device
+numbers 5 to 10 (5 the ISA bridge, 6 the board's own SCSI, 7 to 10 the
+slots) and their pins reach chipset interrupt inputs counting down from 15
+as the device number rises. The console confirms it: it assigns a
+controller at device 8 pin A interrupt 0x1b (input 16+11), exactly what the
+table gives, and Linux carries the same table as `dp264_map_irq`. With the
+ES40's wiring in place the controller was found but its disk never
+appeared; with this one, `show device` lists the disk (`dka0`, an RZ58).
+
+**Network boot works (L4).** With a DE600 at device 9 on the UDP backend,
+`boot eia0 -protocols bootp` gets its address, transfers the image over
+TFTP and runs it to the halt, the same as on the ES40.
 
 **Not yet proven:** everything above is the console's own account of itself.
 Without the reference listing from a real DS20E, L3 is not claimed.
