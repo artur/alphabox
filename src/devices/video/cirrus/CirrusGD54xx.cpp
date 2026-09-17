@@ -30,10 +30,8 @@
 using namespace cirrus;
 
 CCirrusGD54xx::CCirrusGD54xx(CConfigurator *cfg, CSystem *c, int pcibus,
-                             int pcidev, const cirrus_chip_config &chip,
-                             u32 *cfg_data, u32 *cfg_mask)
-    : CVGACard(cfg, c, pcibus, pcidev), m_chip(chip), m_cfg_data(cfg_data),
-      m_cfg_mask(cfg_mask) {}
+                             int pcidev, const cirrus_chip_config &chip)
+    : CVGACard(cfg, c, pcibus, pcidev), m_chip(chip) {}
 
 /**
  * Stops the render thread while this object is still whole: the thread
@@ -46,7 +44,21 @@ CCirrusGD54xx::~CCirrusGD54xx() {
 }
 
 void CCirrusGD54xx::init() {
-  add_function(0, m_cfg_data, m_cfg_mask);
+  // PCI header: a VGA-compatible display controller with one prefetchable
+  // memory BAR (the linear aperture), no I/O BARs, no interrupt pin, and
+  // no expansion ROM BAR -- the BIOS is found at 0xc0000.
+  u32 cfg_data[64] = {};
+  u32 cfg_mask[64] = {};
+  cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | PCI_VENDOR_CIRRUS;
+  cfg_data[0x04 >> 2] = 0x02000000; // status: medium DEVSEL
+  cfg_data[0x08 >> 2] = 0x03000000 | m_chip.revision;
+  cfg_data[0x10 >> 2] = 0x00000008; // prefetchable 32-bit memory
+  cfg_data[0x3c >> 2] = 0x000000ff;
+  cfg_mask[0x04 >> 2] = 0x0000ffff;
+  cfg_mask[0x0c >> 2] = 0x0000ffff;
+  cfg_mask[0x10 >> 2] = ~(m_chip.linear_bytes - 1);
+  cfg_mask[0x3c >> 2] = 0x000000ff;
+  add_function(0, cfg_data, cfg_mask);
   ResetPCI();
 
   memset((void *)&state, 0, sizeof(state));
@@ -78,6 +90,8 @@ void CCirrusGD54xx::init() {
   crtc_reset();
   update_banks();
   define_video_mode();
+  m_blitter.set_vram(vga.memory, m_chip.vram_bytes);
+  m_blitter.reset();
 
   load_option_rom(m_chip.default_rom);
 

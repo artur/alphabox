@@ -44,14 +44,11 @@ void CCirrusGD54xx::gc_map(address_map &map) {
               m_gr[GC_BANK_0 + offset] = data;
             }));
 
-  // GR00/GR01: set/reset and its enable. With extended write modes on,
-  // they are the full 8-bit background/foreground colours of modes 4/5.
+  // GR00/GR01: set/reset and its enable. The chip keeps all 8 bits: they
+  // are also the background/foreground colours of write modes 4/5 and of
+  // the blitter.
   map(0x00, 0x01)
-      .lrw8(NAME([this](offs_t offset) {
-              return (m_gr[GC_BANK_MODE] & GC_BANK_MODE_EXT_WRITE)
-                         ? m_gr[offset]
-                         : u8(m_gr[offset] & 0x0f);
-            }),
+      .lrw8(NAME([this](offs_t offset) { return m_gr[offset]; }),
             NAME([this](offs_t offset, u8 data) {
               m_gr[offset] = data;
               if (offset == 0)
@@ -72,7 +69,7 @@ void CCirrusGD54xx::gc_map(address_map &map) {
               return res;
             }),
             NAME([this](offs_t offset, u8 data) {
-              m_gr[0x05] = data;
+              m_gr[0x05] = data & 0x7f;
               vga.gc.shift256 = BIT(data, 6);
               vga.gc.shift_reg = BIT(data, 5);
               vga.gc.host_oe = BIT(data, 4);
@@ -93,26 +90,37 @@ void CCirrusGD54xx::gc_map(address_map &map) {
       .lrw8(NAME([this](offs_t offset) { return u8(0); }),
             NAME([this](offs_t offset, u8 data) {}));
 
-  // GR31: BitBLT start/status. The engine is not modelled yet: a start
-  // request completes at once without drawing, so a driver polling the
-  // busy bit does not hang, and the first request is reported.
-  map(GC_BLT_STATUS, GC_BLT_STATUS)
-      .lrw8(NAME([this](offs_t offset) {
-              return u8(m_gr[GC_BLT_STATUS] & ~BLT_STATUS_BUSY);
-            }),
-            NAME([this](offs_t offset, u8 data) {
-              if (data & BLT_START) {
-                static bool reported = false;
-                if (!reported) {
-                  printf("%s: BitBLT requested; the blitter is not "
-                         "implemented yet\n",
-                         devid_string);
-                  reported = true;
-                }
-                data &= ~BLT_START;
-              }
-              if (data & BLT_RESET)
-                data &= ~(BLT_START | BLT_STATUS_BUSY);
-              m_gr[GC_BLT_STATUS] = data;
-            }));
+  // Blitter geometry: the high bytes of width, height and the pitches
+  // have 5 bits, the address high bytes 6.
+  map(0x21, 0x21).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x21] = data & 0x1f;
+  }));
+  map(0x23, 0x23).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x23] = data & 0x1f;
+  }));
+  map(0x25, 0x25).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x25] = data & 0x1f;
+  }));
+  map(0x27, 0x27).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x27] = data & 0x1f;
+  }));
+  map(0x2e, 0x2e).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x2e] = data & 0x3f;
+  }));
+
+  // GR2A: destination address high byte; with autostart it starts the
+  // blit, so a driver can program everything and kick it with one write.
+  map(0x2a, 0x2a).lw8(NAME([this](offs_t offset, u8 data) {
+    m_gr[0x2a] = data & 0x3f;
+    if (m_gr[GC_BLT_STATUS] & BLT_AUTOSTART) {
+      m_blitter.start();
+      blt_sync();
+    }
+  }));
+
+  // GR31: BitBLT start/status.
+  map(GC_BLT_STATUS, GC_BLT_STATUS).lw8(NAME([this](offs_t offset, u8 data) {
+    m_blitter.status_write(data);
+    blt_sync();
+  }));
 }

@@ -36,6 +36,7 @@
 #include "AliM1543C_pmu.hpp"
 #include "AliM1543C_usb.hpp"
 #include "AlphaCPU.hpp"
+#include "CirrusGD5430.hpp"
 #include "CirrusGD5434.hpp"
 #include "DMA.hpp"
 #include "DPR.hpp"
@@ -587,6 +588,7 @@ static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
                                      0};
 static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_vga[] = {"rom", 0};
+static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_dec21143[] = {
     "adapter",       "mac",        "queue",   "crc",
     "trace_packets", "type",       "host_ip", "bridge",
@@ -631,7 +633,7 @@ classinfo classes[] = {
     {"ali_pmu", c_ali_pmu, IS_PCI, kv_none},
     {"serial", c_serial, ON_CS, kv_serial},
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
-    {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_vga},
+    {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"dec21143", c_dec21143, IS_PCI | IS_NIC, kv_dec21143},
     {"sym53c895", c_sym53c895, IS_PCI | HAS_DISK, kv_none},
     {"sym53c810", c_sym53c810, IS_PCI | HAS_DISK, kv_none},
@@ -856,10 +858,19 @@ void CConfigurator::initialize() {
         new CS3Trio64(this, (CSystem *)pParent->get_device(), pcibus, pcidev);
     break;
 
-  case c_cirrus:
-    myDevice = new CCirrusGD5434(this, (CSystem *)pParent->get_device(), pcibus,
-                                 pcidev);
+  case c_cirrus: {
+    const std::string chip = get_text_value("chip", "gd5434");
+    if (chip == "gd5434")
+      myDevice = new CCirrusGD5434(this, (CSystem *)pParent->get_device(),
+                                   pcibus, pcidev);
+    else if (chip == "gd5430")
+      myDevice = new CCirrusGD5430(this, (CSystem *)pParent->get_device(),
+                                   pcibus, pcidev);
+    else
+      FAILURE_1(Configuration, "cirrus: unknown chip \"%s\" (gd5430, gd5434)",
+                chip.c_str());
     break;
+  }
 
 #if defined(HAVE_SDL)
   case c_es1370:

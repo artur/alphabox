@@ -129,6 +129,7 @@ bool CCirrusGD54xx::mmio_enabled_linear() const {
  * Memory-mapped BitBLT register block: each byte is an alias of a GR
  * register, so reads and writes go through the GR map and keep its side
  * effects. -1 marks bytes with no register behind them.
+ * (Offset 0x13, the destination address's fourth byte, is ignored.)
  **/
 // clang-format off
 static const int16_t mmio_to_gr[0x41] = {
@@ -199,6 +200,11 @@ void CCirrusGD54xx::mem_w(offs_t offset, uint8_t data) {
   }
 
   if (offset < 0x10000) {
+    if (m_blitter.host_active()) {
+      m_blitter.host_write(data);
+      blt_sync();
+      return;
+    }
     const int bank = offset >> 15;
     const u32 in_bank = offset & 0x7fff;
     if (in_bank < m_bank_limit[bank])
@@ -213,7 +219,8 @@ void CCirrusGD54xx::mem_w(offs_t offset, uint8_t data) {
 /**
  * Read from the PCI linear aperture (BAR0). VRAM repeats through the
  * aperture; with SR17 bits 6 and 2 set, the last 256 bytes of each VRAM
- * image are the BitBLT registers instead.
+ * image are the BitBLT registers instead. While a system-to-screen blit
+ * waits for data, writes anywhere else in the aperture are its source.
  **/
 uint8_t CCirrusGD54xx::mem_linear_r(offs_t offset) {
   const u32 addr = offset & vram_mask();
@@ -228,6 +235,11 @@ void CCirrusGD54xx::mem_linear_w(offs_t offset, uint8_t data) {
   const u32 mmio = m_chip.vram_bytes - 0x100;
   if (mmio_enabled_linear() && (addr & mmio) == mmio) {
     mmio_write(addr & 0xff, data);
+    return;
+  }
+  if (m_blitter.host_active()) {
+    m_blitter.host_write(data);
+    blt_sync();
     return;
   }
   write_packed(aperture_offset(addr), data);

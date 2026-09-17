@@ -97,7 +97,7 @@ Source layout under `src/`:
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
 | `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `Sym53C810/895`, `SCSIBus`, `SCSIDevice` |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
-| `devices/video/` | `VGA` (MAME-derived core), `VGACard` (shared card plumbing + standard VGA registers), `ibm8514a`, MAME-derived shims, the dead pre-MAME `Cirrus`; one subdirectory per card family: `s3/` (`S3Trio64`), `cirrus/` (`CirrusGD54xx` split by concern + `CirrusGD5434`) |
+| `devices/video/` | `VGA` (MAME-derived core), `VGACard` (shared card plumbing + standard VGA registers), `ibm8514a`, MAME-derived shims, the dead pre-MAME `Cirrus`; one subdirectory per card family: `s3/` (`S3Trio64`), `cirrus/` (`CirrusGD54xx` split by concern, the device-independent `CirrusBlitter`, `CirrusGD5430`/`CirrusGD5434`) |
 | `devices/net/` | `Ethernet`, `NetworkBackend`, `NetworkPcap`, `NetworkTap` |
 | `gui/` | `bx_gui` backends; SDL3 (`sdl.cpp`) is the maintained one |
 | `base/` | inherited Poco-style wrappers — do NOT use in new code |
@@ -127,8 +127,8 @@ separate `_ide`/`_usb`/`_pmu` PCI functions, `CSerial` (telnet or
 null_attach UARTs), `CKeyboard` (KBC + PS/2 aux mouse, Bochs-derived),
 `CDEC21143` (NIC via pcap), `CSym53C810/895` (SCSI), `CS3Trio64` + `CVGA` +
 MAME-derived rendering into the `bx_gui` plugin layer (`src/gui/`, SDL3 is
-the maintained backend), `CCirrusGD5434` (`cirrus` config class; same
-`CVGACard` base as the S3, BitBLT not yet emulated), `CFlash`+`CDPR`
+the maintained backend), `CCirrusGD5430`/`CCirrusGD5434` (`cirrus` config
+class, `chip` key; same `CVGACard` base as the S3), `CFlash`+`CDPR`
 (firmware NVRAM).
 
 CPU: `CAlphaCPU` (`cpu/AlphaCPU.cpp`) is a per-instruction interpreter

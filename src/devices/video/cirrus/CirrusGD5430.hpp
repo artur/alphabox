@@ -18,28 +18,17 @@
  * USA.
  */
 
-/**
- * \file
- * CL-GD5434 identity.
- **/
+/* Cirrus Logic CL-GD5430 ("Alpine"), PCI, 2 MB -- one of the two Cirrus
+ * parts the ES40 SRM console names. */
 
-#include "CirrusGD5434.hpp"
+#if !defined(INCLUDED_CIRRUS_GD5430_H)
+#define INCLUDED_CIRRUS_GD5430_H
 
-using namespace cirrus;
+#include "CirrusGD54xx.hpp"
 
-static const cirrus_chip_config gd5434_config = {
-    "CL-GD5434",       // part
-    CHIP_GD5434,       // CR27
-    PCI_DEVICE_GD5434, // PCI device id
-    4u << 20,          // 4 MB VRAM
-    16u << 20,         // 16 MB BAR0
-    0x00,              // PCI revision
-    0x98,              // SR0F: 64-bit DRAM bus, 4 MB
-    0x20,              // SR17: PCI bus straps
-    0x2d,              // SR1F: MCLK
-    "gd5434.bin",      // default option ROM
+class CCirrusGD5430 : public CCirrusGD54xx {
+public:
+  CCirrusGD5430(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
 };
 
-CCirrusGD5434::CCirrusGD5434(CConfigurator *cfg, CSystem *c, int pcibus,
-                             int pcidev)
-    : CCirrusGD54xx(cfg, c, pcibus, pcidev, gd5434_config) {}
+#endif // !defined(INCLUDED_CIRRUS_GD5430_H)

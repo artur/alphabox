@@ -33,7 +33,8 @@ The names below were extracted from the decompressed image with
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
-| Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; BitBLT engine not yet emulated |
+| Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
+| Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; Windows 2000 draws its desktop through the BitBLT engine |
 | Ensoniq Sound Card | `es1370` | |
 
 ## Candidates, by value
@@ -47,10 +48,8 @@ on-board firmware or a large command set.
 
 | Firmware name | Effort | Why |
 | --- | --- | --- |
-| Cirrus CL-GD5430 | S | another `cirrus_chip_config` row (chip id, PCI id, 1–2 MB) |
 | NCR 53C825, 53C875, 53C895A, 53C896 | S | same `n810` driver and register set as the 810/895; mostly PCI ids, FIFO size and wide-bus bits |
 | DECchip 21040/21041/21140, DE500-AA/-FA/-XA | S–M | older Tulips on the same driver; the 21140 matters for Windows NT and old Tru64 |
-| Cirrus GD5434 BitBLT | M | not a new device, but the Windows NT and XFree86 Cirrus drivers use it |
 
 ### 2. New devices with high payoff
 
@@ -106,7 +105,8 @@ change what a guest can do on an emulated ES40.
 
 ## Suggested order
 
-1. GD5430 variant and the Cirrus BitBLT engine: finishes the Cirrus family.
+1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done; screen-to-system
+   blits are still ignored).
 2. 53C8xx variants: cheap, bootable, broad guest coverage.
 3. Intel 8255x (DE600/DE602): a second NIC family on a well-documented chip.
 4. PCI-PCI bridge (21152/21154): unlocks multi-function cards and more slots.

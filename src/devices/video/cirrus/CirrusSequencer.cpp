@@ -40,6 +40,10 @@ void CCirrusGD54xx::sequencer_reset() {
   sr[SEQ_DRAM_CONTROL] = m_chip.sr0f_strap;
   sr[SEQ_CONFIG] = m_chip.sr17_strap;
   sr[SEQ_MCLK] = m_chip.sr1f_mclk;
+  // The 543x BIOS reads the memory size from here.
+  sr[SEQ_MEMORY_SIZE] = (m_chip.vram_bytes >= (4u << 20))   ? 0x04
+                        : (m_chip.vram_bytes >= (2u << 20)) ? 0x03
+                                                            : 0x02;
 
   // Power-on dot clocks (numerator, denominator/post-scalar):
   // 25.227, 28.325, 41.165 and 36.082 MHz from the 14.31818 MHz reference.

@@ -33,7 +33,9 @@
 #if !defined(INCLUDED_CIRRUS_REGS_H)
 #define INCLUDED_CIRRUS_REGS_H
 
-#include "StdAfx.hpp"
+#include <cstdint>
+
+#include "datatypes.hpp"
 
 namespace cirrus {
 
@@ -48,15 +50,15 @@ namespace cirrus {
 enum chip_id : u8 {
   // ISA/VLB generation, listed for completeness; the PCI parts below are
   // the ones ES40 SRM names.
-  CHIP_GD5422 = 0x22,
-  CHIP_GD5424 = 0x24,
-  CHIP_GD5426 = 0x26,
-  CHIP_GD5428 = 0x28,
-  CHIP_GD5429 = 0x2A,
+  CHIP_GD5422 = 0x8C,
+  CHIP_GD5426 = 0x90,
+  CHIP_GD5424 = 0x94,
+  CHIP_GD5428 = 0x98,
+  CHIP_GD5429 = 0x9C,
 
   // PCI generation.
   CHIP_GD5430 = 0xA0, ///< named by ES40 SRM
-  CHIP_GD5434 = 0xA8, ///< named by ES40 SRM; our first target
+  CHIP_GD5434 = 0xA8, ///< named by ES40 SRM
   CHIP_GD5436 = 0xAC,
   CHIP_GD5446 = 0xB8,
 };
@@ -125,6 +127,10 @@ constexpr u8 SEQ_CONFIG_STRAPS = 0x38;
 constexpr u8 SEQ_CONFIG_MMIO = 0x04;
 constexpr u8 SEQ_CONFIG_MMIO_LINEAR = 0x40;
 
+/// SR15: scratch pad 3; the 543x BIOS keeps the memory size in the low
+/// nibble (3 = 2 MB, 4 = 4 MB).
+constexpr u8 SEQ_MEMORY_SIZE = 0x15;
+
 constexpr u8 SEQ_MCLK = 0x1F;
 
 /* ---------------------------------------------------------------------
@@ -158,13 +164,64 @@ constexpr u8 GC_BG_COLOR_1 = 0x10; ///< write-mode background, byte 1
 constexpr u8 GC_FG_COLOR_1 = 0x11; ///< write-mode foreground, byte 1
 constexpr u8 GC_DRAM_EXT = 0x18;   ///< extended DRAM controls
 
-/// GR20..GR3F: BitBLT engine registers. GR31 is start/status.
-constexpr u8 GC_BLT_FIRST = 0x20;
-constexpr u8 GC_BLT_LAST = 0x3F;
+/* ---------------------------------------------------------------------
+ * BitBLT engine (GR20..GR39; also memory-mapped, see CirrusMemory.cpp)
+ * ------------------------------------------------------------------ */
+constexpr u8 GC_BLT_WIDTH = 0x20;     ///< GR20/GR21: width - 1 (13 bits)
+constexpr u8 GC_BLT_HEIGHT = 0x22;    ///< GR22/GR23: height - 1
+constexpr u8 GC_BLT_DST_PITCH = 0x24; ///< GR24/GR25
+constexpr u8 GC_BLT_SRC_PITCH = 0x26; ///< GR26/GR27
+constexpr u8 GC_BLT_DST = 0x28;       ///< GR28..GR2A (writing GR2A may start)
+constexpr u8 GC_BLT_SRC = 0x2C;       ///< GR2C..GR2E
+constexpr u8 GC_BLT_SKIP = 0x2F;      ///< GR2F: left-edge pixels to skip
+constexpr u8 GC_BLT_MODE = 0x30;
 constexpr u8 GC_BLT_STATUS = 0x31;
+constexpr u8 GC_BLT_ROP = 0x32;
+constexpr u8 GC_BLT_MODE_EXT = 0x33;
+constexpr u8 GC_BLT_TRANSP = 0x34; ///< GR34/GR35: transparent colour
+constexpr u8 GC_BLT_LAST = 0x39;
+
+// GR30 mode
+constexpr u8 BLT_MODE_BACKWARDS = 0x01;
+constexpr u8 BLT_MODE_HOST_DST = 0x02; ///< screen to system memory
+constexpr u8 BLT_MODE_HOST_SRC = 0x04; ///< system memory to screen
+constexpr u8 BLT_MODE_TRANSPARENT = 0x08;
+constexpr u8 BLT_MODE_PIXEL_WIDTH = 0x30; ///< (bytes per pixel - 1) << 4
+constexpr u8 BLT_MODE_PATTERN = 0x40;
+constexpr u8 BLT_MODE_EXPAND = 0x80; ///< 1 bpp source, colour expanded
+
+// GR31 start/status
 constexpr u8 BLT_STATUS_BUSY = 0x01;
 constexpr u8 BLT_START = 0x02;
 constexpr u8 BLT_RESET = 0x04;
+constexpr u8 BLT_FIFO_USED = 0x10;
+constexpr u8 BLT_AUTOSTART = 0x80;
+
+// GR33 mode extensions
+constexpr u8 BLT_EXT_DWORD_ALIGN = 0x01; ///< host 1 bpp lines padded to 32 bits
+constexpr u8 BLT_EXT_EXPAND_INVERT = 0x02;
+constexpr u8 BLT_EXT_SOLID_FILL = 0x04;
+
+/// GR32 raster operations: the value names the function of source (S)
+/// and destination (D). Anything else behaves as ROP_NOP.
+enum blt_rop : u8 {
+  ROP_0 = 0x00,
+  ROP_S_AND_D = 0x05,
+  ROP_NOP = 0x06,
+  ROP_S_AND_ND = 0x09,
+  ROP_ND = 0x0b,
+  ROP_S = 0x0d,
+  ROP_1 = 0x0e,
+  ROP_NS_AND_D = 0x50,
+  ROP_S_XOR_D = 0x59,
+  ROP_S_OR_D = 0x6d,
+  ROP_NS_OR_ND = 0x90,
+  ROP_S_XNOR_D = 0x95,
+  ROP_S_OR_ND = 0xad,
+  ROP_NS = 0xd0,
+  ROP_NS_OR_D = 0xd6,
+  ROP_NS_AND_ND = 0xda,
+};
 
 /* ---------------------------------------------------------------------
  * Hidden DAC

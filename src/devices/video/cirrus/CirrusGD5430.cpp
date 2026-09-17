@@ -20,26 +20,26 @@
 
 /**
  * \file
- * CL-GD5434 identity.
+ * CL-GD5430 identity.
  **/
 
-#include "CirrusGD5434.hpp"
+#include "CirrusGD5430.hpp"
 
 using namespace cirrus;
 
-static const cirrus_chip_config gd5434_config = {
-    "CL-GD5434",       // part
-    CHIP_GD5434,       // CR27
-    PCI_DEVICE_GD5434, // PCI device id
-    4u << 20,          // 4 MB VRAM
+static const cirrus_chip_config gd5430_config = {
+    "CL-GD5430",       // part
+    CHIP_GD5430,       // CR27
+    PCI_DEVICE_GD5430, // PCI device id
+    2u << 20,          // 2 MB VRAM
     16u << 20,         // 16 MB BAR0
     0x00,              // PCI revision
-    0x98,              // SR0F: 64-bit DRAM bus, 4 MB
+    0x18,              // SR0F: 32-bit DRAM bus, 2 MB
     0x20,              // SR17: PCI bus straps
     0x2d,              // SR1F: MCLK
-    "gd5434.bin",      // default option ROM
+    "gd5430.bin",      // default option ROM
 };
 
-CCirrusGD5434::CCirrusGD5434(CConfigurator *cfg, CSystem *c, int pcibus,
+CCirrusGD5430::CCirrusGD5430(CConfigurator *cfg, CSystem *c, int pcibus,
                              int pcidev)
-    : CCirrusGD54xx(cfg, c, pcibus, pcidev, gd5434_config) {}
+    : CCirrusGD54xx(cfg, c, pcibus, pcidev, gd5430_config) {}

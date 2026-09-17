@@ -2,16 +2,21 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus] [ROM=<bios>] vga_boot.sh <axpbox-binary> <label> [seconds]
+# usage: [CARD=s3|cirrus] [CHIP=gd5430|gd5434] [ROM=<bios>] \
+#          vga_boot.sh <axpbox-binary> <label> [seconds]
 #   Runs in $AXPBOX_WORK/runs/vga-<label> (AXPBOX_WORK defaults to <repo>/lab).
-#   Needs an SDL lane. CARD defaults to s3. ROM defaults to
-#   test/arc/86c764x1.bin (s3) or roms/video/cirruslogic/gd5434.BIN (cirrus;
-#   the 86Box ROM set, not in git).
+#   Needs an SDL lane. CARD defaults to s3, CHIP (cirrus only) to gd5434.
+#   ROM defaults to test/arc/86c764x1.bin (s3), or for cirrus to the 86Box
+#   ROM set (not in git): roms/video/cirruslogic/gd5434.BIN (gd5434) or
+#   pci.bin (gd5430).
 #
 # The screen settles on two frames (text cursor on/off). With SRM V7.3-1 the
 # settled sets are:
-#   s3     (86c764x1.bin)          58b2a3f795 b962153c15
-#   cirrus (GD543x PCI BIOS 1.10B) b866caa6ba ccc23de79a
+#   s3             (86c764x1.bin)          58b2a3f795 b962153c15
+#   cirrus gd5434  (GD543x PCI BIOS 1.10B) b866caa6ba ccc23de79a
+#   cirrus gd5430  (86Box pci.bin)         c3f64950a2 d1fb4d6f9c
+# The set is the last ten frames, one every ~2 s, so the cursor phase can
+# alias: on a loaded host one of the two may be missing. Run it alone.
 # A behaviour-preserving change must reproduce them. last.png in the run
 # directory is the final frame.
 #
@@ -25,9 +30,18 @@ BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 SECS=${3:-60}
 CARD=${CARD:-s3}
+CHIP=${CHIP:-gd5434}
+EXTRA=""
 case $CARD in
 s3) ROM=${ROM:-$R/test/arc/86c764x1.bin} ;;
-cirrus) ROM=${ROM:-$R/roms/video/cirruslogic/gd5434.BIN} ;;
+cirrus)
+  case $CHIP in
+  gd5434) ROM=${ROM:-$R/roms/video/cirruslogic/gd5434.BIN} ;;
+  gd5430) ROM=${ROM:-$R/roms/video/cirruslogic/pci.bin} ;;
+  *) echo "vga_boot: CHIP must be gd5430 or gd5434"; exit 2 ;;
+  esac
+  EXTRA="chip = \"$CHIP\";"
+  ;;
 *) echo "vga_boot: CARD must be s3 or cirrus"; exit 2 ;;
 esac
 [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }
@@ -64,6 +78,7 @@ sys0 = tsunami
   pci0.2 = $CARD
   {
     rom = "vgabios.bin";
+    $EXTRA
   }
 
   pci0.15 = ali_ide

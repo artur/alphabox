@@ -28,26 +28,28 @@
  *   CirrusSequencer.cpp  SR extended registers (lock, clocks, straps)
  *   CirrusGraphics.cpp   GR extended registers (banking, write-mode colours,
  *                        BitBLT register block)
+ *   CirrusBlitter.cpp    BitBLT engine
  *   CirrusCRTC.cpp       CR extended registers (offsets, interlace, chip id)
  *   CirrusMemory.cpp     banked 0xa0000 window, linear aperture, extended
  *                        write modes 4/5
  *   CirrusDAC.cpp        hidden DAC, extended palette, colour depth
  *   CirrusCursor.cpp     hardware cursor
  *
- * A concrete chip (CirrusGD5434, ...) supplies a cirrus_chip_config and
- * its PCI header; it should not need to override behaviour.
+ * A concrete chip (CirrusGD5430, CirrusGD5434, ...) supplies only a
+ * cirrus_chip_config; the PCI header is built from it.
  */
 
 #if !defined(INCLUDED_CIRRUS_GD54XX_H)
 #define INCLUDED_CIRRUS_GD54XX_H
 
+#include "CirrusBlitter.hpp"
 #include "CirrusRegs.hpp"
 #include "VGACard.hpp"
 
 /**
  * \brief Per-chip parameters. A variant fills this in and the base does the
- * rest, so adding a GD5430 or GD5446 is a table entry plus its PCI header
- * rather than a new device.
+ * rest, so adding a GD5436 or GD5446 is a table entry rather than a new
+ * device.
  */
 struct cirrus_chip_config {
   const char *part;        ///< human-readable part, for startup messages
@@ -55,6 +57,7 @@ struct cirrus_chip_config {
   u16 pci_device_id;       ///< PCI config space 0x02
   u32 vram_bytes;          ///< installed framebuffer memory (power of two)
   u32 linear_bytes;        ///< PCI BAR0 aperture size (power of two)
+  u8 revision;             ///< PCI revision id
   u8 sr0f_strap;           ///< SR0F power-on value (DRAM configuration)
   u8 sr17_strap;           ///< SR17 power-on value (bus type straps)
   u8 sr1f_mclk;            ///< SR1F power-on memory clock
@@ -64,7 +67,7 @@ struct cirrus_chip_config {
 class CCirrusGD54xx : public CVGACard {
 public:
   CCirrusGD54xx(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
-                const cirrus_chip_config &chip, u32 *cfg_data, u32 *cfg_mask);
+                const cirrus_chip_config &chip);
   virtual ~CCirrusGD54xx();
 
   virtual void init() override;
@@ -115,6 +118,13 @@ protected:
   void mmio_write(u32 offset, u8 data);
   u32 vram_mask() const { return m_chip.vram_bytes - 1; }
 
+  // --- BitBLT engine (CirrusBlitter.cpp) --------------------------------
+  /// Mark the screen dirty if the blitter drew.
+  void blt_sync() {
+    if (m_blitter.take_drawn())
+      state.vga_mem_updated = 1;
+  }
+
   // --- DAC (CirrusDAC.cpp) ----------------------------------------------
   u8 dac_mask_read();
   void dac_mask_write(u8 data);
@@ -131,8 +141,6 @@ protected:
 
   // --- state ------------------------------------------------------------
   const cirrus_chip_config m_chip;
-  u32 *m_cfg_data;
-  u32 *m_cfg_mask;
 
   /// Extended graphics controller registers. GR00/GR01 are kept here at
   /// their full 8 bits (the standard handler keeps only the low nibble)
@@ -155,6 +163,12 @@ protected:
   /// index used for the last write.
   u8 m_cursor_x_low = 0;
   u8 m_cursor_y_low = 0;
+
+  /// The BitBLT engine works on m_gr and the VRAM. Not part of the state
+  /// file: a blit completes within one register write or, for
+  /// system-to-screen transfers, within the guest's following aperture
+  /// writes.
+  CCirrusBlitter m_blitter{m_gr, "cirrus"};
 
   /// Port 0x3c3 (video subsystem enable). Stored and read back only.
   u8 m_port_3c3 = 0x01;
