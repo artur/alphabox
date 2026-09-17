@@ -163,7 +163,7 @@ Pick the strategy:
      `0x8b000` page check in `execute()`), replaces upstream's
      `#ifdef SKIP_SRM_MEMTEST`.
    - `fread` return-value checks in RestoreState.
-   - Debug env hooks (documented in README "Headless testing"):
+   - Debug env hooks (documented in docs/headless.md):
      `AXPBOX_PC_SAMPLE` (AlphaCPU::check_state), `AXPBOX_DUMP_FB`,
      `AXPBOX_AUTOKEY_ENTER`, `AXPBOX_KEYSCRIPT`, `AXPBOX_KEYPIPE`,
      `AXPBOX_AUTOMOUSE`, `AXPBOX_MOUSE_DEBUG` (gui/sdl.cpp; the aux-cmd
@@ -362,8 +362,8 @@ leave both alone). Trailer:
 - Post-port axpbox-only additions (2026-07-10, keep across future
   ports): input-injection/diagnostic hooks (AXPBOX_KEYPIPE,
   AXPBOX_AUTOMOUSE, AXPBOX_MOUSE_DEBUG + aux-cmd trace in
-  Keyboard.cpp), the focus-bounce re-grab in sdl.cpp, README
-  "Headless testing" + "Mouse on WSLg" sections.
+  Keyboard.cpp), the focus-bounce re-grab in sdl.cpp, and their docs
+  (docs/headless.md, the "Mouse on WSLg" part of docs/configuration.md).
 - `9f7554d..2aa5e11` (v0.75.4→v0.85, 254 commits) -- reviewed on merit
   (2026-09-15), on branch arm64-jit (fork artur/axpbox), in phases:
   1 latent CPU/JIT bugs (SQRT classify, compile snapshot, irq_h re-kick,

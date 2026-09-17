@@ -76,8 +76,8 @@ booting them), `test-arc` (AlphaBIOS/ARC console via flash + S3),
 `verify-vga-sdl` (framebuffer inspection + input debugging), `srm-boot-test`,
 `guest-boot-bench` (Windows 2000 guest boots and the MIPS benchmark).
 For headless driving of the emulator (fb dumps, key/mouse injection,
-`SDL_VIDEO_DRIVER=offscreen`), the `AXPBOX_*` env hooks are documented in
-README "Headless testing".
+`SDL_VIDEO_DRIVER=dummy`), the `AXPBOX_*` env hooks are documented in
+`docs/headless.md`.
 
 Formatting: repo LLVM style via `.clang-format`; format only changed lines
 with `git clang-format --binary <clang-format> --diff HEAD -- src`.

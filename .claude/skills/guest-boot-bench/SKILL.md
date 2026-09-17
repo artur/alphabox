@@ -47,7 +47,7 @@ the EXC_SUM MTPR fix. Ctrl+Alt+Delete is Ctrl+Alt+End, or a
 Useful extra environment: `AXPBOX_IRQSTATS=1` (interrupt rates every 5 s,
 e.g. `eir 4:N` halt-line interrupts), `AXPBOX_MEDIA_SWAP=<iso1>:<iso2>:<ms>`
 (CD change stress), `AXPBOX_KEYSCRIPT` / `AXPBOX_AUTOMOUSE` (input
-injection, see README "Headless testing").
+injection, see docs/headless.md).
 
 ## MIPS benchmark
 

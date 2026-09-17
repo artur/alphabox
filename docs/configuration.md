@@ -1,0 +1,166 @@
+# Running and configuring AXPbox
+
+```
+axpbox configure     # interactive generator, writes es40.cfg
+axpbox run           # start the machine (reads es40.cfg)
+axpbox run my.cfg    # ... or another configuration file
+axpbox --version     # version, commit and compiled-in features
+```
+
+The sample [es40.cfg](../es40.cfg) documents every configuration value; the
+generator covers the common ones. If a section contains a value that its
+device doesn't use, AXPbox warns at startup (`%SYS-W-UNKNOWNCFG`).
+
+## Firmware
+
+You need an SRM console ROM image (`rom.srm`). The flash and DPR NVRAM
+images (`rom.flash`, `rom.dpr`) start blank when missing and are saved as
+they change and when the run ends.
+
+The graphics cards run their real VGA BIOS, which you supply:
+
+| Card | Config section | BIOS |
+|---|---|---|
+| S3 Trio64 | `pci0.2 = s3` | `86c764x1.bin` from the [86Box ROM set](https://github.com/86Box/roms/tree/master/video/s3) |
+| Cirrus CL-GD5434 | `pci0.2 = cirrus` | `video/cirruslogic/gd5434.BIN` from the 86Box ROM set |
+| Cirrus CL-GD5430 | `pci0.2 = cirrus` with `chip = "gd5430";` | `video/cirruslogic/pci.bin` from the 86Box ROM set |
+
+Point the section's `rom` value at the file. Use one graphics card per
+machine. With `vga_console = true` in the `ali` section, the SRM console
+appears on the graphics window instead of a serial port.
+
+### ARC / AlphaBIOS and Windows NT
+
+The Windows NT family boots from the ARC (AlphaBIOS) console:
+
+1. Flash AlphaBIOS from the Alpha Systems Firmware v7.3 CD.
+2. Enter `arc` at the SRM prompt.
+
+Windows 2000 has been booted this way on both the S3 and the Cirrus
+GD5434; with the Cirrus card it installs its own Cirrus driver.
+
+## Stopping
+
+Ctrl-C or SIGTERM ends a run gracefully, saving the flash and DPR images.
+With `exit_on_pal_halt = true` in the `sys0` section, a guest halt (an OS
+shutting down to the console) ends the run the same way, which is handy for
+scripted use.
+
+## Serial consoles
+
+The sample configuration attaches both UARTs as `null_attach`: present but
+unconnected. The emulator then starts without waiting for anything, and the
+console lives on the VGA window (`vga_console = true`).
+
+To use a telnet console instead, set `port = 21264;` in a serial section.
+The emulator then **waits at startup** until a client connects
+(`nc localhost 21264`). Ports left out of the configuration are added as
+`null_attach` automatically.
+
+Sending a telnet BREAK opens a small menu: continue, exit, abort, save the
+machine state to `autosave.axp`, or load it back.
+
+## Networking
+
+The DEC 21143 NIC (`pci0.4 = dec21143`) connects to the host through one of
+three backends, selected with `type`:
+
+- `type = "pcap"` (default): captures on an existing host interface. Set
+  `adapter = "eth0";` (Linux) or the `\Device\NPF_{...}` name
+  (Windows/Npcap). On Linux the binary needs capture permission (see
+  [building.md](building.md#linux)); without it, startup fails with "Error
+  opening adapter". Don't leave `adapter` unset on unattended runs: the
+  emulator then asks interactively.
+- `type = "tap"` (Linux only): uses a TUN/TAP device, so the host can reach
+  the guest and it can be bridged onto the LAN. Options:
+  - `adapter = "tap0";`: the device, created if needed (needs
+    CAP_NET_ADMIN or root);
+  - `tap_create = true;`;
+  - `host_ip = "10.0.0.1/24";`;
+  - `bridge = "br0";`;
+  - `uplink = "eno1";`.
+- `type = "null"`: the NIC is present but nothing is ever received and
+  transmissions are discarded. Needs no privileges; useful for tests.
+
+All backends also take:
+
+- `mac`: default `08-00-2B-E5-40-<nic#>`;
+- `queue`: receive queue depth, default 1024;
+- `crc`;
+- `trace_packets`.
+
+## Sound
+
+`pci1.1 = es1370 {}` adds an Ensoniq AudioPCI ES1370 (SDL builds only).
+Guest drivers exist for Windows NT 4; other guests ignore it.
+
+## Keyboard, mouse and window
+
+- **Mouse**: click the window to grab it, Ctrl+F10 to release.
+  `mouse.speed`, `mouse.invert_x` and `mouse.invert_y` tune it.
+- **Window scaling**: `video.scale_ratio` and `video.scale_change_enable`.
+- **Hotkeys**: every GUI shortcut can be rebound with `hotkey.*` in the `sdl`
+  section, e.g. `hotkey.ctrl_alt_delete = "GUI+Shift+D";` on a Mac keyboard
+  without an End key. The active bindings are printed at startup
+  (`%SDL-I-HOTKEYS`) and shown in the window title. Defaults:
+
+  | Hotkey | Action |
+  |---|---|
+  | Ctrl+F10 | Grab or release the mouse |
+  | Ctrl+F11 | Change the CD (file picker) |
+  | Ctrl+Shift+F11 | Change the CD even if the guest has locked the drive |
+  | Ctrl+Alt+End | Send Ctrl+Alt+Delete to the guest |
+  | Ctrl+Alt+Home | Reset the window size |
+
+### Mouse on WSLg / Wayland
+
+On WSLg, the default Wayland backend delivers **no relative mouse motion**
+while the mouse is grabbed: the grab succeeds but the guest pointer never
+moves. Run through XWayland instead:
+
+```
+SDL_VIDEO_DRIVER=x11 DISPLAY=:0 SDL_RENDER_DRIVER=software axpbox run
+```
+
+`SDL_RENDER_DRIVER=software` avoids a fatal GLX error under WSLg's
+XWayland.
+
+To diagnose, set `AXPBOX_MOUSE_DEBUG=1`:
+
+- Motion lines with `grab=1` mean host input reaches the guest.
+- No motion lines after a `grab -> 1` line mean the host backend isn't
+  delivering relative motion.
+
+## Disks, CDs and floppies
+
+- **Disk images**: raw image files (`file`), host devices (`device`) and RAM
+  disks (`ramdisk`), on SCSI (`sym53c810`, `sym53c895`), IDE (`ali_ide`) or
+  the floppy controller.
+- **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
+  (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD
+  drives are read-only unless `read_only = false`.
+- **Empty drives**: a CD or floppy drive with no `file` (or an unreadable
+  one) starts empty.
+- **Changing the CD**: **Ctrl+F11** opens a file picker and inserts the
+  chosen image into the first CD drive.
+  - The image is opened and checked immediately. A bad file is reported and
+    the current disc stays.
+  - The swap happens between guest commands, and the guest sees a normal
+    "medium changed" notification.
+  - A drive the guest has locked (PREVENT MEDIUM REMOVAL) refuses the
+    change; **Ctrl+Shift+F11** forces it.
+- **Tray**: guests may open and close the tray themselves unless
+  `allow_guest_eject = false`.
+
+## Guest installation guides
+
+- [OpenVMS](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)
+  (upstream wiki)
+- [OpenVMS CDE desktop](https://github.com/lenticularis39/axpbox/wiki/GUI-Desktop-Environment-(CDE))
+  (upstream wiki)
+- [NetBSD](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)
+  (upstream wiki)
+- [Windows 2000 / NT](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)
+  (zx.net.nz, archived)
+- [Guest support status](https://github.com/lenticularis39/axpbox/wiki/Guest-support)
+  (upstream wiki)

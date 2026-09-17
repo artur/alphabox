@@ -78,7 +78,7 @@ any blank guest screen is then the guest's doing, not a render bug.
 ## Input injection (headless interaction)
 
 All hooks live in `bx_sdl_gui_c::handle_events` (src/gui/sdl.cpp) and
-are documented user-facing in README.md:
+are documented user-facing in docs/headless.md:
 
 - `AXPBOX_AUTOKEY_ENTER=<sec>` — Enter every N seconds. Mind the
   timing: keystrokes during SRM's nvram script abort the script (see
