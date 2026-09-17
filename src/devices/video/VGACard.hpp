@@ -121,8 +121,9 @@ protected:
   virtual u32 state_magic1() const = 0;
   virtual u32 state_magic2() const = 0;
 
-  /// Register maps. Standard VGA semantics come from CVGA's handlers; a
-  /// card installs its extended registers on top.
+  /// Register maps. init_maps() installs the standard VGA registers first
+  /// (vga_*_map), then calls these: a card adds its extended registers and
+  /// may replace a standard one.
   virtual void crtc_map(address_map &map) = 0;
   virtual void sequencer_map(address_map &map) = 0;
   virtual void gc_map(address_map &map) = 0;
@@ -139,6 +140,9 @@ protected:
   /// Chip overflow bits that extend the CRTC display size (S3 CR5D/CR5E,
   /// Cirrus CR1A/CR1B). Called with the standard-VGA values.
   virtual void apply_extended_timing(int &h, int &v) {}
+
+  /// Palette/overscan write protect (S3 CR33 bit 6).
+  virtual bool atc_palette_locked() const { return false; }
 
   /// The card's own legacy ranges. Unclaimed reads return 0 and writes are
   /// ignored, as an undecoded range would.
@@ -165,6 +169,10 @@ protected:
 
   // --- shared machinery ----------------------------------------------------
   void init_maps();
+  void vga_crtc_map(address_map &map);
+  void vga_sequencer_map(address_map &map);
+  void vga_gc_map(address_map &map);
+  void vga_attribute_map(address_map &map);
 
   /// Register the standard VGA ports (0x3b4, 0x3ba, 0x3c0-0x3cf, 0x3d4,
   /// 0x3da), the VGA BIOS message port (0x500) and the 0xa0000 window.
@@ -195,6 +203,9 @@ protected:
   address_map m_seq_map{256};
   address_map m_gc_map{256};
   address_map m_atc_map{64};
+
+  /// CR11 vertical-retrace interrupt line (not wired).
+  nop_callback m_vsync_cb;
 
   /// Written to the state file verbatim, so its layout is the file format.
   /// memory/memsize are unused -- the VRAM is vga.memory -- and are kept only

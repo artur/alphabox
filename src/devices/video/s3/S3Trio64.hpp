@@ -97,6 +97,7 @@ protected:
   uint64_t hw_cursor_signature() const override;
   bool display_enabled() const override { return m_vga_subsys_enable; }
   void apply_extended_timing(int &h, int &v) override;
+  bool atc_palette_locked() const override;
   u32 card_legacy_read(int index, u32 address, int dsize) override;
   void card_legacy_write(int index, u32 address, int dsize, u32 data) override;
   u32 io_read(u32 address, int dsize) override;
@@ -204,8 +205,6 @@ protected:
   virtual bool get_interlace_mode() override { return BIT(s3.cr42, 5); }
 
   virtual void s3_define_video_mode(void);
-
-  nop_callback m_vsync_cb;
 
   void crtc_map(address_map &map) override;
   void sequencer_map(address_map &map) override;
