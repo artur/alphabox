@@ -345,6 +345,15 @@ public:
 
   explicit CJitEngine(
       int cpu_id = 0); // cpu_id tags the stats/diagnostic prints
+
+  /// The identity AMASK and IMPLVER report, from the processor this engine
+  /// compiles for (CpuModel.hpp). Compiled code holds them as immediates,
+  /// and every engine belongs to one CPU, so a machine whose processors
+  /// differ still gets the right values.
+  void set_cpu_identity(uint64_t amask, uint64_t implver) {
+    m_amask = amask;
+    m_implver = implver;
+  }
   ~CJitEngine();
 
   static inline uint64_t index_of(uint64_t virt_pc) {
@@ -567,6 +576,8 @@ private:
   bool m_traces_enabled =
       false; // global kill-switch; default OFF -> bit-identical
   int m_cpu_id;
+  uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
+  uint64_t m_implver = 0;
   uint64_t m_recorded;
   uint64_t m_itb_gen =
       0; // current ITB generation (bumped on every I-stream TB invalidate)

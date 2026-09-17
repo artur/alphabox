@@ -73,3 +73,17 @@ alphabox run &
 A `serial` section with a `port` waits for a telnet connection before the GUI
 comes up. For unattended runs, connect a client or use
 `null_attach = true`.
+
+## Tracing accesses no device claims
+
+`ALPHABOX_TRACE_UNKNOWN=1` reports every read or write that no device
+answered -- the address, its width, and the instruction or device that made
+it:
+
+```
+%SYS-T-UNKNOWN: read  32 bits at 803fe002800 (PCI configuration) from cpu0 pc=00000000001a1358
+```
+
+A firmware scanning empty configuration space produces these normally; the
+trace matters when a machine's firmware wants hardware that is not
+emulated yet (see [platforms.md](platforms.md)).

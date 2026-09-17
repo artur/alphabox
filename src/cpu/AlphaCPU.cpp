@@ -70,8 +70,11 @@ void CAlphaCPU::release_threads() {
   }
 }
 
+thread_local CAlphaCPU *t_running_cpu = nullptr;
+
 void CAlphaCPU::run() {
   try {
+    t_running_cpu = this;
     mySemaphore.wait();
     while (state.wait_for_start) {
       if (StopThread)
@@ -134,6 +137,10 @@ void CAlphaCPU::run() {
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
     : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+  // The configuration class names the part ("ev68cb").
+  m_model = find_cpu_model(cfg->get_myValue());
+  if (!m_model)
+    FAILURE_1(Configuration, "Unknown Alpha processor %s", cfg->get_myValue());
   // Native PALcode vs the vmspal replacement routines is a system-wide choice
   // (mixing them across CPUs in SMP is unsafe), decided while the CPUs are
   // constructed and read back in init(), which runs after all of them.
@@ -221,6 +228,7 @@ void CAlphaCPU::init() {
 #ifdef ES40_JIT
   if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum);
+    m_jit->set_cpu_identity(m_model->amask, m_model->implver);
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
   }
   {
@@ -2478,7 +2486,7 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
   case 0x10:
     return state.pal_base; // PAL_BASE
   case 0x11:               // I_CTL
-    return state.i_ctl_other | (((u64)CPU_CHIP_ID) << 24) |
+    return state.i_ctl_other | (((u64)cpu->m_model->chip_id) << 24) |
            (u64)state.i_ctl_vptb | (((u64)state.i_ctl_va_mode) << 15) |
            (state.hwe ? U64(0x1) << 12 : 0) | (state.sde ? U64(0x1) << 7 : 0) |
            (((u64)state.i_ctl_spe) << 3);

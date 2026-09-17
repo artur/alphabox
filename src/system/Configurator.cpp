@@ -578,9 +578,9 @@ typedef struct {
 // the user to remove it.
 static const char *const kv_none[] = {0};
 static const char *const kv_tsunami[] = {
-    "memory.bits",     "rom.srm",          "rom.flash",
-    "rom.dpr",         "rom.decompressed", "time",
-    "arc_year_compat", "exit_on_pal_halt", 0};
+    "memory.bits",      "rom.srm", "rom.flash",       "rom.dpr",
+    "rom.decompressed", "time",    "arc_year_compat", "exit_on_pal_halt",
+    "platform",         0};
 static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "skip_memtest_hack",
                                         "timer.max_instr_per_tick", 0};
@@ -790,23 +790,15 @@ void CConfigurator::initialize() {
     // pci0 slots are reserved for system-internal devices. Placing an
     // add-in device on one of those slots causes the SRM firmware to
     // malfunction (e.g. SCSI disks not detected, device conflicts).
-    if (pcibus == 0 && !behind_bridge) {
-      bool is_system_device =
-          (myClassId == c_ali || myClassId == c_ali_ide ||
-           myClassId == c_ali_usb || myClassId == c_ali_pmu);
-      if (!is_system_device) {
-        if (pcidev == 0)
-          FAILURE_2(Configuration,
-                    "%s (%s): PCI slot pci0.0 is reserved and cannot be "
-                    "used for add-in devices. Use pci0.1 through pci0.4",
-                    myName, myValue);
-        if (pcidev == 7 || pcidev == 15 || pcidev == 17 || pcidev == 19)
-          FAILURE_3(Configuration,
-                    "%s (%s): PCI slot pci0.%d is reserved for a "
-                    "system-internal device. Use pci0.1 through pci0.4 "
-                    "for add-in devices",
-                    myName, myValue, pcidev);
-      }
+    // Slots the board keeps for its own hardware are refused; which those
+    // are is a property of the machine (src/platforms/).
+    const bool is_system_device =
+        (myClassId == c_ali || myClassId == c_ali_ide ||
+         myClassId == c_ali_usb || myClassId == c_ali_pmu);
+    if (!behind_bridge && !is_system_device) {
+      const char *refusal = theSystem->platform().slot_refusal(pcibus, pcidev);
+      if (refusal)
+        FAILURE_3(Configuration, "%s (%s): %s", myName, myValue, refusal);
     }
   }
 

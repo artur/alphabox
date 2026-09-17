@@ -40,10 +40,15 @@
 #include <condition_variable>
 #include <mutex>
 
+#include "CpuModel.hpp"
 #include "System.hpp"
 #include "SystemComponent.hpp"
 #include "cpu_defs.hpp"
 class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
+
+/// The processor executing on this thread, or nullptr on a device thread.
+/// Diagnostics only (the unknown-access trace): never a control path.
+extern thread_local class CAlphaCPU *t_running_cpu;
 
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
@@ -82,6 +87,9 @@ inline std::atomic<u64> g_jit_code_flush{0};
  **/
 class CAlphaCPU : public CSystemComponent {
 public:
+  /// The part this processor is (identity and extensions).
+  const cpu_model &model() const { return *m_model; }
+
   void flush_icache_asm();
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
@@ -426,6 +434,10 @@ private:
   // the asn-keyed lookup paths (the chain guard checks tag+epoch only). No-op
   // in non-JIT builds.
   void jit_note_asn_change();
+
+  /// The part this processor is: identity and architecture extensions,
+  /// chosen by the configuration class (CpuModels.cpp).
+  const cpu_model *m_model = nullptr;
 
 #ifdef ES40_JIT
   // JIT block-discovery engine (per-CPU), allocated in init().

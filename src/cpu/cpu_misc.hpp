@@ -39,7 +39,7 @@
     if (REG_1 != 31) {                                                         \
       GO_PAL(OPCDEC);                                                          \
     } else {                                                                   \
-      state.r[REG_3] = V_2 & ~CPU_AMASK;                                       \
+      state.r[REG_3] = V_2 & ~m_model->amask;                                  \
     }                                                                          \
   } while (0)
 
@@ -274,7 +274,7 @@
     }                                                                          \
   }
 
-#define DO_IMPLVER state.r[REG_3] = CPU_IMPLVER;
+#define DO_IMPLVER state.r[REG_3] = m_model->implver;
 
 // state.cc is wall-clock in both engines (advanced at batch boundaries by real
 // elapsed time * cpu_hz), so the live cycle count is simply state.cc; _cc_accum

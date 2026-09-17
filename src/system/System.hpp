@@ -27,6 +27,7 @@
  * serve the general public.
  */
 
+#include "Platform.hpp"
 #include "SystemComponent.hpp"
 #include "TraceEngine.hpp"
 #include "i2c_spd.hpp"
@@ -187,11 +188,27 @@ public:
     return m_reset_in_progress.load(std::memory_order_acquire);
   }
 
+  /// The machine this is: which board, its slots, interrupts and firmware
+  /// (Platform.hpp). Chosen by the "platform" configuration value.
+  const platform_config &platform() const { return *m_platform; }
+
   int RegisterMemory(CSystemComponent *component, int index, u64 base,
                      u64 length);
   void RegisterComponent(CSystemComponent *component);
   void UnregisterComponent(CSystemComponent *component);
   int RegisterCPU(class CAlphaCPU *cpu);
+
+  const platform_config *m_platform = nullptr; ///< the machine (Platform.hpp)
+
+  /**
+   * Report an access no device claimed: what, where, how wide, and the
+   * instruction that made it. Off unless ALPHABOX_TRACE_UNKNOWN is set in
+   * the environment; bringing up an unfamiliar firmware is mostly reading
+   * this trace (docs/platforms.md).
+   */
+  void trace_unknown(const char *space, u64 address, int dsize, bool write,
+                     u64 data, CSystemComponent *source);
+  static bool trace_unknown_on();
 
   CSystem(CConfigurator *cfg);
   void ResetMem(unsigned int membits);

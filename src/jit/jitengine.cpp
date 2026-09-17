@@ -3197,16 +3197,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.cmovz(x86::rax, x86::r10); // op2==0 -> 64 (BSF leaves rax undefined)
       break;
 
-    case OP_AMASK: // Rc = op2 & ~CPU_AMASK -- EV68 feature mask 0x1307 (keep in
-                   // sync w/ cpu_defs.h);
+    case OP_AMASK: // Rc = op2 & ~AMASK, this processor's extensions
       op2_rcx();   // classify enforced Ra==31 (the Ra!=31 form traps OPCDEC in
                    // the interpreter)
-      a.mov(x86::rax, imm(~(uint64_t)0x1307));
+      a.mov(x86::rax, imm(~m_amask));
       a.and_(x86::rax, x86::rcx);
       break;
-    case OP_IMPLVER: // Rc = CPU_IMPLVER (2 = EV6 family; keep in sync w/
-                     // cpu_defs.h)
-      a.mov(x86::eax, imm(2));
+    case OP_IMPLVER: // Rc = IMPLVER, this processor's implementation version
+      a.mov(x86::rax, imm(m_implver));
       break;
 
     case OP_CMPEQ:

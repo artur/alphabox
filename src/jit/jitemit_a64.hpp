@@ -1795,13 +1795,13 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.clz(x0, x0);
       break;
 
-    case OP_AMASK: // Rc = op2 & ~CPU_AMASK (keep in sync w/ cpu_defs.h)
+    case OP_AMASK: // Rc = op2 & ~AMASK, this processor's extensions
       op2_x1();
-      a.mov(x9, imm(0x1307));
+      a.mov(x9, imm(m_amask));
       a.bic(x0, x1, x9);
       break;
-    case OP_IMPLVER: // Rc = CPU_IMPLVER (keep in sync w/ cpu_defs.h)
-      a.mov(x0, imm(2));
+    case OP_IMPLVER: // Rc = IMPLVER, this processor's implementation version
+      a.mov(x0, imm(m_implver));
       break;
 
     case OP_CMPEQ:

@@ -6,6 +6,7 @@
 #   CPUS=1..4            number of CPUs (default 1)
 #   MEMBITS=<n>          memory.bits (default: the test machine's 26)
 #   SCSI=sym53c810|825|875|895 add the controller with a 1 GB disk + RAM disk
+#   PLATFORM=<name>      machine to emulate (default es40)
 #   NIC=dec21143|de600|i82557|i82558|i82559  add the NIC (null backend)
 #   NET_PEER=N:P         with NIC: UDP backend on port N, and net_peer.py on
 #                        port P answering ARP/BOOTP/TFTP (log: peer.log);
@@ -33,7 +34,7 @@ set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { sed -n '2,36p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,38p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
@@ -52,6 +53,7 @@ cp "$R/test/rom/cl67srmrom.exe" "$D/"
 cfg=(--out "$D/es40.cfg" --port "$PORT" --cpus "${CPUS:-1}")
 [ -n "${MEMBITS:-}" ] && cfg+=(--membits "$MEMBITS")
 [ -n "${SCSI:-}" ] && cfg+=(--scsi "$SCSI")
+[ -n "${PLATFORM:-}" ] && cfg+=(--platform "$PLATFORM")
 [ -n "${NIC:-}" ] && cfg+=(--nic "$NIC")
 [ -n "${NET_PEER:-}" ] && cfg+=(--nic-udp "$NET_PEER")
 [ -n "${EXTRA_CFG:-}" ] && cfg+=(--extra-cfg "$(cd "$(dirname "$EXTRA_CFG")" && pwd)/$(basename "$EXTRA_CFG")")

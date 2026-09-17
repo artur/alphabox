@@ -17,6 +17,8 @@ change it for the SRM probes:
   --nic CLASS           pci0.4 = dec21143|de600|i82557|i82558|i82559 on the
                         null network backend (nothing received, sends
                         dropped; needs no host privileges)
+  --platform NAME       machine to emulate (default: the ES40 the base
+                        configuration describes); sets platform = "NAME"
   --nic-udp N:P         put that NIC on the UDP backend instead: listening
                         on 127.0.0.1:N, sending to 127.0.0.1:P (net_peer.py)
   --extra-cfg FILE      configuration text added inside the machine block
@@ -47,6 +49,7 @@ def main():
     ap.add_argument("--cpu1-opt", action="append", default=[])
     ap.add_argument("--scsi", choices=["sym53c810", "sym53c825", "sym53c875", "sym53c895"])
     ap.add_argument("--nic", choices=["dec21143", "de600", "i82557", "i82558", "i82559"])
+    ap.add_argument("--platform")
     ap.add_argument("--nic-udp")
     ap.add_argument("--extra-cfg")
     ap.add_argument("--ide-cfg")
@@ -111,6 +114,10 @@ def main():
         else:
             backend = "    type = \"null\";\n"
         extra += "\n  pci0.4 = %s\n  {\n%s  }\n" % (args.nic, backend)
+    if args.platform:
+        t = re.sub(r"(sys0 = tsunami\s*\{)",
+                   lambda mm: mm.group(1) + '\n  platform = "%s";' % args.platform,
+                   t, count=1)
     if args.extra_cfg:
         extra += "\n" + open(args.extra_cfg).read()
     if args.floppy:

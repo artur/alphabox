@@ -480,10 +480,8 @@ void CPCIDevice::WriteMem(int index, u64 address, int dsize, u64 data) {
 }
 
 bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
-  // Per Tsunami HRM section 6.3, the 64 TIGbus interrupt inputs (DRIR
-  // bits 0-63) are board-wired to PCI INTx pins.  ES40 uses the slot-
-  // based pattern SRM programs at first pass:
-  //   DRIR_bit = ((slot + 1) * 4 + bus * 0x10 + (pin - 1)) & 0x3f.
+  // Which chipset interrupt input a slot's pin reaches is board wiring:
+  // the platform descriptor answers it (src/platforms/).
   //
   // Two gates the cfg-space CFIT longword tells us:
   //   - Pin (cfg+0x3D) selects which INTx (1=A, 2=B, 3=C, 4=D); 0 means
@@ -513,8 +511,9 @@ bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
     dev = b->pci_dev();
   }
   const int slot = dev & 0x1f;
-  const int bus_offset = (myPCIBus & 0x3) * 0x10;
-  const int drir_bit = ((slot + 1) * 4 + bus_offset + intx) & 0x3f;
+  const int drir_bit = cSystem->platform().pci_interrupt(myPCIBus, slot, intx);
+  if (drir_bit < 0)
+    return false; // this slot has no interrupt wiring
 
 #ifdef DEBUG_PCI_IRQ
   printf("PCI-IRQ: %s.%d %s line=0x%02x pin=%d slot=%d bus=%d -> DRIR bit %d\n",

@@ -65,12 +65,21 @@ CSystem::CSystem(CConfigurator *cfg) try {
   iNumComponents = 0;
   iNumMemories = 0;
   iNumCPUs = 0;
+  m_platform =
+      find_platform(myCfg->get_text_value("platform", DEFAULT_PLATFORM));
+  if (!m_platform)
+    FAILURE_1(Configuration, "Unknown platform %s",
+              myCfg->get_text_value("platform", DEFAULT_PLATFORM));
+
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
-  // 64 MB (the smallest four-DIMM set the SPD model describes) to 32 GB (four
-  // Typhoon arrays of 8 GB each).
-  if (iNumMemoryBits < 26 || iNumMemoryBits > 35)
-    FAILURE(Configuration,
-            "memory.bits must be between 26 (64 MB) and 35 (32 GB)");
+  // How much memory the board holds, from its descriptor: the ES40 takes
+  // 64 MB (the smallest four-DIMM set the SPD model describes) to 32 GB
+  // (four Typhoon arrays of 8 GB each).
+  if (iNumMemoryBits < m_platform->min_memory_bits ||
+      iNumMemoryBits > m_platform->max_memory_bits)
+    FAILURE_3(Configuration, "memory.bits must be between %d and %d on the %s",
+              m_platform->min_memory_bits, m_platform->max_memory_bits,
+              m_platform->description);
   m_exit_on_pal_halt = myCfg->get_bool_value("exit_on_pal_halt", false);
 
   // initialize SPD data according to configured memory size
@@ -249,6 +258,34 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   asMemories[iNumMemories] = m;
   iNumMemories++;
   return 0;
+}
+
+bool CSystem::trace_unknown_on() {
+  static const bool on = getenv("ALPHABOX_TRACE_UNKNOWN") != nullptr;
+  return on;
+}
+
+void CSystem::trace_unknown(const char *space, u64 address, int dsize,
+                            bool write, u64 data, CSystemComponent *source) {
+  if (!trace_unknown_on())
+    return;
+
+  // A processor's own access says which instruction made it; a device's
+  // says which device.
+  char from[128] = "";
+  if (t_running_cpu)
+    snprintf(from, sizeof(from), " from cpu%d pc=%016" PRIx64,
+             t_running_cpu->get_cpuid(), t_running_cpu->get_pc());
+  else if (source)
+    snprintf(from, sizeof(from), " from %s", source->devid_string);
+
+  if (write)
+    printf("%%SYS-T-UNKNOWN: write %2d bits to %011" PRIx64
+           " (%s) = %016" PRIx64 "%s\n",
+           dsize, address, space, data, from);
+  else
+    printf("%%SYS-T-UNKNOWN: read  %2d bits at %011" PRIx64 " (%s)%s\n", dsize,
+           address, space, from);
 }
 
 volatile sig_atomic_t got_sigint = 0;
@@ -724,18 +761,14 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
     if (a >= U64(0x801fc000000) && a < U64(0x801fe000000)) {
 
       // Unused PCI I/O space
-      //      if (source)
-      //        printf("Write to unknown IO port %" LL"x on PCI 0 from %s \n",a
-      //        & U64(0x1ffffff),source->devid_string);
-      //      else
-      //        printf("Write to unknown IO port %" LL"x on PCI 0   \n",a &
-      //        U64(0x1ffffff));
+      trace_unknown("PCI 0 I/O", a, dsize, true, data, source);
       return;
     }
 
     if (a >= U64(0x803fc000000) && a < U64(0x803fe000000)) {
 
       // Unused PCI I/O space
+      trace_unknown("PCI 1 I/O", a, dsize, true, data, source);
       if (source) {
         printf("Write to unknown IO port %" PRIx64 " on PCI 1 from %s   \n",
                a & U64(0x1ffffff), source->devid_string);
@@ -748,6 +781,7 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
     if (a >= U64(0x80000000000) && a < U64(0x80100000000)) {
 
       // Unused PCI memory space
+      trace_unknown("PCI 0 memory", a, dsize, true, data, source);
       u64 paddr = a & U64(0xffffffff);
       if (paddr > 0xb8fff || paddr < 0xb8000) { // skip legacy video
         if (source) {
@@ -944,6 +978,7 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
         (a >= U64(0x803fe000000) && a < U64(0x803ff000000))) {
 
       // Unused PCI configuration space
+      trace_unknown("PCI configuration", a, dsize, false, 0, source);
       switch (dsize) {
       case 8:
         return X64_BYTE;
@@ -965,6 +1000,7 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
     if (a >= U64(0x801fc000000) && a < U64(0x801fe000000)) {
 
       // Unused PCI I/O space
+      trace_unknown("PCI 0 I/O", a, dsize, false, 0, source);
       // if (source)
       //  printf("Read from unknown IO port %" LL"x on PCI 0 from %s   \n",a &
       //  U64(0x1ffffff),source->devid_string);
@@ -977,6 +1013,7 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
     if (a >= U64(0x803fc000000) && a < U64(0x803fe000000)) {
 
       // Unused PCI I/O space
+      trace_unknown("PCI 1 I/O", a, dsize, false, 0, source);
       if (source) {
         printf("Read from unknown IO port %" PRIx64 " on PCI 1 from %s   \n",
                a & U64(0x1ffffff), source->devid_string);
@@ -989,6 +1026,7 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
     if (a >= U64(0x80000000000) && a < U64(0x80100000000)) {
 
       // Unused PCI memory space
+      trace_unknown("PCI 0 memory", a, dsize, false, 0, source);
       u64 paddr = a & U64(0xffffffff);
       if (paddr > 0xb8fff || paddr < 0xb8000) { // skip legacy video
         if (source) {
@@ -1942,11 +1980,17 @@ int CSystem::LoadROM() {
     f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
               "rb");
     if (!f) {
-      f = fopen(myCfg->get_text_value("rom.srm", "cl67srmrom.exe"), "rb");
+      const char *srm =
+          myCfg->get_text_value("rom.srm", m_platform->firmware_file);
+      if (m_platform->firmware != FW_LFU_BUNDLE)
+        FAILURE_1(NotImplemented,
+                  "%s: console images behind the standard ROM header are not "
+                  "loaded yet (docs/platforms.md)",
+                  m_platform->description);
+      f = fopen(srm, "rb");
       if (!f)
         FAILURE(Runtime, "No original or decompressed SRM ROM image found");
-      printf("%%SYS-I-READROM: Reading original ROM image from %s.\n",
-             myCfg->get_text_value("rom.srm", "cl67srmrom.exe"));
+      printf("%%SYS-I-READROM: Reading original ROM image from %s.\n", srm);
       for (i = 0; i < 0x240; i++) {
         if (feof(f))
           break;
