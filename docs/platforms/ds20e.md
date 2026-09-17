@@ -223,6 +223,23 @@ disabled where the ES40's console reports 8 MB from the same chipset
 registers. Finding the handoff structure the SROM fills, and filling it,
 is the next piece of work -- and it may settle the machine name too.
 
+**What the garbled SROM revision actually is (2026-09-17).** The console
+prints three bytes, `a8 ca 1c`. Dumping guest memory
+(`ALPHABOX_DUMP_MEMORY=1`) finds them at address `0x1ccaa8`: the quadword
+there is `0x001ccaa8`, a pointer to itself, with the same value again at
+`+4`. That is an empty list -- head and tail pointing at themselves -- and
+the console is printing the bytes of the head as if they were the
+revision string.
+
+So this is not a register returning rubbish: it is a list of per-processor
+records that nothing fills. On a real machine the processor's serial ROM
+leaves those records behind, which is the same source as the cache size the
+console reports and very likely the machine code that picks its name. To go
+further, the record's format has to come out of the console's own code --
+a longer chase than the earlier items, and one that buys three cosmetic
+lines. It is left here, with the address and the mechanism recorded, for
+whoever wants it.
+
 **Console settings do persist**: `set`, `init`, `show` keeps the value, so
 this machine's non-volatile storage already works.
 

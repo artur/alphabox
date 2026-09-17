@@ -94,6 +94,10 @@ every address the firmware puts on it and whether anything answered.
 processors and hand work to them -- how a machine brings its processors up
 differs from board to board.
 
+`ALPHABOX_DUMP_MEMORY=1` writes guest memory to `memory_000000000000.dmp`
+when the emulator is asked to stop, which is how to find what a firmware
+left in memory (and what it did not).
+
 A firmware scanning empty configuration space produces these normally; the
 traces matter when a machine's firmware wants hardware that is not emulated
 yet (see [platforms.md](platforms.md)).

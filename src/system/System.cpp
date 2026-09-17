@@ -366,8 +366,16 @@ void CSystem::Run() {
   start_threads();
 
   for (k = 0;; k++) {
-    if (got_sigint)
+    if (got_sigint) {
+      // A snapshot of guest memory for inspection: where the firmware put
+      // something is often the only way to find what it expects
+      // (docs/platforms.md). Off unless asked for.
+      if (getenv("ALPHABOX_DUMP_MEMORY")) {
+        printf("%%SYS-I-MEMDUMP: writing memory_000000000000.dmp.\n");
+        DumpMemory(0);
+      }
       FAILURE(Graceful, "CTRL-C or SIGTERM detected");
+    }
 
     if (m_pal_halt_exit.load(std::memory_order_relaxed))
       FAILURE(Graceful, "HALT invoked, exit_on_pal_halt configured");
