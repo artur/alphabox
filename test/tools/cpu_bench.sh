@@ -11,6 +11,9 @@
 #           second is lost in the noise of when the prompt appeared. At the
 #           default the two runs take roughly five and ten seconds of pure
 #           loop, which is well clear of it.
+#   MIX     "alu" (default) or "mem": integer operates only, or a mix with
+#           a load and a store in it, which is what guest code really looks
+#           like and what the address path costs.
 #   REGS    "pinned" (default) or "spilled": whether the loop uses guest
 #           registers the JIT keeps in host registers. The difference is
 #           what the fixed pin set is worth.
@@ -40,6 +43,7 @@ BODY=${BODY:-32}
 ITER=${ITER:-300000000}
 REPEAT=${REPEAT:-3}
 REGS=${REGS:-pinned}
+MIX=${MIX:-alu}
 PORT=${PORT:-21200}
 WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/runs/cpubench-$LABEL
@@ -72,12 +76,12 @@ print('$t' if not best or float('$t') < float(best) else best)")
 
 small=$D/small.img
 large=$D/large.img
-python3 "$T/bench_image.py" "$small" --iterations "$ITER" --body "$BODY" --regs "$REGS" > /dev/null
-python3 "$T/bench_image.py" "$large" --iterations $((ITER * 2)) --body "$BODY" --regs "$REGS" > /dev/null
+python3 "$T/bench_image.py" "$small" --iterations "$ITER" --body "$BODY" --regs "$REGS" --mix "$MIX" > /dev/null
+python3 "$T/bench_image.py" "$large" --iterations $((ITER * 2)) --body "$BODY" --regs "$REGS" --mix "$MIX" > /dev/null
 n_small=$(python3 "$T/bench_image.py" --count --iterations "$ITER" --body "$BODY")
 n_large=$(python3 "$T/bench_image.py" --count --iterations $((ITER * 2)) --body "$BODY")
 
-echo "== $LABEL: $BODY instructions per iteration, $REGS registers, $ITER and $((ITER * 2)) iterations"
+echo "== $LABEL: $BODY instructions per iteration, $MIX mix, $REGS registers, $ITER and $((ITER * 2)) iterations"
 t_small=$(best_of "$small" small "$PORT")
 t_large=$(best_of "$large" large "$((PORT + 1))")
 

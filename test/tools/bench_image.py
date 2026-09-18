@@ -31,6 +31,7 @@ import sys
 
 # Alpha instruction encodings, from the Architecture Handbook's formats.
 OP_LDA, OP_LDAH = 0x08, 0x09
+OP_LDQ, OP_STQ = 0x29, 0x2D
 OP_INTA, OP_INTL = 0x10, 0x11
 OP_BR, OP_BNE = 0x30, 0x3D
 F_ADDQ, F_SUBQ, F_CMPULT = 0x20, 0x29, 0x1D
@@ -65,7 +66,7 @@ REGISTER_SETS = {
 }
 
 
-def build_code(iterations, body, regs="pinned"):
+def build_code(iterations, body, regs="pinned", mix="alu"):
     """The loop, as a list of instruction words, and the count it executes."""
     if body < 2:
         sys.exit("a loop body is at least a decrement and a branch")
@@ -101,6 +102,33 @@ def build_code(iterations, body, regs="pinned"):
         operate(OP_INTA, h, e, F_ADDQ, b),
         operate(OP_INTL, b, f, F_XOR, d),
     ]
+    if mix == "mem":
+        # Real guest code is full of loads and stores, and each one costs the
+        # translated code an address calculation and a probe of the page cache
+        # before the access itself. This pattern alternates a load, a store
+        # and an operate on what was loaded, all within one page, so the probe
+        # always hits and what is measured is the fast path rather than the
+        # helper behind it.
+        #
+        # The scratch page is our own code's, a kilobyte past the loop: a
+        # branch-to-self puts the address of the next instruction in a
+        # register, which is the only way this code can learn where it was
+        # loaded. It is written to but never executed.
+        scratch = h
+        code.append(branch(OP_BR, scratch, 0))       # scratch = &next
+        code.append(memfmt(OP_LDA, scratch, scratch, 1024))
+        prologue += 2
+        pattern = [
+            memfmt(OP_LDQ, a, scratch, 0),
+            operate(OP_INTA, a, b, F_ADDQ, a),
+            memfmt(OP_STQ, a, scratch, 8),
+            memfmt(OP_LDQ, c, scratch, 16),
+            operate(OP_INTL, c, d, F_XOR, c),
+            memfmt(OP_STQ, c, scratch, 24),
+            memfmt(OP_LDQ, e, scratch, 32),
+            operate(OP_INTA, e, a, F_ADDQ, e),
+        ]
+
     loop = [pattern[i % len(pattern)] for i in range(body - 2)]
     loop.append(operate_lit(OP_INTA, 1, 1, F_SUBQ, 1))
     # The branch is the last instruction of the loop, so it jumps back over
@@ -136,6 +164,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("image", nargs="?", help="image to write (a floppy by default)")
     ap.add_argument("--iterations", type=int, default=20_000_000)
+    ap.add_argument("--mix", choices=("alu", "mem"), default="alu",
+                    help="integer operates only, or a load/store/operate "
+                         "pattern in one page (default alu)")
     ap.add_argument("--regs", choices=sorted(REGISTER_SETS), default="pinned",
                     help="use guest registers the JIT pins to host registers, "
                          "or ones it does not (default pinned)")
@@ -148,7 +179,7 @@ def main():
                     help="print the instruction count and write nothing")
     args = ap.parse_args()
 
-    code, count = build_code(args.iterations, args.body, args.regs)
+    code, count = build_code(args.iterations, args.body, args.regs, args.mix)
     if args.count:
         print(count)
         return 0
@@ -157,8 +188,8 @@ def main():
 
     size = 1474560 if abs(args.size_mb - 1.47456) < 0.001 else int(args.size_mb * 1e6)
     blocks = write_image(args.image, code, size)
-    print("%s: %d instructions in %d block(s), %d per iteration, %s registers"
-          % (args.image, count, blocks, args.body, args.regs))
+    print("%s: %d instructions in %d block(s), %d per iteration, %s registers,"
+          " %s mix" % (args.image, count, blocks, args.body, args.regs, args.mix))
     return 0
 
 
