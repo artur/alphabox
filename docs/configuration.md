@@ -195,7 +195,7 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
 
 - **Disk images**: raw image files (`file`), host devices (`device`) and RAM
   disks (`ramdisk`), on SCSI (`sym53c810`, `sym53c825`, `sym53c875`,
-  `sym53c895`), IDE (`ali_ide`) or
+  `sym53c895`, and the QLogic `isp1020` and `isp1040`), IDE (`ali_ide`) or
   the floppy controller.
 - **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
   (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD

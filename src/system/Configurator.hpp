@@ -61,6 +61,7 @@ typedef enum {
   c_i8255x,
   c_pci_bridge,
   c_sym53c8xx,
+  c_isp1040,
   c_mpu401,
   c_es1370,
 

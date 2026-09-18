@@ -20,7 +20,9 @@
 
 /**
  * \file
- * 93C46/93C66 Microwire serial EEPROM, driven pin by pin.
+ * 93C46/93C66 Microwire serial EEPROM, driven pin by pin: the part a
+ * board hangs off a few general-purpose pins to remember its settings.
+ * Used by the Intel 8255x NICs and the QLogic ISP adapters.
  **/
 #if !defined(INCLUDED_EEPROM93CX6_H_)
 #define INCLUDED_EEPROM93CX6_H_

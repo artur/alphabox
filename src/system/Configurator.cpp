@@ -58,6 +58,7 @@
 #endif
 #include "ES1370.hpp"
 #include "I8255x.hpp"
+#include "Isp1040.hpp"
 #include "MPU401.hpp"
 #include "PCIBridge.hpp"
 #include "Sym53C8xx.hpp"
@@ -654,6 +655,8 @@ classinfo classes[] = {
     {"i82557", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82558", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82559", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"isp1020", c_isp1040, IS_PCI | HAS_DISK, kv_none},
+    {"isp1040", c_isp1040, IS_PCI | HAS_DISK, kv_none},
     {"sym53c810", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c825", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c875", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
@@ -932,6 +935,13 @@ void CConfigurator::initialize() {
   case c_pci_bridge:
     myDevice = new CPCIBridge(this, theSystem, pcibus, pcidev,
                               *CPCIBridge::find_chip(myValue));
+    break;
+
+  case c_isp1040:
+    // As for the Symbios: myDevice points at the disk-controller part,
+    // which is what disks are registered with. The class names the part.
+    myDevice = (CDiskController *)new CIsp1040(this, theSystem, pcibus, pcidev,
+                                               *CIsp1040::find_chip(myValue));
     break;
 
   case c_sym53c8xx:
