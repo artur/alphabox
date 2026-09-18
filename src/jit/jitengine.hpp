@@ -210,6 +210,9 @@ public:
   // reads, so compiled code can touch them via [rsi + offset]. Filled once by
   // set_offsets().
   struct JitOffsets {
+    uint32_t dpc_tag,  // the packed {page, asn, cm} the fast path compares
+        dpc_bias,      // host address of the page, less its virtual address
+        dpc_key;       // the live {asn, cm} half of a tag (CAlphaCPU member)
     uint32_t dpc_valid, dpc_virt_page, dpc_phys_base, dpc_host_base, dpc_cm,
         dpc_asn; // offsets of READ slot [0][0]
     uint32_t dpc_stride,

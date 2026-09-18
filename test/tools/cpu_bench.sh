@@ -55,10 +55,20 @@ rm -rf "$D"; mkdir -p "$D"
 run_once() {
   local image=$1 port=$2 start end
   start=$(python3 -c 'import time; print(time.time())')
+  # The loop runs for as long as it runs: srm_probe's per-command timeout is
+  # a minute by default, which a memory-heavy image passes straight through.
   PORT=$port ALPHABOX_WORK=$WORK FLOPPY="$image" EXIT_ON_HALT=1 \
-    CMDS="boot dva0" AFTER=wait-exit \
+    CMDS="boot dva0" AFTER=wait-exit CMD_TIMEOUT=600 \
     bash "$T/srm_probe.sh" "$BIN" "$LABEL-$3" 300 > "$D/$3.log" 2>&1
   end=$(python3 -c 'import time; print(time.time())')
+  # A run that did not reach the halt measured nothing, and a number derived
+  # from it is worse than no number: a mistyped path or a port already in use
+  # ends the run in a second and turns into six-figure MIPS.
+  if ! grep -aq "halted CPU 0\|HALT instruction executed\|HALT invoked" \
+       "$D/$3.log"; then
+    echo "  $3: the image never halted -- see $D/$3.log" >&2
+    exit 3
+  fi
   python3 -c "print('%.3f' % ($end - $start))"
 }
 
@@ -91,8 +101,9 @@ n1, n2 = int(sys.argv[1]), int(sys.argv[2])
 t1, t2 = float(sys.argv[3]), float(sys.argv[4])
 body = int(sys.argv[5])
 dt = t2 - t1
-if dt <= 0:
-    sys.exit("  the two runs took the same time; raise ITER")
+if dt <= 0.2:
+    sys.exit("  the two runs took the same time (%.3fs apart): raise ITER, or\n"
+             "  something made both runs stop early -- check the logs" % dt)
 mips = (n2 - n1) / dt / 1e6
 print("  %.0f MIPS  (%d instructions in %.3fs, body %d)"
       % (mips, n2 - n1, dt, body))

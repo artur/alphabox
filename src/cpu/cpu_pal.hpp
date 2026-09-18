@@ -197,6 +197,7 @@
                                                                                \
     case 0x09: /* CM */                                                        \
       state.cm = (int)(state.r[REG_2] >> 3) & 3;                               \
+      dpc_context_changed();                                                   \
       irq_trace_ipr("iMTPR", function, state.r[REG_2]);                        \
       if (int_deliverable())                                                   \
         state.check_int = true;                                                \
@@ -204,6 +205,7 @@
                                                                                \
     case 0x0b: /* IER_CM */                                                    \
       state.cm = (int)(state.r[REG_2] >> 3) & 3;                               \
+      dpc_context_changed();                                                   \
       if (int_deliverable())                                                   \
         state.check_int = true;                                                \
       [[fallthrough]];                                                         \
@@ -288,6 +290,7 @@
                                                                                \
     case 0x25: /* DTB_ASN0 */                                                  \
       state.asn0 = (int)(state.r[REG_2] >> 56);                                \
+      dpc_context_changed();                                                   \
       flush_data_page_cache();                                                 \
       break;                                                                   \
                                                                                \

@@ -472,48 +472,42 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 
 #ifndef JIT_VERIFY
     // Inline data-page-cache probe (mirrors jit_read/jit_write's cache path):
-    // x2 = va. On a hit: x10 = host page base, x11 = page offset. Misses (slot
-    // tag, {cm,asn0}, MMIO/none) branch to slow. Clobbers x10-x12.
-    const uint32_t dpc_cm_rel = m_off.dpc_cm - m_off.dpc_virt_page;
-    const uint32_t dpc_host_rel = m_off.dpc_host_base - m_off.dpc_virt_page;
-    // {cm, asn0} key: one unscaled load off x20 (production x20 = state.r[0])
-    // when state.cm sits within its +-256 window, else via [cpu + off].
-    const int32_t key_rel = (int32_t)m_off.state_cm - (int32_t)m_off.regs;
-    const bool key_via_regs = key_rel >= -256 && key_rel <= 255;
+    // x2 = va. On a hit: x10 = the page's bias, so the access itself is
+    // ldr/str [x10, x2] -- no masking, no second base. A miss of any kind
+    // branches to slow. Clobbers x9-x12.
+    //
+    // The slot holds what a hit needs in two adjacent words: a tag that is
+    // the page, the address space and the mode together, and the bias. So
+    // the question "is this page here, mine, and safe to touch inline?" is
+    // one comparison, and a page the fast path must not touch (MMIO) simply
+    // carries a tag no key can equal.
+    const uint32_t dpc_bias_rel = m_off.dpc_bias - m_off.dpc_tag;
     auto dpc_probe = [&](bool write_row, const Label &slow) {
       const uint32_t row =
-          m_off.dpc_virt_page + (write_row ? m_off.dpc_write_row : 0);
+          m_off.dpc_tag + (write_row ? m_off.dpc_write_row : 0);
       a.lsr(x10, x2, imm(13));
       a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
-      int32_t base = 0; // row offset still to add in the field loads
-      if (m_off.dpc_stride == 40 && (row % 8) == 0 &&
-          row + dpc_host_rel <= 32760 && row + dpc_cm_rel <= 32760) {
-        // x10 = cpu + idx * 40 via two shifted adds (was mov/mul/mov/add/add);
-        // the row base folds into each field load's displacement.
-        a.add(x11, x10, x10, a64::lsl(2)); // idx * 5
-        a.add(x10, kCpu, x11, a64::lsl(3));
-        base = (int32_t)row;
+      if (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) {
+        // A 64-byte slot makes the index a shift, and both fields sit within
+        // one load's displacement of the slot.
+        a.add(x10, kCpu, x10, a64::lsl(6));
       } else {
         a.mov(x11, imm(m_off.dpc_stride));
         a.mul(x10, x10, x11);
         a.mov(x11, imm((uint64_t)row));
         a.add(x10, x10, x11);
-        a.add(x10, kCpu, x10); // x10 = &data_page_cache[row][dpc_index(va)]
+        a.add(x10, kCpu, x10);
       }
-      a.and_(x11, x2, imm(~(uint64_t)0x1FFF));
-      a.ldr(x12, a64::ptr(x10, base)); // slot virt_page
+      const int32_t base =
+          (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) ? (int32_t)row
+                                                                  : 0;
+      a.ldr(x12, a64::ptr(x10, base));                          // slot tag
+      a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_bias_rel));  // slot bias
+      a.and_(x11, x2, imm(~(uint64_t)0x1FFF));                  // this page
+      a.ldr(x9, fld(m_off.dpc_key, 3)); // the live address space and mode
+      a.orr(x11, x11, x9);              // ... which together are the key
       a.cmp(x12, x11);
       a.b_ne(slow);
-      if (key_via_regs) // {cm, asn0} (adjacent in state)
-        a.ldur(x11, a64::ptr(kRegs, key_rel));
-      else
-        a.ldr(x11, fld(m_off.state_cm, 3));
-      a.ldr(x12, a64::ptr(x10, base + (int32_t)dpc_cm_rel)); // slot {cm, asn}
-      a.cmp(x12, x11);
-      a.b_ne(slow);
-      a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_host_rel)); // 0 = MMIO
-      a.cbz(x10, slow);
-      a.and_(x11, x2, imm(0x1FFF));
     };
 #endif
 
@@ -566,7 +560,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b_ne(slow);
       }
       dpc_probe(false, slow);
-      load_from(a64::ptr(x10, x11));
+      load_from(a64::ptr(x10, x2));
       if (!cold_record(slow, ldone)) {
         a.b(ldone);
         a.bind(slow);
@@ -616,7 +610,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.mov(x12, imm(0));
       else
         mov_from_reg(x12, ra);
-      const a64::Mem m = a64::ptr(x10, x11);
+      const a64::Mem m = a64::ptr(x10, x2);
       if (size_bits == 64)
         a.str(x12, m);
       else if (size_bits == 32)
@@ -690,11 +684,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.b_ne(slow);
       dpc_probe(!isload, slow);
       if (isload) {
-        a.ldr(x0, a64::ptr(x10, x11));
+        a.ldr(x0, a64::ptr(x10, x2));
         a.str(x0, fld(m_off.f_base + (uint32_t)fa * 8, 3));
       } else {
         a.ldr(x12, fld(m_off.f_base + (uint32_t)fa * 8, 3));
-        a.str(x12, a64::ptr(x10, x11));
+        a.str(x12, a64::ptr(x10, x2));
       }
       if (!cold_record(slow, fdone)) {
         a.b(fdone);
@@ -778,9 +772,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b_hs(ld_slow);
         a.ldr(x10, fld(m_off.dram_ptr, 3));
         if (size_bits == 32)
-          a.ldrsw(x0, a64::ptr(x10, x11));
+          a.ldrsw(x0, a64::ptr(x10, x2));
         else
-          a.ldr(x0, a64::ptr(x10, x11));
+          a.ldr(x0, a64::ptr(x10, x2));
         mov_to_reg(ra, x0);
         if (!cold_record(ld_slow, ld_done)) {
           a.b(ld_done);
@@ -913,9 +907,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.ldr(x10, fld(m_off.dram_ptr, 3));
         const a64::Gp v = src_reg(ra, x12, false);
         if (size_bits == 32)
-          a.str(a64::w(v.id()), a64::ptr(x10, x11));
+          a.str(a64::w(v.id()), a64::ptr(x10, x2));
         else
-          a.str(v, a64::ptr(x10, x11));
+          a.str(v, a64::ptr(x10, x2));
         if (!cold_record(st_slow, st_done)) {
           a.b(st_done);
           a.bind(st_slow);

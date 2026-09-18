@@ -204,6 +204,7 @@ void CAlphaCPU::vmspal_call_swpctx() {
 
   p6 &= 0xff;
   state.asn0 = (int)p6;
+  dpc_context_changed();
   state.asn1 = (int)p6;
   state.asn = (int)p6;
   flush_data_page_cache();
@@ -665,6 +666,7 @@ int CAlphaCPU::vmspal_call_rei() {
     p20 &= 0xffff;
     p22 &= ~U64(0xffff);
     state.cm = (int)(p4 >> 3) & 3;
+    dpc_context_changed();
     p22 |= p20;
     p23 &= ~U64(0x3);
     p20 = r30 + 0x40;
@@ -691,6 +693,7 @@ int CAlphaCPU::vmspal_call_rei() {
     hw_ldq(p21 + 0x10, p7);
     p7 += p4;
     state.cm = (int)(p4 >> 3) & 3;
+    dpc_context_changed();
     p5 = (p20 >> 56) & 0xff;
     p20 &= 0xff;
     p22 &= ~U64(0xffff);
@@ -816,6 +819,7 @@ int CAlphaCPU::vmspal_int_initiate_exception() {
 
     // change mode to kernel
     state.cm = 0;
+    dpc_context_changed();
 
     // switch to kernel stack
     p20 += p4;
@@ -871,6 +875,7 @@ int CAlphaCPU::vmspal_int_initiate_interrupt() {
 
     // change mode to kernel
     state.cm = 0;
+    dpc_context_changed();
 
     // switch to kernel stack
     p20 += p4;

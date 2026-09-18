@@ -401,15 +401,67 @@ private:
   static constexpr int kDpcEntries = 1 << kDpcBits;
   static constexpr u64 kDpcMask = (u64)kDpcEntries - 1;
   static inline u64 dpc_index(u64 va) { return (va >> 13) & kDpcMask; }
+  /// One translated page.
+  ///
+  /// The first two fields are the only ones compiled code reads, and it
+  /// reads them together: they are adjacent and the slot is 64 bytes, so
+  /// the index is a shift and the pair is one load. Everything a hit needs
+  /// to know is in them -- which page this is, who it belongs to, whether
+  /// it can be touched inline, and where it lives on the host.
   struct SDataPageCache {
+    /// virt_page | (asn << 2) | cm, and bit 12 for a page compiled code
+    /// must not touch inline (MMIO); all ones when the slot is empty. The
+    /// low thirteen bits of a virtual page are zero, which is what leaves
+    /// room for the address space and the mode.
+    u64 tag;
+    /// Where the page is on the host, less its virtual address, so that an
+    /// access is bias + va: one register-offset load, no masking.
+    u64 bias;
+
     u64 virt_page; // va & ~0x1FFF
     u64 phys_base; // pa & ~0x1FFF
-    u64 host_base; // dram_ptr + phys_base for DRAM pages, 0 for MMIO (JIT
-                   // inline fast path)
+    u64 host_base; // dram_ptr + phys_base for DRAM pages, 0 for MMIO
     int cm;        // current mode (CM) at fill time
     int asn;       // data ASN (asn0) at fill time
     bool valid;
+    char pad[15]; // a 64-byte slot: the JIT's index is a shift
+
+    /// What compiled code compares against: the page, the address space and
+    /// the mode in one word. `mmio` sets a bit no key ever has, so such a
+    /// page fails the comparison and takes the slow path without the fast
+    /// path having to ask a second question.
+    static inline u64 make_tag(u64 vp, int cm, int asn, bool mmio) {
+      return vp | ((u64)(asn & 0xff) << 2) | (u64)(cm & 3) |
+             (mmio ? U64(0x1000) : 0);
+    }
+
+    inline void fill(u64 vp, u64 phys, u64 host, int cm_, int asn_) {
+      virt_page = vp;
+      phys_base = phys;
+      host_base = host;
+      cm = cm_;
+      asn = asn_;
+      valid = true;
+      bias = host - vp;
+      tag = make_tag(vp, cm_, asn_, host == 0);
+    }
+
+    inline void invalidate() {
+      valid = false;
+      host_base = 0;
+      tag = ~U64(0); // matches no key
+    }
   } data_page_cache[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
+  static_assert(sizeof(SDataPageCache) == 64,
+                "the JIT indexes the page cache with a shift");
+
+  /// (asn0 << 2) | cm: the half of a page-cache tag that is not the page.
+  /// Kept beside the state it is made of so compiled code can load it in one
+  /// instruction; dpc_context_changed() is what keeps it true.
+  u64 m_dpc_key = 0;
+  inline void dpc_context_changed() {
+    m_dpc_key = ((u64)(state.asn0 & 0xff) << 2) | (u64)(state.cm & 3);
+  }
 
   // Drop only the cached translation(s) a single data-TB entry could have
   // produced: its page's slot in both rows for an 8K entry (match_mask bit 13
@@ -420,20 +472,15 @@ private:
       return;
     }
     const u64 idx = dpc_index(virt);
-    for (int rw = 0; rw < 2; rw++) {
-      data_page_cache[rw][idx].valid = false;
-      data_page_cache[rw][idx].host_base = 0;
-    }
+    for (int rw = 0; rw < 2; rw++)
+      data_page_cache[rw][idx].invalidate();
   }
   u64 m_stat_dpc_flushes = 0; // flush_data_page_cache() calls (JIT_STATS)
   inline void flush_data_page_cache() {
     ++m_stat_dpc_flushes;
     for (int i = 0; i < kDpcEntries; i++) {
-      data_page_cache[0][i].valid = false;
-      data_page_cache[1][i].valid = false;
-      data_page_cache[0][i].host_base =
-          0; // valid==false => host_base==0, so the JIT can drop its valid load
-      data_page_cache[1][i].host_base = 0;
+      data_page_cache[0][i].invalidate();
+      data_page_cache[1][i].invalidate();
     }
   }
 

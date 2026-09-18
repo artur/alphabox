@@ -269,6 +269,9 @@ void CAlphaCPU::init() {
         (uint32_t)((char *)&data_page_cache[0][0].valid - (char *)this);
     o.dpc_virt_page =
         (uint32_t)((char *)&data_page_cache[0][0].virt_page - (char *)this);
+    o.dpc_tag = (uint32_t)((char *)&data_page_cache[0][0].tag - (char *)this);
+    o.dpc_bias = (uint32_t)((char *)&data_page_cache[0][0].bias - (char *)this);
+    o.dpc_key = (uint32_t)((char *)&m_dpc_key - (char *)this);
     o.dpc_phys_base =
         (uint32_t)((char *)&data_page_cache[0][0].phys_base - (char *)this);
     o.dpc_host_base =
@@ -1297,6 +1300,7 @@ void CAlphaCPU::jit_run(int budget) {
           state.i_ctl_vptb = s[19];
           state.i_ctl_other = s[20];
           state.cm = (int)s[21];
+          dpc_context_changed();
           state.sir = (int)s[22];
           state.aster = (int)s[23];
           state.astrr = (int)s[24];
@@ -1323,6 +1327,7 @@ void CAlphaCPU::jit_run(int budget) {
         state.i_ctl_vptb = ictl_vptb_pre;
         state.i_ctl_other = ictl_other_pre;
         state.cm = cm_pre;
+        dpc_context_changed();
         state.sir = sir_pre; // ...and CM/SIRR
         state.aster = aster_pre;
         state.astrr = astrr_pre; // ...and the PCTX read-backs (a
@@ -1426,6 +1431,7 @@ void CAlphaCPU::jit_run(int budget) {
             state.i_ctl_vptb = ictl_vptb_pre;
             state.i_ctl_other = ictl_other_pre;
             state.cm = cm_pre;
+            dpc_context_changed();
             state.sir = sir_pre;
             state.aster = aster_pre;
             state.astrr = astrr_pre;
@@ -1731,14 +1737,11 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.virt_page = vp;
-    dpc.phys_base = phys & ~U64(0x1FFF);
-    dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
-                        ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                        : 0;
-    dpc.cm = cm;
-    dpc.asn = cpu->state.asn0;
-    dpc.valid = true;
+    dpc.fill(vp, phys & ~U64(0x1FFF),
+             ((phys | U64(0x1FFF)) < cpu->dram_size)
+                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
+                 : 0,
+             cm, cpu->state.asn0);
   }
 
   // DRAM only: bail on MMIO so the interpreter does device reads (side effects
@@ -2088,14 +2091,11 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
         return 1; // fault-on-read (FOR)
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.virt_page = vp;
-    dpc.phys_base = phys & ~U64(0x1FFF);
-    dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
-                        ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                        : 0;
-    dpc.cm = cpu->state.cm;
-    dpc.asn = cpu->state.asn0;
-    dpc.valid = true;
+    dpc.fill(vp, phys & ~U64(0x1FFF),
+             ((phys | U64(0x1FFF)) < cpu->dram_size)
+                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
+                 : 0,
+             cpu->state.cm, cpu->state.asn0);
   }
 
   if (phys >=
@@ -2326,14 +2326,11 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.virt_page = vp;
-    dpc.phys_base = phys & ~U64(0x1FFF);
-    dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
-                        ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                        : 0;
-    dpc.cm = cm;
-    dpc.asn = cpu->state.asn0;
-    dpc.valid = true;
+    dpc.fill(vp, phys & ~U64(0x1FFF),
+             ((phys | U64(0x1FFF)) < cpu->dram_size)
+                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
+                 : 0,
+             cm, cpu->state.asn0);
   }
 
   if (phys < cpu->dram_size)
@@ -2431,14 +2428,11 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
         return U64(0x100); // fault-on-write (FOW)
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.virt_page = vp;
-    dpc.phys_base = phys & ~U64(0x1FFF);
-    dpc.host_base = ((phys | U64(0x1FFF)) < cpu->dram_size)
-                        ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                        : 0;
-    dpc.cm = cpu->state.cm;
-    dpc.asn = cpu->state.asn0;
-    dpc.valid = true;
+    dpc.fill(vp, phys & ~U64(0x1FFF),
+             ((phys | U64(0x1FFF)) < cpu->dram_size)
+                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
+                 : 0,
+             cpu->state.cm, cpu->state.asn0);
   }
 
   // Shared LL/SC path: consumes the reservation, applies the ABA sequence
@@ -2604,6 +2598,7 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
     break;
   case 0x25: // DTB_ASN0
     cpu->state.asn0 = (int)(value >> 56);
+    cpu->dpc_context_changed();
     cpu->flush_data_page_cache();
     break;
   case 0xa5: // DTB_ASN1
@@ -2612,12 +2607,14 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
     break;
   case 0x09: // CM (current mode)
     cpu->state.cm = (int)(value >> 3) & 3;
+    cpu->dpc_context_changed();
     if (cpu->int_deliverable())
       cpu->state.check_int = true;
     cpu->irq_trace_ipr("jMTPR", function, value);
     break;
   case 0x0b: // IER_CM: write CM, then fall into IER
     cpu->state.cm = (int)(value >> 3) & 3;
+    cpu->dpc_context_changed();
     if (cpu->int_deliverable())
       cpu->state.check_int = true;
     [[fallthrough]];

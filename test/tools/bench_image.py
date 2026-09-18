@@ -36,6 +36,7 @@ OP_INTA, OP_INTL = 0x10, 0x11
 OP_BR, OP_BNE = 0x30, 0x3D
 F_ADDQ, F_SUBQ, F_CMPULT = 0x20, 0x29, 0x1D
 F_AND, F_BIS, F_XOR = 0x00, 0x20, 0x40
+F_BIC = 0x08
 
 
 def operate(op, ra, rb, func, rc):
@@ -110,14 +111,28 @@ def build_code(iterations, body, regs="pinned", mix="alu"):
         # always hits and what is measured is the fast path rather than the
         # helper behind it.
         #
-        # The scratch page is our own code's, a kilobyte past the loop: a
-        # branch-to-self puts the address of the next instruction in a
-        # register, which is the only way this code can learn where it was
-        # loaded. It is written to but never executed.
+        # The scratch area is two pages past the code, and that distance is
+        # the point: a store into the page the loop is executing from is a
+        # store into translated code, which sends the emulator down its
+        # self-modifying-code path -- so a scratch area a kilobyte away
+        # measures that path rather than the memory path, one slow access
+        # per iteration. A branch-to-self is the only way this code can
+        # learn where it was loaded.
+        # The scratch base is the one register the pattern below must not
+        # write: an arithmetic instruction landing on it sends every later
+        # access to an address the loop never meant, and the run wanders off
+        # instead of halting.
         scratch = h
         code.append(branch(OP_BR, scratch, 0))       # scratch = &next
-        code.append(memfmt(OP_LDA, scratch, scratch, 1024))
-        prologue += 2
+        code.append(memfmt(OP_LDAH, scratch, scratch, 1))  # +64 KB
+        code.append(memfmt(OP_LDA, scratch, scratch, 0))
+        # ... and eight-byte aligned. A branch-to-self gives a four-byte
+        # aligned address, and an unaligned quadword access does not merely
+        # cost more: it leaves the compiled block at its first instruction
+        # every time, so the whole loop runs interpreted and the benchmark
+        # measures the interpreter (135 MIPS) instead of the memory path.
+        code.append(operate_lit(OP_INTL, scratch, 7, F_BIC, scratch))
+        prologue += 4
         pattern = [
             memfmt(OP_LDQ, a, scratch, 0),
             operate(OP_INTA, a, b, F_ADDQ, a),
@@ -126,7 +141,7 @@ def build_code(iterations, body, regs="pinned", mix="alu"):
             operate(OP_INTL, c, d, F_XOR, c),
             memfmt(OP_STQ, c, scratch, 24),
             memfmt(OP_LDQ, e, scratch, 32),
-            operate(OP_INTA, e, a, F_ADDQ, e),
+            operate(OP_INTA, e, f, F_ADDQ, e),
         ]
 
     loop = [pattern[i % len(pattern)] for i in range(body - 2)]
