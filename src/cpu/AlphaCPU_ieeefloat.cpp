@@ -123,8 +123,15 @@
 #define FMZERO U64(0x8000000000000000) /* minus zero (fp) */
 #define FPINF U64(0x7FF0000000000000)  /* plus infinity (fp) */
 #define FMINF U64(0xFFF0000000000000)  /* minus infinity (fp) */
-#define FPMAX U64(0x7FFFFFFFFFFFFFFF)  /* plus MAX (fp) */
-#define FMMAX U64(0xFFFFFFFFFFFFFFFF)  /* minus MAX (fp) */
+/* The largest finite number of each format, as it sits in a register: an
+   exponent one below all-ones and a fraction of all ones. The values here
+   used to be 0x7FFF.../0xFFFF..., which have an all-ones exponent AND a
+   non-zero fraction -- that is a NaN, not a maximum, and an overflow whose
+   rounding was toward zero returned it instead of the number the
+   architecture asks for (ARM 4.7.7.5). S results live in a register in
+   T format, so the S maximum is the T encoding of the largest float. */
+#define FPMAX_T U64(0x7FEFFFFFFFFFFFFF) /* plus MAX (T) */
+#define FPMAX_S U64(0x47EFFFFFE0000000) /* plus MAX (S, in a register) */
 #define IPMAX U64(0x7FFFFFFFFFFFFFFF)  /* plus MAX (int) */
 #define IMMAX U64(0x8000000000000000)  /* minus MAX (int) */
 #define FPSLOW U64(0x000000001FFFFFFF) /* S lower bits <28:0> */
@@ -869,7 +876,9 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins); /* set inexact */
     if (rndadd)                                      /* did we round? */
       return (r->sign ? FMINF : FPINF);              /* return infinity */
-    return (r->sign ? FMMAX : FPMAX);
+    /* Rounding was toward zero, so the answer is the largest finite number
+       of this format with the result's sign (ARM 4.7.7.5). */
+    return (((u64)r->sign) << FPR_V_SIGN) | (dp == DT_S ? FPMAX_S : FPMAX_T);
   } /* no, return max */
 
   if (r->exp <= expmin[dp]) { /* underflow? */
@@ -877,9 +886,14 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
        flush-to-zero result. The two bits are independent per HRM 4.7.7.1. */
     ieee_trap(TRAP_UNF, ins & I_FTRP_U, FPCR_UNFD, ins);
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins); /* set inexact */
-    /* Preserve sign of zero on underflow per IEEE-754 / HRM 4.7.7.3. */
-    return ((u64)r->sign) << FPR_V_SIGN;
-  } /* underflow to signed zero */
+    /* A true zero, not a signed one: ARM 4.7.7.7 says "a true zero (64 bits
+       of zero) is always stored in the result register ... even if the
+       result after rounding would have been -0", and 21264 HRM A.8 agrees
+       ("a true zero (+0) is written to the destination register"). The
+       comment that used to be here cited 4.7.7.3, which is the trap-shadow
+       section and says nothing about the sign. */
+    return FPZERO;
+  } /* underflow to a true zero */
 
   res = (((u64)r->sign) << FPR_V_SIGN) | /* form result */
         (((u64)r->exp) << FPR_V_EXP) | ((r->frac >> FPR_GUARD) & FPR_FRAC);
