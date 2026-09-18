@@ -1321,121 +1321,7 @@ uint32_t CS3Trio64::screen_update(bitmap_rgb32 &bitmap,
 
 #endif
 
-  // draw hardware graphics cursor
-  // TODO: support 16 bit and greater video modes
-  // TODO: should be a derived function from svga_device
-  if (s3.cursor_mode & 0x01) // if cursor is enabled
-  {
-    uint16_t cx = s3.cursor_x & 0x07ff;
-    uint16_t cy = s3.cursor_y & 0x07ff;
-
-    if (cur_mode == SCREEN_OFF || cur_mode == TEXT_MODE ||
-        cur_mode == MONO_MODE || cur_mode == CGA_MODE || cur_mode == EGA_MODE)
-      return 0; // cursor only works in VGA or SVGA modes
-
-    uint32_t src =
-        s3.cursor_start_addr * 1024; // start address is in units of 1024 bytes
-
-    uint32_t bg_col;
-    uint32_t fg_col;
-    int r, g, b;
-    uint32_t datax;
-    switch (cur_mode) {
-    case RGB15_MODE:
-    case RGB16_MODE:
-      datax = s3.cursor_bg[0] | s3.cursor_bg[1] << 8;
-      r = (datax & 0xf800) >> 11;
-      g = (datax & 0x07e0) >> 5;
-      b = (datax & 0x001f) >> 0;
-      r = (r << 3) | (r & 0x7);
-      g = (g << 2) | (g & 0x3);
-      b = (b << 3) | (b & 0x7);
-      bg_col = (0xff << 24) | (r << 16) | (g << 8) | (b << 0);
-
-      datax = s3.cursor_fg[0] | s3.cursor_fg[1] << 8;
-      r = (datax & 0xf800) >> 11;
-      g = (datax & 0x07e0) >> 5;
-      b = (datax & 0x001f) >> 0;
-      r = (r << 3) | (r & 0x7);
-      g = (g << 2) | (g & 0x3);
-      b = (b << 3) | (b & 0x7);
-      fg_col = (0xff << 24) | (r << 16) | (g << 8) | (b << 0);
-      break;
-    case RGB24_MODE:
-    case RGB32_MODE:
-      datax = s3.cursor_bg[0] | s3.cursor_bg[1] << 8 | s3.cursor_bg[2] << 16;
-      r = (datax & 0xff0000) >> 16;
-      g = (datax & 0x00ff00) >> 8;
-      b = (datax & 0x0000ff) >> 0;
-      bg_col = (0xff << 24) | (r << 16) | (g << 8) | (b << 0);
-
-      datax = s3.cursor_fg[0] | s3.cursor_fg[1] << 8 | s3.cursor_fg[2] << 16;
-      r = (datax & 0xff0000) >> 16;
-      g = (datax & 0x00ff00) >> 8;
-      b = (datax & 0x0000ff) >> 0;
-      fg_col = (0xff << 24) | (r << 16) | (g << 8) | (b << 0);
-      break;
-    case RGB8_MODE:
-    default:
-      bg_col = pen(s3.cursor_bg[0]);
-      fg_col = pen(s3.cursor_fg[0]);
-      break;
-    }
-
-    // popmessage("%08x
-    // %08x",(s3.cursor_bg[0])|(s3.cursor_bg[1]<<8)|(s3.cursor_bg[2]<<16)|(s3.cursor_bg[3]<<24)
-    //                     ,(s3.cursor_fg[0])|(s3.cursor_fg[1]<<8)|(s3.cursor_fg[2]<<16)|(s3.cursor_fg[3]<<24));
-    //      for(x=0;x<64;x++)
-    //          printf("%08x: %02x %02x %02x
-    //          %02x\n",src+x*4,vga.memory[src+x*4],vga.memory[src+x*4+1],vga.memory[src+x*4+2],vga.memory[src+x*4+3]);
-    for (int y = 0; y < 64; y++) {
-      if (cy + y < cliprect.max_y && cx < cliprect.max_x) {
-        uint32_t *const dst = &bitmap.pix(cy + y, cx);
-        for (int x = 0; x < 64; x++) {
-          uint16_t bita =
-              (vga.memory[(src + 1) % vga.svga_intf.vram_size] |
-               ((vga.memory[(src + 0) % vga.svga_intf.vram_size]) << 8)) >>
-              (15 - (x % 16));
-          uint16_t bitb =
-              (vga.memory[(src + 3) % vga.svga_intf.vram_size] |
-               ((vga.memory[(src + 2) % vga.svga_intf.vram_size]) << 8)) >>
-              (15 - (x % 16));
-          uint8_t val = ((bita & 0x01) << 1) | (bitb & 0x01);
-
-          if (s3.extended_dac_ctrl & 0x10) { // X11 mode
-            switch (val) {
-            case 0x00:
-              break; // no change
-            case 0x01:
-              break; // no change
-            case 0x02:
-              dst[x] = bg_col;
-              break;
-            case 0x03:
-              dst[x] = fg_col;
-              break;
-            }
-          } else { // Windows mode
-            switch (val) {
-            case 0x00:
-              dst[x] = bg_col;
-              break;
-            case 0x01:
-              dst[x] = fg_col;
-              break;
-            case 0x02:
-              break; // screen data
-            case 0x03:
-              dst[x] = ~(dst[x]);
-              break; // inverted
-            }
-          }
-          if (x % 16 == 15)
-            src += 4;
-        }
-      }
-    }
-  }
+  draw_hardware_cursor(bitmap, cliprect, cur_mode);
   return 0;
 }
 
@@ -1456,60 +1342,6 @@ uint32_t CS3Trio64::screen_update(bitmap_rgb32 &bitmap,
 // END MAME pc_vga_s3.cpp
 
 // ES40 specific functions
-
-// Returns (A<<1)|B for pixel (sx,sy) from a 6464 cursor map.
-// Supports:
-//   Standard layout (16 bytes/row): A[15:0] then B[15:0] per 16 px (all
-//   non-16bpp modes) 64k layout (16bpp): A byte then B byte per 8 px, each bit
-//   horizontally doubled. Right-storage addressing when CR45 bit4 is set - via
-//   MAME
-static inline u8 s3_cursor_ab(const u8 *vram, u32 vram_mask, u32 src_base,
-                              unsigned sx, unsigned sy, bool is16bpp,
-                              bool right_storage) {
-  // Compute row base with optional "right storage" skew.
-  auto row_base_16bytes = [&](unsigned row) -> u32 {
-    if (!right_storage) {
-      return src_base + row * 16; // normal: 16 bytes/row
-    }
-    // right storage (non-16bpp path): last 256B of each 1KiB line, 4 lines 1KiB
-    const unsigned lane = (row >> 4) & 0x3; // 0..3
-    const unsigned r = row & 0x0F;          // 0..15 within lane
-    return src_base + lane * 1024u + (1024u - 256u) + r * 16u;
-  };
-
-  if (!is16bpp) {
-    // Standard 16B/row path: A[15:0] then B[15:0] per 16 pixels
-    const unsigned group = sx >> 4; // 0..3
-    const unsigned bit = 15 - (sx & 15);
-    const u32 rb = row_base_16bytes(sy);
-    const u32 src = rb + group * 4u;
-    const u16 A = (u16)vram[(src + 1) & vram_mask] |
-                  ((u16)vram[(src + 0) & vram_mask] << 8);
-    const u16 B = (u16)vram[(src + 3) & vram_mask] |
-                  ((u16)vram[(src + 2) & vram_mask] << 8);
-    return (u8)(((A >> bit) & 1) << 1 | ((B >> bit) & 1));
-  } else {
-    // 64k (16bpp) path: one A byte + one B byte per 8 pixels, bits doubled
-    // horizontally. We still keep 16 bytes per row total: 8 groups  2 bytes.
-    // Right storage variant uses last 512B of 22KiB lines.
-    u32 rb;
-    if (!right_storage) {
-      rb = src_base + sy * 16u;
-    } else {
-      const unsigned lane = (sy >> 5) & 0x1; // 0..1
-      const unsigned r = sy & 0x1F;          // 0..31
-      rb = src_base + lane * 2048u + (2048u - 512u) + r * 16u;
-    }
-    const unsigned group8 = sx >> 3;  // 0..7 (8px groups)
-    const u32 src = rb + group8 * 2u; // A byte, then B byte
-    const u8 Abits = vram[(src + 0) & vram_mask];
-    const u8 Bbits = vram[(src + 1) & vram_mask];
-    const unsigned bit = 7 - ((sx & 7) >> 1); // horizontal bit-doubling
-    const u8 A = (Abits >> bit) & 1;
-    const u8 B = (Bbits >> bit) & 1;
-    return (u8)((A << 1) | B);
-  }
-}
 
 /** PCI Configuration Space data block */
 static u32 s3_cfg_data[64] = {
@@ -3139,10 +2971,15 @@ u8 CS3Trio64::read_b_3c3() {
   return vga_enabled();
 }
 
-// The hardware cursor is not flagged by vga_mem_updated; its mode, position
-// and pattern address feed the refresh dirty-gate instead.
+// The hardware cursor is not flagged by vga_mem_updated; its mode, position,
+// pattern address and pattern display start feed the refresh dirty-gate
+// instead. The display start belongs here because Windows parks the cursor
+// with it: it hides the pointer by moving the origin off the screen and
+// setting CR4F to the last pattern row at the same time.
 uint64_t CS3Trio64::hw_cursor_signature() const {
   return ((uint64_t)s3.cursor_mode << 56) |
+         ((uint64_t)(s3.cursor_pattern_x & 0x3F) << 50) |
+         ((uint64_t)(s3.cursor_pattern_y & 0x3F) << 44) |
          ((uint64_t)s3.cursor_start_addr << 24) |
          ((uint64_t)(s3.cursor_x & 0x7FF) << 12) |
          (uint64_t)(s3.cursor_y & 0x7FF);
@@ -3188,139 +3025,121 @@ void CS3Trio64::mem_linear_w(uint32_t offset, uint8_t data) {
   state.vga_mem_updated = 1;
 }
 
-// Draws the 64x64 S3 hardware graphics cursor over a pre-rendered framebuffer.
-// Supports Windows mode and X11 mode (CR55 bit 4), and all color depths.
-void CS3Trio64::s3_draw_hardware_cursor(uint32_t *pixels, int pitch_px,
-                                        int clip_width, int clip_height,
-                                        uint8_t cur_mode) {
-  // Only draw if cursor is enabled
-  if (!(s3.cursor_mode & 0x01))
+// One of the two cursor colours, unpacked from the CR4A/CR4B stack the way
+// this mode's renderer unpacks a pixel out of display memory. The stack holds
+// a pixel in the frame buffer's own format: the guest resets the stack
+// pointer by reading CR45 and then writes one byte per byte of a pixel -- one
+// at 8 bits per pixel, two at 15 and 16, three at 24 and 32 -- so a colour
+// read as a palette index is only right in the 8-bit modes.
+uint32_t CS3Trio64::cursor_color(const uint8_t *stack, uint8_t cur_mode) const {
+  switch (cur_mode) {
+  case RGB15_MODE: {
+    const unsigned v = stack[0] | (stack[1] << 8);
+    const unsigned r = (v >> 10) & 0x1f, g = (v >> 5) & 0x1f, b = v & 0x1f;
+    return 0xff000000u | (((r << 3) | (r & 7)) << 16) |
+           (((g << 3) | (g & 7)) << 8) | ((b << 3) | (b & 7));
+  }
+
+  case RGB16_MODE: {
+    const unsigned v = stack[0] | (stack[1] << 8);
+    const unsigned r = (v >> 11) & 0x1f, g = (v >> 5) & 0x3f, b = v & 0x1f;
+    return 0xff000000u | (((r << 3) | (r & 7)) << 16) |
+           (((g << 2) | (g & 3)) << 8) | ((b << 3) | (b & 7));
+  }
+
+  case RGB24_MODE:
+  case RGB32_MODE:
+    // A pixel little end first: blue, green, red. The fourth byte of the
+    // stack is the 964's alpha byte and means nothing here.
+    return 0xff000000u | (stack[2] << 16) | (stack[1] << 8) | stack[0];
+
+  default:
+    return pen(stack[0]);
+  }
+}
+
+// Draws the hardware cursor over the frame the renderer has just produced.
+//
+// The cursor is a 64x64 pattern of two-bit pixels in display memory, sixteen
+// bytes to a row: for every sixteen pixels a word of A bits and then the
+// matching word of B bits. A and B together choose the background colour, the
+// foreground colour, the screen underneath, or the screen inverted -- with
+// the four meanings rotated when CR55 puts the cursor in X11 rather than
+// MS-Windows mode. The Trio64 stores the pattern that way whatever the colour
+// depth (it is the older 911/924 that pack a 64k-colour cursor differently),
+// so only the colours change from mode to mode.
+void CS3Trio64::draw_hardware_cursor(bitmap_rgb32 &bitmap,
+                                     const rectangle &cliprect,
+                                     uint8_t cur_mode) {
+  if (!(s3.cursor_mode & 0x01)) // CR45 bit 0: HWGC ENB
     return;
 
-  // Cursor only works in VGA or SVGA modes
+  // The cursor is part of the VGA and SVGA picture only.
   if (cur_mode == SCREEN_OFF || cur_mode == TEXT_MODE ||
       cur_mode == MONO_MODE || cur_mode == CGA_MODE || cur_mode == EGA_MODE)
     return;
 
-  uint16_t cx = s3.cursor_x & 0x07FF;
-  uint16_t cy = s3.cursor_y & 0x07FF;
+  const uint32_t bg_col = cursor_color(s3.cursor_bg, cur_mode);
+  const uint32_t fg_col = cursor_color(s3.cursor_fg, cur_mode);
 
-  // Start address is in units of 1024 bytes
-  uint32_t src = (uint32_t)s3.cursor_start_addr * 1024;
+  // CR46/47 and CR48/49 put the top left corner of the pattern on the screen;
+  // CR4E/CR4F say which pattern pixel is displayed there. That pair is how a
+  // guest walks the pointer off the left or the top edge of the screen with
+  // an origin that cannot go negative -- and Windows uses it to park the
+  // cursor when it hides it -- so the pattern is drawn from an origin the
+  // display start is subtracted from.
+  const int origin_x =
+      (int)(s3.cursor_x & 0x07ff) - (int)(s3.cursor_pattern_x & 0x3f);
+  const int origin_y =
+      (int)(s3.cursor_y & 0x07ff) - (int)(s3.cursor_pattern_y & 0x3f);
 
-  // Decode foreground/background colors
-  uint32_t bg_col, fg_col;
+  const uint32_t base = (uint32_t)s3.cursor_start_addr * 1024; // CR4C/CR4D
+  const uint32_t vram = vga.svga_intf.vram_size;
+  const bool x11 = (s3.extended_dac_ctrl & 0x10) != 0; // CR55 bit 4
 
-  auto decode_rgb16 = [](const uint8_t *raw) -> uint32_t {
-    uint32_t datax = raw[0] | (raw[1] << 8);
-    int r = (datax & 0xF800) >> 11;
-    int g = (datax & 0x07E0) >> 5;
-    int b = (datax & 0x001F) >> 0;
-    r = (r << 3) | (r & 0x7);
-    g = (g << 2) | (g & 0x3);
-    b = (b << 3) | (b & 0x7);
-    return 0xFF000000u | (r << 16) | (g << 8) | b;
-  };
-
-  auto decode_rgb24 = [](const uint8_t *raw) -> uint32_t {
-    uint32_t datax = raw[0] | (raw[1] << 8) | (raw[2] << 16);
-    int r = (datax & 0xFF0000) >> 16;
-    int g = (datax & 0x00FF00) >> 8;
-    int b = (datax & 0x0000FF) >> 0;
-    return 0xFF000000u | (r << 16) | (g << 8) | b;
-  };
-
-  switch (cur_mode) {
-  case RGB15_MODE:
-  case RGB16_MODE:
-    bg_col = decode_rgb16(s3.cursor_bg);
-    fg_col = decode_rgb16(s3.cursor_fg);
-    break;
-
-  case RGB24_MODE:
-  case RGB32_MODE:
-    bg_col = decode_rgb24(s3.cursor_bg);
-    fg_col = decode_rgb24(s3.cursor_fg);
-    break;
-
-  case RGB8_MODE:
-  default:
-    bg_col = pen(s3.cursor_bg[0]);
-    fg_col = pen(s3.cursor_fg[0]);
-    break;
-  }
-
-  // Draw the 64x64 cursor bitmap
-  // Cursor data: 64 rows, each row = 16 bytes (4 words of 16 bits A + 16 bits
-  // B) Pattern origin offset from CR4E/CR4F
-  const int pat_x = s3.cursor_pattern_x & 0x3F;
-  const int pat_y = s3.cursor_pattern_y & 0x3F;
+  const int min_x = (std::max)(cliprect.min_x, 0);
+  const int min_y = (std::max)(cliprect.min_y, 0);
+  const int max_x = (std::min)(cliprect.max_x, bitmap.width() - 1);
+  const int max_y = (std::min)(cliprect.max_y, bitmap.height() - 1);
 
   for (int y = 0; y < 64; y++) {
-    int screen_y = cy + y - pat_y;
-    if (screen_y < 0 || screen_y >= clip_height) {
-      // Still need to advance src through the row's cursor data
-      // Each row: 4 groups of 4 bytes = 16 bytes
-      // But we advance per-group below, so just skip
-      // We need 4 groups * 4 bytes = 16 bytes per row
-      src += 16; // skip this row's data
+    const int sy = origin_y + y;
+    if (sy < min_y || sy > max_y)
       continue;
-    }
 
-    uint32_t *dst = pixels + (screen_y * pitch_px);
-    uint32_t row_src = src;
-
+    uint32_t *const dst = &bitmap.pix(sy);
     for (int x = 0; x < 64; x++) {
-      // Each 16-pixel group uses 4 bytes: 2 bytes for A-plane, 2 for B-plane
-      // Bit extraction from MAME:
-      uint16_t bita =
-          (vga.memory[(row_src + 1) % vga.svga_intf.vram_size] |
-           ((vga.memory[(row_src + 0) % vga.svga_intf.vram_size]) << 8)) >>
-          (15 - (x % 16));
-      uint16_t bitb =
-          (vga.memory[(row_src + 3) % vga.svga_intf.vram_size] |
-           ((vga.memory[(row_src + 2) % vga.svga_intf.vram_size]) << 8)) >>
-          (15 - (x % 16));
-      uint8_t val = ((bita & 0x01) << 1) | (bitb & 0x01);
+      const int sx = origin_x + x;
+      if (sx < min_x || sx > max_x)
+        continue;
 
-      int screen_x = cx + x - pat_x;
-      if (screen_x >= 0 && screen_x < clip_width) {
-        if (s3.extended_dac_ctrl & 0x10) {
-          // X11 mode
-          switch (val) {
-          case 0x00: /* no change - transparent */
-            break;
-          case 0x01: /* no change - transparent */
-            break;
-          case 0x02:
-            dst[screen_x] = bg_col;
-            break;
-          case 0x03:
-            dst[screen_x] = fg_col;
-            break;
-          }
-        } else {
-          // Windows mode
-          switch (val) {
-          case 0x00:
-            dst[screen_x] = bg_col;
-            break;
-          case 0x01:
-            dst[screen_x] = fg_col;
-            break;
-          case 0x02: /* screen data - no change */
-            break;
-          case 0x03:
-            dst[screen_x] = ~(dst[screen_x]);
-            break; // invert
-          }
-        }
+      const uint32_t src = base + y * 16 + (x >> 4) * 4;
+      const unsigned bit = 15 - (x & 15);
+      const unsigned a =
+          (vga.memory[(src + 0) % vram] << 8 | vga.memory[(src + 1) % vram]) >>
+          bit;
+      const unsigned b =
+          (vga.memory[(src + 2) % vram] << 8 | vga.memory[(src + 3) % vram]) >>
+          bit;
+
+      const unsigned ab = ((a & 1) << 1) | (b & 1);
+      if (x11) {
+        // X11: the A bit says whether the pixel is the cursor's at all, the
+        // B bit which of its two colours it takes.
+        if (ab == 0x02)
+          dst[sx] = bg_col;
+        else if (ab == 0x03)
+          dst[sx] = fg_col;
+      } else {
+        // MS-Windows: a clear A bit means one of the cursor's two colours, a
+        // set one the screen underneath, as it is or inverted.
+        if (ab == 0x00)
+          dst[sx] = bg_col;
+        else if (ab == 0x01)
+          dst[sx] = fg_col;
+        else if (ab == 0x03)
+          dst[sx] = ~dst[sx] | 0xff000000u;
       }
-
-      // Advance source pointer every 16 pixels
-      if (x % 16 == 15)
-        row_src += 4;
     }
-    src = row_src; // advance to next row
   }
 }
