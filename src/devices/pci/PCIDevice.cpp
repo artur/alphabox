@@ -167,6 +167,16 @@ void CPCIDevice::add_legacy_mem(int id, u32 base, u32 length) {
   map_range(id, false, base, length);
 }
 
+void CPCIDevice::add_hose_io(int id, u32 base, u32 length) {
+  dev_range_is_io[id] = true;
+  cSystem->RegisterMemory(this, id, bus_address(true, base), length);
+}
+
+void CPCIDevice::add_hose_mem(int id, u32 base, u32 length) {
+  dev_range_is_io[id] = false;
+  cSystem->RegisterMemory(this, id, bus_address(false, base), length);
+}
+
 u32 CPCIDevice::config_read(int func, u32 address, int dsize) {
   u8 *x;
 

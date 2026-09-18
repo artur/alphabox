@@ -673,9 +673,11 @@ void CVGACard::add_vga_legacy_ranges() {
   add_legacy_io(LEGACY_IO_3D4, 0x3d4, 2);
   add_legacy_io(LEGACY_IO_3DA, 0x3da, 1);
 
-  /* The VGA BIOS we use sends text messages to port 0x500.
-     We listen for these messages at port 500. */
-  add_legacy_io(LEGACY_IO_BIOS_MSG, 0x500, 1);
+  /* The VGA BIOS we use sends text messages to port 0x500. That is not a
+     port of the card at all -- it is a channel between the BIOS and us --
+     so the machine listens for it, and a card behind a bridge is heard
+     just as well as one on the hose. */
+  add_hose_io(LEGACY_IO_BIOS_MSG, 0x500, 1);
   bios_message_size = 0;
   bios_message[0] = '\0';
 
@@ -1324,8 +1326,11 @@ void CVGACard::load_option_rom(const char *default_name) {
   rom_max = (unsigned)fread(option_rom, 1, sizeof(option_rom), rom);
   fclose(rom);
 
-  // Option ROM address space: C0000
-  add_legacy_mem(LEGACY_MEM_ROM, 0xc0000, rom_max);
+  // The console looks for a video BIOS at C0000, where firmware leaves a
+  // copy of the card's option ROM. Answering there is the machine's part,
+  // not the card's: a card behind a PCI-PCI bridge is reached through the
+  // bridge's windows, and no window covers C0000.
+  add_hose_mem(LEGACY_MEM_ROM, 0xc0000, rom_max);
 }
 
 /**

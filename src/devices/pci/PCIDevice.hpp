@@ -100,6 +100,15 @@ protected:
   void add_legacy_io(int id, u32 base, u32 length);
   void add_legacy_mem(int id, u32 base, u32 length);
 
+  /// Place a range on this device's hose whatever bus the device sits on,
+  /// because it is the machine that answers there on the card's behalf.
+  /// An option ROM is the case that matters: the card offers it through
+  /// its expansion ROM, and it is the firmware that leaves a copy in low
+  /// memory -- which is why a PCI-PCI bridge in between never forwards
+  /// those addresses, and why this must not go through one.
+  void add_hose_io(int id, u32 base, u32 length);
+  void add_hose_mem(int id, u32 base, u32 length);
+
   /// Where `base` on this device's bus lands in the hose's address space.
   /// A transparent bridge forwards an address unchanged, so this is the
   /// same wherever on the hose the device sits.

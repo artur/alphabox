@@ -91,6 +91,9 @@ behind the standard Alpha ROM header.
 Two NIC families are available, each in any free PCI slot:
 
 - `dec21143`: the DEC 21143 (Tulip, DE500-BA); the console calls it `ewa0`.
+  Its older relatives are `dec21140` (10/100, media chosen through the
+  general purpose port), `dec21041` and `dec21040` (10 Mb); the console
+  names those by their chip and boots over any of them.
 - `de600`: the DE600-AA, an Intel 82559 board, which the console calls
   `eia0` and shows by name; `i82557`, `i82558` and `i82559` are Intel's
   own PRO/100 boards with those controllers.
@@ -122,7 +125,7 @@ Either connects to the host through one of four backends, selected with
   transmissions are discarded. Needs no privileges; useful for tests.
 
 Every NIC takes `mac` (default `08-00-2B-E5-40-<n>`, `n` counting the NICs
-in the machine). The `dec21143` also takes `queue` (receive queue depth,
+in the machine). The Tulips also take `queue` (receive queue depth,
 default 1024), `crc` and `trace_packets`.
 
 ## PCI-PCI bridges and multi-port boards
@@ -195,8 +198,11 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
 
 - **Disk images**: raw image files (`file`), host devices (`device`) and RAM
   disks (`ramdisk`), on SCSI (`sym53c810`, `sym53c825`, `sym53c875`,
-  `sym53c895`, and the QLogic `isp1020` and `isp1040`), IDE (`ali_ide`) or
-  the floppy controller.
+  `sym53c895`, `sym53c896`, and the QLogic `isp1020` and `isp1040`), IDE
+  (`ali_ide`) or the floppy controller.
+  - The `sym53c896` has two channels, which appear as two PCI functions of
+    the one device: disks named `disk0.<target>` hang on the first,
+    `disk1.<target>` on the second.
 - **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
   (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD
   drives are read-only unless `read_only = false`.

@@ -70,6 +70,55 @@ if bridge:
 print(t.replace(anchor, sec + anchor, 1), end="")
 PY
 
+# The guest is driven blind, through the frame dumps: a screen that stops
+# changing is the only sign we get that it is ready for the next keystroke,
+# and a screen that changes afterwards is the only sign the keystroke landed.
+# Boot time varies by minutes between runs, so waiting a fixed number of
+# frames types into whatever happens to have focus -- which, on a Windows
+# 2000 desktop, opens the Internet Connection Wizard.
+frame_hash() {
+  local f
+  f=fb/$(ls fb | tail -1)
+  [ -f "$f" ] || return 0
+  if command -v md5 > /dev/null; then md5 -q "$f"; else md5sum "$f" | cut -d" " -f1; fi
+}
+
+# Wait until the newest frame has been the same for $2 samples (2 s apart),
+# giving up after $1 seconds.
+settle() {
+  local deadline=$((SECONDS + $1)) same=0 last="" now
+  while [ $SECONDS -lt $deadline ]; do
+    kill -0 $P 2>/dev/null || return 1
+    now=$(frame_hash)
+    if [ -n "$now" ] && [ "$now" = "$last" ]; then
+      same=$((same + 1))
+      [ $same -ge "$2" ] && return 0
+    else
+      same=0
+    fi
+    last=$now
+    sleep 2
+  done
+  return 1
+}
+
+# Send a key token and wait for the screen to answer; retries once, because
+# a keystroke that arrives while the guest is still busy is simply lost.
+key_takes() {
+  local before try
+  for try in 1 2; do
+    before=$(frame_hash)
+    echo "$1" >> keys
+    local deadline=$((SECONDS + ${2:-20}))
+    while [ $SECONDS -lt $deadline ]; do
+      sleep 2
+      kill -0 $P 2>/dev/null || return 1
+      [ "$(frame_hash)" != "$before" ] && return 0
+    done
+  done
+  return 1
+}
+
 ok=1
 for boot in $(seq 1 "$BOOTS"); do
   rm -rf fb && mkdir fb && : > keys
@@ -83,19 +132,23 @@ for boot in $(seq 1 "$BOOTS"); do
     sleep 2
   done
   if kill -0 $P 2>/dev/null; then
+    # Let the desktop finish settling -- on the first boot it is still
+    # installing the driver for the new controller at this point.
+    settle 300 3 || echo "  boot $boot: desktop never settled, trying anyway"
     # Open a command prompt through the Start menu (Ctrl+Esc, then R for
     # Run...): Win+R does not raise the Run dialog in this guest, and the
     # keystrokes then fall through to the desktop and open whatever icon
     # they happen to select.
-    echo "ctrl-esc" >> keys
-    sleep 5
-    echo "r" >> keys
-    sleep 5
-    echo "c m d enter" >> keys
-    sleep 10
-    python3 "$T/keys_for.py" --enter \
-      'for %d in (d e f g h i) do if exist %d:\data.bin copy %d:\data.bin %d:\copy.bin' >> keys
-    sleep 50
+    if key_takes "ctrl-esc" && key_takes "r"; then
+      settle 30 2
+      echo "c m d enter" >> keys
+      settle 60 2
+      python3 "$T/keys_for.py" --enter \
+        'for %d in (d e f g h i) do if exist %d:\data.bin copy %d:\data.bin %d:\copy.bin' >> keys
+      sleep 50
+    else
+      echo "  boot $boot: the Start menu never opened"
+    fi
     kill $P # our own emulator only
     for i in $(seq 1 40); do kill -0 $P 2>/dev/null || break; sleep 0.5; done
     kill -0 $P 2>/dev/null && kill -9 $P
