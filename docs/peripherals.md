@@ -47,7 +47,8 @@ The names below were extracted from the decompressed image with
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
 | Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
 | Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; Windows 2000 draws its desktop through the BitBLT engine |
-| Ensoniq Sound Card | `es1370` | |
+| Ensoniq Sound Card | `es1371` | the AudioPCI 97: an AC'97 codec on a serial link, and a sample rate converter where the ES1370 had fixed rates. This is the only audio part the console's table names (1274:1371); Windows 2000 binds `es1371mp.sys` to it, though only after its INF is given an NT install section -- the one on the Alpha media is decorated `.NTX86` and so matches nothing here |
+| (not named) | `es1370` | the part before it, with a mixer of its own. The console has no table entry for 1274:5000, so `show config` prints only its ids |
 
 ## Candidates, by value
 

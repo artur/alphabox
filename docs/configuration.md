@@ -154,8 +154,21 @@ unconnected (`type = "null"`).
 
 ## Sound
 
-`pci1.1 = es1370 {}` adds an Ensoniq AudioPCI ES1370 (SDL builds only).
-Guest drivers exist for Windows NT 4; other guests ignore it.
+`pci1.1 = es1371 {}` adds an Ensoniq AudioPCI 97 (SDL builds only),
+and `es1370` the part before it. Neither takes a configuration value.
+
+The ES1371 is the one to reach for. It is the only sound card the ES40
+console names in `show config` ("Ensoniq Sound Card"), it carries an
+AC'97 codec instead of the ES1370's own mixer, and it is what the
+Windows 2000 and Windows NT 4 drivers were written for. Windows 2000
+on Alpha needs a hand to install it: the `wdma_ens.inf` on the Alpha
+media decorates its install sections `.NTX86`, so setup falls through
+to the Windows 95 section and refuses the driver -- although
+`es1371mp.sys` in `driver.cab` is an Alpha binary. A copy of that INF
+with the sections renamed `.NT` installs and plays.
+
+The `es1370` is kept for Windows NT 4 and for anything written against
+that part; other guests ignore it.
 
 ## Keyboard, mouse and window
 

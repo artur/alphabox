@@ -56,7 +56,7 @@
 #if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
 #endif
-#include "ES1370.hpp"
+#include "ES137x.hpp"
 #include "I8255x.hpp"
 #include "Isp1040.hpp"
 #include "MPU401.hpp"
@@ -675,7 +675,8 @@ classinfo classes[] = {
     {"win32", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
     {"mpu401", c_mpu401, ON_CS, kv_mpu401},
-    {"es1370", c_es1370, IS_PCI, kv_none},
+    {"es1370", c_es137x, IS_PCI, kv_none},
+    {"es1371", c_es137x, IS_PCI, kv_none},
     {0, c_none, 0, 0}};
 
 /**
@@ -919,11 +920,17 @@ void CConfigurator::initialize() {
     break;
   }
 
+  case c_es137x:
 #if defined(HAVE_SDL)
-  case c_es1370:
-    myDevice = new CES1370(this, theSystem, pcibus, pcidev);
-    break;
+    // The class name ("es1370", "es1371") names the part.
+    myDevice = new CES137x(this, theSystem, pcibus, pcidev,
+                           *CES137x::find_chip(myValue));
+#else
+    FAILURE_2(Configuration,
+              "Class %s for %s needs compilation with SDL support", myValue,
+              myName);
 #endif
+    break;
 
 #if defined(HAVE_PCAP) || defined(__linux__)
 
