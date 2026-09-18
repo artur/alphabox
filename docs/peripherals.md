@@ -34,7 +34,9 @@ The names below were extracted from the decompressed image with
 | NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM |
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
 | NCR 53C896 | `sym53c896` | `n810` console driver: bootable on both channels; two Ultra2-Wide cores as PCI functions 0 and 1, 8 KB SCRIPTS RAM each, 256-byte register file with the phase-mismatch jump block. Windows 2000 drives it with `sym_hi`, not the `symc8xx` of the single-channel parts |
-| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver |
+| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver (`ql10wnt`) |
+| QLogic ISP1080 | `isp1080` | Ultra2 Wide, low-voltage differential. The console does not know PCI device 0x1080 -- its table carries QLogic 0x1020 and the Fibre Channel parts and nothing else -- so `show config` prints the raw id and it is not bootable. Windows 2000 drives it with `ql1080` |
+| QLogic ISP1240 | `isp1240` | two Ultra Wide buses on one PCI function (not two functions, the way the 53C896 is built): one set of queues and mailboxes, and a command entry names its bus in the top bit of the target byte. Disks are `disk0.<id>` and `disk1.<id>`. Unknown to the console for the same reason as the 1080; Windows 2000 drives it with `ql1240` |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DECchip 21140-AA | `dec21140` | same driver; no SIA, media through the general purpose port. The board described has nothing wired to those pins and no MII PHY |
 | DECchip 21041-AA | `dec21041` | same driver; 10 Mb SIA, the older serial ROM format. The console drives it at 10BaseT from its own table and reads only the station address out of the ROM |
@@ -130,7 +132,10 @@ work: see [platforms.md](platforms.md).
    it. The aliases of the VGA I/O ranges, which a real bridge decodes with
    the address bits above bit 9 as don't-cares, are not claimed.
 5. ~~QLogic ISP1040 (KZPBA)~~ (done): the console and Windows 2000's own
-   QLogic driver both drive it.
+   QLogic driver both drive it. The ISP1080 and the dual-bus ISP1240 came
+   later and are driven by Windows alone: the ES40 console's PCI table has
+   no entry for either device id, so it cannot name them or boot from them
+   whatever the emulation does.
 6. ~~Older Tulips~~ (done): the 21040, 21041 and 21140 join the 21143 as
    parts of one family, each with the identity and media machinery it
    really had -- a parallel address ROM read through CSR9, the older serial

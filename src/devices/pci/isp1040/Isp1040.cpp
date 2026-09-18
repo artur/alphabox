@@ -42,14 +42,18 @@
 CIsp1040::CIsp1040(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
                    const isp_chip_config &chip)
     : CPCIDevice(cfg, c, pcibus, pcidev),
-      CDiskController(1, chip.wide ? 16 : 8), m_chip(chip) {
-  CSCSIBus *bus = new CSCSIBus(cfg, c);
-  scsi_register(0, bus, 7); // the adapter's own place on the bus
+      CDiskController(chip.buses, chip.wide ? 16 : 8), m_chip(chip) {
+  // One SCSI bus per channel the part has. They share everything else --
+  // the queues, the mailboxes, the interrupt -- because there is one RISC
+  // behind both of them.
+  for (int b = 0; b < m_chip.buses; b++)
+    scsi_register(b, new CSCSIBus(cfg, c), 7); // our own place on the bus
 }
 
 CIsp1040::~CIsp1040() {
   stop_threads();
-  scsi_bus[0] = 0;
+  for (int b = 0; b < m_chip.buses; b++)
+    scsi_bus[b] = 0;
 }
 
 void CIsp1040::init() {
@@ -70,7 +74,8 @@ void CIsp1040::init() {
   add_function(0, data, mask);
 
   memset(&state, 0, sizeof(state));
-  state.nvram_eeprom.init(ISP_NVRAM_ADDRESS_BITS);
+  state.nvram_eeprom.init(m_chip.gen1080 ? ISP1080_NVRAM_ADDRESS_BITS
+                                         : ISP_NVRAM_ADDRESS_BITS);
   build_nvram();
 
   ResetPCI();
@@ -79,16 +84,35 @@ void CIsp1040::init() {
 }
 
 /**
- * The adapter's own settings, as its NVRAM holds them: the header the
- * drivers check ("ISP"), the version they require, this adapter's SCSI
- * address, and per-target entries that allow everything the part can do.
- * The last byte makes the bytes sum to zero, which is the check they
- * apply.
+ * The adapter's own settings, as its NVRAM holds them. Both generations
+ * open with a header the drivers check and a version they require, and
+ * both end with a byte that makes all the bytes sum to zero, which is the
+ * other check they apply; what lies between is the part of it that changed
+ * shape between the 1020 and the 1080.
  **/
 void CIsp1040::build_nvram() {
-  u8 nv[ISP_NVRAM_BYTES];
+  const int bytes = m_chip.gen1080 ? ISP1080_NVRAM_BYTES : ISP_NVRAM_BYTES;
+  u8 nv[ISP1080_NVRAM_BYTES];
   memset(nv, 0, sizeof(nv));
 
+  if (m_chip.gen1080)
+    build_nvram_1080(nv);
+  else
+    build_nvram_1020(nv);
+
+  u8 sum = 0;
+  for (int i = 0; i < bytes - 1; i++)
+    sum = u8(sum + nv[i]);
+  nv[bytes - 1] = u8(-sum);
+
+  // The part is addressed in words, low byte first.
+  for (int w = 0; w < bytes / 2; w++)
+    state.nvram_eeprom.data[w] = u16(nv[w * 2] | nv[w * 2 + 1] << 8);
+}
+
+/// The 1020 and 1040 layout: one bus, and everything about it in the first
+/// seventeen bytes.
+void CIsp1040::build_nvram_1020(u8 *nv) {
   nv[0] = 'I';
   nv[1] = 'S';
   nv[2] = 'P';
@@ -96,7 +120,7 @@ void CIsp1040::build_nvram() {
   nv[4] = 2; // the version the drivers require of this family
   // Byte 5: FIFO threshold in the low bits, this adapter's SCSI address in
   // the top nibble, and the adapter enabled.
-  nv[5] = u8(0x02 | (1 << 3) | (state.initiator_id << 4));
+  nv[5] = u8(0x02 | (1 << 3) | (state.initiator_id[0] << 4));
   nv[6] = 3;            // bus reset delay, seconds
   nv[7] = 4;            // retry count
   nv[8] = 5;            // retry delay
@@ -119,20 +143,67 @@ void CIsp1040::build_nvram() {
     e[2] = m_chip.ultra ? 0x0c : 0x19; // synchronous period
     e[3] = 0x0f | 0x10;                // offset, device enabled
   }
+}
 
-  u8 sum = 0;
-  for (int i = 0; i < ISP_NVRAM_BYTES - 1; i++)
-    sum = u8(sum + nv[i]);
-  nv[ISP_NVRAM_BYTES - 1] = u8(-sum);
+/**
+ * The 1080/1240/1280 layout, twice as long and arranged around the buses:
+ * a header and the settings of the package itself, then a block for each
+ * SCSI bus holding that bus's timings and its sixteen target entries. The
+ * dual-channel parts are why it is shaped this way -- the second bus's
+ * block follows the first, 112 bytes on, and is read the same way.
+ *
+ * The header is "ISP " here, with a space where the 1020 has a zero byte,
+ * and the version is 1: Linux qla1280 refuses anything below that and
+ * NetBSD asks nothing of it. Failing those checks is not fatal -- a driver
+ * that does not believe the NVRAM falls back to defaults of its own, which
+ * are much the same as these -- but an adapter should be able to say what
+ * it is.
+ **/
+void CIsp1040::build_nvram_1080(u8 *nv) {
+  nv[0] = 'I';
+  nv[1] = 'S';
+  nv[2] = 'P';
+  nv[3] = ' ';
+  nv[4] = 1;
 
-  // The part is addressed in words, low byte first.
-  for (int w = 0; w < ISP_NVRAM_BYTES / 2; w++)
-    state.nvram_eeprom.data[w] = u16(nv[w * 2] | nv[w * 2 + 1] << 8);
+  // Byte 16: the host interface. Burst enabled (the drivers disagree about
+  // which bit that is, so both), the adapter enabled, and a FIFO threshold
+  // of 4, which is what Linux uses for every part past the 1040.
+  nv[16] = u8(0x02 | 0x04 | 0x08 | (4 << 4));
+  // Byte 17: both buses' terminators on, and automatic termination.
+  nv[17] = u8(0x03 | (0x03 << 2) | 0x80);
+
+  for (int b = 0; b < ISP_MAX_BUSES; b++) {
+    u8 *bus = nv + ISP1080_NVRAM_BUS0 + b * ISP1080_NVRAM_BUS_STRIDE;
+    // Our own SCSI address, and the bus's width; leave SCSI reset enabled.
+    bus[0] = u8(state.initiator_id[b] | (m_chip.wide ? 0x20 : 0));
+    bus[1] = 5; // bus reset delay, seconds
+    bus[2] = 4; // retry count
+    bus[3] = 5; // retry delay
+    // Asynchronous data setup time, and active negation on both REQ/ACK
+    // and the data lines, which is what this generation is set up for.
+    bus[4] = u8(8 | 0x10 | 0x20);
+    bus[6] = 250; // selection timeout, milliseconds
+    bus[7] = 0;
+    bus[8] = 32; // maximum queue depth
+    bus[9] = 0;
+
+    for (int t = 0; t < 16; t++) {
+      u8 *e = bus + ISP1080_NVRAM_TARGOFF + 6 * t;
+      // The same target entry the 1020 has, byte for byte; the period and
+      // offset are the ones Linux qla1280 sets up for this generation.
+      e[0] = u8(0x01 | 0x04 | 0x08 | 0x10 | (m_chip.wide ? 0x20 : 0) | 0x40 |
+                0x80);
+      e[1] = 16;        // execution throttle
+      e[2] = 10;        // synchronous period
+      e[3] = 12 | 0x10; // offset, device enabled
+    }
+  }
 }
 
 void CIsp1040::register_disk(CDisk *dsk, int bus, int dev) {
   CDiskController::register_disk(dsk, bus, dev);
-  dsk->scsi_register(0, scsi_bus[0], dev);
+  dsk->scsi_register(0, scsi_bus[bus], dev);
 }
 
 void CIsp1040::ResetPCI() {
@@ -172,7 +243,10 @@ void CIsp1040::chip_reset(bool keep_parameters) {
   state.mailbox_out[4] = ISP_PRODUCT_ID_4;
 
   if (!keep_parameters) {
-    state.initiator_id = 7;
+    for (int b = 0; b < ISP_MAX_BUSES; b++)
+      state.initiator_id[b] = 7;
+    state.gpio_data = 0;
+    state.gpio_enable = 0;
     build_nvram();
   }
   if (state.irq_asserted) {
@@ -220,10 +294,48 @@ void CIsp1040::nvram_pins(u16 value) {
                               (value & ISP_NVRAM_DATA_OUT) != 0);
 }
 
+/**
+ * The window at 0x80 on the 1080 family, when BIU_CONF1 has pointed it at
+ * something other than the RISC. Returns true when this offset belongs to
+ * the selected bank and `value` has been answered.
+ *
+ * Only the SCSI processor's pins are worth answering. A driver reads the
+ * control pins to decide whether the bus is alive -- Linux takes 0x87ff,
+ * every signal asserted with a phase valid, for a bus that has died, and
+ * anything else for one that has not -- and the differential pins to see
+ * what kind of bus came up. Nothing else in either bank is read by a
+ * driver that is not debugging its own firmware, so the rest reads zero.
+ **/
+bool CIsp1040::banked_register(u32 offset, u16 *value) {
+  const u16 bank = state.conf1 & ISP_CONF1_BANK_MASK;
+
+  if (!m_chip.gen1080 || offset < ISP_BANKED_WINDOW ||
+      bank == ISP_CONF1_BANK_RISC)
+    return false;
+
+  *value = 0;
+  if (bank == ISP_CONF1_BANK_DMA)
+    return true; // the DMA registers, which the firmware alone touches
+
+  if (offset == ISP_SXP_PINS_DIFF) {
+    // Between commands this bus is idle, so nothing is asserted; what the
+    // driver is after is the mode. The 1080 is a low-voltage differential
+    // part and the 1240 a single-ended one.
+    *value = m_chip.ultra2 ? ISP_SXP_PINS_LVD_MODE : ISP_SXP_PINS_SE_MODE;
+  }
+  return true;
+}
+
 u32 CIsp1040::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   std::lock_guard<std::recursive_mutex> lock(myLock);
   const u32 offset = address & (ISP_REG_SIZE - 1);
   u16 value = 0;
+
+  if (banked_register(offset, &value)) {
+    TRACE_ISP("%s: read  %02x = %04x (bank %04x)\n", devid_string, offset,
+              value, state.conf1 & ISP_CONF1_BANK_MASK);
+    return value;
+  }
 
   switch (offset) {
   case ISP_BIU_ID_LO:
@@ -266,6 +378,14 @@ u32 CIsp1040::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   case ISP_HCCR:
     value = u16(state.risc_paused ? ISP_HCCR_PAUSE : 0);
     break;
+  case ISP_GPIO_DATA:
+    if (m_chip.gen1080)
+      value = state.gpio_data;
+    break;
+  case ISP_GPIO_ENABLE:
+    if (m_chip.gen1080)
+      value = state.gpio_enable;
+    break;
   default:
     if (offset >= ISP_MBOX(0) && offset < ISP_MBOX(ISP_MBOX_COUNT))
       value = state.mailbox_out[(offset - ISP_MBOX(0)) / 2];
@@ -283,6 +403,13 @@ void CIsp1040::WriteMem_Bar(int func, int bar, u32 address, int dsize,
   const u16 value = u16(data);
 
   TRACE_ISP("%s: write %02x = %04x\n", devid_string, offset, value);
+
+  // The banked window is read-only here: what lies behind it is the RISC's
+  // own working registers and the SCSI pins, and a driver writes to them
+  // only to single-step firmware this emulation does not run.
+  u16 ignored;
+  if (banked_register(offset, &ignored))
+    return;
 
   switch (offset) {
   case ISP_BIU_ICR:
@@ -311,6 +438,18 @@ void CIsp1040::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 
   case ISP_BIU_NVRAM:
     nvram_pins(value);
+    return;
+
+  case ISP_GPIO_DATA:
+    // The terminators, on the 1080 family. There is nothing to terminate
+    // here, so the pins only have to read back what was driven onto them.
+    if (m_chip.gen1080)
+      state.gpio_data = value;
+    return;
+
+  case ISP_GPIO_ENABLE:
+    if (m_chip.gen1080)
+      state.gpio_enable = value;
     return;
 
   case ISP_BIU_REQINP:

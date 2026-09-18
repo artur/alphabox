@@ -30,6 +30,14 @@
  * Firmware loading is accepted and discarded: the emulation implements
  * what the firmware would have done, so there is nothing to load it into,
  * and no driver reads it back.
+ *
+ * On the parts with two SCSI buses the command set did not grow; the
+ * commands that concern one bus say which in a bit they had to spare. A
+ * bus reset names it in mailbox 2; the per-target commands put it in the
+ * top bit of the target byte, which is mailbox 1's high half; setting the
+ * adapter's own SCSI address puts it in the top bit of mailbox 1. Commands
+ * that carry a parameter for each bus at once -- retry counts, selection
+ * timeouts -- simply use more mailboxes.
  **/
 #include "Isp1040.hpp"
 #include "SCSIBus.hpp"
@@ -55,6 +63,9 @@ void CIsp1040::mailbox_done(u16 status) {
 
 void CIsp1040::mailbox_command() {
   const u16 command = state.mailbox[0];
+  // Which bus a command that names one is for. On a single-bus part the
+  // bit is not there to be read, and every command is for bus 0.
+  const int id_bus = m_chip.buses > 1 ? (state.mailbox[1] >> 7) & 1 : 0;
 
   // Unless a command says otherwise, it answers with the registers it was
   // given, so a driver reading them back sees its own values.
@@ -122,11 +133,15 @@ void CIsp1040::mailbox_command() {
     state.response_out = state.mailbox[5];
     break;
 
-  case ISP_MBOX_BUS_RESET:
-    scsi_bus[0]->reset_bus();
+  case ISP_MBOX_BUS_RESET: {
+    // Mailbox 1 is the delay to hold the bus in reset, which nothing here
+    // needs; mailbox 2 is the bus, on a part that has more than one.
+    const int bus = m_chip.buses > 1 ? state.mailbox[2] & 1 : 0;
+    scsi_bus[bus]->reset_bus();
     mailbox_done(ISP_MBOX_COMMAND_COMPLETE);
     raise_async(ISP_ASYNC_BUS_RESET);
     return;
+  }
 
   case ISP_MBOX_ABORT:
   case ISP_MBOX_ABORT_DEVICE:
@@ -138,15 +153,17 @@ void CIsp1040::mailbox_command() {
     break;
 
   case ISP_MBOX_SET_INIT_SCSI_ID:
-    state.initiator_id = u8(state.mailbox[1] & 0x0f);
+    state.initiator_id[id_bus] = u8(state.mailbox[1] & 0x0f);
     break;
 
   case ISP_MBOX_GET_INIT_SCSI_ID:
-    state.mailbox_out[1] = state.initiator_id;
+    state.mailbox_out[1] = state.initiator_id[id_bus];
     break;
 
   case ISP_MBOX_GET_CLOCK_RATE:
-    state.mailbox_out[1] = m_chip.ultra ? 60 : 40; // MHz
+    // The clock the part times the bus off: 40 MHz on the 1020, 60 on the
+    // Ultra parts, 100 on the Ultra2 ones.
+    state.mailbox_out[1] = m_chip.ultra2 ? 100 : (m_chip.ultra ? 60 : 40);
     break;
 
   case ISP_MBOX_GET_SELECT_TIMEOUT:
@@ -178,7 +195,10 @@ void CIsp1040::mailbox_command() {
     // Everything this part can do, for every target: synchronous transfer
     // at the part's rate, wide where it is wide.
     state.mailbox_out[2] = u16(0x00c0 | (m_chip.wide ? 0x0020 : 0));
-    state.mailbox_out[3] = u16((0x0f << 8) | (m_chip.ultra ? 0x0c : 0x19));
+    if (m_chip.gen1080)
+      state.mailbox_out[3] = (12 << 8) | 10;
+    else
+      state.mailbox_out[3] = u16((0x0f << 8) | (m_chip.ultra ? 0x0c : 0x19));
     break;
 
   case ISP_MBOX_GET_DEV_QUEUE_PARAMS:
@@ -195,19 +215,17 @@ void CIsp1040::mailbox_command() {
   case ISP_MBOX_SET_PCI_PARAMS:
   case ISP_MBOX_SET_TARGET_PARAMS:
   case ISP_MBOX_SET_DEV_QUEUE_PARAMS:
+  case ISP_MBOX_SET_RESET_DELAY_PARAMS:
   case ISP_MBOX_SET_SYSTEM_PARAMETER:
   case ISP_MBOX_SET_FIRMWARE_FEATURES:
-  case ISP_MBOX_UNDOCUMENTED_5A:
+  case ISP_MBOX_SET_DATA_OVERRUN_RECOVERY:
     // Timing and queueing parameters: accepted. What they describe --
-    // transfer rates, retries, tag ages -- has no counterpart here, where
-    // a transfer takes no time on a bus that never disconnects.
-    //
-    // The last of these (0x5a) is accepted on weaker grounds: it is not in
-    // any documentation or open-source driver, but QLogic's own drivers
-    // end their initialisation with it and give up if it is refused, and
-    // the ES40 console never issues it and works. So it is taken to be a
-    // parameter this emulation has no counterpart for. If it turns out to
-    // mean something that must be done, this is where it goes.
+    // transfer rates, retries, tag ages, what to do about an overrun --
+    // has no counterpart here, where a transfer takes no time on a bus
+    // that never disconnects and a target hands over exactly what the
+    // command entry has room for. The drivers of the 1080 generation set
+    // most of these for both buses in one command, in mailboxes of their
+    // own, which costs nothing to ignore twice over.
     break;
 
   default:

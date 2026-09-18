@@ -18,8 +18,9 @@
  * USA.
  */
 
-/* QLogic ISP1020/ISP1040 PCI SCSI adapter -- the KZPBA the ES40 console
- * knows as "QLogic ISP10x0", whose disks it names dka0 like the Symbios.
+/* QLogic ISP10x0 and ISP1x80 PCI SCSI adapters -- the KZPBA the ES40
+ * console knows as "QLogic ISP10x0", whose disks it names dka0 like the
+ * Symbios.
  *
  * This is a different kind of adapter from the 53C8xx: instead of a
  * processor running SCRIPTS the host wrote, it has a RISC running QLogic's
@@ -34,6 +35,19 @@
  * bus. A driver that uploads firmware gets it accepted and ignored, which
  * is what it expects -- it never reads it back.
  *
+ * Two generations live here. The ISP1020 and ISP1040 are the first: one
+ * SCSI bus, a 128-byte NVRAM, and the register map the file below
+ * describes. The ISP1080 and ISP1240 are the second, and they kept that
+ * interface almost whole -- same mailboxes at the same offsets, same eight
+ * of them, same queue entries -- while moving three things that this code
+ * has to know about. Their NVRAM is twice the size and a different shape,
+ * with a block of settings per SCSI bus. The window at 0x80, which on the
+ * older parts shows the RISC or the SCSI processor according to one bit of
+ * BIU_CONF1, is a four-way bank on these because there are two SCSI
+ * processors to show. And the 1240 has two SCSI buses on the one PCI
+ * function, so a command entry says which of them it is for, in the top
+ * bit of its target byte.
+ *
  *   Isp1040.cpp          construction, PCI header, registers, reset,
  *                        the thread, NVRAM contents, state file
  *   Isp1040Mailbox.cpp   the mailbox command set
@@ -44,9 +58,10 @@
  * Documentation consulted:
  *  - the NetBSD isp(4) driver (sys/dev/ic/isp.c, ispreg.h, ispmbox.h) and
  *    its PCI attachment, which document the register map, the mailbox
- *    command set, the queue entries and the NVRAM layout
- *  - Linux qla1280 and FreeBSD isp, for the same interface from another
- *    angle
+ *    command set, the queue entries and both NVRAM layouts
+ *  - Linux qla1280, which drives the 1040, 1080, 1240, 1280 and 1x160 from
+ *    one body of code and so says plainly what differs between them
+ *  - FreeBSD isp, for the same interface from another angle
  *  - the ES40 SRM console, which names the part and edits its NVRAM
  *    (isp1020_edit)
  */
@@ -62,22 +77,28 @@
 #include <mutex>
 
 /**
- * \brief What distinguishes one ISP10x0 part from another.
+ * \brief What distinguishes one QLogic ISP part from another.
  **/
 struct isp_chip_config {
   const char *name;   ///< configuration class, e.g. "isp1040"
   const char *part;   ///< the part, for messages
   u16 device_id;      ///< PCI config 0x02
   u8 revision;        ///< PCI config 0x08
+  u8 buses;           ///< SCSI buses on this one PCI function (2 on the 1240)
   bool wide;          ///< 16 targets rather than 8
   bool ultra;         ///< Ultra SCSI (20 MB/s)
+  bool ultra2;        ///< Ultra2 LVD (40 MB/s)
+  bool gen1080;       ///< the 1080/1240/1280 generation (NVRAM, banking)
   u16 firmware_major; ///< what ABOUT FIRMWARE reports
   u16 firmware_minor;
   u16 firmware_micro;
 };
 
+/// How many SCSI buses any part in the family can have.
+#define ISP_MAX_BUSES 2
+
 /**
- * \brief Emulated QLogic ISP1020/ISP1040 SCSI adapter.
+ * \brief Emulated QLogic ISP1020/1040/1080/1240 SCSI adapter.
  **/
 class CIsp1040 : public CPCIDevice, public CDiskController, public CSCSIDevice {
 public:
@@ -99,7 +120,7 @@ public:
 
   virtual void register_disk(class CDisk *dsk, int bus, int dev);
 
-  /// The part named `name` ("isp1020", "isp1040"), or nullptr.
+  /// The part named `name` ("isp1020", "isp1080"), or nullptr.
   static const isp_chip_config *find_chip(const char *name);
 
 private:
@@ -109,9 +130,12 @@ private:
   void run();
   void chip_reset(bool keep_parameters);
   void build_nvram();
+  void build_nvram_1020(u8 *nv);
+  void build_nvram_1080(u8 *nv);
   void nvram_pins(u16 value);
   void update_irq();
   void raise_async(u16 event);
+  bool banked_register(u32 offset, u16 *value);
 
   // Isp1040Mailbox.cpp
   void mailbox_command();
@@ -144,7 +168,9 @@ private:
     u16 icr;  ///< interrupt control
     u16 isr;  ///< interrupt status
     u16 sema; ///< semaphore: a mailbox result is waiting
-    u16 conf1;
+    u16 conf1;     ///< also selects the bank at 0x80 on the 1080 family
+    u16 gpio_data; ///< the 1080 family's termination pins
+    u16 gpio_enable;
     u16 nvram;          ///< the EEPROM's pins, as last written
     u16 mailbox[8];     ///< what the driver wrote
     u16 mailbox_out[8]; ///< what we answer with
@@ -161,7 +187,7 @@ private:
     u16 response_in;  ///< ours
     u16 response_out; ///< the driver's consumer index
 
-    u8 initiator_id;
+    u8 initiator_id[ISP_MAX_BUSES]; ///< this adapter's own place on each bus
     u16 pending_async; ///< an event to report once the mailbox is read
     bool irq_asserted;
     bool queue_pending; ///< entries left for the thread

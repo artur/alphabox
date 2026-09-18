@@ -660,6 +660,8 @@ classinfo classes[] = {
     {"i82559", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"isp1020", c_isp1040, IS_PCI | HAS_DISK, kv_none},
     {"isp1040", c_isp1040, IS_PCI | HAS_DISK, kv_none},
+    {"isp1080", c_isp1040, IS_PCI | HAS_DISK, kv_none},
+    {"isp1240", c_isp1040, IS_PCI | HAS_DISK, kv_none},
     {"sym53c810", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c825", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c875", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
