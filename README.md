@@ -10,9 +10,9 @@ the Tsunami/Typhoon chipset — well enough to run the operating systems of the
 Alpha era: OpenVMS, Tru64 UNIX, NetBSD and Windows NT/2000. It runs on x86-64
 and AArch64 hosts under Linux, macOS and Windows.
 
-| OpenVMS 8.4 with the CDE desktop | Windows 2000 (build 2128) |
-|---|---|
-| ![OpenVMS 8.4 desktop](screenshots/openvms.png) | ![Windows 2000 desktop](screenshots/win2000.png) |
+| OpenVMS 8.4 with the CDE desktop | Windows 2000 (build 2128) | Windows 2000 on two processors |
+|---|---|---|
+| ![OpenVMS 8.4 desktop](screenshots/openvms.png) | ![Windows 2000 desktop](screenshots/win2000.png) | ![Windows 2000 Task Manager showing two CPUs](screenshots/win2000-smp.png) |
 
 ## Features
 
