@@ -124,7 +124,15 @@
  * sien and asten.
  *
  * Source: table of IER masks in PALcode at offset 0d00H.
+ *
+ * Only the low five bits of an IPL select a row. The architecture takes the
+ * new IPL from R16<4:0> and leaves anything above that undefined for the
+ * guest -- but undefined for the guest must not mean undefined for us, and
+ * a guest that puts 2^34 in R16 was reading thirty-two rows past the end of
+ * this table and killing the emulator with it.
  **/
+#define IPL_ROW(x) ipl_ier_mask[(x) & 0x1f]
+
 static int ipl_ier_mask[32][6] = {
 
     /* ei, sl, cr, pc,     si, ast */
@@ -343,12 +351,12 @@ void CAlphaCPU::vmspal_call_mtpr_ipl() {
   r0 = (p22 >> 8) & 0xff;
   p22 &= ~U64(0xff00);
   p22 |= (r16 << 8);
-  state.eien = ipl_ier_mask[r16][0];
-  state.slen = ipl_ier_mask[r16][1];
-  state.cren = ipl_ier_mask[r16][2];
-  state.pcen = ipl_ier_mask[r16][3];
-  state.sien = ipl_ier_mask[r16][4];
-  state.asten = ipl_ier_mask[r16][5];
+  state.eien = IPL_ROW(r16)[0];
+  state.slen = IPL_ROW(r16)[1];
+  state.cren = IPL_ROW(r16)[2];
+  state.pcen = IPL_ROW(r16)[3];
+  state.sien = IPL_ROW(r16)[4];
+  state.asten = IPL_ROW(r16)[5];
   state.check_int = true;
 }
 
@@ -722,12 +730,12 @@ int CAlphaCPU::vmspal_call_rei() {
   p23 &= ~U64(0x3);
   p20 = r30 + 0x40;
   r30 = p20 | p5;
-  state.eien = ipl_ier_mask[p7][0];
-  state.slen = ipl_ier_mask[p7][1];
-  state.cren = ipl_ier_mask[p7][2];
-  state.pcen = ipl_ier_mask[p7][3];
-  state.sien = ipl_ier_mask[p7][4];
-  state.asten = ipl_ier_mask[p7][5];
+  state.eien = IPL_ROW(p7)[0];
+  state.slen = IPL_ROW(p7)[1];
+  state.cren = IPL_ROW(p7)[2];
+  state.pcen = IPL_ROW(p7)[3];
+  state.sien = IPL_ROW(p7)[4];
+  state.asten = IPL_ROW(p7)[5];
   state.check_int = true;
   set_pc(p23);
   return 0;
@@ -950,12 +958,12 @@ int CAlphaCPU::vmspal_ent_sw_int(int si) {
   hw_stq(p21 + 0x158, p5);
   hw_stq(p21 + 0x150, state.current_pc);
   state.sir &= ~(1 << x);
-  state.eien = ipl_ier_mask[x][0];
-  state.slen = ipl_ier_mask[x][1];
-  state.cren = ipl_ier_mask[x][2];
-  state.pcen = ipl_ier_mask[x][3];
-  state.sien = ipl_ier_mask[x][4];
-  state.asten = ipl_ier_mask[x][5];
+  state.eien = IPL_ROW(x)[0];
+  state.slen = IPL_ROW(x)[1];
+  state.cren = IPL_ROW(x)[2];
+  state.pcen = IPL_ROW(x)[3];
+  state.sien = IPL_ROW(x)[4];
+  state.asten = IPL_ROW(x)[5];
   state.check_int = true;
   p20 = (u64)x << 8;
   p20 |= 4;
