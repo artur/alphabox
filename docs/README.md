@@ -14,5 +14,8 @@
   [DS20E](platforms/ds20e.md)).
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
+- [Processor fidelity](cpu-fidelity.md): where the emulated 21264 does not
+  match the real one, what a guest can therefore not be used to test, and
+  how to check the processor yourself.
 
 The sample [`es40.cfg`](../es40.cfg) documents every configuration value.

@@ -138,6 +138,12 @@ class, `chip` key; same `CVGACard` base as the S3), `CES137x` (sound:
 `es1370`, `es1371`, SDL audio), `CFlash`+`CDPR`
 (firmware NVRAM).
 
+Where the emulated processor knowingly differs from a real 21264 --
+unaligned accesses that do not trap, `FPCR[UNDZ]`, machine checks that are
+never raised, the oversized icache -- is recorded in `docs/cpu-fidelity.md`,
+along with what was audited and found correct. Read it before "fixing" CPU
+behaviour, and add to it when a divergence is found or closed.
+
 CPU: `CAlphaCPU` (`cpu/AlphaCPU.cpp`) is a per-instruction interpreter
 (`execute()`, opcode implementations in `cpu/cpu_*.hpp` headers included
 into it); `cpu/AlphaCPU_vmspal.cpp` is a native fast-path reimplementation
