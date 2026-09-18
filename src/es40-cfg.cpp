@@ -833,8 +833,22 @@ int main_cfg(int argc, char *argv[]) {
 #endif
   card_q.addAnswer("scsi", "sym53c810",
                    "Symbios 53C810 narrow SCSI controller");
-  card_q.addAnswer("es1370 audio", "es1370",
-                   "ES1370 Audio card (works only with Windows NT 4.0)");
+  card_q.addAnswer("audio", "es1371", "Ensoniq AudioPCI sound card");
+
+  /* Which of the family. The ES1371 is the one to reach for: it is what
+   * the console names and what Windows 2000 carries a driver for. The
+   * ES1370 before it has its own mixer and fixed rates, and the driver
+   * for it is older than most guests here.
+   */
+  MultipleChoiceQuestion audio_q;
+  audio_q.setQuestion("Which Ensoniq part should the sound card be?");
+  audio_q.setExplanation("es1371 is the AudioPCI 97, with an AC'97 codec; "
+                         "the console names it and Windows 2000 and NT 4 "
+                         "have drivers for it. es1370 is the part before "
+                         "it, with a mixer of its own.");
+  audio_q.addAnswer("es1371", "es1371", "Ensoniq ES1371 (AudioPCI 97)");
+  audio_q.addAnswer("es1370", "es1370", "Ensoniq ES1370 (AudioPCI)");
+  audio_q.setDefault("es1371");
 
   /* Loop until there are no more PCI
    * cards to add.
@@ -864,6 +878,10 @@ int main_cfg(int argc, char *argv[]) {
     if (card == "dec21143")
       card = tulip_q.ask();
 #endif
+    /* So is an AudioPCI.
+     */
+    if (card == "es1371")
+      card = audio_q.ask();
 
     /* Determine where to put this card.
      */

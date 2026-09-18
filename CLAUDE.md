@@ -97,7 +97,7 @@ Source layout under `src/`:
 | `platforms/` | which machine is emulated: `Platform.hpp` + the board rows in `Platforms.cpp` (slots, interrupt wiring, firmware form, processors, memory), chosen with `platform = "<name>";` |
 | `devices/common/` | device parts more than one family uses: `Eeprom93cx6` (the Microwire serial EEPROM the Intel NICs and the QLogic adapters keep their settings in) |
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
-| `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `ES1370`, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `isp1040/` (the QLogic ISP10x0 SCSI adapters: mailboxes and request/response queues rather than SCRIPTS); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`); `tulip/` (`CTulip`: the DECchip 21040/21041/21140/21143 NICs, whose parts differ in how they name themselves and pick a medium -- `TulipMedia.cpp`) |
+| `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `isp1040/` (the QLogic ISP10x0 SCSI adapters: mailboxes and request/response queues rather than SCRIPTS); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`); `tulip/` (`CTulip`: the DECchip 21040/21041/21140/21143 NICs, whose parts differ in how they name themselves and pick a medium -- `TulipMedia.cpp`); `es137x/` (`CES137x`: the Ensoniq AudioPCI sound cards, sharing one DMA engine; the ES1371's AC'97 codec and sample rate converter are in `ES137xCodec.cpp`) |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
 | `devices/video/` | `VGA` (MAME-derived core), `VGACard` (shared card plumbing + standard VGA registers), `ibm8514a`, MAME-derived shims, the dead pre-MAME `Cirrus`; one subdirectory per card family: `s3/` (`S3Trio64`), `cirrus/` (`CirrusGD54xx` split by concern, the device-independent `CirrusBlitter`, `CirrusGD5430`/`CirrusGD5434`) |
 | `devices/net/` | `Ethernet`, `NicAddress` (shared station-address default), `NetworkBackend` and its backends `NetworkPcap`, `NetworkTap`, `NetworkUdp`, `NetworkNull` |
@@ -132,7 +132,8 @@ null_attach UARTs), `CKeyboard` (KBC + PS/2 aux mouse, Bochs-derived),
 `CTulip` and `CI8255x` (NICs: `dec2104x`, `de600`/`i8255[789]`; pcap, TAP, UDP or null backend), `CSym53C8xx` (SCSI: 53C810/825/875/895, and the two-channel 896 as two PCI functions) and `CIsp1040` (SCSI: QLogic ISP1020/1040, a mailbox and queue interface rather than SCRIPTS), `CS3Trio64` + `CVGA` +
 MAME-derived rendering into the `bx_gui` plugin layer (`src/gui/`, SDL3 is
 the maintained backend), `CCirrusGD5430`/`CCirrusGD5434` (`cirrus` config
-class, `chip` key; same `CVGACard` base as the S3), `CFlash`+`CDPR`
+class, `chip` key; same `CVGACard` base as the S3), `CES137x` (sound:
+`es1370`, `es1371`, SDL audio), `CFlash`+`CDPR`
 (firmware NVRAM).
 
 CPU: `CAlphaCPU` (`cpu/AlphaCPU.cpp`) is a per-instruction interpreter

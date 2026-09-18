@@ -31,6 +31,7 @@ file(GLOB srcs
     src/devices/pci/isp1040/*.cpp
     src/devices/pci/bridge/*.cpp
     src/devices/pci/tulip/*.cpp
+    src/devices/pci/es137x/*.cpp
     src/platforms/*.cpp
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
@@ -51,7 +52,7 @@ target_include_directories(alphabox PRIVATE
     src src/cpu src/system src/common
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge
-    src/devices/pci/isp1040 src/devices/pci/tulip
+    src/devices/pci/isp1040 src/devices/pci/tulip src/devices/pci/es137x
     src/platforms
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus

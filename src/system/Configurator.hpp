@@ -63,7 +63,7 @@ typedef enum {
   c_sym53c8xx,
   c_isp1040,
   c_mpu401,
-  c_es1370,
+  c_es137x,
 
   // disk devices
   c_file,
