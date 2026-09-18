@@ -224,8 +224,9 @@ protected:
   void mem_linear_w(uint32_t offset, uint8_t data) override;
 
   // Hardware cursor overlay (MAME: screen_update cursor portion)
-  void s3_draw_hardware_cursor(uint32_t *pixels, int pitch_px, int clip_width,
-                               int clip_height, uint8_t cur_mode);
+  void draw_hardware_cursor(bitmap_rgb32 &bitmap, const rectangle &cliprect,
+                            uint8_t cur_mode);
+  uint32_t cursor_color(const uint8_t *stack, uint8_t cur_mode) const;
 
   inline void vram_write_dirty(uint32_t addr, uint8_t v) {
     vga.memory[addr % vga.svga_intf.vram_size] = v;
