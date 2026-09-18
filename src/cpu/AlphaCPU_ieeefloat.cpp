@@ -221,7 +221,7 @@ u64 CAlphaCPU::ieee_cvtst(u64 op, u32 ins) {
      not raise invalid-operation on CVTST. */
   if (FPR_GETEXP(op) == 0 && FPR_GETFRAC(op) != 0 && !(state.fpcr & FPCR_DNZ)) {
     b.sign = FPR_GETSIGN(op);
-    b.exp = 0;
+    b.exp = 1; /* the exponent of a denormal, once it has a hidden bit */
     b.frac = FPR_GETFRAC(op) << FPR_GUARD;
     ieee_norm(&b);                   /* renormalize denormal */
     b.exp = b.exp + T_BIAS - S_BIAS; /* rebias S-exp to T-exp */
@@ -418,11 +418,17 @@ u64 CAlphaCPU::ieee_cvtfi(u64 op, u32 ins) {
   if (a.frac > (a.sign ? IMMAX : IPMAX))
     ovf = 1; /* overflow? */
 
-  if (ovf)
+  if (ovf) {
     /* Pass `ins` (not 0) so I_GETRC(ins) reports the real destination
        register and ins & I_FTRP_S sets TRAP_SWC correctly on /S. */
     ieee_trap(TRAP_IOV, ins & I_FTRP_V, 0, ins); /* overflow trap */
-  if (ovf || sticky)                             /* ovflo or round? */
+    /* A conversion whose result does not fit the integer is also an invalid
+       operation on this part -- 21264 HRM Table A-11 gives "Integer overflow
+       -> Truncated result / Invalid Op" for CVTfi, and inexact is a separate
+       row of that table, not a consequence of overflow. */
+    ieee_trap(TRAP_INV, 1, FPCR_INVD, ins);
+  }
+  if (sticky) /* rounded away something? */
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins);
   return (a.sign ? NEG_Q(a.frac) : a.frac);
 }
@@ -695,8 +701,14 @@ u64 CAlphaCPU::ieee_sqrt(u64 op, u32 ins, u32 dp) {
   ftpb = ieee_unpack(op, &b, ins); /* unpack */
   if (ftpb == UFT_NAN)
     return ieee_quiet_nan_result(op, dp); /* NaN? */
-  if ((ftpb == UFT_ZERO) || /* zero? */ ((ftpb == UFT_INF) && !b.sign))
-    return op;                              /* +infinity? */
+  if (ftpb == UFT_ZERO)
+    /* The square root of a zero is that zero -- but return the zero, not the
+       operand: with FPCR[DNZ] set a denormal operand has just been treated
+       as a signed zero (ARM 4.7.7.11), and handing back its bit pattern
+       would answer sqrt(-denormal) with the denormal itself. */
+    return ((u64)b.sign) << FPR_V_SIGN;
+  if ((ftpb == UFT_INF) && !b.sign)
+    return op; /* +infinity? */
   if (b.sign) {                             /* minus? */
     ieee_trap(TRAP_INV, 1, FPCR_INVD, ins); /* signal inv op */
     return CQNAN;
@@ -748,7 +760,11 @@ int CAlphaCPU::ieee_unpack(u64 op, UFP *r, u32 ins) {
     }
 
     r->frac = r->frac << FPR_GUARD; /* guard fraction */
-    ieee_norm(r);                   /* normalize dnorm */
+    /* A denormal is 0.fraction x 2^(1-bias), so the exponent that goes with
+       a fraction carrying the hidden bit is 1, not the 0 that is stored.
+       Normalizing from 0 made every denormal worth half its value. */
+    r->exp = 1;
+    ieee_norm(r); /* normalize dnorm */
     /* Denormal input operands take an *unmaskable* trap when
        FPCR[DNZ] is clear (HRM A.11: "denormal input operands for
        arithmetic operations produce an unmaskable denormal trap").
@@ -882,8 +898,16 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
   } /* no, return max */
 
   if (r->exp <= expmin[dp]) { /* underflow? */
-    /* UNFD (with /S) disables the underflow trap; UNDZ separately controls
-       flush-to-zero result. The two bits are independent per HRM 4.7.7.1. */
+    /* KNOWN DIVERGENCE, deliberately not changed yet (docs/cpu-fidelity.md).
+       FPCR[UNDZ] is read nowhere in this emulator, so UNFD alone silences an
+       underflow and the result is flushed to zero. The architecture says
+       otherwise: this implementation cannot produce a denormal result, so
+       with UNFD set and UNDZ clear it must still trap, precisely so software
+       can supply the denormal the hardware could not (ARM 4.7.2, and 21264
+       Table 2-14, where UNFD=1 with UNDZ=0 means "trap to supply a possible
+       denormal result"). Honouring UNDZ makes underflows trap that do not
+       trap today, which changes trap delivery for a running guest -- so it
+       waits until a guest can be booted to prove it. */
     ieee_trap(TRAP_UNF, ins & I_FTRP_U, FPCR_UNFD, ins);
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins); /* set inexact */
     /* A true zero, not a signed one: ARM 4.7.7.7 says "a true zero (64 bits

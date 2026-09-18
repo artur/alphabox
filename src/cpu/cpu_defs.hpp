@@ -278,7 +278,11 @@ typedef struct ufp UFP;
 #define FPCR_INVD U64(0x0002000000000000) /* invalid op disable */
 #define FPCR_DNZ U64(0x0001000000000000)  /* denormal to zero */
 #define FPCR_DNOD U64(0x0000800000000000) /* denormal disable */
-#define FPCR_RAZ U64(0x00007FFF00000000)  /* zero */
+/* Bits that read as zero and ignore what is written to them. The 21264 has
+   no DNOD (bit 47): HRM Table 2-14 leaves 47:0 reserved, and ARM 4.7.2 says
+   an unimplemented FPCR bit "is read as zero and ignored when set". Storing
+   it let a guest probe for a feature this part does not have. */
+#define FPCR_RAZ (U64(0x00007FFF00000000) | FPCR_DNOD) /* zero */
 #define FPCR_ERR                                                               \
   (FPCR_IOV | FPCR_INE | FPCR_UNF | FPCR_OVF | FPCR_DZE | FPCR_INV)
 #define FPCR_GETFRND(x) (((x) >> FPCR_V_RMOD) & FPCR_M_RMOD)
