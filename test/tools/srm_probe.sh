@@ -5,7 +5,7 @@
 #   PORT=<n>             telnet port (default 21100; one per parallel probe)
 #   CPUS=1..4            number of CPUs (default 1)
 #   MEMBITS=<n>          memory.bits (default: the test machine's 26)
-#   SCSI=sym53c810|825|875|895 add the controller with a 1 GB disk + RAM disk
+#   SCSI=sym53c810|825|875|895|896 add the controller with a 1 GB disk + RAM disk
 #   PLATFORM=<name>      machine to emulate (default es40)
 #   ROM=<file>           console firmware image, copied into the run directory
 #                        (default: the ES40's cl67srmrom.exe)

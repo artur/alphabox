@@ -33,6 +33,7 @@ The names below were extracted from the decompressed image with
 | NCR 53C825 (825A) | `sym53c825` | `n810` console driver: bootable; wide, 4 KB SCRIPTS RAM |
 | NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM |
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
+| NCR 53C896 | `sym53c896` | `n810` console driver: bootable on both channels; two Ultra2-Wide cores as PCI functions 0 and 1, 8 KB SCRIPTS RAM each, 256-byte register file with the phase-mismatch jump block. Windows 2000 drives it with `sym_hi`, not the `symc8xx` of the single-channel parts |
 | QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DECchip 21140-AA | `dec21140` | same driver; no SIA, media through the general purpose port. The board described has nothing wired to those pins and no MII PHY |
@@ -57,7 +58,7 @@ on-board firmware or a large command set.
 
 | Firmware name | Effort | Why |
 | --- | --- | --- |
-| NCR 53C895A, 53C896 | S–M | same `n810` driver; the 895A has 8 KB of RAM and a 256-byte register window, the 896 is two channels as two PCI functions |
+| NCR 53C895A | S | same `n810` driver, and the same 256-byte register window and 8 KB of RAM as the 896 that is done; a single-channel part, so mostly a table row. Windows 2000's Alpha media carries no driver bound to its id (`DEV_0012`), so only the console would exercise it |
 | DE500-AA/-FA/-XA | S–M | named boards built on the 21140 and the 21143: a subsystem id the console recognises, and, for the 21140 boards, a real MII PHY on the general purpose port's reset pin |
 
 ### 2. New devices with high payoff
@@ -119,8 +120,8 @@ work: see [platforms.md](platforms.md).
 1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done, both directions of
    host transfer: a screen-to-system blit hands the rectangle back through
    the aperture a line at a time).
-2. ~~53C8xx variants~~: the 825, 875 and 895 are done; the 895A and 896
-   remain.
+2. ~~53C8xx variants~~: the 825, 875, 895 and the two-channel 896 are
+   done; only the 895A remains, and no Windows 2000 driver binds to it.
 3. ~~Intel 8255x~~: the DE600 and Intel's 82557/82558/82559 boards are
    done; the dual-port DE602 waits for the bridges.
 4. ~~PCI-PCI bridges~~: the 21050/21052/21152/21153/21154 and the DE602

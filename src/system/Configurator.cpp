@@ -664,6 +664,7 @@ classinfo classes[] = {
     {"sym53c825", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c875", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"sym53c895", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
+    {"sym53c896", c_sym53c8xx, IS_PCI | HAS_DISK, kv_none},
     {"floppy", c_floppy, ON_CS | HAS_DISK, kv_none},
     {"file", c_file, IS_DISK, kv_disk_file},
     {"device", c_device, IS_DISK, kv_disk_device},

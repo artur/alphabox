@@ -30,10 +30,16 @@
 
 /* Symbios (NCR/LSI) 53C8xx PCI-SCSI I/O processor family.
  *
- * One SCRIPTS processor and register file for every part; the differences
- * between parts (wide SCSI, on-chip RAM, register masks, PCI identity) are
- * data in a sym_chip_config, so a chip is a table row (Sym53C8xxChips.cpp).
- * The code is split by concern:
+ * A part is one or more SCSI cores in one package. A core -- a register
+ * file, a SCRIPTS processor and the SCSI bus it drives -- is CChannel; the
+ * single-channel parts have one, and the 53C896 has two, presented as PCI
+ * functions 0 and 1 of one device. Everything a channel does not own (the
+ * PCI header, DMA to host memory, the interrupt pins, the disks) belongs to
+ * CSym53C8xx and is reached through the `dev` back-reference.
+ *
+ * The differences between parts (wide SCSI, on-chip RAM, register masks,
+ * PCI identity, how many channels) are data in a sym_chip_config, so a chip
+ * is a table row (Sym53C8xxChips.cpp). The code is split by concern:
  *
  *   Sym53C8xx.cpp            construction, PCI header, threads, reset,
  *                            state file, main-thread timers
@@ -52,8 +58,10 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 /**
  * \brief What distinguishes one 53C8xx part from another.
@@ -64,6 +72,16 @@ struct sym_chip_config {
   u8 pci_revision;   ///< PCI config 0x08; its low nibble also reads in CTEST3
   u8 macntl;         ///< MACNTL reset value (bits 7..4: chip type)
   u32 ram_bytes;     ///< on-chip SCRIPTS RAM behind BAR2 (0: none)
+
+  /// SCSI cores, each a PCI function of its own. One everywhere but the 896.
+  u8 channels;
+
+  /// Operating registers the part decodes: 128 bytes up to the 895, 256 on
+  /// the 896, which fills the upper half with mailboxes, chip control and
+  /// the phase-mismatch block. Also decides whether the registers show
+  /// through the upper half of PCI configuration space, which only the
+  /// parts with the smaller file do.
+  u16 reg_bytes;
 
   // SCSI IDs: 3 bits on narrow parts, 4 on wide ones.
   u8 id_mask;
@@ -84,6 +102,12 @@ struct sym_chip_config {
   u8 stest3_mask;
   u8 stest4; ///< STEST4 read value (Ultra2 parts; 0 where absent)
 };
+
+/// The largest SCRIPTS RAM any part in the family has (the 896's 8 KB).
+#define SYM_MAX_RAM_BYTES 8192
+
+/// The most SCSI cores any part in the family has (the 896's two).
+#define SYM_MAX_CHANNELS 2
 
 /**
  * \brief Symbios 53C8xx SCSI disk controller.
@@ -108,7 +132,6 @@ public:
   virtual int RestoreState(FILE *f);
   virtual void check_state();
 
-  virtual void run(); // Poco Thread entry point
   virtual void init();
   virtual void start_threads();
   virtual void stop_threads();
@@ -133,112 +156,157 @@ public:
 private:
   const sym_chip_config m_chip;
 
-  void write_b_scntl0(u8 value);
-  void write_b_scntl1(u8 value);
-  void write_b_istat(u8 value);
-  u8 read_b_ctest2();
-  void write_b_ctest3(u8 value);
-  void write_b_ctest4(u8 value);
-  void write_b_ctest5(u8 value);
-  void write_b_stest2(u8 value);
-  void write_b_stest3(u8 value);
-  void write_b_scntl3(u8 value);
-  u8 read_b_scratch(u32 address);
-  u8 read_b_dstat();
-  u8 read_b_sist(int id);
-  void write_b_dcntl(u8 value);
+  /**
+   * \brief One SCSI core: register file, SCRIPTS processor, SCSI bus.
+   *
+   * The channel is what the data manuals call the chip: everything below
+   * this line was written against a single-channel part and still reads
+   * that way, because a channel of the 896 is a whole 53C895 in all but
+   * its PCI header. Its index is both the PCI function it answers for and
+   * the number of the SCSI bus it drives, so disk0.* hang off the first
+   * channel and disk1.* off the second.
+   **/
+  class CChannel {
+  public:
+    CChannel(CSym53C8xx &dev, int index);
 
-  void post_dsp_write();
+    void init();
+    void start_thread();
+    void stop_thread();
 
-  void start_scripts();
-  void run_scripts_inline();
-  bool inline_can_execute_next();
-  void step_scripts();
-  void halt_scripts_on_failure(const std::string &msg);
+    u32 bar_read(int bar, u32 address, int dsize);
+    void bar_write(int bar, u32 address, int dsize, u32 data);
 
-  int check_phase(int chk_phase);
-  void execute_io_op();
-  void execute_rw_op();
-  void execute_ls_op();
-  void execute_mm_op();
-  void execute_tc_op();
-  void execute_bm_op();
-  void execute();
+    /// Advance the main-thread timers; returns a SCRIPTS failure to report.
+    std::string poll();
+    bool thread_died() const { return myThreadDead.load(); }
 
-  void eval_interrupts();
-  void set_interrupt(int reg, u8 interrupt);
-  void chip_reset();
+    int save(FILE *f, const char *devid);
+    int restore(FILE *f, const char *devid);
 
-  std::unique_ptr<std::thread> myThread;
-  std::atomic_bool myThreadDead{false};
+  private:
+    void run(); ///< the SCRIPTS thread's entry point
 
-  /// Serializes the register file and SCRIPTS execution. Recursive because
-  /// SCRIPTS Load/Store and R/W instructions re-enter ReadMem_Bar/WriteMem_Bar
-  /// (and through DSP/ISTAT/DCNTL writes, the start logic) with it held.
-  std::recursive_mutex myRegLock;
-  /// Wakes the SCRIPTS thread; predicate is StopThread || state.executing.
-  std::condition_variable_any scriptsWake;
-  bool StopThread = false;      ///< guarded by myRegLock
-  bool scripts_running = false; ///< a SCRIPTS instruction is executing on the
-                                ///< thread holding myRegLock
-  std::string scripts_error;    ///< SCRIPTS failure for check_state() to raise
+    void write_b_scntl0(u8 value);
+    void write_b_scntl1(u8 value);
+    void write_b_istat(u8 value);
+    u8 read_b_ctest2();
+    void write_b_ctest3(u8 value);
+    void write_b_ctest4(u8 value);
+    void write_b_ctest5(u8 value);
+    void write_b_stest2(u8 value);
+    void write_b_stest3(u8 value);
+    void write_b_scntl3(u8 value);
+    u8 read_b_scratch(u32 address);
+    u8 read_b_dstat();
+    u8 read_b_sist(int id);
+    void write_b_dcntl(u8 value);
+
+    void post_dsp_write();
+
+    void start_scripts();
+    void run_scripts_inline();
+    bool inline_can_execute_next();
+    void step_scripts();
+    void halt_scripts_on_failure(const std::string &msg);
+
+    int check_phase(int chk_phase);
+    void phase_mismatch(int phase, u32 insn_addr, u32 entry_addr, u8 count_top,
+                        u32 remaining, u32 address, u32 moved);
+    void count_scsi_bytes(int phase, u32 moved);
+    bool pm_jump() const;
+    void execute_io_op();
+    void execute_rw_op();
+    void execute_ls_op();
+    void execute_mm_op();
+    void execute_tc_op();
+    void execute_bm_op();
+    void execute();
+
+    void eval_interrupts();
+    void set_interrupt(int reg, u8 interrupt);
+    void chip_reset();
+
+    /// The device this core is a part of, and its part description: the
+    /// register macros in Sym53C8xxRegs.hpp read m_chip directly.
+    CSym53C8xx &dev;
+    const sym_chip_config &m_chip;
+    /// PCI function, SCSI bus number and disk bus number of this core.
+    const int index;
+
+    std::unique_ptr<std::thread> myThread;
+    std::atomic_bool myThreadDead{false};
+
+    /// Serializes the register file and SCRIPTS execution. Recursive because
+    /// SCRIPTS Load/Store and R/W instructions re-enter bar_read/bar_write
+    /// (and through DSP/ISTAT/DCNTL writes, the start logic) with it held.
+    std::recursive_mutex myRegLock;
+    /// Wakes the SCRIPTS thread; predicate is StopThread || state.executing.
+    std::condition_variable_any scriptsWake;
+    bool StopThread = false;      ///< guarded by myRegLock
+    bool scripts_running = false; ///< a SCRIPTS instruction is executing on the
+                                  ///< thread holding myRegLock
+    std::string scripts_error;    ///< SCRIPTS failure for poll() to report
 #if defined(DEBUG_SYM_START)
-  unsigned long dbg_sigp_not_waiting = 0;
-  unsigned long dbg_inline_handoffs = 0;
+    unsigned long dbg_sigp_not_waiting = 0;
+    unsigned long dbg_inline_handoffs = 0;
 #endif
 
-  /// The state structure contains all elements that need to be saved to the
-  /// statefile.
-  struct SSym_state {
-    bool irq_asserted;
+    /// The state structure contains all elements that need to be saved to the
+    /// statefile.
+    struct SSym_state {
+      bool irq_asserted;
 
-    union USym_regs {
-      u8 reg8[128];
-      u16 reg16[64];
-      u32 reg32[64];
-    } regs;
+      union USym_regs {
+        u8 reg8[256];
+        u16 reg16[128];
+        u32 reg32[64];
+      } regs;
 
-    struct SSym_alu {
-      bool carry;
-    } alu;
+      struct SSym_alu {
+        bool carry;
+      } alu;
 
-    u8 ram[4096];
+      u8 ram[SYM_MAX_RAM_BYTES];
 
-    bool executing;
+      bool executing;
 
-    bool wait_reselect;
-    bool select_timeout;
-    int disconnected;
-    u32 wait_jump;
+      bool wait_reselect;
+      bool select_timeout;
+      int disconnected;
+      u32 wait_jump;
 
-    u8 dstat_stack;
-    u8 sist0_stack;
-    u8 sist1_stack;
+      u8 dstat_stack;
+      u8 sist0_stack;
+      u8 sist1_stack;
 
-    long gen_timer;
+      long gen_timer;
 
-    // Instruction counter for runaway SCRIPTS protection
-    int insn_processed;
+      // Instruction counter for runaway SCRIPTS protection
+      int insn_processed;
 
-    // SCSI phase tracked by the controller (SSTAT1 bits [2:0])
-    int scsi_phase;
+      // SCSI phase tracked by the controller (SSTAT1 bits [2:0])
+      int scsi_phase;
 
-    // Current SCSI status byte from command completion
-    u8 status;
+      // Current SCSI status byte from command completion
+      u8 status;
 
-    // Message-in buffer and length
-    u8 msg[8];
-    int msg_len;
+      // Message-in buffer and length
+      u8 msg[8];
+      int msg_len;
 
-    // Message action: what to do after MSG IN phase completes
-    // 0 = COMMAND, 1 = disconnect, 2 = DATA OUT, 3 = DATA IN
-    int msg_action;
+      // Message action: what to do after MSG IN phase completes
+      // 0 = COMMAND, 1 = disconnect, 2 = DATA OUT, 3 = DATA IN
+      int msg_action;
 
-    // Current LUN (set by IDENTIFY message)
-    u8 current_lun;
+      // Current LUN (set by IDENTIFY message)
+      u8 current_lun;
 
-    // Command completion pending flag
-    int command_complete;
-  } state;
+      // Command completion pending flag
+      int command_complete;
+    } state;
+  };
+
+  std::unique_ptr<CChannel> channels[SYM_MAX_CHANNELS];
 };
 #endif // !defined(INCLUDED_SYM53C8XX_H_)

@@ -69,7 +69,7 @@
  *condition occurs that generates an interrupt, the bit corresponding to the
  *earlier masked non-fatal interrupt will still be set."
  **/
-void CSym53C8xx::set_interrupt(int reg, u8 interrupt) {
+void CSym53C8xx::CChannel::set_interrupt(int reg, u8 interrupt) {
   // printf("set interrupt %02x, %02x.\n",reg,interrupt);
   switch (reg) {
   case R_DSTAT:
@@ -129,7 +129,7 @@ void CSym53C8xx::set_interrupt(int reg, u8 interrupt) {
  *
  * Check interrupt registers, and determine if an interrupt should be generated.
  **/
-void CSym53C8xx::eval_interrupts() {
+void CSym53C8xx::CChannel::eval_interrupts() {
   // will_assert: when this boolean value is true at the end of this function,
   // an interrupt will be signalled to the system.
   bool will_assert = false;
@@ -222,7 +222,10 @@ void CSym53C8xx::eval_interrupts() {
   }
 
   // If interrupts are disabled, don't signal any interrupt to the system.
-  if (TB_R8(DCNTL, IRQD)) {
+  // DCNTL IRQD may only be written while SCRIPTS are stopped; the 896's
+  // SIRQD does the same from a register the host may touch at any time,
+  // and each channel's bit masks only its own pin.
+  if (TB_R8(DCNTL, IRQD) || (m_chip.reg_bytes > 128 && TB_R8(ISTAT1, SIRQD))) {
     will_assert = false;
 
     // printf("  won't assert(IRQD).\n");
@@ -236,7 +239,7 @@ void CSym53C8xx::eval_interrupts() {
   if (will_assert != state.irq_asserted) {
 
     // printf("  doing...%d\n",will_assert);
-    do_pci_interrupt(0, will_assert);
+    dev.do_pci_interrupt(index, will_assert);
     state.irq_asserted = will_assert;
   }
 }

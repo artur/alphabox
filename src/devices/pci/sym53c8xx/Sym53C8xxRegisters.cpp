@@ -42,10 +42,31 @@
 #include "Sym53C8xxRegs.hpp"
 
 /**
- * write data to one of the PCI BAR (relocatable) address ranges.
+ * Write data to one of the PCI BAR (relocatable) address ranges.
+ *
+ * The function number is the channel: each of them decodes a register file
+ * and a SCRIPTS RAM of its own.
  **/
 void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                               u32 data) {
+  if (func < m_chip.channels)
+    channels[func]->bar_write(bar, address, dsize, data);
+}
+
+/**
+ * Read data from one of the PCI BAR (relocatable) address ranges.
+ **/
+u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
+  if (func >= m_chip.channels)
+    return 0;
+  return channels[func]->bar_read(bar, address, dsize);
+}
+
+/**
+ * Write to this channel's registers or SCRIPTS RAM.
+ **/
+void CSym53C8xx::CChannel::bar_write(int bar, u32 address, int dsize,
+                                     u32 data) {
   void *p;
 
   // One PCI transaction = one critical section: a 16/32-bit access must not
@@ -57,7 +78,7 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
   switch (bar) {
   case 0:
   case 1:
-    address &= 0x7f;
+    address &= m_chip.reg_bytes - 1;
     switch (dsize) {
     case 8:
 #if defined(DEBUG_SYM_REGS)
@@ -96,6 +117,8 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
       case R_SCRATCHA + 3: // 37
       case R_DMODE:        // 38
       case R_SBR:          // 3A     // 810
+      case R_SLPAR:        // 44
+      case R_SWIDE:        // 45
       case R_GPCNTL:       // 47
       case R_STIME0:       // 48
       case R_RESPID:       // 4A
@@ -140,6 +163,24 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
         write_b_istat((u8)data);
         break;
 
+      case R_ISTAT1: // 15
+        // The 896 generation added a second interrupt-status register and
+        // two mailboxes here; on the older parts nothing decodes at 15-17,
+        // and the writes NT and the Linux generic driver make are ignored.
+        if (m_chip.reg_bytes > 128) {
+          WRM_R8(ISTAT1, (u8)data);
+          eval_interrupts(); // SIRQD gates the interrupt pin
+        }
+        break;
+
+      case R_MBOX0:  // 16
+      case R_MBOX1:  // 17
+      case R_CCNTL0: // 56
+      case R_CCNTL1: // 57
+        if (m_chip.reg_bytes > 128)
+          state.regs.reg8[address] = (u8)data;
+        break;
+
       case R_CTEST3: // 1B
         write_b_ctest3((u8)data);
         break;
@@ -177,7 +218,9 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
         break;
 
       case R_MACNTL: // 46     // 810
-        WRM_R8(MACNTL, (u8)data);
+        // Read-only on the 896, where it is the chip-type register.
+        if (m_chip.reg_bytes == 128)
+          WRM_R8(MACNTL, (u8)data);
         break;
 
       case R_STIME1: // 49
@@ -213,15 +256,10 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
       case R_SSTAT0: // 0D
       case R_SSTAT1: // 0E
       case R_SSTAT2: // 0F
+      case R_SIST0:  // 42
+      case R_SIST1:  // 43
         // printf("SYM: Write to read-only register at %02x. FreeBSD driver
         // cache test.\n", address);
-        break;
-
-      case 0x15: // ??? NT wants this
-      case 0x16: // ??? NT wants this
-      case 0x17: // ??? NT wants this
-        // printf("SYM: Write to non-existing register at %02x. Linux generic
-        // driver.\n", address);
         break;
 
       default:
@@ -232,22 +270,22 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
       break;
 
     case 16:
-      WriteMem_Bar(0, 1, address + 0, 8, (data >> 0) & 0xff);
-      WriteMem_Bar(0, 1, address + 1, 8, (data >> 8) & 0xff);
+      bar_write(1, address + 0, 8, (data >> 0) & 0xff);
+      bar_write(1, address + 1, 8, (data >> 8) & 0xff);
       break;
 
     case 32:
-      WriteMem_Bar(0, 1, address + 0, 8, (data >> 0) & 0xff);
-      WriteMem_Bar(0, 1, address + 1, 8, (data >> 8) & 0xff);
-      WriteMem_Bar(0, 1, address + 2, 8, (data >> 16) & 0xff);
-      WriteMem_Bar(0, 1, address + 3, 8, (data >> 24) & 0xff);
+      bar_write(1, address + 0, 8, (data >> 0) & 0xff);
+      bar_write(1, address + 1, 8, (data >> 8) & 0xff);
+      bar_write(1, address + 2, 8, (data >> 16) & 0xff);
+      bar_write(1, address + 3, 8, (data >> 24) & 0xff);
       break;
     }
     break;
 
   case 2:
     // SCRIPTS RAM; accesses past its end are not decoded.
-    if (address + dsize / 8 > sizeof(state.ram))
+    if (address + dsize / 8 > m_chip.ram_bytes)
       break;
     p = (u8 *)state.ram + address;
     switch (dsize) {
@@ -266,9 +304,9 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 }
 
 /**
- * Read data from one of the PCI BAR (relocatable) address ranges.
+ * Read from this channel's registers or SCRIPTS RAM.
  **/
-u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
+u32 CSym53C8xx::CChannel::bar_read(int bar, u32 address, int dsize) {
   u32 data = 0;
   void *p;
 
@@ -279,11 +317,21 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   switch (bar) {
   case 0:
   case 1:
-    address &= 0x7f;
+    address &= m_chip.reg_bytes - 1;
     switch (dsize) {
     case 8:
       if (address >= R_SCRATCHB + 4) {
         data = state.regs.reg8[address];
+        // With PCI configuration information enabled the part answers with
+        // its own identity in SFS, as SCRATCHA and SCRATCHB answer with the
+        // BAR bases; it is how a driver tells an 896 from its successors,
+        // the chip-type nibble no longer naming a part.
+        if (address - R_SFS < 4 && m_chip.reg_bytes > 128 &&
+            TB_R8(CTEST2, SRTCH)) {
+          const u32 id =
+              (u32(m_chip.pci_revision) << 16) | m_chip.pci_device_id;
+          data = u8(id >> ((address - R_SFS) * 8));
+        }
         break;
       }
 
@@ -334,6 +382,8 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
         data = 0xff; // DMA FIFO content byte
         break;
 
+      case R_MBOX0:        // 16
+      case R_MBOX1:        // 17
       case R_CTEST1:       // 19
       case R_CTEST3:       // 1B
       case R_TEMP:         // 1C
@@ -368,6 +418,8 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
       case R_ADDER + 3:    // 3F
       case R_SIEN0:        // 40
       case R_SIEN1:        // 41
+      case R_SLPAR:        // 44
+      case R_SWIDE:        // 45
       case R_MACNTL:       // 46     // 810
       case R_GPCNTL:       // 47
       case R_STIME0:       // 48
@@ -425,18 +477,25 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
         data = m_chip.stest4;
         break;
 
-      case 0x15: // ??? NT wants this
-      case 0x16: // ??? NT wants this
-      case 0x17: // ??? Linux wants this.
+      case R_ISTAT1: // 15
+        // SRUN says a SCRIPTS program is running. ISTAT0/ISTAT1 and the
+        // mailboxes are the registers a driver may read while it does.
+        if (m_chip.reg_bytes > 128)
+          data = (R8(ISTAT1) & R_ISTAT1_SIRQD) |
+                 (state.executing ? R_ISTAT1_SRUN : 0);
+        break;
+
+      case R_CCNTL0: // 56
+      case R_CCNTL1: // 57
+        if (m_chip.reg_bytes > 128)
+          data = state.regs.reg8[address];
+        break;
+
       case 0x59: // ??? Linux wants this.
       case 0x23: // CTEST6 NT wants this.
-      case 0x44: // SLPAR NT wants this.
-      case 0x45:
       case 0x51:
       case 0x53:
       case 0x55:
-      case 0x56:
-      case 0x57:
       case 0x5a:
       case 0x5b:
         // printf("SYM: Read from non-existing register at %02x. Linux generic
@@ -458,21 +517,21 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
       break;
 
     case 16:
-      data = (ReadMem_Bar(0, 1, address + 0, 8) << 0) & 0x00ff;
-      data |= (ReadMem_Bar(0, 1, address + 1, 8) << 8) & 0xff00;
+      data = (bar_read(1, address + 0, 8) << 0) & 0x00ff;
+      data |= (bar_read(1, address + 1, 8) << 8) & 0xff00;
       break;
 
     case 32:
-      data = (ReadMem_Bar(0, 1, address + 0, 8) << 0) & 0x000000ff;
-      data |= (ReadMem_Bar(0, 1, address + 1, 8) << 8) & 0x0000ff00;
-      data |= (ReadMem_Bar(0, 1, address + 2, 8) << 16) & 0x00ff0000;
-      data |= (ReadMem_Bar(0, 1, address + 3, 8) << 24) & 0xff000000;
+      data = (bar_read(1, address + 0, 8) << 0) & 0x000000ff;
+      data |= (bar_read(1, address + 1, 8) << 8) & 0x0000ff00;
+      data |= (bar_read(1, address + 2, 8) << 16) & 0x00ff0000;
+      data |= (bar_read(1, address + 3, 8) << 24) & 0xff000000;
       break;
     }
     break;
 
   case 2:
-    if (address + dsize / 8 > sizeof(state.ram))
+    if (address + dsize / 8 > m_chip.ram_bytes)
       return 0;
     p = (u8 *)state.ram + address;
     switch (dsize) {
@@ -504,7 +563,7 @@ u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
  * TRG: When this bit is set, the controller is a target device.
  * UNIMPLEMENTED.
  **/
-void CSym53C8xx::write_b_scntl0(u8 value) {
+void CSym53C8xx::CChannel::write_b_scntl0(u8 value) {
   bool old_start = TB_R8(SCNTL0, START);
 
   WRM_R8(SCNTL0, value);
@@ -536,7 +595,7 @@ void CSym53C8xx::write_b_scntl0(u8 value) {
  *
  * \todo: Implement real reset of the SCSI bus.
  **/
-void CSym53C8xx::write_b_scntl1(u8 value) {
+void CSym53C8xx::CChannel::write_b_scntl1(u8 value) {
   bool old_iarb = TB_R8(SCNTL1, IARB);
   bool old_con = TB_R8(SCNTL1, CON);
   bool old_rst = TB_R8(SCNTL1, RST);
@@ -558,7 +617,7 @@ void CSym53C8xx::write_b_scntl1(u8 value) {
       // A bus reset ends any connection: the target drops off and CON
       // clears (drivers write SCNTL1 back read-modify-write, so a stale
       // CON would otherwise survive the reset).
-      scsi_bus[0]->reset_bus();
+      dev.scsi_bus[index]->reset_bus();
       SB_R8(SCNTL1, CON, false);
       RAISE(SIST0, RST);
     }
@@ -581,7 +640,7 @@ void CSym53C8xx::write_b_scntl1(u8 value) {
  *
  * Since interrupt state is affected, call eval_interrupts.
  **/
-void CSym53C8xx::write_b_istat(u8 value) {
+void CSym53C8xx::CChannel::write_b_istat(u8 value) {
   bool old_srst = TB_R8(ISTAT, SRST);
   bool old_sem = TB_R8(ISTAT, SEM);
   bool old_sigp = TB_R8(ISTAT, SIGP);
@@ -642,9 +701,9 @@ void CSym53C8xx::write_b_istat(u8 value) {
  *     SIGP flag.
  *   .
  **/
-u8 CSym53C8xx::read_b_ctest2() {
-  SB_R8(CTEST2, CIO, pci_state.config_data[0][4] != 0);
-  SB_R8(CTEST2, CM, pci_state.config_data[0][5] != 0);
+u8 CSym53C8xx::CChannel::read_b_ctest2() {
+  SB_R8(CTEST2, CIO, dev.pci_state.config_data[index][4] != 0);
+  SB_R8(CTEST2, CM, dev.pci_state.config_data[index][5] != 0);
   SB_R8(CTEST2, SIGP, TB_R8(ISTAT, SIGP));
   SB_R8(ISTAT, SIGP, false);
 
@@ -665,7 +724,7 @@ u8 CSym53C8xx::read_b_ctest2() {
  * instruction fetch. This allows SCRIPTS to be stored in a PROM
  * while data tables are stored in RAM. UNIMPLEMENTED.
  **/
-void CSym53C8xx::write_b_ctest3(u8 value) {
+void CSym53C8xx::CChannel::write_b_ctest3(u8 value) {
   WRM_R8(CTEST3, value);
 
   // if ((value>>3) & 1)
@@ -686,7 +745,7 @@ void CSym53C8xx::write_b_ctest3(u8 value) {
  * SRTM: Shadow Register Test Mode. Access shadow copies of TEMP and
  * DSA. Used for manufacturing diagnostics only. UNIMPLEMENTED.
  **/
-void CSym53C8xx::write_b_ctest4(u8 value) {
+void CSym53C8xx::CChannel::write_b_ctest4(u8 value) {
   R8(CTEST4) = value;
 
   if ((value >> 4) & 1)
@@ -711,7 +770,7 @@ void CSym53C8xx::write_b_ctest4(u8 value) {
  * automatically clears itself after decrementing the DBC register.
  * UNIMPLEMENTED.
  **/
-void CSym53C8xx::write_b_ctest5(u8 value) {
+void CSym53C8xx::CChannel::write_b_ctest5(u8 value) {
   WRM_R8(CTEST5, value);
 
   if ((value >> 7) & 1)
@@ -727,7 +786,7 @@ void CSym53C8xx::write_b_ctest5(u8 value) {
  * This is implemented as a separate function, because it requires
  * interrupt re-evaluation.
  **/
-u8 CSym53C8xx::read_b_dstat() {
+u8 CSym53C8xx::CChannel::read_b_dstat() {
   u8 retval = R8(DSTAT);
 
   RDCLR_R8(DSTAT);
@@ -746,7 +805,7 @@ u8 CSym53C8xx::read_b_dstat() {
  * This is implemented as a separate function, because it requires
  * interrupt re-evaluation.
  **/
-u8 CSym53C8xx::read_b_sist(int id) {
+u8 CSym53C8xx::CChannel::read_b_sist(int id) {
   u8 retval = state.regs.reg8[R_SIST0 + id];
 
   if (id)
@@ -771,7 +830,7 @@ u8 CSym53C8xx::read_b_sist(int id) {
  * IRQD (IRQ Disable): disables the IRQ pin. Requires interrupt
  * re-evaluation.
  **/
-void CSym53C8xx::write_b_dcntl(u8 value) {
+void CSym53C8xx::CChannel::write_b_dcntl(u8 value) {
   WRM_R8(DCNTL, value);
 
   // start operation
@@ -796,7 +855,7 @@ void CSym53C8xx::write_b_dcntl(u8 value) {
  * mode operation. No SCRIPTS processor, but raw manipulation of
  * SCSI registers. Yuck. UNIMPLEMENTED.
  **/
-void CSym53C8xx::write_b_stest2(u8 value) {
+void CSym53C8xx::CChannel::write_b_stest2(u8 value) {
   WRM_R8(STEST2, value);
 
   //  if (value & R_STEST2_ROF)
@@ -810,7 +869,7 @@ void CSym53C8xx::write_b_stest2(u8 value) {
  *
  * Disabling wide SCSI (EWS) also clears the Wide SCSI Receive flag.
  **/
-void CSym53C8xx::write_b_scntl3(u8 value) {
+void CSym53C8xx::CChannel::write_b_scntl3(u8 value) {
   WRM_R8(SCNTL3, value);
 
   if (m_chip.id_mask == 0x0f && !TB_R8(SCNTL3, EWS))
@@ -824,11 +883,11 @@ void CSym53C8xx::write_b_scntl3(u8 value) {
  * memory-mapped base of the operating registers (BAR1) and SCRATCHB the
  * base of the RAM (BAR2); the scratch contents are kept.
  **/
-u8 CSym53C8xx::read_b_scratch(u32 address) {
+u8 CSym53C8xx::CChannel::read_b_scratch(u32 address) {
   if (m_chip.ram_bytes && TB_R8(CTEST2, SRTCH)) {
     const bool a = address < R_SCRATCHB;
     const int byte = int(address - (a ? R_SCRATCHA : R_SCRATCHB));
-    const u32 bar = pci_state.config_data[0][a ? 5 : 6];
+    const u32 bar = dev.pci_state.config_data[index][a ? 5 : 6];
     return u8(bar >> (byte * 8));
   }
   return state.regs.reg8[address];
@@ -841,7 +900,7 @@ u8 CSym53C8xx::read_b_scratch(u32 address) {
  * some unimplemented bits that probably should have a function if
  * a driver ever decides to use these.
  **/
-void CSym53C8xx::write_b_stest3(u8 value) {
+void CSym53C8xx::CChannel::write_b_stest3(u8 value) {
   WRM_R8(STEST3, value);
 
   // CSF (Clear SCSI FIFO) clears itself once the FIFO is empty, which with

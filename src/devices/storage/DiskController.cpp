@@ -49,7 +49,7 @@ void CDiskController::register_disk(class CDisk *dsk, int bus, int dev) {
   if (dev >= num_dev)
     FAILURE(Configuration, "Can't register disk: device number out of range");
 
-  disks[bus * num_bus + dev] = dsk;
+  disks[bus * num_dev + dev] = dsk;
 }
 
 class CDisk *CDiskController::get_disk(int bus, int dev) {
@@ -58,5 +58,5 @@ class CDisk *CDiskController::get_disk(int bus, int dev) {
   if (dev >= num_dev)
     return 0;
 
-  return disks[bus * num_bus + dev];
+  return disks[bus * num_dev + dev];
 }
