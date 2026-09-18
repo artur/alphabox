@@ -1252,21 +1252,47 @@ void CAliM1543C_ide::identify_drive(int index, bool packet) {
   CONTROLLER(index).data[61] =
       (u16)(SEL_DISK(index)->get_lba_size() >> 16) & 0xFFFF;
 
-  // multiword dma capability (10-8: modes selected, 2-0, modes
-  // supported)
-  if (usedma && !packet)
-    CONTROLLER(index).data[63] =
-        CONTROLLER(index).dma_mode << 8 | 0x01; // dma 0 supported
-  else
-    CONTROLLER(index).data[63] =
-        CONTROLLER(index).dma_mode << 8 | 0x00; // dma not supported
+  /* The DMA modes this drive offers.
+   *
+   * A transfer here is a memcpy along the bus master's PRD list: it takes no
+   * time, and the mode never reaches it -- do_dma_transfer() walks the same
+   * descriptors whatever the guest picked, and the ALi timing registers a
+   * driver programs for its choice (configuration space 0x4b, 0x54-0x57) are
+   * read-only in this model and read by nothing. So the mode is a label, and
+   * the honest thing is to wear the label the real part would let a drive
+   * wear rather than the slowest one imaginable.
+   *
+   * In front of the drive sits an ALi M1543C, and the configuration space we
+   * hand out says which one: revision 0xc1, with the part's UDMA test and
+   * UDMA setting registers already carrying their power-on values. That is an
+   * UltraDMA/33 south bridge -- multiword modes 0 through 2 and Ultra modes 0
+   * through 2, no further. Stopping there is not only what the part does, it
+   * is also what this model can be honest about: Ultra mode 3 and up are the
+   * ones that need an 80-conductor cable and the reporting (word 93) and
+   * error recovery that go with detecting one, and none of that exists here.
+   * Within modes 0-2 there is nothing a guest can program that the transfer
+   * would get wrong, because the transfer consults none of it.
+   *
+   * ATAPI stays PIO-only whatever the setting says: packet DMA is not
+   * reliable in this controller model, and ide_busmaster_status() already
+   * tells the guest so (see the comment there). Both words must agree with it.
+   */
+  u16 mwdma_modes = (usedma && !packet) ? 0x0007 : 0x0000;
+  u16 udma_modes = (usedma && !packet) ? 0x0007 : 0x0000;
+  u8 selected_mode = CONTROLLER(index).dma_mode;
+
+  // multiword dma (2-0: modes supported, 10-8: mode selected)
+  CONTROLLER(index).data[63] = mwdma_modes;
+  if (mwdma_modes && (selected_mode & 0xf8) == 0x20)
+    CONTROLLER(index).data[63] |= (u16)(0x0100 << (selected_mode & 0x07));
 
   // pio modes supported (bit 0 = mode 3, bit 1 = mode 4)
   CONTROLLER(index).data[64] = 0x0002;
 
-  // minimum cycle times
-  CONTROLLER(index).data[65] = 480; // mode 0
-  CONTROLLER(index).data[66] = 480; // mode 0
+  // minimum cycle times: multiword mode 2's where we offer mode 2,
+  // multiword mode 0's where we offer no DMA at all
+  CONTROLLER(index).data[65] = mwdma_modes ? 120 : 480;
+  CONTROLLER(index).data[66] = mwdma_modes ? 120 : 480;
   CONTROLLER(index).data[67] = 120; // pio4
   CONTROLLER(index).data[68] = 120; // pio4
   if (packet) {
@@ -1299,9 +1325,10 @@ void CAliM1543C_ide::identify_drive(int index, bool packet) {
   CONTROLLER(index).data[86] = 0x4000;
   CONTROLLER(index).data[87] = 0x4000;
 
-  // ultra dma modes supported (10-8: modes selected, 2-0, modes
-  // supported)
-  CONTROLLER(index).data[88] = 0x0000;
+  // ultra dma (2-0: modes supported, 10-8: mode selected)
+  CONTROLLER(index).data[88] = udma_modes;
+  if (udma_modes && (selected_mode & 0xf8) == 0x40)
+    CONTROLLER(index).data[88] |= (u16)(0x0100 << (selected_mode & 0x07));
 }
 
 u32 CAliM1543C_ide::get_disk_lba(int index) {
@@ -1637,21 +1664,24 @@ void CAliM1543C_ide::execute(int index) {
       if (SEL_DISK(index)->cdrom()) {
         command_aborted(index, SEL_COMMAND(index).current_command);
       } else {
-#ifdef DEBUG_IDE
-        printf("Original c: %d, h: %d, s: %d\n",
-               SEL_DISK(index)->get_cylinders(), SEL_DISK(index)->get_heads(),
-               SEL_DISK(index)->get_sectors());
-        printf("Requested c: %d, h: %d, s: %d\n",
-               SEL_REGISTERS(index).cylinder_no,
-               SEL_REGISTERS(index).head_no + 1,
-               SEL_REGISTERS(index).sector_count);
-#endif
-        if (SEL_DISK(index)->get_heads() ==
-                (SEL_REGISTERS(index).head_no + 1) &&
-            SEL_DISK(index)->get_sectors() ==
-                SEL_REGISTERS(index).sector_count) {
 
-          // use the default translation -- ok!
+        /* The command carries the translation the guest wants: heads in the
+         * low bits of the device register, sectors per track in the sector
+         * count. The only one we can agree to is the drive's own, because
+         * that is the one get_disk_lba() decodes every CHS address with; we
+         * cannot re-cut the disk, so honouring a different geometry would
+         * mean reading and writing the wrong blocks for the rest of the
+         * session. A guest that asks for what IDENTIFY reported -- which is
+         * what a guest normally asks for -- gets a yes; anything else gets
+         * an abort and a line saying what it asked for, and falls back to
+         * LBA, which is what every guest we boot addresses the disk with.
+         */
+        int req_heads = SEL_REGISTERS(index).head_no + 1;
+        int req_sectors = SEL_REGISTERS(index).sector_count;
+        if (SEL_DISK(index)->get_heads() == req_heads &&
+            SEL_DISK(index)->get_sectors() == req_sectors) {
+
+          // the drive's own translation -- ok!
           SEL_STATUS(index).busy = false;
           SEL_STATUS(index).drive_ready = true;
           SEL_STATUS(index).fault = false;
@@ -1659,9 +1689,10 @@ void CAliM1543C_ide::execute(int index) {
           SEL_STATUS(index).err = false;
           raise_interrupt(index);
         } else {
-#ifdef DEBUG_IDE
-          PAUSE("INIT DEV PARAMS -- geometry not supported!");
-#endif
+          printf("%%IDE-W-GEOMETRY: Controller %d drive %d asked for %d "
+                 "heads, %d sectors/track; this drive is %ld/%ld. Refused.\n",
+                 index, CONTROLLER(index).selected, req_heads, req_sectors,
+                 SEL_DISK(index)->get_heads(), SEL_DISK(index)->get_sectors());
           SEL_STATUS(index).busy = false;
           SEL_STATUS(index).drive_ready = true;
           SEL_STATUS(index).fault = false;
@@ -2316,48 +2347,46 @@ void CAliM1543C_ide::execute(int index) {
     case 0xef: // set features
       SEL_COMMAND(index).command_in_progress = false;
       switch (SEL_REGISTERS(index).features) {
-      case 0x03: // set transfer mode
-        if (SEL_REGISTERS(index).sector_count < 16) {
+      case 0x03: { // set transfer mode
 
-          // allow all PIO modes.
-          SEL_STATUS(index).busy = false;
-          SEL_STATUS(index).drive_ready = true;
-          SEL_STATUS(index).seek_complete = true;
-          SEL_STATUS(index).fault = false;
-          SEL_STATUS(index).drq = false;
-          SEL_STATUS(index).err = false;
-          raise_interrupt(index);
-          break;
-        } else {
-
-          // a DMA mode.
-          switch (SEL_REGISTERS(index).sector_count) {
-          case 0x20:
-          case 0x21:
-          case 0x22:
-
-            // multiword dma
-            CONTROLLER(index).dma_mode =
-                SEL_REGISTERS(index).sector_count & 0x03;
-            SEL_STATUS(index).busy = false;
-            SEL_STATUS(index).drive_ready = true;
-            SEL_STATUS(index).seek_complete = true;
-            SEL_STATUS(index).fault = false;
-            SEL_STATUS(index).drq = false;
-            SEL_STATUS(index).err = false;
-            raise_interrupt(index);
-            break;
-
-          case 0x40:
-          case 0x41:
-          case 0x42:
-
-            // ultra dma
-            command_aborted(index, SEL_COMMAND(index).current_command);
-            break;
-          }
+        /* The mode byte is in the sector count register, and the answer has
+         * to be the same one IDENTIFY gave: agreeing here to a mode we did
+         * not offer there would leave the guest believing something about
+         * the bus that no word of ours supports. PIO is always available;
+         * the DMA modes are the ones identify_drive() puts in words 63 and
+         * 88, which an ATAPI drive or a channel configured without DMA does
+         * not get. Anything else -- a reserved mode byte, a mode above what
+         * an UltraDMA/33 bridge reaches -- is refused rather than quietly
+         * ignored, which is what used to happen: the old code matched only
+         * the mode bytes it knew and left the command with BSY still set
+         * for any other, so the guest waited for a drive that had stopped
+         * answering.
+         */
+        u8 mode = (u8)SEL_REGISTERS(index).sector_count;
+        bool dma_ok = usedma && !SEL_DISK(index)->cdrom();
+        bool accept = (mode < 0x10) ||                            // pio
+                      (dma_ok && mode >= 0x20 && mode <= 0x22) || // multiword
+                      (dma_ok && mode >= 0x40 && mode <= 0x42);   // ultra
+        if (!accept) {
+          command_aborted(index, SEL_COMMAND(index).current_command);
           break;
         }
+
+        if (mode != CONTROLLER(index).dma_mode && mode >= 0x20)
+          printf("%%IDE-I-XFERMODE: Controller %d drive %d selects %s DMA "
+                 "mode %d.\n",
+                 index, CONTROLLER(index).selected,
+                 (mode & 0x20) ? "multiword" : "ultra", mode & 0x07);
+        CONTROLLER(index).dma_mode = mode;
+        SEL_STATUS(index).busy = false;
+        SEL_STATUS(index).drive_ready = true;
+        SEL_STATUS(index).seek_complete = true;
+        SEL_STATUS(index).fault = false;
+        SEL_STATUS(index).drq = false;
+        SEL_STATUS(index).err = false;
+        raise_interrupt(index);
+        break;
+      }
 
       default:
         printf("%%IDE-I-FEAT: Unhandled set feature subcommand %x\n",

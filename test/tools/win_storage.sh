@@ -5,7 +5,11 @@
 #
 # usage: CTRL=<config class> win_storage.sh <label> <alphabox-binary> \
 #            <install-dir> <cfg> [boots] [VAR=value ...]
-#   CTRL      controller class, e.g. sym53c810 (placed at pci0.3)
+#   CTRL      controller class, e.g. sym53c810 (placed at pci0.3).
+#             CTRL=ali_ide instead hangs the test disk off the IDE
+#             controller the machine already has, as drive IDE_DEV
+#             (default disk0.1, the master's companion on the first
+#             channel).
 #   CTRL_OPTS extra lines for the controller section, e.g. 'chip = "x";'
 #   BRIDGE    put the controller behind a PCI-PCI bridge of this class
 #             (at pci0.3), as device BRIDGE_DEV (default 2) on its bus
@@ -38,15 +42,24 @@ D=$WORK/storage-$LABEL
 rm -rf "$D"
 cp -c -R "$SRC" "$D" 2>/dev/null || cp -R "$SRC" "$D" || exit 2
 cd "$D" || exit 2
-python3 "$T/fat_disk.py" make scsi0.img --size-mb 64 --data-kb 2048 > /dev/null || exit 2
-python3 - "$CFG" "$CTRL" "${CTRL_OPTS:-}" "${BRIDGE:-}" "${BRIDGE_DEV:-2}" > storage.cfg <<'PY' || exit 2
+python3 "$T/fat_disk.py" make test0.img --size-mb 64 --data-kb 2048 > /dev/null || exit 2
+python3 - "$CFG" "$CTRL" "${CTRL_OPTS:-}" "${BRIDGE:-}" "${BRIDGE_DEV:-2}" \
+  "${IDE_DEV:-disk0.1}" > storage.cfg <<'PY' || exit 2
 import sys
-cfg, ctrl, opts, bridge, bridge_dev = sys.argv[1:6]
+cfg, ctrl, opts, bridge, bridge_dev, ide_dev = sys.argv[1:7]
 t = open(cfg).read()
 anchor = "  pci0.15 = ali_ide"
 assert anchor in t, "no ali_ide section to anchor on"
-sec = "  pci0.3 = %s\n  {\n%s    disk0.0 = file\n    {\n      file = \"scsi0.img\";\n    }\n  }\n\n" % (
-    ctrl, ("    " + opts + "\n") if opts else "")
+def drive(name):
+    return "    %s = file\n    {\n      file = \"test0.img\";\n    }\n" % name
+if ctrl == "ali_ide":
+    # the machine already has this controller: add the disk to it
+    head = anchor + "\n  {\n"
+    assert head in t, "ali_ide section does not open the way we expect"
+    print(t.replace(head, head + drive(ide_dev), 1), end="")
+    sys.exit()
+sec = "  pci0.3 = %s\n  {\n%s%s  }\n\n" % (
+    ctrl, ("    " + opts + "\n") if opts else "", drive("disk0.0"))
 if bridge:
     inner = sec.replace("  pci0.3 = ", "  pci.%s = " % bridge_dev, 1)
     inner = "".join("  " + l if l.strip() else l for l in inner.splitlines(True))
@@ -84,11 +97,11 @@ for boot in $(seq 1 "$BOOTS"); do
   last=$(ls fb | tail -1)
   [ -n "$last" ] && python3 "$T/ppm2png.py" "fb/$last" boot$boot.png
   printf '  boot %d: ' "$boot"
-  if python3 "$T/fat_disk.py" check scsi0.img COPY.BIN DATA.BIN; then
+  if python3 "$T/fat_disk.py" check test0.img COPY.BIN DATA.BIN; then
     ok=0
     break
   fi
 done
-grep -aE 'Emulator Failure|SYM:' boot*.log | sort | uniq -c | sort -rn | head -8 | sed 's/^/  /'
+grep -aE 'Emulator Failure|SYM:|%IDE-' boot*.log | sort | uniq -c | sort -rn | head -8 | sed 's/^/  /'
 echo "  screens: $D/boot*.png"
 exit $ok
