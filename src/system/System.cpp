@@ -1048,9 +1048,13 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
       }
     }
 
-    if (a >= U64(0x800000c0000) && a < U64(0x801000e0000)) {
+    if (a >= U64(0x800000c0000) && a < U64(0x800000e0000)) {
 
-      // Unused PCI ROM BIOS space
+      // The option ROM window with nothing shadowed into it. It reads as
+      // zero, but it is worth tracing: this is where the console looks for
+      // a video BIOS, and a card that fails to answer here is a card the
+      // console will never bring up.
+      trace_unknown("PCI ROM BIOS", a, dsize, false, 0, source);
       return 0;
     }
 
