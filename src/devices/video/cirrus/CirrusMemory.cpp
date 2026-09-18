@@ -176,6 +176,8 @@ uint8_t CCirrusGD54xx::mem_r(offs_t offset) {
     return CVGA::mem_r(offset);
 
   if (offset < 0x10000) {
+    if (m_blitter.host_readable())
+      return m_blitter.host_read();
     const int bank = offset >> 15;
     const u32 in_bank = offset & 0x7fff;
     if (in_bank >= m_bank_limit[bank])
@@ -219,14 +221,18 @@ void CCirrusGD54xx::mem_w(offs_t offset, uint8_t data) {
 /**
  * Read from the PCI linear aperture (BAR0). VRAM repeats through the
  * aperture; with SR17 bits 6 and 2 set, the last 256 bytes of each VRAM
- * image are the BitBLT registers instead. While a system-to-screen blit
- * waits for data, writes anywhere else in the aperture are its source.
+ * image are the BitBLT registers instead. While a host transfer is in
+ * flight the aperture is the blit data port, wherever in it the guest
+ * happens to look: writes anywhere else feed a system-to-screen blit, and
+ * reads take back what a screen-to-system blit has produced.
  **/
 uint8_t CCirrusGD54xx::mem_linear_r(offs_t offset) {
   const u32 addr = offset & vram_mask();
   const u32 mmio = m_chip.vram_bytes - 0x100;
   if (mmio_enabled_linear() && (addr & mmio) == mmio)
     return mmio_read(addr & 0xff);
+  if (m_blitter.host_readable())
+    return m_blitter.host_read();
   return vga.memory[aperture_offset(addr)];
 }
 

@@ -165,10 +165,9 @@ protected:
   u8 m_cursor_y_low = 0;
 
   /// The BitBLT engine works on m_gr and the VRAM. Not part of the state
-  /// file: a blit completes within one register write or, for
-  /// system-to-screen transfers, within the guest's following aperture
-  /// writes.
-  CCirrusBlitter m_blitter{m_gr, "cirrus"};
+  /// file: a blit completes within one register write or, for host
+  /// transfers, within the aperture accesses the guest makes next.
+  CCirrusBlitter m_blitter{m_gr};
 
   /// Port 0x3c3 (video subsystem enable). Stored and read back only.
   u8 m_port_3c3 = 0x01;

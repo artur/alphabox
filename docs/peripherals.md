@@ -113,8 +113,9 @@ work: see [platforms.md](platforms.md).
 
 ## Suggested order
 
-1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done; screen-to-system
-   blits are still ignored).
+1. ~~GD5430 variant and the Cirrus BitBLT engine~~ (done, both directions of
+   host transfer: a screen-to-system blit hands the rectangle back through
+   the aperture a line at a time).
 2. ~~53C8xx variants~~: the 825, 875 and 895 are done; the 895A and 896
    remain.
 3. ~~Intel 8255x~~: the DE600 and Intel's 82557/82558/82559 boards are
