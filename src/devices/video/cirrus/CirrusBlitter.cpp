@@ -32,8 +32,9 @@
  *   - 8x8 pattern fill, from a colour pattern or a 1 bpp one.
  * Each applies one of 16 raster operations between source and destination.
  * The source is VRAM, or -- for system-to-screen blits -- bytes the guest
- * writes to the aperture afterwards, consumed a line at a time. Screen-to-
- * system blits are not implemented; they are ignored and reported once.
+ * writes to the aperture afterwards, consumed a line at a time. A screen-to-
+ * system blit is the same thing the other way round: the destination is the
+ * host, which reads the rectangle back out of the aperture a line at a time.
  *
  * Behaviour follows what QEMU's GD54xx model documents, except where a
  * comment below says otherwise. Every VRAM access is masked, so no
@@ -43,7 +44,7 @@
 #include "CirrusBlitter.hpp"
 #include "CirrusRegs.hpp"
 
-#include <cstdio>
+#include <cstring>
 
 using namespace cirrus;
 
@@ -156,6 +157,7 @@ void CCirrusBlitter::reset() {
   m_gr[GC_BLT_STATUS] &= ~(BLT_START | BLT_STATUS_BUSY | BLT_FIFO_USED);
   m_host_active = false;
   m_host_source = false;
+  m_host_dest = false;
   m_host_remaining = 0;
   m_host_fill = 0;
   m_host_line = 0;
@@ -190,8 +192,20 @@ u32 CCirrusBlitter::src_pixel(u32 addr, int bytes) const {
   return value;
 }
 
+/**
+ * The destination byte at an address. On a screen-to-system blit the
+ * destination is the line the host is about to read, not VRAM, so the whole
+ * of run() draws into the buffer and the guest takes the result away
+ * through the aperture.
+ **/
+u8 &CCirrusBlitter::dst_byte(u32 addr) {
+  if (m_host_dest)
+    return m_buffer[addr & (BUFFER_SIZE - 1)];
+  return m_vram[addr & m_mask];
+}
+
 void CCirrusBlitter::store(u32 addr, u8 src) {
-  u8 &d = m_vram[addr & m_mask];
+  u8 &d = dst_byte(addr);
   d = rop_apply(m_rop, d, src);
 }
 
@@ -214,14 +228,14 @@ void CCirrusBlitter::put_transparent(u32 addr, u32 color, u32 transparent) {
   u8 result[4];
   u32 pixel = 0;
   for (int i = 0; i < n; i++) {
-    const u8 d = m_vram[(addr + i) & m_mask];
+    const u8 d = dst_byte(addr + i);
     result[i] = rop_apply(m_rop, d, u8(color >> (8 * i)));
     pixel |= u32(result[i]) << (8 * i);
   }
   if (pixel == transparent)
     return;
   for (int i = 0; i < n; i++)
-    m_vram[(addr + i) & m_mask] = result[i];
+    dst_byte(addr + i) = result[i];
 }
 
 /**
@@ -389,7 +403,7 @@ void CCirrusBlitter::run(u32 dst, u32 src, int dst_pitch, int src_pitch,
  * Prepare a system-to-screen blit: work out how many source bytes make a
  * line and wait for them (host_write).
  **/
-bool CCirrusBlitter::start_host() {
+bool CCirrusBlitter::start_host_src() {
   const int pattern_row = (m_bytes == 1) ? 8 : (m_bytes == 2) ? 16 : 32;
 
   if (m_mode & BLT_MODE_PATTERN) {
@@ -446,6 +460,68 @@ void CCirrusBlitter::host_write(u8 data) {
     reset();
 }
 
+/**
+ * Prepare a screen-to-system blit. The engine still does the work -- it
+ * reads the source rectangle and applies the raster operation -- but the
+ * result goes to the host instead of VRAM, one line at a time, so only the
+ * line the guest is reading has to exist.
+ *
+ * The chip hands back a whole number of doublewords per line, which is how
+ * it takes them in the other direction; the padding at the end of a short
+ * line is whatever the engine leaves there, and here that is zero.
+ **/
+bool CCirrusBlitter::start_host_dst() {
+  // Only a plain rectangle read makes sense this way round. Colour
+  // expansion and the pattern fills invent pixels rather than read a
+  // rectangle back, and no driver asks the engine to hand those over.
+  if (m_kind != COPY_FWD && m_kind != COPY_TRANSPARENT_FWD)
+    return false;
+
+  m_host_line = size_t((m_width + 3) & ~3);
+  if (m_host_line > BUFFER_SIZE)
+    return false;
+
+  m_host_remaining = int(m_host_line) * m_height;
+  m_host_dest = true;
+  m_host_active = true;
+  // The engine holds a line the guest has not taken yet, which is what the
+  // FIFO-used bit says.
+  m_gr[GC_BLT_STATUS] |= BLT_FIFO_USED;
+  fill_host_line();
+  return true;
+}
+
+/**
+ * Draw the next line of a screen-to-system blit into the buffer. The line
+ * starts out blank, so a raster operation that wants a destination sees
+ * zero: the engine never fetches the host's memory, and a driver reading the
+ * screen back asks for the source anyway.
+ **/
+void CCirrusBlitter::fill_host_line() {
+  memset(m_buffer, 0, m_host_line);
+  run(0, m_src, 0, 0, m_width, 1);
+  m_src += m_src_pitch;
+  m_host_fill = 0;
+}
+
+/**
+ * One byte of a screen-to-system blit, read by the guest from the aperture.
+ * The next line is drawn as soon as the previous one has been taken, and the
+ * blit ends with the last byte of the last line.
+ **/
+u8 CCirrusBlitter::host_read() {
+  const u8 data = m_buffer[m_host_fill++];
+  if (m_host_fill < m_host_line)
+    return data;
+
+  m_host_remaining -= int(m_host_line);
+  if (m_host_remaining <= 0)
+    reset();
+  else
+    fill_host_line();
+  return data;
+}
+
 void CCirrusBlitter::start() {
   m_gr[GC_BLT_STATUS] |= BLT_STATUS_BUSY;
 
@@ -461,6 +537,7 @@ void CCirrusBlitter::start() {
   m_bytes = ((m_mode & BLT_MODE_PIXEL_WIDTH) >> 4) + 1;
   m_mode &= ~BLT_MODE_PIXEL_WIDTH;
   m_host_source = false;
+  m_host_dest = false;
   m_fg = color(true);
   m_bg = color(false);
 
@@ -499,7 +576,11 @@ void CCirrusBlitter::start() {
       reset();
       return;
     }
-    if (m_mode & BLT_MODE_BACKWARDS) {
+    // Backwards is there so that an overlapping screen-to-screen copy does
+    // not overwrite what it has yet to read. A readback has no such overlap
+    // -- the destination is the host's own memory -- and the guest expects
+    // the stream in address order, so the direction bit is left alone.
+    if ((m_mode & BLT_MODE_BACKWARDS) && !(m_mode & BLT_MODE_HOST_DST)) {
       m_dst_pitch = -m_dst_pitch;
       m_src_pitch = -m_src_pitch;
       m_kind = transparent ? COPY_TRANSPARENT_BKWD : COPY_BKWD;
@@ -510,19 +591,15 @@ void CCirrusBlitter::start() {
   }
 
   if (m_mode & BLT_MODE_HOST_SRC) {
-    if (!start_host())
+    if (!start_host_src())
       reset();
     return; // runs as the source bytes arrive
   }
 
   if (m_mode & BLT_MODE_HOST_DST) {
-    if (!m_reported_host_dst) {
-      printf("%s: screen-to-system BitBLT is not implemented; ignored\n",
-             m_name);
-      m_reported_host_dst = true;
-    }
-    reset();
-    return;
+    if (!start_host_dst())
+      reset();
+    return; // runs as the guest reads the bytes back
   }
 
   if (m_mode & BLT_MODE_PATTERN) {

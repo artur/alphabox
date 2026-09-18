@@ -36,10 +36,9 @@
 
 class CCirrusBlitter {
 public:
-  /// \param gr   the chip's GR register array: GR00..GR39 are read when a
-  ///             blit starts, and GR31's status bits are kept up to date.
-  /// \param name prefix for the few messages the engine prints.
-  CCirrusBlitter(u8 *gr, const char *name) : m_gr(gr), m_name(name) {}
+  /// \param gr the chip's GR register array: GR00..GR39 are read when a
+  ///           blit starts, and GR31's status bits are kept up to date.
+  explicit CCirrusBlitter(u8 *gr) : m_gr(gr) {}
 
   /// The framebuffer; its size must be a power of two.
   void set_vram(u8 *vram, u32 vram_bytes) {
@@ -57,8 +56,13 @@ public:
 
   /// A system-to-screen blit is waiting for source bytes: aperture writes
   /// go to host_write() instead of VRAM.
-  bool host_active() const { return m_host_active; }
+  bool host_active() const { return m_host_active && !m_host_dest; }
   void host_write(u8 data);
+
+  /// A screen-to-system blit has bytes waiting: aperture reads come from
+  /// host_read() instead of VRAM.
+  bool host_readable() const { return m_host_active && m_host_dest; }
+  u8 host_read();
 
   /// True if VRAM was drawn since the previous call.
   bool take_drawn() {
@@ -83,23 +87,24 @@ private:
     EXPAND_PATTERN_TRANSPARENT,
   };
 
-  bool start_host();
+  bool start_host_src();
+  bool start_host_dst();
+  void fill_host_line();
   void run(u32 dst, u32 src, int dst_pitch, int src_pitch, int width,
            int height);
   u8 src_byte(u32 addr) const;
   u32 src_pixel(u32 addr, int bytes) const;
+  u8 &dst_byte(u32 addr);
   void store(u32 addr, u8 src);
   void put(u32 addr, u32 color);
   void put_transparent(u32 addr, u32 color, u32 transparent);
   u32 color(bool foreground) const;
 
   u8 *m_gr;
-  const char *m_name;
   u8 *m_vram = nullptr;
   u32 m_vram_bytes = 0;
   u32 m_mask = 0;
   bool m_drawn = false;
-  bool m_reported_host_dst = false;
 
   // The operation in progress.
   kind_t m_kind = FILL;
@@ -111,12 +116,16 @@ private:
   u8 m_mode = 0, m_mode_ext = 0;
   u32 m_fg = 0, m_bg = 0;
 
-  // System-to-screen transfer.
+  // Host transfer, in either direction: one line of it lives in m_buffer,
+  // which the guest fills through the aperture (system to screen) or drains
+  // through it (screen to system). The two directions are exclusive, so
+  // they share the buffer and the counters.
   bool m_host_active = false;
   bool m_host_source = false; ///< src_byte reads the buffer, not VRAM
-  int m_host_remaining = 0;   ///< source bytes still expected
-  size_t m_host_fill = 0;     ///< bytes buffered for the current line
-  size_t m_host_line = 0;     ///< bytes per source line
+  bool m_host_dest = false;   ///< dst_byte writes the buffer, not VRAM
+  int m_host_remaining = 0;   ///< bytes still to be taken in or handed back
+  size_t m_host_fill = 0;     ///< position in the current line
+  size_t m_host_line = 0;     ///< bytes per line on the host's side
   u8 m_buffer[BUFFER_SIZE] = {};
 };
 
