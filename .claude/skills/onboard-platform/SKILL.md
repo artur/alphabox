@@ -57,8 +57,15 @@ The board is selected with `platform = "<name>";` in the machine block.
    ```
 
    `%SYS-T-UNKNOWN` lines give the address, the width and the instruction
-   that made the access. Repeated reads of one address usually mean the
-   firmware is waiting for a bit to change.
+   that made the access, with the return address -- firmware reaches
+   hardware through helpers, so the caller is what matters. Repeated reads
+   of one address usually mean the firmware is waiting for a bit to change.
+
+   The other traces answer different questions: `ALPHABOX_TRACE_CALLS=1`
+   (the firmware's own calls, which shows where a silent failure stops),
+   `ALPHABOX_TRACE_I2C=1`, `ALPHABOX_TRACE_MP=1` (how a console starts
+   other processors), `ALPHABOX_TRACE_FLASH=1`, and
+   `ALPHABOX_DUMP_MEMORY=1` (guest memory at exit).
 4. **Identify the register before implementing it.** Sources, in order: the
    machine's hardware manual; Linux `arch/alpha/kernel/sys_*.c` and
    `core_*.c`; NetBSD `sys/arch/alpha/`; the equivalent register on the

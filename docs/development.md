@@ -30,7 +30,7 @@ They stop only the emulator processes they started.
 |---|---|
 | `srm_run.sh` | SRM firmware boot to `P00>>>` for one build, with a console-log diff against `test/rom/axp_correct.log` and the JIT_VERIFY mismatch count. Give each build its own `PORT` to run several at once. |
 | `srm_probe.sh` | SRM probes: CPU count, `memory.bits`, SCSI/IDE/floppy drives, a NIC (`NIC=<class>`, optionally on a UDP link to `net_peer.py` with `NET_PEER=<nic port>:<peer port>`), any extra configuration (`EXTRA_CFG=<file>`: bridges, more devices), console commands, and the SIGTERM, disconnect and halt exit paths. |
-| Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP`, `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get. See [headless.md](headless.md). |
+| Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `ALPHABOX_TRACE_CALLS`, `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP`, `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get. See [headless.md](headless.md). |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image, so `boot eia0`/`boot ewa0` exercises a full network boot. |
 | `vga_boot.sh` | SRM on the S3 or Cirrus VGA console (`CARD=s3\|cirrus`, `CHIP=gd5430\|gd5434`), window-less; reports the hashes of the frames the screen settles on. The known sets are in the script header. |
 | `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. |

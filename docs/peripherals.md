@@ -61,7 +61,6 @@ on-board firmware or a large command set.
 
 | Firmware name | Effort | Why |
 | --- | --- | --- |
-| QLogic ISP10x0 (`isp1020`, KZPBA) | L | the standard ES40 SCSI adapter; bootable; drivers in OpenVMS, Tru64, NetBSD, Linux and NT. The command interface runs through on-board RISC firmware, so it's a mailbox/IOCB model, not a register model |
 | DECchip ZLXp 21030 (TGA) | L | DEC's own 2D/3D workstation graphics; DECwindows/CDE on OpenVMS and Tru64 expect it; NetBSD has a driver |
 | DE602-F*/-T* (DE602 add-on modules) | S | extra ports for a DE602 |
 | DE504-BA and other quad 21143 boards | S | four `dec21143` behind a bridge: already possible by hand; a board class would name them |
@@ -130,3 +129,12 @@ work: see [platforms.md](platforms.md).
 Each new device gets its own directory under `src/devices/<bus>/` (as
 `video/s3/` and `video/cirrus/` do), split by concern, and is verified
 against the real firmware or guest driver that names it.
+
+**Verify against a guest driver, not only the console.** The console is
+undemanding: it drove the QLogic adapter while three things were wrong that
+Windows would not tolerate -- a missing self-identification after reset, and
+two mistakes in the queue entries that carry the buffer segments of a large
+transfer, which the console never exercised because it only ever issues
+single-segment commands. Each of them was invisible until a guest driver
+ran. `win_storage.sh` (a file copy inside Windows) is the cheapest such
+test for a storage controller.

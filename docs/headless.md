@@ -94,6 +94,10 @@ every address the firmware puts on it and whether anything answered.
 processors and hand work to them -- how a machine brings its processors up
 differs from board to board.
 
+`ALPHABOX_TRACE_CALLS=1` reports the firmware's own calls, once per call
+site and routine, which is how a silent failure inside a console is read
+(it found the DS10's). Interpreter builds only.
+
 `ALPHABOX_TRACE_FLASH=1` reports the commands firmware sends the flash,
 which tells "it never found the part" from "it read what it wanted".
 

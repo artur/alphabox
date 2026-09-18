@@ -95,6 +95,7 @@ Source layout under `src/`:
 | `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
 | `system/` | `System`, `SystemComponent`, `Configurator`, `DPR`, `Flash`, `Port80`, `i2c_spd`, `TraceEngine` |
 | `platforms/` | which machine is emulated: `Platform.hpp` + the board rows in `Platforms.cpp` (slots, interrupt wiring, firmware form, processors, memory), chosen with `platform = "<name>";` |
+| `devices/common/` | device parts more than one family uses: `Eeprom93cx6` (the Microwire serial EEPROM the Intel NICs and the QLogic adapters keep their settings in) |
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
 | `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `DEC21143`, `ES1370`, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `isp1040/` (the QLogic ISP10x0 SCSI adapters: mailboxes and request/response queues rather than SCRIPTS); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`) |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
@@ -128,7 +129,7 @@ children (`CDiskFile`/`CDiskDevice`/`CDiskRam`, BIN/CUE support in
 Major devices: `CAliM1543C` (ISA bridge: PIT/RTC-TOY/PIC/DMA + SuperIO) with
 separate `_ide`/`_usb`/`_pmu` PCI functions, `CSerial` (telnet or
 null_attach UARTs), `CKeyboard` (KBC + PS/2 aux mouse, Bochs-derived),
-`CDEC21143` and `CI8255x` (NICs: `dec21143`, `de600`/`i8255[789]`; pcap, TAP, UDP or null backend), `CSym53C8xx` (SCSI: 53C810/825/875/895), `CS3Trio64` + `CVGA` +
+`CDEC21143` and `CI8255x` (NICs: `dec21143`, `de600`/`i8255[789]`; pcap, TAP, UDP or null backend), `CSym53C8xx` (SCSI: 53C810/825/875/895) and `CIsp1040` (SCSI: QLogic ISP1020/1040, a mailbox and queue interface rather than SCRIPTS), `CS3Trio64` + `CVGA` +
 MAME-derived rendering into the `bx_gui` plugin layer (`src/gui/`, SDL3 is
 the maintained backend), `CCirrusGD5430`/`CCirrusGD5434` (`cirrus` config
 class, `chip` key; same `CVGACard` base as the S3), `CFlash`+`CDPR`
@@ -175,8 +176,9 @@ Alphabox emulates the ES40; other machines are added as work packets under
 skill). Board facts belong in the board row, never spread through device
 code. Bring-up traces, all off by default:
 `ALPHABOX_TRACE_UNKNOWN` (accesses nothing claims, with the instruction and
-return address), `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP` (how a console
-starts other processors), `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`.
+return address), `ALPHABOX_TRACE_CALLS` (the firmware's own calls),
+`ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP` (how a console starts other
+processors), `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`.
 `PLATFORM=` and `ROM=` select machine and firmware in `srm_probe.sh`.
 Firmware images live in the git-ignored `roms/`; never download one.
 
