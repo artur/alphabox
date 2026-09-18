@@ -197,9 +197,17 @@ void CIsp1040::mailbox_command() {
   case ISP_MBOX_SET_DEV_QUEUE_PARAMS:
   case ISP_MBOX_SET_SYSTEM_PARAMETER:
   case ISP_MBOX_SET_FIRMWARE_FEATURES:
+  case ISP_MBOX_UNDOCUMENTED_5A:
     // Timing and queueing parameters: accepted. What they describe --
     // transfer rates, retries, tag ages -- has no counterpart here, where
     // a transfer takes no time on a bus that never disconnects.
+    //
+    // The last of these (0x5a) is accepted on weaker grounds: it is not in
+    // any documentation or open-source driver, but QLogic's own drivers
+    // end their initialisation with it and give up if it is refused, and
+    // the ES40 console never issues it and works. So it is taken to be a
+    // parameter this emulation has no counterpart for. If it turns out to
+    // mean something that must be done, this is where it goes.
     break;
 
   default:

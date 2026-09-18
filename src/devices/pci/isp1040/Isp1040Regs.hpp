@@ -124,8 +124,23 @@
 #define ISP_MBOX_SET_DEV_QUEUE_PARAMS 0x0039
 #define ISP_MBOX_SET_SYSTEM_PARAMETER 0x0045
 #define ISP_MBOX_SET_FIRMWARE_FEATURES 0x004a
+/// Issued at the end of initialisation by QLogic's own drivers (the
+/// AlphaBIOS one and Windows' QL10WNT), always with mailbox 1 set to 1.
+/// No public documentation names it, and the ES40 console never issues
+/// it and works regardless -- but those drivers give up when it is
+/// refused, so it is accepted. See Isp1040Mailbox.cpp.
+#define ISP_MBOX_UNDOCUMENTED_5A 0x005a
 #define ISP_MBOX_INIT_REQ_QUEUE_A64 0x0052
 #define ISP_MBOX_INIT_RES_QUEUE_A64 0x0053
+
+// What the firmware leaves in the mailboxes after a RISC reset: the part
+// identifying itself, "ISP  ", and the interface version. Drivers check it
+// to decide whether there is a working adapter here at all -- Windows'
+// does, and refuses the device when it does not match.
+#define ISP_PRODUCT_ID_1 0x4953 ///< "IS"
+#define ISP_PRODUCT_ID_2 0x5020 ///< "P "
+#define ISP_PRODUCT_ID_3 0x2020 ///< "  "
+#define ISP_PRODUCT_ID_4 0x0001
 
 // Mailbox 0 on completion.
 #define ISP_MBOX_BUSY 0x0004
@@ -163,7 +178,9 @@
 #define ISP_REQ_CDB_LEN 12
 #define ISP_REQ_DATASEG 0x20 ///< four {address, count} pairs
 #define ISP_REQ_SEGMENTS 4
-#define ISP_CONT_DATASEG 0x04 ///< seven pairs in a continuation entry
+// A continuation entry has a reserved word after its header, so its seven
+// segments start at 8; the 64-bit form has none and starts at 4.
+#define ISP_CONT_DATASEG 0x08 ///< seven pairs in a continuation entry
 #define ISP_CONT_SEGMENTS 7
 #define ISP_A64_DATASEG 0x20 ///< two {address, address high, count}
 #define ISP_A64_SEGMENTS 2

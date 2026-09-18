@@ -109,10 +109,13 @@ int CIsp1040::gather_segments(u32 entry_address, const u8 *entry, u32 *address,
     found++;
   }
 
-  // Continuation entries hold the rest, one queue slot each.
-  u16 slot = state.request_out;
+  // Continuation entries hold the rest. They follow the command entry in
+  // the queue, one slot each -- which is why the command's own slot is
+  // where the walk starts, not where the queue has been consumed to.
+  u16 slot = u16((((entry_address - state.request_base) / ISP_QUEUE_ENTRY_SIZE) +
+                  1) %
+                 state.request_length);
   while (found < wanted && found < max_segments) {
-    slot = u16((slot + state.request_length - 1) % state.request_length);
     const u32 at = state.request_base + u32(slot) * ISP_QUEUE_ENTRY_SIZE;
     u8 cont[ISP_QUEUE_ENTRY_SIZE];
     do_pci_read(at, cont, 1, sizeof(cont));
@@ -171,8 +174,14 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
   for (int i = 0; i < segments; i++)
     wanted += seg_count[i];
 
-  TRACE_QUEUE("%s: command %02x to %d.%d, %d segments, %u bytes\n",
-              devid_string, entry[ISP_REQ_CDB], target, lun, segments, wanted);
+  TRACE_QUEUE("%s: command %02x to %d.%d, type %02x count %d, %d segments, "
+              "%u bytes\n",
+              devid_string, entry[ISP_REQ_CDB], target, lun, type, entry[1],
+              segments, wanted);
+#if defined(DEBUG_ISP)
+  for (int i = 0; i < segments; i++)
+    printf("    segment %d: %08x + %u\n", i, seg_address[i], seg_count[i]);
+#endif
 
   if (!scsi_arbitrate(0)) {
     post_response(entry, ISP_STATUS_BUS_RESET, 0, 0, wanted, nullptr, 0);

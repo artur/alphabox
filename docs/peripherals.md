@@ -33,7 +33,7 @@ The names below were extracted from the decompressed image with
 | NCR 53C825 (825A) | `sym53c825` | `n810` console driver: bootable; wide, 4 KB SCRIPTS RAM |
 | NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM |
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
-| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: the console enumerates disks on it; Windows 2000's driver does not attach yet |
+| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test |
 | DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | `ei` console driver: network boot on either port |
@@ -123,8 +123,8 @@ work: see [platforms.md](platforms.md).
 4. ~~PCI-PCI bridges~~: the 21050/21052/21152/21153/21154 and the DE602
    boards are done; the forwarding windows are not modelled (devices behind
    a bridge claim their BARs on the hose directly).
-5. ~~QLogic ISP1040 (KZPBA)~~: the console drives it and finds its disks;
-   Windows 2000's own driver does not attach yet (see the class notes).
+5. ~~QLogic ISP1040 (KZPBA)~~ (done): the console and Windows 2000's own
+   QLogic driver both drive it.
 6. TGA (ZLXp 21030): native DECwindows/CDE graphics.
 
 Each new device gets its own directory under `src/devices/<bus>/` (as

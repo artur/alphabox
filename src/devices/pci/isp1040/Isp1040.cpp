@@ -164,6 +164,12 @@ void CIsp1040::chip_reset(bool keep_parameters) {
   state.queue_pending = false;
   memset(state.mailbox, 0, sizeof(state.mailbox));
   memset(state.mailbox_out, 0, sizeof(state.mailbox_out));
+  // A reset part identifies itself in the mailboxes; a driver that does
+  // not find it there concludes there is no adapter (Isp1040Regs.hpp).
+  state.mailbox_out[1] = ISP_PRODUCT_ID_1;
+  state.mailbox_out[2] = ISP_PRODUCT_ID_2;
+  state.mailbox_out[3] = ISP_PRODUCT_ID_3;
+  state.mailbox_out[4] = ISP_PRODUCT_ID_4;
 
   if (!keep_parameters) {
     state.initiator_id = 7;
