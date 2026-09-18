@@ -41,6 +41,9 @@
 
 #include "Sym53C8xxRegs.hpp"
 
+CSym53C8xx::CChannel::CChannel(CSym53C8xx &dev, int index)
+    : dev(dev), m_chip(dev.m_chip), index(index) {}
+
 /**
  * Thread entry point.
  *
@@ -49,7 +52,7 @@
  *   - Executing SCRIPTS code until execution ends.
  *   .
  **/
-void CSym53C8xx::run() {
+void CSym53C8xx::CChannel::run() {
   try {
     std::unique_lock<std::recursive_mutex> lock(myRegLock);
     for (;;) {
@@ -74,18 +77,23 @@ void CSym53C8xx::run() {
 /**
  * Constructor.
  *
- * Set up the SCSI bus, and defer the rest of initialization to
+ * Set up a SCSI bus per channel, and defer the rest of initialization to
  * CSym53C8xx::init.
  **/
 CSym53C8xx::CSym53C8xx(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
                        const sym_chip_config &chip)
     : CPCIDevice(cfg, c, pcibus, pcidev),
-      // Narrow parts address targets 0-6, wide ones 0-15.
-      CDiskController(1, chip.id_mask == 0x0f ? 16 : 7), m_chip(chip) {
+      // One disk bus per channel; narrow parts address targets 0-6, wide
+      // ones 0-15.
+      CDiskController(chip.channels, chip.id_mask == 0x0f ? 16 : 7),
+      m_chip(chip) {
 
-  // create scsi bus
-  CSCSIBus *a = new CSCSIBus(cfg, c);
-  scsi_register(0, a, 7); // scsi id 7 by default
+  for (int i = 0; i < m_chip.channels; i++) {
+    // create scsi bus
+    CSCSIBus *a = new CSCSIBus(cfg, c);
+    scsi_register(i, a, 7); // scsi id 7 by default
+    channels[i].reset(new CChannel(*this, i));
+  }
 }
 
 /**
@@ -94,40 +102,64 @@ CSym53C8xx::CSym53C8xx(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
  * Reset PCI structures, reset the chipset, and set up locks.
  **/
 void CSym53C8xx::init() {
-  // PCI header: I/O BAR0 and memory BAR1 for the 128-byte register file,
-  // BAR2 for the on-chip SCRIPTS RAM on the parts that have it.
-  u32 cfg_data[64] = {};
-  u32 cfg_mask[64] = {};
-  cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | 0x1000;
-  cfg_data[0x04 >> 2] = 0x02000001;
-  cfg_data[0x08 >> 2] = 0x01000000 | m_chip.pci_revision;
-  cfg_data[0x10 >> 2] = 0x00000001;
-  cfg_data[0x3c >> 2] = 0x401101ff;
-  cfg_mask[0x04 >> 2] = 0x00000157;
-  cfg_mask[0x0c >> 2] = 0x0000ffff;
-  cfg_mask[0x10 >> 2] = 0xffffff00;
-  cfg_mask[0x14 >> 2] = 0xffffff00;
-  if (m_chip.ram_bytes)
-    cfg_mask[0x18 >> 2] = ~(m_chip.ram_bytes - 1);
-  cfg_mask[0x3c >> 2] = 0x000000ff;
-  add_function(0, cfg_data, cfg_mask);
+  // PCI header: I/O BAR0 and memory BAR1 for the register file, BAR2 for the
+  // on-chip SCRIPTS RAM on the parts that have it. A part with more than one
+  // channel gives each of them a function of its own; they are identical
+  // save for the interrupt pin and the multi-function bit.
+  for (int f = 0; f < m_chip.channels; f++) {
+    u32 cfg_data[64] = {};
+    u32 cfg_mask[64] = {};
+    cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | 0x1000;
+    cfg_data[0x04 >> 2] = 0x02000001;
+    cfg_data[0x08 >> 2] = 0x01000000 | m_chip.pci_revision;
+    // Header type bit 7: configuration software only looks for functions
+    // past 0 when the device says it has them.
+    if (m_chip.channels > 1)
+      cfg_data[0x0c >> 2] = 0x00800000;
+    cfg_data[0x10 >> 2] = 0x00000001;
+    // Each channel has an interrupt pin of its own, counting from INTA, so
+    // the console can give the two of them separate interrupt lines.
+    cfg_data[0x3c >> 2] = 0x401100ff | (u32(f + 1) << 8);
+    cfg_mask[0x04 >> 2] = 0x00000157;
+    cfg_mask[0x0c >> 2] = 0x0000ffff;
+    cfg_mask[0x10 >> 2] = 0xffffff00;
+    cfg_mask[0x14 >> 2] = 0xffffff00;
+    if (m_chip.ram_bytes)
+      cfg_mask[0x18 >> 2] = ~(m_chip.ram_bytes - 1);
+    cfg_mask[0x3c >> 2] = 0x000000ff;
+    add_function(f, cfg_data, cfg_mask);
+  }
 
   ResetPCI();
 
+  for (int i = 0; i < m_chip.channels; i++)
+    channels[i]->init();
+
+  if (m_chip.channels > 1)
+    printf("%s: Symbios %s, %d channels\n", devid_string, m_chip.name,
+           m_chip.channels);
+  else
+    printf("%s: Symbios %s\n", devid_string, m_chip.name);
+}
+
+void CSym53C8xx::CChannel::init() {
   // chip_reset() only lowers the PCI line if irq_asserted says it is up, so
   // start from a known state rather than whatever the allocation held.
   memset(&state, 0, sizeof(state));
   chip_reset();
 
   myThread = nullptr;
-
-  printf("%s: Symbios %s\n", devid_string, m_chip.name);
 }
 
 /**
- * Create the thread, and start executing it.
+ * Create the threads, and start executing them.
  **/
 void CSym53C8xx::start_threads() {
+  for (int i = 0; i < m_chip.channels; i++)
+    channels[i]->start_thread();
+}
+
+void CSym53C8xx::CChannel::start_thread() {
   if (!myThread) {
     printf(" sym");
     {
@@ -141,9 +173,14 @@ void CSym53C8xx::start_threads() {
 }
 
 /**
- * Stop and destroy the thread.
+ * Stop and destroy the threads.
  **/
 void CSym53C8xx::stop_threads() {
+  for (int i = 0; i < m_chip.channels; i++)
+    channels[i]->stop_thread();
+}
+
+void CSym53C8xx::CChannel::stop_thread() {
   {
     std::lock_guard<std::recursive_mutex> lock(myRegLock);
     StopThread = true;
@@ -159,11 +196,12 @@ void CSym53C8xx::stop_threads() {
 /**
  * Destructor.
  *
- * Kill thread if still running, and destroy the SCSI bus.
+ * Kill threads if still running, and destroy the SCSI busses.
  **/
 CSym53C8xx::~CSym53C8xx() {
   stop_threads();
-  scsi_bus[0] = 0;
+  for (int i = 0; i < m_chip.channels; i++)
+    scsi_bus[i] = 0;
 }
 
 /**
@@ -171,11 +209,11 @@ CSym53C8xx::~CSym53C8xx() {
  *
  * Initialize all registers to their default values.
  **/
-void CSym53C8xx::chip_reset() {
+void CSym53C8xx::CChannel::chip_reset() {
   // SCRIPTS bookkeeping lives outside the register array and must survive
   // neither power-on initialization nor an ISTAT software reset: stale
   // stacked interrupts would drain into SIST0/DSTAT, and a stale disconnect
-  // countdown would raise a false UDC from check_state().
+  // countdown would raise a false UDC from poll().
   state.executing = false;
   state.wait_reselect = false;
   state.select_timeout = false;
@@ -201,28 +239,29 @@ void CSym53C8xx::chip_reset() {
   //  R8(SSTAT2) = R_SSTAT2_LDSC; // 810
   R8(CTEST1) = R_CTEST1_FMT;  // 810
   R8(CTEST2) = R_CTEST2_DACK; // 810
-  R8(CTEST3) =
-      (u8)(pci_state.config_data[0][2] << 4) & R_CTEST3_REV; // Chip rev.
-  R8(MACNTL) = m_chip.macntl;                                // chip type
-  R8(GPCNTL) = 0x0F;                                         // 810
-  R8(STEST0) = 0x03;                                         // 810
+  const u32 pci_rev = dev.pci_state.config_data[index][2];
+  R8(CTEST3) = (u8)(pci_rev << 4) & R_CTEST3_REV; // Chip rev.
+  R8(MACNTL) = m_chip.macntl;                     // chip type
+  R8(GPCNTL) = 0x0F;                              // 810
+  R8(STEST0) = 0x03;                              // 810
 
   // Reset clears the interrupt state, so the IRQ/ pin must drop as well;
   // eval_interrupts() only signals level changes and would otherwise leave
   // the line stuck high.
   if (state.irq_asserted)
-    do_pci_interrupt(0, false);
+    dev.do_pci_interrupt(index, false);
   state.irq_asserted = false;
 }
 
 /**
  * Register a disk
  *
- * Attach the disk to the SCSI bus.
+ * Attach the disk to the SCSI bus of the channel it is configured on: on a
+ * two-channel part disk0.* is the first channel and disk1.* the second.
  **/
 void CSym53C8xx::register_disk(class CDisk *dsk, int bus, int dev) {
   CDiskController::register_disk(dsk, bus, dev);
-  dsk->scsi_register(0, scsi_bus[0], dev);
+  dsk->scsi_register(0, scsi_bus[bus], dev);
 }
 
 // The 53C810's values, so its existing state files still restore.
@@ -231,19 +270,30 @@ static u32 sym_magic2 = 0xCC53C810;
 
 /**
  * Save state to a Virtual Machine State file.
+ *
+ * One record per channel, in order, so a single-channel part writes exactly
+ * what it always has.
  **/
 int CSym53C8xx::SaveState(FILE *f) {
-  long ss = sizeof(state);
   int res;
 
   if ((res = CPCIDevice::SaveState(f)))
     return res;
 
+  for (int i = 0; i < m_chip.channels; i++)
+    if ((res = channels[i]->save(f, devid_string)))
+      return res;
+  return 0;
+}
+
+int CSym53C8xx::CChannel::save(FILE *f, const char *devid) {
+  long ss = sizeof(state);
+
   fwrite(&sym_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
   fwrite(&sym_magic2, sizeof(u32), 1, f);
-  printf("%s: %d bytes saved.\n", devid_string, (int)ss);
+  printf("%s: %d bytes saved.\n", devid, (int)ss);
   return 0;
 }
 
@@ -251,66 +301,76 @@ int CSym53C8xx::SaveState(FILE *f) {
  * Restore state from a Virtual Machine State file.
  **/
 int CSym53C8xx::RestoreState(FILE *f) {
-  long ss;
-  u32 m1;
-  u32 m2;
   int res;
-  size_t r;
 
   if ((res = CPCIDevice::RestoreState(f)))
     return res;
 
+  for (int i = 0; i < m_chip.channels; i++)
+    if ((res = channels[i]->restore(f, devid_string)))
+      return res;
+  return 0;
+}
+
+int CSym53C8xx::CChannel::restore(FILE *f, const char *devid) {
+  long ss;
+  u32 m1;
+  u32 m2;
+  size_t r;
+
   r = fread(&m1, sizeof(u32), 1, f);
   if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
+    printf("%s: unexpected end of file!\n", devid);
     return -1;
   }
 
   if (m1 != sym_magic1) {
-    printf("%s: MAGIC 1 does not match!\n", devid_string);
+    printf("%s: MAGIC 1 does not match!\n", devid);
     return -1;
   }
 
   r = fread(&ss, sizeof(long), 1, f);
   if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
+    printf("%s: unexpected end of file!\n", devid);
     return -1;
   }
 
   if (ss != sizeof(state)) {
-    printf("%s: STRUCT SIZE does not match!\n", devid_string);
+    printf("%s: STRUCT SIZE does not match!\n", devid);
     return -1;
   }
 
   r = fread(&state, sizeof(state), 1, f);
   if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
+    printf("%s: unexpected end of file!\n", devid);
     return -1;
   }
 
   r = fread(&m2, sizeof(u32), 1, f);
   if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
+    printf("%s: unexpected end of file!\n", devid);
     return -1;
   }
 
   if (m2 != sym_magic2) {
-    printf("%s: MAGIC 2 does not match!\n", devid_string);
+    printf("%s: MAGIC 2 does not match!\n", devid);
     return -1;
   }
 
-  printf("%s: %d bytes restored.\n", devid_string, (int)ss);
+  printf("%s: %d bytes restored.\n", devid, (int)ss);
   return 0;
 }
 
 /**
  * Override PCI Configuration Space read action.
  *
- * Lower 80 bytes are normal, upper 80 bytes reflect into the
- * register space.
+ * Lower 80 bytes are normal, upper 80 bytes reflect into the register space
+ * -- on the parts whose register file is small enough to fit there. The 896
+ * has twice as many registers and stops answering configuration cycles
+ * after its power-management capability.
  **/
 u32 CSym53C8xx::config_read_custom(int func, u32 address, int dsize, u32 data) {
-  if (address >= 0x80)
+  if (address >= 0x80 && m_chip.reg_bytes == 128)
     return ReadMem_Bar(func, 1, address - 0x80, dsize);
   else
     return data;
@@ -324,7 +384,7 @@ u32 CSym53C8xx::config_read_custom(int func, u32 address, int dsize, u32 data) {
  **/
 void CSym53C8xx::config_write_custom(int func, u32 address, int dsize,
                                      u32 old_data, u32 new_data, u32 data) {
-  if (address >= 0x80)
+  if (address >= 0x80 && m_chip.reg_bytes == 128)
     WriteMem_Bar(func, 1, address - 0x80, dsize, data);
 }
 
@@ -332,18 +392,31 @@ void CSym53C8xx::config_write_custom(int func, u32 address, int dsize,
  * Check if threads are still running.
  **/
 void CSym53C8xx::check_state() {
-  if (myThreadDead.load())
-    FAILURE(Thread, "SYM thread has died");
+  for (int i = 0; i < m_chip.channels; i++) {
+    if (channels[i]->thread_died())
+      FAILURE_1(Thread, "SYM thread has died (channel %d)", i);
 
+    const std::string msg = channels[i]->poll();
+    if (!msg.empty())
+      FAILURE_2(Thread, "SYM SCRIPTS failed (channel %d): %.1024s", i,
+                msg.c_str());
+  }
+}
+
+/**
+ * Advance this channel's main-thread timers, and report a SCRIPTS failure
+ * the thread left behind.
+ **/
+std::string CSym53C8xx::CChannel::poll() {
   // Runs on the main thread: take myRegLock so the GP-timer RAISE() below
   // doesn't race SCRIPTS' eval_interrupts(). RAII unlock covers the early
-  // returns (and the throw) below.
+  // returns below.
   std::lock_guard<std::recursive_mutex> regLock(myRegLock);
 
   if (!scripts_error.empty()) {
     std::string msg;
     msg.swap(scripts_error);
-    FAILURE_1(Thread, "SYM SCRIPTS failed: %.1024s", msg.c_str());
+    return msg;
   }
 
   if (state.gen_timer) {
@@ -351,7 +424,7 @@ void CSym53C8xx::check_state() {
     if (!state.gen_timer) {
       state.gen_timer = (R8(STIME1) & R_STIME1_GEN) * 30;
       RAISE(SIST1, GEN);
-      return;
+      return std::string();
     }
   }
 
@@ -383,7 +456,7 @@ void CSym53C8xx::check_state() {
       // printf("SYM: Disconnect expected. stopping disconnect timer at
       // %d.\n",state.disconnected);
       state.disconnected = 0;
-      return;
+      return std::string();
     }
 
     state.disconnected--;
@@ -393,7 +466,9 @@ void CSym53C8xx::check_state() {
       // printf(">");
       // getchar();
       RAISE(SIST0, UDC);
-      return;
+      return std::string();
     }
   }
+
+  return std::string();
 }

@@ -46,7 +46,7 @@
  *
  * Start executing SCSI SCRIPT (inline burst, then the thread).
  **/
-void CSym53C8xx::post_dsp_write() {
+void CSym53C8xx::CChannel::post_dsp_write() {
   if (!TB_R8(DMODE, MAN)) {
     start_scripts();
     run_scripts_inline();
@@ -64,7 +64,7 @@ void CSym53C8xx::post_dsp_write() {
  * continues from the new DSP and keeps its budget, so a self-restarting loop
  * is still caught.
  **/
-void CSym53C8xx::start_scripts() {
+void CSym53C8xx::CChannel::start_scripts() {
   state.executing = true;
   if (!scripts_running)
     state.insn_processed = 0;
@@ -84,7 +84,7 @@ void CSym53C8xx::start_scripts() {
  * after SYM_INLINE_INSN_LIMIT instructions; the device thread takes over from
  * there. Nested calls from SCRIPTS itself are no-ops.
  **/
-void CSym53C8xx::run_scripts_inline() {
+void CSym53C8xx::CChannel::run_scripts_inline() {
   if (scripts_running || !state.executing)
     return;
 
@@ -113,10 +113,10 @@ void CSym53C8xx::run_scripts_inline() {
  * belongs on a CPU thread inside an MMIO write. Everything else (I/O,
  * R/W, Transfer Control, Load/Store) only touches controller and bus state.
  **/
-bool CSym53C8xx::inline_can_execute_next() {
+bool CSym53C8xx::CChannel::inline_can_execute_next() {
   u32 insn;
   try {
-    do_pci_read(R32(DSP), &insn, 4, 1);
+    dev.do_pci_read(R32(DSP), &insn, 4, 1);
   } catch (...) {
     return false; // let the thread's execute() hit and report it
   }
@@ -137,9 +137,9 @@ bool CSym53C8xx::inline_can_execute_next() {
  *
  * Exceptions never propagate: this may run on a CPU (interpreter/JIT) thread
  * inside an MMIO write. SCRIPTS are halted and the failure is raised by
- * check_state() on the main thread.
+ * the main thread, which collects it in poll().
  **/
-void CSym53C8xx::step_scripts() {
+void CSym53C8xx::CChannel::step_scripts() {
   scripts_running = true;
   try {
     execute();
@@ -154,10 +154,10 @@ void CSym53C8xx::step_scripts() {
 }
 
 /**
- * Halt SCRIPTS after an exception and record it for check_state().
+ * Halt SCRIPTS after an exception and record it for poll().
  * Caller holds myRegLock.
  **/
-void CSym53C8xx::halt_scripts_on_failure(const std::string &msg) {
+void CSym53C8xx::CChannel::halt_scripts_on_failure(const std::string &msg) {
   printf("SYM: exception while executing SCRIPTS at DSP %08x: %s\n", R32(DSP),
          msg.c_str());
   state.executing = false;
@@ -172,15 +172,15 @@ void CSym53C8xx::halt_scripts_on_failure(const std::string &msg) {
  * Returns -1 on timeout or similar, 0 on different phase, and 1 on same phase
  **/
 
-int CSym53C8xx::check_phase(int chk_phase) {
-  int real_phase = scsi_get_phase(0);
+int CSym53C8xx::CChannel::check_phase(int chk_phase) {
+  int real_phase = dev.scsi_get_phase(index);
 
   if (real_phase == SCSI_PHASE_ARBITRATION) {
 #if defined(DEBUG_SYM_SCRIPTS)
     printf("Phase check... selection time-out!\n");
 #endif
     RAISE(SIST1, STO); // select time-out
-    scsi_free(0);
+    dev.scsi_free(index);
     state.select_timeout = false;
     return -1;
   }
@@ -238,7 +238,7 @@ int CSym53C8xx::check_phase(int chk_phase) {
  *   +- 6..7: Instruction Type: 00 = Block Move
  * \endcode
  **/
-void CSym53C8xx::execute_bm_op() {
+void CSym53C8xx::CChannel::execute_bm_op() {
   bool indirect = (R8(DCMD) >> 5) & 1;
   bool table_indirect = (R8(DCMD) >> 4) & 1;
   int opcode = (R8(DCMD) >> 3) & 1;
@@ -257,6 +257,37 @@ void CSym53C8xx::execute_bm_op() {
     return;
   }
 
+  // Where the instruction and its operands came from. A phase-mismatch
+  // jump hands these to the SCRIPTS routine that has to take the transfer
+  // up again, and it has to hand them over even when the phase never
+  // matched -- a target that disconnects before the first byte is the case
+  // the whole mechanism exists for -- so the operands are read before the
+  // phase is compared. Nothing is committed to DNAD or DBC until it is.
+  const u32 insn_addr = R32(DSP) - 8;
+  u32 entry_addr = insn_addr;
+  u32 start;
+  u32 count;
+  u8 count_top = R8(DCMD);
+
+  if (table_indirect) {
+    entry_addr = (R32(DSA) + sext_u32_24(R32(DSPS))) & ~0x03u; // 810
+#if defined(DEBUG_SYM_SCRIPTS)
+    printf("SYM: Reading table at DSA(%08x)+DSPS(%08x) = %08x.\n", R32(DSA),
+           R32(DSPS), entry_addr);
+#endif
+    u32 entry;
+    dev.do_pci_read(entry_addr, &entry, 4, 1);
+    count = entry & 0x00ffffff;
+    count_top = (u8)(entry >> 24);
+    dev.do_pci_read(entry_addr + 4, &start, 4, 1);
+  } else if (indirect) {
+    dev.do_pci_read(R32(DSPS), &start, 4, 1);
+    count = GET_DBC();
+  } else {
+    start = R32(DSPS);
+    count = GET_DBC();
+  }
+
   // Compare phase
   int phase_result = check_phase(scsi_phase);
 
@@ -267,47 +298,23 @@ void CSym53C8xx::execute_bm_op() {
   }
 
   if (phase_result == 0) {
-    // Phase mismatch — raise MA interrupt
+    // Phase mismatch — interrupt, or jump, before a single byte moved
 #if defined(DEBUG_SYM_SCRIPTS)
     printf("SYM: Phase mismatch! Expected %d, got different.\n", scsi_phase);
 #endif
     // Update SSTAT1 with the actual phase from the SCSI bus
-    int real_phase = scsi_get_phase(0);
+    int real_phase = dev.scsi_get_phase(index);
     R8(SSTAT1) = (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (real_phase & R_SSTAT1_PHASE);
 
-    RAISE(SIST0, MA);
+    phase_mismatch(scsi_phase, insn_addr, entry_addr, count_top, count, start,
+                   0);
     return;
   }
 
   // Phase matches — proceed with data transfer
 #if defined(DEBUG_SYM_SCRIPTS)
   printf("SYM: Ready for transfer.\n");
-#endif
-
-  u32 start;
-  u32 count;
-
-  if (table_indirect) {
-    u32 add = R32(DSA) + sext_u32_24(R32(DSPS));
-
-    add &= ~0x03; // 810
-#if defined(DEBUG_SYM_SCRIPTS)
-    printf("SYM: Reading table at DSA(%08x)+DSPS(%08x) = %08x.\n", R32(DSA),
-           R32(DSPS), add);
-#endif
-    do_pci_read(add, &count, 4, 1);
-    count &= 0x00ffffff;
-    do_pci_read(add + 4, &start, 4, 1);
-  } else if (indirect) {
-    do_pci_read(R32(DSPS), &start, 4, 1);
-    count = GET_DBC();
-  } else {
-    start = R32(DSPS);
-    count = GET_DBC();
-  }
-
-#if defined(DEBUG_SYM_SCRIPTS)
-  printf("SYM: %08x: MOVE Start/count %x, %x\n", R32(DSP) - 8, start, count);
+  printf("SYM: %08x: MOVE Start/count %x, %x\n", insn_addr, start, count);
 #endif
   R32(DNAD) = start;
   SET_DBC(count); // page 5-32
@@ -319,8 +326,10 @@ void CSym53C8xx::execute_bm_op() {
     return;
   }
 
+  u32 moved = 0; // what this Block Move put on the bus, for SBC and CSBC
+
   for (;;) {
-    size_t expected = scsi_expected_xfer(0);
+    size_t expected = dev.scsi_expected_xfer(index);
     u32 remaining = GET_DBC();
     u32 xfer = remaining;
 
@@ -334,31 +343,33 @@ void CSym53C8xx::execute_bm_op() {
 
     if (xfer == 0) {
       // Target has nothing to provide/accept in this phase but DBC > 0.
-      // Raise phase mismatch so SCRIPTS can save the residual via DBC.
-      RAISE(SIST0, MA);
+      // Report a phase mismatch so SCRIPTS can save the residual.
+      phase_mismatch(scsi_phase, insn_addr, entry_addr, count_top, remaining,
+                     R32(DNAD), moved);
       return;
     }
 
-    u8 *scsi_data_ptr = (u8 *)scsi_xfer_ptr(0, xfer);
+    u8 *scsi_data_ptr = (u8 *)dev.scsi_xfer_ptr(index, xfer);
     u8 *org_sdata_ptr = scsi_data_ptr;
 
     switch (scsi_phase) {
     case SCSI_PHASE_COMMAND:
     case SCSI_PHASE_DATA_OUT:
     case SCSI_PHASE_MSG_OUT:
-      do_pci_read(R32(DNAD), scsi_data_ptr, 1, xfer);
+      dev.do_pci_read(R32(DNAD), scsi_data_ptr, 1, xfer);
       R32(DNAD) += xfer;
       break;
 
     case SCSI_PHASE_STATUS:
     case SCSI_PHASE_DATA_IN:
     case SCSI_PHASE_MSG_IN:
-      do_pci_write(R32(DNAD), scsi_data_ptr, 1, xfer);
+      dev.do_pci_write(R32(DNAD), scsi_data_ptr, 1, xfer);
       R32(DNAD) += xfer;
       break;
     }
 
     SET_DBC(remaining - xfer);
+    moved += xfer;
     R8(SFBR) = *org_sdata_ptr;
 
     // Update SIDL with last byte received during MSG_IN
@@ -370,24 +381,90 @@ void CSym53C8xx::execute_bm_op() {
       // SCRIPTS that read it before the next check_phase.
       R8(SSTAT1) =
           (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (scsi_phase & R_SSTAT1_PHASE);
-      scsi_xfer_done(0);
+      dev.scsi_xfer_done(index);
+      count_scsi_bytes(scsi_phase, moved);
       return;
     }
 
     // Residual remains. Hand the slice back to the target and re-check
     // phase before continuing.
-    scsi_xfer_done(0);
+    dev.scsi_xfer_done(index);
 
     phase_result = check_phase(scsi_phase);
     if (phase_result <= 0) {
       // phase_result < 0: check_phase already raised STO/disconnect.
-      // phase_result == 0: phase shifted; RAISE MA so SCRIPTS can save
-      //                    residual via DBC.
+      // phase_result == 0: the phase shifted under the transfer; report the
+      //                    mismatch with what is left of it.
       if (phase_result == 0)
-        RAISE(SIST0, MA);
+        phase_mismatch(scsi_phase, insn_addr, entry_addr, count_top, GET_DBC(),
+                       R32(DNAD), moved);
       return;
     }
   }
+}
+
+/**
+ * Is this part jumping on a phase mismatch rather than interrupting?
+ **/
+bool CSym53C8xx::CChannel::pm_jump() const {
+  return m_chip.reg_bytes > 128 && TB_R8(CCNTL0, ENPMJ);
+}
+
+/**
+ * Account for what a Block Move moved across the SCSI bus.
+ *
+ * SBC counts one instruction, CSBC counts data phases until the driver
+ * reloads it; the phase-mismatch routines work out a residual from them.
+ * Only the parts that jump on a mismatch keep these counts.
+ **/
+void CSym53C8xx::CChannel::count_scsi_bytes(int phase, u32 moved) {
+  if (!pm_jump())
+    return;
+
+  R32(SBC) = moved & 0x00ffffff;
+  if (phase == SCSI_PHASE_DATA_IN || phase == SCSI_PHASE_DATA_OUT)
+    R32(CSBC) += moved;
+}
+
+/**
+ * A Block Move met a phase the SCRIPTS program did not ask for.
+ *
+ * The older parts can only interrupt with MA and leave the driver to work
+ * out from DBC and DNAD where the transfer stopped. The 896 keeps that
+ * state in registers of its own -- what is left of the byte count, where
+ * the data would have gone next, and where the instruction and its operands
+ * live -- and jumps to a SCRIPTS routine instead, so a target that
+ * disconnects mid-transfer never reaches the host at all. Drivers turn it
+ * on with ENPMJ in CCNTL0 and name the two routines in PMJAD1 and PMJAD2:
+ * one for the phases the initiator drives and one for the phases the target
+ * drives, unless PMJCTL asks for them to be chosen by the wide residue.
+ **/
+void CSym53C8xx::CChannel::phase_mismatch(int phase, u32 insn_addr,
+                                          u32 entry_addr, u8 count_top,
+                                          u32 remaining, u32 address,
+                                          u32 moved) {
+  if (!pm_jump()) {
+    RAISE(SIST0, MA);
+    return;
+  }
+
+  count_scsi_bytes(phase, moved);
+  R32(RBC) = (remaining & 0x00ffffff) | (u32(count_top) << 24);
+  R32(UA) = address;
+  R32(ESA) = entry_addr;
+  R32(IA) = insn_addr;
+
+  const bool outbound = phase == SCSI_PHASE_DATA_OUT ||
+                        phase == SCSI_PHASE_COMMAND ||
+                        phase == SCSI_PHASE_MSG_OUT;
+  const bool second = TB_R8(CCNTL0, PMJCTL) ? TB_R8(SCNTL2, WSR) : !outbound;
+  R32(DSP) = second ? R32(PMJAD2) : R32(PMJAD1);
+
+#if defined(DEBUG_SYM_SCRIPTS)
+  printf("SYM: phase mismatch in phase %d: jumping to %08x, %u of %u bytes "
+         "left at %08x.\n",
+         phase, R32(DSP), remaining, remaining + moved, address);
+#endif
 }
 
 /* Execute one SCRIPTS I/O instruction
@@ -467,7 +544,7 @@ void CSym53C8xx::execute_bm_op() {
  *     instruction.
  *   .
  **/
-void CSym53C8xx::execute_io_op() {
+void CSym53C8xx::CChannel::execute_io_op() {
   int opcode = (R8(DCMD) >> 3) & 7;
   bool relative = (R8(DCMD) >> 2) & 1;
   bool table_indirect = (R8(DCMD) >> 1) & 1;
@@ -499,7 +576,7 @@ void CSym53C8xx::execute_io_op() {
 #endif
 
     u32 io_struc;
-    do_pci_read(io_addr, &io_struc, 4, 1);
+    dev.do_pci_read(io_addr, &io_struc, 4, 1);
     destination = (io_struc >> 16) & 0x0f;
 #if defined(DEBUG_SYM_SCRIPTS)
     printf("SYM: table indirect. io_struct = %08x, new dest = %d.\n", io_struc,
@@ -523,7 +600,7 @@ void CSym53C8xx::execute_io_op() {
       return;
     }
 
-    if (!scsi_arbitrate(0)) {
+    if (!dev.scsi_arbitrate(index)) {
 
       // scsi bus busy, try again next clock...
       printf("scsi bus busy...\n");
@@ -535,7 +612,7 @@ void CSym53C8xx::execute_io_op() {
     SB_R8(SSTAT0, WOA, true);
     SB_R8(SCNTL1, IARB, false);
 
-    state.select_timeout = !scsi_select(0, destination);
+    state.select_timeout = !dev.scsi_select(index, destination);
 
     if (!state.select_timeout) // select ok
     {
@@ -562,10 +639,10 @@ void CSym53C8xx::execute_io_op() {
     // Clear phase bits
     R8(SSTAT1) &= ~R_SSTAT1_PHASE;
     {
-      int cur_phase = scsi_get_phase(0);
+      int cur_phase = dev.scsi_get_phase(index);
       if (cur_phase == SCSI_PHASE_ARBITRATION) {
         // We won arbitration; the initiator may free the bus.
-        scsi_free(0);
+        dev.scsi_free(index);
       } else if (cur_phase != SCSI_PHASE_FREE) {
         // free_bus() only lets the selected target release a connected
         // bus, and our passive targets never drop BSY on their own --
@@ -573,7 +650,7 @@ void CSym53C8xx::execute_io_op() {
         printf("SYM: WAIT DISCONNECT with bus still connected (phase %d, "
                "target %d); releasing.\n",
                cur_phase, GET_DEST());
-        scsi_bus[0]->free_bus(GET_DEST());
+        dev.scsi_bus[index]->free_bus(GET_DEST());
       }
     }
     return;
@@ -684,7 +761,7 @@ void CSym53C8xx::execute_io_op() {
  *         1: data8 = SFBR
  * \endcode
  */
-void CSym53C8xx::execute_rw_op() {
+void CSym53C8xx::CChannel::execute_rw_op() {
   int opcode = (R8(DCMD) >> 3) & 7;
   int oper = (R8(DCMD) >> 0) & 7;
   bool use_data8_sfbr = (GET_DBC() >> 23) & 1;
@@ -706,7 +783,7 @@ void CSym53C8xx::execute_rw_op() {
       printf("SYM: %08x: sfbr (%02x) ", R32(DSP) - 8, op_data);
 #endif
     } else {
-      op_data = (u8)ReadMem_Bar(0, 1, reg_address, 8);
+      op_data = (u8)bar_read(1, reg_address, 8);
 #if defined(DEBUG_SYM_SCRIPTS)
       printf("SYM: %08x: reg%02x (%02x) ", R32(DSP) - 8, reg_address, op_data);
 #endif
@@ -791,7 +868,7 @@ void CSym53C8xx::execute_rw_op() {
 #if defined(DEBUG_SYM_SCRIPTS)
     printf("-> reg%02x.\n", reg_address);
 #endif
-    WriteMem_Bar(0, 1, reg_address, 8, op_data);
+    bar_write(1, reg_address, 8, op_data);
   }
 }
 
@@ -869,7 +946,7 @@ void CSym53C8xx::execute_rw_op() {
  *       .
  *   .
  **/
-void CSym53C8xx::execute_tc_op() {
+void CSym53C8xx::CChannel::execute_tc_op() {
   int opcode = (R8(DCMD) >> 3) & 7;
   int scsi_phase = (R8(DCMD) >> 0) & 7;
   bool relative = (GET_DBC() >> 23) & 1;
@@ -1056,11 +1133,14 @@ void CSym53C8xx::execute_tc_op() {
  *
  * This instructions moves up to 4 bytes between registers and memory.
  **/
-void CSym53C8xx::execute_ls_op() {
+void CSym53C8xx::CChannel::execute_ls_op() {
   bool is_load = (R8(DCMD) >> 0) & 1;
   bool no_flush = (R8(DCMD) >> 1) & 1;
   bool dsa_relative = (R8(DCMD) >> 4) & 1;
-  int regaddr = (GET_DBC() >> 16) & 0x7f;
+  // Load/Store carries the whole register address in DBC[23:16], so it
+  // reaches the upper half of a 256-byte register file without the bit-7
+  // trick the Read/Write instruction needs.
+  int regaddr = (GET_DBC() >> 16) & (m_chip.reg_bytes - 1);
   int byte_count = (GET_DBC() >> 0) & 7;
   u32 memaddr;
 
@@ -1084,11 +1164,11 @@ void CSym53C8xx::execute_ls_op() {
     // Perform Load Operation
     for (int i = 0; i < byte_count; i++) {
       u8 dat;
-      do_pci_read(memaddr + i, &dat, 1, 1);
+      dev.do_pci_read(memaddr + i, &dat, 1, 1);
 #if defined(DEBUG_SYM_SCRIPTS)
       printf("SYM: %02x -> reg%02x\n", dat, regaddr + i);
 #endif
-      WriteMem_Bar(0, 1, regaddr + i, 8, dat);
+      bar_write(1, regaddr + i, 8, dat);
     }
   } else {
 #if defined(DEBUG_SYM_SCRIPTS)
@@ -1099,11 +1179,11 @@ void CSym53C8xx::execute_ls_op() {
 #endif
     // Perform Store Operation
     for (int i = 0; i < byte_count; i++) {
-      u8 dat = (u8)ReadMem_Bar(0, 1, regaddr + i, 8);
+      u8 dat = (u8)bar_read(1, regaddr + i, 8);
 #if defined(DEBUG_SYM_SCRIPTS)
       printf("SYM: %02x <- reg%02x\n", dat, regaddr + i);
 #endif
-      do_pci_write(memaddr + i, &dat, 1, 1);
+      dev.do_pci_write(memaddr + i, &dat, 1, 1);
     }
   }
 }
@@ -1130,9 +1210,9 @@ void CSym53C8xx::execute_ls_op() {
  * The DSPS register holds the source address.
  * The TEMP register holds the destination address.
  */
-void CSym53C8xx::execute_mm_op() {
+void CSym53C8xx::CChannel::execute_mm_op() {
   u32 temp_shadow;
-  do_pci_read(R32(DSP), &temp_shadow, 4, 1);
+  dev.do_pci_read(R32(DSP), &temp_shadow, 4, 1);
   R32(DSP) += 4;
 
 #if defined(DEBUG_SYM_SCRIPTS)
@@ -1158,8 +1238,8 @@ void CSym53C8xx::execute_mm_op() {
     return;
   }
 
-  do_pci_read(R32(DSPS), buf, 1, dbc);
-  do_pci_write(temp_shadow, buf, 1, dbc);
+  dev.do_pci_read(R32(DSPS), buf, 1, dbc);
+  dev.do_pci_write(temp_shadow, buf, 1, dbc);
   free(buf);
   return;
 }
@@ -1183,7 +1263,7 @@ void CSym53C8xx::execute_mm_op() {
  *        +---------------------------------+
  * \endcode
  **/
-void CSym53C8xx::execute() {
+void CSym53C8xx::CChannel::execute() {
   int optype;
   int opcode;
   bool is_load_store;
@@ -1201,8 +1281,8 @@ void CSym53C8xx::execute() {
 #endif
 
   // Read 2 DWORDS into the DCMD, DBC and DSPS registers.
-  do_pci_read(R32(DSP), &R32(DBC), 4, 1);
-  do_pci_read(R32(DSP) + 4, &R32(DSPS), 4, 1);
+  dev.do_pci_read(R32(DSP), &R32(DBC), 4, 1);
+  dev.do_pci_read(R32(DSP) + 4, &R32(DSPS), 4, 1);
 
   // Increase DSP to point to the next instruction
   R32(DSP) += 8;

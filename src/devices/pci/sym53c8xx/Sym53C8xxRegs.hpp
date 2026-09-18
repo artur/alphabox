@@ -166,6 +166,21 @@
 #define ISTAT_MASK 0xF0
 #define ISTAT_W1C 0x04
 
+/* Registers 15..17, 56..57 and A8..DF exist only on the parts with a
+ * 256-byte register file (the 53C896 generation); on the older ones
+ * nothing decodes there. */
+
+/// Register 15: ISTAT1: Interrupt Status 1
+#define R_ISTAT1 0x15
+#define R_ISTAT1_FLSH 0x04
+#define R_ISTAT1_SRUN 0x02
+#define R_ISTAT1_SIRQD 0x01
+#define ISTAT1_MASK 0x01
+
+/// Registers 16, 17: MBOX0, MBOX1: host mailboxes, readable while SCRIPTS run
+#define R_MBOX0 0x16
+#define R_MBOX1 0x17
+
 /// Register 18: CTEST0: Chip Test 0
 #define R_CTEST0 0x18
 
@@ -277,7 +292,15 @@
 #define SIST1_RC (m_chip.sist1_rc)
 #define SIST1_FATAL (m_chip.sist1_fatal)
 
-/// Register 46: MACNTL: Memory Access Control
+/// Register 44: SLPAR: SCSI Longitudinal Parity
+#define R_SLPAR 0x44
+
+/// Register 45: SWIDE: SCSI Wide Residue
+#define R_SWIDE 0x45
+
+/// Register 46: MACNTL: Memory Access Control. The 896 calls it CTYPE and
+/// makes it read-only; its chip-type nibble reads 0xf there, which is the
+/// part's way of saying "identify me from the PCI ids in SFS instead".
 #define R_MACNTL 0x46
 #define MACNTL_MASK 0x0F
 
@@ -332,11 +355,50 @@
 /// Register 54: SODL
 #define R_SODL 0x54
 
+/// Register 56: CCNTL0: Chip Control 0
+#define R_CCNTL0 0x56
+#define R_CCNTL0_ENPMJ 0x80
+#define R_CCNTL0_PMJCTL 0x40
+
+/// Register 57: CCNTL1: Chip Control 1
+#define R_CCNTL1 0x57
+
 /// Register 58: SBDL: SCSI Bus Data Lines
 #define R_SBDL 0x58
 
 /// Registers 5C..5F: SCRATCHB: Scratch Register B
 #define R_SCRATCHB 0x5C
+
+/// Registers A8..AB: SFS: SCRIPTS Fetch Selector. With CTEST2 SRTCH (the
+/// 896 calls it PCICIE) set it reads back the part's PCI identity, the way
+/// SCRATCHA and SCRATCHB read back the BAR bases.
+#define R_SFS 0xA8
+
+/* Registers C0..DF: what a Block Move was doing when the phase changed
+ * under it, for the SCRIPTS routine that has to pick the transfer up
+ * again. See execute_bm_op(). */
+
+/// Registers C0..C7: PMJAD1, PMJAD2: the phase-mismatch jump addresses
+#define R_PMJAD1 0xC0
+#define R_PMJAD2 0xC4
+
+/// Registers C8..CB: RBC: remaining byte count (top byte: the instruction)
+#define R_RBC 0xC8
+
+/// Registers CC..CF: UA: where the transfer would have continued
+#define R_UA 0xCC
+
+/// Registers D0..D3: ESA: where the Block Move's operands came from
+#define R_ESA 0xD0
+
+/// Registers D4..D7: IA: the address of the Block Move itself
+#define R_IA 0xD4
+
+/// Registers D8..DA: SBC: bytes this Block Move moved across the bus
+#define R_SBC 0xD8
+
+/// Registers DC..DF: CSBC: bytes moved in data phases since it was loaded
+#define R_CSBC 0xDC
 
 /// Acces an 8-byte register
 #define R8(a) state.regs.reg8[R_##a]
