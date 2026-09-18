@@ -14,9 +14,11 @@ change it for the SRM probes:
   --scsi CTRL           pci0.3 = sym53c810|825|875|895 with disk0.0 = a sparse
                         1 GB image (dka0.img, created in --dir) and
                         disk0.5 = a 10 MB RAM disk
-  --nic CLASS           pci0.4 = dec21143|de600|i82557|i82558|i82559 on the
-                        null network backend (nothing received, sends
-                        dropped; needs no host privileges)
+  --nic CLASS           pci0.4 = one of the Tulips (dec21040, dec21041,
+                        dec21140, dec21143) or the Intel parts (de600,
+                        i82557, i82558, i82559) on the null network backend
+                        (nothing received, sends dropped; needs no host
+                        privileges)
   --platform NAME       machine to emulate (default: the ES40 the base
                         configuration describes); sets platform = "NAME"
   --rom FILE            console firmware image (rom.srm); the decompressed
@@ -50,7 +52,8 @@ def main():
     ap.add_argument("--cpu-opt", action="append", default=[])
     ap.add_argument("--cpu1-opt", action="append", default=[])
     ap.add_argument("--scsi", choices=["sym53c810", "sym53c825", "sym53c875", "sym53c895"])
-    ap.add_argument("--nic", choices=["dec21143", "de600", "i82557", "i82558", "i82559"])
+    ap.add_argument("--nic", choices=["dec21040", "dec21041", "dec21140", "dec21143",
+                                     "de600", "i82557", "i82558", "i82559"])
     ap.add_argument("--platform")
     ap.add_argument("--rom")
     ap.add_argument("--nic-udp")

@@ -35,6 +35,9 @@ The names below were extracted from the decompressed image with
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
 | QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
+| DECchip 21140-AA | `dec21140` | same driver; no SIA, media through the general purpose port. The board described has nothing wired to those pins and no MII PHY |
+| DECchip 21041-AA | `dec21041` | same driver; 10 Mb SIA, the older serial ROM format. The console drives it at 10BaseT from its own table and reads only the station address out of the ROM |
+| DECchip 21040-AA | `dec21040` | same driver; 10 Mb SIA, and no serial ROM at all: the station address comes out of a parallel ROM read a byte at a time through CSR9 |
 | DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test |
 | DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | `ei` console driver: network boot on either port |
 | DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | PCI-PCI bridges; the console numbers and probes the buses behind them, nested too, and what the forwarding windows cover is what is reachable; Windows 2000 drives a 53C810 behind one |
@@ -55,7 +58,7 @@ on-board firmware or a large command set.
 | Firmware name | Effort | Why |
 | --- | --- | --- |
 | NCR 53C895A, 53C896 | S–M | same `n810` driver; the 895A has 8 KB of RAM and a 256-byte register window, the 896 is two channels as two PCI functions |
-| DECchip 21040/21041/21140, DE500-AA/-FA/-XA | S–M | older Tulips on the same driver; the 21140 matters for Windows NT and old Tru64 |
+| DE500-AA/-FA/-XA | S–M | named boards built on the 21140 and the 21143: a subsystem id the console recognises, and, for the 21140 boards, a real MII PHY on the general purpose port's reset pin |
 
 ### 2. New devices with high payoff
 
@@ -127,7 +130,12 @@ work: see [platforms.md](platforms.md).
    the address bits above bit 9 as don't-cares, are not claimed.
 5. ~~QLogic ISP1040 (KZPBA)~~ (done): the console and Windows 2000's own
    QLogic driver both drive it.
-6. TGA (ZLXp 21030): native DECwindows/CDE graphics.
+6. ~~Older Tulips~~ (done): the 21040, 21041 and 21140 join the 21143 as
+   parts of one family, each with the identity and media machinery it
+   really had -- a parallel address ROM read through CSR9, the older serial
+   ROM format, a general purpose port in place of a SIA. The console boots
+   over all four. What remains is a 21140 board with an MII PHY behind it.
+7. TGA (ZLXp 21030): native DECwindows/CDE graphics.
 
 Each new device gets its own directory under `src/devices/<bus>/` (as
 `video/s3/` and `video/cirrus/` do), split by concern, and is verified

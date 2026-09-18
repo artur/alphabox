@@ -57,7 +57,7 @@ typedef enum {
   c_s3,
   c_cirrus,
   c_radeon,
-  c_dec21143,
+  c_tulip,
   c_i8255x,
   c_pci_bridge,
   c_sym53c8xx,

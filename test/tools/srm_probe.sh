@@ -9,7 +9,8 @@
 #   PLATFORM=<name>      machine to emulate (default es40)
 #   ROM=<file>           console firmware image, copied into the run directory
 #                        (default: the ES40's cl67srmrom.exe)
-#   NIC=dec21143|de600|i82557|i82558|i82559  add the NIC (null backend)
+#   NIC=dec21040|dec21041|dec21140|dec21143|de600|i82557|i82558|i82559
+#                        add the NIC (null backend)
 #   NET_PEER=N:P         with NIC: UDP backend on port N, and net_peer.py on
 #                        port P answering ARP/BOOTP/TFTP (log: peer.log);
 #                        NET_PEER_OPT="..." adds net_peer.py options

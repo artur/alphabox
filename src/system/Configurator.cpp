@@ -593,7 +593,7 @@ static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
 static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
-static const char *const kv_dec21143[] = {
+static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
     "udp_local", "udp_remote", 0};
@@ -641,7 +641,10 @@ classinfo classes[] = {
     {"serial", c_serial, ON_CS, kv_serial},
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
-    {"dec21143", c_dec21143, IS_PCI | IS_NIC, kv_dec21143},
+    {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
+    {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
+    {"dec21140", c_tulip, IS_PCI | IS_NIC, kv_tulip},
+    {"dec21143", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"de600", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"de602_port", c_i8255x, IS_PCI | IS_NIC | ON_BOARD, kv_i8255x},
     {"de602b_port", c_i8255x, IS_PCI | IS_NIC | ON_BOARD, kv_i8255x},
@@ -921,8 +924,10 @@ void CConfigurator::initialize() {
 
 #if defined(HAVE_PCAP) || defined(__linux__)
 
-  case c_dec21143:
-    myDevice = new CTulip(this, theSystem, pcibus, pcidev);
+  case c_tulip:
+    // The class name ("dec21040", "dec21143") names the part.
+    myDevice = new CTulip(this, theSystem, pcibus, pcidev,
+                          *CTulip::find_chip(myValue));
     break;
 #endif
 

@@ -100,14 +100,16 @@ void CTulip::run() {
 /**
  * Constructor.
  **/
-CTulip::CTulip(CConfigurator *confg, CSystem *c, int pcibus, int pcidev)
-    : CPCIDevice(confg, c, pcibus, pcidev), mySemaphore(0, 1) {}
+CTulip::CTulip(CConfigurator *confg, CSystem *c, int pcibus, int pcidev,
+               const tulip_chip_config &chip)
+    : CPCIDevice(confg, c, pcibus, pcidev), m_chip(chip), mySemaphore(0, 1) {}
 
 /**
  * Initialize the network device.
  **/
 void CTulip::init() {
-  add_function(0, dec21143_cfg_data, dec21143_cfg_mask);
+  tulip_config_space(m_chip, cfg_data, cfg_mask);
+  add_function(0, cfg_data, cfg_mask);
 
   net_backend = create_network_backend(myCfg);
   if (!net_backend)
@@ -135,7 +137,7 @@ void CTulip::init() {
 
   myThread = nullptr;
 
-  printf("%s: $Id$\n", devid_string);
+  printf("%s: DECchip %s network interface.\n", devid_string, m_chip.part);
 }
 
 void CTulip::start_threads() {
@@ -224,6 +226,13 @@ u32 CTulip::nic_read(u32 address, int dsize) {
     // top three bits keep their reset value.
     if (regnr == CSR_MISSED / 8)
       state.reg[regnr] &= 0xE0000000;
+    // On the 21040 a read of CSR9 is not a register read at all: it is how
+    // the address ROM is clocked out, a byte per read.
+    if (regnr == CSR_MIIROM / 8 && m_chip.id_rom == TULIP_ID_ADDRESS_ROM)
+      data = address_rom_read();
+    // On the 21140 CSR12 is not the SIA status but eight pins.
+    if (regnr == CSR_SIASTAT / 8 && m_chip.media == TULIP_MEDIA_GPR_21140)
+      data = gpr_read();
   } else
     printf("dec21143: WARNING! unaligned access (0x%x) \n", (int)address);
 #if defined(DEBUG_NIC)
@@ -405,6 +414,13 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     break;
 
   case CSR_MIIROM: /*  csr9  */
+    /* On the 21040 CSR9 is the address ROM's port and nothing else: a write
+       of any value rewinds it to its first byte, and the reads that follow
+       walk through it. */
+    if (m_chip.id_rom == TULIP_ID_ADDRESS_ROM) {
+      state.srom.addr = 0;
+      break;
+    }
     if (data & MIIROM_MDC)
       mii_access(oldreg, (u32)data);
     else
@@ -412,8 +428,11 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     break;
 
   case CSR_SIASTAT: /*  csr12  */
-    if (((data & SIASTAT_ANS) == SIASTAT_ANS_START) &&
-        (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE)) {
+    if (m_chip.media == TULIP_MEDIA_GPR_21140) {
+      gpr_write((u32)data);
+      state.reg[CSR_SIASTAT / 8] = oldreg;
+    } else if (((data & SIASTAT_ANS) == SIASTAT_ANS_START) &&
+               (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE)) {
       complete_sia_autoneg();
     } else {
       state.reg[CSR_SIASTAT / 8] = oldreg;
@@ -421,13 +440,23 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     break;
 
   case CSR_SIATXRX: /*  csr14  */
-    if ((data & SIATXRX_ANE) && (state.reg[CSR_SIACONN / 8] & SIACONN_SRL))
+    /* The 21040 has no autonegotiation to enable, and bit 7 of its CSR14
+       means something else, so only the parts that have it look here. */
+    if ((m_chip.media == TULIP_MEDIA_SIA_21041 ||
+         m_chip.media == TULIP_MEDIA_SIA_21143) &&
+        (data & SIATXRX_ANE) && (state.reg[CSR_SIACONN / 8] & SIACONN_SRL))
       complete_sia_autoneg();
     break;
 
   case CSR_SIACONN: /*  csr13  */
-    if ((data & SIACONN_SRL) && (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE)) {
-      complete_sia_autoneg();
+    /* A 21143 comes up through autonegotiation and nothing else. The older
+       SIAs report a link as soon as the driver lets the port out of reset,
+       whether or not it asked to negotiate. */
+    if (m_chip.media == TULIP_MEDIA_SIA_21143) {
+      if ((data & SIACONN_SRL) && (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE))
+        complete_sia_autoneg();
+    } else if (m_chip.media != TULIP_MEDIA_GPR_21140) {
+      sia_connect((u32)data);
     }
     break;
 
@@ -502,9 +531,11 @@ void CTulip::ResetNIC() {
 
   memset(state.reg, 0, sizeof(uint32_t) * 32);
 
-  // Reset the whole SROM/MII state machines (not just their data).
+  // Reset the whole SROM/MII state machines (not just their data), and the
+  // general purpose port, whose pins come out of reset as inputs.
   memset(&state.srom, 0, sizeof(state.srom));
   memset(&state.mii, 0, sizeof(state.mii));
+  memset(&state.gpr, 0, sizeof(state.gpr));
 
   /*  Register values at reset, per HRM tables 3-27/41/47/49/51/57/59/61/63/66:
    */
@@ -517,10 +548,12 @@ void CTulip::ResetNIC() {
   state.reg[CSR_MISSED / 8] = 0xE0000000;  /* csr8  */
   state.reg[CSR_MIIROM / 8] = 0xFFF483FF;  /* csr9  */
   state.reg[CSR_GPT / 8] = 0xFFFE0000;     /* csr11 */
-  state.reg[CSR_SIASTAT / 8] = 0x000000C6; /* csr12 - link‑fail until autoneg */
-  state.reg[CSR_SIACONN / 8] = 0xFFFF0000; /* csr13 */
-  state.reg[CSR_SIATXRX / 8] = 0xFFFFFFFF; /* csr14 */
-  state.reg[CSR_SIAGEN / 8] = 0x8FF00000;  /* csr15 */
+  /* csr12 to csr15 are where the parts stop resembling one another: what
+     each of them holds at reset is in the part's own row. */
+  state.reg[CSR_SIASTAT / 8] = m_chip.csr12_reset;
+  state.reg[CSR_SIACONN / 8] = m_chip.csr13_reset;
+  state.reg[CSR_SIATXRX / 8] = m_chip.csr14_reset;
+  state.reg[CSR_SIAGEN / 8] = m_chip.csr15_reset;
 
   state.rx.cur_addr = state.tx.cur_addr = 0;
 

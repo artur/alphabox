@@ -192,7 +192,11 @@ void CTulip::receive_process() {
         if (trace_packets)
           trace_packet("RX", packet_data, packet_len);
         rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
-        state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA; // set 10bT activity
+        // Set 10bT activity -- but only where CSR12 is the SIA status. On
+        // the 21140 that register is eight general purpose pins, and this
+        // bit is one of them.
+        if (m_chip.media != TULIP_MEDIA_GPR_21140)
+          state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
       }
     }
 

@@ -815,7 +815,21 @@ int main_cfg(int argc, char *argv[]) {
                         "if you have no more cards to add.");
   card_q.addAnswer("none", "", "No more cards to add");
 #if defined(HAVE_PCAP) || defined(__linux__)
-  card_q.addAnswer("nic", "dec21143", "DEC 21143 Network Interface (1 max)");
+  card_q.addAnswer("nic", "dec21143", "DEC Tulip Network Interface (1 max)");
+
+  /* Which of the family. They differ in how they describe themselves and
+   * how their media are selected, not in what they carry.
+   */
+  MultipleChoiceQuestion tulip_q;
+  tulip_q.setQuestion("Which Tulip part should the network interface be?");
+  tulip_q.setExplanation("dec21143 is the DE500-BA, the 10/100 part the "
+                         "console and every guest driver know best. The "
+                         "others are the parts that came before it.");
+  tulip_q.addAnswer("21143", "dec21143", "DECchip 21143 (DE500-BA, 10/100)");
+  tulip_q.addAnswer("21140", "dec21140", "DECchip 21140A (10/100)");
+  tulip_q.addAnswer("21041", "dec21041", "DECchip 21041 (10 Mb)");
+  tulip_q.addAnswer("21040", "dec21040", "DECchip 21040 (10 Mb)");
+  tulip_q.setDefault("21143");
 #endif
   card_q.addAnswer("scsi", "sym53c810",
                    "Symbios 53C810 narrow SCSI controller");
@@ -843,14 +857,22 @@ int main_cfg(int argc, char *argv[]) {
     if (card_q.ask() == "")
       break;
 
+    string card = card_q.getAnswer();
+#if defined(HAVE_PCAP) || defined(__linux__)
+    /* A Tulip is a family; ask which one before naming the class.
+     */
+    if (card == "dec21143")
+      card = tulip_q.ask();
+#endif
+
     /* Determine where to put this card.
      */
-    pci_q.setQuestion("In what PCI slot would you like to put the " +
-                      card_q.getAnswer() + " card?");
-    os << "  " << pci_q.ask() << " = " << card_q.getAnswer() << "\n";
+    pci_q.setQuestion("In what PCI slot would you like to put the " + card +
+                      " card?");
+    os << "  " << pci_q.ask() << " = " << card << "\n";
     os << "  {\n";
 
-    if (card_q.getAnswer() == "dec21143") {
+    if (card.compare(0, 6, "dec210") == 0) {
       /* Due to limitations in our network
        * emulation, only one NIC is allowed.
        * Remove it from the list of choices.
@@ -930,7 +952,7 @@ int main_cfg(int argc, char *argv[]) {
       mac_q.setDefault("08-00-2B-E5-40-00");
       os << "    mac = \"" << mac_q.ask() << "\";\n";
 #endif
-    } else if (card_q.getAnswer() == "sym53c810") {
+    } else if (card == "sym53c810") {
       /* Use a ShrinkingChoiceQuestion; once
        * a disk position has been used, it
        * can't be used again.

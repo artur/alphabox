@@ -32,7 +32,8 @@
 
 /**
  * \file
- * The Tulip parts: what each one answers in PCI configuration space.
+ * The Tulip parts: a row per member of the family, and what each one
+ * answers in PCI configuration space.
  **/
 #include "StdAfx.hpp"
 
@@ -41,136 +42,69 @@
 #include "System.hpp"
 #include <string.h>
 
-u32 dec21143_cfg_data[64] = {
-    /*00*/ 0x00191011, // CFID: vendor + device
-    /*04*/ 0x02800000, // CFCS: command + status
-    /*08*/ 0x02000030, // CFRV: class + revision   //dth:was 41
-    /*0c*/ 0x00000000, // CFLT: latency timer + cache line size
-    /*10*/ 0x00000001, // BAR0: CBIO
-    /*14*/ 0x00000000, // BAR1: CBMA
-    /*18*/ 0x00000000, // BAR2:
-    /*1c*/ 0x00000000, // BAR3:
-    /*20*/ 0x00000000, // BAR4:
-    /*24*/ 0x00000000, // BAR5:
-    /*28*/ 0x00000000, // CCIC: CardBus
-    /*2c*/ 0x500b1011, // CSID: subsystem + vendor
-    /*30*/ 0x00000000, // BAR6: expansion rom base
-    /*34*/ 0x00000000, // CCAP: capabilities pointer
-    /*38*/ 0x00000000,
-    /*3c*/ 0x281401ff, // CFIT: interrupt configuration
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0};
+/* Each row claims a pass-2 revision. Drivers never look for an exact pass;
+   they compare against a threshold -- a 21140 of revision 0x20 or later is
+   a 21140A, a 21041 of revision 0x20 or later is the pass whose
+   autonegotiation works -- so claiming pass 2 is claiming the part those
+   drivers were written for.
 
-u32 dec21143_cfg_mask[64] = {
-    /*00*/ 0x00000000, // CFID: vendor + device
-    /*04*/ 0x0000ffff, // CFCS: command + status
-    /*08*/ 0x00000000, // CFRV: class + revision
-    /*0c*/ 0x0000ffff, // CFLT: latency timer + cache line size
-    /*10*/ 0xffffff00, // BAR0
-    /*14*/ 0xffffff00, // BAR1: CBMA
-    /*18*/ 0x00000000, // BAR2:
-    /*1c*/ 0x00000000, // BAR3:
-    /*20*/ 0x00000000, // BAR4:
-    /*24*/ 0x00000000, // BAR5:
-    /*28*/ 0x00000000, // CCIC: CardBus
-    /*2c*/ 0x00000000, // CSID: subsystem + vendor
-    /*30*/ 0x00000000, // BAR6: expansion rom base
-    /*34*/ 0x00000000, // CCAP: capabilities pointer
-    /*38*/ 0x00000000,
-    /*3c*/ 0x000000ff, // CFIT: interrupt configuration
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0};
+   CSR13 to CSR15 hold the SIA on the parts that have one, and the 21040's
+   and 21041's manuals are not to hand: what the rows below say is the
+   simplest thing that is true of a part fresh out of reset, that its SIA is
+   held in reset (CSR13 clear, since SRL is active high) and that the port
+   therefore reports link fail. Nothing else in these registers is state the
+   emulation reads back. The 21140 has no SIA at all, and its CSR12 is
+   eight general purpose pins which come out of reset as inputs. */
+static const tulip_chip_config chips[] = {
+    // name        part    device  rev   subsystem   station address
+    //   serial ROM         media                    CSR12/13/14/15 at reset
+    {"dec21040", "21040", 0x0002, 0x23, 0, 0, TULIP_ID_ADDRESS_ROM,
+     TULIP_SROM_NONE, TULIP_MEDIA_SIA_21040, SIASTAT_NCR | SIASTAT_LKF, 0, 0,
+     0},
+    {"dec21041", "21041", 0x0014, 0x21, 0, 0, TULIP_ID_SERIAL_ROM,
+     TULIP_SROM_21041, TULIP_MEDIA_SIA_21041, SIASTAT_NCR | SIASTAT_LKF, 0, 0,
+     0},
+    {"dec21140", "21140A", 0x0009, 0x22, 0, 0, TULIP_ID_SERIAL_ROM,
+     TULIP_SROM_21140, TULIP_MEDIA_GPR_21140, 0, 0, 0, 0},
+    {"dec21143", "21143", 0x0019, 0x30, 0x1011, 0x500b, TULIP_ID_SERIAL_ROM,
+     TULIP_SROM_21143, TULIP_MEDIA_SIA_21143, 0x000000C6, 0xFFFF0000,
+     0xFFFFFFFF, 0x8FF00000},
+};
+
+const tulip_chip_config *CTulip::find_chip(const char *name) {
+  for (const tulip_chip_config &c : chips)
+    if (!strcmp(c.name, name))
+      return &c;
+  return nullptr;
+}
+
+/**
+ * The configuration header the part answers with. Every Tulip presents the
+ * same pair of base registers -- the CSRs in I/O space, and the same CSRs
+ * again in memory space -- so what differs between the parts is only who
+ * they say they are.
+ **/
+void tulip_config_space(const tulip_chip_config &chip, u32 *data, u32 *mask) {
+  data[0x00 >> 2] = (u32)chip.device_id << 16 | 0x1011; // CFID: vendor DEC
+  data[0x04 >> 2] = 0x02800000;                 // CFCS: command + status
+  data[0x08 >> 2] = 0x02000000 | chip.revision; // CFRV: Ethernet, revision
+  data[0x10 >> 2] = 0x00000001;                 // BAR0: CBIO
+  data[0x14 >> 2] = 0x00000000;                 // BAR1: CBMA
+  /* The subsystem registers arrived with PCI 2.1. The parts older than the
+     21143 answer zero there, which is how a driver that wants to know the
+     board asks their serial ROM instead. */
+  data[0x2c >> 2] = (u32)chip.subsys_id << 16 | chip.subsys_vendor;
+  /* CFIT: interrupt on INTA, line not yet assigned. The 21143 also states
+     how much bus time it wants; for the older parts we have no such figure,
+     and zero in those fields is the honest "no requirement". */
+  data[0x3c >> 2] =
+      chip.media == TULIP_MEDIA_SIA_21143 ? 0x281401ff : 0x000001ff;
+
+  mask[0x04 >> 2] = 0x0000ffff; // CFCS: command + status
+  mask[0x0c >> 2] = 0x0000ffff; // CFLT: latency timer + cache line size
+  mask[0x10 >> 2] = 0xffffff00; // BAR0: CBIO
+  mask[0x14 >> 2] = 0xffffff00; // BAR1: CBMA
+  mask[0x3c >> 2] = 0x000000ff; // CFIT: interrupt line
+}
 
 #endif // defined(HAVE_PCAP) || defined(__linux__)

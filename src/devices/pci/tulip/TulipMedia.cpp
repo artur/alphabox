@@ -234,12 +234,18 @@ void CTulip::mii_access(uint32_t oldreg, uint32_t idata) {
 }
 
 void CTulip::complete_sia_autoneg() {
-  const u32 link_partner = ((u32)(ANLPAR_ACK | ANLPAR_TX_FD | ANLPAR_TX |
-                                  ANLPAR_10_FD | ANLPAR_10 | ANLPAR_CSMA)
-                            << 16);
+  /* What the emulated link partner answers with. The 21041's SIA
+     negotiates at 10 Mb and knows nothing of 100, so it hears only the two
+     10 Mb abilities; the 21143 hears all four. */
+  u32 abilities = ANLPAR_ACK | ANLPAR_10_FD | ANLPAR_10 | ANLPAR_CSMA;
+  if (m_chip.media == TULIP_MEDIA_SIA_21143)
+    abilities |= ANLPAR_TX_FD | ANLPAR_TX;
+  const u32 link_partner = abilities << 16;
 
   /* Autonegotiation completes immediately against the emulated link partner.
-     Report a stable 100baseTX full-duplex link without remote-fault bits. */
+     Report a stable link without remote-fault bits. On the 21041 the two
+     link-status bits cleared here are that part's network-connection-error
+     and link-fail bits, which is the same statement in its own words. */
   state.reg[CSR_SIASTAT / 8] &= ~(SIASTAT_ANS | SIASTAT_LPC | SIASTAT_LS100 |
                                   SIASTAT_LS10 | SIASTAT_NSN | SIASTAT_TRF);
   state.reg[CSR_SIASTAT / 8] |=
@@ -248,14 +254,78 @@ void CTulip::complete_sia_autoneg() {
   state.reg[CSR_STATUS / 8] &= ~STATUS_LNF;
   state.reg[CSR_STATUS / 8] |= STATUS_LNPANC;
 
-  state.reg[CSR_OPMODE / 8] &= ~OPMODE_TTM;
-  state.reg[CSR_OPMODE / 8] |=
-      OPMODE_PS | OPMODE_PCS | OPMODE_SCR | OPMODE_FD | OPMODE_HBD;
+  if (m_chip.media == TULIP_MEDIA_SIA_21143) {
+    /* The 100 Mb result, which only the 21143 has anywhere to put. */
+    state.reg[CSR_OPMODE / 8] &= ~OPMODE_TTM;
+    state.reg[CSR_OPMODE / 8] |=
+        OPMODE_PS | OPMODE_PCS | OPMODE_SCR | OPMODE_FD | OPMODE_HBD;
 
-  state.reg[CSR_SIATXRX / 8] &= ~(SIATXRX_TH | SIATXRX_THX | SIATXRX_T4);
-  state.reg[CSR_SIATXRX / 8] |= SIATXRX_TXF;
+    state.reg[CSR_SIATXRX / 8] &= ~(SIATXRX_TH | SIATXRX_THX | SIATXRX_T4);
+    state.reg[CSR_SIATXRX / 8] |= SIATXRX_TXF;
+  }
 
   update_irq();
+}
+
+/**
+ * The driver has written CSR13, which on the older parts is where it takes
+ * the serial interface out of reset. A real port would now look for its
+ * link partner; the emulated one is plugged into a backend that is already
+ * there, so the link comes up at once -- or goes away again if the driver
+ * has just put the port back into reset.
+ **/
+void CTulip::sia_connect(u32 csr13) {
+  if (!(csr13 & SIACONN_SRL)) {
+    state.reg[CSR_SIASTAT / 8] |= SIASTAT_LKF | SIASTAT_NCR;
+    state.reg[CSR_STATUS / 8] |= STATUS_LNF;
+    update_irq();
+    return;
+  }
+
+  state.reg[CSR_SIASTAT / 8] &= ~(SIASTAT_LKF | SIASTAT_NCR);
+  state.reg[CSR_STATUS / 8] &= ~STATUS_LNF;
+  state.reg[CSR_STATUS / 8] |= STATUS_LNPANC;
+
+  /* A 21041 whose driver asked for autonegotiation gets it now; a 21040
+     has none to give. */
+  if (m_chip.media == TULIP_MEDIA_SIA_21041 &&
+      (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE))
+    complete_sia_autoneg();
+  else
+    update_irq();
+}
+
+/**
+ * Read the 21140's general purpose port. A pin the chip drives reads back
+ * what it drives; a pin it does not drive reads back whatever the board
+ * puts there, and the board this part's serial ROM describes wires nothing
+ * to those pins -- which is why its media blocks tell the driver there is
+ * no link indicator to watch.
+ **/
+u32 CTulip::gpr_read() { return (u32)(state.gpr.out & state.gpr.dir); }
+
+/**
+ * Write it. A write with bit 8 set carries no data: it says which of the
+ * eight pins the chip is to drive from now on.
+ **/
+void CTulip::gpr_write(u32 data) {
+  if (data & 0x00000100)
+    state.gpr.dir = (u8)(data & 0xff);
+  else
+    state.gpr.out = (u8)(data & 0xff);
+}
+
+/**
+ * Hand the driver the next byte of the 21040's address ROM. The chip
+ * presents one byte at a time in the low eight bits of CSR9 and holds bit
+ * 31 up while the byte is not ready yet; ours is always ready, so that bit
+ * stays down. The pointer runs over all 128 bytes the chip serialises,
+ * which is the 32-byte ROM image four times over.
+ **/
+u32 CTulip::address_rom_read() {
+  u32 data = state.srom.data[state.srom.addr & (sizeof(state.srom.data) - 1)];
+  state.srom.addr++;
+  return data;
 }
 
 /**
@@ -364,30 +434,100 @@ void CTulip::srom_access(uint32_t oldreg, uint32_t idata) {
 }
 
 /**
+ * Build the 21040's address ROM.
+ *
+ * That part has no serial ROM at all: its station address sits in a plain
+ * parallel ROM which the chip reads out for the driver a byte at a time.
+ * The layout is the one Digital recommended and every driver checks -- the
+ * address, a checksum over it, both of those backwards, both of them again
+ * forwards, and a test pattern. The chip serialises 128 bytes, which on a
+ * real board is the 32-byte image four times over, and drivers do read
+ * past the first copy, so we write all four.
+ **/
+void CTulip::build_address_rom() {
+  u8 image[32];
+  static const u8 testpat[8] = {0xFF, 0x00, 0x55, 0xAA, 0xFF, 0x00, 0x55, 0xAA};
+
+  memcpy(image, state.mac, 6);
+
+  /* The checksum: the three address words folded together with a doubling
+     between each, every step brought back into sixteen bits by subtracting
+     0xFFFF. The last step tests for equality as well, so a fold that comes
+     out exactly 0xFFFF is carried as zero -- an asymmetry a driver
+     reproduces faithfully, which is why we do too. */
+  unsigned sum = (unsigned)(image[0] | image[1] << 8) * 2;
+  if (sum > 65535)
+    sum -= 65535;
+  sum += (unsigned)(image[2] | image[3] << 8);
+  if (sum > 65535)
+    sum -= 65535;
+  sum *= 2;
+  if (sum > 65535)
+    sum -= 65535;
+  sum += (unsigned)(image[4] | image[5] << 8);
+  if (sum >= 65535)
+    sum -= 65535;
+  image[6] = (u8)(sum & 0xff);
+  image[7] = (u8)((sum >> 8) & 0xff);
+
+  for (int i = 0; i < 8; i++)
+    image[8 + i] = image[7 - i];
+  memcpy(image + 16, image, 8);
+  memcpy(image + 24, testpat, sizeof(testpat));
+
+  for (unsigned i = 0; i < sizeof(state.srom.data); i += sizeof(image))
+    memcpy(state.srom.data + i, image, sizeof(image));
+  state.srom.addr = 0;
+}
+
+/**
  * Build the contents of the serial ROM this part reads its station
  * address and its media description out of.
+ *
+ * Three of the four parts have one, and they do not describe themselves
+ * the same way. The 21143's ROM is version 3 of Digital's format, whose
+ * identification block names the board by its subsystem id and whose media
+ * blocks are the extended kind. The 21041 and the 21140 came first and use
+ * version 1, whose identification block is eighteen zero bytes -- which is
+ * exactly how a driver tells the two formats apart. After the header they
+ * agree on the station address and on where the controller's own
+ * description sits, and differ again in what that description may contain:
+ * the 21041's blocks name a medium and may spell out the three SIA
+ * registers for it, while the 21140's leaf begins with a direction byte
+ * for its general purpose port and its blocks name what to put on it.
  **/
 void CTulip::build_srom() {
   int leaf;
 
+  memset(state.srom.data, 0, sizeof(state.srom.data));
+
+  if (m_chip.id_rom == TULIP_ID_ADDRESS_ROM) {
+    build_address_rom();
+    return;
+  }
+
   /* SROM v3 build per Digital "21X4 Serial ROM Format" 4.05.
    * v3 is the lowest version that defines extended-format info blocks
    * and 21143 block types  */
-
-  /* ID Block (bytes 0..17) — single-function format 5 */
-  const uint16_t subsysVid = 0x1011; /* DEC                 */
-  const uint16_t subsysId = 0x500B;  /* DE-500BA            */
-  state.srom.data[0] = subsysVid & 0xff;
-  state.srom.data[1] = (subsysVid >> 8) & 0xff;
-  state.srom.data[2] = subsysId & 0xff;
-  state.srom.data[3] = (subsysId >> 8) & 0xff;
-  /* bytes 4..14 = 0  (CIS pointers, ID_Reserved1) — left zero */
-  state.srom.data[15] = 0x00; /* MiscHwOptions   - no PME/STSCHG       */
-  /* byte 16 = ID_BLOCK_CRC (Appendix B: low byte of word 8), filled below */
-  state.srom.data[17] = 0x00; /* Func0_HwOptions - no BootROM          */
+  if (m_chip.srom == TULIP_SROM_21143) {
+    /* ID Block (bytes 0..17) — single-function format 5 */
+    const uint16_t subsysVid = m_chip.subsys_vendor; /* DEC       */
+    const uint16_t subsysId = m_chip.subsys_id;      /* DE-500BA  */
+    state.srom.data[0] = subsysVid & 0xff;
+    state.srom.data[1] = (subsysVid >> 8) & 0xff;
+    state.srom.data[2] = subsysId & 0xff;
+    state.srom.data[3] = (subsysId >> 8) & 0xff;
+    /* bytes 4..14 = 0  (CIS pointers, ID_Reserved1) — left zero */
+    state.srom.data[15] = 0x00; /* MiscHwOptions   - no PME/STSCHG       */
+    /* byte 16 = ID_BLOCK_CRC (Appendix B: low byte of word 8), below */
+    state.srom.data[17] = 0x00; /* Func0_HwOptions - no BootROM          */
+  }
+  /* For version 1 bytes 0..17 stay zero: the format has no identification
+     block, and their being zero is the signature drivers look for. */
 
   /* Board info header (bytes 18..29) */
-  state.srom.data[TULIP_ROM_SROM_FORMAT_VERION] = 3;
+  state.srom.data[TULIP_ROM_SROM_FORMAT_VERION] =
+      m_chip.srom == TULIP_SROM_21143 ? 3 : 1;
   state.srom.data[TULIP_ROM_CHIP_COUNT] = 1;
 
   /*  Set the MAC address:  */
@@ -398,42 +538,100 @@ void CTulip::build_srom() {
   state.srom.data[TULIP_ROM_CHIPn_INFO_LEAF_OFFSET(0)] = leaf & 255;
   state.srom.data[TULIP_ROM_CHIPn_INFO_LEAF_OFFSET(0) + 1] = leaf >> 8;
 
-  /* Controller info leaf (offset 30) — 21143 7.5.1 */
-  state.srom.data[leaf + 0] = 0x00; /* Selected Conn Type LSB         */
-  state.srom.data[leaf + 1] = 0x08; /* MSB -> 0x0800 Powerup+Dynamic   */
-  state.srom.data[leaf + 2] = 2;    /* Block Count = 2                */
-  leaf += 3;
+  if (m_chip.srom == TULIP_SROM_21143) {
+    /* Controller info leaf (offset 30) — 21143 7.5.1 */
+    state.srom.data[leaf + 0] = 0x00; /* Selected Conn Type LSB         */
+    state.srom.data[leaf + 1] = 0x08; /* MSB -> 0x0800 Powerup+Dynamic   */
+    state.srom.data[leaf + 2] = 2;    /* Block Count = 2                */
+    leaf += 3;
 
-  /* 21143 SYM 100BaseTX-FDX (type 4, extended) 7.5.2.1.3
-   * The DE-500BA uses the chip's internal SYM scrambler/PCS for 100TX
-   * - there is NO external MII PHY on this board.  */
-  state.srom.data[leaf++] = 0x80 | 8; /* F=1, length=8                       */
-  state.srom.data[leaf++] = TULIP_ROM_MB_21143_SYM;
-  state.srom.data[leaf++] =
-      TULIP_ROM_MB_MEDIA_100TX_FDX; /* 0x05 = 100BaseTX FDX */
-  state.srom.data[leaf++] = 0x00;   /* GPP Control LSB - no GPP needed     */
-  state.srom.data[leaf++] = 0x00;   /* GPP Control MSB                     */
-  state.srom.data[leaf++] = 0x00;   /* GPP Data LSB                        */
-  state.srom.data[leaf++] = 0x00;   /* GPP Data MSB                        */
-  state.srom.data[leaf++] = 0x61;   /* Command LSB: PS|PCS|SCR, no TTM     */
-  state.srom.data[leaf++] = 0x80;   /* Command MSB: no media sense pin      */
+    /* 21143 SYM 100BaseTX-FDX (type 4, extended) 7.5.2.1.3
+     * The DE-500BA uses the chip's internal SYM scrambler/PCS for 100TX
+     * - there is NO external MII PHY on this board.  */
+    state.srom.data[leaf++] = 0x80 | 8; /* F=1, length=8                     */
+    state.srom.data[leaf++] = TULIP_ROM_MB_21143_SYM;
+    state.srom.data[leaf++] =
+        TULIP_ROM_MB_MEDIA_100TX_FDX; /* 0x05 = 100BaseTX FDX */
+    state.srom.data[leaf++] = 0x00;   /* GPP Control LSB - no GPP needed   */
+    state.srom.data[leaf++] = 0x00;   /* GPP Control MSB                   */
+    state.srom.data[leaf++] = 0x00;   /* GPP Data LSB                      */
+    state.srom.data[leaf++] = 0x00;   /* GPP Data MSB                      */
+    state.srom.data[leaf++] = 0x61;   /* Command LSB: PS|PCS|SCR, no TTM   */
+    state.srom.data[leaf++] = 0x80;   /* Command MSB: no media sense pin   */
 
-  /* 21142/3 SIA 10BaseT (type 2, extended, EXT=0) 7.4.2.1.1 */
-  state.srom.data[leaf++] =
-      0x80 | 6; /* F=1, length=6 (no Media Specific Data) */
-  state.srom.data[leaf++] = TULIP_ROM_MB_21142_SIA;
-  state.srom.data[leaf++] = 0x00; /* EXT=0, MediaCode=0 (10BaseT) */
-  state.srom.data[leaf++] = 0x00; /* GPP Control LSB          */
-  state.srom.data[leaf++] = 0x00; /* GPP Control MSB          */
-  state.srom.data[leaf++] = 0x00; /* GPP Data LSB             */
-  state.srom.data[leaf++] = 0x00; /* GPP Data MSB             */
+    /* 21142/3 SIA 10BaseT (type 2, extended, EXT=0) 7.4.2.1.1 */
+    state.srom.data[leaf++] =
+        0x80 | 6; /* F=1, length=6 (no Media Specific Data) */
+    state.srom.data[leaf++] = TULIP_ROM_MB_21142_SIA;
+    state.srom.data[leaf++] = 0x00; /* EXT=0, MediaCode=0 (10BaseT) */
+    state.srom.data[leaf++] = 0x00; /* GPP Control LSB          */
+    state.srom.data[leaf++] = 0x00; /* GPP Control MSB          */
+    state.srom.data[leaf++] = 0x00; /* GPP Data LSB             */
+    state.srom.data[leaf++] = 0x00; /* GPP Data MSB             */
+  } else if (m_chip.srom == TULIP_SROM_21140) {
+    /* The 21140's info leaf. After the connection type comes the byte the
+       21143's leaf does not have: which of the general purpose port's
+       eight pins the chip is to drive. This board drives none of them --
+       it has nothing wired there -- so the byte is zero and both media
+       blocks below say the driver should not look for a link indicator.
+
+       A driver is free to disbelieve that. The console does: it writes its
+       own pin directions (0x1f, the DE500's, where the low five pins are
+       outputs and the top three are a board's link indications), reads
+       none of them back as asserted, and settles on 10BaseT. That is a
+       true answer for a board with nothing on those pins, and the medium
+       it picks makes no difference to what reaches the backend. */
+    state.srom.data[leaf + 0] = SELECT_CONN_TYPE_100TX & 0xff;
+    state.srom.data[leaf + 1] = SELECT_CONN_TYPE_100TX >> 8;
+    state.srom.data[leaf + 2] = 0x00; /* general purpose port directions */
+    state.srom.data[leaf + 3] = 2;    /* Block Count = 2                 */
+    leaf += 4;
+
+    /* Two compact 21140 blocks, four bytes each: the medium, the byte to
+       put on the general purpose port for it, and the command word, whose
+       bits 0, 4, 5 and 6 are the CSR6 bits the driver is to set. 100BaseTX
+       wants the MII/SYM port with its scrambler and PCS; 10BaseT wants the
+       serial port and the 10 Mb transmit threshold. */
+    state.srom.data[leaf++] = TULIP_ROM_MB_MEDIA_100TX;
+    state.srom.data[leaf++] = 0x00; /* nothing to drive               */
+    state.srom.data[leaf++] = 0x61; /* Command LSB: PS|PCS|SCR        */
+    state.srom.data[leaf++] = 0x80; /* Command MSB: no link indicator */
+
+    state.srom.data[leaf++] = TULIP_ROM_MB_MEDIA_TP;
+    state.srom.data[leaf++] = 0x00;
+    state.srom.data[leaf++] = 0x10; /* Command LSB: TTM               */
+    state.srom.data[leaf++] = 0x80;
+  } else {
+    /* The 21041's info leaf: a connection type, a block count, and blocks
+       of one byte each naming a medium. A block may carry six more bytes
+       spelling out CSR13, CSR14 and CSR15 for that medium; this board has
+       nothing unusual to say about its twisted pair, so it does not, and
+       the driver uses the values it holds for a 21041 itself.
+
+       The blocks begin straight after the count, as NetBSD's if_de reads
+       them and as the 21140 leaf below implies -- there the extra byte
+       between the two is the port direction, which a 21041 has no port to
+       need. (Linux's de2104x leaves a byte of padding there instead. Which
+       of them is right cannot be settled here: the console does not read
+       this leaf at all. It takes the station address out of the ROM and
+       then drives the SIA at 10BaseT from its own table, whatever the leaf
+       says -- which is also what if_de does, and why it says that
+       thankfully all 21041s act the same.) */
+    state.srom.data[leaf + 0] = SELECT_CONN_TYPE_TP & 0xff;
+    state.srom.data[leaf + 1] = SELECT_CONN_TYPE_TP >> 8;
+    state.srom.data[leaf + 2] = 1; /* Block Count = 1 */
+    leaf += 3;
+
+    state.srom.data[leaf++] = TULIP_ROM_MB_MEDIA_TP;
+  }
 
   /* ID_BLOCK_CRC (Appendix B): 8-bit CRC, MSB-first, poly 0x06, init 0xFF.
    * Walks bits of the first 9 words MSB-first, stopping at word 8 bit 7.
    * Per the algorithm in the spec, the CRC result lands in the LOW byte
    * of word 8 (= byte 16). Byte 17 is the high byte of word 8 and is
-   * INPUT to the walk (Func0_HwOptions in our layout, value 0). */
-  {
+   * INPUT to the walk (Func0_HwOptions in our layout, value 0). Version 1
+   * has no identification block to protect, so it has no such CRC. */
+  if (m_chip.srom == TULIP_SROM_21143) {
     unsigned char crc8 = 0xFF;
     for (int word = 0; word < 9; word++) {
       uint16_t w =
@@ -451,11 +649,6 @@ void CTulip::build_srom() {
     }
     state.srom.data[16] = crc8;
   }
-
-  /*  MII Management decoder initial state:  */
-  state.mii.state = MII_STATE_RESET;
-
-  state.tx.suspend = false;
 
   // compute the CRC for the SROM data.  This code is from the
   // tu sample driver from HP in if_tu.c, which was apparently
