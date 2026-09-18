@@ -37,7 +37,7 @@ The names below were extracted from the decompressed image with
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test |
 | DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | `ei` console driver: network boot on either port |
-| DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | PCI-PCI bridges; the console numbers and probes the buses behind them, nested too; Windows 2000 drives a 53C810 behind one |
+| DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | PCI-PCI bridges; the console numbers and probes the buses behind them, nested too, and what the forwarding windows cover is what is reachable; Windows 2000 drives a 53C810 behind one |
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
 | Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
 | Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; Windows 2000 draws its desktop through the BitBLT engine |
@@ -120,8 +120,10 @@ work: see [platforms.md](platforms.md).
 3. ~~Intel 8255x~~: the DE600 and Intel's 82557/82558/82559 boards are
    done; the dual-port DE602 waits for the bridges.
 4. ~~PCI-PCI bridges~~: the 21050/21052/21152/21153/21154 and the DE602
-   boards are done; the forwarding windows are not modelled (devices behind
-   a bridge claim their BARs on the hose directly).
+   boards are done, forwarding windows and all: a device behind a bridge is
+   reached because the bridge's I/O, memory or prefetchable window covers
+   it. The aliases of the VGA I/O ranges, which a real bridge decodes with
+   the address bits above bit 9 as don't-cares, are not claimed.
 5. ~~QLogic ISP1040 (KZPBA)~~ (done): the console and Windows 2000's own
    QLogic driver both drive it.
 6. TGA (ZLXp 21030): native DECwindows/CDE graphics.

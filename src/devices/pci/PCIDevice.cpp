@@ -142,20 +142,29 @@ void CPCIDevice::add_function(int func, u32 data[64], u32 mask[64]) {
   device_at[func] = true;
 }
 
+u64 CPCIDevice::bus_address(bool is_io, u32 base) const {
+  return (is_io ? U64(0x00000801fc000000) : U64(0x0000080000000000)) +
+         (U64(0x0000000200000000) * myPCIBus) + base;
+}
+
+u64 CPCIDevice::map_range(int id, bool is_io, u32 base, u64 length) {
+  const u64 t = bus_address(is_io, base);
+
+  if (myBridge)
+    myBridge->map_child_range(this, id, is_io, base, length);
+  else
+    cSystem->RegisterMemory(this, id, t, length);
+  return t;
+}
+
 void CPCIDevice::add_legacy_io(int id, u32 base, u32 length) {
   dev_range_is_io[id] = true;
-  cSystem->RegisterMemory(this, id,
-                          U64(0x00000801fc000000) +
-                              (U64(0x0000000200000000) * myPCIBus) + base,
-                          length);
+  map_range(id, true, base, length);
 }
 
 void CPCIDevice::add_legacy_mem(int id, u32 base, u32 length) {
   dev_range_is_io[id] = false;
-  cSystem->RegisterMemory(this, id,
-                          U64(0x0000080000000000) +
-                              (U64(0x0000000200000000) * myPCIBus) + base,
-                          length);
+  map_range(id, false, base, length);
 }
 
 u32 CPCIDevice::config_read(int func, u32 address, int dsize) {
@@ -268,10 +277,7 @@ void CPCIDevice::register_bar(int func, int bar, u32 data, u32 mask) {
     u32 base =
         (data & PCI_IO_ADDRESS_MASK) & ~(length - 1u); //  IO BAR alignment
 
-    const u64 t =
-        U64(0x00000801fc000000) + (U64(0x0000000200000000) * myPCIBus) + base;
-
-    cSystem->RegisterMemory(this, id, t, length);
+    const u64 t = map_range(id, true, base, length);
     printf("%s(%s).%d PCI BAR %d set to IO   %" PRIx64 ", len %x.\n",
            myCfg->get_myName(), myCfg->get_myValue(), func, bar, t, length);
     return;
@@ -298,10 +304,7 @@ void CPCIDevice::register_bar(int func, int bar, u32 data, u32 mask) {
     // Base: drop enable/reserved via mask, then align to size
     u32 base = (data & PCI_ROM_ADDRESS_MASK) & ~(length - 1u);
 
-    const u64 t =
-        U64(0x0000080000000000) + (U64(0x0000000200000000) * myPCIBus) + base;
-
-    cSystem->RegisterMemory(this, id, t, length);
+    const u64 t = map_range(id, false, base, length);
     printf("%s(%s).%d PCI BAR 6 set to MEM %" PRIx64 " (ROM), len %x.\n",
            myCfg->get_myName(), myCfg->get_myValue(), func, t, length);
     return;
@@ -317,10 +320,7 @@ void CPCIDevice::register_bar(int func, int bar, u32 data, u32 mask) {
     // Base: clear attr bits, then align to size
     u32 base = (data & PCI_MEM_ADDRESS_MASK) & ~(length - 1u);
 
-    const u64 t =
-        U64(0x0000080000000000) + (U64(0x0000000200000000) * myPCIBus) + base;
-
-    cSystem->RegisterMemory(this, id, t, length);
+    const u64 t = map_range(id, false, base, length);
     printf("%s(%s).%d PCI BAR %d set to MEM %" PRIx64 ", len %x.\n",
            myCfg->get_myName(), myCfg->get_myValue(), func, bar, t, length);
   }

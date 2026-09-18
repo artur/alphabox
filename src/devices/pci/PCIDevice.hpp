@@ -100,6 +100,19 @@ protected:
   void add_legacy_io(int id, u32 base, u32 length);
   void add_legacy_mem(int id, u32 base, u32 length);
 
+  /// Where `base` on this device's bus lands in the hose's address space.
+  /// A transparent bridge forwards an address unchanged, so this is the
+  /// same wherever on the hose the device sits.
+  u64 bus_address(bool is_io, u32 base) const;
+
+  /// Place one of this device's ranges at `base` on the bus it lives on,
+  /// or withdraw it with a length of 0. On a hose's root bus that is a
+  /// range registered with the system; behind a bridge the range is the
+  /// bridge's to forward, and is only reachable while one of its windows
+  /// covers it. Returns the address the range would answer at on the hose,
+  /// which a transparent bridge does not change.
+  u64 map_range(int id, bool is_io, u32 base, u64 length);
+
   /// A type 1 (PCI-PCI bridge) header: two BARs, then bus numbers and
   /// forwarding windows instead of BARs 2-5, and the ROM BAR at 0x38.
   bool bridge_header(int func) const;

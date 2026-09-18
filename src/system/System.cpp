@@ -248,6 +248,11 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
     }
   }
 
+  if (iNumMemories == MAX_COMPONENTS)
+    FAILURE_2(Configuration,
+              "Out of memory ranges (%d) adding %s: raise MAX_COMPONENTS",
+              MAX_COMPONENTS, component->devid_string);
+
   CHECK_ALLOCATION(
       m = (struct SMemoryUser *)malloc(sizeof(struct SMemoryUser)));
   m->component = component;
