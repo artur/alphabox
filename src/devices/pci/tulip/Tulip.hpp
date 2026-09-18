@@ -33,15 +33,24 @@
  * \file
  * Contains the definitions for the emulated DEC 21143 NIC device.
  **/
-#if !defined(INCLUDED_DEC21143_H_)
-#define INCLUDED_DEC21143_H_
+#if !defined(INCLUDED_TULIP_H_)
+#define INCLUDED_TULIP_H_
 
-#include "DEC21143_mii.hpp"
-#include "DEC21143_tulipreg.hpp"
+#if defined(DEBUG_NIC)
+#define DEBUG_NIC_FILTER
+#define DEBUG_NIC_SROM
+#endif
+
+#include "TulipMii.hpp"
+#include "TulipRegs.hpp"
 #include "Ethernet.hpp"
 #include "NetworkBackend.hpp"
 #include "PCIDevice.hpp"
 #include "base/Semaphore.hpp"
+
+/// The PCI configuration header of the part, in TulipChips.cpp.
+extern u32 dec21143_cfg_data[64];
+extern u32 dec21143_cfg_mask[64];
 
 /**
  * \brief Emulated DEC 21143 NIC device.
@@ -53,7 +62,7 @@
  *(http://h30097.www3.hp.com/docs/dev_doc/DOCUMENTATION/HTML/dev_docs_r2.html)
  *  .
  **/
-class CDEC21143 : public CPCIDevice {
+class CTulip : public CPCIDevice {
 public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
@@ -65,8 +74,8 @@ public:
                             u32 data);
   virtual u32 ReadMem_Bar(int func, int bar, u32 address, int dsize);
 
-  CDEC21143(CConfigurator *confg, class CSystem *c, int pcibus, int pcidev);
-  virtual ~CDEC21143();
+  CTulip(CConfigurator *confg, class CSystem *c, int pcibus, int pcidev);
+  virtual ~CTulip();
   virtual void ResetPCI();
   void ResetNIC();
   void SetupFilter();
@@ -88,6 +97,7 @@ private:
   u32 nic_read(u32 address, int dsize);
   void nic_write(u32 address, int dsize, u32 data);
   void mii_access(uint32_t oldreg, uint32_t idata);
+  void build_srom();
   void srom_access(uint32_t oldreg, uint32_t idata);
   void complete_sia_autoneg();
   void trace_packet(const char *dir, const u8 *frame, int len);
@@ -97,7 +107,11 @@ private:
   void set_tx_state(int tx_state);
   void set_rx_state(int rx_state);
 
-  inline u32 bswap32_local(u32 v);
+  /// A descriptor word the other way round, for CSR0's DBO.
+  static u32 bswap32_local(u32 v) {
+    return ((v & 0x000000ffU) << 24) | ((v & 0x0000ff00U) << 8) |
+           ((v & 0x00ff0000U) >> 8) | ((v & 0xff000000U) >> 24);
+  }
 
   CPacketQueue *rx_queue;
   CNetworkBackend *net_backend;
@@ -152,4 +166,4 @@ private:
     } rx;
   } state;
 };
-#endif // !defined(INCLUDED_DEC21143_H_)
+#endif // !defined(INCLUDED_TULIP_H_)

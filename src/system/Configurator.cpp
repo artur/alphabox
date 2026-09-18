@@ -54,7 +54,7 @@
 #include "System.hpp"
 #include "gui/plugin.hpp"
 #if defined(HAVE_PCAP) || defined(__linux__)
-#include "DEC21143.hpp"
+#include "Tulip.hpp"
 #endif
 #include "ES1370.hpp"
 #include "I8255x.hpp"
@@ -922,7 +922,7 @@ void CConfigurator::initialize() {
 #if defined(HAVE_PCAP) || defined(__linux__)
 
   case c_dec21143:
-    myDevice = new CDEC21143(this, theSystem, pcibus, pcidev);
+    myDevice = new CTulip(this, theSystem, pcibus, pcidev);
     break;
 #endif
 
