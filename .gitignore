@@ -23,3 +23,6 @@ roms/
 
 # Agent worktrees (created by Claude Code, never part of the tree)
 .claude/worktrees/
+
+# macOS Finder metadata
+.DS_Store
