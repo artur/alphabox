@@ -53,7 +53,19 @@ def branch(op, ra, disp):
     return (op << 26) | (ra << 21) | (disp & 0x1FFFFF)
 
 
-def build_code(iterations, body):
+# The JIT keeps a fixed set of guest registers in host registers (see
+# kA64Pins / kA64CallerPins in jitemit_a64.hpp); every other register is a
+# load and a store around each use. Which set a loop uses therefore changes
+# what it measures, so both are available: "pinned" is the best the register
+# allocator does today, "spilled" the worst, and real code is in between.
+# r1 is the loop counter and belongs to neither set.
+REGISTER_SETS = {
+    "pinned": [2, 3, 9, 10, 11, 17, 18, 26],
+    "spilled": [4, 5, 6, 7, 8, 12, 13, 14],
+}
+
+
+def build_code(iterations, body, regs="pinned"):
     """The loop, as a list of instruction words, and the count it executes."""
     if body < 2:
         sys.exit("a loop body is at least a decrement and a branch")
@@ -70,25 +82,24 @@ def build_code(iterations, body):
         memfmt(OP_LDA, 1, 1, low),
         # Scratch registers with values the arithmetic below cannot trap on
         # (integer operates never trap, but keep them small and readable).
-        memfmt(OP_LDA, 2, 31, 0x1234),
-        memfmt(OP_LDA, 3, 31, 0x0567),
-        memfmt(OP_LDA, 4, 31, 0x7BCD),
-        memfmt(OP_LDA, 5, 31, 0x0011),
     ]
+    for i, r in enumerate(REGISTER_SETS[regs]):
+        code.append(memfmt(OP_LDA, r, 31, 0x1234 + i * 0x111))
     prologue = len(code)
 
     # The body: a repeating pattern of integer operates that depend on each
     # other just enough not to be trivially reorderable, then the counter and
     # the branch back.
+    a, b, c, d, e, f, g, h = REGISTER_SETS[regs]
     pattern = [
-        operate(OP_INTA, 2, 3, F_ADDQ, 2),
-        operate(OP_INTL, 4, 5, F_XOR, 4),
-        operate(OP_INTA, 2, 4, F_ADDQ, 6),
-        operate(OP_INTL, 6, 3, F_BIS, 7),
-        operate(OP_INTA, 7, 5, F_CMPULT, 8),
-        operate(OP_INTL, 8, 2, F_AND, 9),
-        operate(OP_INTA, 9, 6, F_ADDQ, 3),
-        operate(OP_INTL, 3, 7, F_XOR, 5),
+        operate(OP_INTA, a, b, F_ADDQ, a),
+        operate(OP_INTL, c, d, F_XOR, c),
+        operate(OP_INTA, a, c, F_ADDQ, e),
+        operate(OP_INTL, e, b, F_BIS, f),
+        operate(OP_INTA, f, d, F_CMPULT, g),
+        operate(OP_INTL, g, a, F_AND, h),
+        operate(OP_INTA, h, e, F_ADDQ, b),
+        operate(OP_INTL, b, f, F_XOR, d),
     ]
     loop = [pattern[i % len(pattern)] for i in range(body - 2)]
     loop.append(operate_lit(OP_INTA, 1, 1, F_SUBQ, 1))
@@ -125,6 +136,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("image", nargs="?", help="image to write (a floppy by default)")
     ap.add_argument("--iterations", type=int, default=20_000_000)
+    ap.add_argument("--regs", choices=sorted(REGISTER_SETS), default="pinned",
+                    help="use guest registers the JIT pins to host registers, "
+                         "or ones it does not (default pinned)")
     ap.add_argument("--body", type=int, default=32,
                     help="instructions per iteration, the decrement and "
                          "branch included (default 32)")
@@ -134,7 +148,7 @@ def main():
                     help="print the instruction count and write nothing")
     args = ap.parse_args()
 
-    code, count = build_code(args.iterations, args.body)
+    code, count = build_code(args.iterations, args.body, args.regs)
     if args.count:
         print(count)
         return 0
@@ -143,8 +157,8 @@ def main():
 
     size = 1474560 if abs(args.size_mb - 1.47456) < 0.001 else int(args.size_mb * 1e6)
     blocks = write_image(args.image, code, size)
-    print("%s: %d instructions in %d block(s), %d per iteration"
-          % (args.image, count, blocks, args.body))
+    print("%s: %d instructions in %d block(s), %d per iteration, %s registers"
+          % (args.image, count, blocks, args.body, args.regs))
     return 0
 
 

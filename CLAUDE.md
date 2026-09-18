@@ -56,7 +56,9 @@ cd test/rom && bash test.sh        # Linux: SRM firmware boot to P00>>> + consol
 On macOS `test.sh` can never pass (BSD sed rejects `\x00`). The portable test
 tools live in `test/tools/`: `srm_run.sh` (per-lane SRM boot + log diff, own
 port per lane), `srm_probe.sh` (SMP init, memory layout, SCSI, exit-path
-probes), `win_bench.sh` (headless Windows guest boot + MIPS), `vga_boot.sh`
+probes), `win_bench.sh` (headless Windows guest boot + MIPS -- meaningful only with a
+busy guest), `cpu_bench.sh` + `bench_image.py` (how fast Alpha code itself
+runs: a boot block of known instruction count, two sizes, difference), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
 `build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`
 (default `lab/`, git-excluded, which also holds guest images). See the

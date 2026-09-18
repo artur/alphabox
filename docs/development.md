@@ -33,7 +33,8 @@ They stop only the emulator processes they started.
 | Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `ALPHABOX_TRACE_CALLS`, `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP`, `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get. See [headless.md](headless.md). |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image, so `boot eia0`/`boot ewa0` exercises a full network boot. |
 | `vga_boot.sh` | SRM on the S3 or Cirrus VGA console (`CARD=s3\|cirrus`, `CHIP=gd5430\|gd5434`), window-less; reports the hashes of the frames the screen settles on. The known sets are in the script header. |
-| `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. |
+| `cpu_bench.sh`, `bench_image.py` | How fast the emulator executes Alpha code: a boot block of known instruction count, run at two sizes so the console's boot subtracts out. `BODY=` sets the loop length -- long measures the translated code, short measures leaving one block for the next. Do not use a `JIT_STATS` build: its counters are part of what would be measured. |
+| `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. **The MIPS are only meaningful if the guest is busy**: at an idle desktop the number is the guest's idle loop (and the host will sit near 1% CPU, which is the tell). |
 | `win_workload.sh` | Times a CPU-bound command inside a booted Windows guest (a real-workload benchmark). |
 | `win_storage.sh` | Adds a storage controller (`CTRL=<class>`) with a FAT16 test disk to a clone of an installed Windows guest, has Windows copy a file on it, and checks the copy on the host; `BRIDGE=<class>` puts the controller behind a PCI-PCI bridge. |
 | `build_lanes.sh`, `build_revs.sh` | Build every configured build directory, or every commit of a series in a worktree. |

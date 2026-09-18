@@ -140,12 +140,46 @@ work: see [platforms.md](platforms.md).
    parts of one family, each with the identity and media machinery it
    really had -- a parallel address ROM read through CSR9, the older serial
    ROM format, a general purpose port in place of a SIA. The console boots
-   over all four. What remains is a 21140 board with an MII PHY behind it.
+   over all four. What remains is a 21140 board with an MII PHY behind it,
+   and that one waits for a driver that would exercise it: a transceiver was
+   written and thrown away again after measurement showed that neither the
+   console nor Windows 2000 ever reads a PHY register on this machine. Every
+   CSR9 write the console makes has the management clock low -- it is
+   talking to the serial ROM, never to a transceiver. Verifying an MII PHY
+   needs NetBSD or Tru64, whose drivers do probe it.
 7. TGA (ZLXp 21030): native DECwindows/CDE graphics.
 
 Each new device gets its own directory under `src/devices/<bus>/` (as
 `video/s3/` and `video/cirrus/` do), split by concern, and is verified
 against the real firmware or guest driver that names it.
+
+**Some devices the console can never see.** The SRM console does not
+discover what a card is; it looks the PCI vendor and device id up in a
+fixed table built into the firmware (V7.3-1 keeps it at offset 0x140a0c of
+the decompressed image, as 28-byte records of vendor+device, subsystem,
+names and console driver). A card whose id is not in that table is still
+configured -- it gets its BARs and its interrupt, and a guest driver can
+drive it normally -- but `show config` prints the bare numeric id, there is
+no console driver attached, and the console cannot boot from it.
+
+This is a property of the firmware, not of the emulation, and no amount of
+work on a device model changes it. The ES40 of 2007 knew the adapters that
+an ES40 shipped with; parts that arrived later, or that belonged to other
+machines, are simply absent. Two of ours are in that position: the QLogic
+**ISP1080** (`1077:1080`) and **ISP1240** (`1077:1240`) -- the table's only
+QLogic SCSI record is the ISP1020, plus the Fibre Channel parts. Windows
+2000 drives both perfectly well with `ql1080` and `ql1240`; SRM will never
+name them or boot them. The same table explains why the bare 21040, 21041
+and 21140 print their chip names while the 21143 prints "DE500-BA": only
+rows carrying a board's subsystem id (0x500a, 0x500b, 0x500f) have a board
+name to print.
+
+The practical consequence is a rule for what to build next: **a device that
+the console cannot name has to be verified against a guest driver, because
+the cheap console test does not exist for it.** Where no guest we can run
+has a driver either -- as with the 53C895A, which no driver on the Windows
+2000 Alpha media binds to -- there is no way to verify the work at all, and
+it is better not to start it.
 
 **Verify against a guest driver, not only the console.** The console is
 undemanding: it drove the QLogic adapter while three things were wrong that
