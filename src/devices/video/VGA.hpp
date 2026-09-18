@@ -78,6 +78,11 @@ public:
   virtual void mem_w(offs_t offset, uint8_t data);
   virtual uint8_t mem_linear_r(offs_t offset);
   virtual void mem_linear_w(offs_t offset, uint8_t data);
+  /// A drawing engine that writes display memory directly -- the 8514/A
+  /// does, a pixel at a time -- still owes the card whatever mem_linear_w
+  /// would have done besides the store, which on a card that tracks a dirty
+  /// framebuffer is to say that it changed.
+  virtual void mark_vram_updated() {}
 
   void set_offset(uint16_t val) { vga.crtc.offset = val; }
   void set_vram_size(size_t vram_size) { vga.svga_intf.vram_size = vram_size; }

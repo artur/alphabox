@@ -222,6 +222,7 @@ protected:
 
   // Linear framebuffer access (MAME: vga_device::mem_linear_r/w)
   void mem_linear_w(uint32_t offset, uint8_t data) override;
+  void mark_vram_updated() override { state.vga_mem_updated = 1; }
 
   // Hardware cursor overlay (MAME: screen_update cursor portion)
   void draw_hardware_cursor(bitmap_rgb32 &bitmap, const rectangle &cliprect,

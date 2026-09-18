@@ -5,6 +5,10 @@
 #include "VGA.hpp" // es40 req
 #include "emu/emu.hpp"
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+
 //#define VERBOSE (LOG_GENERAL)
 //#define LOG_OUTPUT_FUNC osd_printf_info
 #include "logmacro.hpp"
@@ -21,6 +25,66 @@ enum {
 };
 
 #define IBM8514_LINE_LENGTH (m_vga->offset())
+
+// What the drawing engine costs, printed at exit when ALPHABOX_BLIT_STATS is
+// set in the environment and absent otherwise. The clock is read once per
+// drawing command rather than once per pixel, because a clock read costs
+// about as much as a pixel does and would measure mostly itself.
+namespace {
+bool blit_stats_on() {
+  static const bool on = getenv("ALPHABOX_BLIT_STATS") != nullptr;
+  return on;
+}
+uint64_t g_blit_pixels = 0;
+uint64_t g_blit_ns = 0;
+uint64_t g_blit_calls = 0;
+uint64_t g_blit_cmds = 0;  // drawing commands (rectangles, blits, patterns)
+uint64_t g_blit_xfers = 0; // pixels fed through the transfer register
+std::chrono::steady_clock::time_point g_blit_last_report;
+
+void blit_stats_report_line() {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - g_blit_last_report < std::chrono::seconds(5))
+    return;
+  g_blit_last_report = now;
+  fprintf(stderr,
+          "8514 blit: %llu pixels in %.3f s over %llu commands and %llu "
+          "transfers\n",
+          (unsigned long long)g_blit_pixels, (double)g_blit_ns / 1e9,
+          (unsigned long long)g_blit_cmds, (unsigned long long)g_blit_xfers);
+}
+
+struct blit_stats_timer {
+  std::chrono::steady_clock::time_point t0;
+  blit_stats_timer() {
+    if (blit_stats_on())
+      t0 = std::chrono::steady_clock::now();
+  }
+  ~blit_stats_timer() {
+    if (!blit_stats_on())
+      return;
+    g_blit_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - t0)
+                     .count();
+    ++g_blit_calls;
+    blit_stats_report_line();
+  }
+};
+
+struct blit_stats_report {
+  ~blit_stats_report() {
+    if (!blit_stats_on() || g_blit_pixels == 0)
+      return;
+    fprintf(stderr,
+            "8514 blit: %llu pixels in %.3f s over %llu commands and %llu "
+            "transfers, %.1f ns/pixel, %.1f pixels/command\n",
+            (unsigned long long)g_blit_pixels, (double)g_blit_ns / 1e9,
+            (unsigned long long)g_blit_cmds, (unsigned long long)g_blit_xfers,
+            (double)g_blit_ns / (double)g_blit_pixels,
+            (double)g_blit_pixels / (double)(g_blit_calls ? g_blit_calls : 1));
+  }
+} g_blit_stats_report;
+} // namespace
 
 DEFINE_DEVICE_TYPE(IBM8514A, ibm8514a_device, "ibm8514a", "IBM 8514/A Video")
 
@@ -128,7 +192,24 @@ uint32_t ibm8514a_device::ibm8514_mix(uint8_t mix_mode, uint32_t src,
 
 void ibm8514a_device::ibm8514_do_pixel(uint32_t dest_offset,
                                        uint32_t src_offset, bool use_fgmix) {
-  dest_offset %= m_vga->vga.svga_intf.vram_size;
+  if (blit_stats_on())
+    ++g_blit_pixels;
+
+  // Display memory and the wrap at the end of it. Every card that has a
+  // power-of-two amount of memory -- all of ours -- wraps with a mask; the
+  // divide is kept for one that does not. Going to memory directly rather
+  // than through mem_linear_r/w saves up to eight virtual calls and eight
+  // divides per pixel, and costs the one call at the end that tells the
+  // card its framebuffer changed.
+  uint8_t *const vram = m_vga->vga.memory;
+  const size_t vram_size = m_vga->vga.svga_intf.vram_size;
+  const bool pow2 = (vram_size & (vram_size - 1)) == 0;
+  const uint32_t vram_mask = (uint32_t)(vram_size - 1);
+  auto wrap = [&](uint32_t off) -> uint32_t {
+    return pow2 ? (off & vram_mask) : (uint32_t)(off % vram_size);
+  };
+
+  dest_offset = wrap(dest_offset);
 
   // Clipping — derive actual pixel coordinates for the scissors test.
   int16_t check_x, check_y;
@@ -141,7 +222,15 @@ void ibm8514a_device::ibm8514_do_pixel(uint32_t dest_offset,
     if (line_len == 0)
       line_len = 1; // safety
     check_y = (int16_t)(dest_offset / line_len);
-    check_x = (int16_t)((dest_offset % line_len) / (ibm8514.color_bpp + 1));
+    // The one divide the clipping test still needs is the one by the line
+    // length; dividing the column by the pixel's width is a shift for every
+    // width but three bytes.
+    const uint32_t col = dest_offset % line_len;
+    const uint32_t bpp_bytes = (uint32_t)ibm8514.color_bpp + 1;
+    check_x = (int16_t)(bpp_bytes == 1   ? col
+                        : bpp_bytes == 2 ? (col >> 1)
+                        : bpp_bytes == 4 ? (col >> 2)
+                                         : (col / bpp_bytes));
   } else {
     check_x = ibm8514.curr_x;
     check_y = ibm8514.curr_y;
@@ -180,20 +269,20 @@ void ibm8514a_device::ibm8514_do_pixel(uint32_t dest_offset,
     break;
   }
   case 3: // Display memory (VRAM at source coords)
-    src_offset %= m_vga->vga.svga_intf.vram_size;
+    src_offset = wrap(src_offset);
     switch (ibm8514.color_bpp) {
     case 0:
-      src_dat = m_vga->mem_linear_r(src_offset);
+      src_dat = vram[src_offset];
       break;
     case 1:
-      src_dat = ((m_vga->mem_linear_r(src_offset)) |
-                 (m_vga->mem_linear_r(src_offset + 1) << 8));
+      src_dat = ((uint32_t)vram[src_offset] |
+                 ((uint32_t)vram[wrap(src_offset + 1)] << 8));
       break;
     default:
-      src_dat = ((m_vga->mem_linear_r(src_offset)) |
-                 (m_vga->mem_linear_r(src_offset + 1) << 8) |
-                 (m_vga->mem_linear_r(src_offset + 2) << 16) |
-                 (m_vga->mem_linear_r(src_offset + 3) << 24));
+      src_dat = ((uint32_t)vram[src_offset] |
+                 ((uint32_t)vram[wrap(src_offset + 1)] << 8) |
+                 ((uint32_t)vram[wrap(src_offset + 2)] << 16) |
+                 ((uint32_t)vram[wrap(src_offset + 3)] << 24));
       break;
     }
     break;
@@ -202,17 +291,17 @@ void ibm8514a_device::ibm8514_do_pixel(uint32_t dest_offset,
   // Read destination
   switch (ibm8514.color_bpp) {
   case 0:
-    dst_dat = m_vga->mem_linear_r(dest_offset);
+    dst_dat = vram[dest_offset];
     break;
   case 1:
-    dst_dat = ((m_vga->mem_linear_r(dest_offset)) |
-               (m_vga->mem_linear_r(dest_offset + 1) << 8));
+    dst_dat = ((uint32_t)vram[dest_offset] |
+               ((uint32_t)vram[wrap(dest_offset + 1)] << 8));
     break;
   default:
-    dst_dat = ((m_vga->mem_linear_r(dest_offset)) |
-               (m_vga->mem_linear_r(dest_offset + 1) << 8) |
-               (m_vga->mem_linear_r(dest_offset + 2) << 16) |
-               (m_vga->mem_linear_r(dest_offset + 3) << 24));
+    dst_dat = ((uint32_t)vram[dest_offset] |
+               ((uint32_t)vram[wrap(dest_offset + 1)] << 8) |
+               ((uint32_t)vram[wrap(dest_offset + 2)] << 16) |
+               ((uint32_t)vram[wrap(dest_offset + 3)] << 24));
     break;
   }
 
@@ -235,19 +324,20 @@ void ibm8514a_device::ibm8514_do_pixel(uint32_t dest_offset,
   // Step 7: Write to VRAM
   switch (ibm8514.color_bpp) {
   case 0:
-    m_vga->mem_linear_w(dest_offset, result);
+    vram[dest_offset] = (uint8_t)result;
     break;
   case 1:
-    m_vga->mem_linear_w(dest_offset, result);
-    m_vga->mem_linear_w(dest_offset + 1, result >> 8);
+    vram[dest_offset] = (uint8_t)result;
+    vram[wrap(dest_offset + 1)] = (uint8_t)(result >> 8);
     break;
   default:
-    m_vga->mem_linear_w(dest_offset, result);
-    m_vga->mem_linear_w(dest_offset + 1, result >> 8);
-    m_vga->mem_linear_w(dest_offset + 2, result >> 16);
-    m_vga->mem_linear_w(dest_offset + 3, result >> 24);
+    vram[dest_offset] = (uint8_t)result;
+    vram[wrap(dest_offset + 1)] = (uint8_t)(result >> 8);
+    vram[wrap(dest_offset + 2)] = (uint8_t)(result >> 16);
+    vram[wrap(dest_offset + 3)] = (uint8_t)(result >> 24);
     break;
   }
+  m_vga->mark_vram_updated();
 }
 
 uint16_t ibm8514a_device::ibm8514_color_cmp_r() {
@@ -283,6 +373,9 @@ void ibm8514a_device::ibm8514_write_bg(uint32_t offset) {
 }
 
 void ibm8514a_device::ibm8514_write(uint32_t offset, uint32_t src) {
+  blit_stats_timer stats_timer;
+  if (blit_stats_on())
+    ++g_blit_xfers;
   int data_size = 8;
   uint32_t xfer;
 
@@ -530,6 +623,9 @@ source rectangle is an 8x8 pattern rectangle, which is copied repeatably to the
 destination rectangle.
  */
 void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
+  blit_stats_timer stats_timer;
+  if (blit_stats_on())
+    ++g_blit_cmds;
   int x, y;
   int pattern_x, pattern_y;
   uint32_t off, src;
