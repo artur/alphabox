@@ -103,6 +103,8 @@ public:
   virtual int SaveState(FILE *f) { return 0; }
   virtual int RestoreState(FILE *f) { return 0; }
   virtual void check_state() {}
+  bool open_capture();
+
   virtual void init();
 
   virtual void WriteMem_Bar(int func, int bar, u32 address, int dsize,
@@ -144,6 +146,7 @@ private:
   struct ES137xState {
     SDL_AudioDeviceID audio_be_out;
     SDL_AudioDeviceID audio_be_in;
+    bool capture_refused; ///< the host has no input, or would not give it
     struct chan chan[3];
     SDL_AudioStream *dac_voice[2];
     SDL_AudioStream *adc_voice;

@@ -63,11 +63,11 @@ CES137x::CES137x(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
   if (!SDL_Init(SDL_INIT_AUDIO)) {
     FAILURE_1(SDL, "Failed to initialize SDL audio: %s", SDL_GetError());
   }
-  state.audio_be_in =
-      SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, nullptr);
-  if (!state.audio_be_in) {
-    FAILURE_1(SDL, "Failed to initialize SDL audio input: %s", SDL_GetError());
-  }
+  // The recording device is opened when the guest first turns its ADC on,
+  // not here: asking for it costs the user a microphone permission prompt on
+  // some hosts, and a machine with a sound card in it is not a machine that
+  // is recording anything.
+  state.audio_be_in = 0;
   state.audio_be_out =
       SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, nullptr);
   if (!state.audio_be_out) {
@@ -86,8 +86,34 @@ CES137x::~CES137x() {
   SDL_DestroyAudioStream(state.adc_voice);
   SDL_DestroyAudioStream(state.dac_voice[0]);
   SDL_DestroyAudioStream(state.dac_voice[1]);
-  SDL_CloseAudioDevice(state.audio_be_in);
+  if (state.audio_be_in)
+    SDL_CloseAudioDevice(state.audio_be_in);
   SDL_CloseAudioDevice(state.audio_be_out);
+}
+
+/**
+ * Open the host's recording device, the first time the guest asks to record.
+ *
+ * A host may have no input at all, or may refuse it -- macOS asks the user
+ * whether this program may use the microphone. Neither is a reason to stop
+ * the machine: the guest gets silence, which is what a sound card with
+ * nothing plugged into its line-in gives you anyway.
+ **/
+bool CES137x::open_capture() {
+  if (state.audio_be_in)
+    return true;
+  if (state.capture_refused)
+    return false;
+
+  state.audio_be_in =
+      SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_RECORDING, nullptr);
+  if (!state.audio_be_in) {
+    printf("%s: no recording device (%s); the guest will record silence.\n",
+           devid_string, SDL_GetError());
+    state.capture_refused = true;
+    return false;
+  }
+  return true;
 }
 
 void CES137x::init() {
@@ -223,7 +249,8 @@ void CES137x::update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl) {
 
       if (i == ADC_CHANNEL) {
         if (on) {
-          SDL_BindAudioStream(s->audio_be_in, s->adc_voice);
+          if (open_capture())
+            SDL_BindAudioStream(s->audio_be_in, s->adc_voice);
         } else {
           SDL_UnbindAudioStream(s->adc_voice);
         }
