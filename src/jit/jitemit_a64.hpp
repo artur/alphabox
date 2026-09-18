@@ -784,9 +784,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b_hs(ld_slow);
         a.ldr(x10, fld(m_off.dram_ptr, 3));
         if (size_bits == 32)
-          a.ldrsw(x0, a64::ptr(x10, x2));
+          a.ldrsw(x0, a64::ptr(x10, x11));
         else
-          a.ldr(x0, a64::ptr(x10, x2));
+          a.ldr(x0, a64::ptr(x10, x11));
         mov_to_reg(ra, x0);
         if (!cold_record(ld_slow, ld_done)) {
           a.b(ld_done);
@@ -919,9 +919,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.ldr(x10, fld(m_off.dram_ptr, 3));
         const a64::Gp v = src_reg(ra, x12, false);
         if (size_bits == 32)
-          a.str(a64::w(v.id()), a64::ptr(x10, x2));
+          a.str(a64::w(v.id()), a64::ptr(x10, x11));
         else
-          a.str(v, a64::ptr(x10, x2));
+          a.str(v, a64::ptr(x10, x11));
         if (!cold_record(st_slow, st_done)) {
           a.b(st_done);
           a.bind(st_slow);
