@@ -900,8 +900,8 @@ static inline uint64_t src_hash(const uint8_t *p, uint32_t n_instr) {
 }
 
 CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
-                                         uint32_t asn, bool asm_global,
-                                         uint32_t n_instr,
+                                         uint32_t asn, uint8_t cm,
+                                         bool asm_global, uint32_t n_instr,
                                          const uint8_t *dram) {
   JitBlock &b = m_blocks[index_of(virt_pc)];
   // record() is only reached after the dispatcher validated the live physical,
@@ -951,6 +951,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.tag = virt_pc;
   b.phys = phys_pc;
   b.asn = asn;
+  b.cm = cm;
   b.asm_global = asm_global;
   b.n_instr = n_instr;
   b.valid = true;
@@ -983,7 +984,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
 // LIVE physical it just translated. If the slot matches and its source bytes
 // still hash the same, restamp and return it straight to the hot path
 CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
-                                                     uint32_t asn,
+                                                     uint32_t asn, uint8_t cm,
                                                      uint64_t phys_pc,
                                                      const uint8_t *dram) {
   JitBlock &b = m_blocks[index_of(virt_pc)];

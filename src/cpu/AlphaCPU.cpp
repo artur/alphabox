@@ -932,10 +932,12 @@ void CAlphaCPU::jit_run(int budget) {
     // Hot path: virtual+ASN lookup, phys-validated (skipped on a translation
     // miss).
     CJitEngine::JitBlock *b =
-        have_phys ? m_jit->lookup(start_virt, start_asn) : nullptr;
+        have_phys ? m_jit->lookup(start_virt, start_asn, (uint8_t)state.cm)
+                  : nullptr;
     if (have_phys && !b) // lazy-flushed survivor? hash-revalidate in place (no
                          // interpreted pass)
-      b = m_jit->revalidate_flushed(start_virt, start_asn, start_phys,
+      b = m_jit->revalidate_flushed(start_virt, start_asn,
+                                    (uint8_t)state.cm, start_phys,
                                     (const uint8_t *)dram_ptr);
 
     // A valid block whose phys no longer matches = a page remap the virtual key
@@ -1008,7 +1010,8 @@ void CAlphaCPU::jit_run(int budget) {
               (cur->tag & 1);
           if (spc == b->tag)
             break; // back-edge to the head -> compile_trace closes the loop
-          CJitEngine::JitBlock *succ = m_jit->lookup(spc, start_asn);
+          CJitEngine::JitBlock *succ =
+              m_jit->lookup(spc, start_asn, (uint8_t)state.cm);
           if (!succ || succ == b || !succ->code || succ->prefix_len == 0)
             break;
           u64 sp;
@@ -1640,7 +1643,8 @@ void CAlphaCPU::jit_run(int budget) {
     // false).
     if (have_phys && !src_stale && state.pc != expected) {
       CJitEngine::JitBlock *nb =
-          m_jit->record(start_virt, start_phys, start_asn, start_asm, n,
+          m_jit->record(start_virt, start_phys, start_asn,
+                        (uint8_t)state.cm, start_asm, n,
                         (const uint8_t *)dram_ptr);
       // Compile only once the block has proven hot (see compile_after()).
       if (!nb->compiled && ++nb->cold_runs >= m_jit->compile_after())
@@ -2685,7 +2689,8 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   // PAL reset-vector entry: never chain in, so the dispatcher's flush runs.
   if (target == (cpu->state.pal_base | 1))
     return nullptr;
-  CJitEngine::JitBlock *b = cpu->m_jit->lookup(target, (u32)cpu->state.asn);
+  CJitEngine::JitBlock *b =
+      cpu->m_jit->lookup(target, (u32)cpu->state.asn, (uint8_t)cpu->state.cm);
   if (!b || !b->jit_body)
     return nullptr;
   // Idle pacing only sees passes through an idle/parked loop head that come
@@ -2917,7 +2922,8 @@ void CAlphaCPU::jit_fp_selftest() {
     const u32 ins = (v.opc << 26) | (fa << 21) | (2 << 16) | (v.func << 5) | 3;
     memcpy((u8 *)dram_ptr + page, &ins, 4);
     flush_icache(); // drop the stale fetch line; bumps the JIT flush gen too
-    CJitEngine::JitBlock *b = m_jit->record(pc0, page, 0, true, 1, dram);
+    CJitEngine::JitBlock *b =
+        m_jit->record(pc0, page, 0, (uint8_t)state.cm, true, 1, dram);
     if (!b->compiled)
       m_jit->compile_block(
           b, dram, dram_size, (void *)&CAlphaCPU::jit_read,

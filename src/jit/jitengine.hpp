@@ -112,6 +112,11 @@ public:
     uint64_t tag;     // start VIRTUAL PC (validity tag / key)
     uint64_t phys;    // start physical PC (source bytes for compilation)
     uint32_t asn;     // address space number (key; ignored when asm_global)
+    uint8_t cm;       // the processor mode this block was translated for: part
+                      // of the key, because whether the mode may execute the
+                      // page was settled once, when it was translated. A
+                      // global (ASM) page is global across address spaces, not
+                      // across modes.
     bool asm_global;  // global (ASM) page: matches any ASN, like the icache
     uint32_t n_instr; // instructions in the straight-line block
     bool valid;
@@ -370,10 +375,10 @@ public:
   // block matches any ASN, mirroring the icache's hit rule. flush_gen-stale
   // blocks miss here; revalidate_flushed() resurrects them after a source-hash
   // check.
-  inline JitBlock *lookup(uint64_t virt_pc, uint32_t asn) {
+  inline JitBlock *lookup(uint64_t virt_pc, uint32_t asn, uint8_t cm) {
     JitBlock &b = m_blocks[index_of(virt_pc)];
     return (b.valid && b.flush_gen == m_flush_gen && b.tag == virt_pc &&
-            (b.asm_global || b.asn == asn))
+            b.cm == cm && (b.asm_global || b.asn == asn))
                ? &b
                : nullptr;
   }
@@ -424,6 +429,11 @@ public:
   } // a trace side-exited / underran its first-pass span
 #endif
 
+  // When this tier is revived, its key needs the processor mode as a block's
+  // does (JitBlock::cm): whether a mode may execute a page is settled when the
+  // page is translated, so a fragment built for one mode must not answer a
+  // lookup made in another. Nothing builds fragments today, which is the only
+  // reason this is a comment rather than a field.
   inline TraceFragment *trace_lookup(uint64_t virt_pc, uint32_t asn) {
     TraceFragment &t = m_traces[trace_index_of(virt_pc)];
     return (t.valid && t.head_tag == virt_pc && (t.asm_global || t.asn == asn))
@@ -438,10 +448,10 @@ public:
 
   // Lazy-flush survivor: hash-revalidate the slot in place (no interpreted
   // pass, no re-record).
-  JitBlock *revalidate_flushed(uint64_t virt_pc, uint32_t asn, uint64_t phys_pc,
-                               const uint8_t *dram);
+  JitBlock *revalidate_flushed(uint64_t virt_pc, uint32_t asn, uint8_t cm,
+                               uint64_t phys_pc, const uint8_t *dram);
 
-  JitBlock *record(uint64_t virt_pc, uint64_t phys_pc, uint32_t asn,
+  JitBlock *record(uint64_t virt_pc, uint64_t phys_pc, uint32_t asn, uint8_t cm,
                    bool asm_global, uint32_t n_instr, const uint8_t *dram);
   void compile_block(JitBlock *b, const uint8_t *dram, uint64_t dram_size,
                      void *read_helper, void *write_helper, void *opcdec_helper,

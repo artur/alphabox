@@ -168,6 +168,7 @@ private:
   bool StopThread;
 
   int get_icache(u64 address, u32 *data);
+  u8 icache_exec_modes(u64 address, u64 v_a);
   int FindTBEntry(u64 virt, int flags);
   int initiate_acv_fault(u64 virt, int flags, u32 instruction);
   void add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags, int asn);
@@ -694,6 +695,12 @@ private:
       u64 p_address;              /**< Physical address of first instruction */
       bool asm_bit;               /**< Address Space Match bit */
       bool valid;                 /**< Valid cache entry */
+      /** Which processor modes may execute this line: bit per mode, taken
+          from the translation buffer when the line was filled. A hit has to
+          check it, or a line filled for the kernel would go on answering
+          fetches made in user mode -- an access violation that never
+          happens. */
+      u8 exec_modes;
     } icache[ICACHE_ENTRIES];     /**< Instruction cache entries [HRM p 2-11] */
     int next_icache;              /**< Number of next cache entry to use */
     int last_found_icache;        /**< Number of last cache entry found */
@@ -844,6 +851,30 @@ inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
  * code, that relies on the correct instruction stream to
  * remain in the cache.
  **/
+/**
+ * Which processor modes may execute the page this line was filled from.
+ *
+ * A PALmode fetch does not go through the translation buffer at all, so
+ * such a line answers in every mode -- the PAL bit is part of the tag, so
+ * a native fetch cannot reach it anyway. Otherwise the answer is the
+ * I-stream translation's per-mode read permission, which is what
+ * virt2phys consulted to let this fill happen in the first place.
+ **/
+inline u8 CAlphaCPU::icache_exec_modes(u64 address, u64 v_a) {
+  if (address & 1)
+    return 0xf;
+
+  const int i = FindTBEntry(v_a, ACCESS_EXEC);
+  if (i < 0)
+    return (u8)(1 << state.cm); // no entry to ask: trust this fetch only
+
+  u8 modes = 0;
+  for (int m = 0; m < 4; m++)
+    if (state.tb[TB_INDEX_ITB][i].access[0][m])
+      modes |= (u8)(1 << m);
+  return modes;
+}
+
 inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
   // Direct-map the icache: 2 KiB lines (ICACHE_LINE_SIZE * 4 == 2048 bytes).
   // Use VA[...:11] as the set index. The PAL bit (VA<0>) remains part of the
@@ -860,6 +891,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
     // ---- Fast hit probe
     if (state.icache[i].valid &&
         (state.icache[i].asn == state.asn || state.icache[i].asm_bit) &&
+        ((state.icache[i].exec_modes >> state.cm) & 1) &&
         state.icache[i].address == (address & ICACHE_MATCH_MASK)) {
 
       *data =
@@ -898,6 +930,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       state.icache[i].asm_bit = asm_bit;
       state.icache[i].address = address & ICACHE_MATCH_MASK;
       state.icache[i].p_address = p_a;
+      state.icache[i].exec_modes = icache_exec_modes(address, v_a);
 
       *data =
           endian_32(state.icache[i].data[(address >> 2) & ICACHE_INDEX_MASK]);
