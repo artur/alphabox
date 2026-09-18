@@ -282,11 +282,23 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     return;
 
   do {
-    // MISC barriers (TRAPB/EXCB/MB/WMB) and prefetch/cache hints: AArch64 has
-    // no store-serializing instruction like x86 mfence, so both emit nothing
-    // and the block extends straight past them.
-    if (op == OP_NOP || op == OP_MFENCE)
+    // MISC (0x18): prefetch and cache hints are nothing to us, but the
+    // barriers are. A guest CPU is a host thread and compiled stores are
+    // plain stores, so on a weakly ordered host the guest's own ordering is
+    // only as good as what we emit for its MB and WMB. DMB ISH is the
+    // instruction for it -- inner shareable covers every core a guest CPU
+    // can be scheduled on -- and it matches what the interpreter does with
+    // a seq_cst fence and what the x86 emitter does with mfence.
+    //
+    // (An earlier comment here claimed AArch64 had no equivalent of mfence
+    // and emitted nothing at all. It does, and a guest releasing a lock or
+    // publishing a descriptor ring entry depends on it.)
+    if (op == OP_NOP)
       continue;
+    if (op == OP_MFENCE) {
+      a.dmb(asmjit::a64::Predicate::DB::kISH);
+      continue;
+    }
 
     // Value-forwarding: x0 may still hold the guest reg the previous op
     // computed (see the x86 emitter).
