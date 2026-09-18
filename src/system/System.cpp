@@ -244,6 +244,8 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
         (asMemories[i]->index == index)) {
       asMemories[i]->base = base;
       asMemories[i]->length = length;
+      aMemoryBounds[i].base = base;
+      aMemoryBounds[i].end = base + length;
       return 0;
     }
   }
@@ -261,6 +263,8 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   m->index = index;
 
   asMemories[iNumMemories] = m;
+  aMemoryBounds[iNumMemories].base = base;
+  aMemoryBounds[iNumMemories].end = base + length;
   iNumMemories++;
   return 0;
 }
@@ -754,14 +758,21 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
   if (a >> iNumMemoryBits) // non-memory
   {
 
-    // check registered device memory ranges
-    for (i = 0; i < iNumMemories; i++) {
-      if ((a >= asMemories[i]->base) &&
-          (a < asMemories[i]->base + asMemories[i]->length)) {
-        asMemories[i]->component->WriteMem(
-            asMemories[i]->index, a - asMemories[i]->base, dsize, data);
-        return;
-      }
+    // check registered device memory ranges, the one that answered last
+    // before the rest
+    i = iLastMemory;
+    if (i < 0 || i >= iNumMemories || a < aMemoryBounds[i].base ||
+        a >= aMemoryBounds[i].end) {
+      for (i = 0; i < iNumMemories; i++)
+        if (a >= aMemoryBounds[i].base && a < aMemoryBounds[i].end)
+          break;
+      if (i < iNumMemories)
+        iLastMemory = i;
+    }
+    if (i < iNumMemories) {
+      asMemories[i]->component->WriteMem(
+          asMemories[i]->index, a - aMemoryBounds[i].base, dsize, data);
+      return;
     }
 
     if ((a == U64(0x00000801FC000CF8)) && (dsize == 32)) {
@@ -994,13 +1005,20 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
   if (a >> iNumMemoryBits) // Non Memory
   {
 
-    // check registered device memory ranges
-    for (i = 0; i < iNumMemories; i++) {
-      if ((a >= asMemories[i]->base) &&
-          (a < asMemories[i]->base + asMemories[i]->length))
-        return asMemories[i]->component->ReadMem(
-            asMemories[i]->index, a - asMemories[i]->base, dsize);
+    // check registered device memory ranges, the one that answered last
+    // before the rest
+    i = iLastMemory;
+    if (i < 0 || i >= iNumMemories || a < aMemoryBounds[i].base ||
+        a >= aMemoryBounds[i].end) {
+      for (i = 0; i < iNumMemories; i++)
+        if (a >= aMemoryBounds[i].base && a < aMemoryBounds[i].end)
+          break;
+      if (i < iNumMemories)
+        iLastMemory = i;
     }
+    if (i < iNumMemories)
+      return asMemories[i]->component->ReadMem(
+          asMemories[i]->index, a - aMemoryBounds[i].base, dsize);
 
     if ((a == U64(0x00000801FC000CFC)) && (dsize == 32)) {
       printf("PCI 0 config space read through CF8/CFC mechanism.   \n");

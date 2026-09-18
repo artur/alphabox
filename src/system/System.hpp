@@ -546,6 +546,20 @@ private:
   int iNumMemories;
   struct SMemoryUser *asMemories[MAX_COMPONENTS];
 
+  /// The same ranges again, laid out for the lookup every non-memory access
+  /// begins with: the bounds inline rather than behind a hundred separate
+  /// allocations, so the scan reads a few cache lines instead of chasing a
+  /// pointer per range. Kept in step with asMemories by RegisterMemory.
+  struct SMemoryBounds {
+    u64 base;
+    u64 end; // first byte past the range
+  } aMemoryBounds[MAX_COMPONENTS];
+  /// The range that answered last. Accesses arrive in runs -- a guest
+  /// drawing a window sends thousands in a row to the same card -- so trying
+  /// it first turns the scan into one comparison. A stale or torn value only
+  /// costs a miss: the bounds are checked before it is used.
+  int iLastMemory = -1;
+
   class CAlphaCPU *acCPUs[4];
 
   CConfigurator *myCfg;
