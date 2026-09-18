@@ -198,11 +198,16 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
 
 - **Disk images**: raw image files (`file`), host devices (`device`) and RAM
   disks (`ramdisk`), on SCSI (`sym53c810`, `sym53c825`, `sym53c875`,
-  `sym53c895`, `sym53c896`, and the QLogic `isp1020` and `isp1040`), IDE
-  (`ali_ide`) or the floppy controller.
+  `sym53c895`, `sym53c896`, and the QLogic `isp1020`, `isp1040`, `isp1080`
+  and `isp1240`), IDE (`ali_ide`) or the floppy controller.
   - The `sym53c896` has two channels, which appear as two PCI functions of
     the one device: disks named `disk0.<target>` hang on the first,
     `disk1.<target>` on the second.
+  - The `isp1240` also has two SCSI buses, but on one PCI function, and
+    disks name them the same way.
+  - The ES40 console knows the `isp1020` and `isp1040` and boots from
+    them; it has no entry for the `isp1080` or the `isp1240`, which only a
+    guest operating system can use.
 - **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
   (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD
   drives are read-only unless `read_only = false`.

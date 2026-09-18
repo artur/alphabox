@@ -34,6 +34,10 @@
  * select the target, hand over the command block, move the data and
  * collect the status. Nothing disconnects, so there is no reselection to
  * model.
+ *
+ * The parts with two SCSI buses have one pair of queues all the same:
+ * there is one RISC serving both buses, and a command says which bus it is
+ * for in the top bit of its target byte.
  **/
 #include "Isp1040.hpp"
 #include "SCSIBus.hpp"
@@ -159,7 +163,12 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
     return true;
   }
 
-  const int target = entry[ISP_REQ_TARGET];
+  // On a part with two of them, the top bit of the target byte is the bus.
+  const int bus =
+      m_chip.buses > 1 && (entry[ISP_REQ_TARGET] & ISP_REQ_TARGET_BUS) ? 1 : 0;
+  const int target = m_chip.buses > 1
+                         ? entry[ISP_REQ_TARGET] & ISP_REQ_TARGET_ID
+                         : entry[ISP_REQ_TARGET];
   const int lun = entry[ISP_REQ_LUN];
   const u16 flags = dma_read16(entry_address + ISP_REQ_FLAGS);
   int cdb_length = dma_read16(entry_address + ISP_REQ_CDBLEN);
@@ -174,21 +183,21 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
   for (int i = 0; i < segments; i++)
     wanted += seg_count[i];
 
-  TRACE_QUEUE("%s: command %02x to %d.%d, type %02x count %d, %d segments, "
+  TRACE_QUEUE("%s: command %02x to %d:%d.%d, type %02x count %d, %d segments, "
               "%u bytes\n",
-              devid_string, entry[ISP_REQ_CDB], target, lun, type, entry[1],
-              segments, wanted);
+              devid_string, entry[ISP_REQ_CDB], bus, target, lun, type,
+              entry[1], segments, wanted);
 #if defined(DEBUG_ISP)
   for (int i = 0; i < segments; i++)
     printf("    segment %d: %08x + %u\n", i, seg_address[i], seg_count[i]);
 #endif
 
-  if (!scsi_arbitrate(0)) {
+  if (!scsi_arbitrate(bus)) {
     post_response(entry, ISP_STATUS_BUS_RESET, 0, 0, wanted, nullptr, 0);
     return true;
   }
-  if (!scsi_select(0, target)) {
-    scsi_free(0);
+  if (!scsi_select(bus, target)) {
+    scsi_free(bus);
     post_response(entry, ISP_STATUS_SELECTION_TIMEOUT, 0, ISP_STATE_GOT_BUS,
                   wanted, nullptr, 0);
     return true;
@@ -204,22 +213,22 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
   u32 offset_in_segment = 0;
 
   for (bool done = false; !done;) {
-    switch (scsi_get_phase(0)) {
+    switch (scsi_get_phase(bus)) {
     case SCSI_PHASE_COMMAND: {
-      u8 *p = (u8 *)scsi_xfer_ptr(0, cdb_length);
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, cdb_length);
       // The command block, with the logical unit the entry names.
       memcpy(p, entry + ISP_REQ_CDB, cdb_length);
       p[1] = u8((p[1] & 0x1f) | ((lun & 7) << 5));
-      scsi_xfer_done(0);
+      scsi_xfer_done(bus);
       state_flags |= ISP_STATE_SENT_CDB;
       break;
     }
 
     case SCSI_PHASE_DATA_IN:
     case SCSI_PHASE_DATA_OUT: {
-      const bool in = scsi_get_phase(0) == SCSI_PHASE_DATA_IN;
-      size_t chunk = scsi_expected_xfer(0);
-      u8 *p = (u8 *)scsi_xfer_ptr(0, chunk);
+      const bool in = scsi_get_phase(bus) == SCSI_PHASE_DATA_IN;
+      size_t chunk = scsi_expected_xfer(bus);
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, chunk);
 
       // Spread the transfer over the entry's segments, in order.
       size_t left = chunk;
@@ -245,24 +254,24 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
         completion = in ? ISP_STATUS_DATA_OVERRUN : ISP_STATUS_COMPLETE;
         memset(p, 0, left);
       }
-      scsi_xfer_done(0);
+      scsi_xfer_done(bus);
       state_flags |= ISP_STATE_XFRD_DATA;
       break;
     }
 
     case SCSI_PHASE_STATUS: {
-      u8 *p = (u8 *)scsi_xfer_ptr(0, 1);
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, 1);
       scsi_status = *p;
-      scsi_xfer_done(0);
+      scsi_xfer_done(bus);
       state_flags |= ISP_STATE_GOT_STATUS;
       break;
     }
 
     case SCSI_PHASE_MSG_IN: {
-      size_t n = scsi_expected_xfer(0);
-      u8 *p = (u8 *)scsi_xfer_ptr(0, n);
+      size_t n = scsi_expected_xfer(bus);
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, n);
       const bool complete = n && p[0] == 0x00; // command complete
-      scsi_xfer_done(0);
+      scsi_xfer_done(bus);
       if (complete)
         done = true;
       break;
@@ -273,9 +282,9 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
       // for. The target offers room for a whole message stream, so ask
       // for one byte -- anything more is read as further messages.
       // Disconnection is not offered, because nothing here disconnects.
-      u8 *p = (u8 *)scsi_xfer_ptr(0, 1);
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, 1);
       p[0] = u8(0x80 | (lun & 7));
-      scsi_xfer_done(0);
+      scsi_xfer_done(bus);
       break;
     }
 
@@ -285,7 +294,7 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
     }
   }
 
-  scsi_free(0);
+  scsi_free(bus);
 
   if (wanted > moved && completion == ISP_STATUS_COMPLETE)
     completion = ISP_STATUS_DATA_UNDERRUN;

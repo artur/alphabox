@@ -20,8 +20,8 @@
 
 /**
  * \file
- * QLogic ISP1020/1040 registers, mailbox commands and queue entries
- * (family units only). Names follow the QLogic firmware interface
+ * QLogic ISP1020/1040/1080/1240 registers, mailbox commands and queue
+ * entries (family units only). Names follow the QLogic firmware interface
  * specification, as the NetBSD, Linux and FreeBSD drivers use them.
  **/
 #if !defined(INCLUDED_ISP1040REGS_H_)
@@ -46,6 +46,11 @@
 #define ISP_HCCR 0xc0 ///< host command and control
 #define ISP_REG_SIZE 0x100
 
+// The mailboxes did not move and did not multiply in the 1080/1240/1280
+// generation: NetBSD's PCI attachment uses PCI_MBOX_REGS_OFF (0x70) for
+// every PCI SCSI ISP, and there are eight of them (INMAILBOX0..7) on all of
+// them. What moved is the window at 0x80, and with it the DMA registers.
+
 // The identity the driver checks before it believes there is a card here.
 #define ISP_BIU_ID_MAGIC_LO 0x4953 ///< "IS"
 #define ISP_BIU_ID_MAGIC_HI 0x5000 ///< "P"
@@ -68,6 +73,48 @@
 #define ISP_NVRAM_DATA_IN 0x0008  ///< from the EEPROM
 #define ISP_NVRAM_BYTES 128
 #define ISP_NVRAM_ADDRESS_BITS 6 ///< a 93C46, addressed in words
+
+// The 1080/1240/1280 carry twice as much, in a part addressed with eight
+// address bits rather than six: NetBSD clocks out eleven bits for them
+// (start, the read opcode, eight of address) where the 1020 takes nine,
+// and Linux qla1280 does the same for every part it drives.
+#define ISP1080_NVRAM_BYTES 256
+#define ISP1080_NVRAM_ADDRESS_BITS 8
+
+// Where that NVRAM keeps things. A block of per-bus settings starts at 24
+// and is 112 bytes long, so the second bus's block begins at 136; each
+// block ends with sixteen six-byte target entries, laid out exactly as the
+// 1020's are.
+#define ISP1080_NVRAM_BUS0 24
+#define ISP1080_NVRAM_BUS_STRIDE 112
+#define ISP1080_NVRAM_TARGOFF 16 ///< the targets, within a bus block
+
+// BIU_CONF1 on the 1080 family: which block of registers the window at
+// 0x80 shows. There are two SCSI processors to choose between, one per
+// bus, so one bit no longer suffices; with neither bit set the window is
+// the RISC's, as it is on the 1020 with its SXP bit clear.
+#define ISP_CONF1_BANK_MASK 0x0300
+#define ISP_CONF1_BANK_RISC 0x0000
+#define ISP_CONF1_BANK_SXP0 0x0100
+#define ISP_CONF1_BANK_SXP1 0x0200
+#define ISP_CONF1_BANK_DMA 0x0300
+#define ISP_BANKED_WINDOW 0x80 ///< where that window starts
+
+// In the SXP bank: the SCSI bus itself. A driver reads the control pins to
+// tell a dead bus from a live one (Linux calls all of them asserted with a
+// phase valid, 0x87ff, dead), and the differential pins to see whether the
+// bus came up low-voltage differential, high-voltage differential or
+// single-ended.
+#define ISP_SXP_PINS_CTRL 0xf2
+#define ISP_SXP_PINS_DIFF 0xf6
+#define ISP_SXP_PINS_LVD_MODE 0x1000
+#define ISP_SXP_PINS_HVD_MODE 0x0800
+#define ISP_SXP_PINS_SE_MODE 0x0400
+#define ISP_SXP_PINS_DIFF_MODE 0x0100
+
+// General-purpose pins, which on the 1080 family drive the terminators.
+#define ISP_GPIO_DATA 0xcc
+#define ISP_GPIO_ENABLE 0xce
 
 // ISP_HCCR commands (the top nibble)
 #define ISP_HCCR_CMD_MASK 0xf000
@@ -122,16 +169,18 @@
 #define ISP_MBOX_SET_PCI_PARAMS 0x0037
 #define ISP_MBOX_SET_TARGET_PARAMS 0x0038
 #define ISP_MBOX_SET_DEV_QUEUE_PARAMS 0x0039
+#define ISP_MBOX_SET_RESET_DELAY_PARAMS 0x003a
 #define ISP_MBOX_SET_SYSTEM_PARAMETER 0x0045
 #define ISP_MBOX_SET_FIRMWARE_FEATURES 0x004a
-/// Issued at the end of initialisation by QLogic's own drivers (the
-/// AlphaBIOS one and Windows' QL10WNT), always with mailbox 1 set to 1.
-/// No public documentation names it, and the ES40 console never issues
-/// it and works regardless -- but those drivers give up when it is
-/// refused, so it is accepted. See Isp1040Mailbox.cpp.
-#define ISP_MBOX_UNDOCUMENTED_5A 0x005a
 #define ISP_MBOX_INIT_REQ_QUEUE_A64 0x0052
 #define ISP_MBOX_INIT_RES_QUEUE_A64 0x0053
+/// What to do when a target sends more data than the command asked for.
+/// QLogic's own drivers (the AlphaBIOS one and Windows' QL10WNT) end their
+/// initialisation with this and give up when it is refused; Linux qla1280
+/// names it and sets it to 2, "reset the SCSI bus and return all
+/// outstanding I/O". Nothing here overruns, so it is accepted and there is
+/// nothing to do. See Isp1040Mailbox.cpp.
+#define ISP_MBOX_SET_DATA_OVERRUN_RECOVERY 0x005a
 
 // What the firmware leaves in the mailboxes after a RISC reset: the part
 // identifying itself, "ISP  ", and the interface version. Drivers check it
@@ -170,6 +219,12 @@
 #define ISP_REQ_HANDLE 0x04
 #define ISP_REQ_LUN 0x08
 #define ISP_REQ_TARGET 0x09
+/// On a part with two SCSI buses on the one PCI function, the target byte
+/// says which of them the command is for in its top bit -- Linux qla1280
+/// writes `bus ? (id | BIT_7) : id`, NetBSD calls it GET_BUS_VAL. The
+/// target itself needs four bits even on the wide parts, so there is room.
+#define ISP_REQ_TARGET_BUS 0x80
+#define ISP_REQ_TARGET_ID 0x7f
 #define ISP_REQ_CDBLEN 0x0a
 #define ISP_REQ_FLAGS 0x0c
 #define ISP_REQ_TIMEOUT 0x10

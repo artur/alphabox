@@ -11,10 +11,12 @@ change it for the SRM probes:
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
                         e.g. palcode.vms.nohle=true
   --cpu1-opt KEY=VALUE  extra setting on cpu1 only (repeatable)
-  --scsi CTRL           pci0.3 = sym53c810|825|875|895|896 with disk0.0 = a
-                        sparse 1 GB image (dka0.img, created in --dir) and
-                        disk0.5 = a 10 MB RAM disk. The two-channel 896 also
-                        gets disk1.0 = dkb0.img on its second channel.
+  --scsi CTRL           pci0.3 = one of the Symbios parts (sym53c810, 825,
+                        875, 895, 896) or the QLogic ones (isp1020, isp1040,
+                        isp1080, isp1240), with disk0.0 = a sparse 1 GB image
+                        (dka0.img, created in --dir) and disk0.5 = a 10 MB
+                        RAM disk. The two-bus parts, the 896 and the 1240,
+                        also get disk1.0 = dkb0.img on their second bus.
   --nic CLASS           pci0.4 = one of the Tulips (dec21040, dec21041,
                         dec21140, dec21143) or the Intel parts (de600,
                         i82557, i82558, i82559) on the null network backend
@@ -53,7 +55,9 @@ def main():
     ap.add_argument("--cpu-opt", action="append", default=[])
     ap.add_argument("--cpu1-opt", action="append", default=[])
     ap.add_argument("--scsi", choices=["sym53c810", "sym53c825", "sym53c875",
-                                       "sym53c895", "sym53c896"])
+                                       "sym53c895", "sym53c896",
+                                       "isp1020", "isp1040", "isp1080",
+                                       "isp1240"])
     ap.add_argument("--nic", choices=["dec21040", "dec21041", "dec21140", "dec21143",
                                      "de600", "i82557", "i82558", "i82559"])
     ap.add_argument("--platform")
@@ -114,9 +118,9 @@ def main():
                     "      read_only = false;\n    }\n") % (bus, name)
         scsi = sparse_disk(0, "dka0.img")
         scsi += "    disk0.5 = ramdisk\n    {\n      size = 10M;\n    }\n"
-        # The 896 is two controllers in one: give its second channel a disk
-        # too, so a probe can see both of them.
-        if args.scsi == "sym53c896":
+        # The 896 and the 1240 have two SCSI buses: give the second one a
+        # disk too, so a probe can see both of them.
+        if args.scsi in ("sym53c896", "isp1240"):
             scsi += sparse_disk(1, "dkb0.img")
         extra += "\n  pci0.3 = %s\n  {\n%s  }\n" % (args.scsi, scsi)
     if args.nic:
