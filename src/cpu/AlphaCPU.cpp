@@ -126,7 +126,7 @@ void CAlphaCPU::run() {
     start_time = std::chrono::steady_clock::now();
     next_timer_fire = start_time;
     tick_last_fire = start_time;
-    cc_last_sync = start_time;
+    cc_last_sync = host_ticks();
     cc_large = 0;
     state.instruction_count = 0;
     prev_icount = 0;
@@ -242,6 +242,10 @@ void CAlphaCPU::init() {
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
 
   cpu_hz = myCfg->get_num_value("speed", true, 500000000);
+  // Guest cycles per host tick, settled once, so an RPCC read is a multiply.
+  cc_tick_hz = host_tick_hz();
+  cc_cycles_per_tick_q32 =
+      (u64)(((__uint128_t)cpu_hz << 32) / (cc_tick_hz ? cc_tick_hz : 1));
   // Instruction-paced interval-timer cap (timer.max_instr_per_tick, 0 = off).
   m_max_instr_per_tick =
       myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
@@ -406,6 +410,10 @@ void CAlphaCPU::ResetForSystemReset() {
   state.iProcNum = savedProcNum;
 
   cpu_hz = myCfg->get_num_value("speed", true, 500000000);
+  // Guest cycles per host tick, settled once, so an RPCC read is a multiply.
+  cc_tick_hz = host_tick_hz();
+  cc_cycles_per_tick_q32 =
+      (u64)(((__uint128_t)cpu_hz << 32) / (cc_tick_hz ? cc_tick_hz : 1));
   // Instruction-paced interval-timer cap (timer.max_instr_per_tick, 0 = off).
   m_max_instr_per_tick =
       myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
@@ -678,7 +686,7 @@ void CAlphaCPU::jit_run(int budget) {
     }
   }
   const auto now = std::chrono::steady_clock::now();
-  cc_last_sync += std::chrono::nanoseconds(
+  cc_last_sync += ns_to_host_ticks(
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the
                            // RPCC (diag_rpcc.h)
   g_diag_excluded_ns = 0;
@@ -917,7 +925,7 @@ void CAlphaCPU::jit_run(int budget) {
         budget -= done;
 #ifdef JIT_STATS
         cc_last_sync +=
-            std::chrono::nanoseconds(m_jit->note_exec(done, 0, _trace_tsc, 0));
+            ns_to_host_ticks(m_jit->note_exec(done, 0, _trace_tsc, 0));
         m_jit->trace_entered();
         if (done < (u32)t->n_instr)
           m_jit->trace_exited(); // ran fewer than the trace's first-pass span
@@ -1397,7 +1405,7 @@ void CAlphaCPU::jit_run(int budget) {
                    "jit=%u\n",
                    (unsigned long long)start_virt, n_stores_interp,
                    m_jit_slog_i);
-          cc_last_sync += std::chrono::nanoseconds(
+          cc_last_sync += ns_to_host_ticks(
               m_jit->verify_compare(start_virt, state.r, jr, vw,
                                     b->prefix_len) +
               g_diag_excluded_ns); // don't bill the verify progress-print OR
@@ -1561,7 +1569,7 @@ void CAlphaCPU::jit_run(int budget) {
       budget -= done;
 #ifdef JIT_STATS
       m_jit->note_hot_pc(start_virt, start_phys, done, (const u8 *)dram_ptr);
-      cc_last_sync += std::chrono::nanoseconds(m_jit->note_exec(
+      cc_last_sync += ns_to_host_ticks(m_jit->note_exec(
           done, 0, _comp_tsc,
           0)); // don't bill the stats-print stall to the wall-clock RPCC
 #endif
@@ -1611,7 +1619,7 @@ void CAlphaCPU::jit_run(int budget) {
         break;
     }
 #ifdef JIT_STATS
-    cc_last_sync += std::chrono::nanoseconds(m_jit->note_exec(
+    cc_last_sync += ns_to_host_ticks(m_jit->note_exec(
         0, n, 0, jit_rdtsc() - _interp_t0)); // don't bill the stats-print stall
                                              // to the wall-clock RPCC
     m_jit->note_cold(cold_reason, n, cold_first_op);
@@ -4352,7 +4360,7 @@ int CAlphaCPU::RestoreState(FILE *f) {
   cc_last_read = state.cc;
   cc_borrow = 0;
   cc_wall_remainder = 0;
-  cc_last_sync = std::chrono::steady_clock::now();
+  cc_last_sync = host_ticks();
   // RAM and TB state now belong to the restored state: drop the data page
   // cache, the sequential icache cursor and every compiled block (the epoch
   // bump makes them re-hash against the restored RAM before they run).

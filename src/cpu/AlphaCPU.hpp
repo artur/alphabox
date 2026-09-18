@@ -320,12 +320,54 @@ private:
   enum class TickHold { Ticked, Expired, Doorbell };
   TickHold tick_hold(u64 period_ns);
 
+  // The host's monotonic clock, read as cheaply as the host allows.
+  //
+  // What this costs is not a detail: a guest RPCC read syncs the cycle
+  // counter, and Windows 2000 reads RPCC about twenty million times a second,
+  // so the read alone was a third of a core. Measured on an Apple M-series
+  // host: std::chrono::steady_clock::now() 14.8 ns, mach_absolute_time()
+  // 5.0 ns, the generic timer register 0.28 ns -- and they are all the same
+  // counter. steady_clock merely reaches it through a call and a unit
+  // conversion. Where the register is not ours to read, the standard clock
+  // is what we have; ticks are then nanoseconds and nothing else changes.
+#if defined(__aarch64__)
+  static inline u64 host_ticks() {
+    u64 v;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+  }
+  static inline u64 host_tick_hz() {
+    u64 f;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    return f ? f : 1000000000ULL;
+  }
+#else
+  static inline u64 host_ticks() {
+    return (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+  static inline u64 host_tick_hz() { return 1000000000ULL; }
+#endif
+  /// Host nanoseconds as host ticks, for the few places that bill an
+  /// instrumentation stall back out of the cycle counter.
+  static inline u64 ns_to_host_ticks(u64 ns) {
+    const u64 hz = host_tick_hz();
+    return hz == 1000000000ULL ? ns
+                               : (u64)((__uint128_t)ns * hz / 1000000000ULL);
+  }
+
   // Wall-clock RPCC: state.cc advances by real elapsed time * cpu_hz so it
   // tracks the configured CPU frequency regardless of how fast/bursty the JIT
-  // runs. This is the last sync timestamp; the delta since it (when cc_ena) is
-  // added to state.cc each jit_run, then it's reset to now.
-  std::chrono::steady_clock::time_point cc_last_sync;
-  u64 cc_wall_remainder = 0; // sub-cycle numerator carried across syncs (/1e9)
+  // runs. This is the last sync timestamp, in host ticks; the delta since it
+  // (when cc_ena) is added to state.cc each jit_run, then it's reset to now.
+  u64 cc_last_sync = 0;
+  /// Guest cycles per host tick in 32.32 fixed point, so the conversion is a
+  /// multiply and a shift rather than a divide by a frequency the compiler
+  /// cannot see. Truncation makes the counter slow by under one part in 2^32.
+  u64 cc_cycles_per_tick_q32 = 0;
+  u64 cc_tick_hz = 1000000000ULL; // host_tick_hz(), read once
+  u64 cc_wall_remainder = 0; // sub-cycle numerator carried across syncs (Q32)
   u64 cc_last_read = 0; // last RPCC value returned (forward-progress floor)
   u64 cc_borrow = 0;    // cycles lent to that floor, repaid from wall progress
 
@@ -333,24 +375,22 @@ private:
   // on every guest RPCC read: a stale batch-start value makes NetBSD's PCC
   // timecounter see time go backwards (negative ping times).
   void sync_cc_wallclock() {
-    const auto now = std::chrono::steady_clock::now();
+    const u64 now = host_ticks();
     if (cc_last_sync > now)
       cc_last_sync = now; // a stall can't exceed real elapsed; never bill
                           // negative
-    auto cc_delta = now - cc_last_sync;
+    u64 cc_delta = now - cc_last_sync;
     cc_last_sync = now;
     if (state.cc_ena) {
       // Cap (not drop) odd deltas at 1s: dropping made the cc run slow through
       // early-boot device-init stalls, and SRM's cycles-per-tick calibration
       // locked that in as a too-low CPU speed (the 357MHz bug).
-      if (cc_delta > std::chrono::seconds(1))
-        cc_delta = std::chrono::seconds(1);
-      const u64 ns =
-          (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(cc_delta)
-              .count();
-      const u64 scaled = ns * cpu_hz + cc_wall_remainder; // keep sub-cycles
-      u64 add = scaled / 1000000000ULL;
-      cc_wall_remainder = scaled % 1000000000ULL;
+      if (cc_delta > cc_tick_hz)
+        cc_delta = cc_tick_hz;
+      const u64 scaled =
+          cc_delta * cc_cycles_per_tick_q32 + cc_wall_remainder; // sub-cycles
+      u64 add = scaled >> 32;
+      cc_wall_remainder = scaled & U64(0xffffffff);
       if (cc_borrow) { // repay the floor by withholding progress, never going
                        // backwards
         const u64 repay = cc_borrow < add ? cc_borrow : add;
