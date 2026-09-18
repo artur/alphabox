@@ -538,6 +538,27 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define TRACE_UNALIGN(flags, align)
 #endif
 
+/* Take the alignment trap: PAL_BASE+0x280, with the faulting address, the
+   register the access named, and the opcode. MM_STAT's ACV bit stays clear
+   -- this is an alignment fault, not an access violation, and a handler
+   that classifies by MM_STAT (21264 HRM Table 5-17) should not be told
+   otherwise. */
+#define GO_PAL_UNALIGN(addr, flags)                                            \
+  {                                                                            \
+    u32 _ua_opcode = I_GETOP(ins);                                             \
+    state.fault_va = (addr);                                                   \
+    state.va_form_va = (addr);                                                 \
+    state.exc_sum = ((REG_1 & 0x1f) << 8);                                     \
+    state.mm_stat = ((_ua_opcode == 0x1b || _ua_opcode == 0x1f)                \
+                         ? _ua_opcode - 0x18                                   \
+                         : _ua_opcode)                                         \
+                        << 4 |                                                 \
+                    ((flags & ACCESS_WRITE) ? 1 : 0);                          \
+    TRACE_UNALIGN(flags, 0);                                                   \
+    GO_PAL(UNALIGN);                                                           \
+    ES40_EXECUTE_END();                                                        \
+  }
+
 #define DATA_PHYS(addr, flags, align)                                          \
   if ((addr) & (align)) {                                                      \
     u64 a1 = (addr);                                                           \
@@ -555,23 +576,26 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       if (tb_i >= 0)                                                           \
         page_mask = state.tb[tb_t][tb_i].keep_mask;                            \
       if ((a1 ^ a2) & ~page_mask) {                                            \
-        u32 _ua_opcode = I_GETOP(ins);                                         \
-        state.fault_va = (addr);                                               \
-        state.va_form_va = (addr);                                             \
-        state.exc_sum = ((REG_1 & 0x1f) << 8);                                 \
-        state.mm_stat =                                                        \
-            ((_ua_opcode == 0x1b || _ua_opcode == 0x1f) ? _ua_opcode - 0x18    \
-                                                        : _ua_opcode)          \
-                << 4 |                                                         \
-            ((flags & ACCESS_WRITE) ? 1 : 0) |                                 \
-            2; /* ACV (matches brokenpipe AlphaFault_Alignment -> accvio) */   \
-        TRACE_UNALIGN(flags, align);                                           \
-        GO_PAL(UNALIGN);                                                       \
-        ES40_EXECUTE_END();                                                    \
+        GO_PAL_UNALIGN(addr, flags);                                           \
       }                                                                        \
     }                                                                          \
   }                                                                            \
   DATA_PHYS_NT(addr, flags) // use the define above instead of duplicating
+
+/* The locked forms are not the ordinary ones. A misaligned LDx_L or STx_C
+   takes the alignment trap whatever page it is on, because there is nothing
+   sensible for anyone to do with it afterwards: the architecture says so
+   outright (ARM 4.2.4/4.2.5, "software will not emulate unaligned LDx_L and
+   STx_C instructions"), and an operating system's fixup handler answers such
+   an access with an illegal-operand exception rather than completing it.
+   Emulating it anyway meant handing a misaligned address to a host atomic
+   compare-and-swap, which on this host is a bus error that kills the
+   emulator and the guest with it. */
+#define DATA_PHYS_LOCKED(addr, flags, align)                                   \
+  if ((addr) & (align)) {                                                      \
+    GO_PAL_UNALIGN(addr, flags);                                               \
+  }                                                                            \
+  DATA_PHYS_NT(addr, flags)
 
 /**
  * Normal variant of read action
@@ -611,7 +635,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_VIRT_LOCK(va, size, dest)                                         \
   {                                                                            \
     pbc = false;                                                               \
-    DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);                                \
+    DATA_PHYS_LOCKED(va, ACCESS_READ, (size / 8) - 1);                                \
     LLR;                                                                       \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
@@ -649,7 +673,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_VIRT_LOCK_F(va, size, dest, f)                                    \
   {                                                                            \
     pbc = false;                                                               \
-    DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);                                \
+    DATA_PHYS_LOCKED(va, ACCESS_READ, (size / 8) - 1);                         \
     LLR;                                                                       \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
@@ -707,7 +731,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _stc_va = (va);                                                        \
     u64 _stc_data = (src);                                                     \
     pbc = false;                                                               \
-    DATA_PHYS(_stc_va, ACCESS_WRITE, (size / 8) - 1);                          \
+    DATA_PHYS_LOCKED(_stc_va, ACCESS_WRITE, (size / 8) - 1);                          \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
     if (pbc) {                                                                 \
