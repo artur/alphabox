@@ -600,6 +600,29 @@ int CPCIDevice::RestoreState(FILE *f) {
   }
 
   printf("%s: %d PCI bytes restored.\n", devid_string, (int)ss);
+
+  // Config space is back, but the memory and I/O windows its BARs map were
+  // registered with the system by do_pci_write as the guest programmed them,
+  // and nothing has re-registered them -- SaveState's own note asks for
+  // exactly this. Redo every BAR that holds a real address, judged by the
+  // write path's own test, so the device is reachable where the restored
+  // guest believes it is. Without it the S3's framebuffer and MMIO were
+  // unclaimed after a restore, every access read as unknown memory, and the
+  // display driver spun on a status register forever.
+  for (int func = 0; func < 8; func++) {
+    for (int d = 0x10; d <= 0x30; d += 4) {
+      if (d > 0x24 && d != 0x30)
+        continue; // BARs 0-5 at 0x10..0x24, the ROM BAR at 0x30
+      const int bar = (d == 0x30) ? 6 : (d - 0x10) / 4;
+      const u32 data = endian_32(pci_state.config_data[func][d / 4]);
+      const u32 mask = endian_32(pci_state.config_mask[func][d / 4]);
+      if (mask == 0 || (data & mask) == mask || (data & mask) == 0)
+        continue; // absent function, size probe, or unassigned
+      if (bridge_header(func) && d > 0x14)
+        continue; // a bridge has only two BARs
+      register_bar(func, bar, data, mask);
+    }
+  }
   return 0;
 }
 
