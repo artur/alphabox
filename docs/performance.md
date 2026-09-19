@@ -126,6 +126,17 @@ three findings that agreed across independent sources:
   against our 40%. Alpha tags `JSR`/`RET` architecturally, so we can
   classify at compile time with no heuristic.
 
+  The point of that trick is finer than "keep a shadow stack", and it is the
+  same in Rosetta 2 (which reserves a memory region named *Rosetta Return
+  Stack* for it) and in Transitive's patent on the technique: **validate in
+  software, predict in hardware**. A guest return compiled as anything other
+  than a host return is an indirect branch, and the patent puts the cost
+  plainly -- it is "very difficult for target hardware to effectively
+  predict the addresses of indirect branches, and not surprisingly such a
+  solution can perform very poorly". The software stack only checks that the
+  return went where it should; the host's return-address predictor is what
+  makes it fast.
+
 ### The trace tier stays dormant
 
 `jitengine.cpp` already carries the note that traces preempt block chaining

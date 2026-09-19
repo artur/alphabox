@@ -16,6 +16,9 @@
   is emulated, and what comes next.
 - [Performance](performance.md): what has been measured, what bounds each
   workload, and which optimizations did not pay off.
+- [Recompiler techniques](jit-techniques.md): what Dolphin, QEMU, PCSX2,
+  PPSSPP, RPCS3, Rosetta 2 and the literature do about block linking,
+  indirect branches and memory translation -- and what they abandoned.
 - [Processor fidelity](cpu-fidelity.md): where the emulated 21264 does not
   match the real one, what a guest can therefore not be used to test, and
   how to check the processor yourself.
