@@ -58,6 +58,9 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 #include <set>
 #include <utility>
 #include <vector>
@@ -103,6 +106,15 @@ void CAlphaCPU::trace_call(u64 from, u64 to) {
 void CAlphaCPU::run() {
   try {
     t_running_cpu = this;
+#ifdef __APPLE__
+    // ALPHABOX_CPU_QOS=1: ask for the interactive QoS class on this thread.
+    // A std::thread starts at the default class, and on Apple Silicon that
+    // lets the scheduler place a long-running compute thread on an efficiency
+    // core -- an experiment hook to find out whether the guest CPU lands on a
+    // performance core at all before anything else about its speed is judged.
+    if (getenv("ALPHABOX_CPU_QOS"))
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
     mySemaphore.wait();
     while (state.wait_for_start) {
       if (StopThread)

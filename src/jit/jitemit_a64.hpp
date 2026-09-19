@@ -1495,16 +1495,21 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.mov(x0, imm(0));
         else
           mov_from_reg(x0, ra);
+        if (m_defer_branch_pc) {
+          // Emit nothing: the epilogue tests Ra itself and branches, and
+          // materialises only the PC of the side actually taken. Every op
+          // clears the value-forward slot on entry; put the previous op's
+          // back, since nothing was emitted here to invalidate it, so the
+          // epilogue can see that x0 already holds Ra.
+          m_pending_br_op = (int)op;
+          m_pending_br_ra = ra;
+          regalloc.rax_holds = prev_x0;
+          continue;
+        }
         if (op == OP_BLBC || op == OP_BLBS)
           a.tst(x0, imm(1));
         else
           a.tst(x0, x0);
-        if (m_defer_branch_pc) {
-          // Leave the condition in the flags; the epilogue branches on it and
-          // materialises only the PC of the side actually taken.
-          m_pending_br_op = (int)op;
-          continue;
-        }
         a.mov(x9, imm(fall));
         a.mov(x10, imm(tgt));
         CondCode cc = CondCode::kEQ;
@@ -2190,29 +2195,52 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
           a64_emit_gate(a, m_off, exit_chain);
         emit_static_exit(btgt, 0, exit_chain);
       } else if (m_pending_br_op >= 0) {
-        // Branch on the condition the terminator left in the flags. Each side
-        // then materialises its own PC -- a compile-time constant -- instead
-        // of both being built and selected between on the hot path.
+        // Test the terminator's register here and branch on it directly. Each
+        // side then materialises its own PC -- a compile-time constant --
+        // instead of both being built and selected between on the hot path.
+        // The register is read where it lives: its pin, or one load from the
+        // guest slot (the same load the old shape did at the branch itself).
         Label not_taken = a.new_label();
+        const int bra = m_pending_br_ra;
+        a64::Gp xr = a64::x0;
+        if (bra == 31) {
+          a.mov(a64::x0, imm(0)); // R31 reads as zero; keep the one code shape
+        } else if (ra.host_of(bra) >= 0) {
+          xr = a64::x((uint32_t)ra.host_of(bra));
+        } else if (ra.rax_holds == bra) {
+          // The previous op left exactly this register in x0 (value-forward):
+          // no reload. Common, since the compare feeding a branch is usually
+          // the instruction right before it.
+        } else {
+          const int idx = (pal_block && ((bra & 0xc) == 0x4)) ? bra + 32 : bra;
+          a.ldr(a64::x0,
+                a64::ptr(a64::x20, idx * 8)); // x20 = guest register file
+        }
         switch (m_pending_br_op) {
-        case OP_BEQ:
-        case OP_BLBC:
-          a.b_ne(not_taken);
+        case OP_BEQ: // taken if Ra == 0
+          a.cbnz(xr, not_taken);
           break;
         case OP_BNE:
-        case OP_BLBS:
-          a.b_eq(not_taken);
+          a.cbz(xr, not_taken);
           break;
-        case OP_BLT:
-          a.b_ge(not_taken);
+        case OP_BLT: // taken if Ra < 0: bit 63
+          a.tbz(xr, imm(63), not_taken);
           break;
         case OP_BGE:
-          a.b_lt(not_taken);
+          a.tbnz(xr, imm(63), not_taken);
           break;
-        case OP_BLE:
+        case OP_BLBC: // taken if bit 0 clear
+          a.tbnz(xr, imm(0), not_taken);
+          break;
+        case OP_BLBS:
+          a.tbz(xr, imm(0), not_taken);
+          break;
+        case OP_BLE: // the two that need flags keep the cmp adjacent
+          a.cmp(xr, imm(0));
           a.b_gt(not_taken);
           break;
         default: // OP_BGT
+          a.cmp(xr, imm(0));
           a.b_le(not_taken);
           break;
         }
