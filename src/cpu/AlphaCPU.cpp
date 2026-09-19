@@ -2164,6 +2164,14 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
 // round-robin victim), the same eviction bookkeeping (drop the evicted page
 // from the data page cache), then the entry copied back whole.
 int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
+  // ALPHABOX_TB_SHADOW=0 turns the refill off in the same binary, so an A/B
+  // of the shadow is free of code-layout effects (see docs/performance.md).
+  static const bool enabled = [] {
+    const char *e = getenv("ALPHABOX_TB_SHADOW");
+    return !(e && e[0] == '0');
+  }();
+  if (!enabled)
+    return -1;
   const STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
   if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
       !(sh.asm_bit || sh.asn == asn))

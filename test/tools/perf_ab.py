@@ -65,10 +65,22 @@ def busy_host():
             reasons.append('a guest: ' + args[:70])
     return reasons
 
-def refuse_if_busy(when):
+def refuse_if_busy(when, wait_s=4 * 3600):
+    # Never time while a build or another guest runs -- but do not throw away
+    # the rounds already done because another session's guest came and went
+    # between two of ours: wait for a quiet host (polling), and say so.
     r = busy_host()
+    waited = 0
+    while r and waited < wait_s:
+        if waited == 0:
+            print(f"perf_ab: host busy ({when}); waiting for it to be free:\n  " + "\n  ".join(r), flush=True)
+        time.sleep(10); waited += 10
+        r = busy_host()
     if r:
-        sys.exit(f"perf_ab: refusing to time ({when}) while the host is busy with\n  " + "\n  ".join(r))
+        sys.exit(f"perf_ab: gave up ({when}) after {waited // 60} min; the host is still busy with\n  " + "\n  ".join(r))
+    if waited:
+        print(f"perf_ab: host free after {waited // 60} min {waited % 60} s; a 30 s settle, then {when}", flush=True)
+        time.sleep(30)
     # A run writes a fresh clone of a 4 GB image and a Windows boot diverges it
     # by hundreds of MB; a snapshot is the whole of guest RAM. A full disk does
     # not fail cleanly -- it failed the state save mid-write once, after the
@@ -79,14 +91,14 @@ def refuse_if_busy(when):
         sys.exit(f"perf_ab: refusing ({when}): only {free_gb:.1f} GB free under {WORK}; "
                  "old run clones (lab/work-*, lab/bench-*, lab/ntbench-*) are the usual cause")
 
-def run_one(label, binary, workload, section, scale, snapshot=False):
+def run_one(label, binary, workload, section, scale, snapshot=False, env_extra=None):
     """One run -- a cold boot, or a resumed snapshot; returns ({section: ms}, {section: result}, total_ms, log)."""
     if snapshot:
         cmd = [os.path.join(R, 'test/tools/nt_snap.sh'), 'run', label, binary, workload, section, str(scale)]
     else:
         cmd = [os.path.join(R, 'test/tools/nt_bench.sh'), label, binary, 'win2k-installed',
                'es40-window.cfg', workload, section, str(scale)]
-    env = dict(os.environ, TIMEOUT='900')
+    env = dict(os.environ, TIMEOUT='900', **(env_extra or {}))
     p = subprocess.run(cmd, capture_output=True, text=True, env=env)
     ms, res, total = {}, {}, None
     for ln in p.stdout.splitlines():
@@ -105,7 +117,14 @@ def main():
     ap.add_argument('--expect', default='', help='section:pct,... written down BEFORE the run')
     ap.add_argument('--snapshot', action='store_true',
                     help='resume the desktop snapshot (nt_snap.sh run) instead of cold-booting each run')
+    ap.add_argument('--env-base', action='append', default=[], metavar='K=V',
+                    help='environment for the base arm only (repeatable): the same binary with a '
+                         'runtime switch off measures a change free of code-layout effects')
+    ap.add_argument('--env-head', action='append', default=[], metavar='K=V',
+                    help='environment for the head arm only (repeatable)')
     a = ap.parse_args()
+    env_arm = {'base': dict(kv.split('=', 1) for kv in a.env_base),
+               'head': dict(kv.split('=', 1) for kv in a.env_head)}
     if a.rounds < 2:
         sys.exit("perf_ab: fewer than 2 interleaved rounds cannot distinguish a change from drift; refusing")
     base, head = (os.path.abspath(a.base), os.path.abspath(a.head))
@@ -125,7 +144,7 @@ def main():
         'base': {'path': base, 'sha': sha(base)}, 'head': {'path': head, 'sha': sha(head)},
         'rounds': a.rounds, 'workload': a.workload, 'section': a.section, 'scale': a.scale,
         'mode': 'snapshot' if a.snapshot else 'cold-boot',
-        'expect': expect,
+        'expect': expect, 'env': env_arm,
     }
     known = {'Apple M3 Max': 4.05, 'Apple M3 Pro': 4.05, 'Apple M3': 4.05, 'Apple M2': 3.49, 'Apple M1': 3.2, 'Apple M4': 4.4}
     for k, v in known.items():
@@ -138,7 +157,7 @@ def main():
         for arm, binary in (('base', base), ('head', head)):
             refuse_if_busy(f'{arm} round {r}')
             print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)
-            ms, res, total, log = run_one(f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale, a.snapshot)
+            ms, res, total, log = run_one(f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale, a.snapshot, env_arm[arm])
             if total is None:
                 sys.exit(f"perf_ab: {arm} round {r} produced no result:\n{log[-800:]}")
             runs[arm].append({'ms': ms, 'result': res, 'total': total})
@@ -183,12 +202,16 @@ def main():
     jp = os.path.join(WORK, 'results', f'{a.label}.json')
     json.dump(out, open(jp, 'w'), indent=1)
     tot = next(r for r in rows if r[0] == 'TOTAL')
+    # Two builds of the CPU file differ by 5-10% per section from code layout
+    # alone (ledger: shadow-knob vs tb-shadow); one binary with a runtime
+    # switch does not. The method is part of what a row claims.
+    method = 'same-binary' if meta['base']['sha'] == meta['head']['sha'] else 'two-build'
     line = (f"| {meta['date'][:16]} | {a.label} | {meta['commit']} | {meta['base']['sha']} -> {meta['head']['sha']} | "
-            f"{tot[1]} -> {tot[2]} | {tot[3]:+.1f}% | {verdict} |\n")
+            f"{tot[1]} -> {tot[2]} | {tot[3]:+.1f}% | {verdict} | {method} |\n")
     lp = os.path.join(WORK, 'results', 'ledger.md')
     if not os.path.exists(lp):
         open(lp, 'w').write("# Performance ledger\n\nEvery timed A/B, appended by test/tools/perf_ab.py. "
-                            "Quote this, not memory.\n\n| when | label | HEAD | base -> head | total ms | delta | verdict |\n|---|---|---|---|---|---|---|\n")
+                            "Quote this, not memory.\n\n| when | label | HEAD | base -> head | total ms | delta | verdict | method |\n|---|---|---|---|---|---|---|---|\n")
     open(lp, 'a').write(line)
     print(f"\nwritten: {jp}\nledger:  {lp}")
     sys.exit(1 if fails else 0)
