@@ -69,11 +69,23 @@ def refuse_if_busy(when):
     r = busy_host()
     if r:
         sys.exit(f"perf_ab: refusing to time ({when}) while the host is busy with\n  " + "\n  ".join(r))
+    # A run writes a fresh clone of a 4 GB image and a Windows boot diverges it
+    # by hundreds of MB; a snapshot is the whole of guest RAM. A full disk does
+    # not fail cleanly -- it failed the state save mid-write once, after the
+    # guest had booted, and the failure read as "no snapshot" not "no space".
+    st = os.statvfs(WORK)
+    free_gb = st.f_bavail * st.f_frsize / 2**30
+    if free_gb < 6:
+        sys.exit(f"perf_ab: refusing ({when}): only {free_gb:.1f} GB free under {WORK}; "
+                 "old run clones (lab/work-*, lab/bench-*, lab/ntbench-*) are the usual cause")
 
-def run_one(label, binary, workload, section, scale):
-    """One boot; returns ({section: ms}, {section: result}, total_ms, log)."""
-    cmd = [os.path.join(R, 'test/tools/nt_bench.sh'), label, binary, 'win2k-installed',
-           'es40-window.cfg', workload, section, str(scale)]
+def run_one(label, binary, workload, section, scale, snapshot=False):
+    """One run -- a cold boot, or a resumed snapshot; returns ({section: ms}, {section: result}, total_ms, log)."""
+    if snapshot:
+        cmd = [os.path.join(R, 'test/tools/nt_snap.sh'), 'run', label, binary, workload, section, str(scale)]
+    else:
+        cmd = [os.path.join(R, 'test/tools/nt_bench.sh'), label, binary, 'win2k-installed',
+               'es40-window.cfg', workload, section, str(scale)]
     env = dict(os.environ, TIMEOUT='900')
     p = subprocess.run(cmd, capture_output=True, text=True, env=env)
     ms, res, total = {}, {}, None
@@ -91,6 +103,8 @@ def main():
     ap.add_argument('--workload', default='axp'); ap.add_argument('--section', default='all')
     ap.add_argument('--scale', default='1')
     ap.add_argument('--expect', default='', help='section:pct,... written down BEFORE the run')
+    ap.add_argument('--snapshot', action='store_true',
+                    help='resume the desktop snapshot (nt_snap.sh run) instead of cold-booting each run')
     a = ap.parse_args()
     if a.rounds < 2:
         sys.exit("perf_ab: fewer than 2 interleaved rounds cannot distinguish a change from drift; refusing")
@@ -110,6 +124,7 @@ def main():
         'dirty': bool(sh(f'git -C {R} status --porcelain -- src')),
         'base': {'path': base, 'sha': sha(base)}, 'head': {'path': head, 'sha': sha(head)},
         'rounds': a.rounds, 'workload': a.workload, 'section': a.section, 'scale': a.scale,
+        'mode': 'snapshot' if a.snapshot else 'cold-boot',
         'expect': expect,
     }
     known = {'Apple M3 Max': 4.05, 'Apple M3 Pro': 4.05, 'Apple M3': 4.05, 'Apple M2': 3.49, 'Apple M1': 3.2, 'Apple M4': 4.4}
@@ -123,7 +138,7 @@ def main():
         for arm, binary in (('base', base), ('head', head)):
             refuse_if_busy(f'{arm} round {r}')
             print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)
-            ms, res, total, log = run_one(f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale)
+            ms, res, total, log = run_one(f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale, a.snapshot)
             if total is None:
                 sys.exit(f"perf_ab: {arm} round {r} produced no result:\n{log[-800:]}")
             runs[arm].append({'ms': ms, 'result': res, 'total': total})

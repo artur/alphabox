@@ -382,6 +382,15 @@ All of these live in `test/tools/` and are described in
   datapath, where the guest times itself and the harness reads the numbers
   off C: afterwards. Use this when the question is which datapath costs
   what, rather than whether one number moved.
+- `nt_snap.sh` -- the same benchmark without the boot. `make` boots the
+  install once, stages the benchmark, and takes a whole-machine snapshot with
+  every thread stopped (`SIGUSR1`; `ALPHABOX_SNAPSHOT_EXIT=1` exits right
+  after, so the disk image is exactly what the snapshot saw). `run` resumes
+  it (`ALPHABOX_RESTORE`) and types the run command into Start > Run. A cold
+  boot was ~120 s of a ~165 s run; a resume is seconds. Nothing is written to
+  C: behind the resumed OS -- that would corrupt its cached FAT -- so the
+  benchmark files are staged before the snapshot and the run command carries
+  its arguments. `perf_ab.py --snapshot` uses it.
 - **`perf_ab.py` -- the only way a performance claim gets made.** Two
   binaries, N >= 2 interleaved rounds of `nt_bench.sh`, per-section medians
   with ranges and an overlap flag, a check that every section computed the

@@ -342,12 +342,22 @@ void CSystem::trace_unknown(const char *space, u64 address, int dsize,
 }
 
 volatile sig_atomic_t got_sigint = 0;
+// SIGUSR1: take a snapshot of the whole machine at the next safe point in
+// Run() -- threads stopped, exactly as the serial console's <BREAK> menu does
+// it. ALPHABOX_SNAPSHOT names the file (default autosave.axp), and
+// ALPHABOX_SNAPSHOT_EXIT=1 exits right after saving, so that the disk images
+// on exit are the disks the snapshot saw: no guest instruction runs between
+// the two. That pair -- snapshot plus disks -- is what ALPHABOX_RESTORE
+// resumes from, and it is what lets a benchmark skip the guest's two-minute
+// boot.
+volatile sig_atomic_t got_sigusr1 = 0;
 
 /**
  * Handle SIGINT (Ctrl-C) or SIGTERM by setting a flag that makes the main loop
  * exit gracefully (threads stopped, flash and DPR saved).
  **/
 void sigint_handler(int signum) { got_sigint = 1; }
+void sigusr1_handler(int signum) { got_sigusr1 = 1; }
 
 /**
  * Run the system by clocking the CPU(s) and devices.
@@ -371,6 +381,17 @@ void CSystem::Run() {
   /* catch CTRL-C and SIGTERM and shut down gracefully */
   signal(SIGINT, &sigint_handler);
   signal(SIGTERM, &sigint_handler);
+  signal(SIGUSR1, &sigusr1_handler);
+
+  // ALPHABOX_RESTORE=<file>: resume a saved machine instead of cold-booting.
+  // Every component has been constructed and initialised by now and no
+  // thread runs yet, which is the one moment the whole state can be replaced
+  // consistently. The disk images in the working directory must be the ones
+  // the snapshot was taken against (see ALPHABOX_SNAPSHOT_EXIT).
+  if (const char *snap = getenv("ALPHABOX_RESTORE")) {
+    printf("%%SYS-I-RESTORE: resuming from %s\n", snap);
+    RestoreState(snap);
+  }
 
   start_threads();
 
@@ -388,6 +409,19 @@ void CSystem::Run() {
 
     if (m_pal_halt_exit.load(std::memory_order_relaxed))
       FAILURE(Graceful, "HALT invoked, exit_on_pal_halt configured");
+
+    if (got_sigusr1) {
+      got_sigusr1 = 0;
+      const char *snap = getenv("ALPHABOX_SNAPSHOT");
+      if (!snap)
+        snap = "autosave.axp";
+      stop_threads();
+      printf("%%SYS-I-SNAPSHOT: saving machine state to %s\n", snap);
+      SaveState(snap);
+      if (getenv("ALPHABOX_SNAPSHOT_EXIT"))
+        FAILURE(Graceful, "snapshot taken, exiting as asked");
+      start_threads();
+    }
 
     if (ProcessPendingReset())
       continue;
