@@ -32,6 +32,7 @@
 
 #ifdef ES40_JIT
 
+#include <chrono> // jit_tsc_ns calibrates the counter against steady_clock
 #include "config_debug.hpp" // JIT_VERIFY
 #include <cstddef>
 #include <cstdint>
@@ -51,9 +52,7 @@ static inline uint64_t jit_rdtsc() { return __rdtsc(); }
 // a cheap helper's whole body, so timing helpers with it measured the clock.
 // Units are counter ticks, not cycles or ns; every share here is a ratio of
 // the same clock, and jit_tsc_ns() converts a per-call figure for printing.
-#include <chrono>
 static inline uint64_t jit_rdtsc() { return __builtin_readcyclecounter(); }
-#endif
 #endif
 // Per-call figures: ticks -> ns. x86's TSC is not converted (it prints as
 // cycles). The AArch64 counter's rate is measured once against steady_clock,
@@ -78,6 +77,7 @@ static inline double jit_tsc_ns(double ticks) {
   return ticks * ns_per_tick;
 #endif
 }
+#endif
 #if defined(JIT_REGPROF) && !defined(JIT_STATS)
 #error                                                                         \
     "JIT_REGPROF needs JIT_STATS (its report rides note_exec's 100M-instruction window)"
