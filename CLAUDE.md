@@ -77,6 +77,15 @@ Deeper verification (each has a skill with the full recipe): `boot-openvms`
 booting them), `test-arc` (AlphaBIOS/ARC console via flash + S3),
 `verify-vga-sdl` (framebuffer inspection + input debugging), `srm-boot-test`,
 `guest-boot-bench` (Windows 2000 guest boots and the MIPS benchmark).
+
+**Performance claims go through `test/tools/perf_ab.py`, and are quoted
+from `lab/results/ledger.md`, never from memory.** It refuses to time
+while a build or another guest runs, refuses fewer than two interleaved
+rounds, checks every section's computed result is identical across arms,
+records both binaries' hashes and HEAD, and marks `--expect` predictions
+hit or miss. A number that did not come out of it is an estimate and must
+be labelled one. Static figures (bytes per instruction, block size) are
+never quoted as dynamic cost.
 For headless driving of the emulator (fb dumps, key/mouse injection,
 `SDL_VIDEO_DRIVER=dummy`), the `ALPHABOX_*` env hooks are documented in
 `docs/headless.md`.

@@ -381,6 +381,15 @@ All of these live in `test/tools/` and are described in
   datapath, where the guest times itself and the harness reads the numbers
   off C: afterwards. Use this when the question is which datapath costs
   what, rather than whether one number moved.
+- **`perf_ab.py` -- the only way a performance claim gets made.** Two
+  binaries, N >= 2 interleaved rounds of `nt_bench.sh`, per-section medians
+  with ranges and an overlap flag, a check that every section computed the
+  same result under both arms, both binaries' hashes and HEAD recorded, and
+  `--expect section:pct` predictions written down before the run and marked
+  hit or miss after it. It refuses to start while a build or another guest
+  is running. Everything it measures is appended to `lab/results/ledger.md`;
+  quote that file, not memory. Each of those refusals corresponds to a
+  mistake that was actually made on 2026-09-19.
 - `s3_bench.sh` -- times a directory listing scrolling in a console window,
   and reports the drawing engine's own counters. It writes the emulator's
   pid to `emulator.pid` in its run directory: **profile that pid**, because
