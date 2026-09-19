@@ -916,6 +916,11 @@ private:
   uint64_t m_stale_by_cause[EPOCH_CAUSES] = {};  // ...and the stale link misses
                                                  // charged to the last one
   int m_last_epoch_cause = EPOCH_OTHER;
+  // Windowed: what an ASM-bit-clear icache flush costs -- how many, the host
+  // ticks its cache walk takes, and how many uncompiled blocks it re-records
+  // from cold (their hotness count restarts, so a flush every few thousand
+  // instructions keeps code from ever compiling).
+  uint64_t m_fng_calls = 0, m_fng_tsc = 0, m_hot_lost = 0;
   uint64_t m_dpc_miss[DM_CAUSES] = {}; // windowed: inline page-cache probe
                                        // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,

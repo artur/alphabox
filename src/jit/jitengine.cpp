@@ -917,6 +917,20 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
     b.n_instr = n_instr;
     return &b;
   }
+  // Dropped by a flush before it ever compiled: there is no code to
+  // revalidate, and the only thing the flush can take from it is the hotness
+  // count -- a heuristic, and the bytes are read afresh when it does compile.
+  // Keep it. Under a firmware PALcode that flushes the icache every few
+  // thousand instructions (the NT OS loader), a block that restarts from cold
+  // at every flush never reaches compile_after, and the loader ran
+  // interpreted for 15 s of every boot.
+  // Only the count survives: the record below is otherwise the fresh one
+  // (no links, no prefix, nothing derived from the old bytes).
+  const uint32_t kept_runs =
+      (!b.code && b.tag == virt_pc && b.cm == cm && b.phys == phys_pc &&
+       (b.asm_global || b.asn == asn))
+          ? b.cold_runs
+          : 0;
   // Revalidate: a flush dropped the block but kept the compiled code. If the
   // bytes the prefix was compiled from still hash the same, reuse it instead of
   // recompiling. Hash over hash_len, NOT the caller's n_instr --
@@ -933,6 +947,10 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   // New block, page remap, or modified bytes: record fresh and force a
   // recompile.
 #ifdef JIT_STATS
+  // The same block, never compiled, dropped by a flush: without kept_runs
+  // its hotness count would restart here. Counted so a flush storm shows.
+  if (kept_runs)
+    m_hot_lost++;
   // Why is this a FRESH compile (steps 2+3 both failed)? Categorize the slot's
   // prior occupant in the same order step 3 checks, so we know whether the
   // churn is cache aliasing (tag) -- which more slots fix -- vs same-PC
@@ -972,7 +990,8 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.prefix_len = 0;
   b.compiled = false;
   b.hot = 0; // fresh block: restart the trace-promotion counter
-  b.cold_runs = 0; // fresh block: restart the hotness count
+  b.cold_runs = kept_runs; // fresh block: restart the hotness count, unless a
+                           // flush dropped this very block before it compiled
 #ifdef JIT_REGPROF
   b.rp_hits = 0; // fresh block: restart the exec counter (resurrect/revalidate
                  // keep theirs)
@@ -1167,6 +1186,9 @@ void CJitEngine::flush() {
   ++m_flush_gen;
   ++m_epoch;
   note_epoch(m_flush_cause);
+#ifdef JIT_STATS
+  ++m_fng_calls; // lazy: no walk to time, only the hotness it costs
+#endif
   // The epoch bump alone no longer stops a direct static link -- those are
   // guarded by the target's liveness, not by a counter -- and an IMB says the
   // bytes under every block may have changed. Walking the cache is the price
@@ -1192,6 +1214,10 @@ void CJitEngine::flush_non_global() {
   ++m_itb_gen;
   ++m_epoch;
   note_epoch(EPOCH_FNG);
+#ifdef JIT_STATS
+  ++m_fng_calls;
+  const uint64_t fng_t0 = jit_rdtsc();
+#endif
   for (int i = 0; i < kCacheEntries; ++i) {
     if (!m_blocks[i].asm_global) {
       m_blocks[i].valid = false;
@@ -1199,6 +1225,9 @@ void CJitEngine::flush_non_global() {
       unlink_inbound(&m_blocks[i]); // soft-dropped: direct links must miss too
     }
   }
+#ifdef JIT_STATS
+  m_fng_tsc += jit_rdtsc() - fng_t0;
+#endif
   for (int i = 0; i < kTraceEntries;
        ++i) { // a trace spanning any !asm_global segment depends on a
               // soft-dropped block -> drop it too
@@ -4338,6 +4367,18 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                           (unsigned long long)m_epoch_bumps[c],
                           (unsigned long long)m_stale_by_cause[c]);
       printf("%s\n", buf);
+      // The flush storm, priced: the walk's own time and the hotness it
+      // throws away (blocks re-recorded from cold because a flush dropped
+      // them before they compiled).
+      if (m_fng_calls || m_hot_lost) {
+        printf("[JIT][STATS][CPU%d]   flushes %llu | walk %.1f ms "
+               "(%.1f%% of window) | hotness resets %llu\n",
+               m_cpu_id, (unsigned long long)m_fng_calls,
+               jit_tsc_ns((double)m_fng_tsc) / 1e6,
+               win_tsc ? 100.0 * (double)m_fng_tsc / (double)win_tsc : 0.0,
+               (unsigned long long)m_hot_lost);
+        m_fng_calls = m_fng_tsc = m_hot_lost = 0;
+      }
     }
     len = snprintf(
         buf, sizeof(buf),
@@ -4457,6 +4498,7 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                          dpc_miss_name(c), (unsigned long long)m_dpc_miss[c],
                          dt ? 100.0 * (double)m_dpc_miss[c] / (double)dt : 0.0);
         printf("%s\n", b2);
+        memset(m_dpc_miss, 0, sizeof(m_dpc_miss)); // windowed, like the rest
       }
       printf("[JIT][STATS][CPU%d]   helper calls: read %llu write %llu locked "
              "%llu stc %llu indirect %llu read_phys %llu write_phys %llu mtpr "

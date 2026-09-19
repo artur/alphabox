@@ -579,11 +579,48 @@ void CAlphaCPU::write_fpcr_arch(u64 arch_val) {
 static const bool s_trace_icflush = getenv("ALPHABOX_TRACE_ICFLUSH") != nullptr;
 static std::map<uint64_t, uint64_t> s_icflush_pc;
 static std::mutex s_icflush_lock;
+static std::map<uint64_t, uint64_t> s_icflush_from; // EXC_ADDR at the flush
 void CAlphaCPU::note_ic_flush_pc() {
   if (!s_trace_icflush)
     return;
   std::lock_guard<std::mutex> g(s_icflush_lock);
-  s_icflush_pc[state.current_pc]++;
+  const bool first = s_icflush_pc[state.current_pc]++ == 0;
+  const bool first_from = s_icflush_from[state.exc_addr]++ == 0;
+  // First sighting of a caller: the words before its return address, so the
+  // CALL_PAL (and what surrounds it) can be read. Firmware runs identity
+  // mapped in low memory; anything else is skipped rather than translated.
+  if (first_from && dram_ptr && state.exc_addr < dram_size &&
+      state.exc_addr >= 48) {
+    printf("%%CPU-I-ICFLUSH: first flush entered from exc_addr %016" PRIx64
+           "\n",
+           state.exc_addr);
+    for (uint64_t a = state.exc_addr - 48; a < state.exc_addr + 16; a += 4) {
+      uint32_t w;
+      memcpy(&w, (const char *)dram_ptr + a, 4);
+      printf("%%CPU-I-ICFLUSH:   %s %08llx: %08x  op=%02x ra=%02x rb=%02x "
+             "fn=%04x\n",
+             a == state.exc_addr - 4 ? "->" : "  ", (unsigned long long)a, w,
+             w >> 26, (w >> 21) & 31, (w >> 16) & 31, w & 0xffff);
+    }
+  }
+  // First sighting of a flushing PC: dump the words around it NOW, while the
+  // PAL image that holds it is still in memory (a firmware PAL is gone by the
+  // time the CPU is destroyed). PALmode PC == physical, bit 0 the PAL flag.
+  if (first && dram_ptr) {
+    const uint64_t phys = state.current_pc & ~(uint64_t)3;
+    const uint64_t from = (phys >= 32) ? phys - 32 : 0;
+    printf("%%CPU-I-ICFLUSH: first flush from %016" PRIx64 " (exc_addr %016" PRIx64
+           ", pal_base %016" PRIx64 ")\n",
+           state.current_pc, state.exc_addr, state.pal_base);
+    for (uint64_t a = from; a < phys + 40 && a + 4 <= dram_size; a += 4) {
+      uint32_t w;
+      memcpy(&w, (const char *)dram_ptr + a, 4);
+      printf("%%CPU-I-ICFLUSH:   %s %08llx: %08x  op=%02x ra=%02x rb=%02x "
+             "fn=%04x\n",
+             a == phys ? "->" : "  ", (unsigned long long)a, w, w >> 26,
+             (w >> 21) & 31, (w >> 16) & 31, w & 0xffff);
+    }
+  }
 }
 void CAlphaCPU::dump_ic_flush_pcs() {
   if (!s_trace_icflush)
@@ -605,6 +642,22 @@ void CAlphaCPU::dump_ic_flush_pcs() {
     printf("%%CPU-I-ICFLUSH:   %016llx  %llu (%.1f%%)\n",
            (unsigned long long)v[i].first, (unsigned long long)v[i].second,
            tot ? 100.0 * (double)v[i].second / (double)tot : 0.0);
+  // Who entered PALcode for it: EXC_ADDR at the flush is the return address
+  // of the CALL_PAL (or the trapped PC) that led there.
+  {
+    std::vector<std::pair<uint64_t, uint64_t>> f(s_icflush_from.begin(),
+                                                 s_icflush_from.end());
+    std::sort(f.begin(), f.end(),
+              [](const std::pair<uint64_t, uint64_t> &a,
+                 const std::pair<uint64_t, uint64_t> &b) {
+                return a.second > b.second;
+              });
+    printf("%%CPU-I-ICFLUSH: entered from %zu distinct EXC_ADDRs\n", f.size());
+    for (size_t i = 0; i < f.size() && i < 12; ++i)
+      printf("%%CPU-I-ICFLUSH:   exc_addr %016llx  %llu (%.1f%%)\n",
+             (unsigned long long)f[i].first, (unsigned long long)f[i].second,
+             tot ? 100.0 * (double)f[i].second / (double)tot : 0.0);
+  }
   // The instruction words around the busiest site, so the PAL routine can be
   // identified (PALmode PC == physical, bit 0 is the PAL flag).
   if (!v.empty() && dram_ptr) {
