@@ -30,6 +30,9 @@
 
 int main_sim(int argc, char *argv[]);
 int main_cfg(int argc, char *argv[]);
+#ifdef ALPHABOX_HVF
+int main_hvprobe(int argc, char **argv);
+#endif
 
 /**
  * Print the version, the commit and the optional features compiled in.
@@ -44,6 +47,9 @@ static void print_version() {
   printf(" (commit %s)", PACKAGE_GITSHA);
 #endif
   printf("\nFeatures:");
+#ifdef ALPHABOX_HVF
+  printf(" HVF-probe");
+#endif
   int features = 0;
 #if defined(ES40_JIT)
 #if defined(__aarch64__) || defined(_M_ARM64)
@@ -75,6 +81,10 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+#ifdef ALPHABOX_HVF
+  if (argc >= 2 && strcmp(argv[1], "hvprobe") == 0)
+    return main_hvprobe(argc - 1, ++argv);
+#endif
   if (argc <= 1 || (strcmp(argv[1], "run") && strcmp(argv[1], "configure"))) {
     std::cerr << "Alphabox Alpha Emulator";
 #ifdef PACKAGE_GITSHA
@@ -82,6 +92,9 @@ int main(int argc, char **argv) {
 #endif
     std::cerr << std::endl;
     std::cerr << "Usage: " << argv[0] << " run|configure <options>" << std::endl;
+#ifdef ALPHABOX_HVF
+    std::cerr << "       " << argv[0] << " hvprobe   (Hypervisor.framework mechanics on this host)" << std::endl;
+#endif
     std::cerr << "       " << argv[0] << " --version" << std::endl;
     return 0;
   }

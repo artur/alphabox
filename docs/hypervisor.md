@@ -53,6 +53,47 @@ would still exit. The benchmark itself has no MMIO, so a benchmark number
 would flatter the design; the boot and any GUI workload would show the
 truth.
 
+## Measured on this Mac: `alphabox hvprobe`
+
+The mechanics above are no longer assumed. `-DALPHABOX_HVF=ON` (macOS on
+Apple silicon, with the JIT's asmjit; the build signs the binary ad hoc
+with `com.apple.security.hypervisor`) adds `alphabox hvprobe`, which
+creates a VM, maps 32 MB, generates its guest code with asmjit at IPA ==
+VA and measures, with nothing emulated (M3 Max, 2026-09-19, two runs):
+
+| what | measured |
+| --- | --- |
+| `ID_AA64MMFR0_EL1` | **ASID 8 bits**, PA range 40 bits, 4 KB and 16 KB granules yes, 64 KB no |
+| exit round trip, HVC (`hv_vcpu_run` returns, resumes) | **0.7-1.2 us** |
+| exit round trip, a load from an unmapped IPA emulated on the host (the MMIO case: read the fault, write the register, step the PC, resume) | **0.9-1.0 us** |
+| a stage-1 fault taken at EL1 inside the VM, the page mapped by the guest's own vector, `eret`, the load retried (the TB-miss case; no exit) | **170-220 ns** |
+| a page touch with the page mapped (the VM's TLB doing its job) | 8 ns |
+| the VM's raw speed, a 5-instruction loop | ~17.5 G instructions/s |
+
+Three of the design's numbers change with that:
+
+- **The ASID has 8 bits, exactly one per Alpha ASN.** The four processor
+  modes cannot be folded into it. Mode separation would have to come from
+  switching table sets (a `TTBR0` write per PAL entry and exit, with the
+  TLB entries of the other mode either flushed or left reachable), or from
+  checking protection in software on the paths where it differs -- the
+  global-page problem below becomes moot and a different one takes its
+  place.
+- **An in-VM TLB miss costs 170-220 ns, against ~47 ns for today's software
+  page-cache miss** (less again with the TB index). The hardware MMU wins on
+  the hit path (one load instead of the probe) and loses on every miss, so
+  the balance depends on the miss rate of real code, which the profiler can
+  give per section.
+- **An MMIO access costs 0.9-1.0 us, against 12-20 ns today.** At the 140M
+  MMIO accesses a boot-plus-benchmark run makes from compiled code that is
+  130-140 s added to a 143 s boot, so the framebuffer would have to be
+  shared memory before the design could even be tried on a booting guest.
+
+The probe also stands as the first piece of the prototype's checklist: the
+EL1 vector, the stage-1 tables with a 4 KB granule and the fault-and-map
+loop all work as designed. It is not an emulator component and does not
+run any Alpha code.
+
 ## Three gaps a reviewer added
 
 - **Global pages do not mix with modes in the ASID.** An ARM TLB entry
@@ -69,12 +110,10 @@ truth.
   guest enables the EV6's 48-bit mode. The alternatives -- emitted code at
   EL0 with the runtime privileged, or a canonical-address check per access
   -- both cost, and belong on the prototype's checklist.
-- **Two assumptions to verify before believing any number.** 256 ASNs times
-  four modes needs ten ASID bits: read the width from `ID_AA64MMFR0_EL1`
-  rather than assume 16. And the exit cost above is assumed, not measured:
-  one measured exit round trip replaces the 1-3 us range with a number.
-  Idle belongs with it -- a guest `WFI` must exit so the host thread can
-  sleep.
+- **Two assumptions, now verified** (see the probe above): the ASID width
+  is 8 bits, not 16, so the mode cannot live there; an exit round trip is
+  0.7-1.2 us. Idle still belongs on the list -- a guest `WFI` must exit so
+  the host thread can sleep.
 
 The compiler can stay outside the VM at first: the code cache is shared
 memory and compiles are rare, which postpones porting asmjit to the

@@ -43,6 +43,7 @@ They stop only the emulator processes they started.
 | `s3_bench.sh` | Graphics workload: boots an installed Windows guest, opens a command prompt and times a directory listing scrolling in it -- what a guest feels as a slow or fast card. With `ALPHABOX_BLIT_STATS=1` the drawing engine reports its pixels, commands and transfers. Writes the emulator's pid to `emulator.pid`: profile *that* pid, since other emulators may be running on the host. |
 | `win_storage.sh` | Adds a storage controller (`CTRL=<class>`) with a FAT16 test disk to a clone of an installed Windows guest, has Windows copy a file on it, and checks the copy on the host; `BRIDGE=<class>` puts the controller behind a PCI-PCI bridge. |
 | `build_lanes.sh`, `build_revs.sh` | Build every configured build directory, or every commit of a series in a worktree. |
+| `alphabox hvprobe` | Not a script: a subcommand built with `-DALPHABOX_HVF=ON` (macOS on Apple silicon, JIT lane) that measures Hypervisor.framework's mechanics on the host -- ID registers, exit round trips, a stage-1 fault handled inside the VM -- for [hypervisor.md](hypervisor.md). The build signs the binary ad hoc with the hypervisor entitlement. |
 | `ppm2png.py`, `keys_for.py`, `mips_summary.py`, `fat_disk.py` | Helpers: frame-dump conversion, key tokens for a line of text, MIPS summaries, FAT16 test disks. |
 
 On Linux, `cd test/rom && bash test.sh` is the original firmware regression

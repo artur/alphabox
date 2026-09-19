@@ -14,6 +14,10 @@ endif()
 # JIT for x86-64 and AArch64 hosts (requires the asmjit sources in
 # third_party/asmjit; see README)
 option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
+# Hypervisor.framework probe (`alphabox hvprobe`, see docs/hypervisor.md):
+# macOS on Apple silicon only, needs the JIT's asmjit for its guest code,
+# and the binary is then signed ad hoc with the hypervisor entitlement.
+option(ALPHABOX_HVF "Build the Hypervisor.framework probe (macOS/arm64)" OFF)
 
 # Source files. One glob per source directory: a NEW directory must be added
 # both here and to target_include_directories below, or its .cpp files are
@@ -21,6 +25,7 @@ option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
 file(GLOB srcs
     src/*.cpp
     src/cpu/*.cpp
+    src/hv/*.cpp
     src/system/*.cpp
     src/common/*.cpp
     src/devices/isa/*.cpp
@@ -49,7 +54,7 @@ add_executable(alphabox ${srcs} src/Main.cpp)
 # Headers are included unqualified ("System.hpp"), so every source directory
 # is on the include path and a moved file needs no include changes.
 target_include_directories(alphabox PRIVATE
-    src src/cpu src/system src/common
+    src src/cpu src/hv src/system src/common
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge
     src/devices/pci/isp1040 src/devices/pci/tulip src/devices/pci/es137x
@@ -72,6 +77,18 @@ if (NOT ES40_DISABLE_ASMJIT)
     target_include_directories(alphabox PRIVATE ${CMAKE_SOURCE_DIR}/third_party/asmjit/src)
     target_link_libraries(alphabox asmjit)
     message(STATUS "asmjit JIT enabled")
+endif()
+
+if (ALPHABOX_HVF)
+    if (NOT APPLE OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64" OR ES40_DISABLE_ASMJIT)
+        message(FATAL_ERROR "ALPHABOX_HVF needs macOS on Apple silicon and -DES40_DISABLE_ASMJIT=OFF")
+    endif()
+    target_compile_definitions(alphabox PRIVATE ALPHABOX_HVF)
+    target_link_libraries(alphabox "-framework Hypervisor")
+    add_custom_command(TARGET alphabox POST_BUILD
+        COMMAND codesign --sign - --force --entitlements ${CMAKE_SOURCE_DIR}/src/hv/alphabox.entitlements $<TARGET_FILE:alphabox>
+        COMMENT "Signing alphabox ad hoc with the hypervisor entitlement")
+    message(STATUS "Hypervisor.framework probe enabled")
 endif()
 
 # Path to additional CMake modules
