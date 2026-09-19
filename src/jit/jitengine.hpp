@@ -834,6 +834,10 @@ private:
   int m_pending_br_ra = 31;
   bool m_defer_branch_pc = false;
   bool m_pc_on_hot_path = false; // ALPHABOX_JIT_PCSTORE=0: the old exit shape
+  // Index of the last instruction of the block being emitted: a conditional
+  // branch before it is an in-block exit, not the terminator. ~0 outside
+  // assemble_block (the cold pass and the trace builder never see one).
+  uint32_t m_block_last = ~0u;
 
   static constexpr uint32_t kColdMax = 1024;
   uint32_t m_cold_slow[kColdMax];

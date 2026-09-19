@@ -518,8 +518,32 @@ predictions on record:
 Three instructions removed from a hot path bought 1.7%; a load, a compare
 and a four-instruction constant removed from the same paths bought nothing
 at all. On this core, instruction count off the address and branch chains
-is not time, and only a measurement says which is which. The remaining
-per-block item, longer blocks, is a different code generator.
+is not time, and only a measurement says which is which.
+
+### Extended blocks
+
+The last per-block item. A block used to end at every branch, taken or
+not, and the cold pass that sizes a block already runs on through the
+branches it does not take (`n_instr` ends at the one it takes). So the
+translator now runs on through an integer conditional branch the cold pass
+fell through, and the AArch64 emitter makes its taken side an exit in the
+middle of the block -- count, gate if backward, a static exit with a link
+slot of its own -- while the fall-through is simply the next instruction:
+the pins stay live and the value-forward slot survives the branch. BR/BSR
+always leave; FP branches still end a block; the x86-64 emitter is
+untouched (the scan is arch-gated). `ALPHABOX_JIT_EBB=0` restores one
+branch per block in the same binary.
+
+Measured inside one binary through the snapshot (ledger: `ebb`, 3
+rounds, results identical): **-2.0% in total, no overlap** -- alu -5.9%,
+ldst -3.7%, byte -2.5%, branch -2.3%, the rest inside the noise. The
+prediction was -4%: the exit sequence a not-taken branch used to pay is
+cheaper than its instruction count, like everything else on this core.
+JIT_VERIFY earned its keep on the first build: 41k mismatches, because
+`emit_op` loaded the branch register into `x0` before deciding to defer
+the branch and then recorded `x0` as still holding the previous op's
+forwarded value -- harmless while a branch always ended the block, wrong
+once instructions followed it. Block length, measured: compiled blocks average 9.0 instructions with extended blocks against 6.3 without (chains 257.2 vs 192.8 instructions between dispatches), JIT_STATS at the end of a resumed benchmark run.
 
 The band is also a lever: if two builds of one file swing a section by
 5-10%, some hot loop is alignment-sensitive. Aligning the hot helpers and

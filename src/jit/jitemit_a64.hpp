@@ -1493,21 +1493,24 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           continue; // the exit writes the PC where it is read: miss and gate
         a.mov(x9, imm(tgt));
       } else {
-        if (ra == 31)
-          a.mov(x0, imm(0));
-        else
-          mov_from_reg(x0, ra);
-        if (m_defer_branch_pc) {
-          // Emit nothing: the epilogue tests Ra itself and branches, and
-          // materialises only the PC of the side actually taken. Every op
-          // clears the value-forward slot on entry; put the previous op's
-          // back, since nothing was emitted here to invalidate it, so the
-          // epilogue can see that x0 already holds Ra.
+        if (m_defer_branch_pc || i < m_block_last) {
+          // Emit nothing -- and load nothing: the exit code tests Ra where it
+          // lives (its pin, the value-forward slot, or one load of its own)
+          // and materialises only the PC of the side actually taken. Every
+          // op clears the value-forward slot on entry; put the previous op's
+          // back, since nothing was emitted here to invalidate it. (Loading
+          // Ra into x0 first and then claiming x0 still held the previous
+          // op's value was harmless while a branch always ended the block;
+          // with instructions after it, JIT_VERIFY caught 41k mismatches.)
           m_pending_br_op = (int)op;
           m_pending_br_ra = ra;
           regalloc.rax_holds = prev_x0;
           continue;
         }
+        if (ra == 31)
+          a.mov(x0, imm(0));
+        else
+          mov_from_reg(x0, ra);
         if (op == OP_BLBC || op == OP_BLBS)
           a.tst(x0, imm(1));
         else
@@ -2014,11 +2017,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     m_pc_on_hot_path = pc_on_hot_path;
   }
 #endif
-  for (uint32_t i = 0; i < plen; ++i)
-    emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
-  m_defer_branch_pc = false;
-
-  // Epilogue: count this block, then chain (stay native) or return.
 #ifndef JIT_VERIFY
   const uint32_t off_body = (uint32_t)((char *)&b->jit_body - (char *)b);
   const uint32_t off_tag = (uint32_t)((char *)&b->tag - (char *)b);
@@ -2065,7 +2063,8 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // slot's JitBlock can be re-recorded for another PC under the same epoch. A
   // miss records link_from = b | (slot + 1) so the dispatcher fills exactly
   // this slot, then takes lbl (return to the dispatcher).
-  auto emit_static_exit = [&](uint64_t target, int slot, const Label &lbl) {
+  auto emit_static_exit = [&](uint64_t target, ExitRec *&xr, int slot,
+                              const Label &lbl) {
     if (target == b->tag) {
       a.b(body); // self-loop (the gate already ran)
       return;
@@ -2080,9 +2079,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       return;
     }
     Label miss = a.new_label();
-    if (!xrec)
-      xrec = alloc_exit_rec();
-    a.mov(a64::x3, imm((uint64_t)xrec)); // this code's exit record
+    if (!xr)
+      xr = alloc_exit_rec();
+    a.mov(a64::x3, imm((uint64_t)xr)); // this exit's record
     const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
     const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
     // A target inside this block's OWN guest page needs no epoch at all.
@@ -2100,7 +2099,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     // instruction can change SDE mid-chain (HW_MTPR ends a block).
     const bool same_page = ((target ^ b->tag) & ~(uint64_t)0x1FFE) == 0;
     if (same_page && direct_links_enabled()) {
-      xrec->direct_mask |= (uint8_t)(1u << slot);
+      xr->direct_mask |= (uint8_t)(1u << slot);
       a.ldr(a64::x1, a64::ptr(a64::x3, off_lbody + 8 * slot));
       a.cbz(a64::x1, miss);
       a.br(a64::x1); // HIT: tail in (shared frame)
@@ -2142,6 +2141,108 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.b(lbl);
   };
 #endif
+  // Test the branch's register where it lives -- its pin, the value-forward
+  // slot, or one load into x0 (which then forwards it) -- and branch to
+  // not_taken. Six of eight forms need no flags; BLE/BGT keep a cmp adjacent.
+  auto emit_cond_test = [&](int bop, int bra, const Label &not_taken) {
+    a64::Gp xr = a64::x0;
+    if (bra == 31) {
+      a.mov(a64::x0, imm(0)); // R31 reads as zero; keep the one code shape
+    } else if (ra.host_of(bra) >= 0) {
+      xr = a64::x((uint32_t)ra.host_of(bra));
+    } else if (ra.rax_holds == bra) {
+      // x0 already holds Ra (the compare feeding a branch is usually the
+      // instruction right before it): no reload.
+    } else {
+      const int idx = (pal_block && ((bra & 0xc) == 0x4)) ? bra + 32 : bra;
+      a.ldr(a64::x0, a64::ptr(a64::x20, idx * 8)); // x20 = guest register file
+      ra.rax_holds = bra;
+    }
+    switch (bop) {
+    case OP_BEQ: // taken if Ra == 0
+      a.cbnz(xr, not_taken);
+      break;
+    case OP_BNE:
+      a.cbz(xr, not_taken);
+      break;
+    case OP_BLT: // taken if Ra < 0: bit 63
+      a.tbz(xr, imm(63), not_taken);
+      break;
+    case OP_BGE:
+      a.tbnz(xr, imm(63), not_taken);
+      break;
+    case OP_BLBC: // taken if bit 0 clear
+      a.tbnz(xr, imm(0), not_taken);
+      break;
+    case OP_BLBS:
+      a.tbz(xr, imm(0), not_taken);
+      break;
+    case OP_BLE: // the two that need flags keep the cmp adjacent
+      a.cmp(xr, imm(0));
+      a.b_gt(not_taken);
+      break;
+    default: // OP_BGT
+      a.cmp(xr, imm(0));
+      a.b_le(not_taken);
+      break;
+    }
+  };
+#ifndef JIT_VERIFY
+  Label exit_all = a.new_label(); // every exit's way to the epilogue
+  ExitRec *mid_rec = nullptr;     // the in-block exits' records, two a piece
+  int mid_slot = 0;
+#endif
+  // A conditional branch that is not the block's last instruction: its taken
+  // side leaves here (count, gate if backward, static exit of its own), its
+  // fall-through is simply the next instruction of this block.
+  auto emit_mid_exit = [&](uint32_t i) {
+    const uint32_t lw = words[i];
+    const uint64_t bfall = b->tag + 4 * (uint64_t)(i + 1);
+    const int64_t bdisp = (int64_t)((uint64_t)(lw & 0x1FFFFF) << 43) >> 43;
+    const uint64_t btgt = bfall + (uint64_t)(bdisp * 4);
+    Label not_taken = a.new_label();
+    emit_cond_test(m_pending_br_op, m_pending_br_ra, not_taken);
+#ifdef JIT_VERIFY
+    a.mov(a64::x9, imm(btgt));
+    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+    a64_add_imm(a, a64::x0, a64::x27, i + 1);
+    a.b(done);
+#else
+    const bool taken_backward = btgt <= b->tag + 4 * (uint64_t)i;
+    a64_count_add(a, i + 1);
+    Label gate_out = a.new_label();
+    const bool stub = taken_backward && !m_pc_on_hot_path;
+    if (m_pc_on_hot_path) {
+      a.mov(a64::x9, imm(btgt));
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+    }
+    if (taken_backward)
+      a64_emit_gate(a, m_off, stub ? gate_out : exit_all);
+    if (mid_slot == kLinkSlots) {
+      mid_rec = nullptr;
+      mid_slot = 0;
+    }
+    emit_static_exit(btgt, mid_rec, mid_slot++, exit_all);
+    if (stub) {
+      a.bind(gate_out);
+      a.mov(a64::x9, imm(btgt));
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+      a.b(exit_all);
+    }
+#endif
+    a.bind(not_taken);
+    m_pending_br_op = -1;
+  };
+  m_block_last = plen ? plen - 1 : 0;
+  for (uint32_t i = 0; i < plen; ++i) {
+    emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
+    if (m_pending_br_op >= 0 && i + 1 < plen)
+      emit_mid_exit(i);
+  }
+  m_block_last = ~0u;
+  m_defer_branch_pc = false;
+
+  // Epilogue: count this block, then chain (stay native) or return.
   if (terminator_jmp) {
     a64_count_add(a, plen);
 #ifndef JIT_VERIFY
@@ -2214,7 +2315,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         const bool stub = taken_backward && !m_pc_on_hot_path;
         if (taken_backward)
           a64_emit_gate(a, m_off, stub ? gate_out : exit_chain);
-        emit_static_exit(btgt, 0, exit_chain);
+        emit_static_exit(btgt, xrec, 0, exit_chain);
         if (stub) { // the gate's way out: the PC, then leave
           a.bind(gate_out);
           a.mov(a64::x9, imm(btgt));
@@ -2228,49 +2329,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         // The register is read where it lives: its pin, or one load from the
         // guest slot (the same load the old shape did at the branch itself).
         Label not_taken = a.new_label();
-        const int bra = m_pending_br_ra;
-        a64::Gp xr = a64::x0;
-        if (bra == 31) {
-          a.mov(a64::x0, imm(0)); // R31 reads as zero; keep the one code shape
-        } else if (ra.host_of(bra) >= 0) {
-          xr = a64::x((uint32_t)ra.host_of(bra));
-        } else if (ra.rax_holds == bra) {
-          // The previous op left exactly this register in x0 (value-forward):
-          // no reload. Common, since the compare feeding a branch is usually
-          // the instruction right before it.
-        } else {
-          const int idx = (pal_block && ((bra & 0xc) == 0x4)) ? bra + 32 : bra;
-          a.ldr(a64::x0,
-                a64::ptr(a64::x20, idx * 8)); // x20 = guest register file
-        }
-        switch (m_pending_br_op) {
-        case OP_BEQ: // taken if Ra == 0
-          a.cbnz(xr, not_taken);
-          break;
-        case OP_BNE:
-          a.cbz(xr, not_taken);
-          break;
-        case OP_BLT: // taken if Ra < 0: bit 63
-          a.tbz(xr, imm(63), not_taken);
-          break;
-        case OP_BGE:
-          a.tbnz(xr, imm(63), not_taken);
-          break;
-        case OP_BLBC: // taken if bit 0 clear
-          a.tbnz(xr, imm(0), not_taken);
-          break;
-        case OP_BLBS:
-          a.tbz(xr, imm(0), not_taken);
-          break;
-        case OP_BLE: // the two that need flags keep the cmp adjacent
-          a.cmp(xr, imm(0));
-          a.b_gt(not_taken);
-          break;
-        default: // OP_BGT
-          a.cmp(xr, imm(0));
-          a.b_le(not_taken);
-          break;
-        }
+        emit_cond_test(m_pending_br_op, m_pending_br_ra, not_taken);
         Label gate_out = a.new_label();
         if (m_pc_on_hot_path) {
           a.mov(a64::x9, imm(btgt));
@@ -2278,13 +2337,13 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         }
         if (taken_backward) // the gate clobbers only x1/x17 (and flags)
           a64_emit_gate(a, m_off, m_pc_on_hot_path ? exit_chain : gate_out);
-        emit_static_exit(btgt, 0, exit_chain);
+        emit_static_exit(btgt, xrec, 0, exit_chain);
         a.bind(not_taken);
         if (m_pc_on_hot_path) {
           a.mov(a64::x9, imm(bfall));
           a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
         }
-        emit_static_exit(bfall, 1, exit_chain); // forward: no gate
+        emit_static_exit(bfall, xrec, 1, exit_chain); // forward: no gate
         if (taken_backward && !m_pc_on_hot_path) { // the gate's way out
           a.bind(gate_out);
           a.mov(a64::x9, imm(btgt));
@@ -2297,9 +2356,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         a.b_ne(not_taken);
         if (taken_backward) // the gate clobbers only x1/x17 (and flags)
           a64_emit_gate(a, m_off, exit_chain);
-        emit_static_exit(btgt, 0, exit_chain);
+        emit_static_exit(btgt, xrec, 0, exit_chain);
         a.bind(not_taken);
-        emit_static_exit(bfall, 1, exit_chain); // forward: no gate
+        emit_static_exit(bfall, xrec, 1, exit_chain); // forward: no gate
       }
     } else {
       a64_emit_gate(a, m_off, exit_chain);
@@ -2325,13 +2384,16 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     Label exit_chain = a.new_label();
     // A fall-through only moves forward: no gate (see the branch exits). The
     // PC is written on the exit's miss path, not here.
-    emit_static_exit(b->tag + 4 * (uint64_t)plen, 0, exit_chain);
+    emit_static_exit(b->tag + 4 * (uint64_t)plen, xrec, 0, exit_chain);
     a.bind(exit_chain);
 #else
     a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
     a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
 #endif
   }
+#ifndef JIT_VERIFY
+  a.bind(exit_all);
+#endif
   a.mov(a64::x0, a64::x27);
   a.bind(done); // bails arrive with x0 already set
   a64_epilogue(a);

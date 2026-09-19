@@ -237,6 +237,28 @@ static inline bool is_terminator(SafeOp op) {
   return op == OP_JMP || op == OP_HW_RET || op == OP_CALL_PAL ||
          op == OP_HW_MTPR_TERM || is_branch(op);
 }
+// Extended blocks (AArch64 emitter only): a block runs on through an integer
+// conditional branch that the cold pass did not take, the taken side becoming
+// an exit in the middle of the block, so the fall-through path keeps its pins
+// and the forwarded value instead of paying an exit and a link probe every
+// ~4 instructions. ALPHABOX_JIT_EBB=0 restores one branch per block in the
+// same binary (the A/B switch). BR/BSR always leave; FP branches keep ending
+// a block.
+static inline bool is_ebb_branch(SafeOp op) {
+  return op >= OP_BEQ && op <= OP_FBGE && op != OP_BR && op != OP_BSR &&
+         !(op >= OP_FBEQ && op <= OP_FBGE);
+}
+static inline bool ebb_enabled() {
+#ifdef JIT_HOST_A64
+  static const bool v = [] {
+    const char *e = getenv("ALPHABOX_JIT_EBB");
+    return !(e && e[0] == '0');
+  }();
+  return v;
+#else
+  return false;
+#endif
+}
 
 // POPCNT isn't baseline x86-64 (pre-2008 CPUs lack it); query the host once.
 // CTLZ/CTTZ use baseline BSR/BSF, so only CTPOP is gated -- it stays
@@ -3458,12 +3480,23 @@ void CJitEngine::compile_block(
     }
     plen++;
     if (is_terminator(sop)) { // branch or computed jump ends the block
+      // A not-taken conditional branch with more of the cold pass behind it
+      // (n_instr ends at the branch that WAS taken) stays inside the block;
+      // it needs one more instruction to fall through to.
+      if (ebb_enabled() && is_ebb_branch(sop) && plen < b->n_instr &&
+          plen < 64 && (phys + (uint64_t)plen * 4) < page_end)
+        continue;
       terminator_branch = true;
       if (sop == OP_JMP || sop == OP_HW_RET)
         terminator_jmp = true;
       break;
     }
   }
+  // The scan may stop right after a branch it meant to run through (an
+  // uncompilable op next): that branch is then the terminator after all.
+  if (!terminator_branch && plen > 0 &&
+      is_branch(classify(words[plen - 1], pal_block)))
+    terminator_branch = true;
 
   if (plen == 0)
     return;
