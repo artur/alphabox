@@ -42,18 +42,26 @@ def sha(path):
     return h.hexdigest()[:12]
 
 def busy_host():
-    """Anything that would perturb a timed round. Our own harness is excluded."""
-    me = str(os.getpid())
+    """Anything that would perturb a timed round: a compiler actually running,
+    or another guest. Judged by the EXECUTABLE, not by command text -- a shell
+    whose script mentions `cmake --build` is not a build, and the wrapper this
+    tool is launched from usually mentions it. Our own ancestry is excluded."""
     procs = sh("ps -Ao pid,ppid,args")
-    reasons = []
+    table = {}
     for ln in procs.splitlines()[1:]:
         parts = ln.split(None, 2)
-        if len(parts) < 3: continue
-        pid, ppid, args = parts
-        if pid == me or ppid == me: continue
-        if 'cmake --build' in args or re.search(r'\b(make|ninja|clang\+\+|cc1plus)\b', args):
+        if len(parts) == 3: table[parts[0]] = (parts[1], parts[2])
+    mine = set(); p = str(os.getpid())
+    while p in table and p not in mine:
+        mine.add(p); p = table[p][0]
+    reasons = []
+    for pid, (ppid, args) in table.items():
+        if pid in mine or ppid in mine: continue
+        exe = os.path.basename(args.split()[0]) if args.split() else ''
+        if exe in ('clang', 'clang++', 'cc1plus', 'cc', 'c++', 'ld', 'ld64.lld', 'ninja', 'make', 'gmake') \
+           or (exe == 'cmake' and '--build' in args):
             reasons.append('a build: ' + args[:70])
-        if re.search(r'\b(qemu-system|alphabox run|axpbox run)\b', args) or re.search(r'lab/bin/\S+ run', args):
+        elif exe.startswith('qemu-system') or re.search(r'(lab/bin/\S+|alphabox|axpbox) run\b', args):
             reasons.append('a guest: ' + args[:70])
     return reasons
 
