@@ -4189,10 +4189,8 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
     // the window -- the part of "compiled" time that is not emitted code.
     // Measured from entry to return, so a helper's callees (FindTBEntry, a
     // page-table walk, a device access) are charged to it.
-    // jit_rdtsc() is the x86 TSC where there is one and steady_clock
-    // nanoseconds on AArch64 -- and that clock costs ~15 ns a read, about as
-    // much as a cheap helper's whole body, so on AArch64 these shares are an
-    // upper bound. (The per-call figure is therefore ns there, not cycles.)
+    // jit_rdtsc() is the x86 TSC where there is one (per-call prints as
+    // cycles) and the 24 MHz counter register on AArch64 (converted to ns).
 #if defined(_M_X64) || defined(__x86_64__)
     static const char *const kTscUnit = "cyc";
 #else
@@ -4212,7 +4210,7 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
       if (m_helper_tsc[k])
         hl += snprintf(hb + hl, sizeof(hb) - hl, " %s %.1f%% (%.0f %s/call)",
                        kHk[k], 100.0 * (double)m_helper_tsc[k] / (double)win_tsc,
-                       m_helper_n[k] ? (double)m_helper_tsc[k] / (double)m_helper_n[k] : 0.0,
+                       m_helper_n[k] ? jit_tsc_ns((double)m_helper_tsc[k] / (double)m_helper_n[k]) : 0.0,
                        kTscUnit);
     printf("%s\n", hb);
     const double cf = 100.0 * (double)m_tsc_compiled / (double)win_tsc;

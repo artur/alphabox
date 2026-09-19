@@ -46,14 +46,38 @@
 #endif
 static inline uint64_t jit_rdtsc() { return __rdtsc(); }
 #else
-#include <chrono> // no TSC on AArch64 hosts: the time split uses steady_clock ns
-static inline uint64_t jit_rdtsc() {
-  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
+// AArch64: the virtual counter register (cntvct_el0), 24 MHz on Apple
+// Silicon and ~0.3 ns to read. steady_clock was ~15 ns a read, which is about
+// a cheap helper's whole body, so timing helpers with it measured the clock.
+// Units are counter ticks, not cycles or ns; every share here is a ratio of
+// the same clock, and jit_tsc_ns() converts a per-call figure for printing.
+#include <chrono>
+static inline uint64_t jit_rdtsc() { return __builtin_readcyclecounter(); }
+#endif
+#endif
+// Per-call figures: ticks -> ns. x86's TSC is not converted (it prints as
+// cycles). The AArch64 counter's rate is measured once against steady_clock,
+// because assuming it was wrong: hw.tbfrequency says 24 MHz on this host and
+// the counter the builtin reads runs at 1 GHz, which put every per-call
+// figure out by 42x until a two-line test caught it.
+static inline double jit_tsc_ns(double ticks) {
+#if defined(_M_X64) || defined(__x86_64__)
+  return ticks;
+#else
+  static const double ns_per_tick = [] {
+    const auto c0 = std::chrono::steady_clock::now();
+    const uint64_t t0 = jit_rdtsc();
+    while (std::chrono::steady_clock::now() - c0 < std::chrono::milliseconds(20)) {
+    }
+    const uint64_t t1 = jit_rdtsc();
+    const double ns = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now() - c0)
+                          .count();
+    return (t1 > t0) ? ns / (double)(t1 - t0) : 1.0;
+  }();
+  return ticks * ns_per_tick;
+#endif
 }
-#endif
-#endif
 #if defined(JIT_REGPROF) && !defined(JIT_STATS)
 #error                                                                         \
     "JIT_REGPROF needs JIT_STATS (its report rides note_exec's 100M-instruction window)"
