@@ -70,6 +70,17 @@ constexpr struct {
 } kA64CallerPins[] = {{1, 4},  {9, 5},   {17, 6}, {2, 7},
                       {10, 8}, {18, 13}, {3, 14}, {11, 15}};
 
+// Count the low contiguous set bits of a mask, to prove it is the
+// ((1 << n) - 1) form UBFX can express.
+static inline uint32_t a64_popcount_low(uint32_t m) {
+  uint32_t n = 0;
+  while (m & 1u) {
+    ++n;
+    m >>= 1;
+  }
+  return n;
+}
+
 // Emit failures (an operand combination a64 can't encode) must not ship a
 // silently truncated block: record them and let assemble_* discard the code.
 class A64EmitErrors : public asmjit::ErrorHandler {
@@ -350,13 +361,25 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     };
     // va = r[Rb] + disp -> x2
     auto ea_x2 = [&](int64_t disp) {
-      if (rb == 31)
+      if (rb == 31) {
         a.mov(x2, imm(disp));
-      else {
-        mov_from_reg(x2, rb);
-        if (disp)
-          a64_add_imm(a, x2, x2, disp);
+        return;
       }
+      // A pinned base folds the displacement straight into the ADD/SUB
+      // instead of moving the pin to x2 and adding to it. One instruction
+      // saved on every memory access whose base is pinned, which is most of
+      // them: the pin set was chosen from a profile of real guest code.
+      const int p = regalloc.host_of(rb);
+      if (p >= 0 && disp != 0 && disp > -4096 && disp < 4096) {
+        if (disp > 0)
+          a.add(x2, a64::x((uint32_t)p), imm(disp));
+        else
+          a.sub(x2, a64::x((uint32_t)p), imm(-disp));
+        return;
+      }
+      mov_from_reg(x2, rb);
+      if (disp)
+        a64_add_imm(a, x2, x2, disp);
     };
 
     // Three-address operands: read pinned guest registers in place and compute
@@ -497,8 +520,18 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     auto dpc_probe = [&](bool write_row, const Label &slow) {
       const uint32_t row =
           m_off.dpc_tag + (write_row ? m_off.dpc_write_row : 0);
-      a.lsr(x10, x2, imm(13)); // must match CAlphaCPU::dpc_index
-      a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
+      // Index: one UBFX instead of LSR+AND. kDpcMask is a contiguous run of
+      // low bits by construction (kDpcEntries is a power of two), so the two
+      // forms are identical -- and this must keep matching
+      // CAlphaCPU::dpc_index.
+      const uint32_t idx_bits = a64_popcount_low(m_off.dpc_mask);
+      if (idx_bits && ((1u << idx_bits) - 1u) == m_off.dpc_mask &&
+          13 + idx_bits <= 64) {
+        a.ubfx(x10, x2, imm(13), imm(idx_bits));
+      } else {
+        a.lsr(x10, x2, imm(13)); // must match CAlphaCPU::dpc_index
+        a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
+      }
       if (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) {
         // A 64-byte slot makes the index a shift, and both fields sit within
         // one load's displacement of the slot.
@@ -513,8 +546,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const int32_t base =
           (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) ? (int32_t)row
                                                                   : 0;
-      a.ldr(x12, a64::ptr(x10, base));                          // slot tag
-      a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_bias_rel));  // slot bias
+      // Tag and bias are adjacent 8-byte fields, so one LDP fetches the pair
+      // -- which is what the slot layout was designed for. LDP's immediate is
+      // a signed 7-bit value scaled by 8, so it reaches +504: the read row
+      // (offset 400) fits, the write row (4496) does not and keeps two loads.
+      if (dpc_bias_rel == 8 && (base % 8) == 0 && base >= -512 && base <= 504) {
+        a.ldp(x12, x10, a64::ptr(x10, base)); // slot tag, slot bias
+      } else {
+        a.ldr(x12, a64::ptr(x10, base));                         // slot tag
+        a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_bias_rel)); // slot bias
+      }
       a.and_(x11, x2, imm(~(uint64_t)0x1FFF));                  // this page
       a.ldr(x9, fld(m_off.dpc_key, 3)); // the live address space and mode
       a.orr(x11, x11, x9);              // ... which together are the key
@@ -533,15 +574,24 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                             : (op == OP_LDWU)                ? 16
                                                              : 8;
       auto load_from = [&](const a64::Mem &m) {
+        // Land the value in the destination's own pinned register where there
+        // is one, instead of loading into x0 and moving it across. The cost is
+        // that x0 no longer mirrors Ra, so this path forgoes value-forwarding
+        // -- worth it, because the forward only pays when the very next
+        // instruction reads Ra, while the extra MOV was paid by every load.
+        const int p = regalloc.host_of(ra);
+        const a64::Gp dst = (p >= 0) ? a64::x((uint32_t)p) : x0;
+        const a64::Gp dst32 = (p >= 0) ? a64::w((uint32_t)p) : w0;
         if (size_bits == 64)
-          a.ldr(x0, m);
+          a.ldr(dst, m);
         else if (size_bits == 32)
-          a.ldrsw(x0, m);
+          a.ldrsw(dst, m);
         else if (size_bits == 16)
-          a.ldrh(w0, m);
+          a.ldrh(dst32, m);
         else
-          a.ldrb(w0, m);
-        mov_to_reg(ra, x0);
+          a.ldrb(dst32, m);
+        if (p < 0)
+          mov_to_reg(ra, x0); // unpinned: store it to the guest slot
       };
       auto emit_helper = [&]() {
         emit_call(hs.read_helper, {{JA_CPU, 0},
