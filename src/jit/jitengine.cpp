@@ -1376,8 +1376,20 @@ static uint32_t regprof_mask(const uint32_t *w, uint32_t n) {
         touch(ra);
       break;
     }
+    case 0x19: // HW_MFPR (PALmode): Ra
+      touch(ra);
+      break;
+    case 0x1b: // HW_LD (PALmode): Ra, Rb(base)
+    case 0x1f: // HW_ST (PALmode): Ra, Rb(base)
+      touch(ra);
+      touch(rb);
+      break;
+    case 0x1d: // HW_MTPR (PALmode): Rb
+    case 0x1e: // HW_RET (PALmode): Rb
+      touch(rb);
+      break;
     default:
-      break; // FP / HW / CALL_PAL: not the GPR forwarding path
+      break; // FP / CALL_PAL: not the GPR forwarding path
     }
   }
   return mask;
@@ -4597,13 +4609,21 @@ void CJitEngine::regprof_report() {
            exec_bytes =
                0; // exec-weighted: hot-path Alpha instrs and emitted x86 bytes
   uint64_t exec_mem = 0, exec_pairs = 0, exec_near = 0; // DPC-reuse counts
+  // PALmode blocks apart: how much of the hot path runs under PALcode, and
+  // which GPRs it uses -- R4-7/R20-23 are the shadow bank there, never pinned.
+  uint64_t pal_hist[32] = {0}, pal_instr = 0, pal_bytes = 0;
   for (int s = 0; s < kCacheEntries; ++s) {
     const JitBlock &b = m_blocks[s];
     if (!b.valid || b.rp_hits == 0)
       continue;
+    const bool pal = (b.tag & 1) != 0;
     for (int r = 0; r < 31; ++r)
       if (b.rp_mask & (1u << r))
-        hist[r] += b.rp_hits;
+        (pal ? pal_hist : hist)[r] += b.rp_hits;
+    if (pal) {
+      pal_instr += b.rp_hits * (uint64_t)b.prefix_len;
+      pal_bytes += b.rp_hits * (uint64_t)b.rp_csz;
+    }
     exec_instr += b.rp_hits * (uint64_t)b.prefix_len;
     exec_bytes += b.rp_hits * (uint64_t)b.rp_csz;
     exec_mem += b.rp_hits * (uint64_t)b.rp_memops;
@@ -4645,6 +4665,41 @@ void CJitEngine::regprof_report() {
     hist[best] = 0;
   }
   printf("%s   (* = not pin-eligible)\n", buf);
+  // The PALmode share since the previous report (rp_hits is cumulative per
+  // block; the difference of the sums is the window, less evicted blocks).
+  static uint64_t prev_instr = 0, prev_pal = 0;
+  const int64_t d_instr = (int64_t)(exec_instr - prev_instr),
+                d_pal = (int64_t)(pal_instr - prev_pal);
+  prev_instr = exec_instr;
+  prev_pal = pal_instr;
+  // A flush that evicts hot blocks makes the sums shrink: report the window
+  // only when both deltas are sane, else -1.
+  const double d_share = (d_instr > 0 && d_pal >= 0 && d_pal <= d_instr)
+                             ? 100.0 * (double)d_pal / (double)d_instr
+                             : -1.0;
+  len = snprintf(buf, sizeof(buf),
+                 "[JIT][REGPROF][CPU%d] PALmode: %.1f%% of hot instrs this "
+                 "window (%.1f%% cumulative, %.1f bytes/instr); PAL GPRs:",
+                 m_cpu_id, d_share,
+                 exec_instr ? 100.0 * (double)pal_instr / (double)exec_instr
+                            : 0.0,
+                 pal_instr ? (double)pal_bytes / (double)pal_instr : 0.0);
+  for (int rank = 0; rank < 12 && len < (int)sizeof(buf) - 24; ++rank) {
+    int best = -1;
+    uint64_t bestv = 0;
+    for (int r = 0; r < 31; ++r)
+      if (pal_hist[r] > bestv) {
+        bestv = pal_hist[r];
+        best = r;
+      }
+    if (best < 0)
+      break;
+    len += snprintf(buf + len, sizeof(buf) - len, " R%d=%llu%s", best,
+                    (unsigned long long)bestv,
+                    ((best & 0xc) == 0x4) ? "s" : "");
+    pal_hist[best] = 0;
+  }
+  printf("%s   (s = shadow bank)\n", buf);
 }
 #endif
 
