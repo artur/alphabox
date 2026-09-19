@@ -99,6 +99,9 @@ public:
   void irq_trace_ipr(const char *what, u32 fn, u64 val);
   int get_cpuid();
   void flush_icache();
+  void note_ic_flush_pc();  // ALPHABOX_TRACE_ICFLUSH: histogram of the PC that
+                            // issued each icache flush
+  void dump_ic_flush_pcs(); // ...printed when the CPU goes away
 
   virtual void run(); // Poco Thread entry point
   void execute();
@@ -438,9 +441,35 @@ private:
   // Data page translation cache: direct-mapped by virtual page (kDpcEntries
   // slots/dir) so a multi-page access pattern doesn't thrash a single slot. The
   // inline load checks one slot.
-  static constexpr int kDpcBits = 6; // 64 slots/dir (8KB pages -> 512KB)
+  // 64 slots/dir (8KB pages -> 512KB). Raising this to 256 was measured and
+  // does NOT pay: read-helper calls fell only 373634 -> 343914 per 100M
+  // instructions (8%) on CPU-bound Windows code, and the workload did not move
+  // (61.7 s against 59.4 s, one run each). The misses are not conflicts, so
+  // the slot count is not the lever -- see docs/performance.md. The ceiling,
+  // should anyone try again, is the inline probe's addressing: it reaches both
+  // rows with one displacement while dpc_tag + kDpcEntries*64 + 8 <= 32760, so
+  // 256 is the largest power of two that stays free; past that the emitter has
+  // to compute the slot address, on every memory op.
+  static constexpr int kDpcBits = 6;
   static constexpr int kDpcEntries = 1 << kDpcBits;
   static constexpr u64 kDpcMask = (u64)kDpcEntries - 1;
+  // A slice of the address, not a hash -- and that is a measured decision, not
+  // an oversight. Slicing means two pages differing only ABOVE bits 13..18
+  // always collide whatever the table size, which is exactly what a kernel and
+  // a user page do: 100% of this probe's misses are "another page in my slot".
+  // Folding the high bits in (h ^= h>>13; h ^= h>>26) does fix that -- read
+  // helper calls per 100M instructions fell 364984 -> 242727 and writes
+  // 45560 -> 115 -- and it still lost, because it costs two instructions on
+  // every HIT and hits vastly outnumber misses:
+  //
+  //   cmd /c for /l loop   59.4 / 58.4 s  ->  57.3 / 57.3 s   (2-3% faster)
+  //   nt_bench.sh axp all  24429 ms       ->  26007 ms        (6.5% SLOWER,
+  //                                          three runs each, no overlap)
+  //
+  // The win only appears where misses are CONFLICT misses among a few hot
+  // pages. Code that fits the cache pays the two instructions for nothing, and
+  // code that streams past it misses anyway. Anyone retrying this needs an
+  // index that costs at most one extra instruction. See docs/performance.md.
   static inline u64 dpc_index(u64 va) { return (va >> 13) & kDpcMask; }
   /// One translated page.
   ///
@@ -795,10 +824,26 @@ private:
 #define RREG(a)                                                                \
   (((a)&0x1f) + (((state.pc & 1) && (((a)&0xc) == 0x4) && state.sde) ? 32 : 0))
 
+// Tell the JIT which caller's icache flush this is, for the epoch census.
+// A flush rejects every cached block link, so knowing which event does it is
+// what tells us whether the link guard can be replaced.
+#ifdef ES40_JIT
+#define JIT_FLUSH_CAUSE(c)                                                     \
+  do {                                                                         \
+    if (m_jit)                                                                 \
+      m_jit->set_flush_cause(CJitEngine::c);                                   \
+  } while (0)
+#else
+#define JIT_FLUSH_CAUSE(c)                                                     \
+  do {                                                                         \
+  } while (0)
+#endif
+
 /**
  * Empty the instruction cache.
  **/
 inline void CAlphaCPU::flush_icache() {
+  note_ic_flush_pc();
   if (icache_enabled) {
     for (int i = 0; i < ICACHE_ENTRIES; i++) {
       state.icache[i].valid = false;

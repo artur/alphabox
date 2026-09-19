@@ -959,6 +959,8 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.code = nullptr;
   b.jit_body =
       nullptr; // not compiled yet -> cached links to us must miss until compile
+  unlink_inbound(&b); // ...including the epoch-free direct links, which have
+                      // no other way of learning this slot changed hands
   for (int i = 0; i < kLinkSlots; ++i)
     b.link[i] = nullptr; // no cached successors yet
 #ifdef JIT_STATS
@@ -1121,8 +1123,10 @@ void CJitEngine::reclaim_code() {
   m_call_thunk = nullptr; // lived in the runtime just deleted
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
+  note_epoch(EPOCH_RECLAIM);
   m_exit_chunks.clear(); // exit records belong to the code just freed
   m_exit_used = kExitChunk;
+  m_direct_live = 0; // ...and every direct link lived in one of them
   m_code_bytes = 0;
 #ifdef JIT_STATS
   m_stat_reclaims++;
@@ -1135,6 +1139,7 @@ void CJitEngine::reclaim_code() {
     m_blocks[i].code = nullptr;
     m_blocks[i].jit_body = nullptr;
     m_blocks[i].compiled = false;
+    m_blocks[i].inbound = 0; // the exit records themselves were just freed
   }
   // Traces hold JitFns into the runtime we just deleted -- drop them too, or a
   // post-reclaim trace dispatch jumps through a freed pointer. trace_lookup
@@ -1143,12 +1148,29 @@ void CJitEngine::reclaim_code() {
     m_traces[i].valid = false;
 }
 
+// Drop every direct static link in the cache. Data writes only (see
+// unlink_inbound), so this is cheap per block; it is a full 16K-slot walk, so
+// only events that genuinely invalidate code bytes may call it.
+void CJitEngine::unlink_all() {
+  if (!m_direct_live)
+    return; // nothing epoch-free is linked: the epoch bump is the whole story
+  for (int i = 0; i < kCacheEntries; ++i)
+    if (m_blocks[i].inbound)
+      unlink_inbound(&m_blocks[i]);
+}
+
 void CJitEngine::flush() {
   // LAZY:  don't walk 16K slots each time. Bump the generation instead: stale
   // blocks miss in lookup() and revalidate_flushed() re-hashes their source
   // bytes before they run again.
   ++m_flush_gen;
   ++m_epoch;
+  note_epoch(m_flush_cause);
+  // The epoch bump alone no longer stops a direct static link -- those are
+  // guarded by the target's liveness, not by a counter -- and an IMB says the
+  // bytes under every block may have changed. Walking the cache is the price
+  // of the epoch-free hit path; IMB is rare (see the epoch census).
+  unlink_all();
   if (m_rt && m_code_bytes >= kReclaimBytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
@@ -1168,10 +1190,12 @@ void CJitEngine::flush_non_global() {
   // Soft-dropped bodies must not stay reachable through epoch-keyed data links.
   ++m_itb_gen;
   ++m_epoch;
+  note_epoch(EPOCH_FNG);
   for (int i = 0; i < kCacheEntries; ++i) {
     if (!m_blocks[i].asm_global) {
       m_blocks[i].valid = false;
       m_blocks[i].jit_body = nullptr;
+      unlink_inbound(&m_blocks[i]); // soft-dropped: direct links must miss too
     }
   }
   for (int i = 0; i < kTraceEntries;
@@ -1632,7 +1656,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.test(x86::dl, imm(amask));
       a.jnz(slow);
       a.mov(x86::r11, x86::rdx);
-      a.shr(x86::r11, imm(13));
+      a.shr(x86::r11, imm(13));              // must match CAlphaCPU::dpc_index
       a.and_(x86::r11, imm(m_off.dpc_mask)); // r11 = dpc_index(va)
       a.imul(x86::r11, x86::r11,
              imm(m_off.dpc_stride)); // r11 = slot byte offset
@@ -1726,7 +1750,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.test(x86::dl, imm(amask));
       a.jnz(slow);
       a.mov(x86::r11, x86::rdx);
-      a.shr(x86::r11, imm(13));
+      a.shr(x86::r11, imm(13));              // must match CAlphaCPU::dpc_index
       a.and_(x86::r11, imm(m_off.dpc_mask)); // r11 = dpc_index(va)
       a.imul(x86::r11, x86::r11,
              imm(m_off.dpc_stride));             // r11 = slot byte offset
@@ -1840,7 +1864,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.test(x86::dl, imm(7));
       a.jnz(slow); // 8-byte aligned
       a.mov(x86::r11, x86::rdx);
-      a.shr(x86::r11, imm(13));
+      a.shr(x86::r11, imm(13)); // must match CAlphaCPU::dpc_index
       a.and_(x86::r11, imm(m_off.dpc_mask));
       a.imul(x86::r11, x86::r11, imm(m_off.dpc_stride));
       if (!isload)
@@ -4253,10 +4277,27 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
     static const char *const kColdNames[CR_COUNT] = {
         "nophys",  "noblock", "nothot",  "uncompilable", "stale", "int",
         "int-pal", "timer",   "pal!sde", "budget",       "done0"};
-    printf("[JIT][STATS][CPU%d]   link misses by cause: stale %llu | "
-           "new target %llu\n",
+    printf("[JIT][STATS][CPU%d]   link misses by cause: scan stale %llu / new "
+           "%llu | static-exit stale %llu / new %llu\n",
            m_cpu_id, (unsigned long long)m_link_stale,
-           (unsigned long long)m_link_fresh);
+           (unsigned long long)m_link_fresh, (unsigned long long)m_dlink_stale,
+           (unsigned long long)m_dlink_fresh);
+    // Epoch census: how often each event moved the validation epoch, and how
+    // many stale link misses are charged to the event that moved it last.
+    // This is what decides whether an epoch can be replaced by a reverse index
+    // -- and which events that index has to walk.
+    {
+      len = snprintf(
+          buf, sizeof(buf),
+          "[JIT][STATS][CPU%d]   epoch bumps (stale charged):", m_cpu_id);
+      for (int c = 0; c < EPOCH_CAUSES && len < (int)sizeof(buf) - 48; ++c)
+        if (m_epoch_bumps[c] || m_stale_by_cause[c])
+          len += snprintf(buf + len, sizeof(buf) - len, " %s=%llu(%llu)",
+                          epoch_cause_name(c),
+                          (unsigned long long)m_epoch_bumps[c],
+                          (unsigned long long)m_stale_by_cause[c]);
+      printf("%s\n", buf);
+    }
     len = snprintf(
         buf, sizeof(buf),
         "[JIT][STATS][CPU%d] cold-path instr/entries by reason:", m_cpu_id);
@@ -4360,6 +4401,22 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
     }
     {
       const uint64_t fl = m_dpc_flush_src ? *m_dpc_flush_src : 0;
+      {
+        char b2[256];
+        int l2 = snprintf(
+            b2, sizeof(b2),
+            "[JIT][STATS][CPU%d]   page-cache probe misses:", m_cpu_id);
+        uint64_t dt = 0;
+        for (int c = 0; c < DM_CAUSES; ++c)
+          dt += m_dpc_miss[c];
+        for (int c = 0; c < DM_CAUSES && l2 < (int)sizeof(b2) - 40; ++c)
+          if (m_dpc_miss[c])
+            l2 +=
+                snprintf(b2 + l2, sizeof(b2) - l2, " %s=%llu(%.0f%%)",
+                         dpc_miss_name(c), (unsigned long long)m_dpc_miss[c],
+                         dt ? 100.0 * (double)m_dpc_miss[c] / (double)dt : 0.0);
+        printf("%s\n", b2);
+      }
       printf("[JIT][STATS][CPU%d]   helper calls: read %llu write %llu locked "
              "%llu stc %llu indirect %llu read_phys %llu write_phys %llu mtpr "
              "%llu mfpr %llu | dpc flushes %llu\n",

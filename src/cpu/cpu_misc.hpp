@@ -309,6 +309,7 @@
 // this CPU.
 #define DO_IMB                                                                 \
   do {                                                                         \
+    JIT_FLUSH_CAUSE(EPOCH_IMB);                                                \
     flush_icache();                                                            \
     tbia(ACCESS_EXEC);                                                         \
   } while (0)

@@ -54,7 +54,9 @@
 #include "cpu_vax.hpp"
 #include "diag_rpcc.hpp"
 #include "lockstep.hpp"
+#include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <set>
 #include <utility>
@@ -286,6 +288,18 @@ void CAlphaCPU::init() {
     o.dpc_mask = (uint32_t)kDpcMask;
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
+    // ALPHABOX_JIT_OFFSETS=1: whether the inline page-cache probe can still
+    // reach both rows with one displacement. Past that the emitter falls back
+    // to computing the slot address, which costs every memory op -- the limit
+    // on how large this cache can grow without restructuring it.
+    if (getenv("ALPHABOX_JIT_OFFSETS")) {
+      const uint32_t bias_rel = o.dpc_bias - o.dpc_tag;
+      printf("[JIT] dpc: tag=%u bias_rel=%u stride=%u entries=%d write_row=%u "
+             "| one-displacement read=%d write=%d (limit 32760)\n",
+             o.dpc_tag, bias_rel, o.dpc_stride, kDpcEntries, o.dpc_write_row,
+             (int)(o.dpc_tag + bias_rel <= 32760),
+             (int)(o.dpc_tag + o.dpc_write_row + bias_rel <= 32760));
+    }
     o.state_cm = (uint32_t)((char *)&state.cm - (char *)this);
     o.state_asn0 = (uint32_t)((char *)&state.asn0 - (char *)this);
     o.dram_ptr = (uint32_t)((char *)&dram_ptr - (char *)this);
@@ -546,7 +560,59 @@ void CAlphaCPU::write_fpcr_arch(u64 arch_val) {
 /**
  * Destructor.
  **/
-CAlphaCPU::~CAlphaCPU() { stop_threads(); }
+// ALPHABOX_TRACE_ICFLUSH=1: histogram of the PC that issued each icache flush,
+// printed at exit. An IC_FLUSH rejects every cached block link, and the census
+// says the guest issues one per ~1000 instructions, so the question of WHICH
+// instruction does it decides the whole invalidation design.
+static const bool s_trace_icflush = getenv("ALPHABOX_TRACE_ICFLUSH") != nullptr;
+static std::map<uint64_t, uint64_t> s_icflush_pc;
+static std::mutex s_icflush_lock;
+void CAlphaCPU::note_ic_flush_pc() {
+  if (!s_trace_icflush)
+    return;
+  std::lock_guard<std::mutex> g(s_icflush_lock);
+  s_icflush_pc[state.current_pc]++;
+}
+void CAlphaCPU::dump_ic_flush_pcs() {
+  if (!s_trace_icflush)
+    return;
+  std::lock_guard<std::mutex> g(s_icflush_lock);
+  std::vector<std::pair<uint64_t, uint64_t>> v(s_icflush_pc.begin(),
+                                               s_icflush_pc.end());
+  std::sort(v.begin(), v.end(),
+            [](const std::pair<uint64_t, uint64_t> &a,
+               const std::pair<uint64_t, uint64_t> &b) {
+              return a.second > b.second;
+            });
+  uint64_t tot = 0;
+  for (auto &e : v)
+    tot += e.second;
+  printf("%%CPU-I-ICFLUSH: %llu icache flushes from %zu distinct PCs\n",
+         (unsigned long long)tot, v.size());
+  for (size_t i = 0; i < v.size() && i < 12; ++i)
+    printf("%%CPU-I-ICFLUSH:   %016llx  %llu (%.1f%%)\n",
+           (unsigned long long)v[i].first, (unsigned long long)v[i].second,
+           tot ? 100.0 * (double)v[i].second / (double)tot : 0.0);
+  // The instruction words around the busiest site, so the PAL routine can be
+  // identified (PALmode PC == physical, bit 0 is the PAL flag).
+  if (!v.empty() && dram_ptr) {
+    const uint64_t phys = (v[0].first & ~(uint64_t)3) & ~(uint64_t)1;
+    const uint64_t from = (phys >= 32) ? phys - 32 : 0;
+    for (uint64_t a = from; a < phys + 40 && a + 4 <= dram_size; a += 4) {
+      uint32_t w;
+      memcpy(&w, (const char *)dram_ptr + a, 4);
+      printf("%%CPU-I-ICFLUSH:   %s %08llx: %08x  op=%02x ra=%02x rb=%02x "
+             "fn=%04x\n",
+             a == phys ? "->" : "  ", (unsigned long long)a, w, w >> 26,
+             (w >> 21) & 31, (w >> 16) & 31, w & 0xffff);
+    }
+  }
+}
+
+CAlphaCPU::~CAlphaCPU() {
+  stop_threads();
+  dump_ic_flush_pcs();
+}
 
 #if defined(IDB)
 char dbg_string[1000];
@@ -592,7 +658,7 @@ static double max_mips = 0.0;
 void CAlphaCPU::jit_note_asn_change() {
 #ifdef ES40_JIT
   if (m_jit)
-    m_jit->note_itb_invalidate();
+    m_jit->note_itb_invalidate(CJitEngine::EPOCH_ASN);
 #endif
 }
 
@@ -761,8 +827,10 @@ void CAlphaCPU::jit_run(int budget) {
 
     // PAL reset-vector entry (firmware updater rewrote the image in place, or a
     // restart): drop stale icache lines and compiled blocks first.
-    if (start_virt == (state.pal_base | 1))
+    if (start_virt == (state.pal_base | 1)) {
+      JIT_FLUSH_CAUSE(EPOCH_PALRST);
       flush_icache();
+    }
 
     // Resolve the block's physical start side-effect-free (FAKE = no fault, no
     // TB fill) so execute() stays the sole I-stream fetcher; covers
@@ -809,14 +877,16 @@ void CAlphaCPU::jit_run(int budget) {
       if (m_idle_pc == 0 && nt_idle_head(dram_ptr, dram_size, start_phys)) {
         m_idle_pc = start_virt;
         if (m_jit)
-          m_jit->note_itb_invalidate(); // new epoch: drop links into the head
+          m_jit->note_itb_invalidate(
+              CJitEngine::EPOCH_IDLE); // new epoch: drop links into the head
         printf("%%CPU-I-IDLE: CPU%d idle loop recognized at %016llx\n",
                (int)state.iProcNum, (unsigned long long)start_virt);
       }
       if (m_park_pc == 0 && nt_park_head(dram_ptr, dram_size, start_phys)) {
         m_park_pc = start_virt;
         if (m_jit)
-          m_jit->note_itb_invalidate(); // new epoch: drop links into the head
+          m_jit->note_itb_invalidate(
+              CJitEngine::EPOCH_IDLE); // new epoch: drop links into the head
         printf("%%CPU-I-IDLE: CPU%d parked-processor loop recognized at "
                "%016llx\n",
                (int)state.iProcNum, (unsigned long long)start_virt);
@@ -1523,12 +1593,26 @@ void CAlphaCPU::jit_run(int budget) {
           // validated in this epoch (vgen stamped above) and is about to run.
           CJitEngine::ExitRec *xr =
               (CJitEngine::ExitRec *)(lraw & ~(uintptr_t)7);
+          const unsigned k = exact - 1;
+          // A direct slot (same-page target) carries no epoch: it is valid
+          // until the target block is invalidated, which unlinks it through
+          // the target's inbound list. So it can only arrive here empty.
+          const bool direct = (xr->direct_mask >> k) & 1u;
+          // A static exit's slot always holds the SAME compile-time target, so
+          // a body already in it means the epoch compare -- not a new target --
+          // is what sent us here.
+          m_jit->note_dlink_stale(xr->body[k] != nullptr);
           if (b->tag == m_link_target && b->jit_body) {
-            xr->body[exact - 1] = b->jit_body;
-            xr->epoch[exact - 1] = m_jit->vgen();
-          } else {
-            xr->body[exact - 1] = nullptr;
-            xr->epoch[exact - 1] = ~(uint64_t)0;
+            if (direct)
+              m_jit->link_direct(xr, k, b);
+            else {
+              xr->body[k] = b->jit_body;
+              xr->epoch[k] = m_jit->vgen();
+            }
+          } else if (!direct) { // a direct slot is already empty, and clearing
+                                // it here would cut it out of no list
+            xr->body[k] = nullptr;
+            xr->epoch[k] = ~(uint64_t)0;
           }
         } else {
           CJitEngine::JitBlock *lf =
@@ -1719,6 +1803,16 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
       cpu->data_page_cache[0][dpc_index(va)]; // direct-mapped by virt page
+  // Why the INLINE probe sent us here, which is not the same question as why
+  // this helper bails. The inline probe compares one packed tag, so it rejects
+  // an empty slot, another page in the slot, a different address space or
+  // mode, and an MMIO page alike -- and the fixes for those differ.
+  cpu->m_jit->note_dpc_miss(!dpc.valid            ? CJitEngine::DM_EMPTY
+                            : dpc.virt_page != vp ? CJitEngine::DM_OTHER_PAGE
+                            : dpc.cm != cm        ? CJitEngine::DM_MODE
+                            : dpc.asn != cpu->state.asn0 ? CJitEngine::DM_ASN
+                            : dpc.host_base == 0         ? CJitEngine::DM_MMIO
+                                                         : CJitEngine::DM_HIT);
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
@@ -3454,8 +3548,10 @@ _next_instruction:
     } else {
       // PAL reset-vector entry: drop stale icache lines (in-place image
       // rewrite by the firmware updater)
-      if (state.pc == (state.pal_base | 1))
+      if (state.pc == (state.pal_base | 1)) {
+        JIT_FLUSH_CAUSE(EPOCH_PALRST);
         flush_icache();
+      }
       // Full icache lookup
       if (get_icache(state.pc, &ins))
         goto _next_instruction;
@@ -3491,8 +3587,10 @@ _next_instruction:
       seq_next_pc += 4;
     } else {
       // PAL reset-vector entry: drop stale icache lines
-      if (state.pc == (state.pal_base | 1))
+      if (state.pc == (state.pal_base | 1)) {
+        JIT_FLUSH_CAUSE(EPOCH_PALRST);
         flush_icache();
+      }
       if (get_icache(state.pc, &ins))
         return;
 
@@ -5040,7 +5138,8 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
 
 #ifdef ES40_JIT
   if (itb_remap && m_jit)
-    m_jit->note_itb_invalidate(); // code page remapped in place -> chains
+    m_jit->note_itb_invalidate(
+        CJitEngine::EPOCH_REMAP); // code page remapped in place -> chains
                                   // re-validate
 #endif
 
@@ -5152,8 +5251,9 @@ void CAlphaCPU::tbia(int flags) {
     flush_data_page_cache();
 #ifdef ES40_JIT
   else if (m_jit)
-    m_jit->note_itb_invalidate(); // whole ITB cleared -> indirect chains
-                                  // re-validate phys
+    m_jit->note_itb_invalidate(
+        CJitEngine::EPOCH_TBIA); // whole ITB cleared -> indirect chains
+                                 // re-validate phys
 #endif
 }
 
@@ -5176,7 +5276,8 @@ void CAlphaCPU::tbiap(int flags) {
     flush_data_page_cache();
 #ifdef ES40_JIT
   else if (m_jit)
-    m_jit->note_itb_invalidate(); // process ITB entries cleared -> chains
+    m_jit->note_itb_invalidate(
+        CJitEngine::EPOCH_TBIAP); // process ITB entries cleared -> chains
                                   // re-validate phys
 #endif
 }
@@ -5206,7 +5307,7 @@ void CAlphaCPU::tbis(u64 virt, int flags) {
   // evicted from the TB), a JIT block compiled from this page is still stale
   // and MUST re-validate before being chained.
   if (m_jit)
-    m_jit->note_itb_invalidate();
+    m_jit->note_itb_invalidate(CJitEngine::EPOCH_TBIS);
 #endif
 }
 

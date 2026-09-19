@@ -125,6 +125,11 @@ public:
                     // not compiled
     JitBlock *link[kLinkSlots]; // cached direct successors (poly-link,
                                 // round-robin back-patched); null = empty
+    uintptr_t inbound; // head of the list of static exits linked INTO this
+                       // block, as ExitRec* | slot (QEMU's jmp_list_head).
+                       // Those links carry no epoch, so invalidating this
+                       // block means walking this list and clearing them --
+                       // see unlink_inbound().
 #ifdef JIT_STATS
     uint32_t link_misses; // instrumentation: per-source link-miss count,
                           // cumulative (poly-link sizing)
@@ -502,6 +507,8 @@ public:
 
   void flush_non_global(); // flush only !asm_global blocks (the ASM-bit-clear /
                            // ASN icache flush)
+  void unlink_all();       // drop every direct static link (flush(): the code
+                           // bytes may have changed under all of them)
   void reclaim_code();     // free ALL compiled code once past kReclaimBytes
                            // (cold-path only)
   // flush() can be reached from a compiled IC_FLUSH, so it DEFERS the reclaim
@@ -514,13 +521,61 @@ public:
     }
   }
 
+  // Why the validation epoch moved. Every bump rejects every cached link, so
+  // before replacing the epoch with a reverse index we need to know which
+  // event actually does the rejecting -- the fixes differ per cause (an ASN
+  // switch invalidates nothing about the code; an IMB invalidates the bytes).
+  enum EpochCause {
+    EPOCH_ASN,     // address-space switch (swpctx / ITB_ASN write)
+    EPOCH_TBIS,    // single-page I-stream invalidate
+    EPOCH_TBIA,    // whole ITB cleared
+    EPOCH_TBIAP,   // process-specific ITB entries cleared
+    EPOCH_REMAP,   // a code page re-translated in place (ITB fill over a
+                   // different physical)
+    EPOCH_FLUSH,   // icache flush, caller not separated out
+    EPOCH_IMB,     // guest IMB (instruction memory barrier)
+    EPOCH_ICFLUSH, // guest HW_MTPR IC_FLUSH
+    EPOCH_PALRST,  // execution reached the PAL reset vector
+    EPOCH_FNG,     // ASM-bit-clear icache flush (non-global bodies dropped)
+    EPOCH_RECLAIM, // the code arena was freed
+    EPOCH_IDLE,    // idle/park head learned (links into it are refused)
+    EPOCH_OTHER,
+    EPOCH_CAUSES
+  };
+  static const char *epoch_cause_name(int c) {
+    static const char *const n[EPOCH_CAUSES] = {
+        "asn",      "tbis",   "tbia", "tbiap",   "remap", "flush", "imb",
+        "ic_flush", "palrst", "fng",  "reclaim", "idle",  "other"};
+    return (c >= 0 && c < EPOCH_CAUSES) ? n[c] : "?";
+  }
+
   // ITB-generation counter for the indirect-chain staleness check
   // (jit_indirect). Bumped on every I-stream TB invalidate (tbia/tbiap/tbis,
   // ACCESS_EXEC) ... those can remap a code page WITHOUT flushing the JIT, so a
   // chained block could run stale bytes.
-  inline void note_itb_invalidate() {
+  // Why the inline data-page-cache probe missed and had to call the helper.
+  // The probe compares one packed tag, so every one of these looks the same
+  // from compiled code -- and they want different fixes: OTHER_PAGE is a size
+  // or indexing problem, MODE and ASN are key problems, MMIO is by design.
+  enum DpcMiss {
+    DM_EMPTY,      // slot never filled (cold, or invalidated since)
+    DM_OTHER_PAGE, // another page occupies the slot
+    DM_MODE,       // same page, cached for a different processor mode
+    DM_ASN,        // same page, cached for a different address space
+    DM_MMIO,       // a page compiled code may not touch inline
+    DM_HIT,        // the C++ path accepts it: the two guards disagree
+    DM_CAUSES
+  };
+  static const char *dpc_miss_name(int c) {
+    static const char *const n[DM_CAUSES] = {
+        "empty", "other-page", "mode", "asn", "mmio", "probe-only"};
+    return (c >= 0 && c < DM_CAUSES) ? n[c] : "?";
+  }
+  void set_flush_cause(int c) { m_flush_cause = c; }
+  inline void note_itb_invalidate(EpochCause cause = EPOCH_OTHER) {
     ++m_itb_gen;
     ++m_epoch;
+    note_epoch(cause);
   }
   // Record a validated computed-jump target for the inline cache (see
   // m_ind_cache). Non-global blocks are safe too: the entry comes from a
@@ -550,15 +605,32 @@ public:
   // the second a prediction problem, and they want opposite fixes.
   void note_link_stale(bool stale) {
     if (stale)
-      m_link_stale++;
+      m_link_stale++, m_stale_by_cause[m_last_epoch_cause]++;
     else
       m_link_fresh++;
   }
+  // The same question for a static exit's data link (a64 emit_static_exit):
+  // the slot already held a body, so the epoch compare -- not the absence of a
+  // prediction -- is what sent us back to the dispatcher.
+  void note_dlink_stale(bool stale) {
+    if (stale)
+      m_dlink_stale++, m_stale_by_cause[m_last_epoch_cause]++;
+    else
+      m_dlink_fresh++;
+  }
+  void note_epoch(int cause) {
+    m_last_epoch_cause = cause;
+    m_epoch_bumps[cause]++;
+  }
+  void note_dpc_miss(int cause) { m_dpc_miss[cause]++; }
   void note_link_bail() { m_bail_link++; }
   void note_jmp_attempt() { m_jmp_attempt++; }
   void note_jmp_hit() { m_jmp_hit++; }
 #else
   void note_link_stale(bool) {}
+  void note_dlink_stale(bool) {}
+  void note_epoch(int) {}
+  void note_dpc_miss(int) {}
   void note_link_bail() {}
   void note_jmp_attempt() {}
   void note_jmp_hit() {}
@@ -607,6 +679,15 @@ private:
       0; // current ITB generation (bumped on every I-stream TB invalidate)
   uint64_t m_flush_gen = 0; // current icache-flush generation (bumped by
                             // flush(); lazy IC_FLUSH/IMB)
+  // Which caller's icache flush we are in, so the epoch census can separate
+  // an IMB from an IC_FLUSH from a PAL restart. Set by flush_icache().
+  int m_flush_cause = EPOCH_FLUSH;
+  uint64_t m_direct_live = 0; // direct links currently established; lets
+                              // unlink_all() cost nothing when there are none
+  const bool m_direct_links = [] {
+    const char *e = getenv("ALPHABOX_JIT_DLINK");
+    return e && e[0] == '1';
+  }();
   uint64_t m_epoch = 0; // m_itb_gen + m_flush_gen, kept in step with both so
                         // compiled chain guards load one word
   // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
@@ -644,8 +725,54 @@ private:
 public: // the dispatcher fills these (AlphaCPU.cpp)
   struct ExitRec {
     void *body[kLinkSlots];
-    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch)
+    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch). Read only
+                                // by a cross-page slot; a direct slot ignores
+                                // it.
+    // Reverse index, for direct (epoch-free) slots only: the next static exit
+    // linked into the same target block, as ExitRec* | slot. 0 = end of list.
+    uintptr_t in_next[kLinkSlots];
+    uint8_t direct_mask; // bit k: slot k is a DIRECT link -- its target is in
+                         // the source block's own guest page, so no MMU change
+                         // can invalidate it without invalidating the source
+                         // too, and the only guard left is body != null.
   };
+
+  // Link a direct static exit to a block, and record it on that block's
+  // inbound list so the block's invalidation can undo it. The caller has
+  // already established that b is this exit's target and is compiled.
+  inline void link_direct(ExitRec *xr, unsigned slot, JitBlock *b) {
+    if (xr->body[slot])
+      return; // already linked, hence already on b's list
+    xr->body[slot] = b->jit_body;
+    xr->in_next[slot] = b->inbound;
+    b->inbound = (uintptr_t)xr | slot;
+    m_direct_live++;
+  }
+
+  // Drop every direct link INTO b (QEMU's tb_jmp_unlink). Writes data only --
+  // no code patching, so no icache maintenance and no W^X toggle -- and is
+  // safe to call while b's own code is on the stack: the exits it clears will
+  // simply miss to the dispatcher next time.
+  inline void unlink_inbound(JitBlock *b) {
+    uintptr_t p = b->inbound;
+    b->inbound = 0;
+    while (p) {
+      ExitRec *xr = (ExitRec *)(p & ~(uintptr_t)7);
+      const unsigned k = (unsigned)(p & 7);
+      p = xr->in_next[k];
+      xr->in_next[k] = 0;
+      xr->body[k] = nullptr;
+      m_direct_live--;
+    }
+  }
+
+  // ALPHABOX_JIT_DLINK=1 compiles the epoch-free static exit for same-page
+  // targets. OFF by default: measurement says a cached link misses ~1000 times
+  // per 100M instructions on CPU-bound guest code, so there is nothing here to
+  // win, and an icache flush -- which the guest's PALcode issues once per ~1000
+  // instructions during firmware -- has to walk the cache to undo the links.
+  // See docs/performance.md.
+  bool direct_links_enabled() const { return m_direct_links; }
 
 private:
   static constexpr size_t kExitChunk = 1u << 16;
@@ -660,7 +787,9 @@ private:
     for (int i = 0; i < kLinkSlots; ++i) {
       r->body[i] = nullptr;
       r->epoch[i] = ~(uint64_t)0;
+      r->in_next[i] = 0;
     }
+    r->direct_mask = 0;
     return r;
   }
   static constexpr uint32_t kColdMax = 1024;
@@ -736,6 +865,14 @@ private:
   uint64_t m_tsc_window_start; // host TSC at window start (the time-split
                                // denominator)
   uint64_t m_link_stale = 0, m_link_fresh = 0; // link misses by cause
+  uint64_t m_dlink_stale = 0, m_dlink_fresh = 0; // ...for static-exit data
+                                                 // links (a64)
+  uint64_t m_epoch_bumps[EPOCH_CAUSES] = {};     // cumulative: epoch bumps
+  uint64_t m_stale_by_cause[EPOCH_CAUSES] = {};  // ...and the stale link misses
+                                                 // charged to the last one
+  int m_last_epoch_cause = EPOCH_OTHER;
+  uint64_t m_dpc_miss[DM_CAUSES] = {}; // windowed: inline page-cache probe
+                                       // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,
       m_jmp_hit; // windowed: link-miss bails, jit_indirect attempts/hits
   uint64_t m_fresh_cold, m_fresh_tag, m_fresh_asn, m_fresh_phys,

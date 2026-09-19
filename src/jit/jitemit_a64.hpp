@@ -497,7 +497,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     auto dpc_probe = [&](bool write_row, const Label &slow) {
       const uint32_t row =
           m_off.dpc_tag + (write_row ? m_off.dpc_write_row : 0);
-      a.lsr(x10, x2, imm(13));
+      a.lsr(x10, x2, imm(13)); // must match CAlphaCPU::dpc_index
       a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
       if (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) {
         // A 64-byte slot makes the index a shift, and both fields sit within
@@ -1995,14 +1995,42 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     if (!xrec)
       xrec = alloc_exit_rec();
     a.mov(a64::x3, imm((uint64_t)xrec)); // this code's exit record
+    const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
+    const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
+    // A target inside this block's OWN guest page needs no epoch at all.
+    // Blocks never cross a page (see page_end), so the source and the target
+    // share one translation: if this code is running, the dispatcher validated
+    // that page's physical this time round, which validates the target's too.
+    // An address-space switch cannot reach it either -- the block's key is
+    // (PC, ASN, mode) and the target was looked up under the very context this
+    // code runs in. What is left is the target block itself going away, and
+    // that unlinks this slot through the target's inbound list.
+    //
+    // The SDE guard goes with the epoch: PALmode-ness is part of the page
+    // identity here, so a PALmode target is only ever reached from PALmode
+    // code that the dispatcher already gated on SDE, and no compiled
+    // instruction can change SDE mid-chain (HW_MTPR ends a block).
+    const bool same_page = ((target ^ b->tag) & ~(uint64_t)0x1FFE) == 0;
+    if (same_page && direct_links_enabled()) {
+      xrec->direct_mask |= (uint8_t)(1u << slot);
+      a.ldr(a64::x1, a64::ptr(a64::x3, off_lbody + 8 * slot));
+      a.cbz(a64::x1, miss);
+      a.br(a64::x1); // HIT: tail in (shared frame)
+      a.bind(miss);
+      a.orr(a64::x3, a64::x3, imm((uint64_t)(slot + 1)));
+      a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
+      a.str(a64::x9, a64_cpu_field(a, m_off.link_target, 3));
+      a.b(lbl);
+      return;
+    }
     if (target & 1) { // PALmode target needs SDE (shadow remap)
       a.ldrb(a64::w1, a64_cpu_field(a, m_off.sde, 0));
       a.cbz(a64::w1, miss);
     }
-    // Data link: the body cached for this slot is valid while the epoch it was
-    // cached in is current (no pointer chase, tag or vgen compare).
-    const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
-    const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
+    // Cross-page data link: the body cached for this slot is valid while the
+    // epoch it was cached in is current (no pointer chase, tag or vgen
+    // compare). It stays epoch-guarded because a remap of the target's page
+    // leaves this block's own page, and so this block, untouched.
     a.ldr(a64::x2, a64::ptr(a64::x3, off_lepoch + 8 * slot));
     a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // m_epoch
     a.cmp(a64::x2, a64::x10);

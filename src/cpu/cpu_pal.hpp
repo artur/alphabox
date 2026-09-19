@@ -255,6 +255,7 @@
       break;                                                                   \
                                                                                \
     case 0x13: /* IC_FLUSH */                                                  \
+      JIT_FLUSH_CAUSE(EPOCH_ICFLUSH);                                          \
       flush_icache();                                                          \
       break;                                                                   \
                                                                                \
