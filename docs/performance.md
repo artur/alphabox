@@ -545,6 +545,33 @@ the branch and then recorded `x0` as still holding the previous op's
 forwarded value -- harmless while a branch always ended the block, wrong
 once instructions followed it. Block length, measured: compiled blocks average 9.0 instructions with extended blocks against 6.3 without (chains 257.2 vs 192.8 instructions between dispatches), JIT_STATS at the end of a resumed benchmark run.
 
+### The TB index
+
+What was left of stride after the shadow was 98% inside `jit_read` at 47 ns
+a call: the 128-entry linear scan of the TB whenever the advisory hint
+missed, which on code that walks memory is every page-cache miss. The scan
+is now replaced by an exact index of the TB -- which slot holds each 8 KB
+page, eight ways per set, 2048 sets, kept in step by every insert,
+eviction and invalidation (`add_tb`, the shadow refill, `tbia`, `tbiap`,
+`tbis`, `tbis_d`), rebuilt from `state.tb` on reset and restore, never
+saved. A miss in the index means the page is not in the TB, so the scan is
+skipped and the shadow refill or the DTB-miss trap follows at once; an
+entry with a granularity hint spans pages and cannot be indexed, so while
+any is live the scan is used. A hit is validated against the entry exactly
+as the scan would validate it, so the index can never return a wrong
+mapping; a false negative can only cost a refill. In a JIT_VERIFY build
+the scan runs as the oracle after every index miss: 0 mismatches, and the
+false negatives it counted were all in one set -- page 0, live under many
+ASNs at once under SRM -- 317 of 6.4M probes with two ways, 270 with four,
+3 of 6303123 with eight. `ALPHABOX_TB_INDEX=0` keeps the scan in the same binary.
+
+Measured (ledger: `tb-index2`, same binary against the scan alone; and
+`tb-index-vs-head`, against a clean HEAD build that still had the hint,
+both through the snapshot, three rounds, results identical): against HEAD
+**-4.5% in total, stride -70.8%** (562 to 164 ms), the other sections
+-1% to -3% and inside the two-build band; against the bare scan -8.1%,
+ldst -27%, byte -15%, which is what the hint had already been buying.
+
 The band is also a lever: if two builds of one file swing a section by
 5-10%, some hot loop is alignment-sensitive. Aligning the hot helpers and
 the dispatch loop to 64 bytes and fixing the symbol order with a linker

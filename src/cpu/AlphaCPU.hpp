@@ -531,19 +531,69 @@ private:
   static_assert(sizeof(SDataPageCache) == 64,
                 "the JIT indexes the page cache with a shift");
 
-  /// Where each page was last found in the TB: (va >> 13) & mask -> entry
-  /// number, zero-initialised. Real hardware searches its 128-entry
-  /// DTB fully-associatively in a cycle; FindTBEntry searches it with a
-  /// linear loop when its last-match guess fails, which on code that walks
-  /// memory is every page-cache miss -- measured at ~950 host cycles per
-  /// access on a 48 MB stride. This is advisory only: a hit is validated
-  /// against the entry exactly as the scan would, so a stale slot costs one
-  /// scan and can never return a wrong mapping, and nothing has to
-  /// invalidate it. Not saved state, for the same reason.
-  static constexpr int kTbHintBits = 10;
-  static constexpr int kTbHintEntries = 1 << kTbHintBits;
-  u8 m_tb_hint[2][kTbHintEntries] = {}; // a wrong slot costs one scan, so
-                                         // zero is a fine "empty
+  /// An exact index of the TB: which slot holds each 8 KB page, two ways
+  /// per set. A real EV68 looks its DTB up fully associatively in a cycle;
+  /// FindTBEntry used to search it with a linear loop when its last-match
+  /// guess failed, which on code that walks memory is every page-cache miss
+  /// (the 47 ns helper of docs/performance.md, most of it that scan). The
+  /// index is kept in step by every insert, eviction and invalidation, so a
+  /// miss in it means "not in the TB" and the scan is skipped; an entry
+  /// with a granularity hint spans pages and cannot be indexed, so while any
+  /// is live (m_tb_gh_live) the scan is used. A hit is still validated
+  /// against the entry exactly as the scan would, so the index can never
+  /// return a wrong mapping; a false negative (three live pages in one set)
+  /// costs a refill from the shadow at worst. In a JIT_VERIFY build the
+  /// scan runs as the oracle after every index miss and counts the false
+  /// negatives. ALPHABOX_TB_INDEX=0 keeps the scan in the same binary.
+  /// Derived state: rebuilt from state.tb on reset and restore, not saved.
+  static constexpr int kTbIdxBits = 11;
+  static constexpr int kTbIdxEntries = 1 << kTbIdxBits;
+  // Eight ways: page 0 alone is mapped under many ASNs at once under SRM,
+  // and the verify oracle counted 317 false negatives in 6.4M probes with
+  // two ways and 270 with four, all in that one set. A probe stops at the
+  // first empty way, so the width costs nothing elsewhere.
+  static constexpr int kTbIdxWays = 8;
+  u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
+  int m_tb_gh_live[2] = {0, 0}; // live entries with a granularity hint
+  bool m_tb_idx_on = true;
+#ifdef JIT_VERIFY
+  u64 m_tb_idx_false_neg = 0; // index said "absent", the scan found it
+  u64 m_tb_idx_probes = 0;
+#endif
+  static inline int tb_idx_set(u64 virt) {
+    return (int)((virt >> 13) & (u64)(kTbIdxEntries - 1));
+  }
+  /// Insert at way 0, the others sliding down; a slot already present just
+  /// moves to the front; the oldest falls out (a false negative for it,
+  /// served by the oracle in verify builds and by a refill otherwise).
+  inline void tb_idx_insert(int t, u64 virt, int slot) {
+    u8 *w = m_tb_idx[t][tb_idx_set(virt)];
+    const u8 v = (u8)(slot + 1);
+    int k = 0;
+    while (k < kTbIdxWays - 1 && w[k] != v && w[k] != 0)
+      k++;
+    for (; k > 0; k--)
+      w[k] = w[k - 1];
+    w[0] = v;
+  }
+  /// Remove a slot, keeping the ways packed from the front (a lookup stops
+  /// at the first empty way).
+  inline void tb_idx_remove(int t, u64 virt, int slot) {
+    u8 *w = m_tb_idx[t][tb_idx_set(virt)];
+    const u8 v = (u8)(slot + 1);
+    for (int k = 0; k < kTbIdxWays; k++)
+      if (w[k] == v) {
+        for (; k < kTbIdxWays - 1; k++)
+          w[k] = w[k + 1];
+        w[kTbIdxWays - 1] = 0;
+        return;
+      }
+  }
+  /// One entry leaves or enters the TB: the index, or the count of the
+  /// unindexable (granularity-hint) ones. Defined with the GH_ masks.
+  void tb_idx_drop(int t, int slot);
+  void tb_idx_add(int t, int slot);
+  void tb_idx_rebuild(); // from state.tb, both TBs
 
   /// (asn0 << 2) | cm: the half of a page-cache tag that is not the page.
   /// Kept beside the state it is made of so compiled code can load it in one

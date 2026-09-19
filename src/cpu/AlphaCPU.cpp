@@ -250,6 +250,7 @@ CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
 
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
+  tb_idx_rebuild();
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
   cc_wall_remainder = 0;
@@ -429,6 +430,7 @@ void CAlphaCPU::ResetForSystemReset() {
   const int savedProcNum = state.iProcNum;
 
   memset(&state, 0, sizeof(state));
+  tb_idx_rebuild();
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
   cc_wall_remainder = 0;
@@ -677,6 +679,11 @@ void CAlphaCPU::dump_ic_flush_pcs() {
 CAlphaCPU::~CAlphaCPU() {
   stop_threads();
   dump_ic_flush_pcs();
+#ifdef JIT_VERIFY
+  printf("%%CPU-I-TBINDEX: %llu probes, %llu false negatives\n",
+         (unsigned long long)m_tb_idx_probes,
+         (unsigned long long)m_tb_idx_false_neg);
+#endif
 }
 
 #if defined(IDB)
@@ -2059,6 +2066,7 @@ int CAlphaCPU::RestoreState(FILE *f) {
   // NOT part of the saved state, so they would otherwise survive into a
   // restored image that has different code at those addresses -- and idle
   // pacing would then sleep on a PC that is not an idle loop. Re-learn them.
+  tb_idx_rebuild(); // derived from the state just read
   m_idle_pc = m_park_pc = 0;
   m_idle_streak = 0;
   m_link_from = nullptr; // pending link request into pre-restore code
@@ -2107,42 +2115,48 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
       TB_ASN_MATCH(state.tb[t][i]))
     return i;
 
-  // Then where this page was found last time (m_tb_hint): one indexed probe
-  // instead of the scan below, validated by the same test the scan applies.
-  u8 &hint = m_tb_hint[t][(virt >> 13) & (kTbHintEntries - 1)];
-  i = hint;
-  if (i < TB_ENTRIES && state.tb[t][i].valid &&
-      !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
-      TB_ASN_MATCH(state.tb[t][i])) {
+  // The exact index (see m_tb_idx): two validated probes, and a miss means
+  // the page is not in the TB -- unless an entry with a granularity hint is
+  // live, which the index cannot represent, or the switch is off.
+  if (m_tb_idx_on && m_tb_gh_live[t] == 0) {
+    const u8 *w = m_tb_idx[t][tb_idx_set(virt)];
 #ifdef JIT_VERIFY
-    // Oracle: the index is derived state that no differential test can see
-    // (interpreter and JIT share this lookup, so a wrong answer is
-    // common-mode). Validation guarantees the hinted entry MATCHES; what it
-    // cannot guarantee is that it is the entry the scan would have chosen
-    // first, which differs only if two entries match one address. Check.
+    m_tb_idx_probes++;
+#endif
+    for (int k = 0; k < kTbIdxWays && w[k]; k++) {
+      i = (int)w[k] - 1;
+      if (state.tb[t][i].valid &&
+          !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
+          TB_ASN_MATCH(state.tb[t][i])) {
+        state.last_found_tb[t][rw] = i;
+        return i;
+      }
+    }
+#ifdef JIT_VERIFY
+    // Oracle: the index is derived state no differential test can see, so
+    // the scan checks every "absent" here. A find is a false negative: an
+    // index bug, or three live pages in one set (counted, and served).
     for (int j = 0; j < TB_ENTRIES; j++)
       if (state.tb[t][j].valid &&
           !((state.tb[t][j].virt ^ virt) & state.tb[t][j].match_mask) &&
           TB_ASN_MATCH(state.tb[t][j])) {
-        if (j != i)
-          printf("%%CPU-W-TBHINT: MISMATCH va %016" PRIx64 " hint entry %d, "
-                 "scan entry %d (tb %d)\n",
-                 virt, i, j, t);
-        break;
+        if (m_tb_idx_false_neg++ < 8)
+          printf("%%CPU-W-TBINDEX: false negative va %016" PRIx64
+                 " (tb %d slot %d, set %d ways %u/%u/%u/%u..)\n",
+                 virt, t, j, tb_idx_set(virt), w[0], w[1], w[2], w[3]);
+        state.last_found_tb[t][rw] = j;
+        return j;
       }
 #endif
-    state.last_found_tb[t][rw] = i;
-    return i;
-  }
-
-  // Otherwise, loop through the TB entries to find a match.
-  for (i = 0; i < TB_ENTRIES; i++) {
-    if (state.tb[t][i].valid &&
-        !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
-        TB_ASN_MATCH(state.tb[t][i])) {
-      state.last_found_tb[t][rw] = i;
-      hint = (u8)i;
-      return i;
+  } else {
+    // Otherwise, loop through the TB entries to find a match.
+    for (i = 0; i < TB_ENTRIES; i++) {
+      if (state.tb[t][i].valid &&
+          !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
+          TB_ASN_MATCH(state.tb[t][i])) {
+        state.last_found_tb[t][rw] = i;
+        return i;
+      }
     }
   }
 
@@ -2179,9 +2193,12 @@ int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
   const int t = TB_INDEX_DATA;
   const int i = state.next_tb[t];
   state.next_tb[t] = (i + 1 == TB_ENTRIES) ? 0 : i + 1;
-  if (state.tb[t][i].valid)
+  if (state.tb[t][i].valid) {
     flush_data_page_cache_range(state.tb[t][i].virt, state.tb[t][i].match_mask);
+    tb_idx_drop(t, i);
+  }
   state.tb[t][i] = sh;
+  tb_idx_add(t, i);
   m_tb_shadow_refills++;
   return i;
 }
@@ -2705,6 +2722,34 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  * \param asn     Address space number latched by the PAL fill port.
  **/
+void CAlphaCPU::tb_idx_drop(int t, int slot) {
+  if (state.tb[t][slot].match_mask == GH_0_MATCH)
+    tb_idx_remove(t, state.tb[t][slot].virt, slot);
+  else
+    m_tb_gh_live[t]--;
+}
+
+void CAlphaCPU::tb_idx_add(int t, int slot) {
+  if (state.tb[t][slot].match_mask == GH_0_MATCH)
+    tb_idx_insert(t, state.tb[t][slot].virt, slot);
+  else
+    m_tb_gh_live[t]++;
+}
+
+void CAlphaCPU::tb_idx_rebuild() {
+  static const bool on = [] {
+    const char *e = getenv("ALPHABOX_TB_INDEX");
+    return !(e && e[0] == '0');
+  }();
+  m_tb_idx_on = on;
+  memset(m_tb_idx, 0, sizeof(m_tb_idx));
+  m_tb_gh_live[0] = m_tb_gh_live[1] = 0;
+  for (int t = 0; t < 2; t++)
+    for (int i = 0; i < TB_ENTRIES; i++)
+      if (state.tb[t][i].valid)
+        tb_idx_add(t, i);
+}
+
 void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
                        int asn) {
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
@@ -2791,6 +2836,13 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
   state.tb[t][i].asm_bit = (int)pte_flags & 0x10;
   state.tb[t][i].asn = asn;
   state.tb[t][i].valid = true;
+  if (old_valid) { // the slot's previous page leaves the index
+    if (old_mask == GH_0_MATCH)
+      tb_idx_remove(t, old_virt, i);
+    else
+      m_tb_gh_live[t]--;
+  }
+  tb_idx_add(t, i);
   // Keep an 8 KB data translation in the shadow (see m_tb_shadow): what the
   // TB evicts later can then be refilled without a trap to PALcode.
   if (t == TB_INDEX_DATA && match_mask == GH_0_MATCH)
@@ -2912,6 +2964,8 @@ void CAlphaCPU::tbia(int flags) {
   int i;
   for (i = 0; i < TB_ENTRIES; i++)
     state.tb[t][i].valid = false;
+  memset(m_tb_idx[t], 0, sizeof(m_tb_idx[t]));
+  m_tb_gh_live[t] = 0;
   state.last_found_tb[t][0] = 0;
   state.last_found_tb[t][1] = 0;
   state.next_tb[t] = 0;
@@ -2943,8 +2997,10 @@ void CAlphaCPU::tbiap(int flags) {
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
   int i;
   for (i = 0; i < TB_ENTRIES; i++)
-    if (!state.tb[t][i].asm_bit)
+    if (!state.tb[t][i].asm_bit && state.tb[t][i].valid) {
       state.tb[t][i].valid = false;
+      tb_idx_drop(t, i);
+    }
 
   if (t == TB_INDEX_DATA)
     flush_data_page_cache();
@@ -2982,8 +3038,10 @@ void CAlphaCPU::tbis(u64 virt, int flags) {
   }
 
   int i = FindTBEntry(virt, flags);
-  if (i >= 0)
+  if (i >= 0) {
     state.tb[t][i].valid = false;
+    tb_idx_drop(t, i);
+  }
 #ifdef ES40_JIT
   // A TBIS signals the OS is changing this code page's mapping. Bump the JIT
   // generation even when the entry wasn't currently cached (i<0, already
@@ -3011,6 +3069,7 @@ void CAlphaCPU::tbis_d(u64 virt, int asn) {
         (state.tb[TB_INDEX_DATA][i].asm_bit ||
          state.tb[TB_INDEX_DATA][i].asn == asn)) {
       state.tb[TB_INDEX_DATA][i].valid = false;
+      tb_idx_drop(TB_INDEX_DATA, i);
       flush_data_page_cache_range(state.tb[TB_INDEX_DATA][i].virt,
                                   state.tb[TB_INDEX_DATA][i].match_mask);
     }
