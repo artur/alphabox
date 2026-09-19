@@ -1495,12 +1495,18 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.mov(x0, imm(0));
         else
           mov_from_reg(x0, ra);
-        a.mov(x9, imm(fall));
-        a.mov(x10, imm(tgt));
         if (op == OP_BLBC || op == OP_BLBS)
           a.tst(x0, imm(1));
         else
           a.tst(x0, x0);
+        if (m_defer_branch_pc) {
+          // Leave the condition in the flags; the epilogue branches on it and
+          // materialises only the PC of the side actually taken.
+          m_pending_br_op = (int)op;
+          continue;
+        }
+        a.mov(x9, imm(fall));
+        a.mov(x10, imm(tgt));
         CondCode cc = CondCode::kEQ;
         switch (op) {
         case OP_BEQ:
@@ -1979,8 +1985,23 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   m_cold_base = 0;
   for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
     m_cold_used[i] = false;
+  // Opt this pass into the condition-branching exit: a block ends at its
+  // branch, so at most one op can leave a condition pending, and the epilogue
+  // below is the only consumer. A JIT_VERIFY build has no epilogue, and the
+  // cold pass and the trace builder do not opt in, so both keep writing the
+  // PC where they stand.
+  m_pending_br_op = -1;
+#ifndef JIT_VERIFY
+  {
+    const uint32_t lw = plen ? words[plen - 1] : 0u;
+    const uint32_t lopc = lw >> 26;
+    m_defer_branch_pc = terminator_branch && lopc >= 0x30 && lopc <= 0x3f &&
+                        lopc != 0x30 && lopc != 0x34; // not BR / BSR
+  }
+#endif
   for (uint32_t i = 0; i < plen; ++i)
     emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
+  m_defer_branch_pc = false;
 
   // Epilogue: count this block, then chain (stay native) or return.
 #ifndef JIT_VERIFY
@@ -2168,6 +2189,42 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         if (taken_backward)
           a64_emit_gate(a, m_off, exit_chain);
         emit_static_exit(btgt, 0, exit_chain);
+      } else if (m_pending_br_op >= 0) {
+        // Branch on the condition the terminator left in the flags. Each side
+        // then materialises its own PC -- a compile-time constant -- instead
+        // of both being built and selected between on the hot path.
+        Label not_taken = a.new_label();
+        switch (m_pending_br_op) {
+        case OP_BEQ:
+        case OP_BLBC:
+          a.b_ne(not_taken);
+          break;
+        case OP_BNE:
+        case OP_BLBS:
+          a.b_eq(not_taken);
+          break;
+        case OP_BLT:
+          a.b_ge(not_taken);
+          break;
+        case OP_BGE:
+          a.b_lt(not_taken);
+          break;
+        case OP_BLE:
+          a.b_gt(not_taken);
+          break;
+        default: // OP_BGT
+          a.b_le(not_taken);
+          break;
+        }
+        a.mov(a64::x9, imm(btgt));
+        a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        if (taken_backward) // the gate clobbers only x1/x17 (and flags)
+          a64_emit_gate(a, m_off, exit_chain);
+        emit_static_exit(btgt, 0, exit_chain);
+        a.bind(not_taken);
+        a.mov(a64::x9, imm(bfall));
+        a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        emit_static_exit(bfall, 1, exit_chain); // forward: no gate
       } else {
         Label not_taken = a.new_label();
         a.cmp(a64::x9, a64::x10);

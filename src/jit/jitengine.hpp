@@ -792,6 +792,18 @@ private:
     r->direct_mask = 0;
     return r;
   }
+  // AArch64 conditional-branch exit. A block ending in a PC-relative
+  // conditional branch used to materialise BOTH successor PCs, csel between
+  // them, store the winner to state.pc, and then compare that PC back against
+  // the taken target to discover which way the branch went. The condition is
+  // already in the flags at that point, so the epilogue can simply branch on
+  // it. emit_op leaves the opcode here and the flags set; nothing between
+  // there and the epilogue touches NZCV (a64_count_add only adds). Only
+  // assemble_block's main pass opts in -- the cold pass and the trace builder
+  // still need the PC written where they stand.
+  int m_pending_br_op = -1;
+  bool m_defer_branch_pc = false;
+
   static constexpr uint32_t kColdMax = 1024;
   uint32_t m_cold_slow[kColdMax];
   uint32_t m_cold_back[kColdMax];
