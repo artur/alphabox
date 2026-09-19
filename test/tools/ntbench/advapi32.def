@@ -1,0 +1,6 @@
+; advapi32.def: the token calls shutdown.c makes.
+LIBRARY advapi32.dll
+EXPORTS
+    AdjustTokenPrivileges
+    LookupPrivilegeValueA
+    OpenProcessToken

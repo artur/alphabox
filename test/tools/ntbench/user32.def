@@ -1,0 +1,4 @@
+; user32.def: the one call shutdown.c makes into user32.
+LIBRARY user32.dll
+EXPORTS
+    ExitWindowsEx
