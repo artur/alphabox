@@ -479,9 +479,12 @@ All of these live in `test/tools/` and are described in
   its arguments. `perf_ab.py --snapshot` uses it. Until 2026-09-19 the S3
   saved 32 bytes of bookkeeping and no registers or VRAM, so a resumed
   desktop drew nothing; the VGA core, the VRAM and the S3's own state (the
-  extended registers, the 8514 engine, the linear-window cache) are now in
-  the file, the derived timing and mapping are recomputed on restore, and
-  the render thread re-pushes the text font and redraws. First resume after
+  extended registers, the 8514 engine, the linear-window cache) and the SVGA
+  mode decode (bank registers, the colour-depth selects -- derived state the
+  write handlers keep outside the core; without it a resume drew a black
+  1280x480) are now in the file, the derived timing, pitch and mapping are
+  recomputed on restore, and the render thread re-pushes the text font and
+  redraws. First resume after
   the change: the guest took the typed command and wrote DONE 17 s after
   launch.
 - **`perf_ab.py` -- the only way a performance claim gets made.** Two

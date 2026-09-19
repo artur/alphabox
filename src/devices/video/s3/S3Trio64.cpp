@@ -1641,8 +1641,12 @@ int CS3Trio64::restore_card_state(FILE *f) {
 }
 
 void CS3Trio64::post_restore() {
-  update_linear_mapping(); // the CR58/59/5A decode
-  recompute_params();      // pixel clock, refresh interval, screen timing
+  update_linear_mapping();    // the CR58/59/5A decode
+  refresh_pitch_offset();     // CR43/CR51 bits of the pitch
+  recompute_scanline_layout(); // CR5D extension bits
+  s3_define_video_mode();     // colour mode, and the pixel clock divisor
+                              // with it (recompute_params_clock)
+  recompute_params();         // refresh interval, screen timing
 }
 
 void CS3Trio64::update_linear_mapping() {

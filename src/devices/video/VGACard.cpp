@@ -1269,6 +1269,12 @@ int CVGACard::SaveState(FILE *f) {
   fwrite(&core_magic, sizeof(u32), 1, f);
   fwrite(&cs, sizeof(long), 1, f);
   fwrite(&core, sizeof(core), 1, f);
+  // The SVGA mode decode (bank registers, the rgb8/15/16/24/32 selects) is
+  // derived from the registers by the write handlers, not from vga_t: a
+  // resume without it drew a black 1280x480 desktop. Saved verbatim.
+  long ms = sizeof(svga);
+  fwrite(&ms, sizeof(long), 1, f);
+  fwrite(&svga, sizeof(svga), 1, f);
   fwrite(&vram, sizeof(u64), 1, f);
   fwrite(vga.memory, 1, (size_t)vram, f);
   if ((res = save_card_state(f)))
@@ -1351,6 +1357,12 @@ int CVGACard::RestoreState(FILE *f) {
   vga_t core;
   if (fread(&core, sizeof(core), 1, f) != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
+    return -1;
+  }
+  long ms;
+  if (fread(&ms, sizeof(long), 1, f) != 1 || ms != (long)sizeof(svga) ||
+      fread(&svga, sizeof(svga), 1, f) != 1) {
+    printf("%s: SVGA mode block does not match!\n", devid_string);
     return -1;
   }
   u64 vram;
