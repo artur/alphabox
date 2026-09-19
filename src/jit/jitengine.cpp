@@ -845,6 +845,7 @@ CJitEngine::CJitEngine(int cpu_id)
   memset(m_bail_kind, 0, sizeof(m_bail_kind));
   memset(m_hot_pc, 0, sizeof(m_hot_pc));
   memset(m_helper_n, 0, sizeof(m_helper_n));
+  memset(m_helper_tsc, 0, sizeof(m_helper_tsc));
   memset(m_mtpr_rt, 0, sizeof(m_mtpr_rt));
   m_stat_wall_last_ns =
       (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -4184,6 +4185,36 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
   // Separates the two bottleneck candidates the instruction counts can't (chain
   // length and interp rate both just track how hot/covered the code is).
   if (win_tsc) {
+    // Host cycles spent inside the helpers compiled code calls, as a share of
+    // the window -- the part of "compiled" time that is not emitted code.
+    // Measured from entry to return, so a helper's callees (FindTBEntry, a
+    // page-table walk, a device access) are charged to it.
+    // jit_rdtsc() is the x86 TSC where there is one and steady_clock
+    // nanoseconds on AArch64 -- and that clock costs ~15 ns a read, about as
+    // much as a cheap helper's whole body, so on AArch64 these shares are an
+    // upper bound. (The per-call figure is therefore ns there, not cycles.)
+#if defined(_M_X64) || defined(__x86_64__)
+    static const char *const kTscUnit = "cyc";
+#else
+    static const char *const kTscUnit = "ns";
+#endif
+    static const char *const kHk[HK_COUNT] = {
+        "read",  "write", "locked", "stc",  "indirect", "read_phys",
+        "write_phys", "mtpr", "mfpr"};
+    uint64_t htot = 0;
+    for (int k = 0; k < HK_COUNT; ++k)
+      htot += m_helper_tsc[k];
+    char hb[400];
+    int hl = snprintf(hb, sizeof(hb),
+                      "[JIT][STATS][CPU%d] helper time: %.1f%% of window |",
+                      m_cpu_id, 100.0 * (double)htot / (double)win_tsc);
+    for (int k = 0; k < HK_COUNT && hl < (int)sizeof(hb) - 40; ++k)
+      if (m_helper_tsc[k])
+        hl += snprintf(hb + hl, sizeof(hb) - hl, " %s %.1f%% (%.0f %s/call)",
+                       kHk[k], 100.0 * (double)m_helper_tsc[k] / (double)win_tsc,
+                       m_helper_n[k] ? (double)m_helper_tsc[k] / (double)m_helper_n[k] : 0.0,
+                       kTscUnit);
+    printf("%s\n", hb);
     const double cf = 100.0 * (double)m_tsc_compiled / (double)win_tsc;
     const double itf = 100.0 * (double)m_tsc_interp / (double)win_tsc;
     printf("[JIT][STATS][CPU%d] time-split: compiled %.1f%% | interp %.1f%% | "
@@ -4432,6 +4463,7 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
              (unsigned long long)(fl - m_dpc_flush_last));
       m_dpc_flush_last = fl;
       memset(m_helper_n, 0, sizeof(m_helper_n));
+  memset(m_helper_tsc, 0, sizeof(m_helper_tsc));
       uint64_t mt[256];
       memcpy(mt, m_mtpr_rt, sizeof(mt));
       len = snprintf(buf, sizeof(buf),

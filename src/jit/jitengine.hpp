@@ -623,6 +623,7 @@ public:
     m_epoch_bumps[cause]++;
   }
   void note_dpc_miss(int cause) { m_dpc_miss[cause]++; }
+  void note_helper_tsc(int kind, uint64_t cycles) { m_helper_tsc[kind] += cycles; }
   void note_link_bail() { m_bail_link++; }
   void note_jmp_attempt() { m_jmp_attempt++; }
   void note_jmp_hit() { m_jmp_hit++; }
@@ -631,6 +632,7 @@ public:
   void note_dlink_stale(bool) {}
   void note_epoch(int) {}
   void note_dpc_miss(int) {}
+  void note_helper_tsc(int, uint64_t) {}
   void note_link_bail() {}
   void note_jmp_attempt() {}
   void note_jmp_hit() {}
@@ -871,6 +873,9 @@ private:
   const uint8_t *m_hot_dram = nullptr;
   uint64_t m_hot_win = 0;
   uint64_t m_helper_n[HK_COUNT];             // windowed: helper entries
+  uint64_t m_helper_tsc[HK_COUNT];           // windowed: host cycles inside
+                                             // each helper (entry to return,
+                                             // callees included)
   uint64_t m_mtpr_rt[256]; // windowed: jit_hw_mtpr calls by IPR function
   const uint64_t *m_dpc_flush_src = nullptr; // CPU's data-page-cache flushes
   uint64_t m_dpc_flush_last = 0;             // ...at the previous window

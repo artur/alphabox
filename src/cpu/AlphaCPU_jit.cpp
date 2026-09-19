@@ -38,6 +38,24 @@
 #include <cfenv> // fesetenv: pin the host FPCR for the JIT FP path
 #endif
 
+#ifdef JIT_STATS
+// Charge every host cycle between a helper's entry and its return -- callees
+// included -- to that helper kind, so the stats can say what share of a
+// window the helpers are, not just how often they were called.
+struct HelperTimer {
+  CJitEngine *e;
+  int k;
+  uint64_t t0;
+  HelperTimer(CJitEngine *e_, int k_) : e(e_), k(k_), t0(jit_rdtsc()) {}
+  ~HelperTimer() { e->note_helper_tsc(k, jit_rdtsc() - t0); }
+};
+#define HELPER_TIMER(cpu, kind) HelperTimer _helper_timer((cpu)->m_jit, kind)
+#else
+#define HELPER_TIMER(cpu, kind)                                                \
+  do {                                                                         \
+  } while (0)
+#endif
+
 // ASN switch: bump the chain epoch so compiled chain edges revalidate through
 // the asn-keyed lookup paths (the chain guard checks tag+epoch only). No-op in
 // non-JIT builds.
@@ -1176,6 +1194,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   size_bits &= 0xff;
   const u64 amask = (u64)(size_bits / 8) - 1;
   cpu->m_jit->note_helper(CJitEngine::HK_READ);
+  HELPER_TIMER(cpu, CJitEngine::HK_READ);
   if (va & amask) { // unaligned: let the interpreter handle it
     cpu->m_jit->note_bail(false, CJitEngine::BK_UNALIGNED);
     return 1;
@@ -1555,6 +1574,7 @@ int CAlphaCPU::jit_fltv(CAlphaCPU *cpu, u32 ins) {
 int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
                                u64 *out) {
   cpu->m_jit->note_helper(CJitEngine::HK_LOCKED);
+  HELPER_TIMER(cpu, CJitEngine::HK_LOCKED);
   const u64 amask = (u64)(size_bits / 8) - 1;
   if (va & amask)
     return 1; // unaligned: let the interpreter handle it
@@ -1714,6 +1734,7 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
 int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                              u64 *out) {
   cpu->m_jit->note_helper(CJitEngine::HK_READ_PHYS);
+  HELPER_TIMER(cpu, CJitEngine::HK_READ_PHYS);
   // MMIO: bail before the replay so verify models production (which bails
   // here). A device read isn't size-truncated, so a replayed+re-truncated value
   // would falsely mismatch. dram_size is page-aligned and the align below only
@@ -1758,6 +1779,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   size_bits &= 0xff;
   const u64 amask = (u64)(size_bits / 8) - 1;
   cpu->m_jit->note_helper(CJitEngine::HK_WRITE);
+  HELPER_TIMER(cpu, CJitEngine::HK_WRITE);
   if (va & amask) { // unaligned: let the interpreter handle it
     cpu->m_jit->note_bail(true, CJitEngine::BK_UNALIGNED);
     return 1;
@@ -1837,6 +1859,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
 int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                               u64 value) {
   cpu->m_jit->note_helper(CJitEngine::HK_WRITE_PHYS);
+  HELPER_TIMER(cpu, CJitEngine::HK_WRITE_PHYS);
   if (cpu->m_jit_vreplay) {
     const u32 i = cpu->m_jit_slog_i++;
     if (phys != cpu->m_jit_slog_addr[i] || value != cpu->m_jit_slog_val[i]) {
@@ -1871,6 +1894,7 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 // comparing against the LDx_L datum.
 u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   cpu->m_jit->note_helper(CJitEngine::HK_STC);
+  HELPER_TIMER(cpu, CJitEngine::HK_STC);
   if (cpu->m_jit_vreplay) {
     const u32 i = cpu->m_jit_slog_i++;
     const u64 success = cpu->m_jit_slog_success[i];
@@ -1943,6 +1967,7 @@ void CAlphaCPU::jit_opcdec(CAlphaCPU *cpu, u64 cpc) {
 /* HW_MFPR (PALmode): return the IPR selected by (ins>>8)&0xff. */
 u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
   cpu->m_jit->note_helper(CJitEngine::HK_MFPR);
+  HELPER_TIMER(cpu, CJitEngine::HK_MFPR);
   const auto &state = cpu->state;
   const u32 function = (ins >> 8) & 0xff;
 
@@ -2031,6 +2056,7 @@ u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
  * epoch). */
 void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
   cpu->m_jit->note_helper(CJitEngine::HK_MTPR);
+  HELPER_TIMER(cpu, CJitEngine::HK_MTPR);
   cpu->m_jit->note_mtpr(function);
   // 0x40-0x7f bitmask group: ASTER/ASTRR/PPCEN/FPEN field stores (+check_int
   // for the AST bits). The ASN write (bit 0, dpc flush + asn-epoch bump) is
@@ -2171,6 +2197,7 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
 void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_jmp_attempt();
   cpu->m_jit->note_helper(CJitEngine::HK_INDIRECT);
+  HELPER_TIMER(cpu, CJitEngine::HK_INDIRECT);
   // PAL reset-vector entry: never chain in, so the dispatcher's flush runs.
   if (target == (cpu->state.pal_base | 1))
     return nullptr;
