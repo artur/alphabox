@@ -99,6 +99,63 @@ production speed, so its own counters are part of what it measures.
   implementation is in the tree behind `ALPHABOX_JIT_DLINK=1`, default off,
   for whoever needs firmware to link well.
 
+## Where the host's time goes
+
+A host profile (`sample`, 25 s, 1 ms) of the emulator while the guest ran
+`nt_bench.sh`, counting only the busy thread -- the other seven are device
+and GUI threads asleep in `semwait`/`cvwait`:
+
+| where | share |
+| --- | --- |
+| emitted JIT code | **~92%** |
+| `jit_run` -- the dispatcher, with the memory helpers inlined into it | ~5% |
+| `FindTBEntry` -- the TB lookup behind a page-cache miss | ~2% |
+| `execute` -- the interpreter | 0.4% |
+| clock reads, interrupts, everything else | <1% |
+
+No lock contention, no syscall cost, no helper hot spot: on this workload
+`jit_read` and `jit_write` do not even appear as leaf frames. The guest CPU
+thread is on a performance core -- forcing `QOS_CLASS_USER_INTERACTIVE` on
+it (`ALPHABOX_CPU_QOS=1`, an experiment hook) changed nothing (-0.4%,
+inside the noise). **The remaining cost is the emitted code itself, and
+nothing around it.**
+
+How much code that is, from `JIT_REGPROF` on the same workload:
+
+- **Real MIPS on real code: ~1400** on the instrumented build, against
+  ~4300 for the self-looping `cpu_bench.sh` loop. At the host's clock that
+  is roughly 2.5 host cycles per guest instruction, which with ~10-12 host
+  instructions per guest instruction on the executed path means the core is
+  already running the emitted code at a high IPC. There is no latent
+  throughput to unlock; only fewer instructions will do.
+- **Memory ops are 36.6% of hot instructions**, and 28.9% of those follow an
+  access through the same base register within 8 KB -- probe-hoisting
+  candidates, which is the only technique here that takes the probe off the
+  address chain entirely instead of shortening it.
+- **Five hot registers are not pinned.** Ranked by executions times
+  accesses, R25, R15, R28, R13 and R14 are each in the top sixteen at
+  0.8-1.2 billion, and none has a host register, so every reference is a
+  load or a store. The pin set was chosen from a Windows 2000 *setup*
+  profile; this benchmark's compiler uses different registers. A fixed
+  global pin set is workload-dependent by construction, and the callee-saved
+  registers are all spoken for -- freeing `x20` and `x28` (the register-file
+  and epoch bases, both reachable from `x19` with a merged hot struct) buys
+  two more, and per-block allocation buys the rest.
+- The report's "93 bytes per instruction, execution-weighted" is **not** the
+  executed path length: it weights each block's *whole* size, prologue and
+  cold stubs included, by how often the block runs. The executed path is the
+  29-33 instructions per specimen in `lab/jit-disasm-sample.md`.
+
+So the answer to "why is it this slow" has one part, not several: about
+ten host instructions run for every guest instruction, on a core that
+executes them as fast as it can. Reaching an EV7z's 10300 MIPS would need
+about seven times fewer -- roughly one and a half host instructions per
+guest instruction, which is native-compiler territory: register allocation
+across blocks, no per-access probe on the common path, and blocks long
+enough that exits stop mattering. Peepholes and the exit and access work
+above are worth having and are worth perhaps a third in total; the rest is
+a different kind of code generator.
+
 ## Where the time goes on a CPU-bound guest workload
 
 Same windows as above, the `cmd` loop running, per 100M guest instructions:
