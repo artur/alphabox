@@ -50,6 +50,11 @@ class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
 /// Diagnostics only (the unknown-access trace): never a control path.
 extern thread_local class CAlphaCPU *t_running_cpu;
 
+/// Is this a well-formed virtual address for the current VA size? Defined
+/// with address translation in AlphaCPU.cpp; the JIT's memory helpers in
+/// AlphaCPU_jit.cpp have to ask the same question before translating.
+bool alpha_valid_va_form(u64 virt, bool va48);
+
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
 // cache when another CPU flushed: compiled blocks are per-CPU, but guest code
