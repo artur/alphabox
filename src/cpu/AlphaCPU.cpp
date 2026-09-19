@@ -4368,6 +4368,12 @@ int CAlphaCPU::RestoreState(FILE *f) {
   flush_data_page_cache();
   break_seq_icache();
 #ifdef ES40_JIT
+  // The recognized idle and parked-loop heads are learned from RAM and are
+  // NOT part of the saved state, so they would otherwise survive into a
+  // restored image that has different code at those addresses -- and idle
+  // pacing would then sleep on a PC that is not an idle loop. Re-learn them.
+  m_idle_pc = m_park_pc = 0;
+  m_idle_streak = 0;
   m_link_from = nullptr; // pending link request into pre-restore code
   if (m_jit)
     m_jit->flush();
