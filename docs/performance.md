@@ -50,26 +50,32 @@ From `JIT_STATS` on a Windows 2000 guest. Treat its *counts* as reliable and
 its *time shares* as not: the instrumented build runs at a fraction of the
 production speed, so its own counters are part of what it measures.
 
-- A compiled chain runs **~27 instructions** before returning to the
-  dispatcher.
+- Chain length is a property of the **workload**, not of the engine. The
+  same build gives 27 instructions per chain at 96.6% native while scrolling
+  a console, where the guest traps to the drawing engine constantly, and
+  **878 instructions at 99.7% native** running a CPU-bound command. Quote
+  the one that matches the workload being discussed.
 - **~80%** of those returns are cached-link misses, **18%** are computed
   jumps whose inline cache missed. The computed-jump cache hits only ~40%
   of the time.
-- The link misses are **not** a fanout problem. Instrumentation buckets the
-  missing links by how many distinct successors the source block has:
-  `f1=690 sources / 811278 misses`, and f2 through f5+ are exactly zero.
-  Every one of them has a single, stable successor. More link slots would
-  do nothing.
+- The link misses are **not** a fanout problem, and not a prediction problem
+  either. Bucketing them by how many distinct successors the source block
+  has gives `f1=690 sources / 811278 misses` with f2 through f5+ exactly
+  zero, and counting whether the successor was already in a slot gives
+  **stale 5766038 against new target 4378**. 99.92% of link misses are the
+  guard rejecting a successor that was right there. No larger or cleverer
+  successor cache can address any of it.
 - The mechanism is that an address-space switch bumps a **global** epoch
   counter, and the link guard compares each successor's validation epoch
   against it -- so one context switch invalidates every cached link in the
   engine at once. ~690 hot blocks times ~1160 invalidations per window
   accounts for the miss count.
-- Removing that invalidation (as an unsafe experiment) did not help, but
-  that experiment was run on the console-scrolling workload, which is
-  drawing-bound and could not have shown it either way. It needs redoing
-  with `win_workload.sh` before the result means anything. The same mistake
-  is described under [the cycle counter](#the-cycle-counter).
+- Disabling the address-space half of that invalidation, as an unsafe
+  experiment on the CPU-bound workload, is worth about 3%: 59.3 s against
+  57.2 s, medians of three, with the run ranges overlapping. That measures
+  one source of staleness, not the design -- the epoch is bumped by every
+  ITB invalidate as well. A fix has to remove the dependency, not one of
+  its causes.
 
 ## The cycle counter
 
@@ -95,6 +101,48 @@ delay loops bounded by real time -- a cheaper read buys more spinning, not
 an earlier desktop. Only a guest doing real work with an operating system
 around it exercises the path at all. **A change can be real and still be
 invisible to every benchmark you happen to have.**
+
+## What other emulators do here, and what they gave up on
+
+Surveyed in September 2026 against Dolphin, QEMU TCG, PCSX2, PPSSPP,
+RPCS3, box64, FEX, dynarmic and the binary-translation literature. The
+three findings that agreed across independent sources:
+
+- **Nobody else validates a block link against a global counter.** Dolphin
+  puts the processor mode into the block's *identity* and treats a link as
+  valid until the target block is destroyed, keeping a reverse index
+  (`links_to`) so destroying a block unpatches its inbound links. QEMU
+  reaches the same place by keying blocks physically and chaining only
+  within a page. Either way the invalidation is surgical, never global.
+- **Nobody else consults a data structure on a link hit.** Dolphin, PCSX2,
+  PPSSPP and RPCS3 all patch a direct branch into the compiled code, so a
+  taken link is one predicted branch; Dolphin even folds the cycle-budget
+  test into its condition. Our two-slot cache costs four dependent loads
+  and an indirect branch the host cannot predict.
+- **Nobody else uses a per-site inline cache for indirect branches.**
+  Dolphin has none at all: it makes guest calls and returns into real host
+  `BL`/`RET` so the host's own return predictor works, measured at 8%.
+  QEMU uses one large PC-hashed table probed inline, measured at 95.8% hit
+  against our 40%. Alpha tags `JSR`/`RET` architecturally, so we can
+  classify at compile time with no heuristic.
+
+### The trace tier stays dormant
+
+`jitengine.cpp` already carries the note that traces preempt block chaining
+and measured as a net loss. The outside evidence is emphatic enough that
+this should not be revisited without a new reason:
+
+- IBM's production trace JIT, retrofitted from its own method JIT, reached
+  **95.5%** of it on DaCapo -- 10.5% more code, 27% more compile time, worse
+  startup -- winning on one benchmark of thirteen and losing by over 15% on
+  three (CGO 2011). The same authors later measured each basic block
+  duplicated **13 times** across traces, with 40% of traces short-lived.
+- Mozilla deleted TraceMonkey entirely, 67,643 lines, because a method JIT
+  with type inference was faster on average and being knocked off trace
+  "happens a lot - more than anyone expected".
+- The one positive trace-versus-method result is against HotSpot's
+  *non-optimizing* compiler; against the real one the same system reached
+  67% / 85% / 93% on SPECjbb2005 / SPECjvm2008 / DaCapo.
 
 ## The drawing engine
 
