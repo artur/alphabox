@@ -1489,6 +1489,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.mov(x9, imm(fall & ~(uint64_t)3));
           mov_to_reg(ra, x9);
         }
+        if (m_defer_branch_pc)
+          continue; // the exit writes the PC where it is read: miss and gate
         a.mov(x9, imm(tgt));
       } else {
         if (ra == 31)
@@ -2000,8 +2002,16 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   {
     const uint32_t lw = plen ? words[plen - 1] : 0u;
     const uint32_t lopc = lw >> 26;
+    // ALPHABOX_JIT_PCSTORE=0: the old shape, the PC written on the hot path of
+    // every exit. A same-binary A/B switch: the emitter reads it once and
+    // emits either form, so the interpreter and the helpers keep one layout.
+    static const bool pc_on_hot_path = [] {
+      const char *e = getenv("ALPHABOX_JIT_PCSTORE");
+      return e && e[0] == '0';
+    }();
     m_defer_branch_pc = terminator_branch && lopc >= 0x30 && lopc <= 0x3f &&
-                        lopc != 0x30 && lopc != 0x34; // not BR / BSR
+                        !(pc_on_hot_path && (lopc == 0x30 || lopc == 0x34));
+    m_pc_on_hot_path = pc_on_hot_path;
   }
 #endif
   for (uint32_t i = 0; i < plen; ++i)
@@ -2063,6 +2073,8 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     // ALPHABOX_JIT_NO_DLINK=1: the tag-checked scan exit instead (A/B switch).
     static const bool no_dlink = getenv("ALPHABOX_JIT_NO_DLINK") != nullptr;
     if (no_dlink) {
+      a.mov(a64::x9, imm(target));
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
       emit_chain(lbl);
       a.b(lbl);
       return;
@@ -2093,6 +2105,8 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.cbz(a64::x1, miss);
       a.br(a64::x1); // HIT: tail in (shared frame)
       a.bind(miss);
+      a.mov(a64::x9, imm(target)); // the PC, written only where it is read
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
       a.orr(a64::x3, a64::x3, imm((uint64_t)(slot + 1)));
       a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
       a.str(a64::x9, a64_cpu_field(a, m_off.link_target, 3));
@@ -2114,6 +2128,11 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.ldr(a64::x1, a64::ptr(a64::x3, off_lbody + 8 * slot));
     a.br(a64::x1); // HIT: tail in (shared frame)
     a.bind(miss);
+    // The PC goes to state.pc here, on the miss path, and nowhere on the hot
+    // one: a hit tails into the next body, which never reads it, and a
+    // 64-bit constant is up to four instructions per exit.
+    a.mov(a64::x9, imm(target));
+    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
     a.orr(a64::x3, a64::x3, imm((uint64_t)(slot + 1)));
     a.str(a64::x3, a64_cpu_field(a, m_off.link_from, 3));
     // The target PC too: the dispatcher caches a data link only into a block
@@ -2191,9 +2210,17 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       const uint64_t btgt = bfall + (uint64_t)(bdisp * 4);
       const bool taken_backward = btgt <= bpc;
       if (lopc == 0x30 || lopc == 0x34) {
+        Label gate_out = a.new_label();
+        const bool stub = taken_backward && !m_pc_on_hot_path;
         if (taken_backward)
-          a64_emit_gate(a, m_off, exit_chain);
+          a64_emit_gate(a, m_off, stub ? gate_out : exit_chain);
         emit_static_exit(btgt, 0, exit_chain);
+        if (stub) { // the gate's way out: the PC, then leave
+          a.bind(gate_out);
+          a.mov(a64::x9, imm(btgt));
+          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+          a.b(exit_chain);
+        }
       } else if (m_pending_br_op >= 0) {
         // Test the terminator's register here and branch on it directly. Each
         // side then materialises its own PC -- a compile-time constant --
@@ -2244,15 +2271,26 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
           a.b_le(not_taken);
           break;
         }
-        a.mov(a64::x9, imm(btgt));
-        a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        Label gate_out = a.new_label();
+        if (m_pc_on_hot_path) {
+          a.mov(a64::x9, imm(btgt));
+          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        }
         if (taken_backward) // the gate clobbers only x1/x17 (and flags)
-          a64_emit_gate(a, m_off, exit_chain);
+          a64_emit_gate(a, m_off, m_pc_on_hot_path ? exit_chain : gate_out);
         emit_static_exit(btgt, 0, exit_chain);
         a.bind(not_taken);
-        a.mov(a64::x9, imm(bfall));
-        a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        if (m_pc_on_hot_path) {
+          a.mov(a64::x9, imm(bfall));
+          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+        }
         emit_static_exit(bfall, 1, exit_chain); // forward: no gate
+        if (taken_backward && !m_pc_on_hot_path) { // the gate's way out
+          a.bind(gate_out);
+          a.mov(a64::x9, imm(btgt));
+          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+          a.b(exit_chain);
+        }
       } else {
         Label not_taken = a.new_label();
         a.cmp(a64::x9, a64::x10);
@@ -2276,14 +2314,22 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.bind(exit_chain);
 #endif
   } else {
-    a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
-    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+#ifndef JIT_VERIFY
+    if (m_pc_on_hot_path) {
+      a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+    }
+#endif
     a64_count_add(a, plen);
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
-    // A fall-through only moves forward: no gate (see the branch exits).
+    // A fall-through only moves forward: no gate (see the branch exits). The
+    // PC is written on the exit's miss path, not here.
     emit_static_exit(b->tag + 4 * (uint64_t)plen, 0, exit_chain);
     a.bind(exit_chain);
+#else
+    a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
+    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
 #endif
   }
   a.mov(a64::x0, a64::x27);

@@ -833,6 +833,7 @@ private:
   int m_pending_br_op = -1;
   int m_pending_br_ra = 31;
   bool m_defer_branch_pc = false;
+  bool m_pc_on_hot_path = false; // ALPHABOX_JIT_PCSTORE=0: the old exit shape
 
   static constexpr uint32_t kColdMax = 1024;
   uint32_t m_cold_slow[kColdMax];
