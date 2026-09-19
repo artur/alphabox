@@ -188,6 +188,49 @@ builtin reads runs at 1 GHz on this host though `hw.tbfrequency` says 24 MHz
 -- the conversion is calibrated at first use rather than assumed, because
 assuming it put every per-call figure out by 42x.
 
+### The shadow, and what a miss really cost
+
+The shadow landed (`be4de87`): stride -75.8% (2,308 -> 558 ms), the whole
+benchmark -8.1%, results byte-identical. The prediction had been -40%,
+priced from the helper share alone, and the miss was informative: of the
+469 ms a stride window lost per 100M instructions, **helpers were 49%**,
+the interpreter (the faulting load re-run, then the trap) 22%, dispatch
+11%, and the compiled PAL handler itself ~19%. A path is priced from the
+`time-split` line, not from one counter. What is left of stride is 98%
+inside `jit_read` at 47 ns a call, 3.7M calls per 100M instructions, with
+no TB miss and no interpreter: the 128-entry TB scan when the per-page
+hint misses, which stride's eviction pattern guarantees.
+
+### PALmode, measured
+
+`JIT_REGPROF` tells PALmode blocks apart (`e6bbc0b`): on the benchmark,
+**0.3-0.6% of hot instructions run in PALmode**, and PAL blocks cost 84-88
+bytes per instruction against 101 for everything else. The shadow bank
+(R23, R21, R4, R22, R7) is PAL's hottest register set and is never pinned,
+so a PAL-specific pin set is a real idea -- bounded at about 0.1% of the
+benchmark, against a spill/reload at every chained CALL_PAL/HW_RET edge.
+Not worth it on this evidence.
+
+### The icache-flush storm
+
+The one kernel-heavy phase in a Windows 2000 boot -- 15 s at 186 MIPS
+under the SRM console's PALcode -- is a flush storm: one `CALL_PAL IMB`
+site (`0x1a10b4`, 99.3% of 3.4M flushes) every ~1,200 instructions. Every
+flush dropped every uncompiled block, `record()` restarted its hotness
+count, and nothing reached `compile_after`: 26M blocks recorded, 1.5k
+compiled, interpreter 54% and dispatch 31% of the phase. `106b1c3` keeps
+only the count across a flush (nothing derived from the old bytes
+survives) and the phase went to interpreter 1.2%, 291 MIPS -- and took
+the same 15 s, running 1.6x the instructions and 1.6x the IMBs. The
+firmware is polling on real time around disk I/O (680k `HW_MFPR` and 620k
+locked ops per 100M instructions), so that phase is a device-pacing
+question, not a JIT one. Dispatch stays at 58% there because every flush
+still bumps the epoch and kills every link; a no-op flush through
+dirty-code-page tracking is the other half, if the phase ever matters.
+The prediction was written down before the run
+(`lab/results/flushfix-prediction.md`): three of four held, and the
+fourth's miss is the finding.
+
 ## Where the time goes on a CPU-bound guest workload
 
 Same windows as above, the `cmd` loop running, per 100M guest instructions:
