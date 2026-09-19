@@ -160,6 +160,34 @@ enough that exits stop mattering. Peepholes and the exit and access work
 above are worth having and are worth perhaps a third in total; the rest is
 a different kind of code generator.
 
+### Helper time, measured
+
+`JIT_STATS` times every helper entry to return (callees included) with the
+counter register and reports the share per window. On `nt_bench.sh`, the
+whole benchmark: **8.8% of wall time inside helpers**, distributed as
+
+| section | helper share | per call | what |
+| --- | --- | --- | --- |
+| alu, branch, call, div | ~0.1% | -- | never miss the page cache |
+| sort | ~5% | ~10 ns | bursty read + write |
+| byte | ~9% | ~10 ns | many cheap misses over a 1 MB buffer |
+| ldst | ~17% | ~10 ns | many cheap misses: read 11%, write 5% |
+| stride | **~63%** | **~78 ns** reads, plus 4.5M `HW_MTPR` + 4.4M `HW_MFPR` per 100M instructions | **PALcode's DTB-miss handler** -- 19% of the window in the IPR helpers alone |
+
+Two different problems, then. `stride` pays for *slow* misses that go through
+PALcode; the lever is a host-side shadow of translations consulted before a
+miss is delivered, invisible to the guest while every invalidate is honoured.
+`ldst` and `byte` pay for *many* cheap misses -- conflict misses in a 64-slot
+direct-mapped cache -- and the fix there must tax misses only (a second way,
+or a second-level lookup in the cold stub), not hits, which is exactly what
+the hashed index got wrong.
+
+Instrument note: the first measurement used `steady_clock` at ~15 ns a read
+and reported 11.9%; three points of that were the clock. And the counter the
+builtin reads runs at 1 GHz on this host though `hw.tbfrequency` says 24 MHz
+-- the conversion is calibrated at first use rather than assumed, because
+assuming it put every per-call figure out by 42x.
+
 ## Where the time goes on a CPU-bound guest workload
 
 Same windows as above, the `cmd` loop running, per 100M guest instructions:
