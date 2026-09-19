@@ -2061,6 +2061,23 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
   if (i < TB_ENTRIES && state.tb[t][i].valid &&
       !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
       TB_ASN_MATCH(state.tb[t][i])) {
+#ifdef JIT_VERIFY
+    // Oracle: the index is derived state that no differential test can see
+    // (interpreter and JIT share this lookup, so a wrong answer is
+    // common-mode). Validation guarantees the hinted entry MATCHES; what it
+    // cannot guarantee is that it is the entry the scan would have chosen
+    // first, which differs only if two entries match one address. Check.
+    for (int j = 0; j < TB_ENTRIES; j++)
+      if (state.tb[t][j].valid &&
+          !((state.tb[t][j].virt ^ virt) & state.tb[t][j].match_mask) &&
+          TB_ASN_MATCH(state.tb[t][j])) {
+        if (j != i)
+          printf("%%CPU-W-TBHINT: MISMATCH va %016" PRIx64 " hint entry %d, "
+                 "scan entry %d (tb %d)\n",
+                 virt, i, j, t);
+        break;
+      }
+#endif
     state.last_found_tb[t][rw] = i;
     return i;
   }
