@@ -544,10 +544,21 @@ public:
   // (jit_indirect) miss. Empty when stats are off, so the call sites need no
   // #ifdef.
 #ifdef JIT_STATS
+  // Why a cached link missed: the successor was already in a slot and merely
+  // went stale (the epoch moved, e.g. an address-space switch), or it was a
+  // target this exit had not cached. The first is an invalidation problem,
+  // the second a prediction problem, and they want opposite fixes.
+  void note_link_stale(bool stale) {
+    if (stale)
+      m_link_stale++;
+    else
+      m_link_fresh++;
+  }
   void note_link_bail() { m_bail_link++; }
   void note_jmp_attempt() { m_jmp_attempt++; }
   void note_jmp_hit() { m_jmp_hit++; }
 #else
+  void note_link_stale(bool) {}
   void note_link_bail() {}
   void note_jmp_attempt() {}
   void note_jmp_hit() {}
@@ -724,6 +735,7 @@ private:
       m_tsc_interp; // windowed: host TSC cycles in b->code() vs interp fallback
   uint64_t m_tsc_window_start; // host TSC at window start (the time-split
                                // denominator)
+  uint64_t m_link_stale = 0, m_link_fresh = 0; // link misses by cause
   uint64_t m_bail_link, m_jmp_attempt,
       m_jmp_hit; // windowed: link-miss bails, jit_indirect attempts/hits
   uint64_t m_fresh_cold, m_fresh_tag, m_fresh_asn, m_fresh_phys,

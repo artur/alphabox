@@ -1538,6 +1538,7 @@ void CAlphaCPU::jit_run(int budget) {
           for (int i = 0; i < CJitEngine::kLinkSlots; ++i)
             if (lf->link[i] == b)
               in = true; // skip if already cached (it just went stale)
+          m_jit->note_link_stale(in);
           if (!in) {
             for (int i = CJitEngine::kLinkSlots - 1; i > 0; --i)
               lf->link[i] = lf->link[i - 1];

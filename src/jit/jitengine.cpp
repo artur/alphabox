@@ -4253,6 +4253,10 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
     static const char *const kColdNames[CR_COUNT] = {
         "nophys",  "noblock", "nothot",  "uncompilable", "stale", "int",
         "int-pal", "timer",   "pal!sde", "budget",       "done0"};
+    printf("[JIT][STATS][CPU%d]   link misses by cause: stale %llu | "
+           "new target %llu\n",
+           m_cpu_id, (unsigned long long)m_link_stale,
+           (unsigned long long)m_link_fresh);
     len = snprintf(
         buf, sizeof(buf),
         "[JIT][STATS][CPU%d] cold-path instr/entries by reason:", m_cpu_id);
