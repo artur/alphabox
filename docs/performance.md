@@ -122,12 +122,16 @@ nothing around it.**
 
 How much code that is, from `JIT_REGPROF` on the same workload:
 
-- **Real MIPS on real code: ~1400** on the instrumented build, against
-  ~4300 for the self-looping `cpu_bench.sh` loop. At the host's clock that
-  is roughly 2.5 host cycles per guest instruction, which with ~10-12 host
-  instructions per guest instruction on the executed path means the core is
-  already running the emitted code at a high IPC. There is no latent
-  throughput to unlock; only fewer instructions will do.
+- **Real MIPS on real code: ~1400** on the instrumented build, ~1530 on the
+  production build (scaling by wall time), against ~4300 for the
+  self-looping `cpu_bench.sh` loop. The host is an M3 Max whose performance
+  cores run at 4.05 GHz, so that is **2.9 host cycles per guest instruction
+  instrumented, ~2.65 in production**. With ~10-12 host instructions per
+  guest instruction on the executed path the IPC is about 4 -- high, but
+  below what the core can sustain, so part of each guest instruction is
+  serial latency on the address chain rather than pure instruction count.
+  Fewer instructions will do most of the work; shortening the chain does
+  the rest.
 - **Memory ops are 36.6% of hot instructions**, and 28.9% of those follow an
   access through the same base register within 8 KB -- probe-hoisting
   candidates, which is the only technique here that takes the probe off the
