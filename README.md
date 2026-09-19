@@ -87,11 +87,19 @@ The [documentation](docs/README.md) covers the details:
 
 ## Performance
 
-With the JIT build on an Apple M-series host, Windows 2000 runs at roughly
-2250 MIPS per emulated CPU. That is an upper bound, measured on the guest's
-idle loop; a CPU-bound 25-million-iteration `cmd` loop inside the guest takes
-about 110 s. An idle two-CPU Windows desktop uses about 3–6 % of one host
+With the JIT build on an Apple M-series host, translated Alpha code runs at
+about 4300 MIPS per emulated CPU on an arithmetic loop and 4000 on a memory
+loop, and 96.6 % of guest instructions execute as host code. Inside a
+Windows 2000 guest, a CPU-bound 15-million-iteration `cmd` loop takes about
+62 s. An idle two-CPU Windows 2000 desktop uses about 3-6 % of one host
 core.
+
+A MIPS figure taken from a running guest is worth less than it looks: a
+booting guest spends its time spinning on the cycle counter waiting for real
+time to pass, and a guest scrolling a console window is waiting for the
+drawing engine, so neither gets faster when the processor emulation does.
+[docs/performance.md](docs/performance.md) has the measurements, what bounds
+which workload, and the optimizations that turned out not to pay.
 
 ## Known limitations
 

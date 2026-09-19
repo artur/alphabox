@@ -34,6 +34,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_IDETRACE=1` | Timestamped IDE timeline: commands, ATAPI packet opcodes, bus-master starts and interrupts, and every ATAPI check condition with its sense key. |
 | `ALPHABOX_MEDIA_SWAP=<image1>:<image2>:<ms>` | Media-change stress test: alternate two images in the first CD drive every `<ms>` ms, forced past a guest lock, applied between guest commands. |
 | `ALPHABOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write. |
+| `ALPHABOX_BLIT_STATS=1` | Every 5 s, print what the 8514/A drawing engine has drawn: pixels, drawing commands and host-data transfers, with the host time the commands took. Says whether a sluggish-feeling guest is drawing-bound, and how the driver is drawing (a listing that scrolls a console draws ~900 million pixels, one transfer each). The timing is per command, not per pixel, so it does not swamp what it measures -- but it does slow a drawing-heavy guest noticeably, so leave it off when timing anything. |
 
 **JIT builds**
 

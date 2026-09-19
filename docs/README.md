@@ -14,6 +14,8 @@
   [DS20E](platforms/ds20e.md)).
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
+- [Performance](performance.md): what has been measured, what bounds each
+  workload, and which optimizations did not pay off.
 - [Processor fidelity](cpu-fidelity.md): where the emulated 21264 does not
   match the real one, what a guest can therefore not be used to test, and
   how to check the processor yourself.
