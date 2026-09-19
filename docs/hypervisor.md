@@ -53,6 +53,49 @@ would still exit. The benchmark itself has no MMIO, so a benchmark number
 would flatter the design; the boot and any GUI workload would show the
 truth.
 
+## Three gaps a reviewer added
+
+- **Global pages do not mix with modes in the ASID.** An ARM TLB entry
+  marked global matches under every ASID, so a kernel page translated with
+  the global bit -- the natural rendering of Alpha's ASM bit -- would be
+  reachable while the user-mode table set is selected. Either never mark
+  entries global and pay more refills per context switch, or use the global
+  bit only for pages whose permissions are identical in all four modes.
+- **Nothing protects the runtime from the guest.** The emitted code and the
+  runtime share one EL1 address space; a stray guest pointer into the
+  runtime's memory would succeed where Alpha owes an access violation, and
+  a stray store would corrupt the emulator. Hiding the runtime in a range
+  that is non-canonical for a 43-bit Alpha VA stops working the moment a
+  guest enables the EV6's 48-bit mode. The alternatives -- emitted code at
+  EL0 with the runtime privileged, or a canonical-address check per access
+  -- both cost, and belong on the prototype's checklist.
+- **Two assumptions to verify before believing any number.** 256 ASNs times
+  four modes needs ten ASID bits: read the width from `ID_AA64MMFR0_EL1`
+  rather than assume 16. And the exit cost above is assumed, not measured:
+  one measured exit round trip replaces the 1-3 us range with a number.
+  Idle belongs with it -- a guest `WFI` must exit so the host thread can
+  sleep.
+
+The compiler can stay outside the VM at first: the code cache is shared
+memory and compiles are rare, which postpones porting asmjit to the
+freestanding runtime.
+
+## The MMIO census, priced for today's build
+
+The same census also says something about the emulator as it is. 140M
+MMIO accesses from compiled code at a helper call each is real time now,
+and the reviewer's estimate was ~14 s at 100 ns a call. Measured instead
+(helper timer, whole boot-plus-benchmark run): **helpers take 5.6 s of
+149 s (3.8%) in total**, and the read+write helper time in every window
+where those two exceed 10% -- the MMIO-heavy ones -- sums to **3.3-3.5 s
+per run (2.4%)**, at 12-20 ns a call, not 100. So mapping the S3 linear
+framebuffer as ordinary guest memory on the page-cache fast path (packed
+linear modes only; the banked window and the planar modes stay MMIO; the
+renderer already reads VRAM every frame, so no dirty tracking is needed in
+the process build) is worth about 2% of a boot today, plus whatever the
+page-cache slots those MMIO pages occupy cost the other misses. A modest
+win on its own, and a prerequisite for the VM design.
+
 ## What it can gain
 
 Memory ops are **13.7% of hot instructions** on the benchmark (exec-weighted,

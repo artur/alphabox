@@ -1126,6 +1126,12 @@ void CVGACard::run() {
       bx_gui->init(state.x_tilesize, state.y_tilesize);
       gui_initialized = true;
     }
+    if (m_restored) { // a resumed machine: the GUI never saw this text font
+      m_restored = false;
+      bx_gui->lock();
+      bx_gui->set_text_charmap(&vga.memory[vga.sequencer.char_sel.base[0]]);
+      bx_gui->unlock();
+    }
     bool was_paused = false;
     PauseAck.store(false, std::memory_order_release);
     for (;;) {
@@ -1227,6 +1233,8 @@ void CVGACard::check_state() {
 /**
  * Save state to a Virtual Machine State file.
  **/
+static constexpr u32 kCoreMagic = 0x56474131; // 'VGA1': the core block
+
 int CVGACard::SaveState(FILE *f) {
   long ss = sizeof(state);
   u32 magic1 = state_magic1();
@@ -1248,7 +1256,26 @@ int CVGACard::SaveState(FILE *f) {
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&saved, sizeof(saved), 1, f);
   fwrite(&magic2, sizeof(u32), 1, f);
-  printf("%s: %d bytes saved.\n", devid_string, (int)ss);
+
+  // The VGA core and its VRAM, which the block above never carried -- a
+  // resumed machine drew nothing and took no visible input. The registers
+  // and latches verbatim with the VRAM pointer zeroed, then the VRAM bytes,
+  // then whatever the card adds (save_card_state).
+  vga_t core = vga;
+  core.memory = nullptr;
+  const u32 core_magic = kCoreMagic;
+  const u64 vram = vga.svga_intf.vram_size;
+  long cs = sizeof(core);
+  fwrite(&core_magic, sizeof(u32), 1, f);
+  fwrite(&cs, sizeof(long), 1, f);
+  fwrite(&core, sizeof(core), 1, f);
+  fwrite(&vram, sizeof(u64), 1, f);
+  fwrite(vga.memory, 1, (size_t)vram, f);
+  if ((res = save_card_state(f)))
+    return res;
+  fwrite(&core_magic, sizeof(u32), 1, f);
+  printf("%s: %d bytes saved (+ core %d, VRAM %llu).\n", devid_string, (int)ss,
+         (int)cs, (unsigned long long)vram);
   return 0;
 }
 
@@ -1309,7 +1336,56 @@ int CVGACard::RestoreState(FILE *f) {
     return -1;
   }
 
-  printf("%s: %d bytes restored.\n", devid_string, (int)ss);
+  // The VGA core, the VRAM and the card's own block (see SaveState).
+  u32 cm;
+  long cs;
+  if (fread(&cm, sizeof(u32), 1, f) != 1 || cm != kCoreMagic) {
+    printf("%s: no VGA core block (a state file from before it existed)!\n",
+           devid_string);
+    return -1;
+  }
+  if (fread(&cs, sizeof(long), 1, f) != 1 || cs != (long)sizeof(vga_t)) {
+    printf("%s: VGA core STRUCT SIZE does not match!\n", devid_string);
+    return -1;
+  }
+  vga_t core;
+  if (fread(&core, sizeof(core), 1, f) != 1) {
+    printf("%s: unexpected end of file!\n", devid_string);
+    return -1;
+  }
+  u64 vram;
+  if (fread(&vram, sizeof(u64), 1, f) != 1 ||
+      vram != vga.svga_intf.vram_size) {
+    printf("%s: VRAM size does not match (%llu in the file, %zu here)!\n",
+           devid_string, (unsigned long long)vram, vga.svga_intf.vram_size);
+    return -1;
+  }
+  u8 *mem = vga.memory; // this process's allocation, never the file's pointer
+  vga = core;
+  vga.memory = mem;
+  if (fread(vga.memory, 1, (size_t)vram, f) != (size_t)vram) {
+    printf("%s: unexpected end of file in VRAM!\n", devid_string);
+    return -1;
+  }
+  if ((res = restore_card_state(f)))
+    return res;
+  if (fread(&cm, sizeof(u32), 1, f) != 1 || cm != kCoreMagic) {
+    printf("%s: VGA core end MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  // Everything derived from the registers is stale: the card recomputes its
+  // decodes, and the render thread redraws from scratch (dimensions, the
+  // 32bpp handshake, the text font, the cursor signature).
+  post_restore();
+  state.vga_mem_updated = 1;
+  old_iWidth = old_iHeight = 0;
+  state.last_bpp = 0;
+  m_last_cursor_sig = ~(uint64_t)0;
+  m_frames_since_render = 0;
+  m_restored = true;
+
+  printf("%s: %d bytes restored (+ core %d, VRAM %llu).\n", devid_string,
+         (int)ss, (int)cs, (unsigned long long)vram);
   return 0;
 }
 

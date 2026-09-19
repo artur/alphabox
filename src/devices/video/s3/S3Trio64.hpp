@@ -247,6 +247,11 @@ protected:
 private:
   // MAME CODE HERE
   ibm8514a_device m_8514;
+
+  // Snapshot: the S3's own state beyond the VGA core (see CVGACard).
+  int save_card_state(FILE *f) override;
+  int restore_card_state(FILE *f) override;
+  void post_restore() override;
   void refresh_pitch_offset();
   // END MAME CODE - rest is es40 specific or pending removal
 

@@ -1563,6 +1563,88 @@ static inline bool s3_lfb_enabled(uint8_t cr58) {
   return (cr58 & 0x10) != 0; // ENB LA (Enable Linear Addressing)
 }
 
+// The S3's own state for a snapshot: the extended registers and cursor
+// (s3), the 8514 drawing engine's registers, and the linear-window cache
+// that the register decodes maintain. All plain data.
+namespace {
+constexpr u32 kS3Magic = 0x53335431; // 'S3T1'
+struct S3LfbState {
+  u32 lfb_base_, lfb_size_;
+  bool lfb_enabled_;
+  u32 lfb_base, lfb_size;
+  u64 lfb_phys;
+  bool lfb_active, pci_mem_enable;
+  u32 pci_bar0;
+  bool vga_subsys_enable;
+  u8 video_subsys_enable_46e8;
+};
+int write_block(FILE *f, const void *p, long n) {
+  fwrite(&n, sizeof(long), 1, f);
+  return fwrite(p, 1, (size_t)n, f) == (size_t)n ? 0 : -1;
+}
+int read_block(FILE *f, void *p, long n, const char *what, const char *dev) {
+  long got;
+  if (fread(&got, sizeof(long), 1, f) != 1 || got != n) {
+    printf("%s: %s STRUCT SIZE does not match!\n", dev, what);
+    return -1;
+  }
+  if (fread(p, 1, (size_t)n, f) != (size_t)n) {
+    printf("%s: unexpected end of file in %s!\n", dev, what);
+    return -1;
+  }
+  return 0;
+}
+} // namespace
+
+int CS3Trio64::save_card_state(FILE *f) {
+  const S3LfbState x = {lfb_base_,   lfb_size_,      lfb_enabled_,
+                        lfb_base,    lfb_size,       lfb_phys,
+                        lfb_active,  pci_mem_enable, pci_bar0,
+                        m_vga_subsys_enable, m_video_subsys_enable_46e8};
+  fwrite(&kS3Magic, sizeof(u32), 1, f);
+  if (write_block(f, &s3, sizeof(s3)) ||
+      write_block(f, &m_8514.ibm8514, sizeof(m_8514.ibm8514)) ||
+      write_block(f, &x, sizeof(x)))
+    return -1;
+  fwrite(&kS3Magic, sizeof(u32), 1, f);
+  return 0;
+}
+
+int CS3Trio64::restore_card_state(FILE *f) {
+  u32 m;
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != kS3Magic) {
+    printf("%s: S3 MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  S3LfbState x;
+  if (read_block(f, &s3, sizeof(s3), "S3 registers", devid_string) ||
+      read_block(f, &m_8514.ibm8514, sizeof(m_8514.ibm8514), "8514 engine",
+                 devid_string) ||
+      read_block(f, &x, sizeof(x), "S3 linear window", devid_string))
+    return -1;
+  lfb_base_ = x.lfb_base_;
+  lfb_size_ = x.lfb_size_;
+  lfb_enabled_ = x.lfb_enabled_;
+  lfb_base = x.lfb_base;
+  lfb_size = x.lfb_size;
+  lfb_phys = x.lfb_phys;
+  lfb_active = x.lfb_active;
+  pci_mem_enable = x.pci_mem_enable;
+  pci_bar0 = x.pci_bar0;
+  m_vga_subsys_enable = x.vga_subsys_enable;
+  m_video_subsys_enable_46e8 = x.video_subsys_enable_46e8;
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != kS3Magic) {
+    printf("%s: S3 end MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  return 0;
+}
+
+void CS3Trio64::post_restore() {
+  update_linear_mapping(); // the CR58/59/5A decode
+  recompute_params();      // pixel clock, refresh interval, screen timing
+}
+
 void CS3Trio64::update_linear_mapping() {
   // BAR-only mode: no per-device mapping. PCI core decodes BAR0 and gates
   // access via COMMAND.MSE. We keep these fields for debug only.

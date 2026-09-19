@@ -201,6 +201,20 @@ inside `jit_read` at 47 ns a call, 3.7M calls per 100M instructions, with
 no TB miss and no interpreter: the 128-entry TB scan when the per-page
 hint misses, which stride's eviction pattern guarantees.
 
+That A/B also said ldst +6.7%, sort +5.7% and byte -9.6%, none of them
+predicted. The per-window census (windowed page-cache miss causes, helper
+calls and per-call cost, TB-miss bails) found the steady-state windows of
+ldst identical with and without the shadow, so the change was A/B'd again
+**inside one binary** -- `ALPHABOX_TB_SHADOW=0` on the base arm, the same
+executable on both (`perf_ab.py --env-base`), three rounds. Result: stride
+-76.7%, ldst -1.8%, sort -2.9%, byte -1.0%, everything else within +-2%
+and overlapping; -9.5% in total. The three unexplained numbers were
+**code layout**: two different builds of the CPU file place the
+interpreter's and the helpers' hot loops differently, and that alone moves
+a section by 5-10% either way. Rule from it: a section-level effect under
+~10% between two *builds* is not attributed to the change until a
+same-binary switch, or a layout-neutral comparison, has reproduced it.
+
 ### PALmode, measured
 
 `JIT_REGPROF` tells PALmode blocks apart (`e6bbc0b`): on the benchmark,
@@ -462,7 +476,14 @@ All of these live in `test/tools/` and are described in
   boot was ~120 s of a ~165 s run; a resume is seconds. Nothing is written to
   C: behind the resumed OS -- that would corrupt its cached FAT -- so the
   benchmark files are staged before the snapshot and the run command carries
-  its arguments. `perf_ab.py --snapshot` uses it.
+  its arguments. `perf_ab.py --snapshot` uses it. Until 2026-09-19 the S3
+  saved 32 bytes of bookkeeping and no registers or VRAM, so a resumed
+  desktop drew nothing; the VGA core, the VRAM and the S3's own state (the
+  extended registers, the 8514 engine, the linear-window cache) are now in
+  the file, the derived timing and mapping are recomputed on restore, and
+  the render thread re-pushes the text font and redraws. First resume after
+  the change: the guest took the typed command and wrote DONE 17 s after
+  launch.
 - **`perf_ab.py` -- the only way a performance claim gets made.** Two
   binaries, N >= 2 interleaved rounds of `nt_bench.sh`, per-section medians
   with ranges and an overlap flag, a check that every section computed the
@@ -479,7 +500,37 @@ All of these live in `test/tools/` and are described in
 - `win_bench.sh` -- boots a guest and reports MIPS, which are meaningful
   only while the guest is busy with real work.
 
-Two practical notes, both learned the hard way. A guest run that "did not
+### The per-block items, measured one binary at a time
+
+Every emitter change now carries a compile-time switch (`ALPHABOX_JIT_*=0`
+emits the old shape), so each is A/B'd inside one binary, three rounds,
+predictions on record:
+
+| change | total | verdict |
+| --- | --- | --- |
+| the PC store off the hot path: `state.pc` written only on an exit's miss path or in a gate stub, never where a link hit tails into the next body | **-1.7%**, no overlap, every section -0.8..-2.8% | kept (`ALPHABOX_JIT_PCSTORE`) |
+| `x27` as a down-counter: the gate's budget half one `tbnz` instead of a load and a compare | 0.0% (two runs, both inside the noise) | reverted; the flag-free exit that enabled it stays |
+| exit records in an arena two `add`s from `x28` instead of a 3-4 instruction 64-bit constant | +0.4%, inside the noise | reverted |
+
+Three instructions removed from a hot path bought 1.7%; a load, a compare
+and a four-instruction constant removed from the same paths bought nothing
+at all. On this core, instruction count off the address and branch chains
+is not time, and only a measurement says which is which. The remaining
+per-block item, longer blocks, is a different code generator.
+
+The band is also a lever: if two builds of one file swing a section by
+5-10%, some hot loop is alignment-sensitive. Aligning the hot helpers and
+the dispatch loop to 64 bytes and fixing the symbol order with a linker
+order file would shrink the band for every future comparison, and
+whichever layout produced the faster ldst is a free, permanent gain once
+chosen deliberately. Not done yet.
+
+Three practical notes, all learned the hard way. Build-to-build code
+layout moves a benchmark section by 5-10% on its own (see the shadow's
+same-binary A/B above), so a change worth less than that is measured with
+a runtime switch in one binary -- `perf_ab.py --env-base K=V` runs the base
+arm with the switch off and the head arm with the same executable -- or
+not claimed. A guest run that "did not
 reach the desktop" is either a bugcheck or a timeout, and only the last
 framebuffer tells you which -- convert it with `ppm2png.py` and look.
 And when comparing two builds, interleave the runs: a difference of under

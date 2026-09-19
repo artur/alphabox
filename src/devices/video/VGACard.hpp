@@ -66,6 +66,20 @@ public:
 
   virtual int SaveState(FILE *f) override;
   virtual int RestoreState(FILE *f) override;
+  /// The card's own state beyond the VGA core (extended registers, a
+  /// drawing engine, cached decodes): written after the core's block and
+  /// read back before post_restore(). The base card has none.
+  virtual int save_card_state(FILE *f) {
+    (void)f;
+    return 0;
+  }
+  virtual int restore_card_state(FILE *f) {
+    (void)f;
+    return 0;
+  }
+  /// Recompute what is derived from the registers (timing, the linear
+  /// window) once every register is back.
+  virtual void post_restore() {}
 
   // --- legacy (fixed-address) ranges -------------------------------------
   /// Dispatches the standard VGA ranges (see LegacyRange) and hands every
@@ -246,6 +260,9 @@ protected:
   std::chrono::steady_clock::time_point m_last_refresh_time;
   uint64_t m_last_cursor_sig = 0;
   int m_frames_since_render = 0;
+  /// Set by RestoreState: the render thread, once its GUI exists, pushes the
+  /// restored text font and draws the first frame from the restored VRAM.
+  bool m_restored = false;
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
