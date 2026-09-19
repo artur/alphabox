@@ -36,6 +36,7 @@
 #if !defined(INCLUDED_ALPHACPU_H)
 #define INCLUDED_ALPHACPU_H
 
+#include <type_traits> // std::remove_reference_t for the TB entry alias
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -825,6 +826,28 @@ private:
     bool pal_vms; /**< True if the PALcode base is 0x8000 (=VMS PALcode base) */
     int irq_h_timer[6]; /**< Timers for delayed IRQ_H[0:5] assertion */
   } state; /**< Determines CPU state that needs to be saved to the state file */
+
+  /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
+  /// them. A real EV6 has 128 DTB entries; a program walking more pages than
+  /// that misses on every one, and each miss is a trap into PALcode's
+  /// DTB-miss handler -- measured on a 48 MB stride at 4.5M HW_MTPR + 4.4M
+  /// HW_MFPR per 100M instructions, 19% of the section in the IPR helpers
+  /// alone. Everything the handler would re-insert is what it inserted last
+  /// time, so keep it: FindTBEntry refills the TB from here on a miss instead
+  /// of trapping. Invisible to the guest as long as every invalidate the
+  /// architecture defines is honoured, which tbia/tbiap/tbis do below. Only
+  /// GH=0 (8 KB) entries are kept -- a larger-page entry spans many index
+  /// slots and the few PALcode inserts of those are not the cost.
+  static constexpr int kTbShadowBits = 12;
+  static constexpr int kTbShadowEntries = 1 << kTbShadowBits;
+  using STBEntry = std::remove_reference_t<decltype(state.tb[0][0])>;
+  STBEntry m_tb_shadow[kTbShadowEntries] = {};
+  u64 m_tb_shadow_refills = 0; // FindTBEntry refills from the shadow
+  static inline u64 tb_shadow_index(u64 va) {
+    return (va >> 13) & (u64)(kTbShadowEntries - 1);
+  }
+  int tb_refill_from_shadow(u64 virt, int asn); // -1 if the shadow has nothing
+
 
   u64 last_dtb_virt[2]; /**< DTB_TAG0/1 staging registers for DTB_PTE0/1 writes
                          */

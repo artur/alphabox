@@ -2094,7 +2094,35 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
   }
 
 #undef TB_ASN_MATCH
+  // Nothing in the TB. Before this becomes a DTB miss delivered to PALcode,
+  // see whether PALcode inserted this page before and the TB merely evicted
+  // it -- then put it back ourselves, as its handler would.
+  if (t == TB_INDEX_DATA) {
+    const int j = tb_refill_from_shadow(virt, state.asn0);
+    if (j >= 0) {
+      state.last_found_tb[t][rw] = j;
+      return j;
+    }
+  }
   return -1;
+}
+
+// Refill the data TB from the shadow: the same slot choice as add_tb (a
+// round-robin victim), the same eviction bookkeeping (drop the evicted page
+// from the data page cache), then the entry copied back whole.
+int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
+  const STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+  if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
+      !(sh.asm_bit || sh.asn == asn))
+    return -1;
+  const int t = TB_INDEX_DATA;
+  const int i = state.next_tb[t];
+  state.next_tb[t] = (i + 1 == TB_ENTRIES) ? 0 : i + 1;
+  if (state.tb[t][i].valid)
+    flush_data_page_cache_range(state.tb[t][i].virt, state.tb[t][i].match_mask);
+  state.tb[t][i] = sh;
+  m_tb_shadow_refills++;
+  return i;
 }
 
 static inline u64 alpha_sext_u64_43(u64 a) {
@@ -2702,6 +2730,10 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
   state.tb[t][i].asm_bit = (int)pte_flags & 0x10;
   state.tb[t][i].asn = asn;
   state.tb[t][i].valid = true;
+  // Keep an 8 KB data translation in the shadow (see m_tb_shadow): what the
+  // TB evicts later can then be refilled without a trap to PALcode.
+  if (t == TB_INDEX_DATA && match_mask == GH_0_MATCH)
+    m_tb_shadow[tb_shadow_index(virt)] = state.tb[t][i];
   state.last_found_tb[t][rw] = i;
 
 #ifdef ES40_JIT
@@ -2808,6 +2840,13 @@ void CAlphaCPU::add_tb_i(u64 virt, u64 pte) {
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  **/
 void CAlphaCPU::tbia(int flags) {
+  // The shadow of data translations is a translation cache too: it obeys
+  // every invalidate the TB does. Selected from flags exactly as t is below.
+  if (!(flags & ACCESS_EXEC))
+    for (int k = 0; k < kTbShadowEntries; k++)
+      m_tb_shadow[k].valid = false;
+
+
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
   int i;
   for (i = 0; i < TB_ENTRIES; i++)
@@ -2834,6 +2873,12 @@ void CAlphaCPU::tbia(int flags) {
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  **/
 void CAlphaCPU::tbiap(int flags) {
+  if (!(flags & ACCESS_EXEC))
+    for (int k = 0; k < kTbShadowEntries; k++)
+      if (!m_tb_shadow[k].asm_bit)
+        m_tb_shadow[k].valid = false;
+
+
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
   int i;
   for (i = 0; i < TB_ENTRIES; i++)
@@ -2857,6 +2902,15 @@ void CAlphaCPU::tbiap(int flags) {
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  **/
 void CAlphaCPU::tbis(u64 virt, int flags) {
+  // Over-invalidating the shadow is always safe (it costs one PALcode
+  // refill), so match on the page alone here; tbis_d matches by ASN too.
+  if (!(flags & ACCESS_EXEC)) {
+    STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+    if (sh.valid && sh.virt == (virt & sh.match_mask))
+      sh.valid = false;
+  }
+
+
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
 
   if (t == TB_INDEX_DATA) {
@@ -2880,6 +2934,13 @@ void CAlphaCPU::tbis(u64 virt, int flags) {
 }
 
 void CAlphaCPU::tbis_d(u64 virt, int asn) {
+  {
+    STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+    if (sh.valid && sh.virt == (virt & sh.match_mask) &&
+        (sh.asm_bit || sh.asn == asn))
+      sh.valid = false;
+  }
+
   int i;
 
   for (i = 0; i < TB_ENTRIES; i++) {
