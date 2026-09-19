@@ -79,13 +79,20 @@ booting them), `test-arc` (AlphaBIOS/ARC console via flash + S3),
 `guest-boot-bench` (Windows 2000 guest boots and the MIPS benchmark).
 
 **Performance claims go through `test/tools/perf_ab.py`, and are quoted
-from `lab/results/ledger.md`, never from memory.** It refuses to time
-while a build or another guest runs, refuses fewer than two interleaved
-rounds, checks every section's computed result is identical across arms,
-records both binaries' hashes and HEAD, and marks `--expect` predictions
-hit or miss. A number that did not come out of it is an estimate and must
-be labelled one. Static figures (bytes per instruction, block size) are
-never quoted as dynamic cost.
+from `lab/results/ledger.md`, never from memory.** It never times while a
+build or another guest runs (it waits for a quiet host), refuses fewer
+than two interleaved rounds, checks every section's computed result is
+identical across arms, records both binaries' hashes, HEAD and the method,
+and marks `--expect` predictions hit or miss. Two builds of one file
+differ by 5-10% per section from code layout alone, so an effect under
+~10% is measured **inside one binary**: give the change a runtime switch
+(`ALPHABOX_JIT_*=0` for an emitter shape, read once with `getenv`) and run
+`perf_ab.py label bin bin --env-base SWITCH=0`. `--snapshot` resumes the
+desktop snapshot from `nt_snap.sh make` instead of cold-booting: minutes
+per A/B instead of a quarter of an hour. A number that did not come out
+of it is an estimate and must be labelled one. Static figures (bytes per
+instruction, block size) are never quoted as dynamic cost -- on this host,
+instructions off the address and branch chains cost nothing measurable.
 For headless driving of the emulator (fb dumps, key/mouse injection,
 `SDL_VIDEO_DRIVER=dummy`), the `ALPHABOX_*` env hooks are documented in
 `docs/headless.md`.
