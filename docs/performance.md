@@ -32,9 +32,18 @@ iterations and means nothing.
 
 ## The numbers
 
-- **Translated Alpha code**: about 4300 MIPS on a tight arithmetic loop and
-  4000 MIPS on a memory loop, per emulated CPU (`cpu_bench.sh`). For scale,
-  the fastest Alpha ever built, the EV7z at 1.30 GHz, was about 10300 MIPS.
+- **Real guest code** (the NT application benchmark through the desktop
+  snapshot, JIT_STATS windows of 100M instructions, 2026-09-19 with
+  everything below landed): about **3000 MIPS** overall on one emulated
+  CPU -- 4040 median on the alu loop, 2800-3500 on most sections, 2200-2600
+  on the slowest -- roughly 1.35 host cycles per Alpha instruction on an
+  M3 Max. The stats build is a few percent under production.
+- **Translated Alpha code in a tight loop** (`cpu_bench.sh`, production
+  build, same day): 4200 MIPS on an arithmetic loop and 3540 on a load/store
+  loop, per emulated CPU; earlier in the month 4300 and 4000, the memory
+  figure within the tool's run-to-run spread and not A/B'd. For scale, the
+  ES40's own EV68 at 667 MHz did roughly 1300-1500 MIPS in practice, and the
+  fastest Alpha ever built, the EV7z at 1.30 GHz, about 10300.
 - **A CPU-bound command inside Windows 2000**: a 15-million-iteration `cmd`
   batch loop takes about 62 s (`win_workload.sh`, median of three). This is
   the most representative number we have, because it is real guest code that

@@ -19,8 +19,11 @@ and AArch64 hosts under Linux, macOS and Windows.
 - **Real firmware.** Boots the genuine SRM console and, from it, the
   ARC/AlphaBIOS console; graphics cards run their real VGA BIOS.
 - **Fast.** An asmjit-based JIT for x86-64 and AArch64 hosts (Apple Silicon
-  included), with block chaining and register pinning. An interpreter build
-  is always available too.
+  included), with block chaining, register pinning, extended blocks, a
+  host-side page cache and an indexed TB with a shadow of evicted
+  translations. About 3000 MIPS on real guest code on an Apple M3 Max --
+  two to three times the ES40's own processor. An interpreter build is
+  always available too.
 - **Quiet when idle.** Idle pacing recognizes the guest's idle loops and
   sleeps until an interrupt arrives, so an idle guest costs a few percent of
   a host core.
@@ -87,12 +90,22 @@ The [documentation](docs/README.md) covers the details:
 
 ## Performance
 
-With the JIT build on an Apple M-series host, translated Alpha code runs at
-about 4300 MIPS per emulated CPU on an arithmetic loop and 4000 on a memory
-loop, and 96.6 % of guest instructions execute as host code. Inside a
-Windows 2000 guest, a CPU-bound 15-million-iteration `cmd` loop takes about
-62 s. An idle two-CPU Windows 2000 desktop uses about 3-6 % of one host
-core.
+With the JIT build on an Apple M3 Max, real guest code -- a Windows 2000
+application benchmark that isolates one JIT datapath per section -- runs at
+about 3000 MIPS per emulated CPU (2200 to 4000 depending on the section),
+about 1.35 host cycles per Alpha instruction; a tight arithmetic loop that
+never leaves a block reaches 4200 MIPS and a load/store loop 3500. The
+ES40's own EV68 at 667 MHz managed roughly 1300 to 1500 in practice, the
+fastest Alpha ever built about 10300. Over 99 % of guest instructions
+execute as host code. An idle two-CPU Windows 2000 desktop uses about
+3-6 % of one host core.
+
+The measurements that got here are in
+[docs/performance.md](docs/performance.md), each one made inside one binary
+with a runtime switch and recorded with its prediction, because two builds
+of the same code differ by 5-10 % per section from code layout alone. A
+resumed desktop snapshot (`nt_snap.sh`) makes such an A/B a matter of
+minutes.
 
 A MIPS figure taken from a running guest is worth less than it looks: a
 booting guest spends its time spinning on the cycle counter waiting for real
