@@ -192,6 +192,19 @@ char *CSystem::PtrToMem(u64 address) {
 /**
  * Register a device as being a CPU. Return the CPU number.
  **/
+void CSystem::set_direct_memory(u64 base, u64 size, u8 *host) {
+  // Withdraw first (end = 0: no CPU can map a page from here on), publish
+  // the new triple with the end last, then have every CPU drop what it
+  // cached under the old one.
+  m_direct_end.store(0, std::memory_order_release);
+  m_direct_base = base;
+  m_direct_host = host;
+  if (size)
+    m_direct_end.store(base + size, std::memory_order_release);
+  for (int i = 0; i < iNumCPUs; i++)
+    acCPUs[i]->request_dpc_flush();
+}
+
 int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
   if (iNumCPUs >= 4)
     return -1;

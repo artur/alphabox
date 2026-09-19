@@ -80,6 +80,10 @@ public:
   /// Recompute what is derived from the registers (timing, the linear
   /// window) once every register is back.
   virtual void post_restore() {}
+  /// True while the card's framebuffer is offered to the CPUs for direct
+  /// access (CSystem::set_direct_memory): writes then bypass the card, so
+  /// the renderer cannot rely on its dirty flag and redraws every frame.
+  virtual bool direct_framebuffer_active() const { return false; }
 
   // --- legacy (fixed-address) ranges -------------------------------------
   /// Dispatches the standard VGA ranges (see LegacyRange) and hands every

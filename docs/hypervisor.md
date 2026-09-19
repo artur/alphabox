@@ -119,6 +119,38 @@ The compiler can stay outside the VM at first: the code cache is shared
 memory and compiles are rare, which postpones porting asmjit to the
 freestanding runtime.
 
+## What the device traffic actually is
+
+The census above counts page-cache misses on device pages; it does not say
+which pages. A per-address histogram of every device access the helpers
+served over one Windows 2000 boot-plus-benchmark run (JIT_STATS,
+`dump_device_pages`, 2026-09-20; ~158M accesses, 93% captured) says:
+
+| address | what | reads | writes |
+| --- | --- | --- | --- |
+| port 0x1F0 | **IDE data port: PIO disk transfers** | 81.6M | 10.7M |
+| port 0x60 | keyboard-controller data | 22.5M | -- |
+| port 0x40 | PIT counter 0 (with 3.7M latch writes to it) | 7.4M | 3.7M |
+| `0x801a0000000` | Tsunami Pchip CSRs | 8.7M | -- |
+| `0xA0000` | the legacy VGA window (text during the boot) | 3.7M | 1.1M |
+| ports 0x3D8, 0x3CC, 0x3D4, 0x3C4, 0x3DA | VGA registers | 3.1M | 0.8M |
+| BAR0, the S3's linear framebuffer | -- | below 20k | below 20k |
+
+**The framebuffer is not in it.** Windows 2000's S3 driver draws through
+the accelerator and its ports; the CPU never writes pixels into the linear
+window. So the prerequisite this document named -- the framebuffer as
+shared memory -- was the wrong one: it is implemented now (the S3 offers
+BAR0's VRAM to the CPUs' page caches, `ALPHABOX_LFB_DIRECT`; a resumed
+desktop draws through it, and it changes nothing measurable on this
+guest), and it does not touch the cost. The cost is device *registers*,
+and 58% of it is one of them: the IDE data port, because the guest moves
+its disk data by PIO, one word per port read. Under a hypervisor every one
+of those is an exit at ~1 us: ~90 s per boot for the disk alone. What
+would remove it is not shared memory but a guest that uses bus-master DMA
+for its disks, or an in-VM model of the polled registers (the data port,
+the keyboard controller, the PIT, the Pchip CSRs) -- a much larger design
+than this document described.
+
 ## The MMIO census, priced for today's build
 
 The same census also says something about the emulator as it is. 140M

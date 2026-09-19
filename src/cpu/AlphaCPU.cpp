@@ -676,9 +676,15 @@ void CAlphaCPU::dump_ic_flush_pcs() {
   }
 }
 
+#ifdef JIT_STATS
+void dump_device_pages();
+#endif
 CAlphaCPU::~CAlphaCPU() {
   stop_threads();
   dump_ic_flush_pcs();
+#ifdef JIT_STATS
+  dump_device_pages();
+#endif
 #ifdef JIT_VERIFY
   printf("%%CPU-I-TBINDEX: %llu probes, %llu false negatives\n",
          (unsigned long long)m_tb_idx_probes,
@@ -985,6 +991,8 @@ _next_instruction:
       // timer reaches 0. Batch to reduce memory ops.
       if (state.check_timers) {
         state.check_timers = false;
+        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel))
+          flush_data_page_cache(); // the direct range changed (see CSystem)
         for (int j = 0; j < 6; j++) {
           if (state.irq_h_timer[j]) {
             if (state.irq_h_timer[j] <= 32) {

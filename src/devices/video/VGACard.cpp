@@ -1492,6 +1492,8 @@ void CVGACard::update() {
   const int kBlinkRefreshFrames =
       8; // >= 2x the ~1.9 Hz VGA blink toggle at a 60 Hz refresh
   const uint64_t cursor_sig = hw_cursor_signature();
+  if (direct_framebuffer_active())
+    state.vga_mem_updated = 1; // the CPUs write VRAM behind our back
   if (!state.vga_mem_updated && cursor_sig == m_last_cursor_sig &&
       ++m_frames_since_render < kBlinkRefreshFrames) {
     screen().tick_frame(); // keep cursor/text-blink timing alive while skipping

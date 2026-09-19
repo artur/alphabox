@@ -198,6 +198,22 @@ public:
   void UnregisterComponent(CSystemComponent *component);
   int RegisterCPU(class CAlphaCPU *cpu);
 
+  /// Device memory that is plain bytes on the host -- a linear framebuffer
+  /// -- offered for direct access: a CPU's data page cache then maps its
+  /// pages like DRAM and compiled code reads and writes them inline, with
+  /// no device call. One range (the S3's linear window). The owner offers it
+  /// when the window is live and withdraws it (size 0) before the bytes stop
+  /// being the truth; every CPU's page cache is flushed on either change,
+  /// on the CPU's own thread. The end is published last, so a CPU that
+  /// reads a torn triple sees no range rather than a wrong one.
+  void set_direct_memory(u64 base, u64 size, u8 *host);
+  inline u8 *direct_host_page(u64 phys_page) const {
+    const u64 end = m_direct_end.load(std::memory_order_acquire);
+    if (phys_page < end && phys_page >= m_direct_base)
+      return m_direct_host + (phys_page - m_direct_base);
+    return nullptr;
+  }
+
   const platform_config *m_platform = nullptr; ///< the machine (Platform.hpp)
 
   /**
@@ -561,6 +577,11 @@ private:
   int iLastMemory = -1;
 
   class CAlphaCPU *acCPUs[4];
+public:
+  u64 m_direct_base = 0;
+  std::atomic<u64> m_direct_end{0};
+  u8 *m_direct_host = nullptr;
+private:
 
   CConfigurator *myCfg;
 

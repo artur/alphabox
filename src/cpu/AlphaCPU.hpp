@@ -615,6 +615,24 @@ private:
     for (int rw = 0; rw < 2; rw++)
       data_page_cache[rw][idx].invalidate();
   }
+  /// The host bytes behind a physical page for the page cache: DRAM, or
+  /// device memory the system offers for direct access (a framebuffer), or
+  /// 0 for everything else (MMIO: every access goes through the device).
+  inline u64 dpc_host_base(u64 phys) const {
+    const u64 page = phys & ~U64(0x1FFF);
+    if ((phys | U64(0x1FFF)) < dram_size)
+      return (u64)dram_ptr + page;
+    return (u64)cSystem->direct_host_page(page);
+  }
+  /// Another thread changed what the page cache may map (the direct range
+  /// moved or went away): flush on this CPU's own thread, at the next timer
+  /// check, which the JIT's gate also honours.
+  std::atomic<bool> m_dpc_flush_req{false};
+  friend class CSystem; // set_direct_memory() asks every CPU to flush
+  void request_dpc_flush() {
+    m_dpc_flush_req.store(true, std::memory_order_release);
+    state.check_timers = true;
+  }
   u64 m_stat_dpc_flushes = 0; // flush_data_page_cache() calls (JIT_STATS)
   inline void flush_data_page_cache() {
     ++m_stat_dpc_flushes;

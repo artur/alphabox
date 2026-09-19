@@ -515,10 +515,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
         if (virt2phys(_dpc_va, &phys_address, flags, NULL, ins))               \
           ES40_EXECUTE_END();                                                  \
         _dpc.fill(_dpc_vp, phys_address & ~U64(0x1FFF),                        \
-                  ((phys_address | U64(0x1FFF)) < dram_size)                   \
-                      ? ((u64)dram_ptr + (phys_address & ~U64(0x1FFF)))        \
-                      : 0,                                                     \
-                  state.cm, state.asn0);                                       \
+                  dpc_host_base(phys_address), state.cm, state.asn0);          \
       }                                                                        \
     } else {                                                                   \
       /* PAL privileged access (NO_CHECK, VPTE, ALT, etc) — skip cache */    \

@@ -1641,6 +1641,7 @@ int CS3Trio64::restore_card_state(FILE *f) {
 }
 
 void CS3Trio64::post_restore() {
+  lfb_recalc_and_cache();      // BAR0 / COMMAND, and the direct offer
   update_linear_mapping();    // the CR58/59/5A decode
   refresh_pitch_offset();     // CR43/CR51 bits of the pitch
   recompute_scanline_layout(); // CR5D extension bits
@@ -1655,6 +1656,7 @@ void CS3Trio64::update_linear_mapping() {
   lfb_active = s3_lfb_enabled(m_crtc_map.read_byte(0x58));
   lfb_size = s3_lfb_size_from_cr58(m_crtc_map.read_byte(0x58));
   lfb_base = s3_lfb_base_from_regs();
+  refresh_direct_lfb();
 #ifdef S3_LFB_TRACE
   printf("LFB (BAR-only): CR58=%02x base=%08x size=%x active=%d\n",
          m_crtc_map.read_byte(0x58), lfb_base, lfb_size, lfb_active);
@@ -1678,6 +1680,7 @@ void CS3Trio64::on_crtc_linear_regs_changed() {
 
   // Apply/unapply the mapping now that CR regs changed
   lfb_recalc_and_map();
+  refresh_direct_lfb();
   trace_lfb_if_changed("CR58/59/5A");
 }
 
@@ -2741,6 +2744,47 @@ void CS3Trio64::trace_lfb_if_changed(const char *reason) {
     lfb_trace_needs_first_access_note = true;
 }
 
+// The linear window, offered as plain memory. Through BAR0 the S3 does
+// nothing a plain store would not: mem_write puts the bytes into VRAM masked
+// by its size and sets the dirty flag (which the renderer now assumes while
+// the offer stands), so the CPUs may write VRAM directly. Offered while the
+// window is live (COMMAND.MSE, CR58 enable, BAR0 set) and the card sits on
+// the hose (a bridge maps its ranges elsewhere); withdrawn the moment any of
+// that changes, which also flushes every CPU's page cache. Its size is the
+// VRAM's: that is what the BAR path exposes, whatever CR58 says.
+void CS3Trio64::refresh_direct_lfb() {
+  static const bool enabled = [] {
+    const char *e = getenv("ALPHABOX_LFB_DIRECT");
+    return !(e && e[0] == '0');
+  }();
+  const bool live = enabled && !myBridge && pci_mem_enable && lfb_active &&
+                    pci_bar0 != 0 && vga.memory;
+  u64 base = 0, size = 0;
+  if (live) {
+    // The whole VRAM, not CR58's window size: through BAR0 the card masks
+    // every access by the VRAM size and ignores that field (Windows sets
+    // it to 64K and draws through all 4 MB).
+    base = bus_address(false, pci_bar0);
+    size = vga.svga_intf.vram_size;
+  }
+  static const bool trace = getenv("ALPHABOX_TRACE_LFB") != nullptr;
+  if (trace)
+    printf("%s: direct LFB: enabled=%d bridge=%d mse=%d active=%d bar0=%08x "
+           "lfb_size=%x vram=%zx -> %s %llx+%llx\n",
+           devid_string, (int)enabled, myBridge ? 1 : 0, (int)pci_mem_enable,
+           (int)lfb_active, pci_bar0, lfb_size, vga.svga_intf.vram_size,
+           live ? "offer" : "none", (unsigned long long)base,
+           (unsigned long long)size);
+  if (base == lfb_direct_base && size == lfb_direct_size)
+    return;
+  lfb_direct_base = base;
+  lfb_direct_size = size;
+  printf("%s: linear window %s for direct access (%llx + %llx)\n", devid_string,
+         size ? "offered" : "withdrawn", (unsigned long long)base,
+         (unsigned long long)size);
+  cSystem->set_direct_memory(base, size, size ? vga.memory : nullptr);
+}
+
 void CS3Trio64::lfb_recalc_and_cache() {
   // COMMAND bit 1 (Memory Space Enable)
   // config_read takes the width in bits: the old sizes 2 and 4 matched no
@@ -2760,6 +2804,7 @@ void CS3Trio64::lfb_recalc_and_cache() {
   lfb_base_ = bar0;                        // effective CPU-visible base = BAR0
   lfb_size_ = s3_lfb_size_from_cr58(cr58); // 64K/1M/2M/4M per Trio64
   lfb_enabled_ = pci_mem_enable && s3_lfb_enabled(cr58) && (bar0 != 0);
+  refresh_direct_lfb();
 }
 
 /**

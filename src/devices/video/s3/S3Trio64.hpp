@@ -314,6 +314,12 @@ private:
   u32 lfb_size = 0;         // 64K/1M/2M/4M
   u64 lfb_phys = 0;         // full physical mapping base we registered
   bool lfb_active = false;  // effective enable (PCI + CR58)
+  /// The linear window offered to the CPUs for direct access (see
+  /// refresh_direct_lfb): the system address and size it was offered at,
+  /// or size 0. ALPHABOX_LFB_DIRECT=0 keeps every access on the device path.
+  u64 lfb_direct_base = 0, lfb_direct_size = 0;
+  void refresh_direct_lfb();
+  bool direct_framebuffer_active() const override { return lfb_direct_size != 0; }
 
   bool pci_mem_enable = false; // PCI Command.MSE cached
   u32 pci_bar0 = 0; // cached BAR0 (optional; we treat CR58..5A as truth)

@@ -1187,6 +1187,42 @@ int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
 // JIT load helper (static). Reads size_bits from virtual address va into *out,
 // mirroring DATA_PHYS_NT's normal-read fast path. Returns 0 on success, or 1 on
 // a translation fault / unaligned access - the caller bails to the interpreter
+#ifdef JIT_STATS
+// Which device pages the helpers serve, and how often: the framebuffer we
+// can offer for direct access, or an engine's port we cannot. Printed when
+// the CPU goes away (dump_device_pages).
+// A hashed table: the I/O window alone has hundreds of distinct ports.
+static u64 g_devpage[4096], g_devpage_n[4096][2];
+static u64 g_devpage_dropped = 0;
+static void note_device_page(u64 phys, bool write) {
+  // Keyed by page, except inside the PCI I/O window, where the port itself
+  // is the question (one page holds the PIT, the RTC, the keyboard
+  // controller, the IDE and the VGA ports).
+  const bool io = (phys >> 26) == (U64(0x00000801fc000000) >> 26);
+  const u64 key = (io ? (phys & ~U64(3)) : (phys & ~U64(0x1FFF))) | 1;
+  u64 h = (key * U64(0x9E3779B97F4A7C15)) >> 52;
+  for (int probe = 0; probe < 64; probe++, h = (h + 1) & 4095) {
+    if (g_devpage[h] == key || g_devpage[h] == 0) {
+      g_devpage[h] = key;
+      g_devpage_n[h][write ? 1 : 0]++;
+      return;
+    }
+  }
+  g_devpage_dropped++;
+}
+void dump_device_pages() {
+  printf("[JIT][STATS] device addresses served by the helpers (reads/writes), "
+         "%llu dropped:\n",
+         (unsigned long long)g_devpage_dropped);
+  for (int i = 0; i < 4096; i++)
+    if (g_devpage[i] && g_devpage_n[i][0] + g_devpage_n[i][1] > 20000)
+      printf("[JIT][STATS]   %016llx  %10llu / %10llu\n",
+             (unsigned long long)(g_devpage[i] & ~U64(1)),
+             (unsigned long long)g_devpage_n[i][0],
+             (unsigned long long)g_devpage_n[i][1]);
+}
+#endif
+
 int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // Bit 8 of size_bits selects DTB_ALTMODE access checks (the HW_LD/HW_ST
   // virtual-alt forms); plain loads/stores pass the bare size.
@@ -1246,9 +1282,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
       phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF),
-             ((phys | U64(0x1FFF)) < cpu->dram_size)
-                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                 : 0,
+             cpu->dpc_host_base(phys),
              cm, cpu->state.asn0);
   }
 
@@ -1260,6 +1294,14 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // stops at the load (done < prefix_len) and the verify skips the compare,
   // matching prod.
   if (phys >= cpu->dram_size) {
+#ifdef JIT_STATS
+    note_device_page(phys, false);
+#endif
+    if (dpc.host_base) { // device memory offered for direct access
+      *out = dram_read((const char *)dpc.host_base, phys & U64(0x1FFF),
+                       size_bits);
+      return 0;
+    }
 #ifdef JIT_VERIFY
     return 1;
 #else
@@ -1601,9 +1643,7 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
       phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF),
-             ((phys | U64(0x1FFF)) < cpu->dram_size)
-                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                 : 0,
+             cpu->dpc_host_base(phys),
              cpu->state.cm, cpu->state.asn0);
   }
 
@@ -1838,16 +1878,20 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF),
-             ((phys | U64(0x1FFF)) < cpu->dram_size)
-                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                 : 0,
+             cpu->dpc_host_base(phys),
              cm, cpu->state.asn0);
   }
 
   if (phys < cpu->dram_size)
     dram_write(cpu->dram_ptr, phys, size_bits, value);
-  else
+  else if (dpc.host_base) // device memory offered for direct access
+    dram_write((char *)dpc.host_base, phys & U64(0x1FFF), size_bits, value);
+  else {
+#ifdef JIT_STATS
+    note_device_page(phys, true);
+#endif
     cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+  }
   return 0;
 }
 
@@ -1942,9 +1986,7 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF),
-             ((phys | U64(0x1FFF)) < cpu->dram_size)
-                 ? ((u64)cpu->dram_ptr + (phys & ~U64(0x1FFF)))
-                 : 0,
+             cpu->dpc_host_base(phys),
              cpu->state.cm, cpu->state.asn0);
   }
 

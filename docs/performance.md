@@ -581,6 +581,22 @@ both through the snapshot, three rounds, results identical): against HEAD
 -1% to -3% and inside the two-build band; against the bare scan -8.1%,
 ldst -27%, byte -15%, which is what the hint had already been buying.
 
+### The device traffic, by address
+
+The page-cache census counts device accesses; `JIT_STATS` now also keeps a
+per-address histogram of the ones the helpers serve (`dump_device_pages`,
+printed when the CPU goes away). Over a Windows 2000 boot-plus-benchmark
+run: 58% are the IDE data port (81.6M reads and 10.7M writes -- the guest
+moves its disk data by PIO), 14% the keyboard controller's data port
+(22.5M reads: worth a look, nothing was typed), 7% the PIT (3.7M latches),
+5.5% the Pchip CSRs, 3% the legacy VGA window. The S3's linear framebuffer
+does not appear: the driver draws through the accelerator. So the
+framebuffer-on-the-fast-path item, built and verified (the S3 offers
+BAR0's VRAM to the page caches, `CSystem::set_direct_memory`, switch
+`ALPHABOX_LFB_DIRECT`; a resumed desktop draws through it), buys nothing
+on this guest and stays for the guests that do write pixels. At ~15 ns an
+access the whole device traffic is ~2 s of a 140 s boot.
+
 The band is also a lever: if two builds of one file swing a section by
 5-10%, some hot loop is alignment-sensitive. Aligning the hot helpers and
 the dispatch loop to 64 bytes and fixing the symbol order with a linker
