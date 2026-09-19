@@ -530,6 +530,20 @@ private:
   static_assert(sizeof(SDataPageCache) == 64,
                 "the JIT indexes the page cache with a shift");
 
+  /// Where each page was last found in the TB: (va >> 13) & mask -> entry
+  /// number, zero-initialised. Real hardware searches its 128-entry
+  /// DTB fully-associatively in a cycle; FindTBEntry searches it with a
+  /// linear loop when its last-match guess fails, which on code that walks
+  /// memory is every page-cache miss -- measured at ~950 host cycles per
+  /// access on a 48 MB stride. This is advisory only: a hit is validated
+  /// against the entry exactly as the scan would, so a stale slot costs one
+  /// scan and can never return a wrong mapping, and nothing has to
+  /// invalidate it. Not saved state, for the same reason.
+  static constexpr int kTbHintBits = 10;
+  static constexpr int kTbHintEntries = 1 << kTbHintBits;
+  u8 m_tb_hint[2][kTbHintEntries] = {}; // a wrong slot costs one scan, so
+                                         // zero is a fine "empty
+
   /// (asn0 << 2) | cm: the half of a page-cache tag that is not the page.
   /// Kept beside the state it is made of so compiled code can load it in one
   /// instruction; dpc_context_changed() is what keeps it true.

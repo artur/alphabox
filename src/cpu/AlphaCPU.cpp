@@ -2054,12 +2054,24 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
       TB_ASN_MATCH(state.tb[t][i]))
     return i;
 
+  // Then where this page was found last time (m_tb_hint): one indexed probe
+  // instead of the scan below, validated by the same test the scan applies.
+  u8 &hint = m_tb_hint[t][(virt >> 13) & (kTbHintEntries - 1)];
+  i = hint;
+  if (i < TB_ENTRIES && state.tb[t][i].valid &&
+      !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
+      TB_ASN_MATCH(state.tb[t][i])) {
+    state.last_found_tb[t][rw] = i;
+    return i;
+  }
+
   // Otherwise, loop through the TB entries to find a match.
   for (i = 0; i < TB_ENTRIES; i++) {
     if (state.tb[t][i].valid &&
         !((state.tb[t][i].virt ^ virt) & state.tb[t][i].match_mask) &&
         TB_ASN_MATCH(state.tb[t][i])) {
       state.last_found_tb[t][rw] = i;
+      hint = (u8)i;
       return i;
     }
   }

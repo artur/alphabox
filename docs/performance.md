@@ -354,6 +354,7 @@ And two that did, for contrast:
 | The 8514/A pixel routine: mask instead of six divides, direct memory instead of eight virtual calls | the listing 20 s -> 18 s |
 | Reading the host clock as a register instead of through `steady_clock` | the `cmd` loop 65.8 s -> 61.6 s |
 | Four instructions off the inline memory access (`ubfx` index, `ldp` for tag+bias, the displacement folded into one `add`, loading into the destination's pin) | access sequence 16 -> 12 host instructions; `nt_bench.sh axp` **-4.6%**, 24335-24640 ms against 23328-23398, no overlap. `stride` flat, because it misses the page cache on every access and never runs the probe |
+| An advisory page -> TB-entry index in front of `FindTBEntry`'s linear scan | `nt_bench.sh axp` **-4.6%** via `perf_ab.py` (22570-22695 ms -> 21562-21609, results identical): `ldst` -25.7%, `byte` -13.3%, `stride` only -3.0%. The prediction was the reverse -- `stride`'s consecutive pages share one granularity-hint entry, so the last-match guess already hit there; the scan ran where accesses alternated between pages |
 | Branching on a conditional terminator's own condition instead of building both successor PCs and comparing them | `nt_bench.sh axp` **-2.2%**, 23000-23015 ms against 22476-22515. `div` **-12.5%**, because the benchmark's compiler emits division as an inline restoring loop of conditional branches |
 
 Together those compound to about **6.7%** on that benchmark. Quote the two
