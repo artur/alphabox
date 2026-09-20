@@ -90,6 +90,10 @@ private:
   // REGISTER 61 (NMI)
   u8 reg_61_read();
   void reg_61_write(u8 data);
+  /// Pacing of a guest stall loop on port 61h (see reg_61_read): the time of
+  /// the previous read and how many back-to-back reads there have been.
+  u64 m_r61_last_ns = 0;
+  unsigned m_r61_run = 0;
 
   // REGISTERS 70 - 73: TOY
   u8 toy_read(u32 address);

@@ -35,9 +35,15 @@
  * Contains the code for the emulated Ali M1543C chipset devices.
  **/
 #include "AliM1543C.hpp"
+#include <cstdlib>
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "VGA.hpp"
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#else
+#include <time.h>
+#endif
 
 #ifdef DEBUG_PIC
 bool pic_messages = false;
@@ -552,14 +558,118 @@ void CAliM1543C::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
  * Every 1500 reads the bit gets flipped so maybe the timing will
  * seem reasonable to the OS.
  */
+// Sleep the calling thread until an absolute steady_clock instant, as
+// precisely as the host allows: mach_wait_until on macOS (steady_clock is
+// mach_absolute_time there), clock_nanosleep with TIMER_ABSTIME elsewhere.
+#ifdef __APPLE__
+static mach_timebase_info_data_t g_tb = [] {
+  mach_timebase_info_data_t t;
+  mach_timebase_info(&t);
+  return t;
+}();
+#endif
+// The pacing clock: nanoseconds on the same clock the deadline is waited
+// on (mach_absolute_time on Apple, where steady_clock's epoch is not
+// guaranteed to be it; CLOCK_MONOTONIC elsewhere).
+static u64 pace_now_ns() {
+#ifdef __APPLE__
+  return mach_absolute_time() * g_tb.numer / g_tb.denom;
+#else
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+#endif
+}
+static void sleep_until_ns(u64 ns) {
+#ifdef __APPLE__
+  mach_wait_until(ns * g_tb.denom / g_tb.numer);
+#else
+  struct timespec ts;
+  ts.tv_sec = (time_t)(ns / 1000000000ull);
+  ts.tv_nsec = (long)(ns % 1000000000ull);
+  clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr);
+#endif
+}
+
 u8 CAliM1543C::reg_61_read() {
   // Bit 4: DRAM refresh request, toggling every ~15 us of wall-clock time
   // (delay loops poll it). Bit 5: counter 2's output, from its analytic phase
   // so pollers see jitter-free edges.
-  const u64 refresh_ns =
+  u64 refresh_ns =
       (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
           .count();
+  // Pacing. A guest stall loop (a HAL's KeStallExecutionProcessor counts
+  // refresh toggles) reads this port millions of times a second and burns a
+  // host core for the length of its stall -- 22M reads over one 10 s phase
+  // of a Windows 2000 boot. After a run of back-to-back reads inside one
+  // half-period the thread sleeps to the NEXT toggle edge and answers with
+  // the post-edge value: the guest sees the toggle sequence it would have
+  // seen, at the wall-clock instants it happens (the edge is computed, not
+  // slept "for"), and the core is free in between. ALPHABOX_STALL_PACE=0
+  // turns it off (the same-binary A/B switch).
+  static const bool pace = [] {
+    const char *e = getenv("ALPHABOX_STALL_PACE");
+    return !(e && e[0] == '0');
+  }();
+  // ALPHABOX_TRACE_STALL=1: each burst of port 61h reads as wall-clock time
+  // and count (a burst ends when 50 ms pass without a read), so pacing can
+  // be checked for what matters: the guest's stall must take the same time.
+  static const bool trace = getenv("ALPHABOX_TRACE_STALL") != nullptr;
+  if (trace) {
+    // Bursts are summed up and printed at exit (the last one never ends
+    // with a read after it): what matters is that the guest's stalls take
+    // the same wall time paced as unpaced, with fewer reads.
+    static u64 burst_start = 0, burst_last = 0, burst_n = 0;
+    static u64 sum_ns = 0, longest_ns = 0, bursts = 0, reads = 0;
+    static const bool registered = [] {
+      atexit([] {
+        const u64 open_ns = burst_last - burst_start;
+        printf("STALL bursts of port 61h reads: %llu bursts over 1000 reads, "
+               "%llu reads, %.1f ms in all, longest %.1f ms\n",
+               (unsigned long long)(bursts + (burst_n > 1000)),
+               (unsigned long long)(reads + burst_n),
+               (double)(sum_ns + (burst_n > 1000 ? open_ns : 0)) / 1e6,
+               (double)(longest_ns > open_ns ? longest_ns : open_ns) / 1e6);
+      });
+      return true;
+    }();
+    (void)registered;
+    const u64 t = pace_now_ns();
+    if (burst_n && t - burst_last > 50000000ull) {
+      if (burst_n > 1000) {
+        const u64 d = burst_last - burst_start;
+        bursts++;
+        reads += burst_n;
+        sum_ns += d;
+        if (d > longest_ns)
+          longest_ns = d;
+      }
+      burst_n = 0;
+    }
+    if (!burst_n)
+      burst_start = t;
+    burst_last = t;
+    burst_n++;
+  }
+  if (pace) {
+    const u64 now = pace_now_ns();
+    m_r61_run = (now - m_r61_last_ns < 3000) ? m_r61_run + 1 : 0;
+    if (m_r61_run >= 64) {
+      // The next edge on the pacing clock, and at most one half-period
+      // away: a deadline can never be far off, whatever the clocks do.
+      const u64 edge = (now / REFRESH_TOGGLE_NS + 1) * REFRESH_TOGGLE_NS;
+      sleep_until_ns(edge);
+      const u64 woke = pace_now_ns();
+      // Report the toggle as the pacing clock sees it, so the sleep and the
+      // value agree; the two clocks tick at the same rate.
+      refresh_ns += (woke > now ? woke - now : 0);
+      m_r61_run = 0;
+      m_r61_last_ns = woke;
+    } else {
+      m_r61_last_ns = now;
+    }
+  }
   state.reg_61 &= ~0x30;
   if ((refresh_ns / REFRESH_TOGGLE_NS) & 1U)
     state.reg_61 |= 0x10;
