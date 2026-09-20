@@ -636,7 +636,12 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
   ibm8514.src_y = 0;
   ibm8514.bus_size = (data & 0x0600) >> 9;
 
-  ibm8514.force_busy = true;
+  // Commands execute synchronously below, so the engine is never busy at
+  // the next status read; force_busy made it report HDW_BSY once after
+  // every command, and the S3 display driver's idle wait always failed its
+  // first read and re-polled -- twice the status traffic per primitive.
+  // gpbusy still covers the host-data WAIT states.
+  ibm8514.force_busy = false;
 
   switch (data & 0xe000) {
   case 0x0000: // NOP (for "Short Stroke Vectors")
