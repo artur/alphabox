@@ -260,12 +260,27 @@ void CSerial::stop_threads() {
  **/
 CSerial::~CSerial() { stop_threads(); }
 
+// ALPHABOX_TRACE_SERIAL=<port number>: every register write on that port,
+// with how many times the guest read IIR since the previous write and what
+// the first of those reads returned -- a routine spinning on IIR shows as
+// one write followed by millions of reads of one value.
+static const int s_trace_serial = getenv("ALPHABOX_TRACE_SERIAL")
+                                      ? atoi(getenv("ALPHABOX_TRACE_SERIAL"))
+                                      : -1;
+static u64 s_ser_iir_reads = 0;
+static int s_ser_iir_first = -1;
+
 u64 CSerial::ReadMem(int index, u64 address, int dsize) {
   u8 d;
 
   if (disabled)
     return 0xffu; // missing-UART signature
 
+  if (s_trace_serial == state.iNumber && address == 2) {
+    if (s_ser_iir_first < 0)
+      s_ser_iir_first = state.bIIR;
+    s_ser_iir_reads++;
+  }
   switch (address) {
   case 0: // data buffer
     if (state.bLCR & 0x80) {
@@ -303,7 +318,7 @@ u64 CSerial::ReadMem(int index, u64 address, int dsize) {
 
   case 2: // interrupt cause
     d = state.bIIR;
-    if (d == 0x02)
+    if ((d & 0x0f) == 0x02) // the cause, apart from the FIFO bits above
       state.thre_pending = false; // reading IIR acknowledges THRE
     eval_interrupts();            // recompute IIR and re-drive the IRQ line
     return d;
@@ -336,6 +351,15 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
   if (disabled)
     return; // ignore guest writes to a disabled port
 
+  if (s_trace_serial == state.iNumber) {
+    printf("SERT port %d: IIR reads since last write %llu (first %02x); write "
+           "reg %llu = %02x (LCR %02x IER %02x FCR %02x)\n",
+           state.iNumber, (unsigned long long)s_ser_iir_reads,
+           s_ser_iir_first < 0 ? 0 : s_ser_iir_first, (unsigned long long)address,
+           d, state.bLCR, state.bIER, state.bFCR);
+    s_ser_iir_reads = 0;
+    s_ser_iir_first = -1;
+  }
   switch (address) {
   case 0:
     if (state.bLCR & 0x80) // divisor latch access bit set
@@ -390,7 +414,15 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
     break;
 
   case 2:
+    // FCR. The receive ring is the FIFO; bit 1 empties it, bit 2 has
+    // nothing to empty (transmission is immediate). Bit 0 is what a driver
+    // reads back in IIR bits 7:6 to know it has a 16550 with FIFOs: without
+    // that, every OS's probe concludes "16450, no FIFO" and takes an
+    // interrupt and two register reads per character.
     state.bFCR = d;
+    if (d & 0x02)
+      state.rcvR = state.rcvW;
+    eval_interrupts();
     break;
 
   case 3:
@@ -445,10 +477,13 @@ void CSerial::eval_interrupts() {
     state.bIIR = 0x04; // received data available
   else if ((state.bIER & 0x02) && state.thre_pending)
     state.bIIR = 0x02; // transmitter holding register empty
+  const bool pending = (state.bIIR & 0x01) == 0;
+  if (state.bFCR & 0x01)
+    state.bIIR |= 0xC0; // FIFOs enabled: a 16550 says so here
 
   // Drive IRQ4 (serial0) / IRQ3 (serial1) as a level following the cause;
   // pic_set_line() makes one edge per rising transition, retracting on fall.
-  theAli->pic_set_line(0, 4 - state.iNumber, state.bIIR > 0x01);
+  theAli->pic_set_line(0, 4 - state.iNumber, pending);
 }
 
 void CSerial::write(const char *s, int dsize) {
