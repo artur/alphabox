@@ -14,10 +14,11 @@ endif()
 # JIT for x86-64 and AArch64 hosts (requires the asmjit sources in
 # third_party/asmjit; see README)
 option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
-# Hypervisor.framework probe (`alphabox hvprobe`, see docs/hypervisor.md):
-# macOS on Apple silicon only, needs the JIT's asmjit for its guest code,
-# and the binary is then signed ad hoc with the hypervisor entitlement.
-option(ALPHABOX_HVF "Build the Hypervisor.framework probe (macOS/arm64)" OFF)
+# Hypervisor.framework support (`alphabox hvprobe`, `alphabox hvtest`, and
+# the ALPHABOX_HV=1 runtime; see docs/hypervisor.md): macOS on Apple silicon
+# only, needs the JIT's asmjit for the in-VM vectors, and the binary is
+# then signed ad hoc with the hypervisor entitlement.
+option(ALPHABOX_HVF "Build the Hypervisor.framework runtime (macOS/arm64)" OFF)
 
 # Source files. One glob per source directory: a NEW directory must be added
 # both here and to target_include_directories below, or its .cpp files are
@@ -88,7 +89,7 @@ if (ALPHABOX_HVF)
     add_custom_command(TARGET alphabox POST_BUILD
         COMMAND codesign --sign - --force --entitlements ${CMAKE_SOURCE_DIR}/src/hv/alphabox.entitlements $<TARGET_FILE:alphabox>
         COMMENT "Signing alphabox ad hoc with the hypervisor entitlement")
-    message(STATUS "Hypervisor.framework probe enabled")
+    message(STATUS "Hypervisor.framework runtime enabled")
 endif()
 
 # Path to additional CMake modules

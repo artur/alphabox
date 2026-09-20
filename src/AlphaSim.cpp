@@ -29,6 +29,9 @@
 #include "DPR.hpp"
 #include "Flash.hpp"
 #include "StdAfx.hpp"
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 #include "System.hpp"
 #include "banner.hpp"
 
@@ -117,6 +120,29 @@ int main_sim(int argc, char *argv[]) {
 #ifdef HAS_BACKTRACE
   signal(SIGSEGV, &segv_handler);
   signal(SIGUSR1, &segv_handler);
+#endif
+#ifdef ALPHABOX_HVF
+  // ALPHABOX_HV=1: every CPU thread runs its dispatch loop at EL1 inside a
+  // Hypervisor.framework VM (docs/hypervisor.md). stdout goes unbuffered:
+  // a printf from inside writes through a private copy of stdio's state,
+  // so each one must reach the file descriptor on its own.
+  if (const char *e = getenv("ALPHABOX_HV")) {
+    if (atoi(e) != 0 && hv::init()) {
+      hv::enable();
+      setvbuf(stdout, nullptr, _IONBF, 0);
+      printf("%%HV-I-ENABLED: CPU threads run at EL1 under "
+             "Hypervisor.framework\n");
+      atexit([] {
+        const hv::Stats &s = hv::stats();
+        printf("%%HV-I-STATS: %llu entries, %llu escapes, %llu stage-1 faults, "
+               "%llu syscalls, %llu pages copied\n",
+               (unsigned long long)s.entries, (unsigned long long)s.escapes,
+               (unsigned long long)s.stage1_faults,
+               (unsigned long long)s.syscalls,
+               (unsigned long long)s.pages_copied);
+      });
+    }
+  }
 #endif
   try {
 #if defined(IDB) && (defined(LS_MASTER) || defined(LS_SLAVE))

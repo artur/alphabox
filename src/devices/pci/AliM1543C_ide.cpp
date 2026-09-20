@@ -488,6 +488,31 @@ void CAliM1543C_ide::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 /*
  * Register read/write handlers
  */
+/// The data register of each channel's command block: BAR 0 for the first
+/// channel, BAR 2 for the second, offset 0 in both. A driver moves a whole
+/// sector through it a word at a time, which is the traffic that makes
+/// leaving the VM per device access untenable, so the processor is given
+/// what it needs to serve those words itself. The last word of a buffer is
+/// deliberately left to the ordinary path, where drq is cleared and the
+/// controller woken.
+bool CAliM1543C_ide::get_bulk_port(int index, SBulkPort *out) {
+  const int r = index - PCI_RANGE_BASE;
+  if (r < 0)
+    return false;
+  const int func = (r / 8) & 7, bar = r & 7;
+  if (func != 0 || (bar != 0 && bar != 2))
+    return false;
+  const int ch = (bar == 0) ? 0 : 1;
+  out->offset = REG_COMMAND_DATA;
+  out->data = CONTROLLER(ch).data;
+  out->ptr = &CONTROLLER(ch).data_ptr;
+  out->size = &CONTROLLER(ch).data_size;
+  out->selected = &CONTROLLER(ch).selected;
+  out->drq[0] = &CONTROLLER(ch).drive[0].status.drq;
+  out->drq[1] = &CONTROLLER(ch).drive[1].status.drq;
+  return true;
+}
+
 u32 CAliM1543C_ide::ide_command_read(int index, u32 address, int dsize) {
   u32 data = 0;
   if (!get_disk(index, 0) && !get_disk(index, 1)) {

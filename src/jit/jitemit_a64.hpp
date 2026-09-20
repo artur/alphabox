@@ -2081,6 +2081,13 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     Label miss = a.new_label();
     if (!xr)
       xr = alloc_exit_rec();
+    if (!xr) { // no record to chain through: take the dispatcher every time
+      a.mov(a64::x9, imm(target));
+      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
+      emit_chain(lbl);
+      a.b(lbl);
+      return;
+    }
     a.mov(a64::x3, imm((uint64_t)xr)); // this exit's record
     const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
     const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
@@ -2424,7 +2431,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   if (eh.failed)
     return false; // an instruction failed to encode -- don't ship the block
   JitFn fn = nullptr;
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_body_off = (uint32_t)body_off;
@@ -2531,7 +2538,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
     return false;
   const size_t csz = code.code_size();
   JitFn fn = nullptr;
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_csz = csz;

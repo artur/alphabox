@@ -733,6 +733,26 @@ private:
   bool m_reclaim_pending =
       false; // flush() hit kReclaimBytes; reclaim at the next dispatch boundary
   void *m_rt;            // asmjit::JitRuntime*
+
+public:
+#ifdef ALPHABOX_HVF
+  // Under ALPHABOX_HV=1 the compiled code has to be reachable from inside
+  // the VM, and asmjit's JitRuntime hands out MAP_JIT memory -- the one
+  // kind the framework will not share with a guest. So the code is
+  // published into the VM allocator's memory instead, which our own
+  // stage-1 entries mark executable. The engine object itself, block cache
+  // and all, is placed there too: the compiled code reads it.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+  void *code_alloc(size_t bytes);
+  uint8_t *m_code_arena = nullptr;
+  size_t m_code_arena_used = 0, m_code_arena_size = 0;
+#endif
+  /// Publish an assembled CodeHolder as runnable code. Returns false if it
+  /// could not be placed.
+  bool publish_code(void *code_holder, void **out_fn);
+
+private:
   JitOffsets m_off = {}; // field offsets for the inline load fast path
   // a64 hot/cold split: memory ops record the asmjit label ids of their
   // out-of-line slow path (indexed m_cold_base + instruction index), and
@@ -803,13 +823,32 @@ public: // the dispatcher fills these (AlphaCPU.cpp)
 private:
   static constexpr size_t kExitChunk = 1u << 16;
   std::vector<std::unique_ptr<ExitRec[]>> m_exit_chunks;
+  // Compiled code follows these records, so inside the VM they have to come
+  // from shared memory -- and the allocation itself must not use the
+  // process allocator, whose state inside is a private copy. A fixed set of
+  // chunk pointers, filled from the VM allocator, replaces the vector
+  // there. 64 chunks of 64Ki records is the same ceiling the vector had in
+  // practice.
+  // A pool of chunks that outlives a code reclaim. The vector below owns
+  // the heap ones; inside the VM they come from an allocator that cannot
+  // free, so either way the chunks are kept and REUSED rather than
+  // reallocated. A reclaim rewinds m_chunk_cur to the start of the pool;
+  // it must never make the allocator fail, because the emitter writes the
+  // record's address into the code it generates and does not check it.
+  static constexpr int kMaxChunks = 64;
+  ExitRec *m_chunk_pool[kMaxChunks] = {};
+  int m_chunk_count = 0; // how many exist; never decreases
+  int m_chunk_cur = -1;  // which one is being filled
+  ExitRec *alloc_exit_chunk();
   size_t m_exit_used = kExitChunk;
   ExitRec *alloc_exit_rec() {
     if (m_exit_used == kExitChunk) {
-      m_exit_chunks.emplace_back(new ExitRec[kExitChunk]);
+      ExitRec *c = alloc_exit_chunk();
+      if (!c)
+        return nullptr;
       m_exit_used = 0;
     }
-    ExitRec *r = &m_exit_chunks.back()[m_exit_used++];
+    ExitRec *r = &m_chunk_pool[m_chunk_cur][m_exit_used++];
     for (int i = 0; i < kLinkSlots; ++i) {
       r->body[i] = nullptr;
       r->epoch[i] = ~(uint64_t)0;

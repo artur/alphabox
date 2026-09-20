@@ -614,7 +614,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 
 #define READ_PHYS(size)                                                        \
   (phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)          \
-                            : cSystem->ReadMem(phys_address, size, this));     \
+                            : sys_read(phys_address, size));     \
   LLR
 
 #define READ_VIRT(va, size, dest)                                              \
@@ -625,12 +625,12 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     dest = 0;                                                                  \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      dest |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));           \
+      dest |= (sys_read(phys_address, 8) << (ii * 8));           \
     }                                                                          \
   } else {                                                                     \
     dest = (phys_address < dram_size                                           \
                 ? dram_read(dram_ptr, phys_address, size)                      \
-                : cSystem->ReadMem(phys_address, size, this));                 \
+                : sys_read(phys_address, size));                 \
   }
 
 #define READ_VIRT_LOCK(va, size, dest)                                         \
@@ -644,12 +644,12 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       dest = 0;                                                                \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        dest |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));         \
+        dest |= (sys_read(phys_address, 8) << (ii * 8));         \
       }                                                                        \
     } else {                                                                   \
       dest = (phys_address < dram_size                                         \
                   ? dram_read(dram_ptr, phys_address, size)                    \
-                  : cSystem->ReadMem(phys_address, size, this));               \
+                  : sys_read(phys_address, size));               \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -662,13 +662,13 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 aa = 0;                                                                \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      aa |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));             \
+      aa |= (sys_read(phys_address, 8) << (ii * 8));             \
     }                                                                          \
     dest = f(aa);                                                              \
   } else {                                                                     \
     dest = f((phys_address < dram_size                                         \
                   ? dram_read(dram_ptr, phys_address, size)                    \
-                  : cSystem->ReadMem(phys_address, size, this)));              \
+                  : sys_read(phys_address, size)));              \
   }
 
 #define READ_VIRT_LOCK_F(va, size, dest, f)                                    \
@@ -682,13 +682,13 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       u64 aa = 0;                                                              \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        aa |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));           \
+        aa |= (sys_read(phys_address, 8) << (ii * 8));           \
       }                                                                        \
       dest = f(aa);                                                            \
     } else {                                                                   \
       dest = f((phys_address < dram_size                                       \
                     ? dram_read(dram_ptr, phys_address, size)                  \
-                    : cSystem->ReadMem(phys_address, size, this)));            \
+                    : sys_read(phys_address, size)));            \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -703,7 +703,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
   if (phys_address < dram_size) {                                              \
     dram_write(dram_ptr, phys_address, size, data);                            \
   } else                                                                       \
-    cSystem->WriteMem(phys_address, size, data, this);                         \
+    sys_write(phys_address, size, data);                         \
   LWR
 
 #define WRITE_VIRT(va, size, src)                                              \
@@ -717,14 +717,14 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       if (phys_address < dram_size) {                                          \
         dram_write(dram_ptr, phys_address, 8, aa);                             \
       } else                                                                   \
-        cSystem->WriteMem(phys_address, 8, aa, this);                          \
+        sys_write(phys_address, 8, aa);                          \
       aa >>= 8;                                                                \
     }                                                                          \
   } else {                                                                     \
     if (phys_address < dram_size) {                                            \
       dram_write(dram_ptr, phys_address, size, src);                           \
     } else                                                                     \
-      cSystem->WriteMem(phys_address, size, src, this);                        \
+      sys_write(phys_address, size, src);                        \
   }
 
 #define WRITE_VIRT_COND(va, size, src, dest)                                   \
@@ -758,7 +758,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_PHYS_NT(size)                                                     \
   (ALIGN_PHYS((size) / 8) < dram_size                                          \
        ? dram_read(dram_ptr, ALIGN_PHYS((size) / 8), size)                     \
-       : cSystem->ReadMem(ALIGN_PHYS((size) / 8), size, this));                \
+       : sys_read(ALIGN_PHYS((size) / 8), size));                \
   LLR;
 
 /**
@@ -774,7 +774,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
     } else                                                                     \
-      cSystem->WriteMem(_pa, size, data, this);                                \
+      sys_write(_pa, size, data);                                \
   }                                                                            \
   LWR
 #else
@@ -784,7 +784,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
     } else                                                                     \
-      cSystem->WriteMem(_pa, size, data, this);                                \
+      sys_write(_pa, size, data);                                \
   }
 #endif
 

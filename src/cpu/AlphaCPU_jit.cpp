@@ -138,6 +138,41 @@ void CAlphaCPU::jit_idle_pause() {
                          .count();
 }
 
+// Compiling is the one part of the dispatch path that cannot run inside
+// the VM: asmjit allocates heavily, and the process allocator's state in
+// there is a private copy of the outside's, so a block allocated inside
+// and freed outside corrupts it. hv::escape() performs the call on the
+// host thread; everything it writes -- the code arena, the block cache,
+// the exit records -- is memory the two sides share, so the block is there
+// when the VM resumes. Outside the VM this is a direct call.
+u64 CAlphaCPU::compile_thunk(void *p) {
+  CompileArg *a = (CompileArg *)p;
+  CAlphaCPU *c = a->cpu;
+  c->m_jit->compile_block(
+      (CJitEngine::JitBlock *)a->b, (const uint8_t *)c->dram_ptr, c->dram_size,
+      (void *)&CAlphaCPU::jit_read, (void *)&CAlphaCPU::jit_write,
+      (void *)&CAlphaCPU::jit_opcdec, (void *)&CAlphaCPU::jit_hw_mfpr,
+      (void *)&CAlphaCPU::jit_read_phys, (void *)&CAlphaCPU::jit_hw_mtpr,
+      (void *)&CAlphaCPU::jit_write_phys, (void *)&CAlphaCPU::jit_indirect,
+      (void *)&CAlphaCPU::jit_read_locked, (void *)&CAlphaCPU::jit_stc,
+      (void *)&CAlphaCPU::jit_misc, (void *)&CAlphaCPU::jit_read_vpte,
+      (void *)&CAlphaCPU::jit_read_wchk, (void *)&CAlphaCPU::jit_itof,
+      (void *)&CAlphaCPU::jit_ftoi, (void *)&CAlphaCPU::jit_fltl,
+      (void *)&CAlphaCPU::jit_fp_read, (void *)&CAlphaCPU::jit_fp_write,
+      (void *)&CAlphaCPU::jit_fltv);
+  return 0;
+}
+
+void CAlphaCPU::compile_outside(void *b) {
+  CompileArg a{this, b}; // a local: inside the VM that is the vCPU stack,
+                         // which the host can read
+#ifdef ALPHABOX_HVF
+  hv::escape(&compile_thunk, &a);
+#else
+  compile_thunk(&a);
+#endif
+}
+
 void CAlphaCPU::jit_run(int budget) {
   if (m_jit)
     m_jit->reclaim_if_pending(); // deferred code reclaim, here at a safe point
@@ -155,7 +190,7 @@ void CAlphaCPU::jit_run(int budget) {
       jit_flush_blocks();
     }
   }
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = now_fast();
   cc_last_sync += ns_to_host_ticks(
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the
                            // RPCC (diag_rpcc.h)
@@ -223,6 +258,20 @@ void CAlphaCPU::jit_run(int budget) {
         break;
       }
     }
+  }
+
+  // ALPHABOX_INTERP=1, and every run inside the VM: interpret the batch and
+  // compile nothing. execute() runs ONE instruction in a build that has the
+  // compiler (it is the bail path there; only the interpreter-only build
+  // batches internally), so the budget loop belongs here, above the
+  // per-batch housekeeping's cost rather than below it.
+  if (m_interp_only) {
+    while (budget-- > 0) {
+      if (StopThread)
+        return;
+      execute();
+    }
+    return;
   }
 
   while (budget > 0) {
@@ -1143,19 +1192,7 @@ void CAlphaCPU::jit_run(int budget) {
                         start_asm, n, (const uint8_t *)dram_ptr);
       // Compile only once the block has proven hot (see compile_after()).
       if (!nb->compiled && ++nb->cold_runs >= m_jit->compile_after())
-        m_jit->compile_block(
-            nb, (const uint8_t *)dram_ptr, dram_size,
-            (void *)&CAlphaCPU::jit_read, (void *)&CAlphaCPU::jit_write,
-            (void *)&CAlphaCPU::jit_opcdec, (void *)&CAlphaCPU::jit_hw_mfpr,
-            (void *)&CAlphaCPU::jit_read_phys, (void *)&CAlphaCPU::jit_hw_mtpr,
-            (void *)&CAlphaCPU::jit_write_phys,
-            (void *)&CAlphaCPU::jit_indirect,
-            (void *)&CAlphaCPU::jit_read_locked, (void *)&CAlphaCPU::jit_stc,
-            (void *)&CAlphaCPU::jit_misc, (void *)&CAlphaCPU::jit_read_vpte,
-            (void *)&CAlphaCPU::jit_read_wchk, (void *)&CAlphaCPU::jit_itof,
-            (void *)&CAlphaCPU::jit_ftoi, (void *)&CAlphaCPU::jit_fltl,
-            (void *)&CAlphaCPU::jit_fp_read, (void *)&CAlphaCPU::jit_fp_write,
-            (void *)&CAlphaCPU::jit_fltv);
+        compile_outside(nb);
     }
   }
 }
@@ -1327,7 +1364,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
     // Production: do the device read here, at the same point in the
     // instruction stream the interpreter would. Bailing instead sent every
     // MMIO load (device registers, S3 aperture) back through the interpreter.
-    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    *out = cpu->sys_read(phys, size_bits);
     return 0;
 #endif
   }
@@ -1428,6 +1465,7 @@ int CAlphaCPU::jit_fp_write(CAlphaCPU *cpu, u64 va, u32 fa, u32 descr) {
 // re-derive (cc advances only at the jit_run boundary; the flag is consumed by
 // the read), so in verify we replay the interp pass's value -- like a load.
 u64 CAlphaCPU::jit_misc(CAlphaCPU *cpu, u32 sel) {
+  cpu->m_misc_calls[sel < 3 ? sel : 2]++;
   if (cpu->m_jit_vreplay)
     return cpu->m_jit_vlog[cpu->m_jit_vlog_i++]; // replay; no re-read, no
                                                  // double side effect
@@ -1805,7 +1843,7 @@ int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
     // Production: the ordered device read happens here, as in the interpreter
     // (see jit_read).
     phys &= ~((u64)(size_bits / 8) - 1); // align like READ_PHYS_NT (ALIGN_PHYS)
-    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    *out = cpu->sys_read(phys, size_bits);
     return 0;
 #endif
   }
@@ -1909,7 +1947,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
 #ifdef JIT_STATS
     note_device_page(phys, true);
 #endif
-    cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+    cpu->sys_write(phys, size_bits, value);
   }
   return 0;
 }
@@ -1944,7 +1982,7 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 #else
     // Production: the device write happens here, in instruction order (as
     // jit_write already does for virtual stores).
-    cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+    cpu->sys_write(phys, size_bits, value);
     return 0;
 #endif
   }

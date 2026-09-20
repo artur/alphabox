@@ -68,6 +68,9 @@
 #include <xmmintrin.h> // _mm_setcsr: pin host MXCSR for the JIT SSE FP path
 #elif defined(__aarch64__) || defined(_M_ARM64)
 #include <cfenv> // fesetenv: pin the host FPCR for the JIT FP path
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 #endif
 
 void CAlphaCPU::release_threads() {
@@ -147,11 +150,172 @@ void CAlphaCPU::run() {
     prev_cc = 0;
     prev_time = 0;
 
+  } catch (CException &e) {
+    printf("Exception in CPU thread: %s.\n", e.displayText().c_str());
+    myThreadDead.store(true);
+    return;
+  }
+
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    // The whole dispatch loop -- interpreter, JIT compiler, compiled code,
+    // the device models it calls -- runs at EL1 inside the VM on this
+    // thread's vCPU; only system calls leave it. See docs/hypervisor.md.
+    if (hv::call(hv_run_loop, this) == ~0ULL) {
+      printf("%%HV-F-CPU%d: the VM stopped this CPU; its thread ends\n",
+             get_cpuid());
+      myThreadDead.store(true);
+    }
+    return;
+  }
+#endif
+  run_loop();
+}
+
+#ifdef ALPHABOX_HVF
+void *CAlphaCPU::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CAlphaCPU::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM's allocator releases everything at exit
+  ::operator delete(p);
+}
+#endif
+
+// The system-bus calls, performed on the host thread. hv::escape() lands
+// here with the argument block the caller built; see sys_read/sys_write.
+u64 CAlphaCPU::sys_read_out(void *p) {
+  SysCall *c = (SysCall *)p;
+  return c->sys->ReadMem(c->addr, c->size, c->src);
+}
+
+u64 CAlphaCPU::sys_write_out(void *p) {
+  SysCall *c = (SysCall *)p;
+  c->sys->WriteMem(c->addr, c->size, c->data, c->src);
+  return 0;
+}
+
+// ALPHABOX_RATE=<seconds>: print this processor's instruction rate every
+// <seconds> of wall time. One number, comparable between arms of the same
+// binary: how fast guest code actually runs.
+void CAlphaCPU::rate_tick() {
+  static const int period = getenv("ALPHABOX_RATE")
+                                ? atoi(getenv("ALPHABOX_RATE"))
+                                : 0;
+  if (!period)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (m_rate_last == std::chrono::steady_clock::time_point{}) {
+    m_rate_last = now;
+    m_rate_icount = state.instruction_count;
+    return;
+  }
+  const double secs =
+      std::chrono::duration<double>(now - m_rate_last).count();
+  if (secs < period)
+    return;
+  const u64 done = state.instruction_count - m_rate_icount;
+#ifdef ALPHABOX_HVF
+  const hv::Stats &hs = hv::stats();
+  const u64 esc = hs.escapes - m_rate_escapes, ent = hs.entries - m_rate_entries;
+  m_rate_escapes = hs.escapes;
+  m_rate_entries = hs.entries;
+  fprintf(stderr,
+          "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s); "
+          "%.0f escapes/s, %.0f VM exits/s, %.1f%% of a second in exits at "
+          "1 us each\n",
+          get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs,
+          esc / secs, ent / secs, ent / secs / 1e6 * 100.0);
+  {
+    const u64 bulk = m_bulk_served - m_rate_bulk;
+    m_rate_bulk = m_bulk_served;
+    if (bulk)
+      fprintf(stderr, "%%CPU%d-I-BULK: %.0f transfers/s served inside\n",
+              get_cpuid(), bulk / secs);
+  }
+  {
+    // Which exception classes those exits were. 0x16 is our own HVC (a
+    // fault handled at EL1, or an escape), 0x18 a trapped system register,
+    // 0x20/0x21 instruction aborts, 0x24/0x25 data aborts.
+    char buf[256];
+    int n = snprintf(buf, sizeof buf, "%%CPU%d-I-EXITS:", get_cpuid());
+    for (int ec = 0; ec < 64 && n < (int)sizeof buf - 24; ec++)
+      if (hs.by_ec[ec])
+        n += snprintf(buf + n, sizeof buf - n, " EC%02x=%llu", ec,
+                      (unsigned long long)hs.by_ec[ec]);
+    n += snprintf(buf + n, sizeof buf - n, " | EL1:");
+    for (int ec = 0; ec < 64 && n < (int)sizeof buf - 24; ec++)
+      if (hs.el1_ec[ec])
+        n += snprintf(buf + n, sizeof buf - n, " EC%02x=%llu", ec,
+                      (unsigned long long)hs.el1_ec[ec]);
+    fprintf(stderr,
+            "%s; sysreg iss=%llx pc %llx; last EL1 far %llx pc %llx\n", buf,
+            (unsigned long long)hs.last_sysreg, (unsigned long long)hs.last_pc,
+            (unsigned long long)hs.el1_far, (unsigned long long)hs.el1_pc);
+  }
+#else
+  fprintf(stderr, "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s)\n",
+          get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs);
+#endif
+  m_rate_last = now;
+  m_rate_icount = state.instruction_count;
+  {
+    u64 d[3];
+    for (int i = 0; i < 3; i++) {
+      d[i] = m_misc_calls[i] - m_rate_misc[i];
+      m_rate_misc[i] = m_misc_calls[i];
+    }
+    // The cycle counter alongside: a guest that spins reading RPCC is
+    // waiting for time to pass, and if the counter is frozen -- disabled
+    // through CC_CTL, or not advancing -- it waits forever.
+    const u64 cc_now = state.cc;
+    const u64 cc_moved = cc_now - m_rate_cc;
+    m_rate_cc = cc_now;
+    if (d[0] + d[1] + d[2])
+      fprintf(stderr,
+              "%%CPU%d-I-MISC: %.0f RPCC/s, %.0f RC/s, %.0f RS/s  "
+              "(%.2f per 100 instructions); cc_ena=%d cc advanced %llu\n",
+              get_cpuid(), d[0] / secs, d[1] / secs, d[2] / secs,
+              done ? 100.0 * (d[0] + d[1] + d[2]) / done : 0.0,
+              state.cc_ena ? 1 : 0, (unsigned long long)cc_moved);
+  }
+}
+
+void CAlphaCPU::run_loop() {
+  try {
+#ifdef ALPHABOX_HVF
+    // Phase 2a: the interpreter is what runs inside the VM. The compiler
+    // must not: it emits into MAP_JIT memory, which is the one kind of page
+    // the framework will not share with a guest, so compiled blocks would
+    // be executed from a stale private copy. See docs/hypervisor.md.
+    // ALPHABOX_INTERP=1 forces the same interpreter OUTSIDE the VM: the
+    // control arm for measuring what running inside costs, in one binary.
+    // Inside the VM the compiler's output now lives in the VM allocator's
+    // memory (docs/hypervisor.md), so compiled code can run there too --
+    // ALPHABOX_HV_JIT=1 turns it on. Default is still the interpreter,
+    // which is the configuration that is known good.
+    const bool hv_jit =
+        getenv("ALPHABOX_HV_JIT") && atoi(getenv("ALPHABOX_HV_JIT")) == 1;
+    const bool interp_only =
+        (hv::enabled() && !hv_jit) ||
+        (getenv("ALPHABOX_INTERP") && atoi(getenv("ALPHABOX_INTERP")) == 1);
+#else
+    const bool interp_only =
+        getenv("ALPHABOX_INTERP") && atoi(getenv("ALPHABOX_INTERP")) == 1;
+#endif
+    m_interp_only = interp_only;
+    clock_anchor();
     for (;;) {
       if (StopThread)
         return;
 #ifdef ES40_JIT
       jit_run(2000);
+      rate_tick();
 #else
       // execute() runs a 512-instruction batch itself; calling it 2000 times
       // here made one scheduler turn ~1M instructions, starving the other CPUs
@@ -172,11 +336,27 @@ void CAlphaCPU::run() {
   }
 }
 
+#ifdef ALPHABOX_HVF
+uint64_t CAlphaCPU::hv_run_loop(void *self) {
+  ((CAlphaCPU *)self)->run_loop();
+  return 0;
+}
+#endif
+
 /**
  * Constructor.
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
     : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+#ifdef ALPHABOX_HVF
+  // Under ALPHABOX_HV=1 the compiled code lives in the VM allocator's
+  // memory, which our stage-1 entries mark executable INSIDE the VM and
+  // which the host may only read and write. Anything that runs this
+  // processor outside the VM -- the ROM decompression at startup does,
+  // on the main thread -- must therefore interpret. run_loop() clears
+  // this once it is executing inside.
+  m_interp_only = hv::enabled();
+#endif
   s_trace_calls = getenv("ALPHABOX_TRACE_CALLS") != nullptr;
   // The configuration class names the part ("ev68cb").
   m_model = find_cpu_model(cfg->get_myValue());

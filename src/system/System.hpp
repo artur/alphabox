@@ -127,6 +127,18 @@ struct MPDState {
 };
 
 class CSystem {
+  static void *alloc_guest_memory(size_t bytes);
+  static void free_guest_memory(void *p, size_t bytes);
+
+public:
+#ifdef ALPHABOX_HVF
+  // The device threads outside and the dispatch loop inside both read and
+  // write this object, so under ALPHABOX_HV=1 it is placed in memory the
+  // two share. Elsewhere it is an ordinary allocation.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+#endif
+
 public:
   void DumpMemory(unsigned int filenum);
   char *PtrToMem(u64 address);
@@ -194,6 +206,20 @@ public:
 
   int RegisterMemory(CSystemComponent *component, int index, u64 base,
                      u64 length);
+
+  /// A device's bulk data register, at its absolute physical address. The
+  /// processor consults this before leaving the VM for a device access.
+  struct BulkPort {
+    u64 addr = 0;
+    SBulkPort d;
+  };
+  static constexpr int kMaxBulkPorts = 8;
+  const BulkPort *bulk_for(u64 addr) const {
+    for (int i = 0; i < m_nbulk; i++)
+      if (m_bulk[i].addr == addr)
+        return &m_bulk[i];
+    return nullptr;
+  }
   void RegisterComponent(CSystemComponent *component);
   void UnregisterComponent(CSystemComponent *component);
   int RegisterCPU(class CAlphaCPU *cpu);
@@ -560,6 +586,8 @@ private:
   int iNumComponents;
   CSystemComponent *acComponents[MAX_COMPONENTS];
   int iNumMemories;
+  BulkPort m_bulk[kMaxBulkPorts];
+  int m_nbulk = 0;
   struct SMemoryUser *asMemories[MAX_COMPONENTS];
 
   /// The same ranges again, laid out for the lookup every non-memory access

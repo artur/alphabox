@@ -90,32 +90,32 @@
 #define r30 state.r[30]
 #define r31 state.r[31]
 
-#define hw_stq(a, b) cSystem->WriteMem((a) & ~U64(0x7), 64, b, this)
-#define hw_stl(a, b) cSystem->WriteMem((a) & ~U64(0x3), 32, b, this)
+#define hw_stq(a, b) sys_write((a) & ~U64(0x7), 64, b)
+#define hw_stl(a, b) sys_write((a) & ~U64(0x3), 32, b)
 #define stq(a, b)                                                              \
   if (virt2phys(a, &phys_address, ACCESS_WRITE, NULL, 0))                      \
     return -1;                                                                 \
-  cSystem->WriteMem(phys_address, 64, b, this);
+  sys_write(phys_address, 64, b);
 #define ldq(a, b)                                                              \
   if (virt2phys(a, &phys_address, ACCESS_READ, NULL, 0))                       \
     return -1;                                                                 \
-  b = cSystem->ReadMem(phys_address, 64, this);
+  b = sys_read(phys_address, 64);
 #define stl(a, b)                                                              \
   if (virt2phys(a, &phys_address, ACCESS_WRITE, NULL, 0))                      \
     return -1;                                                                 \
-  cSystem->WriteMem(phys_address, 32, b, this);
+  sys_write(phys_address, 32, b);
 #define ldl(a, b)                                                              \
   if (virt2phys(a, &phys_address, ACCESS_READ, NULL, 0))                       \
     return -1;                                                                 \
-  b = sext_u64_32(cSystem->ReadMem(phys_address, 32, this));
+  b = sext_u64_32(sys_read(phys_address, 32));
 #define ldb(a, b)                                                              \
   if (virt2phys(a, &phys_address, ACCESS_READ, NULL, 0))                       \
     return -1;                                                                 \
-  b = (char)(cSystem->ReadMem(phys_address, 8, this));
-#define hw_ldq(a, b) b = cSystem->ReadMem((a) & ~U64(0x7), 64, this)
+  b = (char)(sys_read(phys_address, 8));
+#define hw_ldq(a, b) b = sys_read((a) & ~U64(0x7), 64)
 #define hw_ldl(a, b)                                                           \
-  b = sext_u64_32(cSystem->ReadMem((a) & ~U64(0x3), 32, this));
-#define hw_ldbu(a, b) b = cSystem->ReadMem(a, 8, this)
+  b = sext_u64_32(sys_read((a) & ~U64(0x3), 32));
+#define hw_ldbu(a, b) b = sys_read(a, 8)
 
 /**
  * Mask for interrupt enabling at IPL's.
@@ -1159,7 +1159,7 @@ int CAlphaCPU::vmspal_ent_dtbm_single(int flags) {
                 ACCESS_READ | NO_CHECK | VPTE | (flags & (PROBE | PROBEW)),
                 NULL, 0))
     return -1;
-  p4 = cSystem->ReadMem(pte_phys, 64, this);
+  p4 = sys_read(pte_phys, 64);
 
   if (!test_bit_64(p4, 0)) {
     if (flags & PROBE) {
@@ -1258,7 +1258,7 @@ int CAlphaCPU::vmspal_ent_itbm(int flags) {
   p4 &= ~U64(0x7);
   if (virt2phys(p4, &pte_phys, ACCESS_READ | NO_CHECK | VPTE, NULL, 0))
     return -1;
-  p4 = cSystem->ReadMem(pte_phys, 64, this);
+  p4 = sys_read(pte_phys, 64);
 
   p6 = 0xfff;
   p5 = p4 & p6;

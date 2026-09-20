@@ -23,6 +23,10 @@
 #ifdef ES40_JIT
 
 #include "jitengine.hpp"
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#include <libkern/OSCacheControl.h>
+#endif
 #include <cassert>
 #include <chrono> // note_exec times its own stats-print I/O (excluded from the wall-clock RPCC)
 #include <cstdio>
@@ -264,6 +268,8 @@ static inline bool ebb_enabled() {
 // CTLZ/CTTZ use baseline BSR/BSF, so only CTPOP is gated -- it stays
 // interpreted when the host lacks POPCNT.
 static bool host_has_popcnt() {
+
+
 #ifdef JIT_HOST_X64
   static const bool ok = asmjit::CpuInfo::host().features().x86().has_popcnt();
   return ok;
@@ -845,6 +851,19 @@ CJitEngine::CJitEngine(int cpu_id)
   m_traces_enabled = false;
 #endif
   m_rt = new asmjit::JitRuntime();
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    // 64 MB of code, from the allocator whose memory may be shared with
+    // the VM. Never freed: a reclaim drops the blocks, not the arena.
+    m_code_arena_size = 64u << 20;
+    m_code_arena = (uint8_t *)hv::alloc(m_code_arena_size);
+    if (!m_code_arena)
+      m_code_arena_size = 0;
+    else
+      printf("%%JIT-I-HVCODE: %zu MB of code space shared with the VM\n",
+             m_code_arena_size >> 20);
+  }
+#endif
   if (const char *ca = getenv("ALPHABOX_JIT_COMPILE_AFTER")) {
     const long v = atol(ca);
     if (v >= 1 && v <= 1000000)
@@ -1157,6 +1176,60 @@ void CJitEngine::trace_selftest() {
 // corrupted the JitAllocator block tree) and drop every slot's now-dangling
 // pointers. Safe only from this CPU's cold path (never while its compiled code
 // could be executing); runtimes are per-CPU.
+/// One chunk of exit records. Inside the VM it comes from the VM
+/// allocator, because compiled code walks these; outside, from the heap.
+/// Either way the pointer is kept in a fixed array, so no container
+/// allocates on the path a block takes the first time it is seen.
+CJitEngine::ExitRec *CJitEngine::alloc_exit_chunk() {
+  if (m_chunk_cur + 1 < m_chunk_count) // one we already own, rewound by a reclaim
+    return m_chunk_pool[++m_chunk_cur];
+  if (m_chunk_count >= kMaxChunks)
+    return nullptr;
+  ExitRec *c = nullptr;
+#ifdef ALPHABOX_HVF
+  if (hv::enabled())
+    c = (ExitRec *)hv::alloc(sizeof(ExitRec) * kExitChunk);
+#endif
+  if (!c) {
+    m_exit_chunks.emplace_back(new ExitRec[kExitChunk]);
+    c = m_exit_chunks.back().get();
+  }
+  m_chunk_pool[m_chunk_count] = c;
+  m_chunk_cur = m_chunk_count++;
+  return c;
+}
+
+/// Publish assembled code so it can be called. Outside the VM that is
+/// asmjit's own runtime; inside it is the shared arena, relocated to its
+/// final address and cleaned out of the data cache so the vCPU's fetch
+/// sees it (see docs/hypervisor.md).
+bool CJitEngine::publish_code(void *code_holder, void **out_fn) {
+  using namespace asmjit;
+  CodeHolder &code = *(CodeHolder *)code_holder;
+#ifdef ALPHABOX_HVF
+  if (hv::enabled() && m_code_arena) {
+    if (code.flatten() != Error::kOk ||
+        code.resolve_cross_section_fixups() != Error::kOk)
+      return false;
+    const size_t estimated = code.code_size();
+    if (!estimated)
+      return false;
+    void *dst = code_alloc(estimated);
+    if (!dst)
+      return false;
+    if (code.relocate_to_base((uintptr_t)dst) != Error::kOk)
+      return false;
+    const size_t sz = code.code_size();
+    if (code.copy_flattened_data(dst, sz) != Error::kOk)
+      return false;
+    sys_icache_invalidate(dst, sz);
+    *out_fn = dst;
+    return true;
+  }
+#endif
+  return ((JitRuntime *)m_rt)->add(out_fn, &code) == Error::kOk;
+}
+
 void CJitEngine::reclaim_code() {
   // printf("[JIT][CPU%d] code reclaim: %llu MB freed\n", m_cpu_id,
   //        (unsigned long long) (m_code_bytes >> 20));
@@ -1166,7 +1239,13 @@ void CJitEngine::reclaim_code() {
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
   note_epoch(EPOCH_RECLAIM);
-  m_exit_chunks.clear(); // exit records belong to the code just freed
+  // The records belonged to the code just freed, so they are all dead --
+  // but the STORAGE is kept and handed out again from the beginning.
+  // Freeing it here (as this once did) left the pool counter behind, and
+  // after enough reclaims the allocator had nothing to give: the emitter
+  // then wrote a null record address into compiled code, which crashed
+  // reading its epoch field.
+  m_chunk_cur = -1;
   m_exit_used = kExitChunk;
   m_direct_live = 0; // ...and every direct link lived in one of them
   m_code_bytes = 0;
@@ -3856,7 +3935,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   if (eh.failed)
     return false; // emit error already reported -- don't ship a broken block
 #endif
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_body_off = (uint32_t)body_off;
@@ -4064,7 +4143,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 
   const size_t csz = code.code_size();
   JitFn fn = nullptr;
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_csz = csz;
@@ -4073,6 +4152,35 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 #endif // JIT_HOST_X64
 
 #ifdef JIT_HOST_A64
+
+
+#ifdef ALPHABOX_HVF
+void *CJitEngine::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CJitEngine::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM allocator releases its memory at exit
+  ::operator delete(p);
+}
+
+/// Bump allocator over the shared code arena. Code is 16-byte aligned so a
+/// block never shares a cache line boundary with the previous one's tail.
+void *CJitEngine::code_alloc(size_t bytes) {
+  const size_t need = (bytes + 15) & ~(size_t)15;
+  if (!m_code_arena || m_code_arena_used + need > m_code_arena_size)
+    return nullptr;
+  void *p = m_code_arena + m_code_arena_used;
+  m_code_arena_used += need;
+  return p;
+}
+#endif
+
+
 #include "jitemit_a64.hpp" // AArch64 emit_op / assemble_block / assemble_trace
 #endif
 

@@ -29,10 +29,28 @@
 #include "SystemComponent.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 
 /**
  * Constructor.
  **/
+#ifdef ALPHABOX_HVF
+void *CSystemComponent::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CSystemComponent::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM allocator releases its memory at exit
+  ::operator delete(p);
+}
+#endif
+
 CSystemComponent::CSystemComponent(CConfigurator *cfg, CSystem *system) {
   char *a;
   char *b;

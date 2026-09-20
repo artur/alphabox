@@ -43,6 +43,9 @@
 #include <stdlib.h>
 
 #include <thread>
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 
 #define CLOCK_RATIO 10000
 
@@ -123,7 +126,7 @@ CSystem::CSystem(CConfigurator *cfg) try {
   // rather than allocate less.
   if (iNumMemoryBits >= sizeof(size_t) * 8)
     FAILURE(Configuration, "memory.bits is too large for this host");
-  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
+  CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
 
   printf("%s(%s): $Id: System.cpp,v 1.79 2008/06/12 07:29:44 iamcamiel Exp $\n",
          cfg->get_myName(), cfg->get_myValue());
@@ -156,9 +159,60 @@ CSystem::~CSystem() {
  * free memory, and allocate and clear new memory.
  **/
 void CSystem::ResetMem(unsigned int membits) {
-  free(memory);
+  free_guest_memory(memory, (size_t)1 << iNumMemoryBits);
   iNumMemoryBits = membits;
-  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
+  CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
+}
+
+/**
+ * Guest DRAM. Under ALPHABOX_HV=1 the processor's dispatch loop runs inside
+ * a VM and the device threads stay outside, so the array both of them read
+ * and write has to be memory the two genuinely share: the framework's own
+ * allocator, mapped into the VM at its own address. Everywhere else it is
+ * an ordinary zeroed allocation.
+ **/
+#ifdef ALPHABOX_HVF
+void *CSystem::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CSystem::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM's allocator releases everything at exit
+  ::operator delete(p);
+}
+#endif
+
+void *CSystem::alloc_guest_memory(size_t bytes) {
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    void *p = hv::alloc(bytes);
+    if (p) {
+      memset(p, 0, bytes);
+      printf("%%SYS-I-HVMEM: %zu MB of guest memory shared with the VM\n",
+             bytes >> 20);
+      return p;
+    }
+    printf("%%SYS-W-HVMEM: the VM's allocator could not provide %zu MB; the "
+           "guest's memory will not be visible inside\n",
+           bytes >> 20);
+  }
+#endif
+  return calloc(bytes, 1);
+}
+
+void CSystem::free_guest_memory(void *p, size_t bytes) {
+#ifdef ALPHABOX_HVF
+  if (hv::enabled())
+    return; // alloc() memory is released when the VM goes away
+  (void)bytes;
+#else
+  (void)bytes;
+#endif
+  free(p);
 }
 
 /**
@@ -279,6 +333,25 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   aMemoryBounds[iNumMemories].base = base;
   aMemoryBounds[iNumMemories].end = base + length;
   iNumMemories++;
+
+  // If this range carries a bulk data register, record its absolute
+  // address so the processor can serve the transfer without leaving the
+  // VM (see SBulkPort). A range that is re-registered at a new address
+  // replaces its old entry; a stale one simply never matches again.
+  SBulkPort bp;
+  if (component->get_bulk_port(index, &bp) && bp.data) {
+    const u64 addr = base + bp.offset;
+    int slot = -1;
+    for (int k = 0; k < m_nbulk; k++)
+      if (m_bulk[k].d.data == bp.data)
+        slot = k;
+    if (slot < 0 && m_nbulk < kMaxBulkPorts)
+      slot = m_nbulk++;
+    if (slot >= 0) {
+      m_bulk[slot].addr = addr;
+      m_bulk[slot].d = bp;
+    }
+  }
   return 0;
 }
 

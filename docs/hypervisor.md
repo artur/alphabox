@@ -225,3 +225,164 @@ If it comes to that, the first prototype is not the JIT: it is the
 *interpreter* alone at EL1 with the hardware TB, because that validates
 the boundary, the page-table mapping, the exit cost and the framebuffer
 sharing with none of the code-generation risk. The JIT moves in second.
+
+## The build
+
+The stage above was not waited for: the module is being built to measure
+rather than to predict, in phases, each with a switch and a test.
+
+### The model: the process's own code at EL1
+
+The doc's original design put a freestanding EL1 runtime inside the VM:
+its own vectors, allocator and `printf`, and the CPU core ported to it.
+What is built instead is smaller and keeps the whole emulator as it is.
+A VM whose stage-1 page tables we own maps *this process's address space
+onto itself*, so an ordinary function of the alphabox binary runs at EL1
+on a vCPU with the same pointers it uses outside -- the heap it shares
+with the device threads, the guest DRAM array, the JIT code cache, the
+stack it was given. Only three things differ from running outside:
+
+- **Memory is mapped on first touch, and always as a copy.** Only memory
+  the runtime allocated through `hv_vm_allocate` is ever passed to
+  `hv_vm_map`: the page tables, the vCPU stacks, the copy arena, and what
+  `hv::alloc()` hands out. Every other page the VM touches -- the
+  binary's text and data, the dyld shared cache, the commpage, the
+  process heap, the process stack -- is copied into the arena and mapped
+  at its original virtual address, so the pointers still work but the
+  bytes are a private snapshot. Code is immutable, so its copy is exact;
+  writable memory diverges, and a global or a `malloc`'d block written
+  inside the VM is not seen outside. Anything the inside and the outside
+  must share has to come from `hv::alloc()`.
+
+  This is not a preference. Whether the framework will accept a page is a
+  property of the *physical frame*, enforced by the kernel's page-table
+  monitor, and nothing in user space predicts it -- the refusal is a host
+  panic, not an error return. One refused kind is known by name: a page of
+  a `MAP_JIT` mapping that has been used as one, which is what asmjit's
+  code cache is made of. The framework documents `hv_vm_allocate` as the
+  memory "suitable to be mapped as guest memory", and that is the whole of
+  what may be offered to it. There is no switch to do otherwise.
+- **System calls are proxied.** An `svc` at EL1 lands in our vector,
+  which saves the registers in a frame on the vCPU stack and leaves the
+  VM with an HVC. The host thread -- the same pthread, so the same
+  process, pointers and thread identity for the kernel -- issues the
+  same `svc #0x80` with the same registers, BSD and Mach alike, and
+  writes the result and the carry flag back into the frame before the
+  ERET. Uncontended locks never leave the VM; a contended one costs an
+  exit and the wait it would have cost anyway.
+- **A few registers are answered by the host.** The framework traps the
+  Apple counter register that `mach_absolute_time` reads
+  (`S3_4_C15_C10_6`) and the implementation-defined ones the JIT
+  write-protect switch flips; the first is answered with the host's
+  clock, the others are no-ops (stage 1 is ours and has no W^X). The
+  vCPU's generic counter starts at the physical counter rather than at
+  what the process reads as `cntvct_el0`, so each vCPU's timer offset is
+  calibrated at creation until the two agree within 2 us -- the CPU core
+  compares its counter reads with the host's.
+
+This is the model of Dune (Belay et al., 2012) on Hypervisor.framework:
+a process with EL1 privileges and its own page tables, everything else
+untouched -- with the one difference that Dune's process keeps *one*
+copy of its memory, and this one does not. That difference is what
+decides the phases below.
+
+### Phase 1: the runtime and its self-test (done)
+
+`src/hv/HvRuntime.cpp`, built with `-DALPHABOX_HVF=ON` (needs the JIT's
+asmjit for the vectors; the binary is signed ad hoc with the hypervisor
+entitlement). `alphabox hvtest` runs its checks inside the VM:
+call/return; `malloc`, libc and `write(2)` inside; `mach_absolute_time`
+and `steady_clock`; `printf`; memory from `hv::alloc()` written inside
+and read outside; a 64 MB strided sum over that memory with the same
+result as outside; a call from a second thread on its own vCPU;
+`cntvct_el0` equal to the host's. It also states whether a global
+written inside was seen outside, which under the copy rule is "no".
+
+Measured before the rule changed, with the heap mapped directly, the
+strided sum ran **1.2-1.3x slower inside** -- two-stage translation on a
+workload with poor locality; a stage-1 walk that misses costs a stage-2
+walk per level. The same figure over `hv::alloc()` memory has not been
+taken yet.
+
+`hvtest --regions` lists every region of the process with how the kernel
+describes it, and creates no VM; `ALPHABOX_HV_TRACE=1` prints every
+mapping, exit and proxied call; `ALPHABOX_HV_WATCHDOG=<s>` cancels a
+vCPU that never exits and prints where it was.
+
+Two things learned building it: asmjit's `align()` stops at 64 bytes,
+so the 128-byte exception-vector entries are padded by hand (an aligned
+table that was not is a vector landing inside the handler, and a fault
+loop with no exit to show for it); and code the host writes is fetched
+by the vCPU from the point of unification, so it is cleaned out of the
+data cache first.
+
+### Phase 2: the CPU loop inside (wired, not yet exercised)
+
+`ALPHABOX_HV=1` makes every CPU thread run its dispatch loop --
+interpreter, JIT compiler, compiled code, and the device models the
+guest's MMIO reaches through `cSystem->ReadMem` -- at EL1 on that
+thread's vCPU (`CAlphaCPU::run` enters `run_loop` through `hv::call`).
+Device threads, SDL, pcap and the disk files stay outside.
+
+The copy rule above is what this phase has to be built around, and it is
+not a detail: the CPU loop and the device threads communicate through
+ordinary memory -- guest DRAM, the interrupt flags in the CPU object,
+the JIT's code cache, the disk buffers -- and none of it is shared while
+it comes from `calloc` and `new`. Every such structure must move to
+`hv::alloc()` before the loop can run inside for longer than a boot
+message: guest DRAM (`CSystem::memory`), the `CAlphaCPU` objects, the
+JIT code cache and its block tables, and the device state the CPU thread
+reaches. Allocation *inside* the VM is the same problem seen from the
+other side: `malloc` called inside works on the private copy of the
+heap, so a block allocated inside and freed outside corrupts the
+allocator. The loop must not allocate.
+
+One concrete obstacle is already known: asmjit calls
+`pthread_jit_write_protect_np` around every code emission, and that
+function traps on an implementation-defined register the framework
+intercepts, checks the result, and executes `BRK` when it does not take
+effect -- so the JIT compiler cannot run inside as it stands. The
+interpreter can. That makes the first honest phase-2 experiment the
+*interpreter* at EL1 with guest DRAM in `hv::alloc()` memory, compiling
+outside or not at all, measured against the same binary with the switch
+off.
+
+### Phase 3: the hardware translation buffer
+
+The gain the hypervisor was priced for, and the part the copy rule does
+*not* obstruct: guest DRAM is `hv::alloc()` memory, so the stage-1
+entries point at pages both sides own. The compiled code has to move
+there too -- asmjit's `JitRuntime` allocates `MAP_JIT` memory, which is
+the one kind the monitor is known to refuse, so blocks are emitted into
+`hv::alloc()` memory and made executable by our own stage-1 entries
+(asmjit assembles into a `CodeHolder` and copies out, which the runtime's
+vectors already do). Alpha seg0 becomes a window in
+the low half of the VM's address space (guest VA plus a constant, above
+anything the process maps), kseg and seg1 live in the high half
+(`TTBR1`), and the four processor modes times 256 ASNs map onto 256
+hardware ASIDs through an allocator that recycles the least recently
+used pair with a `TLBI`. The stage-1 entries are filled *lazily from the
+software TB* on the in-VM translation fault (measured at ~200 ns): the
+software TB stays the truth, the hardware tables are its cache, and
+`tbis`/`tbia`/ASN switches become `TLBI` and table drops instead of
+page-cache flushes and epoch bumps. A guest load in compiled code is
+then one `ldr`.
+
+Device pages are the part that decides whether this pays. An exit costs
+about a microsecond and the boot's device traffic is in the hundred
+millions of accesses, so **an MMIO access must never fault**: an
+emitted load site that faults on a device page once is patched to the
+helper call for good (fault-once site patching), and since drivers reach
+their registers from a handful of sites while the rest of the code
+never does, the direct path keeps the loads and the helpers keep the
+devices. The interpreter has one load site for everything, so it keeps
+the software check it has today; the hardware TB is the JIT's gain.
+
+### Phase 4: interrupts and the timer
+
+What the framework offers beyond the MMU: a pending interrupt injected
+into the vCPU (`hv_vcpu_set_pending_interrupt`) lands in our IRQ vector
+without the dispatch loop polling a flag at every batch boundary, and
+the virtual timer can fire the interval timer. Whether either is worth
+having is measured after phase 3, on the boot and on the guest's idle
+behaviour.

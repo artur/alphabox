@@ -34,8 +34,38 @@
 /**
  * \brief Abstract base class for devices that connect to the Typhoon chipset.
  **/
+/// A device's bulk data register: the one place a driver moves a sector
+/// through, a word at a time, rather than reading a status bit. Crossing
+/// out of the VM for each of those words costs a microsecond and a disk
+/// check makes a million of them a second, so a device that has such a
+/// register describes it here and the processor serves the transfer from
+/// the shared buffer without leaving. Only the last word of a buffer
+/// escapes, which is where the device's completion logic lives.
+struct SBulkPort {
+  u32 offset = 0;          ///< byte offset of the register within the range
+  u16 *data = nullptr;     ///< the transfer buffer (must be shared memory)
+  int *ptr = nullptr;      ///< cursor, in words
+  int *size = nullptr;     ///< words available
+  int *selected = nullptr; ///< which drive's ready flag applies
+  bool *drq[2] = {nullptr, nullptr}; ///< per-drive data-request flags
+};
+
 class CSystemComponent {
 public:
+#ifdef ALPHABOX_HVF
+  // With ALPHABOX_HV=1 the processor runs inside a VM and reads some device
+  // state directly (see SBulkPort), so device objects are placed in the
+  // memory the two sides share.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+#endif
+  /// Describe this range's bulk data register, if it has one.
+  virtual bool get_bulk_port(int index, SBulkPort *out) {
+    (void)index;
+    (void)out;
+    return false;
+  }
+
   virtual int RestoreState(FILE *f) = 0;
   virtual int SaveState(FILE *f) = 0;
 

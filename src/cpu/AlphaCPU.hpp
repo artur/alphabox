@@ -45,6 +45,9 @@
 #include "System.hpp"
 #include "SystemComponent.hpp"
 #include "cpu_defs.hpp"
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
 
 /// The processor executing on this thread, or nullptr on a device thread.
@@ -110,6 +113,10 @@ public:
   void dump_ic_flush_pcs(); // ...printed when the CPU goes away
 
   virtual void run(); // Poco Thread entry point
+  void run_loop();    // the dispatch loop run() ends in
+#ifdef ALPHABOX_HVF
+  static uint64_t hv_run_loop(void *self); // run_loop() as a VM entry
+#endif
   void execute();
   void release_threads();
 
@@ -422,6 +429,117 @@ private:
     cc_last_read = state.cc;
     return ((u64)state.cc_offset) << 32 | (state.cc & U64(0xffffffff));
   }
+
+  // The system bus, reached the way this build must reach it. Guest DRAM is
+  // shared memory and is read directly wherever the caller already checks
+  // for it; everything else is a device, and a device model may take locks,
+  // allocate, or talk to a thread of its own -- none of which works from
+  // inside the VM. So when the dispatch loop runs at EL1 these two leave
+  // the VM and run on the host thread. Outside the VM they are the plain
+  // call they always were. The argument block is a local: inside the VM
+  // that is the vCPU stack, which both sides see.
+  struct SysCall {
+    CSystem *sys;
+    CSystemComponent *src;
+    u64 addr;
+    u64 data;
+    int size;
+  };
+  static u64 sys_read_out(void *p);
+  static u64 sys_write_out(void *p);
+  // The same instant as steady_clock::now(), but read from the generic
+  // timer. std::chrono reaches the clock through Apple's counter register,
+  // which the hypervisor traps: one VM exit per call, and the dispatch loop
+  // calls it once per batch -- which was most of the cost of running
+  // compiled code inside. cntvct_el0 is not trapped. Anchored once per
+  // processor, in the shared object, so both sides agree on the epoch.
+  inline void clock_anchor() {
+    m_clk_ticks0 = host_ticks();
+    m_clk_tp0 = std::chrono::steady_clock::now();
+  }
+  inline std::chrono::steady_clock::time_point now_fast() const {
+#if defined(__aarch64__)
+    // ALPHABOX_FASTCLOCK=0 goes back to std::chrono for this read, which is
+    // the A/B switch that measures what the generic timer is worth. Read
+    // once; the branch is predicted and costs nothing next to the call it
+    // replaces.
+    static const bool fast =
+        !(getenv("ALPHABOX_FASTCLOCK") && atoi(getenv("ALPHABOX_FASTCLOCK")) == 0);
+    if (fast && m_clk_ticks0) {
+      const u64 hz = host_tick_hz();
+      const u64 d = host_ticks() - m_clk_ticks0;
+      // split so the nanosecond scaling cannot overflow on a long run
+      return m_clk_tp0 + std::chrono::nanoseconds((d / hz) * 1000000000ull +
+                                                  (d % hz) * 1000000000ull / hz);
+    }
+#endif
+    return std::chrono::steady_clock::now();
+  }
+  void rate_tick();
+#ifdef ES40_JIT
+  // The block is opaque here: jitengine.hpp is not included by this header.
+  struct CompileArg {
+    CAlphaCPU *cpu;
+    void *b;
+  };
+  static u64 compile_thunk(void *p);
+  void compile_outside(void *b);
+#endif
+
+public:
+#ifdef ALPHABOX_HVF
+  // An interrupt raised by a device thread, the stop flag, the instruction
+  // count the main thread reads: all of them cross the boundary, so under
+  // ALPHABOX_HV=1 the processor object lives in shared memory.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+#endif
+  inline u64 sys_read(u64 addr, int size) {
+#ifdef ALPHABOX_HVF
+    if (hv::enabled()) {
+      // A bulk data register is a transfer, not a register: served from the
+      // shared buffer without leaving the VM. The word that completes the
+      // buffer is left to the device, which clears the request and wakes
+      // its controller.
+      if (const CSystem::BulkPort *bp = cSystem->bulk_for(addr)) {
+        const int words = (size == 32) ? 2 : (size == 16 ? 1 : 0);
+        if (words && *bp->d.drq[*bp->d.selected & 1] &&
+            *bp->d.ptr + words < *bp->d.size) {
+          u64 v = bp->d.data[(*bp->d.ptr)++];
+          if (words == 2)
+            v |= (u64)bp->d.data[(*bp->d.ptr)++] << 16;
+          ++m_bulk_served;
+          return v;
+        }
+      }
+      SysCall c{cSystem, this, addr, 0, size};
+      return hv::escape(&sys_read_out, &c);
+    }
+#endif
+    return cSystem->ReadMem(addr, size, this);
+  }
+  inline void sys_write(u64 addr, int size, u64 data) {
+#ifdef ALPHABOX_HVF
+    if (hv::enabled()) {
+      if (const CSystem::BulkPort *bp = cSystem->bulk_for(addr)) {
+        const int words = (size == 32) ? 2 : (size == 16 ? 1 : 0);
+        if (words && *bp->d.drq[*bp->d.selected & 1] &&
+            *bp->d.ptr + words < *bp->d.size) {
+          bp->d.data[(*bp->d.ptr)++] = (u16)(data & 0xffff);
+          if (words == 2)
+            bp->d.data[(*bp->d.ptr)++] = (u16)((data >> 16) & 0xffff);
+          ++m_bulk_served;
+          return;
+        }
+      }
+      SysCall c{cSystem, this, addr, data, size};
+      hv::escape(&sys_write_out, &c);
+      return;
+    }
+#endif
+    cSystem->WriteMem(addr, size, data, this);
+  }
+  u64 m_bulk_served = 0; ///< transfers served without leaving the VM
 
   // DRAM fast-path cache
   char *dram_ptr; // cSystem->PtrToMem(0) - host pointer to base es40 ram array
@@ -926,6 +1044,37 @@ private:
   u64 last_read_loc;
   u64 last_write_loc;
 #endif
+
+  // Kept last on purpose: the compiled code reaches the page cache and the
+  // register file with one displacement from `this`, and that only works
+  // while they stay near the front of the object (see kDpcEntries above).
+  // New members go here, behind everything the emitter addresses.
+  std::chrono::steady_clock::time_point m_rate_last{};
+  u64 m_rate_icount = 0;
+  // The clock anchor lives here for the same reason as everything else in
+  // this block: compiled code reaches the register file and the page
+  // caches with one displacement from `this`, and a field inserted ahead
+  // of them pushes those past the reach of that addressing. Putting these
+  // two in the middle of the class emitted code that read from a null
+  // pointer.
+  u64 m_clk_ticks0 = 0;
+  std::chrono::steady_clock::time_point m_clk_tp0{};
+  u64 m_rate_cc = 0; // the cycle counter as of the last rate report
+  u64 m_rate_escapes = 0, m_rate_entries = 0, m_rate_bulk = 0;
+
+public:
+  /// How often compiled code leaves for the miscellaneous helper, by kind:
+  /// [0] RPCC (the cycle counter), [1] RC, [2] RS.
+  u64 m_misc_calls[3] = {0, 0, 0};
+
+private:
+  u64 m_rate_misc[3] = {0, 0, 0};
+
+public:
+  /// Interpret, never compile: set for every run inside the VM (the code
+  /// cache cannot be shared with it) and by ALPHABOX_INTERP=1, which is the
+  /// control arm that measures what running inside costs.
+  bool m_interp_only = false;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow
@@ -1008,17 +1157,17 @@ inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
 
     printf("%%CPU-I-PALSCR: Scratch area at %016" PRIx64 ":\n", scratch);
     printf("%%CPU-I-PALSCR:   +0x00 VPTB = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x00, 64, this));
+           sys_read(scratch + 0x00, 64));
     printf("%%CPU-I-PALSCR:   +0x08 PTBR = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x08, 64, this));
+           sys_read(scratch + 0x08, 64));
     printf("%%CPU-I-PALSCR:   +0x10 PCBB = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x10, 64, this));
+           sys_read(scratch + 0x10, 64));
     printf("%%CPU-I-PALSCR:   +0x18 KSP  = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x18, 64, this));
+           sys_read(scratch + 0x18, 64));
     printf("%%CPU-I-PALSCR:   +0x98 WHAMI= %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x98, 64, this));
+           sys_read(scratch + 0x98, 64));
     printf("%%CPU-I-PALSCR:   +0x170 SCBB= %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x170, 64, this));
+           sys_read(scratch + 0x170, 64));
   } else if (!state.pal_vms && state.r[53] == 0) {
     printf(
         "%%CPU-W-NOP21: PAL switched but p21=0! Scratch area not available.\n");
@@ -1143,10 +1292,10 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       // bus.
       const u64 p_instr = p_a + (address & ICACHE_BYTE_MASK);
       u32 ins = 0;
-      ins |= (u8)cSystem->ReadMem(p_instr + 0, 8, this);
-      ins |= ((u8)cSystem->ReadMem(p_instr + 1, 8, this)) << 8;
-      ins |= ((u8)cSystem->ReadMem(p_instr + 2, 8, this)) << 16;
-      ins |= ((u8)cSystem->ReadMem(p_instr + 3, 8, this)) << 24;
+      ins |= (u8)sys_read(p_instr + 0, 8);
+      ins |= ((u8)sys_read(p_instr + 1, 8)) << 8;
+      ins |= ((u8)sys_read(p_instr + 2, 8)) << 16;
+      ins |= ((u8)sys_read(p_instr + 3, 8)) << 24;
       *data = ins; // already in target little-endian form
 
       state.pc_phys = p_instr;
@@ -1170,7 +1319,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
     }
   }
 
-  *data = (u32)cSystem->ReadMem(state.pc_phys, 32, this);
+  *data = (u32)sys_read(state.pc_phys, 32);
   return 0;
 }
 
@@ -1350,9 +1499,9 @@ inline u64 CAlphaCPU::get_prbr(void) {
   bool b;
   if (state.r[21 + 32] && ((u64)(state.r[21 + 32] + 0xaf) <
                            (u64)((U64(0x1) << cSystem->get_memory_bits()))))
-    v_prbr = cSystem->ReadMem(state.r[21 + 32] + 0xa8, 64, this);
+    v_prbr = sys_read(state.r[21 + 32] + 0xa8, 64);
   else
-    v_prbr = cSystem->ReadMem(0x70a8 + (0x200 * get_cpuid()), 64, this);
+    v_prbr = sys_read(0x70a8 + (0x200 * get_cpuid()), 64);
   if (virt2phys(v_prbr, &p_prbr, ACCESS_READ | FAKE | NO_CHECK, &b, 0))
     p_prbr = v_prbr;
   if ((u64)p_prbr > (u64)(U64(0x1) << cSystem->get_memory_bits()))
@@ -1369,9 +1518,9 @@ inline u64 CAlphaCPU::get_hwpcb(void) {
   bool b;
   if (state.r[21 + 32] && ((u64)(state.r[21 + 32] + 0x17) <
                            (u64)((U64(0x1) << cSystem->get_memory_bits()))))
-    v_pcb = cSystem->ReadMem(state.r[21 + 32] + 0x10, 64, this);
+    v_pcb = sys_read(state.r[21 + 32] + 0x10, 64);
   else
-    v_pcb = cSystem->ReadMem(0x7010 + (0x200 * get_cpuid()), 64, this);
+    v_pcb = sys_read(0x7010 + (0x200 * get_cpuid()), 64);
   if (virt2phys(v_pcb, &p_pcb, ACCESS_READ | NO_CHECK | FAKE, &b, 0))
     p_pcb = v_pcb;
   if (p_pcb > (u64)(U64(0x1) << cSystem->get_memory_bits()))
