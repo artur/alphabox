@@ -170,6 +170,35 @@ static u32 pmu_cfg_mask[64] = {
     0,
     0};
 
+// SMBus host, the M7101's own register block (not the PIIX4's, whose layout
+// the first version of this copied). A transaction is set up in the address,
+// command and data registers, started by a write to SMB_START, and its
+// outcome read back in SMB_STS: IDLE while nothing runs, BUSY during a
+// transfer, DONE when it finished, DEV when no device acknowledged the
+// address. The bus behind this host on the emulated board carries no
+// device, so every transaction completes at once with DEV set -- which is
+// what a probing driver takes as "nothing at that address" and moves on
+// from, instead of waiting on a BUSY that never clears or trusting a
+// success that returned zeros.
+enum {
+  SMB_STS = 0x00,   // status: write 1 to clear a bit
+  SMB_CNT = 0x01,   // control: bits 6:4 the protocol, bit 7 kill
+  SMB_START = 0x02, // any write starts the transaction
+  SMB_ADDR = 0x03,  // slave address << 1 | read
+  SMB_DAT0 = 0x04,
+  SMB_DAT1 = 0x05,
+  SMB_BLK = 0x06,
+  SMB_CMD = 0x07,
+};
+enum {
+  SMB_STS_IDLE = 0x04,
+  SMB_STS_BUSY = 0x08,
+  SMB_STS_DONE = 0x10,
+  SMB_STS_DEV = 0x20,  // device error: no acknowledge
+  SMB_STS_COLL = 0x40, // bus collision
+  SMB_STS_TERM = 0x80, // terminated by the kill bit
+};
+
 CAliM1543C_pmu::CAliM1543C_pmu(CConfigurator *cfg, CSystem *c, int pcibus,
                                int pcidev)
     : CPCIDevice(cfg, c, pcibus, pcidev) {
@@ -180,9 +209,7 @@ CAliM1543C_pmu::CAliM1543C_pmu(CConfigurator *cfg, CSystem *c, int pcibus,
   for (int i = 0; i < (int)sizeof(state.smb_block); i++)
     state.smb_block[i] = 0;
 
-  // SMBus host status: bit 0 = HOST_BUSY, leave clear; bit 1 = INTR done,
-  // leave clear so the first probe sees an idle controller.
-  state.smb_block[0x00] = 0x00;
+  state.smb_block[SMB_STS] = SMB_STS_IDLE; // the bus is idle
 
   state.pm_timer_anchor_us = 0;
 
@@ -300,15 +327,22 @@ void CAliM1543C_pmu::smb_io_write(u32 address, int dsize, u32 data) {
 #endif
 
   const int bytes = dsize / 8;
-  for (int i = 0; i < bytes && (off + i) < (int)sizeof(state.smb_block); i++)
-    state.smb_block[off + i] = (u8)(data >> (8 * i));
-
-  // SMBus host status (offset 0).  Bit 0 (HOST_BUSY) auto-clears so the
-  // next status read shows the (stub) transaction completed; bit 1
-  // (INTR/done) gets set so polled drivers see success.
-  if (off == 0x00) {
-    state.smb_block[0] &= ~0x01;
-    state.smb_block[0] |= 0x02;
+  for (int i = 0; i < bytes && (off + i) < (int)sizeof(state.smb_block); i++) {
+    const u8 b = (u8)(data >> (8 * i));
+    switch (off + i) {
+    case SMB_STS: // write 1 to clear; IDLE is not a latched bit
+      state.smb_block[SMB_STS] &= (u8)~(b & ~SMB_STS_IDLE);
+      state.smb_block[SMB_STS] |= SMB_STS_IDLE;
+      break;
+    case SMB_START: // no device answers: done, with a device error
+      state.smb_block[SMB_STS] =
+          (state.smb_block[SMB_CNT] & 0x80)
+              ? (u8)(SMB_STS_IDLE | SMB_STS_TERM)
+              : (u8)(SMB_STS_IDLE | SMB_STS_DONE | SMB_STS_DEV);
+      break;
+    default:
+      state.smb_block[off + i] = b;
+    }
   }
 }
 

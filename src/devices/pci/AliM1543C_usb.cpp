@@ -233,6 +233,38 @@ static void usbtrace_line(const char *what, u64 address, u64 data) {
   printf("%s\n", buf);
 }
 
+// While operational the controller writes the HCCA every frame: the frame
+// number (HccaFrameNumber, offset 0x80, with HccaPad1 cleared beside it) and,
+// when the done queue is handed over, HccaDoneHead. Nothing is ever
+// scheduled here, so the done head stays 0 and only the frame number moves.
+// There is no frame tick to drive it from, so it is posted whenever the
+// guest touches the controller and the number has changed -- every driver
+// that consults the HCCA frame number does so around a register access.
+static u32 ohci_wall_frame() {
+  return (u32)(std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count() &
+               0xffff);
+}
+
+void CAliM1543C_usb::ohci_post_hcca(bool force) {
+  const u32 hcca = state.usb_data[0x18 / 4];
+  if (!hcca || !ohci_operational())
+    return;
+  const u32 frame = ohci_wall_frame();
+  if (!force && frame == m_hcca_posted)
+    return;
+  m_hcca_posted = frame;
+  u32 words[2] = {frame, 0}; // HccaFrameNumber + HccaPad1, HccaDoneHead
+  do_pci_write(hcca + 0x80, words, sizeof(u32), force ? 2 : 1);
+  if (g_usbtrace) {
+    static int n;
+    if (n++ < 4 || force)
+      printf("USBT HCCA %08x <- frame %04x%s\n", hcca, frame,
+             force ? " (done head cleared)" : "");
+  }
+}
+
 u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
   u64 data = 0;
   if (g_usbtrace && address < 0x110) {
@@ -266,12 +298,7 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
     break;
 
   case 0x3c: // HcFmNumber: advances once per (wall-clock) ms while operational
-    data = ohci_operational()
-               ? (u32)(std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now().time_since_epoch())
-                           .count() &
-                       0xffff)
-               : state.usb_data[address / 4];
+    data = ohci_operational() ? ohci_wall_frame() : state.usb_data[address / 4];
     break;
 
   case 4:     // HcControl
@@ -304,6 +331,7 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
            (int)address);
   }
 
+  ohci_post_hcca(false);
   return data;
 }
 
@@ -333,6 +361,7 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
   switch (address) {
   case 4: // HcControl
     state.usb_data[address / 4] = (u32)data & 0x7ff;
+    ohci_post_hcca(true); // entering UsbOperational starts the HCCA writes
     break;
 
   case 8: // HcCommandStatus: write 1 to set
@@ -370,6 +399,7 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
 
   case 0x18: // HcHCCA: the controller needs a 512-byte-aligned block
     state.usb_data[address / 4] = (u32)data & 0xfffffe00;
+    ohci_post_hcca(true);
     break;
 
   case 0x1c: // HcPeriodCurrentED
