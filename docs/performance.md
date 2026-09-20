@@ -588,11 +588,20 @@ per-address histogram of the ones the helpers serve (`dump_device_pages`,
 printed when the CPU goes away). Over a Windows 2000 boot-plus-benchmark
 run, by exact register: 58% the IDE data port 0x1F0 (81.6M reads, 10.8M
 writes -- the guest moves its disk data by PIO: its stack is the generic
-`pciide.sys`, which turns DMA on only for chipsets it knows, and the trace
-shows 5,061 READ MULTIPLE, 662 WRITE MULTIPLE and not one bus-master
-start, though the controller advertises DMA); 14% port 0x61 (22M reads in
-one 10 s phase: the system control port's refresh-toggle bit, which the
-emulator flips every 15 us of wall time and a HAL stall loop counts); 11%
+`pciide.sys` + `pciidex.sys` + `atapi.sys`, and the trace shows 5,061 READ
+MULTIPLE, 662 WRITE MULTIPLE and not one bus-master start, though the
+controller advertises DMA in every register a driver reads: prog-if 0xFA,
+BAR4 relocatable, the bus-master status "DMA capable" bits, IDENTIFY words
+49/53/63/88. Tried and reverted: the bus-master-enable bit set at power on
+and held against the guest's write -- Windows read the bus-master status
+and still chose PIO. Its registry says the same: `TimingModeAllowed` =
+0xFFFFFFFF, nothing persisted forbids DMA, and `TimingMode` = 0x10, PIO 4
+achieved at every boot. The decision is inside the Alpha build's generic
+miniport; the emulator's remaining fidelity gap there, SET FEATURES 02/66
+aborted where a real drive accepts them, is fixed); 14% port 0x61 (22M reads,
+19M of them in one burst of 1.05 s: the system control port's refresh-toggle
+bit, which the emulator flips every 15 us of wall time and a HAL stall loop
+counts); 11%
 the parallel port's status (18M reads, a driver's detection loop); 7% PIT
 channel 2 (the other delay timer); 5.5% one Pchip CSR, TBA2, read 8.6M
 times in the loader phase; 3% the legacy VGA window in text mode; the

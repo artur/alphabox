@@ -89,6 +89,8 @@ public:
   virtual void WriteMem_Bar(int func, int bar, u32 address, int dsize,
                             u32 data);
   virtual u32 ReadMem_Bar(int func, int bar, u32 address, int dsize);
+  void config_write_custom(int func, u32 address, int dsize, u32 old_data,
+                           u32 new_data, u32 raw) override;
 
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);

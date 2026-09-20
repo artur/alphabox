@@ -886,8 +886,25 @@ u8 CAliM1543C_ide::ide_busmaster_status(int index) {
   return status;
 }
 
+// ALPHABOX_IDETRACE: the guest's writes to this function's PCI COMMAND
+// register (Bus Master Enable is what its DMA decision hangs on).
+void CAliM1543C_ide::config_write_custom(int func, u32 address, int dsize,
+                                         u32 old_data, u32 new_data,
+                                         u32 raw) {
+  if (g_idetrace && address <= 0x05)
+    printf("IDET %10.1f PCI COMMAND %04x -> %04x (write @%02x/%d = %08x)\n",
+           idetrace_ms(), old_data & 0xffff, new_data & 0xffff, address,
+           dsize, raw);
+}
+
 u32 CAliM1543C_ide::ide_busmaster_read(int index, u32 address, int dsize) {
   u32 data = 0;
+  if (g_idetrace) { // the first few bus-master register reads, per channel
+    static int n[2];
+    if (n[index]++ < 8)
+      printf("IDET %10.1f ch%d BM read @%u/%d\n", idetrace_ms(), index,
+             (unsigned)address, dsize);
+  }
   switch (dsize) {
   case 8:
     if (address == 2)
@@ -2387,6 +2404,27 @@ void CAliM1543C_ide::execute(int index) {
         raise_interrupt(index);
         break;
       }
+
+      case 0x02: // enable write cache
+      case 0x82: // disable write cache
+      case 0xaa: // enable read look-ahead
+      case 0x55: // disable read look-ahead
+      case 0x66: // disable revert to power-on defaults
+      case 0xcc: // enable revert to power-on defaults
+      case 0x05: // enable advanced power management
+      case 0x85: // disable advanced power management
+        // Drive-side settings a real disk accepts and this file image has no
+        // use for: acknowledged, like the drive would. Windows 2000's
+        // atapi.sys issues 66 and 02 at every device start and used to see
+        // both aborted.
+        SEL_STATUS(index).busy = false;
+        SEL_STATUS(index).drive_ready = true;
+        SEL_STATUS(index).seek_complete = true;
+        SEL_STATUS(index).fault = false;
+        SEL_STATUS(index).drq = false;
+        SEL_STATUS(index).err = false;
+        raise_interrupt(index);
+        break;
 
       default:
         printf("%%IDE-I-FEAT: Unhandled set feature subcommand %x\n",
