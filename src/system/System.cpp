@@ -39,6 +39,7 @@
 #endif
 
 #include <ctype.h>
+#include <map>
 #include <signal.h>
 #include <stdlib.h>
 
@@ -127,6 +128,7 @@ CSystem::CSystem(CConfigurator *cfg) try {
   if (iNumMemoryBits >= sizeof(size_t) * 8)
     FAILURE(Configuration, "memory.bits is too large for this host");
   CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
+  init_code_page_map();
 
   printf("%s(%s): $Id: System.cpp,v 1.79 2008/06/12 07:29:44 iamcamiel Exp $\n",
          cfg->get_myName(), cfg->get_myValue());
@@ -162,6 +164,7 @@ void CSystem::ResetMem(unsigned int membits) {
   free_guest_memory(memory, (size_t)1 << iNumMemoryBits);
   iNumMemoryBits = membits;
   CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
+  init_code_page_map();
 }
 
 /**
@@ -185,6 +188,107 @@ void CSystem::operator delete(void *p) noexcept {
   ::operator delete(p);
 }
 #endif
+
+void CCodePageMap::init(CSystem *sys, u64 dram_bytes, void *page_bits,
+                        void *line_bits) {
+  m_sys = sys;
+  m_pages = dram_bytes >> kPageShift;
+  m_lines = dram_bytes >> kLineShift;
+  m_page_bits = (u8 *)page_bits;
+  m_line_bits = (u8 *)line_bits;
+  m_trace = getenv("ALPHABOX_TRACE_CODEWRITE") != nullptr;
+  m_gen.store(0, std::memory_order_relaxed);
+  m_marked.store(0, std::memory_order_relaxed);
+}
+
+void CCodePageMap::trace_write(u64 phys) {
+  static std::mutex m;
+  static std::map<u64, u64> seen; // by 256-byte line
+  static u64 n = 0;
+  std::lock_guard<std::mutex> g(m);
+  seen[phys >> kLineShift]++;
+  if ((++n % 1000000) == 0) {
+    printf("[CODEWRITE] %llu writes onto compiled lines, %zu lines:",
+           (unsigned long long)n, seen.size());
+    int k = 0;
+    for (auto it = seen.begin(); it != seen.end() && k < 10; ++it, ++k)
+      printf(" %llx(%llu)", (unsigned long long)(it->first << kLineShift),
+             (unsigned long long)it->second);
+    printf("\n");
+    fflush(stdout);
+  }
+}
+
+void CCodePageMap::note_code(u64 phys, size_t bytes) {
+  if (!m_page_bits)
+    return;
+  const u64 last = phys + (bytes ? bytes - 1 : 0);
+  for (u64 ln = phys >> kLineShift; ln <= (last >> kLineShift); ++ln) {
+    if (ln >= m_lines)
+      return;
+    m_line_bits[ln >> 3] |= (u8)(1u << (ln & 7));
+  }
+  for (u64 pg = phys >> kPageShift; pg <= (last >> kPageShift); ++pg) {
+    if (pg >= m_pages)
+      return;
+    u8 &cell = m_page_bits[pg >> 3];
+    const u8 bit = (u8)(1u << (pg & 7));
+    if (!(cell & bit)) {
+      cell |= bit; // a page that holds code keeps the slower write path
+      m_marked.fetch_add(1, std::memory_order_relaxed);
+      // Whatever was written to this page before we looked was written
+      // while it was not yet code, so make the next flush do its work
+      // rather than trust a count taken before this block existed.
+      m_gen.fetch_add(1, std::memory_order_release);
+      if (m_sys)
+        m_sys->request_code_page_flush();
+    }
+  }
+}
+
+/// A device wrote a range. Pages are the cheap filter -- a transfer is
+/// usually nowhere near code -- and only a page that holds some go on to
+/// the lines.
+void CCodePageMap::note_write_range(u64 phys, size_t bytes) {
+  if (!m_page_bits || !bytes)
+    return;
+  const u64 last = phys + bytes - 1;
+  for (u64 pg = phys >> kPageShift; pg <= (last >> kPageShift); ++pg) {
+    if (!holds_code(pg << kPageShift))
+      continue;
+    const u64 from = (pg << kPageShift) > phys ? (pg << kPageShift) : phys;
+    const u64 to = ((pg + 1) << kPageShift) - 1 < last
+                       ? ((pg + 1) << kPageShift) - 1
+                       : last;
+    for (u64 ln = from >> kLineShift; ln <= (to >> kLineShift); ++ln)
+      if (holds_code_line(ln << kLineShift)) {
+        m_gen.fetch_add(1, std::memory_order_release);
+        return;
+      }
+  }
+}
+
+/// One bit per page, from the same allocator as guest memory: the dispatch
+/// loop reads it inside the VM and the device threads write to it outside.
+void CSystem::init_code_page_map() {
+  if (m_code_page_bits) { // a memory resize: the old maps sized the old DRAM
+    free_guest_memory(m_code_page_bits, m_code_page_bytes);
+    free_guest_memory(m_code_line_bits, m_code_line_bytes);
+  }
+  const size_t page_bytes =
+      ((size_t)1 << (iNumMemoryBits - CCodePageMap::kPageShift)) / 8 + 1;
+  const size_t line_bytes =
+      ((size_t)1 << (iNumMemoryBits - CCodePageMap::kLineShift)) / 8 + 1;
+  void *pb = alloc_guest_memory(page_bytes);
+  void *lb = alloc_guest_memory(line_bytes);
+  CHECK_ALLOCATION(pb);
+  CHECK_ALLOCATION(lb);
+  m_code_page_bits = pb;
+  m_code_line_bits = lb;
+  m_code_page_bytes = page_bytes;
+  m_code_line_bytes = line_bytes;
+  m_code_pages.init(this, (u64)1 << iNumMemoryBits, pb, lb);
+}
 
 void *CSystem::alloc_guest_memory(size_t bytes) {
 #ifdef ALPHABOX_HVF
@@ -255,6 +359,11 @@ void CSystem::set_direct_memory(u64 base, u64 size, u8 *host) {
   m_direct_host = host;
   if (size)
     m_direct_end.store(base + size, std::memory_order_release);
+  for (int i = 0; i < iNumCPUs; i++)
+    acCPUs[i]->request_dpc_flush();
+}
+
+void CSystem::request_code_page_flush() {
   for (int i = 0; i < iNumCPUs; i++)
     acCPUs[i]->request_dpc_flush();
 }
@@ -614,13 +723,27 @@ CSystem::CPCIDMAWriteGuard::CPCIDMAWriteGuard(CSystem *sys, bool active)
 }
 
 CSystem::CPCIDMAWriteGuard::~CPCIDMAWriteGuard() {
-  if (system)
+  if (system) {
+    // Again on the way out: invalidate() runs before the transfer, so a
+    // processor that flushed its instruction cache while the bytes were
+    // still arriving would have counted a write that had not happened yet.
+    if (touched_code)
+      system->m_code_pages.note_write_all();
     system->pci_dma_write_leave();
+  }
 }
 
 void CSystem::CPCIDMAWriteGuard::invalidate(u64 address, size_t bytes) {
-  if (system)
+  if (system) {
     system->cpu_clear_external_locks(address, bytes);
+    // A device writing into a page some block was compiled from changes code
+    // just as a store does -- a driver paged in over an old one is exactly
+    // that -- and the processor never sees it.
+    const u64 before = system->m_code_pages.write_gen();
+    system->m_code_pages.note_write_range(address, bytes);
+    if (system->m_code_pages.write_gen() != before)
+      touched_code = true;
+  }
 }
 
 void CSystem::cpu_llsc_enter() {
@@ -710,6 +833,7 @@ u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
   else {
     // STx_C to another quadword of the locked line: no value to compare.
     dram_write(dram, phys, size_bits, value);
+    m_code_pages.note_write(phys); // a conditional store can change code too
     ok = 1;
   }
   if (ok)
@@ -1018,6 +1142,9 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
   default:
     *((u64 *)p) = endian_64((u64)data);
   }
+  // Whoever wrote it -- the native PALcode's stores come through here, and
+  // so does anything a device writes one word at a time.
+  m_code_pages.note_write(a);
 }
 
 /**
@@ -2115,6 +2242,9 @@ static bool srm_decomp_chunk(CSystem *sys, CAlphaCPU *cpu) {
 }
 
 int CSystem::LoadROM() {
+  // The firmware image lands in guest memory behind every processor's back
+  // (a reset reloads it while compiled code exists).
+  m_code_pages.note_write_all();
   FILE *f;
   char *buffer;
   int i;
@@ -2972,6 +3102,7 @@ void CSystem::SaveState(const char *fn) {
  * Restore system state from a state file.
  **/
 void CSystem::RestoreState(const char *fn) {
+  m_code_pages.note_write_all(); // the whole of memory is about to be replaced
   FILE *f;
   int i;
   u64 m;

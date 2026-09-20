@@ -254,6 +254,68 @@ The prediction was written down before the run
 (`lab/results/flushfix-prediction.md`): three of four held, and the
 fourth's miss is the finding.
 
+### The flush that has nothing to flush
+
+That other half, measured. An `IMB` says "I may have changed code", so
+every compiled block has to prove its source words again before it runs;
+the counters say what that proof finds:
+
+```
+[JIT][STATS][CPU0]   revalidate 6981432 | unchanged 6981432 | bytes changed 0 | remapped 0 | 54761154 words hashed
+```
+
+Per 100M instructions at the SRM prompt: seven million re-hashes, 54.7M
+words -- and not one changed byte. Over a whole Windows 2000 boot,
+300,798,944 of them, still not one. The firmware issues `IMB` from a
+polling loop, and nothing it polls ever writes code.
+
+So the flush asks a cheaper question first (`CCodePageMap`,
+`CAlphaCPU::flush_icache`): has anything been written to memory a block
+was compiled from since the last flush? If not it returns -- no icache
+walk, no epoch bump, no re-hash. Every path that writes guest memory
+reports to the map, and compiled code cannot store into a code page
+inline, because such a page is never installed in the write half of the
+data page cache: those stores take the helper, which reports.
+
+**Two granularities, and one page is the reason.** Whether compiled code
+may store into a page inline is a question about a page, since that is
+what the cache maps. Whether a write can have changed code is a question
+about 256 bytes. At page granularity the answer at the console was
+"maybe" every single time: `ALPHABOX_TRACE_CODEWRITE=1` shows the SRM
+console writing one counter 249 million times at offset `0xd40` of the
+page whose code sits at `0x1500`-`0x1ca0`. Same page, 1.5 KB away. At 256
+bytes the counter and the code are plainly apart, and the skip rate goes
+from 0% to 100%.
+
+Measured, same binary, `ALPHABOX_JIT_NOPFLUSH=0/1`:
+
+| workload | off | on | |
+| --- | --- | --- | --- |
+| SRM console at `P00>>>` | 441 MIPS | 1681 MIPS | **3.8x** |
+| Windows 2000 boot, instructions in 90 s | 134.1G, 135.4G | 153.0G, 152.1G | **+13%**, disjoint |
+| Windows 2000, time to the desktop | 95 s, 95 s | 95 s, 95 s | no change |
+| `perf_ab --snapshot`, 3 rounds, 9 sections | | | -0.9%, every section overlapping |
+
+**Who issues the IMBs decides all of it.** `ALPHABOX_RATE=5` through a
+boot: 1.1-1.4 **million** IMB/s while the console firmware runs, 100% of
+them with nothing to flush -- and 4 to 16 IMB/s once Windows is up, 74-96%
+with nothing to flush (Windows does load code, so some are real). That is
+why the compute sections cannot see this at all, and why the desktop
+arrives at the same second: that phase is firmware delay loops around disk
+I/O, as the flush-storm entry above already found. What this removes is
+CPU work that was provably never needed -- not wall-clock time in a boot.
+
+**The test can fail.** `test/tools/smc_test.sh` boots a guest that runs a
+loop until the JIT compiles it, stores a branch-to-halt over an
+instruction inside that compiled block, executes `IMB` and re-enters the
+loop: the emulator halts if the new instruction runs, and hangs forever on
+the old one. Four arms -- unconditional flush (halts), flush skipped
+(halts), stores deliberately unreported through
+`ALPHABOX_JIT_NOPFLUSH_BREAK=1` (hangs, as it must), and the audit mode
+`ALPHABOX_JIT_NOPFLUSH=2`, which flushes anyway and reports a source
+change the map failed to predict (halts, and reports it). A Windows boot
+under the audit reports nothing.
+
 ## Where the time goes on a CPU-bound guest workload
 
 Same windows as above, the `cmd` loop running, per 100M guest instructions:

@@ -284,6 +284,21 @@ void CAlphaCPU::rate_tick() {
               done ? 100.0 * (d[0] + d[1] + d[2]) / done : 0.0,
               state.cc_ena ? 1 : 0, (unsigned long long)cc_moved);
   }
+  {
+    // What the guest's IMBs cost: how many asked for a flush, how many of
+    // those had anything to flush, and how many pages hold code at all.
+    const u64 skipped = m_flush_skipped - m_rate_flush_skipped;
+    const u64 done_f = m_flush_done - m_rate_flush_done;
+    m_rate_flush_skipped = m_flush_skipped;
+    m_rate_flush_done = m_flush_done;
+    if (skipped + done_f)
+      fprintf(stderr,
+              "%%CPU%d-I-FLUSH: %.0f IMB/s, %.1f%% with nothing to flush; "
+              "%llu code pages\n",
+              get_cpuid(), (skipped + done_f) / secs,
+              100.0 * (double)skipped / (double)(skipped + done_f),
+              (unsigned long long)(m_code_map ? m_code_map->code_pages() : 0));
+  }
 }
 
 void CAlphaCPU::run_loop() {
@@ -428,6 +443,16 @@ CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
   }
 }
 
+/// A page this processor had cached as inline-writable has become a code
+/// page (some processor compiled a block from it). Compiled code checks the
+/// cached tag, not the map, so those cached translations have to go: the
+/// refill asks dpc_host_base_w() again and excludes the page, and from then
+/// on stores to it take the helper that reports to the map.
+void CAlphaCPU::honour_new_code_pages() {
+  m_code_pages_seen = m_code_map->code_pages();
+  flush_data_page_cache();
+}
+
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
@@ -451,11 +476,27 @@ void CAlphaCPU::init() {
 
   state.iProcNum = cSystem->RegisterCPU(this);
 
+  // An IMB with nothing to flush costs nothing: the machine's code-page map
+  // says whether anything has been written to a page code was compiled from.
+  // ALPHABOX_JIT_NOPFLUSH=0 restores the unconditional flush.
+  m_code_map = cSystem->code_pages();
+  {
+    const char *e = getenv("ALPHABOX_JIT_NOPFLUSH");
+    m_nopflush = !(e && e[0] == '0');
+    m_nopflush_audit = (e && e[0] == '2');
+    m_nopflush_break = getenv("ALPHABOX_JIT_NOPFLUSH_BREAK") != nullptr;
+    if (m_nopflush_break)
+      printf("%%CPU-W-NOPFLUSH: this processor's stores are NOT being "
+             "reported to the code-page map (test hook)\n");
+  }
+
 #ifdef ES40_JIT
   if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum);
     m_jit->set_cpu_identity(m_model->amask, m_model->implver);
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
+    m_jit->set_code_page_map(m_code_map);
+    m_jit->set_nopflush_audit(m_nopflush_audit ? &m_flush_was_clean : nullptr);
   }
   {
     // Tell the JIT the byte offsets (from `this`) of the fields its inline load
@@ -1187,8 +1228,19 @@ _next_instruction:
       // timer reaches 0. Batch to reduce memory ops.
       if (state.check_timers) {
         state.check_timers = false;
-        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel))
-          flush_data_page_cache(); // the direct range changed (see CSystem)
+        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+          // The direct range changed, or a page became a code page (see
+          // CSystem::request_code_page_flush).
+          flush_data_page_cache();
+          if (m_code_map) {
+            // Until this moment compiled code could still have stored into
+            // that page inline through the translation just dropped. Count
+            // one write, so the next flush does its work and any such store
+            // is caught by the source hash rather than assumed away.
+            m_code_map->note_write_all();
+            m_code_pages_seen = m_code_map->code_pages();
+          }
+        }
         for (int j = 0; j < 6; j++) {
           if (state.irq_h_timer[j]) {
             if (state.irq_h_timer[j] <= 32) {

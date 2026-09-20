@@ -742,6 +742,25 @@ public:
       return (u64)dram_ptr + page;
     return (u64)cSystem->direct_host_page(page);
   }
+  /// The same, for the write half of the cache. A page some block was
+  /// compiled from answers 0, which tags the slot as one compiled code must
+  /// not write inline: the store takes the helper instead, and the helper
+  /// tells the code-page map about it. Reads are untouched.
+  inline u64 dpc_host_base_w(u64 phys) const {
+    if (m_nopflush && m_code_map && m_code_map->holds_code(phys))
+      return 0;
+    return dpc_host_base(phys);
+  }
+  /// A store landed in DRAM at phys: tell the map, so that the next IMB
+  /// knows whether it has work.
+  inline void note_dram_write(u64 phys) {
+    if (m_code_map && !m_nopflush_break)
+      m_code_map->note_write(phys);
+  }
+  /// A page became a code page after this processor had already cached it
+  /// as inline-writable. Drop those cached translations; the refill will
+  /// exclude it.
+  void honour_new_code_pages();
   /// Another thread changed what the page cache may map (the direct range
   /// moved or went away): flush on this CPU's own thread, at the next timer
   /// check, which the JIT's gate also honours.
@@ -1065,6 +1084,7 @@ public:
   std::chrono::steady_clock::time_point m_clk_tp0{};
   u64 m_rate_cc = 0; // the cycle counter as of the last rate report
   u64 m_rate_escapes = 0, m_rate_entries = 0, m_rate_bulk = 0;
+  u64 m_rate_flush_skipped = 0, m_rate_flush_done = 0;
 
 public:
   /// How often compiled code leaves for the miscellaneous helper, by kind:
@@ -1079,6 +1099,45 @@ public:
   /// cache cannot be shared with it) and by ALPHABOX_INTERP=1, which is the
   /// control arm that measures what running inside costs.
   bool m_interp_only = false;
+
+  /// An IMB that has nothing to flush.
+  ///
+  /// The firmware issues IMB from a polling loop, and Windows from its
+  /// scheduler: at the SRM prompt that is a hundred thousand flushes per
+  /// hundred million instructions, each one costing an icache walk, an
+  /// epoch bump that breaks every compiled chain, and a source re-hash for
+  /// every block that runs again afterwards. Across a Windows boot those
+  /// re-hashes have never once found a changed byte (300 million of them,
+  /// measured). So the flush asks the machine's code-page map first: if
+  /// nothing has been written to a page any block was compiled from since
+  /// the last flush, there is nothing to flush, and it returns.
+  ///
+  /// What makes that safe is that every way guest memory can change reports
+  /// to the map -- the interpreter's stores, the JIT's write helpers, a
+  /// conditional store, DMA from a device thread, a firmware reload -- and
+  /// that compiled code cannot store into a code page inline: such a page
+  /// is never installed in the write half of the data page cache, so those
+  /// stores take the helper, which reports. ALPHABOX_JIT_NOPFLUSH=0 keeps
+  /// the old unconditional flush in the same binary.
+  CCodePageMap *m_code_map = nullptr;
+  u64 m_code_gen_seen = ~U64(0); // its write count at our last real flush
+  u64 m_code_pages_seen = 0;     // pages it had marked when we last looked
+  u64 m_flush_skipped = 0;       // flushes that turned out to have no work
+  u64 m_flush_done = 0;          // ... and flushes that did
+  bool m_nopflush = true;
+  /// ALPHABOX_JIT_NOPFLUSH=2: flush unconditionally, as if the map were not
+  /// there, but keep deciding what the map WOULD have said -- and shout if a
+  /// block's source words turn out to have changed while it said nothing had
+  /// been written. That is the failure this optimisation can have, and the
+  /// only way to be sure of a write path we have not thought of is to run a
+  /// guest with this on and see the count stay at zero.
+  bool m_nopflush_audit = false;
+  bool m_flush_was_clean = false; // the map said "nothing written" last time
+  /// ALPHABOX_JIT_NOPFLUSH_BREAK=1 silences the processor's own stores, as
+  /// though a write path had been forgotten. It exists so the test that
+  /// modifies guest code can be shown to fail when the tracking is wrong --
+  /// a test that cannot fail proves nothing (test/tools/smc_test.sh).
+  bool m_nopflush_break = false;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow
@@ -1107,6 +1166,22 @@ public:
  **/
 inline void CAlphaCPU::flush_icache() {
   note_ic_flush_pc();
+  // Nothing written to a page that holds code since the last flush means
+  // there is nothing this flush could invalidate (see m_code_map).
+  if (m_nopflush && m_code_map) {
+    if (m_code_map->code_pages() != m_code_pages_seen)
+      honour_new_code_pages(); // a page became code: drop stale inline writes
+    const u64 gen = m_code_map->write_gen();
+    m_flush_was_clean = (gen == m_code_gen_seen);
+    if (m_flush_was_clean) {
+      ++m_flush_skipped;
+      if (!m_nopflush_audit)
+        return;
+    } else {
+      m_code_gen_seen = gen;
+    }
+  }
+  ++m_flush_done;
   if (icache_enabled) {
     for (int i = 0; i < ICACHE_ENTRIES; i++) {
       state.icache[i].valid = false;

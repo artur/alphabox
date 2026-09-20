@@ -515,7 +515,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
         if (virt2phys(_dpc_va, &phys_address, flags, NULL, ins))               \
           ES40_EXECUTE_END();                                                  \
         _dpc.fill(_dpc_vp, phys_address & ~U64(0x1FFF),                        \
-                  dpc_host_base(phys_address), state.cm, state.asn0);          \
+                  _dpc_rw ? dpc_host_base_w(phys_address)                      \
+                          : dpc_host_base(phys_address),                       \
+                  state.cm, state.asn0);                                       \
       }                                                                        \
     } else {                                                                   \
       /* PAL privileged access (NO_CHECK, VPTE, ALT, etc) — skip cache */    \
@@ -702,6 +704,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define WRITE_PHYS(data, size)                                                 \
   if (phys_address < dram_size) {                                              \
     dram_write(dram_ptr, phys_address, size, data);                            \
+    note_dram_write(phys_address);                                             \
   } else                                                                       \
     sys_write(phys_address, size, data);                         \
   LWR
@@ -716,6 +719,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       DATA_PHYS(va + ii, ACCESS_WRITE, 0);                                     \
       if (phys_address < dram_size) {                                          \
         dram_write(dram_ptr, phys_address, 8, aa);                             \
+        note_dram_write(phys_address);                                         \
       } else                                                                   \
         sys_write(phys_address, 8, aa);                          \
       aa >>= 8;                                                                \
@@ -723,6 +727,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
   } else {                                                                     \
     if (phys_address < dram_size) {                                            \
       dram_write(dram_ptr, phys_address, size, src);                           \
+      note_dram_write(phys_address);                                           \
     } else                                                                     \
       sys_write(phys_address, size, src);                        \
   }
@@ -773,6 +778,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _pa = ALIGN_PHYS((size) / 8);                                          \
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
+      note_dram_write(_pa);                                                    \
     } else                                                                     \
       sys_write(_pa, size, data);                                \
   }                                                                            \
@@ -783,6 +789,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _pa = ALIGN_PHYS((size) / 8);                                          \
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
+      note_dram_write(_pa);                                                    \
     } else                                                                     \
       sys_write(_pa, size, data);                                \
   }

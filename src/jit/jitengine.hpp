@@ -87,6 +87,7 @@ static inline double jit_tsc_ns(double ticks) {
 #endif
 
 class CAlphaCPU; // compiled blocks call back into the CPU for memory accesses
+class CCodePageMap; // which physical pages code has been compiled from
 
 class CJitEngine {
 public:
@@ -394,6 +395,15 @@ public:
   /// compiles for (CpuModel.hpp). Compiled code holds them as immediates,
   /// and every engine belongs to one CPU, so a machine whose processors
   /// differ still gets the right values.
+  /// The machine's code-page map (CSystem). Every page a block is compiled
+  /// from is marked in it, which is what lets an IMB with nothing to flush
+  /// cost nothing -- see CAlphaCPU::flush_icache.
+  void set_code_page_map(CCodePageMap *m) { m_code_map = m; }
+  /// ALPHABOX_JIT_NOPFLUSH=2 points this at the processor's "the map said
+  /// nothing had been written" flag, so a source change found after such a
+  /// flush can be reported as the missed write it would have been.
+  void set_nopflush_audit(const bool *p) { m_nopflush_clean = p; }
+
   void set_cpu_identity(uint64_t amask, uint64_t implver) {
     m_amask = amask;
     m_implver = implver;
@@ -705,6 +715,8 @@ private:
   bool m_traces_enabled =
       false; // global kill-switch; default OFF -> bit-identical
   int m_cpu_id;
+  CCodePageMap *m_code_map = nullptr;
+  const bool *m_nopflush_clean = nullptr;
   uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
   uint64_t m_implver = 0;
   uint64_t m_recorded;
@@ -980,6 +992,13 @@ private:
   // from cold (their hotness count restarts, so a flush every few thousand
   // instructions keeps code from ever compiling).
   uint64_t m_fng_calls = 0, m_fng_tsc = 0, m_hot_lost = 0;
+  // Windowed: what the lazy flush costs on the way back in. A flushed block
+  // misses lookup() and revalidate_flushed() re-hashes its source words to
+  // prove they are unchanged. `changed` is the only outcome that needed the
+  // flush at all -- if it stays at zero while `calls` runs into the millions,
+  // every one of those hashes proved something nothing had altered.
+  uint64_t m_rev_calls = 0, m_rev_ok = 0, m_rev_changed = 0, m_rev_phys = 0,
+           m_rev_words = 0;
   uint64_t m_dpc_miss[DM_CAUSES] = {}; // windowed: inline page-cache probe
                                        // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,

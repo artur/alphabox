@@ -23,6 +23,8 @@
 #ifdef ES40_JIT
 
 #include "jitengine.hpp"
+
+#include "System.hpp" // CCodePageMap: which pages code was compiled from
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
 #include <libkern/OSCacheControl.h>
@@ -1059,8 +1061,38 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
   // page remaps, and self-modifying code.
   if (!(b.code && b.tag == virt_pc && (b.asm_global || b.asn == asn)))
     return nullptr;
-  if (b.phys != phys_pc || b.src_sum != src_hash(dram + phys_pc, b.hash_len))
+#ifdef JIT_STATS
+  ++m_rev_calls;
+  m_rev_words += b.hash_len;
+#endif
+  if (b.phys != phys_pc) {
+#ifdef JIT_STATS
+    ++m_rev_phys;
+#endif
     return nullptr;
+  }
+  if (b.src_sum != src_hash(dram + phys_pc, b.hash_len)) {
+#ifdef JIT_STATS
+    ++m_rev_changed;
+#endif
+    if (m_nopflush_clean && *m_nopflush_clean) {
+      // The audit failing: these source words changed, and the code-page map
+      // had said nothing was written. Some path that writes guest memory
+      // does not report to it -- with the flush actually skipped, this block
+      // would have run its old code.
+      static int n = 0;
+      if (n++ < 20)
+        printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
+               "(pc %016llx, %u words) changed while the code-page map "
+               "reported no write ***\n",
+               m_cpu_id, (unsigned long long)phys_pc,
+               (unsigned long long)virt_pc, b.hash_len);
+    }
+    return nullptr;
+  }
+#ifdef JIT_STATS
+  ++m_rev_ok;
+#endif
   b.valid = true; // flush_non_global() may have cleared it; the hash just
                   // re-validated the bytes
   b.flush_gen = m_flush_gen;
@@ -3607,6 +3639,8 @@ void CJitEngine::compile_block(
   if (memcmp(dram + phys, source_words.data(),
              (size_t)b->n_instr * sizeof(uint32_t)) != 0)
     return;
+  if (m_code_map) // this page now holds code: writes to it must be noticed
+    m_code_map->note_code(phys, (size_t)b->n_instr * sizeof(uint32_t));
   b->code = fn;
   b->jit_body = (void *)((uint8_t *)(void *)fn +
                          body_off); // chained re-entry (past prologue)
@@ -4519,6 +4553,17 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                win_tsc ? 100.0 * (double)m_fng_tsc / (double)win_tsc : 0.0,
                (unsigned long long)m_hot_lost);
         m_fng_calls = m_fng_tsc = m_hot_lost = 0;
+      }
+      // And what those flushes cost on the way back in: one source re-hash
+      // per block per flush generation, and how many of them found a byte
+      // that had actually changed.
+      if (m_rev_calls) {
+        printf("[JIT][STATS][CPU%d]   revalidate %llu | unchanged %llu | "
+               "bytes changed %llu | remapped %llu | %llu words hashed\n",
+               m_cpu_id, (unsigned long long)m_rev_calls,
+               (unsigned long long)m_rev_ok, (unsigned long long)m_rev_changed,
+               (unsigned long long)m_rev_phys, (unsigned long long)m_rev_words);
+        m_rev_calls = m_rev_ok = m_rev_changed = m_rev_phys = m_rev_words = 0;
       }
     }
     len = snprintf(

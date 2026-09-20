@@ -1934,14 +1934,15 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.fill(vp, phys & ~U64(0x1FFF),
-             cpu->dpc_host_base(phys),
-             cm, cpu->state.asn0);
+    dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cm,
+             cpu->state.asn0);
   }
 
-  if (phys < cpu->dram_size)
+  if (phys < cpu->dram_size) {
     dram_write(cpu->dram_ptr, phys, size_bits, value);
-  else if (dpc.host_base) // device memory offered for direct access
+    cpu->note_dram_write(phys); // compiled code never writes a code page
+                                // inline, so its stores land here
+  } else if (dpc.host_base)     // device memory offered for direct access
     dram_write((char *)dpc.host_base, phys & U64(0x1FFF), size_bits, value);
   else {
 #ifdef JIT_STATS
@@ -1987,6 +1988,7 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 #endif
   }
   dram_write(cpu->dram_ptr, phys, size_bits, value);
+  cpu->note_dram_write(phys); // HW_ST can land on a code page too
   return 0;
 }
 
@@ -2042,9 +2044,8 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
         return U64(0x100); // fault-on-write (FOW)
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.fill(vp, phys & ~U64(0x1FFF),
-             cpu->dpc_host_base(phys),
-             cpu->state.cm, cpu->state.asn0);
+    dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cpu->state.cm,
+             cpu->state.asn0);
   }
 
   // Shared LL/SC path: consumes the reservation, applies the ABA sequence
