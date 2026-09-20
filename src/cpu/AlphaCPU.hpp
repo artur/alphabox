@@ -843,6 +843,10 @@ public:
   // ALPHABOX_JIT_FPTEST=1: compiled inline IEEE FP ops vs the interpreter
   void jit_fp_selftest();
 #endif
+  // ALPHABOX_JIT_RPCCTEST=1: the inline RPCC stub against the helper it
+  // replaces. Not under JIT_VERIFY: the stub only exists on the builds
+  // that verification cannot cover, which is exactly why it needs this.
+  void jit_rpcc_selftest();
   // MISC (0x18) state reads: sel 0=RPCC (cycle counter), 1=RC, 2=RS (read
   // interrupt flag + clear/set). Value the verify can't re-derive -> replayed
   // from the load log like a load.

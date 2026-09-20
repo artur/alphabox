@@ -2354,6 +2354,105 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   return b->jit_body;
 }
 
+// ALPHABOX_JIT_RPCCTEST=1: the inline RPCC stub against jit_misc, the
+// helper it replaces. Both are run from the same cycle-counter state and
+// must agree on the value returned AND on the state left behind. The live
+// clock is the one thing they cannot agree on -- each reads it for itself
+// -- so every case starts with cc_last_sync far enough in the past that
+// the elapsed time is clamped to its one-second ceiling, which makes the
+// arithmetic the same whatever the host clock says. cc_last_sync itself
+// is therefore excluded from the comparison.
+void CAlphaCPU::jit_rpcc_selftest() {
+  struct CcState {
+    u64 last_sync, remainder, borrow, last_read, cc;
+    u32 offset;
+    bool ena;
+  };
+  auto save = [&]() {
+    return CcState{cc_last_sync,  cc_wall_remainder, cc_borrow,
+                   cc_last_read,  state.cc,          state.cc_offset,
+                   state.cc_ena};
+  };
+  auto load = [&](const CcState &s) {
+    cc_last_sync = s.last_sync;
+    cc_wall_remainder = s.remainder;
+    cc_borrow = s.borrow;
+    cc_last_read = s.last_read;
+    state.cc = s.cc;
+    state.cc_offset = s.offset;
+    state.cc_ena = s.ena;
+  };
+  const CcState entry = save();
+
+  // A stub built here, so the test runs whatever the emitter would emit.
+  // It is an AArch64 thing: the x86-64 emitter still calls the helper, so
+  // there is nothing to compare against there.
+  typedef u64 (*RpccFn)();
+  // JIT_HOST_A64 is private to jitengine.cpp, so key off the architecture
+  // the same way that file does.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  RpccFn stub = m_jit ? (RpccFn)m_jit->a64_rpcc_stub() : nullptr;
+#else
+  RpccFn stub = nullptr;
+#endif
+  if (!stub) {
+    printf("%%RPCC-F-SELFTEST: no inline stub on this build\n");
+    load(entry);
+    exit(2);
+  }
+
+  const CcState cases[] = {
+      // clamped elapsed, counter running, nothing owed
+      {0, 0, 0, 0, 0, 0, true},
+      // a carry waiting in the sub-cycle remainder
+      {0, 0xffffffffull, 0, 0, 12345, 7, true},
+      // counter stopped: RPCC must not move it
+      {0, 0, 0, 999, 999, 3, false},
+      // the floor is ahead of the counter: lend, and report floor + 1
+      {~U64(0), 0, 0, 1000000, 5, 0, true},
+      // something already lent, to be repaid out of this tick's progress
+      {0, 0, 4000, 0, 0, 1, true},
+      // offset in the high half, counter near the 32-bit wrap
+      {0, 0, 0, 0xfffffff0ull, 0xfffffff0ull, 0x5a5a5a5a, true},
+  };
+
+  int bad = 0;
+  for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    load(cases[i]);
+    const u64 want = jit_misc(this, 0);
+    const CcState after_helper = save();
+
+    load(cases[i]);
+    const u64 got = stub();
+    const CcState after_stub = save();
+
+    const bool same_value = want == got;
+    const bool same_state = after_helper.remainder == after_stub.remainder &&
+                            after_helper.borrow == after_stub.borrow &&
+                            after_helper.last_read == after_stub.last_read &&
+                            after_helper.cc == after_stub.cc &&
+                            after_helper.ena == after_stub.ena;
+    if (!same_value || !same_state) {
+      bad++;
+      printf("%%RPCC-F-SELFTEST: case %u\n"
+             "   helper %016llx  cc %llu rem %llu borrow %llu floor %llu\n"
+             "   stub   %016llx  cc %llu rem %llu borrow %llu floor %llu\n",
+             i, (unsigned long long)want, (unsigned long long)after_helper.cc,
+             (unsigned long long)after_helper.remainder,
+             (unsigned long long)after_helper.borrow,
+             (unsigned long long)after_helper.last_read,
+             (unsigned long long)got, (unsigned long long)after_stub.cc,
+             (unsigned long long)after_stub.remainder,
+             (unsigned long long)after_stub.borrow,
+             (unsigned long long)after_stub.last_read);
+    }
+  }
+  load(entry);
+  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n",
+         (unsigned)(sizeof cases / sizeof cases[0]), bad);
+  exit(bad ? 1 : 0);
+}
+
 #ifdef JIT_VERIFY
 // Differential self-test of the compiled inline IEEE FP ops (FLTI 0x16 and the
 // ITFP SQRTs) against the interpreter -- SRM boot never executes them, so the

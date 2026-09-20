@@ -245,10 +245,98 @@ void *CJitEngine::a64_call_thunk() {
   if (eh.failed)
     return nullptr;
   JitFn fn = nullptr;
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return nullptr;
   m_call_thunk = (void *)fn;
   return m_call_thunk;
+}
+
+// RPCC, without leaving the compiled frame. Same arithmetic as
+// CAlphaCPU::rpcc_read() -- wall-clock sync, then the forward-progress
+// floor -- but written in scratch registers (x0-x3, x16, x17) only, so the
+// eight pinned guest registers a C call would spill stay where they are.
+// x19 holds the CPU. Result in x0.
+void *CJitEngine::a64_rpcc_stub() {
+  if (m_rpcc_stub)
+    return m_rpcc_stub;
+  using namespace asmjit;
+  CodeHolder code;
+  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
+    return nullptr;
+  A64EmitErrors eh;
+  eh.cpu_id = m_cpu_id;
+  code.set_error_handler(&eh);
+  a64::Assembler a(&code);
+  // x19 is the CPU. Every field of it is far beyond a load's immediate
+  // range, so each access goes through a64_cpu_field, which parks the
+  // offset in x17 -- nothing of ours may live there.
+  const auto F = [&](uint32_t off, unsigned lg) {
+    return a64_cpu_field(a, off, lg);
+  };
+  Label no_add = a.new_label(), no_borrow = a.new_label(),
+        store = a.new_label();
+
+  // --- sync_cc_wallclock: advance the counter by the real time elapsed ---
+  uint32_t mrs_cntvct = 0xD53BE040; // mrs x0, cntvct_el0
+  a.embed(&mrs_cntvct, 4);
+  a.ldr(a64::x1, F(m_off.cc_last_sync, 3));
+  a.cmp(a64::x1, a64::x0);
+  a.csel(a64::x1, a64::x0, a64::x1, a64::CondCode::kHI); // never bill negative
+  a.sub(a64::x2, a64::x0, a64::x1);                      // delta
+  a.str(a64::x0, F(m_off.cc_last_sync, 3));
+  a.ldrb(a64::w3, F(m_off.cc_ena, 0));
+  a.cbz(a64::w3, no_add);
+  a.ldr(a64::x3, F(m_off.cc_tick_hz, 3));
+  a.cmp(a64::x2, a64::x3);
+  a.csel(a64::x2, a64::x3, a64::x2, a64::CondCode::kHI); // cap at one second
+  a.ldr(a64::x16, F(m_off.cc_q32, 3));
+  a.mul(a64::x2, a64::x2, a64::x16);
+  a.ldr(a64::x16, F(m_off.cc_remainder, 3));
+  a.add(a64::x2, a64::x2, a64::x16);
+  a.lsr(a64::x3, a64::x2, imm(32));             // whole cycles
+  a.and_(a64::x2, a64::x2, imm(0xffffffffull)); // sub-cycle carry
+  a.str(a64::x2, F(m_off.cc_remainder, 3));
+  a.ldr(a64::x16, F(m_off.cc_borrow, 3));
+  a.cbz(a64::x16, no_borrow);
+  a.cmp(a64::x16, a64::x3);
+  a.csel(a64::x1, a64::x16, a64::x3, a64::CondCode::kLO); // repay = min
+  a.sub(a64::x3, a64::x3, a64::x1);
+  a.sub(a64::x16, a64::x16, a64::x1);
+  a.str(a64::x16, F(m_off.cc_borrow, 3));
+  a.bind(no_borrow);
+  a.ldr(a64::x16, F(m_off.state_cc, 3));
+  a.add(a64::x16, a64::x16, a64::x3);
+  a.str(a64::x16, F(m_off.state_cc, 3));
+  a.bind(no_add);
+
+  // --- forward progress: two reads never return the same value ---
+  a.ldrb(a64::w3, F(m_off.cc_ena, 0));
+  a.ldr(a64::x0, F(m_off.state_cc, 3));
+  a.ldr(a64::x1, F(m_off.cc_last_read, 3));
+  a.cbz(a64::w3, store);
+  a.cmp(a64::x0, a64::x1);
+  a.b(a64::CondCode::kHI, store);
+  a.add(a64::x2, a64::x1, imm(1)); // the floor, plus one
+  a.sub(a64::x3, a64::x2, a64::x0);
+  a.ldr(a64::x16, F(m_off.cc_borrow, 3));
+  a.add(a64::x16, a64::x16, a64::x3); // lend the difference
+  a.str(a64::x16, F(m_off.cc_borrow, 3));
+  a.mov(a64::x0, a64::x2);
+  a.str(a64::x0, F(m_off.state_cc, 3));
+  a.bind(store);
+  a.str(a64::x0, F(m_off.cc_last_read, 3));
+  a.ldr(a64::w1, F(m_off.cc_offset, 2));
+  a.and_(a64::x0, a64::x0, imm(0xffffffffull));
+  a.orr(a64::x0, a64::x0, a64::x1, a64::lsl(32));
+  a.ret(a64::x30);
+
+  if (eh.failed)
+    return nullptr;
+  JitFn fn = nullptr;
+  if (!publish_code(&code, (void **)&fn))
+    return nullptr;
+  m_rpcc_stub = (void *)fn;
+  return m_rpcc_stub;
 }
 
 void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
@@ -1020,7 +1108,27 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // MISC state reads RPCC/RC/RS: Ra = jit_misc(cpu, sel).
     if (op == OP_RPCC || op == OP_RC || op == OP_RS) {
       const int sel = (op == OP_RPCC) ? 0 : (op == OP_RC) ? 1 : 2;
-      emit_call(hs.misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)sel}});
+      // RPCC goes to the stub, which keeps the pins in place.
+      // ALPHABOX_JIT_RPCC=0 sends it back through the helper (A/B switch).
+      //
+      // Not on a JIT_VERIFY build: the verifier runs each block twice and
+      // relies on jit_misc logging what the counter returned so the
+      // interpreter's pass replays the same value. The stub cannot take
+      // part in that, and without it every RPCC block reports a mismatch.
+      // Everything else stays verified; this one instruction is checked
+      // instead against what the firmware measures the CPU's speed to be.
+#ifdef JIT_VERIFY
+      const bool inline_rpcc = false;
+#else
+      static const bool inline_rpcc =
+          !(getenv("ALPHABOX_JIT_RPCC") && atoi(getenv("ALPHABOX_JIT_RPCC")) == 0);
+#endif
+      void *stub = (op == OP_RPCC && inline_rpcc) ? a64_rpcc_stub() : nullptr;
+      if (stub) {
+        a.mov(a64::x16, imm((uint64_t)stub));
+        a.blr(a64::x16);
+      } else
+        emit_call(hs.misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)sel}});
       if (ra != 31)
         mov_to_reg(ra, x0);
       continue;

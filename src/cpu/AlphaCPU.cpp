@@ -508,6 +508,15 @@ void CAlphaCPU::init() {
     o.exc_sum = (uint32_t)((char *)&state.exc_sum - (char *)this);
     o.f_base = (uint32_t)((char *)&state.f[0] - (char *)this);
     o.fpcr = (uint32_t)((char *)&state.fpcr - (char *)this);
+    o.cc_last_sync = (uint32_t)((char *)&cc_last_sync - (char *)this);
+    o.cc_tick_hz = (uint32_t)((char *)&cc_tick_hz - (char *)this);
+    o.cc_q32 = (uint32_t)((char *)&cc_cycles_per_tick_q32 - (char *)this);
+    o.cc_remainder = (uint32_t)((char *)&cc_wall_remainder - (char *)this);
+    o.cc_borrow = (uint32_t)((char *)&cc_borrow - (char *)this);
+    o.cc_last_read = (uint32_t)((char *)&cc_last_read - (char *)this);
+    o.state_cc = (uint32_t)((char *)&state.cc - (char *)this);
+    o.cc_ena = (uint32_t)((char *)&state.cc_ena - (char *)this);
+    o.cc_offset = (uint32_t)((char *)&state.cc_offset - (char *)this);
     o.exc_addr = (uint32_t)((char *)&state.exc_addr - (char *)this);
     o.pal_base = (uint32_t)((char *)&state.pal_base - (char *)this);
     o.sde = (uint32_t)((char *)&state.sde - (char *)this);
@@ -603,6 +612,13 @@ void CAlphaCPU::init() {
 #if defined(ES40_JIT) && defined(JIT_VERIFY)
   if (state.iProcNum == 0 && getenv("ALPHABOX_JIT_FPTEST"))
     jit_fp_selftest(); // exits with the verdict
+#endif
+#if defined(ES40_JIT)
+  // The inline RPCC stub is the one piece of emitted code JIT_VERIFY
+  // cannot check (it replays the helper's result, and the stub does not
+  // take part), so it gets its own comparison against that helper.
+  if (state.iProcNum == 0 && getenv("ALPHABOX_JIT_RPCCTEST"))
+    jit_rpcc_selftest(); // exits with the verdict
 #endif
 }
 

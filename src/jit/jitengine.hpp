@@ -271,6 +271,13 @@ public:
     uint32_t ier_asten, ier_sien, ier_pcen, ier_cren, ier_slen, ier_eien;
     uint32_t sir, eir, aster, astrr;
     uint32_t regs; // state.r[0] (compiled code's x20 in production)
+    // The cycle counter, for the inline RPCC stub. A guest that times
+    // anything reads RPCC constantly -- Windows 2000 does it 16 times per
+    // 100 instructions -- and a helper call spills and reloads eight
+    // pinned registers each time. The stub does the same arithmetic in
+    // scratch registers only, so the pins stay put.
+    uint32_t cc_last_sync, cc_tick_hz, cc_q32, cc_remainder, cc_borrow,
+        cc_last_read, state_cc, cc_ena, cc_offset;
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
   // Hotness threshold: a block is compiled only after it has been interpreted
@@ -762,6 +769,14 @@ private:
   // built lazily in the current code runtime; reclaim_code drops it.
   void *m_call_thunk = nullptr;
   void *a64_call_thunk();
+
+public:
+  /// The inline RPCC stub, built on first use. Public so the processor's
+  /// self-test can call it directly and compare it with the helper.
+  void *a64_rpcc_stub();
+
+private:
+  void *m_rpcc_stub = nullptr;
   // a64 static-exit data links. Each compiled block owns one ExitRec (its
   // address is baked into that block's code); the dispatcher caches the
   // successor's body and the epoch it was validated in. The record belongs to
