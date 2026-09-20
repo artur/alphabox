@@ -1192,16 +1192,35 @@ int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
 // can offer for direct access, or an engine's port we cannot. Printed when
 // the CPU goes away (dump_device_pages).
 // A hashed table: the I/O window alone has hundreds of distinct ports.
-static u64 g_devpage[4096], g_devpage_n[4096][2];
+static u64 g_devpage[65536], g_devpage_n[65536][2];
 static u64 g_devpage_dropped = 0;
+// Watched addresses, counted per 100M-instruction window as well (the
+// timeline says which phase of a boot does what): the keyboard
+// controller's data and status ports, the PIT, the IDE data port, the
+// Pchip CSR page.
+u64 g_watch_n[5];
+static const u64 kWatch[5] = {U64(0x00000801fc000060), U64(0x00000801fc000061),
+                              U64(0x00000801fc000040), U64(0x00000801fc0001f0),
+                              U64(0x00000801a0000000)};
 static void note_device_page(u64 phys, bool write) {
+  for (int w = 0; w < 5; w++)
+    if ((w == 4 ? (phys & ~U64(0x1FFF)) : phys) == kWatch[w])
+      g_watch_n[w]++;
   // Keyed by page, except inside the PCI I/O window, where the port itself
   // is the question (one page holds the PIT, the RTC, the keyboard
   // controller, the IDE and the VGA ports).
   const bool io = (phys >> 26) == (U64(0x00000801fc000000) >> 26);
-  const u64 key = (io ? (phys & ~U64(3)) : (phys & ~U64(0x1FFF))) | 1;
-  u64 h = (key * U64(0x9E3779B97F4A7C15)) >> 52;
-  for (int probe = 0; probe < 64; probe++, h = (h + 1) & 4095) {
+  // ...and the Pchip/Cchip CSR pages by register (64-byte spacing).
+  const bool csr = (phys >> 30) == (U64(0x00000801a0000000) >> 30);
+  // The I/O window by exact port (0x60 is the keyboard controller, 0x61
+  // the system control port beside it).
+  // The key keeps every address bit (an exact port has bit 0): shifted up
+  // one, with bit 0 as the occupancy mark.
+  const u64 key =
+      ((io ? phys : csr ? (phys & ~U64(0x3F)) : (phys & ~U64(0x1FFF))) << 1) |
+      1;
+  u64 h = (key * U64(0x9E3779B97F4A7C15)) >> 48;
+  for (int probe = 0; probe < 256; probe++, h = (h + 1) & 65535) {
     if (g_devpage[h] == key || g_devpage[h] == 0) {
       g_devpage[h] = key;
       g_devpage_n[h][write ? 1 : 0]++;
@@ -1214,10 +1233,10 @@ void dump_device_pages() {
   printf("[JIT][STATS] device addresses served by the helpers (reads/writes), "
          "%llu dropped:\n",
          (unsigned long long)g_devpage_dropped);
-  for (int i = 0; i < 4096; i++)
+  for (int i = 0; i < 65536; i++)
     if (g_devpage[i] && g_devpage_n[i][0] + g_devpage_n[i][1] > 20000)
       printf("[JIT][STATS]   %016llx  %10llu / %10llu\n",
-             (unsigned long long)(g_devpage[i] & ~U64(1)),
+             (unsigned long long)(g_devpage[i] >> 1),
              (unsigned long long)g_devpage_n[i][0],
              (unsigned long long)g_devpage_n[i][1]);
 }

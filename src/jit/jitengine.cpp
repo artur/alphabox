@@ -4533,6 +4533,19 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
         printf("%s\n", b2);
         memset(m_dpc_miss, 0, sizeof(m_dpc_miss)); // windowed, like the rest
       }
+      {
+        extern uint64_t g_watch_n[5];
+        static uint64_t last[5];
+        printf("[JIT][STATS][CPU%d]   watched ports this window: kbc-data %llu "
+               "port61 %llu pit %llu ide-data %llu pchip-csr %llu\n",
+               m_cpu_id, (unsigned long long)(g_watch_n[0] - last[0]),
+               (unsigned long long)(g_watch_n[1] - last[1]),
+               (unsigned long long)(g_watch_n[2] - last[2]),
+               (unsigned long long)(g_watch_n[3] - last[3]),
+               (unsigned long long)(g_watch_n[4] - last[4]));
+        for (int w = 0; w < 5; w++)
+          last[w] = g_watch_n[w];
+      }
       printf("[JIT][STATS][CPU%d]   helper calls: read %llu write %llu locked "
              "%llu stc %llu indirect %llu read_phys %llu write_phys %llu mtpr "
              "%llu mfpr %llu | dpc flushes %llu\n",

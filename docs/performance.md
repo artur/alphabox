@@ -586,16 +586,27 @@ ldst -27%, byte -15%, which is what the hint had already been buying.
 The page-cache census counts device accesses; `JIT_STATS` now also keeps a
 per-address histogram of the ones the helpers serve (`dump_device_pages`,
 printed when the CPU goes away). Over a Windows 2000 boot-plus-benchmark
-run: 58% are the IDE data port (81.6M reads and 10.7M writes -- the guest
-moves its disk data by PIO), 14% the keyboard controller's data port
-(22.5M reads: worth a look, nothing was typed), 7% the PIT (3.7M latches),
-5.5% the Pchip CSRs, 3% the legacy VGA window. The S3's linear framebuffer
-does not appear: the driver draws through the accelerator. So the
-framebuffer-on-the-fast-path item, built and verified (the S3 offers
-BAR0's VRAM to the page caches, `CSystem::set_direct_memory`, switch
-`ALPHABOX_LFB_DIRECT`; a resumed desktop draws through it), buys nothing
-on this guest and stays for the guests that do write pixels. At ~15 ns an
-access the whole device traffic is ~2 s of a 140 s boot.
+run, by exact register: 58% the IDE data port 0x1F0 (81.6M reads, 10.8M
+writes -- the guest moves its disk data by PIO: its stack is the generic
+`pciide.sys`, which turns DMA on only for chipsets it knows, and the trace
+shows 5,061 READ MULTIPLE, 662 WRITE MULTIPLE and not one bus-master
+start, though the controller advertises DMA); 14% port 0x61 (22M reads in
+one 10 s phase: the system control port's refresh-toggle bit, which the
+emulator flips every 15 us of wall time and a HAL stall loop counts); 11%
+the parallel port's status (18M reads, a driver's detection loop); 7% PIT
+channel 2 (the other delay timer); 5.5% one Pchip CSR, TBA2, read 8.6M
+times in the loader phase; 3% the legacy VGA window in text mode; the
+S3's linear framebuffer does not appear at all, because the driver draws
+through the accelerator. So the framebuffer-on-the-fast-path item, built
+and verified (the S3 offers BAR0's VRAM to the page caches,
+`CSystem::set_direct_memory`, switch `ALPHABOX_LFB_DIRECT`; a resumed
+desktop draws through it), buys nothing on this guest and stays for the
+guests that do write pixels. At ~15-20 ns an access the whole device
+traffic is ~2-3 s of a 140 s boot, and every one of those phases is as
+long as the guest's own delay loops make it: a faster port would not
+shorten them, and a faster toggle would cheat every driver's delays. What
+an emulator may do is pace them -- sleep the host thread to the next
+toggle edge instead of spinning -- which is idle pacing's idea again.
 
 The band is also a lever: if two builds of one file swing a section by
 5-10%, some hot loop is alignment-sensitive. Aligning the hot helpers and

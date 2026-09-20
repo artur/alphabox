@@ -32,6 +32,7 @@
  * \file
  * Contains the code for the emulated Keyboard and mouse devices and controller.
  **/
+#include <chrono>
 #include "Keyboard.hpp"
 #include "AliM1543C.hpp"
 #include "StdAfx.hpp"
@@ -143,15 +144,37 @@ void CKeyboard::stop_threads() {
  **/
 CKeyboard::~CKeyboard() { stop_threads(); }
 
+// ALPHABOX_TRACE_KBC=1: every command and data byte the guest writes, with
+// how many times it read the data port since the previous write and what
+// the first and last of those reads returned -- a driver that spins on
+// port 0x60 waiting for a byte shows up as one write followed by millions
+// of reads of the same value.
+static const bool s_trace_kbc = getenv("ALPHABOX_TRACE_KBC") != nullptr;
+static u64 s_kbc_reads = 0, s_kbc_status_reads = 0;
+static u8 s_kbc_first = 0, s_kbc_last = 0;
+static double kbc_ms() {
+  static const auto t0 = std::chrono::steady_clock::now();
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - t0)
+      .count();
+}
+
 u64 CKeyboard::ReadMem(int index, u64 address, int dsize) {
   std::lock_guard<std::mutex> guard(kbdLock);
   switch (index) {
-  case 0:
-    return read_60();
-    break;
+  case 0: {
+    const u8 v = read_60();
+    if (s_trace_kbc) {
+      if (s_kbc_reads++ == 0)
+        s_kbc_first = v;
+      s_kbc_last = v;
+    }
+    return v;
+  }
   case 1:
+    if (s_trace_kbc)
+      s_kbc_status_reads++;
     return read_64();
-    break;
   default:
     FAILURE(InvalidArgument, "kbc: ReadMem index out of range");
   }
@@ -159,6 +182,14 @@ u64 CKeyboard::ReadMem(int index, u64 address, int dsize) {
 
 void CKeyboard::WriteMem(int index, u64 address, int dsize, u64 data) {
   std::lock_guard<std::mutex> guard(kbdLock);
+  if (s_trace_kbc) {
+    printf("KBCT %10.1f: since last write %llu data reads (first %02x last "
+           "%02x), %llu status reads; now write port %02x = %02llx\n",
+           kbc_ms(), (unsigned long long)s_kbc_reads, s_kbc_first, s_kbc_last,
+           (unsigned long long)s_kbc_status_reads, index ? 0x64 : 0x60,
+           (unsigned long long)(data & 0xff));
+    s_kbc_reads = s_kbc_status_reads = 0;
+  }
   switch (index) {
   case 0:
     write_60((u8)data);

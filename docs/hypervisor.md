@@ -129,9 +129,10 @@ served over one Windows 2000 boot-plus-benchmark run (JIT_STATS,
 | address | what | reads | writes |
 | --- | --- | --- | --- |
 | port 0x1F0 | **IDE data port: PIO disk transfers** | 81.6M | 10.7M |
-| port 0x60 | keyboard-controller data | 22.5M | -- |
-| port 0x40 | PIT counter 0 (with 3.7M latch writes to it) | 7.4M | 3.7M |
-| `0x801a0000000` | Tsunami Pchip CSRs | 8.7M | -- |
+| port 0x61 | system control port B: the refresh-toggle bit a HAL stall loop counts (real time) | 22.1M | -- |
+| port 0x3BC/0x3BD | parallel-port status polling | 18.0M | -- |
+| port 0x42 | PIT channel 2, the other delay timer | 7.4M | 3.7M |
+| `0x801a0000280` | Tsunami Pchip 0 TBA2, read in a loop during the loader phase | 8.6M | -- |
 | `0xA0000` | the legacy VGA window (text during the boot) | 3.7M | 1.1M |
 | ports 0x3D8, 0x3CC, 0x3D4, 0x3C4, 0x3DA | VGA registers | 3.1M | 0.8M |
 | BAR0, the S3's linear framebuffer | -- | below 20k | below 20k |
