@@ -192,9 +192,16 @@ void CIsp1040::mailbox_command() {
     break;
 
   case ISP_MBOX_GET_TARGET_PARAMS:
-    // Everything this part can do, for every target: synchronous transfer
-    // at the part's rate, wide where it is wide.
-    state.mailbox_out[2] = u16(0x00c0 | (m_chip.wide ? 0x0020 : 0));
+    // Everything this part can do, for every target: the same flags byte
+    // the NVRAM target entry carries (renegotiate, auto request sense,
+    // tagged queuing, synchronous, wide where the part is wide, parity,
+    // disconnect), in bits 15:8 of mailbox 2 where the firmware interface
+    // keeps it; the low byte is the "narrow / async" pair, both clear.
+    // It used to sit in the low byte, where it decoded as the opposite of
+    // what the NVRAM promised.
+    state.mailbox_out[2] = u16((0x01 | 0x04 | 0x08 | 0x10 |
+                                (m_chip.wide ? 0x20 : 0) | 0x40 | 0x80)
+                               << 8);
     if (m_chip.gen1080)
       state.mailbox_out[3] = (12 << 8) | 10;
     else

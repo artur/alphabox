@@ -1221,8 +1221,16 @@ int CDisk::do_scsi_command() {
       state.scsi.dati.data[3] = 0x02; // response format
       state.scsi.dati.data[4] = 32;   // additional length
       state.scsi.dati.data[5] = 0;    // reserved
-      state.scsi.dati.data[6] = 0x04; // reserved
-      state.scsi.dati.data[7] = 0x60; // capabilities
+      state.scsi.dati.data[6] = 0;    // reserved in SCSI-2 (a bit was set)
+      // Byte 7: what this target can do. Sync (0x10) and CmdQue (0x02):
+      // every initiator -- Windows scsiport, VMS DKDRIVER, Tru64 CAM, NetBSD
+      // scsipi -- gates tagged command queuing on CmdQue, and without it
+      // every disk on both controller families ran one command per LUN
+      // with a full interrupt round trip in between. The bus never
+      // disconnects here, so tags order nothing and cost nothing. No wide
+      // bits: the WDTR reply below answers 8-bit, and 0x60 (WBus32|WBus16)
+      // said otherwise.
+      state.scsi.dati.data[7] = 0x12;
 
       //                        vendor  model           rev.
       memcpy(&(state.scsi.dati.data[8]), "DEC     RZ58     (C) DEC2000", 28);
@@ -2650,17 +2658,52 @@ int CDisk::do_scsi_message() {
         } break;
 
         default:
-          FAILURE_2(NotImplemented,
-                    "%s: MSG: don't understand extended message %02x.\n",
-                    devid_string, state.scsi.msgo.data[msg]);
+          // An extended message this target does not do (PPR, ...): a real
+          // target answers MESSAGE REJECT and the initiator carries on
+          // without it. It used to abort the emulator.
+          state.scsi.msgi.available = 1;
+          state.scsi.msgi.data[0] = 0x07;
+          break;
         }
 
         msg += msglen;
         break;
 
+      // Tagged queuing: SIMPLE, HEAD OF QUEUE, ORDERED tag, then the tag
+      // byte. The bus never disconnects, so every command completes before
+      // the next is accepted and the tag orders nothing; it only has to be
+      // taken, because CmdQue in INQUIRY byte 7 invites it.
+      case 0x20:
+      case 0x21:
+      case 0x22: {
+        static bool said = false;
+        if (!said) { // once per session: the initiator took the offer
+          said = true;
+          printf("%s: tagged command queuing in use\n", devid_string);
+        }
+        msg += 2;
+        break;
+      }
+
+      case 0x06: // ABORT
+      case 0x0d: // ABORT TAG
+      case 0x0c: // BUS DEVICE RESET
+      case 0x08: // NO OPERATION
+      case 0x07: // MESSAGE REJECT (of something we sent)
+        // Nothing is queued past the current command and the current one
+        // completes synchronously: taken, nothing to undo.
+        msg++;
+        break;
+
       default:
-        FAILURE_2(NotImplemented, "%s: MSG: don't understand message %02x.\n",
-                  devid_string, state.scsi.msgo.data[msg]);
+        // Any other message: reject it, as a real target would, rather
+        // than abort the emulator on an initiator that tried something new.
+        printf("%s: MSG: rejecting message %02x\n", devid_string,
+               state.scsi.msgo.data[msg]);
+        state.scsi.msgi.available = 1;
+        state.scsi.msgi.data[0] = 0x07;
+        msg++;
+        break;
       }
     }
   }
