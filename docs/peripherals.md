@@ -47,6 +47,8 @@ The names below were extracted from the decompressed image with
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |
 | Cirrus CL-GD5430 | `cirrus`, `chip = "gd5430"` | `vga_bios`: console |
 | Cirrus CL-GD5434 | `cirrus` | `vga_bios`: console; Windows 2000 draws its desktop through the BitBLT engine |
+| ATI Mach64 (CT) | `mach64` | `vga_bios`: console. The CT is the first Mach64 with its DAC and clock synthesizer on the chip; emulated are its register file, the GUI drawing engine (rectangles, lines, screen and host sources, patterns, the sixteen mixes, colour compare), the hardware cursor and the extended display modes at 4 to 32 bpp. Windows 2000 ships the ATI driver (`atimpab.sys`) |
+| (not named) | `mach64`, `chip = "vt2"` | the 264VT2: the CT's register file plus a video overlay (stored, not drawn), PCI id 1002:5654, for which the console has no table entry -- `show config` prints only its ids |
 | Ensoniq Sound Card | `es1371` | the AudioPCI 97: an AC'97 codec on a serial link, and a sample rate converter where the ES1370 had fixed rates. This is the only audio part the console's table names (1274:1371); Windows 2000 binds `es1371mp.sys` to it, though only after its INF is given an NT install section -- the one on the Alpha media is decorated `.NTX86` and so matches nothing here |
 | (not named) | `es1370` | the part before it, with a mixer of its own. The console has no table entry for 1274:5000, so `show config` prints only its ids |
 
@@ -71,7 +73,6 @@ on-board firmware or a large command set.
 | DECchip ZLXp 21030 (TGA) | L | DEC's own 2D/3D workstation graphics; DECwindows/CDE on OpenVMS and Tru64 expect it; NetBSD has a driver |
 | DE602-F*/-T* (DE602 add-on modules) | S | extra ports for a DE602 |
 | DE504-BA and other quad 21143 boards | S | four `dec21143` behind a bridge: already possible by hand; a board class would name them |
-| ATI Mach64 | M–L | common workstation card for NT and the free Unixes |
 
 ### 3. Storage beyond SCSI-2 parallel
 

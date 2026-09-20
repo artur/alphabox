@@ -1,0 +1,355 @@
+/* Alphabox Alpha Emulator
+ * Copyright (C) 2026 Artur Goulão
+ * Website: https://github.com/artur/alphabox
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
+ * USA.
+ */
+
+/**
+ * \file
+ * Mach64: construction, power-on state, PCI header, I/O port and aperture
+ * routing, the state file.
+ **/
+
+#include "Mach64.hpp"
+#include "System.hpp"
+
+using namespace mach64;
+
+/* The parts. CONFIG_CHIP_ID carries the type in its low half and the
+ * revision in the top byte, as 86Box reports them. VRAM is what the boards
+ * shipped with; the BIOS sizes it by probing the aperture. */
+static const mach64_chip_config mach64_chips[] = {
+    {"ct", "Mach64 CT", PCI_DEVICE_CT, 0x00004354, 0x40, 2u << 20,
+     "mach64ct.bin"},
+    {"vt2", "264VT2", PCI_DEVICE_VT2, 0x40005654, 0x40, 4u << 20,
+     "mach64vt2.bin"},
+};
+
+const mach64_chip_config *mach64_chip_by_name(const char *name) {
+  for (const auto &c : mach64_chips)
+    if (strcmp(c.name, name) == 0)
+      return &c;
+  return nullptr;
+}
+
+/* Sparse I/O: group n answers at 0x02EC + n * 0x400 for the block-0
+ * register below (-1: nothing there). The four ports of a group are the
+ * register's four bytes. */
+static const int sparse_io_reg[SPARSE_IO_GROUPS] = {
+    CRTC_H_TOTAL_DISP, // 02EC
+    CRTC_H_SYNC_STRT_WID,
+    CRTC_V_TOTAL_DISP,
+    CRTC_V_SYNC_STRT_WID,
+    CRTC_VLINE_CRNT_VLINE,
+    CRTC_OFF_PITCH,
+    CRTC_INT_CNTL,
+    CRTC_GEN_CNTL, // 1EEC
+    OVR_CLR,       // 22EC
+    OVR_WID_LEFT_RIGHT,
+    OVR_WID_TOP_BOTTOM,
+    CUR_CLR0, // 2EEC
+    CUR_CLR1,
+    CUR_OFFSET,
+    CUR_HORZ_VERT_POSN,
+    CUR_HORZ_VERT_OFF,
+    SCRATCH_REG0, // 42EC
+    SCRATCH_REG1,
+    CLOCK_CNTL, // 4AEC
+    -1,         // 4EEC
+    MEM_CNTL,   // 52EC
+    MEM_VGA_WP_SEL,
+    MEM_VGA_RP_SEL,
+    DAC_REGS, // 5EEC
+    DAC_CNTL,
+    GEN_TEST_CNTL, // 66EC
+    CONFIG_CNTL,   // 6AEC
+    CONFIG_CHIP_ID,
+    CONFIG_STAT0, // 72EC
+    -1,           // 76EC
+    -1,           // 7AEC
+    -1,           // 7EEC
+};
+
+CMach64::CMach64(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
+                 const mach64_chip_config &chip)
+    : CVGACard(cfg, c, pcibus, pcidev), m_chip(chip) {
+  memset(&r, 0, sizeof(r));
+  memset(&accel, 0, sizeof(accel));
+}
+
+/**
+ * Stops the render thread while this object is still whole: the thread
+ * calls this card's hooks (see CVGACard::~CVGACard).
+ **/
+CMach64::~CMach64() {
+  stop_threads();
+  delete[] vga.memory;
+  vga.memory = nullptr;
+}
+
+void CMach64::init() {
+  // "memory" picks the framebuffer size in MB (1, 2, 4, 8); the chip's
+  // own default otherwise.
+  const u64 mb = myCfg->get_num_value("memory", false, m_chip.vram_bytes >> 20);
+  if (mb != 1 && mb != 2 && mb != 4 && mb != 8)
+    FAILURE_1(Configuration,
+              "mach64: memory must be 1, 2, 4 or 8 (MB), not %llu",
+              (unsigned long long)mb);
+  m_vram_bytes = u32(mb) << 20;
+
+  // PCI header: a VGA-compatible display controller with the 16 MB
+  // memory aperture (BAR0, prefetchable) and the 256-byte block I/O
+  // register window (BAR1), and no expansion ROM BAR: as for the other
+  // cards, the BIOS is found at 0xc0000. 0x40 is ATI's I/O configuration
+  // register: bits 1..0 pick the sparse I/O base (0: 0x2EC), bit 2 enables
+  // the block I/O BAR, as the CT powers up.
+  u32 cfg_data[64] = {};
+  u32 cfg_mask[64] = {};
+  cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | PCI_VENDOR_ATI;
+  cfg_data[0x04 >> 2] = 0x02000000; // status: medium DEVSEL
+  cfg_data[0x08 >> 2] = 0x03000000 | m_chip.revision;
+  cfg_data[0x10 >> 2] = 0x00000008; // prefetchable 32-bit memory
+  cfg_data[0x14 >> 2] = 0x00000001; // I/O
+  cfg_data[0x3c >> 2] = 0x000000ff;
+  cfg_data[0x40 >> 2] = 0x00000004;
+  cfg_mask[0x04 >> 2] = 0x0000ffff;
+  cfg_mask[0x0c >> 2] = 0x0000ffff;
+  cfg_mask[0x10 >> 2] = ~(APERTURE_BYTES - 1);
+  cfg_mask[0x14 >> 2] = 0xffffff00;
+  cfg_mask[0x3c >> 2] = 0x000000ff;
+  cfg_mask[0x40 >> 2] = 0x00000007;
+  add_function(0, cfg_data, cfg_mask);
+  ResetPCI();
+
+  memset((void *)&state, 0, sizeof(state));
+  memset(&vga, 0, sizeof(vga));
+  memset(&svga, 0, sizeof(svga));
+
+  vga.svga_intf.vram_size = m_vram_bytes;
+  vga.memory = new u8[m_vram_bytes];
+  memset(vga.memory, 0, m_vram_bytes);
+
+  add_vga_legacy_ranges();
+  init_maps();
+
+  // The sparse I/O groups and the extended VGA index/data pair.
+  for (int n = 0; n < SPARSE_IO_GROUPS; n++)
+    add_legacy_io(LEGACY_IO_SPARSE + n, SPARSE_IO_BASE + (u32(n) << 10), 4);
+  add_legacy_io(LEGACY_IO_ATI_EXT, ATI_EXT_INDEX, 2);
+
+  // Standard VGA power-on state.
+  vga.gc.bit_mask = 0xff;
+  vga.gc.memory_map_sel = 3; // colour text
+  vga.sequencer.data[0] = 0x03;
+  vga.sequencer.data[4] = 0x06;
+  vga.sequencer.char_sel.base[0] = 0x20000;
+  vga.sequencer.char_sel.base[1] = 0x20000;
+  vga.crtc.line_compare = 1023;
+  vga.crtc.vert_disp_end = 399;
+  vga.dac.mask = 0xff;
+  vga.dac.dirty = 1;
+
+  // Mach64 power-on state.
+  memset(&r, 0, sizeof(r));
+  r.config_chip_id = m_chip.config_chip_id;
+  r.config_stat0 = 4;
+  r.dac_cntl = DAC_TYPE_INTERNAL;
+  r.dst_cntl = DST_X_DIR | DST_Y_DIR;
+  r.port_3c3 = 0x01;
+  r.gui_traj_cntl = DST_X_DIR | DST_Y_DIR;
+  switch (m_vram_bytes >> 20) {
+  case 1:
+    r.mem_cntl = MEM_1M;
+    break;
+  case 2:
+    r.mem_cntl = MEM_2M;
+    break;
+  case 4:
+    r.mem_cntl = MEM_4M;
+    break;
+  default:
+    r.mem_cntl = MEM_8M;
+    break;
+  }
+  update_banks();
+  m_eeprom.init(8); // 93C66: 256 words
+  for (auto &w : m_eeprom.data)
+    w = 0xffff; // blank, as a card whose BIOS has not written it yet
+
+  load_option_rom(m_chip.default_rom);
+
+  state.last_bpp = 8;
+  state.x_tilesize = X_TILESIZE;
+  state.y_tilesize = Y_TILESIZE;
+  state.vga_mem_updated = 1;
+
+  timing.divisor = 1;
+  timing.vrefresh_hz = 60.0;
+  timing.refresh_interval_ms = 16;
+  m_last_refresh_time = std::chrono::steady_clock::now();
+
+  printf("%s: ATI %s, %u KB\n", devid_string, m_chip.part, m_vram_bytes / 1024);
+}
+
+/**
+ * VGA ports the base does not claim: 0x3c3 (video subsystem enable) and
+ * the two undefined ports next to it, which the BIOS touches and which are
+ * dead on this card.
+ **/
+u8 CMach64::io_read_b(u32 address) {
+  switch (address) {
+  case 0x3c3:
+    return r.port_3c3;
+  case 0x3cb:
+  case 0x3cd:
+    return 0;
+  }
+  return CVGACard::io_read_b(address);
+}
+
+void CMach64::io_write_b(u32 address, u8 data) {
+  switch (address) {
+  case 0x3c3:
+    r.port_3c3 = data;
+    return;
+  case 0x3cb:
+  case 0x3cd:
+    return;
+  }
+  CVGACard::io_write_b(address, data);
+}
+
+/**
+ * The card's own I/O ranges: a sparse I/O group is one register's four
+ * bytes; 0x1ce/0x1cf index the extended VGA registers.
+ **/
+u32 CMach64::card_legacy_read(int index, u32 address, int dsize) {
+  if (index >= LEGACY_IO_SPARSE &&
+      index < LEGACY_IO_SPARSE + SPARSE_IO_GROUPS) {
+    const int reg = sparse_io_reg[index - LEGACY_IO_SPARSE];
+    if (reg < 0)
+      return 0;
+    return reg_read(REG_BLOCK0 | u32(reg) | (address & 3), dsize / 8);
+  }
+  if (index == LEGACY_IO_ATI_EXT) {
+    u32 data = 0;
+    for (int i = 0; i < dsize / 8; i++) {
+      const u32 port = ATI_EXT_INDEX + address + i;
+      const u8 b = (port == ATI_EXT_INDEX) ? r.ext_index
+                                           : r.ext_regs[r.ext_index & 0x3f];
+      data |= u32(b) << (8 * i);
+    }
+    return data;
+  }
+  return 0;
+}
+
+void CMach64::card_legacy_write(int index, u32 address, int dsize, u32 data) {
+  if (index >= LEGACY_IO_SPARSE &&
+      index < LEGACY_IO_SPARSE + SPARSE_IO_GROUPS) {
+    const int reg = sparse_io_reg[index - LEGACY_IO_SPARSE];
+    if (reg < 0)
+      return;
+    reg_write(REG_BLOCK0 | u32(reg) | (address & 3), dsize / 8, data);
+    return;
+  }
+  if (index == LEGACY_IO_ATI_EXT) {
+    for (int i = 0; i < dsize / 8; i++) {
+      const u32 port = ATI_EXT_INDEX + address + i;
+      const u8 b = u8(data >> (8 * i));
+      if (port == ATI_EXT_INDEX)
+        r.ext_index = b;
+      else
+        r.ext_regs[r.ext_index & 0x3f] = b;
+    }
+  }
+}
+
+/**
+ * BAR0 is the memory aperture; BAR1 the block I/O window onto the first
+ * 256 bytes of block 0.
+ **/
+u32 CMach64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
+  switch (bar) {
+  case 0:
+    return aperture_read(address, dsize);
+  case 1:
+    return reg_read(REG_BLOCK0 | (address & 0xff), dsize / 8);
+  }
+  return 0;
+}
+
+void CMach64::WriteMem_Bar(int func, int bar, u32 address, int dsize,
+                           u32 data) {
+  switch (bar) {
+  case 0:
+    aperture_write(address, dsize, data);
+    return;
+  case 1:
+    reg_write(REG_BLOCK0 | (address & 0xff), dsize / 8, data);
+    return;
+  }
+}
+
+/**
+ * State file: the register file, then the EEPROM. The engine's working
+ * state is not saved: a command completes within the write that starts
+ * it, and a host-data transfer resumes from its registers.
+ **/
+static constexpr u32 kMach64Magic = 0x36344D41; // 'AM64'
+
+int CMach64::save_card_state(FILE *f) {
+  fwrite(&kMach64Magic, sizeof(u32), 1, f);
+  long sz = sizeof(r);
+  fwrite(&sz, sizeof(long), 1, f);
+  fwrite(&r, sizeof(r), 1, f);
+  sz = sizeof(m_eeprom.data);
+  fwrite(&sz, sizeof(long), 1, f);
+  fwrite(m_eeprom.data, sizeof(m_eeprom.data), 1, f);
+  fwrite(&kMach64Magic, sizeof(u32), 1, f);
+  return 0;
+}
+
+int CMach64::restore_card_state(FILE *f) {
+  u32 m;
+  long sz;
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != kMach64Magic) {
+    printf("%s: Mach64 MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  if (fread(&sz, sizeof(long), 1, f) != 1 || sz != (long)sizeof(r) ||
+      fread(&r, sizeof(r), 1, f) != 1) {
+    printf("%s: Mach64 register block does not match!\n", devid_string);
+    return -1;
+  }
+  if (fread(&sz, sizeof(long), 1, f) != 1 ||
+      sz != (long)sizeof(m_eeprom.data) ||
+      fread(m_eeprom.data, sizeof(m_eeprom.data), 1, f) != 1) {
+    printf("%s: Mach64 EEPROM block does not match!\n", devid_string);
+    return -1;
+  }
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != kMach64Magic) {
+    printf("%s: Mach64 end MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  return 0;
+}
+
+void CMach64::post_restore() {
+  update_banks();
+  accel.busy = false;
+}

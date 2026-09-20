@@ -162,6 +162,13 @@ protected:
   /// Palette/overscan write protect (S3 CR33 bit 6).
   virtual bool atc_palette_locked() const { return false; }
 
+  /// True while the card's own CRTC drives the display in place of the VGA
+  /// one (an accelerator's extended mode): the VGA gates -- ATC video
+  /// enable, SR1 screen-off, CR17 sync -- and the VGA mode choice do not
+  /// apply, the card sizes the screen (determine_screen_dimensions) and
+  /// draws it (screen_update).
+  virtual bool native_crtc_active() const { return false; }
+
   /// The card's own legacy ranges. Unclaimed reads return 0 and writes are
   /// ignored, as an undecoded range would.
   virtual u32 card_legacy_read(int index, u32 address, int dsize) { return 0; }
@@ -196,7 +203,8 @@ protected:
   /// 0x3da), the VGA BIOS message port (0x500) and the 0xa0000 window.
   void add_vga_legacy_ranges();
   void update();
-  void determine_screen_dimensions(unsigned *piHeight, unsigned *piWidth);
+  virtual void determine_screen_dimensions(unsigned *piHeight,
+                                           unsigned *piWidth);
   virtual void palette_update() override;
 
   /// Load the card's option ROM (its x86 VGA BIOS, executed by SRM) from

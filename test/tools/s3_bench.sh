@@ -87,7 +87,7 @@ key_takes() { # key_takes <token> [deadline_s]
 }
 
 # Cumulative pixels from the emulator's own periodic report.
-pixels_now() { grep -a "8514 blit:" run.log | tail -1 | sed 's/.*blit: \([0-9]*\) .*/\1/'; }
+pixels_now() { grep -aE "(8514|mach64) blit:" run.log | tail -1 | sed 's/.*blit: \([0-9]*\) .*/\1/'; }
 
 for i in $(seq 1 240); do
   kill -0 $P 2>/dev/null || break

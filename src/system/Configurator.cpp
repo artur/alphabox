@@ -46,6 +46,7 @@
 #include "Flash.hpp"
 #include "FloppyController.hpp"
 #include "Keyboard.hpp"
+#include "Mach64.hpp"
 #include "PCF8584.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
@@ -593,6 +594,7 @@ static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
 static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
+static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
@@ -641,6 +643,7 @@ classinfo classes[] = {
     {"serial", c_serial, ON_CS, kv_serial},
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
+    {"mach64", c_mach64, IS_PCI | ON_GUI, kv_mach64},
     {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21140", c_tulip, IS_PCI | IS_NIC, kv_tulip},
@@ -917,6 +920,15 @@ void CConfigurator::initialize() {
     else
       FAILURE_1(Configuration, "cirrus: unknown chip \"%s\" (gd5430, gd5434)",
                 chip.c_str());
+    break;
+  }
+
+  case c_mach64: {
+    const char *chip = get_text_value("chip", "ct");
+    const mach64_chip_config *c = mach64_chip_by_name(chip);
+    if (!c)
+      FAILURE_1(Configuration, "mach64: unknown chip \"%s\" (ct, vt2)", chip);
+    myDevice = new CMach64(this, theSystem, pcibus, pcidev, *c);
     break;
   }
 

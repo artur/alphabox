@@ -1459,12 +1459,17 @@ void CVGACard::update() {
   unsigned iWidth = 0, iHeight = 0;
 
   /* no screen update necessary
-     Gate on the card's own enable, ATC video enable and SR1 "Screen Off" */
-  if (!display_enabled() || !atc_video_enabled())
+     Gate on the card's own enable, ATC video enable and SR1 "Screen Off".
+     A card whose own CRTC drives the display is gated only by its own
+     enable. */
+  const bool native = native_crtc_active();
+  if (!display_enabled())
+    return;
+  if (!native && !atc_video_enabled())
     return;
 
   const bool screen_off = (vga.sequencer.data[1] & 0x20) != 0; // SR1 bit5
-  if (screen_off)
+  if (!native && screen_off)
     return;
 
   auto now = std::chrono::steady_clock::now();
@@ -1476,9 +1481,15 @@ void CVGACard::update() {
     return;
   m_last_refresh_time = now;
 
-  const uint8_t cur_mode = pc_vga_choosevideomode();
-
-  if (cur_mode == SCREEN_OFF) {
+  if (native) {
+    // The VGA mode choice would look at CR17 sync enable and the VGA
+    // pixel format, neither of which drives this screen; only the palette
+    // upload it does on the way is still wanted.
+    if (vga.dac.dirty) {
+      palette_update();
+      vga.dac.dirty = 0;
+    }
+  } else if (pc_vga_choosevideomode() == SCREEN_OFF) {
     state.vga_mem_updated = 0;
     return;
   }
