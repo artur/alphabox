@@ -1125,15 +1125,15 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
 
     if (a >= U64(0x801fc000000) && a < U64(0x801fe000000)) {
 
-      // Unused PCI I/O space
+      // Unused PCI I/O space: nothing answers, the read is master-aborted
+      // and the data returned is all ones, as on any PCI host. It used to
+      // read as zero, and zero is the worst value an ISA status port can
+      // show: Windows 2000, told by the firmware tree of a parallel port at
+      // 0x3BC that no device here models, read its status as "printer
+      // attached, busy, acknowledging" and ran its IEEE-1284 negotiation to
+      // every timeout -- 18M status reads per boot.
       trace_unknown("PCI 0 I/O", a, dsize, false, 0, source);
-      // if (source)
-      //  printf("Read from unknown IO port %" LL"x on PCI 0 from %s   \n",a &
-      //  U64(0x1ffffff),source->devid_string);
-      // else
-      //  printf("Read from unknown IO port %" LL"x on PCI 0   \n",a &
-      //  U64(0x1ffffff));
-      return 0;
+      return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
     }
 
     if (a >= U64(0x803fc000000) && a < U64(0x803fe000000)) {
