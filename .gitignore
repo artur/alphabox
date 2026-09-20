@@ -26,3 +26,8 @@ roms/
 
 # macOS Finder metadata
 .DS_Store
+
+# NVRAM an emulator run started from the repo root leaves behind
+# (the tracked test/*/flash.rom fixtures are deliberate -- hence anchored)
+/flash.rom
+/dpr.rom
