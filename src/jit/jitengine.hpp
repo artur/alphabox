@@ -166,6 +166,10 @@ public:
     uint32_t hash_len; // word count src_sum covers -- frozen at compile time;
                        // n_instr drifts (interrupt-truncated cold passes shrink
                        // it), so it must NOT key the hash
+    uint64_t code_gen; // the code-page map's write count when these words were
+                       // last known good. Only the audit reads it: a source
+                       // change with this still current is a write nothing
+                       // reported, which is the failure the map can have
     uint64_t vgen; // m_itb_gen + m_flush_gen at last full validation (phys +
                    // code bytes). Both counters are monotonic, so one sum
                    // compare detects either changing

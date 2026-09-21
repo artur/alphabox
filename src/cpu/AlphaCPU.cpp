@@ -1242,7 +1242,8 @@ _next_instruction:
             // that page inline through the translation just dropped. Count
             // one write, so the next flush does its work and any such store
             // is caught by the source hash rather than assumed away.
-            m_code_map->note_write_all();
+            if (!m_nopflush_break) // the break hook silences every report
+              m_code_map->note_write_all();
             m_code_pages_seen = m_code_map->code_pages();
           }
         }
@@ -1285,7 +1286,8 @@ _next_instruction:
       if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
         flush_data_page_cache();
         if (m_code_map) {
-          m_code_map->note_write_all();
+          if (!m_nopflush_break) // the break hook silences every report
+            m_code_map->note_write_all();
           m_code_pages_seen = m_code_map->code_pages();
         }
       }

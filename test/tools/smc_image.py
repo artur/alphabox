@@ -12,12 +12,11 @@ wrote, and the way to be sure is a guest that actually does it:
       system loading code does;
     - it re-enters the loop.
 
-The instruction it writes is a branch to a CALL_PAL HALT. So the emulator
-halts if and only if the new instruction is what runs. If the stale compiled
-block runs instead, the original conditional branch takes the guest around
-the loop and back to the patch, forever -- the run hangs, and the harness
-times out. Success and failure are therefore not a printed claim but the
-difference between a guest that stops and one that never does.
+The instruction it writes sets a register the loop then carries to a halt.
+So the emulator halts if and only if the new instruction is what ran; if the
+block compiled from the old words runs instead, the register stays clear and
+the guest spins forever. Success and failure are therefore not a printed
+claim but the difference between a guest that stops and one that never does.
 
 The loop body is deliberately plain integer arithmetic on registers the JIT
 pins, so nothing but the patched instruction decides where control goes.
@@ -30,8 +29,8 @@ OP_CALL_PAL = 0x00
 OP_LDA, OP_LDAH = 0x08, 0x09
 OP_STL = 0x2C
 OP_INTA, OP_INTL = 0x10, 0x11
-OP_BR, OP_BNE = 0x30, 0x3D
-F_ADDQ, F_SUBQ, F_XOR = 0x20, 0x29, 0x40
+OP_BR, OP_BEQ, OP_BNE = 0x30, 0x39, 0x3D
+F_ADDQ, F_SUBQ, F_XOR, F_BIS = 0x20, 0x29, 0x40, 0x20
 
 PAL_HALT, PAL_IMB = 0x0000, 0x0086
 
@@ -61,53 +60,79 @@ def build_code(iterations, body):
 
     Word 0 leaves the address of word 1 in r2, which is how the patch finds
     itself: the boot block does not know where SRM loaded it.
+
+    The shape matters. An earlier version patched the loop's own exit branch
+    into a branch to the halt, which the INTERPRETER would carry out as soon
+    as it re-read the word -- and since an IMB always invalidates the
+    instruction cache, that is now what happens, whatever the compiled block
+    cache believes. It proved nothing about compiled code. So the patched
+    word writes a REGISTER instead, the loop runs again long enough to be
+    dispatched as compiled code, and the register decides the ending:
+
+        r5 == 0  every turn of the loop ran the patched word  -> halt
+        r5 != 0  some turn ran the words compiled before it   -> spin
+
+    The counting matters. An earlier version had the patched word SET the
+    flag, so a single interpreted turn out of two thousand was enough to
+    report success while the compiled block went on running stale code. The
+    original word counts and the patched one does nothing, so one stale turn
+    out of two thousand is enough to report failure.
     """
-    if body < 4:
-        sys.exit("the loop body holds three operates, a decrement and a branch")
+    if body < 5:
+        sys.exit("the loop body holds the flag store, an operate, a decrement "
+                 "and a branch")
 
     code = [branch(OP_BR, 2, 0)]        # r2 = &word[1], then fall through
     HERE = 1                            # what r2 points at, in words
     code.append(memfmt(OP_LDA, 1, 31, iterations))  # r1 = iterations
     code.append(memfmt(OP_LDA, 3, 31, 0x111))
     code.append(memfmt(OP_LDA, 4, 31, 0x222))
+    code.append(operate(OP_INTL, 31, 31, F_BIS, 8))  # r8 = 0 (first pass)
 
     loop = len(code)
+    flag = None
     for i in range(body - 2):
-        if i % 3 == 0:
+        if i == 0:
+            flag = len(code)            # the word the guest rewrites
+            code.append(memfmt(OP_LDA, 5, 5, 1))  # r5 += 1 (the old word)
+        elif i % 2:
             code.append(operate(OP_INTA, 3, 4, F_ADDQ, 3))
-        elif i % 3 == 1:
-            code.append(operate(OP_INTL, 3, 4, F_XOR, 5))
         else:
-            code.append(operate(OP_INTA, 5, 3, F_ADDQ, 6))
+            code.append(operate(OP_INTL, 3, 4, F_XOR, 6))
     code.append(operate_lit(OP_INTA, 1, 1, F_SUBQ, 1))  # subq r1, 1, r1
+    code.append(branch(OP_BNE, 1, loop - (len(code) + 1)))
 
-    patch = len(code)                   # the instruction the guest rewrites
-    code.append(branch(OP_BNE, 1, loop - (patch + 1)))
+    # Second time round we are here to read the verdict, not to patch again.
+    check_br = len(code)
+    code.append(0)                      # bne r8, check   (filled in below)
 
-    # r1 has reached zero. First an IMB with nothing to report: compiling
-    # the loop marked its page, and marking a page counts as a write, so
-    # this one settles that and leaves the emulator's own bookkeeping with
-    # nothing outstanding. Without it the patch below would be covered by
-    # that earlier bookkeeping rather than by its own store, and the test
-    # could not tell a tracked store from an untracked one.
+    # First pass: settle the emulator's own bookkeeping with an IMB that has
+    # nothing to report (compiling the loop marked its page, and marking a
+    # page counts as a write), then rewrite the flag instruction, make it
+    # visible, and run the loop again -- long enough to be dispatched as the
+    # compiled block it already is.
+    code.append(memfmt(OP_LDA, 8, 31, 1))           # r8 = 1 (second pass)
     code.append(call_pal(PAL_IMB))
-
-    # Now rewrite the branch above into one that leaves the loop for the
-    # halt, make it visible with IMB, and go back into the loop.
     tail = len(code)
-    code.append(0)  # LDAH r7, hi   (filled in once `done` is known)
+    code.append(0)  # LDAH r7, hi
     code.append(0)  # LDA  r7, lo
-    code.append(memfmt(OP_STL, 7, 2, (patch - HERE) * 4))
+    code.append(memfmt(OP_STL, 7, 2, (flag - HERE) * 4))
     code.append(call_pal(PAL_IMB))
-    code.append(memfmt(OP_LDA, 1, 31, 5))           # a few more times round
+    code.append(operate(OP_INTL, 31, 31, F_BIS, 5))  # r5 = 0: count afresh
+    code.append(memfmt(OP_LDA, 1, 31, 2000))
     code.append(branch(OP_BR, 31, loop - (len(code) + 1)))
 
-    done = len(code)
-    code.append(call_pal(PAL_HALT))
+    check = len(code)
+    code[check_br] = branch(OP_BNE, 8, check - (check_br + 1))
+    halt_from = len(code)
+    code.append(0)                      # beq r5, halt  (filled in below)
+    code.append(branch(OP_BR, 31, -1))  # r5 != 0: a stale turn; spin here
+    halt = len(code)
+    code[halt_from] = branch(OP_BEQ, 5, halt - (halt_from + 1))
+    code.append(call_pal(PAL_HALT))     # r5 == 0: the patched word ran
 
-    # The word the guest stores over `patch`: an unconditional branch to the
-    # halt, as it would be encoded at the patch's own address.
-    new_ins = branch(OP_BR, 31, done - (patch + 1)) & 0xFFFFFFFF
+    # The word the guest stores over the flag instruction: do nothing.
+    new_ins = operate(OP_INTL, 31, 31, F_BIS, 31) & 0xFFFFFFFF
     hi, lo = divmod(new_ins, 1 << 16)
     if lo >= 0x8000:                    # LDA sign-extends its displacement
         hi += 1

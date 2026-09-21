@@ -979,6 +979,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
     b.valid = true;
     b.flush_gen = m_flush_gen;
     b.n_instr = n_instr;
+    b.code_gen = m_code_map ? m_code_map->write_gen() : 0;
     b.jit_body = (void *)((uint8_t *)(void *)b.code +
                           b.body_off); // restore chained re-entry
     return &b;
@@ -1006,6 +1007,19 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   else
     m_fresh_hash++; // source bytes changed (self-modifying code)
 #endif
+  // The audit again (see revalidate_flushed): source words that changed with
+  // the code-page map reporting nothing written since they were last known
+  // good is a write that nothing told the map about.
+  if (m_nopflush_clean && m_code_map && b.code && b.tag == virt_pc &&
+      b.phys == phys_pc && m_code_map->write_gen() == b.code_gen) {
+    static int n = 0;
+    if (n++ < 20)
+      printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
+             "(pc %016llx, %u words) changed while the code-page map "
+             "reported no write ***\n",
+             m_cpu_id, (unsigned long long)phys_pc,
+             (unsigned long long)virt_pc, b.hash_len);
+  }
   b.tag = virt_pc;
   b.phys = phys_pc;
   b.asn = asn;
@@ -1069,7 +1083,12 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
 #ifdef JIT_STATS
     ++m_rev_changed;
 #endif
-    if (m_nopflush_clean && *m_nopflush_clean) {
+    // The right question is not "was the last flush clean" but "has anything
+    // been reported written since THESE words were last known good". A write,
+    // then a real flush, then a quiet one, then this block finally running,
+    // is not a miss -- the real flush already invalidated it.
+    if (m_nopflush_clean && m_code_map &&
+        m_code_map->write_gen() == b.code_gen) {
       // The audit failing: these source words changed, and the code-page map
       // had said nothing was written. Some path that writes guest memory
       // does not report to it -- with the flush actually skipped, this block
@@ -1089,6 +1108,7 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
 #endif
   b.valid = true; // flush_non_global() may have cleared it; the hash just
                   // re-validated the bytes
+  b.code_gen = m_code_map ? m_code_map->write_gen() : 0;
   b.flush_gen = m_flush_gen;
   b.vgen = m_itb_gen + m_flush_gen; // phys + code bytes just validated
   b.jit_body = (void *)((uint8_t *)(void *)b.code + b.body_off);
@@ -3629,6 +3649,7 @@ void CJitEngine::compile_block(
       src_hash((const uint8_t *)source_words.data(),
                b->n_instr);     // source fingerprint (revalidate vs self-mod)
   b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
+  b->code_gen = m_code_map ? m_code_map->write_gen() : 0;
   b->prefix_len = plen;
   m_code_bytes += csz; // track for the reclaim threshold (see flush())
 #ifdef JIT_STATS

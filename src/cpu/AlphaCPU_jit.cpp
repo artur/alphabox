@@ -201,6 +201,18 @@ void CAlphaCPU::compile_outside(void *b) {
 #else
   compile_thunk(&a);
 #endif
+  // Compiling may have made a page a code page. Until this processor drops
+  // the translations it cached for that page, its compiled code can still
+  // store into it inline -- without telling the code-page map, because the
+  // whole point of the exclusion is that such a store takes the helper. Do
+  // it here, on the spot: we are on this processor's own thread at a
+  // dispatch boundary, with no compiled frame live. Leaving it to the
+  // deferred request (which the other processors still use) left a window
+  // in which an IMB could consume the one write the marking counted and a
+  // later store in the same window then went unrecorded -- which is a guest
+  // running code that has been overwritten.
+  if (m_code_map && m_code_map->code_pages() != m_code_pages_seen)
+    honour_new_code_pages();
 }
 
 void CAlphaCPU::jit_run(int budget) {

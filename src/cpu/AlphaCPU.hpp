@@ -990,6 +990,12 @@ public:
       u64 p_address;              /**< Physical address of first instruction */
       bool asm_bit;               /**< Address Space Match bit */
       bool valid;                 /**< Valid cache entry */
+      /** The flush generation this line was filled in. An instruction memory
+          barrier invalidates the whole cache by moving the generation on,
+          which is one store instead of a walk of every line -- and the walk
+          was a fifth of the processor's time at the console prompt, where
+          the firmware issues IMB over a million times a second. */
+      u64 gen;
       /** Which processor modes may execute this line: bit per mode, taken
           from the translation buffer when the line was filled. A hit has to
           check it, or a line filled for the kernel would go on answering
@@ -997,6 +1003,7 @@ public:
           happens. */
       u8 exec_modes;
     } icache[ICACHE_ENTRIES];     /**< Instruction cache entries [HRM p 2-11] */
+    u64 icache_gen;               /**< the generation a line must match */
     int next_icache;              /**< Number of next cache entry to use */
     int last_found_icache;        /**< Number of last cache entry found */
 
@@ -1170,8 +1177,22 @@ public:
  **/
 inline void CAlphaCPU::flush_icache() {
   note_ic_flush_pc();
-  // Nothing written to a page that holds code since the last flush means
-  // there is nothing this flush could invalidate (see m_code_map).
+  // The instruction cache goes, always, and whether anything was written to
+  // guest memory has no bearing on it. Its lines are tagged by VIRTUAL
+  // address, and the code-page map speaks of physical ones: a guest that maps
+  // different code at an address it has used before writes nothing that the
+  // map can see -- the new code arrived in a page the map was never told
+  // holds any -- and a line left behind would answer the fetch with the code
+  // that used to be there. Moving the generation on costs one store, and the
+  // lines that matter are refilled as they are fetched.
+  ++state.icache_gen;
+  state.next_icache = 0; // old version, may be relied on elsewhere
+  state.last_found_icache = 0;
+  break_seq_icache();
+  // What CAN be skipped is the compiled block cache below, because a block is
+  // validated against the live physical address on every dispatch and against
+  // its source words whenever a flush has been seen. A remap therefore misses
+  // on the physical, and a rewrite is what the map reports.
   if (m_nopflush && m_code_map) {
     if (m_code_map->code_pages() != m_code_pages_seen)
       honour_new_code_pages(); // a page became code: drop stale inline writes
@@ -1186,14 +1207,6 @@ inline void CAlphaCPU::flush_icache() {
     }
   }
   ++m_flush_done;
-  if (icache_enabled) {
-    for (int i = 0; i < ICACHE_ENTRIES; i++) {
-      state.icache[i].valid = false;
-    }
-    state.next_icache = 0; // old version, may be relied on elsewhere
-    state.last_found_icache = 0;
-  }
-  break_seq_icache();
 #ifdef ES40_JIT
   jit_flush_blocks();
   m_jit_code_seen = ++g_jit_code_flush; // our own flush is already done
@@ -1316,7 +1329,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
 
   if (icache_enabled) {
     // ---- Fast hit probe
-    if (state.icache[i].valid &&
+    if (state.icache[i].valid && state.icache[i].gen == state.icache_gen &&
         (state.icache[i].asn == state.asn || state.icache[i].asm_bit) &&
         ((state.icache[i].exec_modes >> state.cm) & 1) &&
         state.icache[i].address == (address & ICACHE_MATCH_MASK)) {
@@ -1353,6 +1366,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       // DRAM-backed: fill the direct-mapped icache line.
       memcpy(state.icache[i].data, mem, ICACHE_LINE_SIZE * 4);
       state.icache[i].valid = true;
+      state.icache[i].gen = state.icache_gen;
       state.icache[i].asn = state.asn;
       state.icache[i].asm_bit = asm_bit;
       state.icache[i].address = address & ICACHE_MATCH_MASK;
