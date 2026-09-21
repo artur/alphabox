@@ -2632,6 +2632,11 @@ void CAlphaCPU::jit_fp_selftest() {
     const u32 fa = v.binary ? 1 : 31;
     const u32 ins = (v.opc << 26) | (fa << 21) | (2 << 16) | (v.func << 5) | 3;
     memcpy((u8 *)dram_ptr + page, &ins, 4);
+    // Writing guest code behind the code-page map's back: say so, or the
+    // flush below decides it has nothing to do and the next variant is
+    // measured against this one's compiled block.
+    if (m_code_map)
+      m_code_map->note_write_all();
     flush_icache(); // drop the stale fetch line; bumps the JIT flush gen too
     CJitEngine::JitBlock *b =
         m_jit->record(pc0, page, 0, (uint8_t)state.cm, true, 1, dram);
@@ -2729,6 +2734,8 @@ void CAlphaCPU::jit_fp_selftest() {
          (unsigned long long)total_cases, skipped,
          (unsigned long long)total_fail, total_fail ? "FAIL" : "PASS");
   memcpy((u8 *)dram_ptr + page, saved, 4);
+  if (m_code_map)
+    m_code_map->note_write_all(); // as above: this restores guest code
   flush_icache();
   fflush(stdout);
   std::_Exit(total_fail ? 1 : 0);

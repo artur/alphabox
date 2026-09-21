@@ -174,13 +174,15 @@ public:
   bool holds_code(u64 phys) const {
     const u64 pg = phys >> kPageShift;
     return m_page_bits && pg < m_pages &&
-           (m_page_bits[pg >> 3] & (1u << (pg & 7)));
+           (__atomic_load_n(&m_page_bits[pg >> 3], __ATOMIC_RELAXED) &
+            (1u << (pg & 7)));
   }
   /// Was code compiled from this 256-byte line?
   bool holds_code_line(u64 phys) const {
     const u64 ln = phys >> kLineShift;
     return m_line_bits && ln < m_lines &&
-           (m_line_bits[ln >> 3] & (1u << (ln & 7)));
+           (__atomic_load_n(&m_line_bits[ln >> 3], __ATOMIC_RELAXED) &
+            (1u << (ln & 7)));
   }
   /// A guest store or a DMA transfer landed at phys.
   void note_write(u64 phys) {
@@ -200,8 +202,17 @@ public:
 private:
   std::atomic<u64> m_gen{0};    // writes that landed on a compiled line
   std::atomic<u64> m_marked{0}; // code pages marked so far
-  u8 *m_page_bits = nullptr;    // one bit per 8 KB page
-  u8 *m_line_bits = nullptr;    // one bit per 256 bytes
+  // One bit per 8 KB page and per 256 bytes. Every processor's compiler
+  // thread sets bits in these, and one byte covers 64 KB of guest memory
+  // (8 KB for the lines), so two processors compiling anywhere near each
+  // other write the same byte. A plain |= loses one of the two, and a lost
+  // bit is permanent: writes to that line would never be reported again and
+  // a flush that should have happened would be skipped. The bits are
+  // therefore set and read atomically -- relaxed is enough, because what
+  // orders a write against a flush is m_gen's release/acquire, and a bit
+  // that is set late only costs an extra real flush.
+  u8 *m_page_bits = nullptr;
+  u8 *m_line_bits = nullptr;
   u64 m_pages = 0, m_lines = 0;
   CSystem *m_sys = nullptr;
   bool m_trace = false;

@@ -226,15 +226,18 @@ void CCodePageMap::note_code(u64 phys, size_t bytes) {
   for (u64 ln = phys >> kLineShift; ln <= (last >> kLineShift); ++ln) {
     if (ln >= m_lines)
       return;
-    m_line_bits[ln >> 3] |= (u8)(1u << (ln & 7));
+    __atomic_fetch_or(&m_line_bits[ln >> 3], (u8)(1u << (ln & 7)),
+                      __ATOMIC_RELAXED);
   }
   for (u64 pg = phys >> kPageShift; pg <= (last >> kPageShift); ++pg) {
     if (pg >= m_pages)
       return;
-    u8 &cell = m_page_bits[pg >> 3];
     const u8 bit = (u8)(1u << (pg & 7));
-    if (!(cell & bit)) {
-      cell |= bit; // a page that holds code keeps the slower write path
+    // The processor that sets the bit is the one that announces the page;
+    // whoever loses the race has nothing to announce.
+    const u8 was =
+        __atomic_fetch_or(&m_page_bits[pg >> 3], bit, __ATOMIC_RELAXED);
+    if (!(was & bit)) { // a page that holds code keeps the slower write path
       m_marked.fetch_add(1, std::memory_order_relaxed);
       // Whatever was written to this page before we looked was written
       // while it was not yet code, so make the next flush do its work
@@ -829,7 +832,12 @@ u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
   if (m_ll_seq[b].load(std::memory_order_relaxed) != m_ll_seq_snap[cpuid])
     ok = 0; // another STx_C wrote this line since our LDx_L (ABA)
   else if (same_address)
+  {
     ok = dram_cas(dram, phys, expected, value, size_bits) ? 1 : 0;
+    if (ok)
+      m_code_pages.note_write(phys); // the ordinary LDx_L/STx_C pair writes
+                                     // here, and a store is a store
+  }
   else {
     // STx_C to another quadword of the locked line: no value to compare.
     dram_write(dram, phys, size_bits, value);

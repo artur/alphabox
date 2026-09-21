@@ -1271,6 +1271,19 @@ _next_instruction:
     // Process delayed irq_h timers one instruction at a time.
     if (state.check_timers) {
       state.check_timers = false;
+      // The same page-cache flush request the interpreter arm above honours.
+      // It lived only there, so in a JIT build -- which is every build that
+      // matters -- request_dpc_flush() set a flag nothing ever read: the
+      // direct framebuffer window could move or be withdrawn while compiled
+      // code still wrote through a cached translation to where it used to
+      // be, and the code-page broadcast never reached the other processors.
+      if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+        flush_data_page_cache();
+        if (m_code_map) {
+          m_code_map->note_write_all();
+          m_code_pages_seen = m_code_map->code_pages();
+        }
+      }
       for (int ti = 0; ti < 6; ti++) {
         if (state.irq_h_timer[ti]) {
           if (state.irq_h_timer[ti] <= 1) {
