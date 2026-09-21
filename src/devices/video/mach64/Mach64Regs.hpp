@@ -45,6 +45,7 @@ namespace mach64 {
 constexpr u16 PCI_VENDOR_ATI = 0x1002;
 constexpr u16 PCI_DEVICE_CT = 0x4354;  ///< "TC": Mach64 CT, the part SRM names
 constexpr u16 PCI_DEVICE_VT2 = 0x5654; ///< "TV": 264VT2
+constexpr u16 PCI_DEVICE_VT3 = 0x5655; ///< "UV": 264VT3
 
 /// The register file as seen through every path (2 KB).
 constexpr u32 REG_BLOCK_BYTES = 0x800;

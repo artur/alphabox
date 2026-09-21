@@ -47,12 +47,14 @@ using namespace mach64;
  * the rest goes a byte at a time through mem_r/mem_w.
  **/
 u32 CMach64::legacy_read(u32 address, int dsize) {
+  m_trace_path = "window";
   if (vga_aperture_enabled() && address >= 0x1f800)
     return reg_read(address - 0x1f800, dsize / 8);
   return CVGACard::legacy_read(address, dsize);
 }
 
 void CMach64::legacy_write(u32 address, int dsize, u32 data) {
+  m_trace_path = "window";
   if (vga_aperture_enabled() && address >= 0x1f800) {
     reg_write(address - 0x1f800, dsize / 8, data);
     return;

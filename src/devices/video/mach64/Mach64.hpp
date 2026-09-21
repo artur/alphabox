@@ -34,6 +34,7 @@
  *                      host data, patterns, colour compare
  *   Mach64Display.cpp  extended-mode timing and rendering, the hardware
  *                      cursor, the 8-bit DAC
+ *   Mach64DDC.cpp      the monitor on the DDC lines (an EDID EEPROM)
  *
  * The CT (1994) is the first Mach64 with the DAC and clock synthesizer on
  * the chip; the VT parts keep its register file and add a video overlay
@@ -53,6 +54,7 @@
 #include "Eeprom93cx6.hpp"
 #include "Mach64Regs.hpp"
 #include "VGACard.hpp"
+#include "i2c_spd.hpp"
 
 /**
  * \brief Per-chip parameters. A variant is a table entry rather than a
@@ -93,6 +95,7 @@ protected:
   u32 state_magic1() const override { return 0x4D414348; } // 'MACH'
   u32 state_magic2() const override { return 0x48434D41; }
   u8 io_read_b(u32 address) override;
+  u8 io_read_b_traced(u32 address);
   void io_write_b(u32 address, u8 data) override;
   u32 card_legacy_read(int index, u32 address, int dsize) override;
   void card_legacy_write(int index, u32 address, int dsize, u32 data) override;
@@ -122,8 +125,14 @@ protected:
   void reg_written(u32 reg);
   u8 crtc_int_cntl_read();
   u32 config_cntl_read();
-  u8 dac_gio_read(u8 byte3) const;
   void eeprom_clock();
+
+  // --- the monitor's DDC channel (Mach64DDC.cpp) ----------------------------
+  /// DAC_CNTL byte 3 carries the two general-purpose I/O lines the DDC
+  /// bus hangs on; the monitor answers with its EDID.
+  void ddc_attach_monitor();
+  void ddc_drive();
+  u8 dac_gio_read(u8 byte3) const;
   void pll_write(int lane, u8 data);
   u8 pll_read(int lane) const;
   void update_banks();
@@ -258,6 +267,18 @@ protected:
 
   /// The 93C66 the BIOS keeps the card's settings in (256 x 16).
   CEeprom93cx6 m_eeprom;
+
+  /// The DDC bus to the monitor, bit-banged through DAC_CNTL; the monitor
+  /// is a 24C02 holding its EDID.
+  I2CBus m_ddc;
+
+  /// ALPHABOX_TRACE_MACH64: print every register and configuration access
+  /// (bring-up aid; the framebuffer itself is not traced).
+  bool m_trace = false;
+  const char *m_trace_path = "?"; ///< which way the traced access came
+  u32 config_read_custom(int func, u32 address, int dsize, u32 data) override;
+  void config_write_custom(int func, u32 address, int dsize, u32 old_data,
+                           u32 new_data, u32 data) override;
 };
 
 #endif // !defined(INCLUDED_MACH64_H)

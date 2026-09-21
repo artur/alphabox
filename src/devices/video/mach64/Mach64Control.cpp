@@ -219,10 +219,18 @@ u32 CMach64::reg_read(u32 offset, int bytes) {
   u32 data = 0;
   for (int i = 0; i < bytes; i++)
     data |= u32(reg_read8(offset + i)) << (8 * i);
+  if (m_trace)
+    printf("%s: reg read  %c+%03x/%d = %0*x (%s)\n", devid_string,
+           (offset & REG_BLOCK0) ? '0' : '1', offset & 0x3ff, bytes,
+           bytes * 2, data, m_trace_path);
   return data;
 }
 
 void CMach64::reg_write(u32 offset, int bytes, u32 data) {
+  if (m_trace)
+    printf("%s: reg write %c+%03x/%d = %0*x (%s)\n", devid_string,
+           (offset & REG_BLOCK0) ? '0' : '1', offset & 0x3ff, bytes,
+           bytes * 2, data, m_trace_path);
   if ((offset & REG_BLOCK0) && (offset & 0x3ff) >= GUI_FIRST) {
     const u32 reg = offset & 0x3ff;
     switch (bytes) {
@@ -415,6 +423,7 @@ void CMach64::reg_written(u32 reg) {
     update_banks();
     break;
   case DAC_CNTL:
+    ddc_drive();
     vga.dac.dirty = 1; // 8-bit DAC on or off changes every colour
     state.vga_mem_updated = 1;
     break;
@@ -455,24 +464,6 @@ u32 CMach64::config_cntl_read() {
   const u32 base = config_read(0, 0x10, 32) & 0xfff00000u;
   return (r.config_cntl & ~CFG_MEM_AP_LOC_MASK) |
          (((base >> 22) << CFG_MEM_AP_LOC_SHIFT) & CFG_MEM_AP_LOC_MASK);
-}
-
-/**
- * DAC_CNTL byte 3: the two general-purpose I/O lines (the monitor's DDC
- * bus) read back what drives them. Nothing is connected, so a line the
- * chip does not pull low is high.
- **/
-u8 CMach64::dac_gio_read(u8 byte3) const {
-  const bool scl =
-      !(r.dac_cntl & DAC_GIO_DIR_0) || (r.dac_cntl & DAC_GIO_STATE_0);
-  const bool sda =
-      !(r.dac_cntl & DAC_GIO_DIR_1) || (r.dac_cntl & DAC_GIO_STATE_1);
-  u8 v = byte3 & 0xf9;
-  if (scl)
-    v |= 0x04;
-  if (sda)
-    v |= 0x02;
-  return v;
 }
 
 /**

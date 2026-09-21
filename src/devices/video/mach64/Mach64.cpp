@@ -37,6 +37,8 @@ static const mach64_chip_config mach64_chips[] = {
      "mach64ct.bin"},
     {"vt2", "264VT2", PCI_DEVICE_VT2, 0x40005654, 0x40, 4u << 20,
      "mach64vt2.bin"},
+    {"vt3", "264VT3", PCI_DEVICE_VT3, 0x9a005655, 0x40, 4u << 20,
+     "mach64vt2.bin"},
 };
 
 const mach64_chip_config *mach64_chip_by_name(const char *name) {
@@ -112,11 +114,12 @@ void CMach64::init() {
   m_vram_bytes = u32(mb) << 20;
 
   // PCI header: a VGA-compatible display controller with the 16 MB
-  // memory aperture (BAR0, prefetchable) and the 256-byte block I/O
-  // register window (BAR1), and no expansion ROM BAR: as for the other
-  // cards, the BIOS is found at 0xc0000. 0x40 is ATI's I/O configuration
-  // register: bits 1..0 pick the sparse I/O base (0: 0x2EC), bit 2 enables
-  // the block I/O BAR, as the CT powers up.
+  // memory aperture (BAR0, prefetchable), the 256-byte block I/O register
+  // window (BAR1) and a 64 KB expansion ROM. The console finds the BIOS
+  // at 0xc0000 like the other cards', but ATI's Windows miniport reads the
+  // BIOS's data tables through the ROM BAR, so this card exposes one. 0x40
+  // is ATI's I/O configuration register: bits 1..0 pick the sparse I/O
+  // base (0: 0x2EC), bit 2 enables the block I/O BAR, as the CT powers up.
   u32 cfg_data[64] = {};
   u32 cfg_mask[64] = {};
   cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | PCI_VENDOR_ATI;
@@ -130,6 +133,8 @@ void CMach64::init() {
   cfg_mask[0x0c >> 2] = 0x0000ffff;
   cfg_mask[0x10 >> 2] = ~(APERTURE_BYTES - 1);
   cfg_mask[0x14 >> 2] = 0xffffff00;
+  cfg_mask[0x30 >> 2] =
+      ~(u32(sizeof(option_rom)) - 1) | PCI_ROM_ADDRESS_ENABLE;
   cfg_mask[0x3c >> 2] = 0x000000ff;
   cfg_mask[0x40 >> 2] = 0x00000007;
   add_function(0, cfg_data, cfg_mask);
@@ -189,6 +194,7 @@ void CMach64::init() {
   m_eeprom.init(8); // 93C66: 256 words
   for (auto &w : m_eeprom.data)
     w = 0xffff; // blank, as a card whose BIOS has not written it yet
+  ddc_attach_monitor();
 
   load_option_rom(m_chip.default_rom);
 
@@ -202,7 +208,22 @@ void CMach64::init() {
   timing.refresh_interval_ms = 16;
   m_last_refresh_time = std::chrono::steady_clock::now();
 
+  m_trace = getenv("ALPHABOX_TRACE_MACH64") != nullptr;
   printf("%s: ATI %s, %u KB\n", devid_string, m_chip.part, m_vram_bytes / 1024);
+}
+
+u32 CMach64::config_read_custom(int func, u32 address, int dsize, u32 data) {
+  if (m_trace)
+    printf("%s: config read  %02x/%d = %08x\n", devid_string, address, dsize,
+           data);
+  return data;
+}
+
+void CMach64::config_write_custom(int func, u32 address, int dsize,
+                                  u32 old_data, u32 new_data, u32 data) {
+  if (m_trace)
+    printf("%s: config write %02x/%d = %08x (now %08x)\n", devid_string,
+           address, dsize, data, new_data);
 }
 
 /**
@@ -211,6 +232,15 @@ void CMach64::init() {
  * dead on this card.
  **/
 u8 CMach64::io_read_b(u32 address) {
+  if (m_trace && address != 0x3da) {
+    const u8 v = io_read_b_traced(address);
+    printf("%s: port read  %03x = %02x\n", devid_string, address, v);
+    return v;
+  }
+  return io_read_b_traced(address);
+}
+
+u8 CMach64::io_read_b_traced(u32 address) {
   switch (address) {
   case 0x3c3:
     return r.port_3c3;
@@ -222,6 +252,8 @@ u8 CMach64::io_read_b(u32 address) {
 }
 
 void CMach64::io_write_b(u32 address, u8 data) {
+  if (m_trace)
+    printf("%s: port write %03x = %02x\n", devid_string, address, data);
   switch (address) {
   case 0x3c3:
     r.port_3c3 = data;
@@ -238,6 +270,7 @@ void CMach64::io_write_b(u32 address, u8 data) {
  * bytes; 0x1ce/0x1cf index the extended VGA registers.
  **/
 u32 CMach64::card_legacy_read(int index, u32 address, int dsize) {
+  m_trace_path = "sparse";
   if (index >= LEGACY_IO_SPARSE &&
       index < LEGACY_IO_SPARSE + SPARSE_IO_GROUPS) {
     const int reg = sparse_io_reg[index - LEGACY_IO_SPARSE];
@@ -259,6 +292,7 @@ u32 CMach64::card_legacy_read(int index, u32 address, int dsize) {
 }
 
 void CMach64::card_legacy_write(int index, u32 address, int dsize, u32 data) {
+  m_trace_path = "sparse";
   if (index >= LEGACY_IO_SPARSE &&
       index < LEGACY_IO_SPARSE + SPARSE_IO_GROUPS) {
     const int reg = sparse_io_reg[index - LEGACY_IO_SPARSE];
@@ -281,20 +315,24 @@ void CMach64::card_legacy_write(int index, u32 address, int dsize, u32 data) {
 
 /**
  * BAR0 is the memory aperture; BAR1 the block I/O window onto the first
- * 256 bytes of block 0.
+ * 256 bytes of block 0; BAR6 the option ROM.
  **/
 u32 CMach64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
+  m_trace_path = bar ? "blockio" : "aperture";
   switch (bar) {
   case 0:
     return aperture_read(address, dsize);
   case 1:
     return reg_read(REG_BLOCK0 | (address & 0xff), dsize / 8);
+  case 6:
+    return rom_read(address, dsize);
   }
   return 0;
 }
 
 void CMach64::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                            u32 data) {
+  m_trace_path = bar ? "blockio" : "aperture";
   switch (bar) {
   case 0:
     aperture_write(address, dsize, data);
