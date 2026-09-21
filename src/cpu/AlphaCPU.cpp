@@ -291,6 +291,20 @@ void CAlphaCPU::rate_tick() {
     const u64 done_f = m_flush_done - m_rate_flush_done;
     m_rate_flush_skipped = m_flush_skipped;
     m_rate_flush_done = m_flush_done;
+    if (m_stall_skips || m_stall_capped) {
+      const u64 sk = m_stall_skips - m_rate_stall_skips;
+      const u64 cy = m_stall_cycles - m_rate_stall_cycles;
+      m_rate_stall_skips = m_stall_skips;
+      m_rate_stall_cycles = m_stall_cycles;
+      // What the guest asked to wait for, against the time it actually had:
+      // a second of stalls handed over inside a second of wall clock is the
+      // whole boot spent waiting.
+      fprintf(stderr,
+              "%%CPU%d-I-STALL: %.0f waits/s skipped, %.1f%% of the window "
+              "handed over (%llu too long)\n",
+              get_cpuid(), sk / secs, 100.0 * (double)cy / (double)cpu_hz / secs,
+              (unsigned long long)m_stall_capped);
+    }
     if (skipped + done_f)
       fprintf(stderr,
               "%%CPU%d-I-FLUSH: %.0f IMB/s, %.1f%% with nothing to flush; "

@@ -305,6 +305,46 @@ arrives at the same second: that phase is firmware delay loops around disk
 I/O, as the flush-storm entry above already found. What this removes is
 CPU work that was provably never needed -- not wall-clock time in a boot.
 
+### The wait that did not have to be waited
+
+Where does a Windows 2000 boot actually spend its 95 seconds? Not where two
+rounds of JIT work had assumed. Aggregating the hot chain-entry PCs over a
+whole boot (`JIT_STATS`, 318 windows) gives one answer and it is not subtle:
+
+```
+ffffffff807282a8   100.8 G instructions   70.0%
+```
+
+That is `KeStallExecutionProcessor`, the Alpha HAL's microsecond delay:
+
+```
+      rpcc t1            ; start
+loop: rpcc t2            ; now
+      subl t2, t1, t2    ; elapsed
+      subl t0, t2, t2    ; remaining = asked for - elapsed
+      bgt  t2, loop
+```
+
+Weighting each window by its own duration, that loop is **62 of the 95
+seconds**. A driver asking to be delayed is asking this emulator's cycle
+counter to advance, so the dispatcher now hands it the cycles and lets the
+loop fall out (see docs/cpu-fidelity.md for the divergence that buys).
+
+Measured, same binary, two interleaved rounds each:
+
+| | time to desktop | instructions executed |
+| --- | --- | --- |
+| `ALPHABOX_STALL_SKIP=0` | 95 s, 95 s | 161.2 G, 149.5 G |
+| skip, loop left compiled | 80 s, 80 s | 141.9 G, 139.9 G |
+| skip, loop kept interpreted | **60 s, 60 s** | **106.2 G, 101.0 G** |
+
+The middle row is the lesson. Compiled, the loop chains to itself and spins
+a whole dispatch batch before the dispatcher is asked about it -- roughly
+150 turns of a six-instruction loop per wait -- so two thirds of the saving
+was still being spun away. Keeping that one block out of the JIT
+(`CJitEngine::drop_block`) was worth another 20 seconds. A block a dispatch
+loop needs to be *asked* about is worth less compiled than interpreted.
+
 **The test can fail.** `test/tools/smc_test.sh` boots a guest that runs a
 loop until the JIT compiles it, stores a branch-to-halt over an
 instruction inside that compiled block, executes `IMB` and re-enters the

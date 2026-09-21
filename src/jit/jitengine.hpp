@@ -492,6 +492,26 @@ public:
   // back to blocks + re-form. See the .cpp.
   bool trace_ok(TraceFragment *t, uint64_t head_live_phys, const uint8_t *dram);
 
+  /// Drop one block's compiled code and every link into it, and leave it
+  /// looking never-compiled. For a block the dispatcher wants to be asked
+  /// about every time it runs: compiled, a loop chains to itself and spins a
+  /// whole dispatch batch before anyone is asked, which is no use when the
+  /// point of asking is to end the loop (CAlphaCPU::jit_run, the stall).
+  void drop_block(uint64_t virt_pc) {
+    JitBlock &b = m_blocks[index_of(virt_pc)];
+    if (b.tag != virt_pc)
+      return;
+    unlink_inbound(&b);
+    b.valid = false;
+    b.code = nullptr;
+    b.jit_body = nullptr;
+    b.compiled = false;
+    b.cold_runs = 0;
+    ++m_itb_gen; // anything holding a link or an epoch stamp must miss
+    ++m_epoch;
+    note_epoch(EPOCH_IDLE);
+  }
+
   // Lazy-flush survivor: hash-revalidate the slot in place (no interpreted
   // pass, no re-record).
   JitBlock *revalidate_flushed(uint64_t virt_pc, uint32_t asn, uint8_t cm,

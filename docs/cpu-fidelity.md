@@ -91,6 +91,37 @@ from `CSystem::ReadMem` instead of a machine check, so firmware or an OS
 probing a bus for a device that is not there sees a plain read, and a
 guest's machine-check handling cannot be exercised in Alphabox at all.
 
+### A busy-wait is handed the time it is waiting for
+
+Windows' `KeStallExecutionProcessor` delays a driver by spinning on `RPCC`
+until the requested cycles have passed. On hardware the processor really is
+busy for that long; here the processor is asking *this emulator's* counter
+to advance, and spinning through it in real time was 62 of the 95 seconds of
+a Windows 2000 boot -- 70% of every instruction executed.
+
+So the dispatcher recognises that loop by its instruction words (which pin
+its registers: the count asked for, and the counter when the wait began) and,
+when nothing else is pending, adds the remaining cycles to `state.cc` so the
+loop falls out on its next turn. A wait longer than a tenth of a second is
+left alone: that is not a delay, it is a guest waiting for something to
+happen. The block is kept out of the JIT, because compiled it chains to
+itself and spins a whole dispatch batch before the dispatcher is asked.
+
+**The divergence:** the guest's cycle counter runs ahead of real time by
+whatever it would have spent waiting -- during driver initialisation, up to
+about six times real time (`ALPHABOX_RATE` reports it). A guest that
+compares `RPCC` against the interval timer therefore measures a processor
+faster than the configured `speed`. Time of day is unaffected: that comes
+from the interval timer and the TOY clock, not from `RPCC`. On a
+multiprocessor guest each processor's counter jumps independently, which is
+architecturally allowed -- `PCC` has a per-processor offset on real hardware
+and software may not compare it across processors -- but it makes the skew
+much larger than hardware would.
+
+`ALPHABOX_STALL_SKIP=0` restores the real-time wait. Measured, same binary:
+95 s to the desktop with it off, 60 s with it on, and a third fewer
+instructions executed (docs/performance.md).
+
 ### Smaller ones
 
 | What | Where | Consequence |

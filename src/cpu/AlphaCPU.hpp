@@ -1085,6 +1085,7 @@ public:
   u64 m_rate_cc = 0; // the cycle counter as of the last rate report
   u64 m_rate_escapes = 0, m_rate_entries = 0, m_rate_bulk = 0;
   u64 m_rate_flush_skipped = 0, m_rate_flush_done = 0;
+  u64 m_rate_stall_skips = 0, m_rate_stall_cycles = 0;
 
 public:
   /// How often compiled code leaves for the miscellaneous helper, by kind:
@@ -1138,6 +1139,12 @@ public:
   /// modifies guest code can be shown to fail when the tracking is wrong --
   /// a test that cannot fail proves nothing (test/tools/smc_test.sh).
   bool m_nopflush_break = false;
+
+  /// The processor-stall loop (ALPHABOX_STALL_SKIP=1): where it was found,
+  /// how many waits were handed their time, how many cycles that was, and
+  /// how many were too long to be a delay.
+  u64 m_stall_pc = 0;
+  u64 m_stall_skips = 0, m_stall_cycles = 0, m_stall_capped = 0;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow

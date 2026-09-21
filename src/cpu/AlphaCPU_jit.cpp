@@ -89,6 +89,36 @@ static const bool g_idle_stats = getenv("ALPHABOX_IDLESTATS") != nullptr;
 // interrupts, CALL_PAL disable interrupts, LDL t0, n(s0) (the PRCB's DPC
 // queue), BEQ t0. Matched by instruction words, not address, so any NT kernel
 // build is recognized.
+// Hand a busy-wait the time it is waiting for instead of spinning through it
+// in real time (see the dispatcher below). ALPHABOX_STALL_SKIP=0 turns it off
+// and makes the guest wait in real time, as the hardware would.
+static const bool g_stall_skip = [] {
+  const char *e = getenv("ALPHABOX_STALL_SKIP");
+  return !(e && e[0] == '0');
+}();
+
+// Windows' KeStallExecutionProcessor, as the Alpha HAL writes it: a driver
+// asks to be delayed, and the HAL spins on the cycle counter until the
+// cycles have passed.
+//
+//     rpcc t2              now
+//     zap  t2, #240, t2    (the counter is 32 bits)
+//     subl t2, t1, t2      elapsed = now - start
+//     zap  t2, #240, t2
+//     subl t0, t2, t2      remaining = asked - elapsed
+//     bgt  t2, -6          ... while there is any left
+//
+// Matched by its instruction words, which pin the registers too: t0 (r1) is
+// what was asked for and t1 (r2) is the counter when the wait began.
+static inline bool nt_stall_loop(const char *dram, u64 dram_size, u64 phys) {
+  if ((phys & 3) || phys + 24 > dram_size)
+    return false;
+  u32 w[6];
+  memcpy(w, dram + phys, sizeof(w));
+  return w[0] == 0x607fc000 && w[1] == 0x487e1603 && w[2] == 0x40620123 &&
+         w[3] == 0x487e1603 && w[4] == 0x40230123 && w[5] == 0xfc7ffffa;
+}
+
 static inline bool nt_idle_head(const char *dram, u64 dram_size, u64 phys) {
   if ((phys & 3) || phys + 16 > dram_size)
     return false;
@@ -378,6 +408,43 @@ void CAlphaCPU::jit_run(int budget) {
           }
         } else {
           ++m_idle_zero;
+        }
+      }
+    }
+
+    // A driver asking to be delayed is asking THIS emulator's cycle counter
+    // to advance, and spinning on it costs more than half the wall clock of
+    // a Windows 2000 boot. When the processor is in that loop with nothing
+    // else pending, give it the cycles it is waiting for and let the loop
+    // fall out on its next turn. The guest's counter then runs ahead of real
+    // time by what it would have spent waiting, which is the point: it asked
+    // for a delay, not for the host to be busy.
+    if (g_stall_skip && have_phys && !(start_virt & 1)) {
+      if (m_stall_pc == 0 && nt_stall_loop(dram_ptr, dram_size, start_phys)) {
+        m_stall_pc = start_virt;
+        // Compiled, this loop chains to itself and spins a whole dispatch
+        // batch before coming back here -- which is most of the time it was
+        // meant to save. Interpreted, every turn of it passes through the
+        // dispatcher, and the first one ends the wait.
+        if (m_jit)
+          m_jit->drop_block(start_virt);
+        printf("%%CPU-I-STALL: CPU%d processor-stall loop recognized at "
+               "%016llx\n",
+               (int)state.iProcNum, (unsigned long long)start_virt);
+      }
+      if (start_virt == m_stall_pc && !state.check_int && !state.check_timers) {
+        const u64 cc_now = rpcc_read(); // syncs the counter to the wall first
+        const u32 elapsed = (u32)cc_now - (u32)state.r[2];
+        const s32 left = (s32)((u32)state.r[1] - elapsed);
+        // A wait longer than the cap is not a delay, it is a guest waiting
+        // for something to happen; let real time carry it.
+        const u64 cap = cpu_hz / 10;
+        if (left > 0 && (u64)left <= cap) {
+          state.cc += (u64)left;
+          ++m_stall_skips;
+          m_stall_cycles += (u64)left;
+        } else if (left > 0) {
+          ++m_stall_capped;
         }
       }
     }
@@ -1190,8 +1257,10 @@ void CAlphaCPU::jit_run(int budget) {
       CJitEngine::JitBlock *nb =
           m_jit->record(start_virt, start_phys, start_asn, (uint8_t)state.cm,
                         start_asm, n, (const uint8_t *)dram_ptr);
-      // Compile only once the block has proven hot (see compile_after()).
-      if (!nb->compiled && ++nb->cold_runs >= m_jit->compile_after())
+      // Compile only once the block has proven hot (see compile_after()) --
+      // except the stall loop, which is only of use to us interpreted.
+      if (!(g_stall_skip && start_virt == m_stall_pc) && !nb->compiled &&
+          ++nb->cold_runs >= m_jit->compile_after())
         compile_outside(nb);
     }
   }
