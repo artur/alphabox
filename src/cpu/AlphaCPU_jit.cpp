@@ -1113,23 +1113,14 @@ void CAlphaCPU::jit_run(int budget) {
           CJitEngine::ExitRec *xr =
               (CJitEngine::ExitRec *)(lraw & ~(uintptr_t)7);
           const unsigned k = exact - 1;
-          // A direct slot (same-page target) carries no epoch: it is valid
-          // until the target block is invalidated, which unlinks it through
-          // the target's inbound list. So it can only arrive here empty.
-          const bool direct = (xr->direct_mask >> k) & 1u;
           // A static exit's slot always holds the SAME compile-time target, so
           // a body already in it means the epoch compare -- not a new target --
           // is what sent us here.
           m_jit->note_dlink_stale(xr->body[k] != nullptr);
           if (b->tag == m_link_target && b->jit_body) {
-            if (direct)
-              m_jit->link_direct(xr, k, b);
-            else {
-              xr->body[k] = b->jit_body;
-              xr->epoch[k] = m_jit->vgen();
-            }
-          } else if (!direct) { // a direct slot is already empty, and clearing
-                                // it here would cut it out of no list
+            xr->body[k] = b->jit_body;
+            xr->epoch[k] = m_jit->vgen();
+          } else {
             xr->body[k] = nullptr;
             xr->epoch[k] = ~(uint64_t)0;
           }

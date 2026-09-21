@@ -150,11 +150,6 @@ public:
                     // not compiled
     JitBlock *link[kLinkSlots]; // cached direct successors (poly-link,
                                 // round-robin back-patched); null = empty
-    uintptr_t inbound; // head of the list of static exits linked INTO this
-                       // block, as ExitRec* | slot (QEMU's jmp_list_head).
-                       // Those links carry no epoch, so invalidating this
-                       // block means walking this list and clearing them --
-                       // see unlink_inbound().
 #ifdef JIT_STATS
     uint32_t link_misses; // instrumentation: per-source link-miss count,
                           // cumulative (poly-link sizing)
@@ -501,7 +496,6 @@ public:
     JitBlock &b = m_blocks[index_of(virt_pc)];
     if (b.tag != virt_pc)
       return;
-    unlink_inbound(&b);
     b.valid = false;
     b.code = nullptr;
     b.jit_body = nullptr;
@@ -568,8 +562,6 @@ public:
 
   void flush_non_global(); // flush only !asm_global blocks (the ASM-bit-clear /
                            // ASN icache flush)
-  void unlink_all();       // drop every direct static link (flush(): the code
-                           // bytes may have changed under all of them)
   void reclaim_code();     // free ALL compiled code once past kReclaimBytes
                            // (cold-path only)
   // flush() can be reached from a compiled IC_FLUSH, so it DEFERS the reclaim
@@ -747,12 +739,6 @@ private:
   // Which caller's icache flush we are in, so the epoch census can separate
   // an IMB from an IC_FLUSH from a PAL restart. Set by flush_icache().
   int m_flush_cause = EPOCH_FLUSH;
-  uint64_t m_direct_live = 0; // direct links currently established; lets
-                              // unlink_all() cost nothing when there are none
-  const bool m_direct_links = [] {
-    const char *e = getenv("ALPHABOX_JIT_DLINK");
-    return e && e[0] == '1';
-  }();
   uint64_t m_epoch = 0; // m_itb_gen + m_flush_gen, kept in step with both so
                         // compiled chain guards load one word
   // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
@@ -818,54 +804,9 @@ private:
 public: // the dispatcher fills these (AlphaCPU.cpp)
   struct ExitRec {
     void *body[kLinkSlots];
-    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch). Read only
-                                // by a cross-page slot; a direct slot ignores
-                                // it.
-    // Reverse index, for direct (epoch-free) slots only: the next static exit
-    // linked into the same target block, as ExitRec* | slot. 0 = end of list.
-    uintptr_t in_next[kLinkSlots];
-    uint8_t direct_mask; // bit k: slot k is a DIRECT link -- its target is in
-                         // the source block's own guest page, so no MMU change
-                         // can invalidate it without invalidating the source
-                         // too, and the only guard left is body != null.
+    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch)
   };
 
-  // Link a direct static exit to a block, and record it on that block's
-  // inbound list so the block's invalidation can undo it. The caller has
-  // already established that b is this exit's target and is compiled.
-  inline void link_direct(ExitRec *xr, unsigned slot, JitBlock *b) {
-    if (xr->body[slot])
-      return; // already linked, hence already on b's list
-    xr->body[slot] = b->jit_body;
-    xr->in_next[slot] = b->inbound;
-    b->inbound = (uintptr_t)xr | slot;
-    m_direct_live++;
-  }
-
-  // Drop every direct link INTO b (QEMU's tb_jmp_unlink). Writes data only --
-  // no code patching, so no icache maintenance and no W^X toggle -- and is
-  // safe to call while b's own code is on the stack: the exits it clears will
-  // simply miss to the dispatcher next time.
-  inline void unlink_inbound(JitBlock *b) {
-    uintptr_t p = b->inbound;
-    b->inbound = 0;
-    while (p) {
-      ExitRec *xr = (ExitRec *)(p & ~(uintptr_t)7);
-      const unsigned k = (unsigned)(p & 7);
-      p = xr->in_next[k];
-      xr->in_next[k] = 0;
-      xr->body[k] = nullptr;
-      m_direct_live--;
-    }
-  }
-
-  // ALPHABOX_JIT_DLINK=1 compiles the epoch-free static exit for same-page
-  // targets. OFF by default: measurement says a cached link misses ~1000 times
-  // per 100M instructions on CPU-bound guest code, so there is nothing here to
-  // win, and an icache flush -- which the guest's PALcode issues once per ~1000
-  // instructions during firmware -- has to walk the cache to undo the links.
-  // See docs/performance.md.
-  bool direct_links_enabled() const { return m_direct_links; }
 
 private:
   static constexpr size_t kExitChunk = 1u << 16;
@@ -899,9 +840,7 @@ private:
     for (int i = 0; i < kLinkSlots; ++i) {
       r->body[i] = nullptr;
       r->epoch[i] = ~(uint64_t)0;
-      r->in_next[i] = 0;
     }
-    r->direct_mask = 0;
     return r;
   }
   // AArch64 conditional-branch exit. A block ending in a PC-relative

@@ -1017,8 +1017,6 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.code = nullptr;
   b.jit_body =
       nullptr; // not compiled yet -> cached links to us must miss until compile
-  unlink_inbound(&b); // ...including the epoch-free direct links, which have
-                      // no other way of learning this slot changed hands
   for (int i = 0; i < kLinkSlots; ++i)
     b.link[i] = nullptr; // no cached successors yet
 #ifdef JIT_STATS
@@ -1275,7 +1273,6 @@ void CJitEngine::reclaim_code() {
   // reading its epoch field.
   m_chunk_cur = -1;
   m_exit_used = kExitChunk;
-  m_direct_live = 0; // ...and every direct link lived in one of them
   m_code_bytes = 0;
 #ifdef JIT_STATS
   m_stat_reclaims++;
@@ -1288,7 +1285,6 @@ void CJitEngine::reclaim_code() {
     m_blocks[i].code = nullptr;
     m_blocks[i].jit_body = nullptr;
     m_blocks[i].compiled = false;
-    m_blocks[i].inbound = 0; // the exit records themselves were just freed
   }
   // Traces hold JitFns into the runtime we just deleted -- drop them too, or a
   // post-reclaim trace dispatch jumps through a freed pointer. trace_lookup
@@ -1297,16 +1293,6 @@ void CJitEngine::reclaim_code() {
     m_traces[i].valid = false;
 }
 
-// Drop every direct static link in the cache. Data writes only (see
-// unlink_inbound), so this is cheap per block; it is a full 16K-slot walk, so
-// only events that genuinely invalidate code bytes may call it.
-void CJitEngine::unlink_all() {
-  if (!m_direct_live)
-    return; // nothing epoch-free is linked: the epoch bump is the whole story
-  for (int i = 0; i < kCacheEntries; ++i)
-    if (m_blocks[i].inbound)
-      unlink_inbound(&m_blocks[i]);
-}
 
 void CJitEngine::flush() {
   // LAZY:  don't walk 16K slots each time. Bump the generation instead: stale
@@ -1322,7 +1308,6 @@ void CJitEngine::flush() {
   // guarded by the target's liveness, not by a counter -- and an IMB says the
   // bytes under every block may have changed. Walking the cache is the price
   // of the epoch-free hit path; IMB is rare (see the epoch census).
-  unlink_all();
   if (m_rt && m_code_bytes >= kReclaimBytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
@@ -1351,7 +1336,6 @@ void CJitEngine::flush_non_global() {
     if (!m_blocks[i].asm_global) {
       m_blocks[i].valid = false;
       m_blocks[i].jit_body = nullptr;
-      unlink_inbound(&m_blocks[i]); // soft-dropped: direct links must miss too
     }
   }
 #ifdef JIT_STATS

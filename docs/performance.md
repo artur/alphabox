@@ -105,8 +105,10 @@ production speed, so its own counters are part of what it measures.
   noise plus boot, and the ranked plan built on it -- branch patching, an
   inline lookup probe, a return stack, cross-page linking -- targets at most
   the 3.4% below, of which linking is a sliver. The reverse-index
-  implementation is in the tree behind `ALPHABOX_JIT_DLINK=1`, default off,
-  for whoever needs firmware to link well.
+  implementation was kept in the tree behind a switch, default off, until it
+  became clear that an option nobody runs is a code path nobody tests; it
+  has been removed, and this entry is the record of why. Every static exit
+  is an epoch-guarded data link.
 
 ## Where the host's time goes
 
