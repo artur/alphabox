@@ -51,10 +51,23 @@
 #if !defined(INCLUDED_MACH64_H)
 #define INCLUDED_MACH64_H
 
+#include <chrono>
+
 #include "Eeprom93cx6.hpp"
 #include "Mach64Regs.hpp"
 #include "VGACard.hpp"
 #include "i2c_spd.hpp"
+
+/// The card's own microsecond clock, one origin for every register that
+/// uses it and for the engine's timing. An inline function, so the two
+/// translation units share the origin.
+inline long long mach64_clock_us() {
+  using clock = std::chrono::steady_clock;
+  static const auto t0 = clock::now();
+  return std::chrono::duration_cast<std::chrono::microseconds>(clock::now() -
+                                                               t0)
+      .count();
+}
 
 /**
  * \brief Per-chip parameters. A variant is a table entry rather than a
@@ -123,6 +136,12 @@ protected:
   void reg_write8(u32 offset, u8 data);
   /// Side effects of a block-0 register once its bytes are stored.
   void reg_written(u32 reg);
+  void card_tick() override;
+  /// Drive INTA from the interrupt the CRTC has latched and the enable
+  /// beside it. Called wherever either can change: the tick that latches a
+  /// vertical blank, the read that latches one, and the write that
+  /// acknowledges or masks it.
+  void update_int_line();
   u8 crtc_int_cntl_read();
   u32 config_cntl_read();
   void eeprom_clock();
@@ -264,6 +283,27 @@ protected:
   u32 m_vram_bytes = 0;
   regs_t r;
   accel_t accel;
+
+  /// When the drawing engine will have finished what it was given.
+  ///
+  /// It draws instantly -- a command is complete by the time the register
+  /// write that started it returns -- but a chip that answered "idle" to
+  /// every question would be a chip no driver could pace itself against.
+  /// So the work is charged at the rate the part draws it, and the engine
+  /// reports busy until that time has passed. The pixels are already on
+  /// the screen; what is being modelled is only when the card admits to
+  /// being ready for more.
+  long long m_engine_busy_until_us = 0;
+  /// A Mach64 CT draws about one pixel per engine clock at 60 MHz, and
+  /// takes a few clocks to set a command up.
+  static constexpr long long kEngineNsPerPixel = 17;
+  static constexpr long long kEngineSetupNs = 300;
+  void engine_charge(uint64_t pixels);
+  bool engine_busy() const { return mach64_clock_us() < m_engine_busy_until_us; }
+
+  /// INTA as this card is currently driving it, so the line is only moved
+  /// when it changes.
+  bool m_int_asserted = false;
 
   /// The 93C66 the BIOS keeps the card's settings in (256 x 16).
   CEeprom93cx6 m_eeprom;

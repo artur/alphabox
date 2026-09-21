@@ -1171,6 +1171,12 @@ void CVGACard::run() {
       PauseAck.store(false, std::memory_order_release);
       was_paused = false;
 
+      // Anything the card has to do whether or not its registers are being
+      // read -- a vertical-blank interrupt is the reason this exists: a
+      // status bit computed when software asks for it is fine, an
+      // interrupt has to happen on its own.
+      card_tick();
+
       // Update the screen (50 times per second)
       bx_gui->lock();
       update();

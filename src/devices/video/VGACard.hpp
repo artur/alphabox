@@ -203,6 +203,10 @@ protected:
   /// 0x3da), the VGA BIOS message port (0x500) and the 0xa0000 window.
   void add_vga_legacy_ranges();
   void update();
+  /// Called from the card's own thread about every 10 ms, in a machine that
+  /// is running (not paused for a firmware reset). The base card has
+  /// nothing to do here; one whose chip raises interrupts of its own does.
+  virtual void card_tick() {}
   virtual void determine_screen_dimensions(unsigned *piHeight,
                                            unsigned *piWidth);
   virtual void palette_update() override;

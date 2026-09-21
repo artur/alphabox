@@ -966,6 +966,18 @@ bool CMach64::engine_colour_compare(u32 src, u32 dst) const {
  * Feed the command in flight: `count` bits of host data (8, 16 or 32),
  * or -1 to run to completion when the host is not a source.
  **/
+/// Charge the time this much drawing would have taken the part, so that a
+/// driver asking whether the engine is ready is told what the hardware
+/// would have told it. Work already in flight is not restarted: the charge
+/// extends from whenever the engine was going to be free.
+void CMach64::engine_charge(uint64_t pixels) {
+  const long long now = mach64_clock_us();
+  const long long from =
+      m_engine_busy_until_us > now ? m_engine_busy_until_us : now;
+  const long long ns = kEngineSetupNs + (long long)pixels * kEngineNsPerPixel;
+  m_engine_busy_until_us = from + (ns + 999) / 1000;
+}
+
 void CMach64::engine_run(u32 host_data, int count) {
   if (!accel.busy)
     return;
@@ -1185,6 +1197,7 @@ void CMach64::engine_run_rect(u32 cpu_dat, int count) {
   }
   if (blit_stats_on())
     g_pixels += drawn;
+  engine_charge(drawn);
 }
 
 void CMach64::engine_run_line(u32 cpu_dat, int count) {
@@ -1313,4 +1326,5 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
   }
   if (blit_stats_on())
     g_pixels += drawn;
+  engine_charge(drawn);
 }

@@ -41,15 +41,10 @@
 using namespace mach64;
 
 /// The frame clock the CRTC status reports against: a nominal 60 Hz on
-/// the wall clock, with one time origin for every register that uses it.
+/// the wall clock, with one time origin for every register that uses it --
+/// mach64_clock_us(), which the engine's timing shares.
 static constexpr long long FRAME_US = 16667;
-static long long clock_us() {
-  using clock = std::chrono::steady_clock;
-  static const auto t0 = clock::now();
-  return std::chrono::duration_cast<std::chrono::microseconds>(clock::now() -
-                                                               t0)
-      .count();
-}
+static long long clock_us() { return mach64_clock_us(); }
 
 /// Byte `lane` of `v`.
 static inline u8 lane_get(u32 v, u32 lane) { return u8(v >> (8 * (lane & 3))); }
@@ -301,8 +296,19 @@ u8 CMach64::reg_read8(u32 offset) {
       return lane < 2 ? lane_get(r.sc_top_bottom, lane) : 0;
     case SC_BOTTOM:
       return lane < 2 ? lane_get(r.sc_top_bottom, lane + 2) : 0;
-    case FIFO_STAT: // no slot is ever full: commands complete as written
-      return 0;
+    case FIFO_STAT: {
+      // One bit per slot, set while that slot still holds work. The engine
+      // draws instantly, so what is reported is the queue the part would
+      // still have at this instant (see engine_charge).
+      if (!engine_busy())
+        return 0;
+      const long long left_us = m_engine_busy_until_us - mach64_clock_us();
+      int slots = int(left_us / 4) + 1; // ~4 us of work to a slot
+      if (slots > 16)
+        slots = 16;
+      const u32 bits = (slots >= 16) ? 0xffffu : ((1u << slots) - 1u);
+      return lane < 2 ? lane_get(bits, lane) : 0;
+    }
     case GUI_TRAJ_CNTL:
       switch (lane) {
       case 0:
@@ -313,8 +319,22 @@ u8 CMach64::reg_read8(u32 offset) {
       default:
         return lane_get(r.pat_cntl, 0);
       }
-    case GUI_STAT: // engine idle, all 32 FIFO entries free
-      return lane == 2 ? 32 : 0;
+    case GUI_STAT: {
+      // Bit 0 says the engine is drawing; byte 2 how many of the 32 command
+      // slots are free. Both come from the same charge.
+      if (!engine_busy())
+        return lane == 2 ? 32 : 0;
+      if (lane == 0)
+        return 1; // GUI_ACTIVE
+      if (lane == 2) {
+        const long long left_us = m_engine_busy_until_us - mach64_clock_us();
+        long long used = left_us / 4 + 1;
+        if (used > 32)
+          used = 32;
+        return u32(32 - used);
+      }
+      return 0;
+    }
     default:
       if (u32 *p = engine_reg(r, reg))
         return lane_get(*p, lane);
@@ -370,6 +390,7 @@ void CMach64::reg_write8(u32 offset, u8 data) {
                         (data & ~CRTC_INT_STATUS_BITS);
       if (data & CRTC_VBLANK_INT)
         r.crtc_int_cntl &= ~CRTC_VBLANK_INT;
+      update_int_line(); // the acknowledgement, or a change of the enable
     }
     return;
   case MEM_VGA_WP_SEL: // a byte write sets a whole 32 KB bank number
@@ -444,11 +465,33 @@ void CMach64::reg_written(u32 reg) {
  **/
 u32 CMach64::vblank_frame() const { return u32(clock_us() / FRAME_US); }
 
+/// A vertical blank happens whether or not anyone is looking: the card's
+/// own thread latches it and drives the line, so a driver that waits for
+/// the interrupt rather than polling the status gets one.
+void CMach64::card_tick() {
+  const u32 frame = vblank_frame();
+  if (frame != r.vblank_seen) {
+    r.vblank_seen = frame;
+    r.crtc_int_cntl |= CRTC_VBLANK_INT;
+  }
+  update_int_line();
+}
+
+void CMach64::update_int_line() {
+  const bool want = (r.crtc_int_cntl & CRTC_VBLANK_INT) &&
+                    (r.crtc_int_cntl & CRTC_VBLANK_INT_EN);
+  if (want == m_int_asserted)
+    return;
+  m_int_asserted = want;
+  do_pci_interrupt(0, want);
+}
+
 u8 CMach64::crtc_int_cntl_read() {
   const u32 frame = vblank_frame();
   if (frame != r.vblank_seen) {
     r.vblank_seen = frame;
     r.crtc_int_cntl |= CRTC_VBLANK_INT;
+    update_int_line();
   }
   u8 v = r.crtc_int_cntl & ~CRTC_VBLANK;
   if ((clock_us() % FRAME_US) >= FRAME_US - 1000) // the last ~1 ms of a frame
