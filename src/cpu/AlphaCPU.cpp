@@ -110,11 +110,14 @@ void CAlphaCPU::run() {
   try {
     t_running_cpu = this;
     mySemaphore.wait();
-    while (state.wait_for_start) {
+    while (*const_cast<volatile bool *>(&state.wait_for_start)) {
       if (StopThread)
         return;
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    // ... and acquire what the processor that released us published: the PC
+    // it set, and whatever else it arranged before saying go.
+    std::atomic_thread_fence(std::memory_order_acquire);
     printf("*** CPU%d *** STARTING ***\n", get_cpuid());
 
 #if defined(_M_X64) || defined(__x86_64__)

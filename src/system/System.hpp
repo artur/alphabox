@@ -735,9 +735,13 @@ inline u64 CSystem::get_c_dir(int ProcNum) {
 
 inline u64 CSystem::get_c_dim(int ProcNum) { return state.cchip.dim[ProcNum]; }
 
-inline void CSystem::set_c_dim(int ProcNum, u64 value) {
-  state.cchip.dim[ProcNum] = value;
-}
+/// Write a processor's device interrupt mask the way the Cchip register
+/// does: under the lock that serialises with interrupt(), and re-driving
+/// that processor's lines afterwards. The bare assignment this used to be
+/// raced with interrupt() and left a masked line asserted until some
+/// unrelated event happened to re-drive it. Only the native PALcode reaches
+/// it; the CSR path always did this.
+void set_c_dim(int ProcNum, u64 value);
 
 extern CSystem *theSystem;
 

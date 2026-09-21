@@ -598,7 +598,10 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
       // a running CPU from this (another CPU's) thread would corrupt it.
       if (cpu->get_waiting()) {
         printf("*** DPR *** Starting CPU %d ***\n", n);
-        cpu->set_pc(0x8001); // should come from dpr...
+        // The PALcode reset entry: PAL_BASE with the PALmode bit. It was
+        // written as 0x8001, which is only where the ES40's decompressed
+        // firmware happens to put PALcode.
+        cpu->set_pc(cpu->get_pal_base() | U64(1));
         cpu->stop_waiting();
       } else {
         printf("*** DPR *** CPU %d is already running, not redirected ***\n",

@@ -157,12 +157,31 @@ against the manuals, and most of it by running code:
   `CALL_PAL` entry PC assembly, the R23 linkage including its PALmode bit,
   PALRES gating, `HW_LD`/`HW_ST` type decoding, `HW_RET`, and PALshadow
   being R4–R7 and R20–R23 under SDE.
-- **The exception path**: `EXC_ADDR` is the triggering instruction for a
-  fault *or a synchronous trap* (HRM 5.2.7 — the +4 an OpenVMS exception
-  frame needs is PALcode's job), `EXC_SUM` and `MM_STAT` bit layouts, AST
-  delivery only below IPL 2, interrupts blocked in PALmode, `lock_flag`
-  cleared on every exception except the transparent TB fills, OPCDEC
-  coverage.
+- **The exception path**: `EXC_ADDR` is the faulting instruction for a
+  *fault*, which is what a fault needs — PALcode restarts it. `EXC_SUM` and
+  `MM_STAT` bit layouts, AST delivery only below IPL 2, interrupts blocked
+  in PALmode, `lock_flag` cleared on every exception except the transparent
+  TB fills, OPCDEC coverage.
+
+  The same PC is used for an *arithmetic trap*, and that is worth the
+  paragraph it took to settle. The architecture reads the other way: "the
+  trap PC is an arbitrary number of instructions past the one triggering
+  the trap" (ARM 4.7.6.1), and the trap-shadow rules exist so a handler can
+  "find the trigger instruction via a linear scan backwards from the trap
+  PC" (ARM 4.7.6). An audit flagged this file for saying otherwise, and the
+  reading is correct — so it was changed to save the instruction after the
+  trigger, and **Windows 2000 stopped booting**: `STOP 0x00000012
+  TRAP_CAUSE_UNKNOWN`, on one processor and on two, reproducibly, where the
+  unchanged build reaches the desktop.
+
+  What that says is that the PALcode image we run makes the adjustment
+  itself, which is what the line above always claimed. The architecture
+  describes the PC the *operating system's* handler is entitled to; between
+  the hardware and that handler sits PALcode, and this one expects the
+  trigger's own PC from the processor. Anyone revisiting this needs a guest
+  boot, not a reading of the handbook: the handbook is not wrong, and
+  neither is the code, and only running one of them tells you which layer
+  you are looking at.
 - **The JIT's bail protocol**: every fault-capable helper probes without
   side effects and returns before touching memory, a register or the lock
   flag, so a fault is taken once, by the interpreter, with the instruction

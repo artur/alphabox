@@ -149,7 +149,16 @@ public:
   void restore_icache();
 
   bool get_waiting() { return state.wait_for_start; };
-  void stop_waiting() { state.wait_for_start = false; };
+  /// Release a parked processor. Whoever starts one -- the console's DPR
+  /// register, or start_secondaries() -- sets its PC first and then calls
+  /// this, from ITS OWN thread. The release must therefore publish those
+  /// writes: on a weakly ordered host the parked processor could otherwise
+  /// see itself released while still holding the PC it was left with at
+  /// reset, and begin executing at the primary's console entry.
+  void stop_waiting() {
+    std::atomic_thread_fence(std::memory_order_release);
+    *const_cast<volatile bool *>(&state.wait_for_start) = false;
+  }
 #ifdef IDB
   u64 get_current_pc_physical();
   u64 get_instruction_count();

@@ -371,9 +371,34 @@ void CSystem::request_code_page_flush() {
     acCPUs[i]->request_dpc_flush();
 }
 
+void CSystem::set_c_dim(int ProcNum, u64 value) {
+  std::lock_guard<std::mutex> g(drir_lock);
+  state.cchip.dim[ProcNum] = value;
+  if (ProcNum >= iNumCPUs)
+    return;
+  if (state.cchip.drir & value & U64(0x00ffffffffffffff))
+    acCPUs[ProcNum]->irq_h(1, true, 100);
+  else
+    acCPUs[ProcNum]->irq_h(1, false, 0);
+  if (state.cchip.drir & value & U64(0xfc00000000000000))
+    acCPUs[ProcNum]->irq_h(0, true, 100);
+  else
+    acCPUs[ProcNum]->irq_h(0, false, 0);
+}
+
 int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
-  if (iNumCPUs >= 4)
-    return -1;
+  // The board says how many processors it takes, and nobody checked: the
+  // number this returns is used as an index straight away
+  // (cpu_lock_address[n], m_ll_seq_snap[n]), so a fifth cpuN block in the
+  // configuration used to write outside the arrays with -1. Refuse it the
+  // way an impossible memory size is refused.
+  const int board_max =
+      m_platform && m_platform->max_cpus > 0 ? m_platform->max_cpus : 4;
+  const int hard_max = (int)(sizeof(acCPUs) / sizeof(acCPUs[0]));
+  const int limit = board_max < hard_max ? board_max : hard_max;
+  if (iNumCPUs >= limit)
+    FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
+              limit, m_platform ? m_platform->description : "unknown board");
   acCPUs[iNumCPUs] = cpu;
   iNumCPUs++;
   return iNumCPUs - 1;
@@ -486,9 +511,14 @@ void CSystem::start_secondaries() {
   for (int i = 1; i < iNumCPUs; i++) {
     if (!acCPUs[i]->get_waiting())
       continue;
-    printf("%%SYS-I-SECONDARY: releasing CPU %d at the PALcode reset entry.\n",
-           i);
-    acCPUs[i]->set_pc(0x8001);
+    // The reset entry is PAL_BASE, with the PALmode bit. It was written as
+    // 0x8001 because the ES40's decompressed firmware puts PALcode at
+    // 0x8000, which is true of that board and not a rule.
+    const u64 entry = acCPUs[i]->get_pal_base() | U64(1);
+    printf("%%SYS-I-SECONDARY: releasing CPU %d at the PALcode reset entry "
+           "(%016llx).\n",
+           i, (unsigned long long)entry);
+    acCPUs[i]->set_pc(entry);
     acCPUs[i]->stop_waiting();
   }
 }
@@ -2466,6 +2496,12 @@ int CSystem::LoadROM() {
       buffer = PtrToMem(0);
       (void)!fread(buffer, 1, 0x200000, f);
       fclose(f);
+      // The three paths that decompress the firmware release the processors
+      // a console does not start itself; this one, which reads the same
+      // image back from cache, did not -- so on such a board the first boot
+      // of a firmware worked and every later one left every secondary
+      // parked. (The ES40's console starts its own, so it never showed.)
+      start_secondaries();
     }
   } // !loadedFromFlash
 

@@ -841,6 +841,22 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 
 #define TRAP_INT U64(0x80) /* exception register is integer reg */
 
+/* EXC_ADDR here is the trigger's OWN pc, through GO_PAL, and that is
+   deliberate -- do not "fix" it without booting a guest.
+
+   The architecture reads the other way: "the trap PC is an arbitrary number
+   of instructions past the one triggering the trap" (ARM 4.7.6.1), and the
+   trap-shadow rules exist so a handler can "find the trigger instruction
+   via a linear scan backwards from the trap PC" (ARM 4.7.6). An audit
+   raised exactly that, the change was made -- state.pc holds the following
+   instruction here, next_pc() having run before any opcode body -- and
+   Windows 2000 stopped booting: STOP 0x00000012 TRAP_CAUSE_UNKNOWN, on one
+   processor and on two, where the unchanged build reaches the desktop.
+
+   The PALcode image we run does the adjustment itself. What the handbook
+   describes is the PC the operating system's handler is entitled to; the
+   processor hands PALcode the trigger, and PALcode builds the frame. See
+   docs/cpu-fidelity.md. */
 #define ARITH_TRAP(flags, reg)                                                 \
   {                                                                            \
     state.exc_sum |= flags;             /* cause of trap */                    \
