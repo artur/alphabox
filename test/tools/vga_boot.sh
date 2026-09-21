@@ -24,6 +24,12 @@
 # A behaviour-preserving change must reproduce them. last.png in the run
 # directory is the final frame.
 #
+# A whole different pair, on every frame, usually means the console printed
+# one line more or fewer than the run the set was taken from and the screen
+# is scrolled by a line: SRM's own "entering idle loop" lands on the screen
+# in some runs and not others (one of eight CT boots here). Diff the last
+# frame against the recorded run before believing a change caused it.
+#
 # Exit status: 0 when frames were captured and the emulator did not fail.
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
