@@ -103,6 +103,7 @@ public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
   void irq_h(int number, bool assert, int delay);
+  void count_down_irq(int line, int step);
   inline bool int_deliverable() const;
   void irq_trace_entry(); // ALPHABOX_IRQTRACE: interrupt-storm diagnosis
   void irq_trace_ipr(const char *what, u32 fn, u64 val);
@@ -1046,7 +1047,13 @@ public:
                          system) */
     u64 last_tb_virt; /**< ITB_TAG staging register for ITB_PTE writes */
     bool pal_vms; /**< True if the PALcode base is 0x8000 (=VMS PALcode base) */
-    int irq_h_timer[6]; /**< Timers for delayed IRQ_H[0:5] assertion */
+    /** Timers for delayed IRQ_H[0:5] assertion. Written by whichever device
+        thread raises or drops a line and counted down by the processor that
+        owns them, so the countdown has to be a read-modify-write: a plain
+        decrement could write back a value a deassert had just zeroed, and
+        the line would fire with nothing in DIR to service it. Same size and
+        alignment as the int this was. */
+    std::atomic<int> irq_h_timer[6];
   } state; /**< Determines CPU state that needs to be saved to the state file */
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
@@ -1478,11 +1485,40 @@ inline bool CAlphaCPU::int_deliverable() const {
 /**
  * Assert or release an external interrupt line to the cpu.
  **/
+/// Count one delayed interrupt line down by `step`, and raise it if this is
+/// the step that reaches zero.
+///
+/// The whole thing is one read-modify-write because the other end of this
+/// timer is a device thread: it may drop the line at any moment, and a
+/// plain decrement would write back the value it read a moment earlier and
+/// bring a cancelled interrupt back to life -- the processor would then
+/// take an interrupt with nothing in the Cchip's DIR to account for it.
+/// Whoever wins the exchange to zero is the one that raises the line, so it
+/// is raised exactly once.
+inline void CAlphaCPU::count_down_irq(int line, int step) {
+  int t = state.irq_h_timer[line].load(std::memory_order_relaxed);
+  while (t > 0) {
+    const int next = (t <= step) ? 0 : t - step;
+    if (state.irq_h_timer[line].compare_exchange_weak(
+            t, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+      if (next == 0) {
+        state.eir |= (U64(0x1) << line);
+        state.check_int = true;
+      } else {
+        state.check_timers = true;
+      }
+      return;
+    }
+    // t now holds what someone else put there; zero means they cancelled it.
+  }
+}
+
 inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
-  bool active = (state.eir & (U64(0x1) << number)) || state.irq_h_timer[number];
+  bool active = (state.eir & (U64(0x1) << number)) ||
+                state.irq_h_timer[number].load(std::memory_order_relaxed);
   if (assert && !active) {
     if (delay) {
-      state.irq_h_timer[number] = delay;
+      state.irq_h_timer[number].store(delay, std::memory_order_release);
       state.check_timers = true;
     } else {
       state.eir |= (U64(0x1) << number);
@@ -1509,10 +1545,12 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
 
   if (!assert && active) {
     state.eir &= ~(U64(0x1) << number);
-    state.irq_h_timer[number] = 0;
+    // Cancel it outright: whoever is counting down sees the zero and stops,
+    // rather than writing back what it read a moment ago.
+    state.irq_h_timer[number].exchange(0, std::memory_order_acq_rel);
     state.check_timers = false;
     for (int i = 0; i < 6; i++) {
-      if (state.irq_h_timer[i])
+      if (state.irq_h_timer[i].load(std::memory_order_relaxed))
         state.check_timers = true;
     }
   }

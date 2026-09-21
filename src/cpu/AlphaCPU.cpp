@@ -1250,22 +1250,8 @@ _next_instruction:
             m_code_pages_seen = m_code_map->code_pages();
           }
         }
-        for (int j = 0; j < 6; j++) {
-          if (state.irq_h_timer[j]) {
-            if (state.irq_h_timer[j] <= 32) {
-              state.irq_h_timer[j] = 0;
-              state.eir |= (U64(0x1) << j);
-              // The timer hasn't reached 0 yet; check on the timers again next
-              // clock tick.
-              state.check_int = true;
-            } else {
-              // The timer has reached 0. Set the interrupt status, and set the
-              // flag that we need to check the interrupt status
-              state.irq_h_timer[j] -= 32;
-              state.check_timers = true;
-            }
-          }
-        }
+        for (int j = 0; j < 6; j++)
+          count_down_irq(j, 32);
       }
     }
 #else
@@ -1294,18 +1280,8 @@ _next_instruction:
           m_code_pages_seen = m_code_map->code_pages();
         }
       }
-      for (int ti = 0; ti < 6; ti++) {
-        if (state.irq_h_timer[ti]) {
-          if (state.irq_h_timer[ti] <= 1) {
-            state.irq_h_timer[ti] = 0;
-            state.eir |= (U64(0x1) << ti);
-            state.check_int = true;
-          } else {
-            state.irq_h_timer[ti]--;
-            state.check_timers = true;
-          }
-        }
-      }
+      for (int ti = 0; ti < 6; ti++)
+        count_down_irq(ti, 1);
     }
 #endif
 
