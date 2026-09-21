@@ -23,6 +23,12 @@
 #ifdef ES40_JIT
 
 #include "jitengine.hpp"
+
+#include "System.hpp" // CCodePageMap: which pages code was compiled from
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#include <libkern/OSCacheControl.h>
+#endif
 #include <cassert>
 #include <chrono> // note_exec times its own stats-print I/O (excluded from the wall-clock RPCC)
 #include <cstdio>
@@ -250,13 +256,9 @@ static inline bool is_ebb_branch(SafeOp op) {
 }
 static inline bool ebb_enabled() {
 #ifdef JIT_HOST_A64
-  static const bool v = [] {
-    const char *e = getenv("ALPHABOX_JIT_EBB");
-    return !(e && e[0] == '0');
-  }();
-  return v;
+  return true;
 #else
-  return false;
+  return false; // only the AArch64 emitter forwards a condition this way
 #endif
 }
 
@@ -264,6 +266,8 @@ static inline bool ebb_enabled() {
 // CTLZ/CTTZ use baseline BSR/BSF, so only CTPOP is gated -- it stays
 // interpreted when the host lacks POPCNT.
 static bool host_has_popcnt() {
+
+
 #ifdef JIT_HOST_X64
   static const bool ok = asmjit::CpuInfo::host().features().x86().has_popcnt();
   return ok;
@@ -845,6 +849,19 @@ CJitEngine::CJitEngine(int cpu_id)
   m_traces_enabled = false;
 #endif
   m_rt = new asmjit::JitRuntime();
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    // 64 MB of code, from the allocator whose memory may be shared with
+    // the VM. Never freed: a reclaim drops the blocks, not the arena.
+    m_code_arena_size = 64u << 20;
+    m_code_arena = (uint8_t *)hv::alloc(m_code_arena_size);
+    if (!m_code_arena)
+      m_code_arena_size = 0;
+    else
+      printf("%%JIT-I-HVCODE: %zu MB of code space shared with the VM\n",
+             m_code_arena_size >> 20);
+  }
+#endif
   if (const char *ca = getenv("ALPHABOX_JIT_COMPILE_AFTER")) {
     const long v = atol(ca);
     if (v >= 1 && v <= 1000000)
@@ -962,6 +979,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
     b.valid = true;
     b.flush_gen = m_flush_gen;
     b.n_instr = n_instr;
+    b.code_gen = m_code_map ? m_code_map->write_gen() : 0;
     b.jit_body = (void *)((uint8_t *)(void *)b.code +
                           b.body_off); // restore chained re-entry
     return &b;
@@ -989,6 +1007,19 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   else
     m_fresh_hash++; // source bytes changed (self-modifying code)
 #endif
+  // The audit again (see revalidate_flushed): source words that changed with
+  // the code-page map reporting nothing written since they were last known
+  // good is a write that nothing told the map about.
+  if (m_nopflush_clean && m_code_map && b.code && b.tag == virt_pc &&
+      b.phys == phys_pc && m_code_map->write_gen() == b.code_gen) {
+    static int n = 0;
+    if (n++ < 20)
+      printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
+             "(pc %016llx, %u words) changed while the code-page map "
+             "reported no write ***\n",
+             m_cpu_id, (unsigned long long)phys_pc,
+             (unsigned long long)virt_pc, b.hash_len);
+  }
   b.tag = virt_pc;
   b.phys = phys_pc;
   b.asn = asn;
@@ -1000,8 +1031,6 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   b.code = nullptr;
   b.jit_body =
       nullptr; // not compiled yet -> cached links to us must miss until compile
-  unlink_inbound(&b); // ...including the epoch-free direct links, which have
-                      // no other way of learning this slot changed hands
   for (int i = 0; i < kLinkSlots; ++i)
     b.link[i] = nullptr; // no cached successors yet
 #ifdef JIT_STATS
@@ -1040,10 +1069,46 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
   // page remaps, and self-modifying code.
   if (!(b.code && b.tag == virt_pc && (b.asm_global || b.asn == asn)))
     return nullptr;
-  if (b.phys != phys_pc || b.src_sum != src_hash(dram + phys_pc, b.hash_len))
+#ifdef JIT_STATS
+  ++m_rev_calls;
+  m_rev_words += b.hash_len;
+#endif
+  if (b.phys != phys_pc) {
+#ifdef JIT_STATS
+    ++m_rev_phys;
+#endif
     return nullptr;
+  }
+  if (b.src_sum != src_hash(dram + phys_pc, b.hash_len)) {
+#ifdef JIT_STATS
+    ++m_rev_changed;
+#endif
+    // The right question is not "was the last flush clean" but "has anything
+    // been reported written since THESE words were last known good". A write,
+    // then a real flush, then a quiet one, then this block finally running,
+    // is not a miss -- the real flush already invalidated it.
+    if (m_nopflush_clean && m_code_map &&
+        m_code_map->write_gen() == b.code_gen) {
+      // The audit failing: these source words changed, and the code-page map
+      // had said nothing was written. Some path that writes guest memory
+      // does not report to it -- with the flush actually skipped, this block
+      // would have run its old code.
+      static int n = 0;
+      if (n++ < 20)
+        printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
+               "(pc %016llx, %u words) changed while the code-page map "
+               "reported no write ***\n",
+               m_cpu_id, (unsigned long long)phys_pc,
+               (unsigned long long)virt_pc, b.hash_len);
+    }
+    return nullptr;
+  }
+#ifdef JIT_STATS
+  ++m_rev_ok;
+#endif
   b.valid = true; // flush_non_global() may have cleared it; the hash just
                   // re-validated the bytes
+  b.code_gen = m_code_map ? m_code_map->write_gen() : 0;
   b.flush_gen = m_flush_gen;
   b.vgen = m_itb_gen + m_flush_gen; // phys + code bytes just validated
   b.jit_body = (void *)((uint8_t *)(void *)b.code + b.body_off);
@@ -1157,6 +1222,60 @@ void CJitEngine::trace_selftest() {
 // corrupted the JitAllocator block tree) and drop every slot's now-dangling
 // pointers. Safe only from this CPU's cold path (never while its compiled code
 // could be executing); runtimes are per-CPU.
+/// One chunk of exit records. Inside the VM it comes from the VM
+/// allocator, because compiled code walks these; outside, from the heap.
+/// Either way the pointer is kept in a fixed array, so no container
+/// allocates on the path a block takes the first time it is seen.
+CJitEngine::ExitRec *CJitEngine::alloc_exit_chunk() {
+  if (m_chunk_cur + 1 < m_chunk_count) // one we already own, rewound by a reclaim
+    return m_chunk_pool[++m_chunk_cur];
+  if (m_chunk_count >= kMaxChunks)
+    return nullptr;
+  ExitRec *c = nullptr;
+#ifdef ALPHABOX_HVF
+  if (hv::enabled())
+    c = (ExitRec *)hv::alloc(sizeof(ExitRec) * kExitChunk);
+#endif
+  if (!c) {
+    m_exit_chunks.emplace_back(new ExitRec[kExitChunk]);
+    c = m_exit_chunks.back().get();
+  }
+  m_chunk_pool[m_chunk_count] = c;
+  m_chunk_cur = m_chunk_count++;
+  return c;
+}
+
+/// Publish assembled code so it can be called. Outside the VM that is
+/// asmjit's own runtime; inside it is the shared arena, relocated to its
+/// final address and cleaned out of the data cache so the vCPU's fetch
+/// sees it (see docs/hypervisor.md).
+bool CJitEngine::publish_code(void *code_holder, void **out_fn) {
+  using namespace asmjit;
+  CodeHolder &code = *(CodeHolder *)code_holder;
+#ifdef ALPHABOX_HVF
+  if (hv::enabled() && m_code_arena) {
+    if (code.flatten() != Error::kOk ||
+        code.resolve_cross_section_fixups() != Error::kOk)
+      return false;
+    const size_t estimated = code.code_size();
+    if (!estimated)
+      return false;
+    void *dst = code_alloc(estimated);
+    if (!dst)
+      return false;
+    if (code.relocate_to_base((uintptr_t)dst) != Error::kOk)
+      return false;
+    const size_t sz = code.code_size();
+    if (code.copy_flattened_data(dst, sz) != Error::kOk)
+      return false;
+    sys_icache_invalidate(dst, sz);
+    *out_fn = dst;
+    return true;
+  }
+#endif
+  return ((JitRuntime *)m_rt)->add(out_fn, &code) == Error::kOk;
+}
+
 void CJitEngine::reclaim_code() {
   // printf("[JIT][CPU%d] code reclaim: %llu MB freed\n", m_cpu_id,
   //        (unsigned long long) (m_code_bytes >> 20));
@@ -1166,9 +1285,14 @@ void CJitEngine::reclaim_code() {
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
   note_epoch(EPOCH_RECLAIM);
-  m_exit_chunks.clear(); // exit records belong to the code just freed
+  // The records belonged to the code just freed, so they are all dead --
+  // but the STORAGE is kept and handed out again from the beginning.
+  // Freeing it here (as this once did) left the pool counter behind, and
+  // after enough reclaims the allocator had nothing to give: the emitter
+  // then wrote a null record address into compiled code, which crashed
+  // reading its epoch field.
+  m_chunk_cur = -1;
   m_exit_used = kExitChunk;
-  m_direct_live = 0; // ...and every direct link lived in one of them
   m_code_bytes = 0;
 #ifdef JIT_STATS
   m_stat_reclaims++;
@@ -1181,7 +1305,6 @@ void CJitEngine::reclaim_code() {
     m_blocks[i].code = nullptr;
     m_blocks[i].jit_body = nullptr;
     m_blocks[i].compiled = false;
-    m_blocks[i].inbound = 0; // the exit records themselves were just freed
   }
   // Traces hold JitFns into the runtime we just deleted -- drop them too, or a
   // post-reclaim trace dispatch jumps through a freed pointer. trace_lookup
@@ -1190,16 +1313,6 @@ void CJitEngine::reclaim_code() {
     m_traces[i].valid = false;
 }
 
-// Drop every direct static link in the cache. Data writes only (see
-// unlink_inbound), so this is cheap per block; it is a full 16K-slot walk, so
-// only events that genuinely invalidate code bytes may call it.
-void CJitEngine::unlink_all() {
-  if (!m_direct_live)
-    return; // nothing epoch-free is linked: the epoch bump is the whole story
-  for (int i = 0; i < kCacheEntries; ++i)
-    if (m_blocks[i].inbound)
-      unlink_inbound(&m_blocks[i]);
-}
 
 void CJitEngine::flush() {
   // LAZY:  don't walk 16K slots each time. Bump the generation instead: stale
@@ -1215,7 +1328,6 @@ void CJitEngine::flush() {
   // guarded by the target's liveness, not by a counter -- and an IMB says the
   // bytes under every block may have changed. Walking the cache is the price
   // of the epoch-free hit path; IMB is rare (see the epoch census).
-  unlink_all();
   if (m_rt && m_code_bytes >= kReclaimBytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
@@ -1244,7 +1356,6 @@ void CJitEngine::flush_non_global() {
     if (!m_blocks[i].asm_global) {
       m_blocks[i].valid = false;
       m_blocks[i].jit_body = nullptr;
-      unlink_inbound(&m_blocks[i]); // soft-dropped: direct links must miss too
     }
   }
 #ifdef JIT_STATS
@@ -3528,6 +3639,8 @@ void CJitEngine::compile_block(
   if (memcmp(dram + phys, source_words.data(),
              (size_t)b->n_instr * sizeof(uint32_t)) != 0)
     return;
+  if (m_code_map) // this page now holds code: writes to it must be noticed
+    m_code_map->note_code(phys, (size_t)b->n_instr * sizeof(uint32_t));
   b->code = fn;
   b->jit_body = (void *)((uint8_t *)(void *)fn +
                          body_off); // chained re-entry (past prologue)
@@ -3536,6 +3649,7 @@ void CJitEngine::compile_block(
       src_hash((const uint8_t *)source_words.data(),
                b->n_instr);     // source fingerprint (revalidate vs self-mod)
   b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
+  b->code_gen = m_code_map ? m_code_map->write_gen() : 0;
   b->prefix_len = plen;
   m_code_bytes += csz; // track for the reclaim threshold (see flush())
 #ifdef JIT_STATS
@@ -3856,7 +3970,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   if (eh.failed)
     return false; // emit error already reported -- don't ship a broken block
 #endif
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_body_off = (uint32_t)body_off;
@@ -4064,7 +4178,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 
   const size_t csz = code.code_size();
   JitFn fn = nullptr;
-  if (((JitRuntime *)m_rt)->add(&fn, &code) != Error::kOk)
+  if (!publish_code(&code, (void **)&fn))
     return false;
   *out_fn = fn;
   *out_csz = csz;
@@ -4073,6 +4187,35 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
 #endif // JIT_HOST_X64
 
 #ifdef JIT_HOST_A64
+
+
+#ifdef ALPHABOX_HVF
+void *CJitEngine::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CJitEngine::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM allocator releases its memory at exit
+  ::operator delete(p);
+}
+
+/// Bump allocator over the shared code arena. Code is 16-byte aligned so a
+/// block never shares a cache line boundary with the previous one's tail.
+void *CJitEngine::code_alloc(size_t bytes) {
+  const size_t need = (bytes + 15) & ~(size_t)15;
+  if (!m_code_arena || m_code_arena_used + need > m_code_arena_size)
+    return nullptr;
+  void *p = m_code_arena + m_code_arena_used;
+  m_code_arena_used += need;
+  return p;
+}
+#endif
+
+
 #include "jitemit_a64.hpp" // AArch64 emit_op / assemble_block / assemble_trace
 #endif
 
@@ -4411,6 +4554,17 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                win_tsc ? 100.0 * (double)m_fng_tsc / (double)win_tsc : 0.0,
                (unsigned long long)m_hot_lost);
         m_fng_calls = m_fng_tsc = m_hot_lost = 0;
+      }
+      // And what those flushes cost on the way back in: one source re-hash
+      // per block per flush generation, and how many of them found a byte
+      // that had actually changed.
+      if (m_rev_calls) {
+        printf("[JIT][STATS][CPU%d]   revalidate %llu | unchanged %llu | "
+               "bytes changed %llu | remapped %llu | %llu words hashed\n",
+               m_cpu_id, (unsigned long long)m_rev_calls,
+               (unsigned long long)m_rev_ok, (unsigned long long)m_rev_changed,
+               (unsigned long long)m_rev_phys, (unsigned long long)m_rev_words);
+        m_rev_calls = m_rev_ok = m_rev_changed = m_rev_phys = m_rev_words = 0;
       }
     }
     len = snprintf(

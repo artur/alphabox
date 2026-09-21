@@ -32,6 +32,7 @@ int main_sim(int argc, char *argv[]);
 int main_cfg(int argc, char *argv[]);
 #ifdef ALPHABOX_HVF
 int main_hvprobe(int argc, char **argv);
+int main_hvtest(int argc, char **argv);
 #endif
 
 /**
@@ -48,7 +49,7 @@ static void print_version() {
 #endif
   printf("\nFeatures:");
 #ifdef ALPHABOX_HVF
-  printf(" HVF-probe");
+  printf(" HVF");
 #endif
   int features = 0;
 #if defined(ES40_JIT)
@@ -84,6 +85,8 @@ int main(int argc, char **argv) {
 #ifdef ALPHABOX_HVF
   if (argc >= 2 && strcmp(argv[1], "hvprobe") == 0)
     return main_hvprobe(argc - 1, ++argv);
+  if (argc >= 2 && strcmp(argv[1], "hvtest") == 0)
+    return main_hvtest(argc - 1, ++argv);
 #endif
   if (argc <= 1 || (strcmp(argv[1], "run") && strcmp(argv[1], "configure"))) {
     std::cerr << "Alphabox Alpha Emulator";
@@ -94,6 +97,7 @@ int main(int argc, char **argv) {
     std::cerr << "Usage: " << argv[0] << " run|configure <options>" << std::endl;
 #ifdef ALPHABOX_HVF
     std::cerr << "       " << argv[0] << " hvprobe   (Hypervisor.framework mechanics on this host)" << std::endl;
+    std::cerr << "       " << argv[0] << " hvtest    (the process's own code at EL1: the VM runtime's self-test)" << std::endl;
 #endif
     std::cerr << "       " << argv[0] << " --version" << std::endl;
     return 0;

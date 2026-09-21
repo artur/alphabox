@@ -91,6 +91,37 @@ from `CSystem::ReadMem` instead of a machine check, so firmware or an OS
 probing a bus for a device that is not there sees a plain read, and a
 guest's machine-check handling cannot be exercised in Alphabox at all.
 
+### A busy-wait is handed the time it is waiting for
+
+Windows' `KeStallExecutionProcessor` delays a driver by spinning on `RPCC`
+until the requested cycles have passed. On hardware the processor really is
+busy for that long; here the processor is asking *this emulator's* counter
+to advance, and spinning through it in real time was 62 of the 95 seconds of
+a Windows 2000 boot -- 70% of every instruction executed.
+
+So the dispatcher recognises that loop by its instruction words (which pin
+its registers: the count asked for, and the counter when the wait began) and,
+when nothing else is pending, adds the remaining cycles to `state.cc` so the
+loop falls out on its next turn. A wait longer than a tenth of a second is
+left alone: that is not a delay, it is a guest waiting for something to
+happen. The block is kept out of the JIT, because compiled it chains to
+itself and spins a whole dispatch batch before the dispatcher is asked.
+
+**The divergence:** the guest's cycle counter runs ahead of real time by
+whatever it would have spent waiting -- during driver initialisation, up to
+about six times real time (`ALPHABOX_RATE` reports it). A guest that
+compares `RPCC` against the interval timer therefore measures a processor
+faster than the configured `speed`. Time of day is unaffected: that comes
+from the interval timer and the TOY clock, not from `RPCC`. On a
+multiprocessor guest each processor's counter jumps independently, which is
+architecturally allowed -- `PCC` has a per-processor offset on real hardware
+and software may not compare it across processors -- but it makes the skew
+much larger than hardware would.
+
+`ALPHABOX_STALL_SKIP=0` restores the real-time wait. Measured, same binary:
+95 s to the desktop with it off, 60 s with it on, and a third fewer
+instructions executed (docs/performance.md).
+
 ### Smaller ones
 
 | What | Where | Consequence |
@@ -103,7 +134,7 @@ guest's machine-check handling cannot be exercised in Alphabox at all.
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | A VAX *dirty zero* operand does not raise invalid operation | `AlphaCPU_vaxfloat.cpp` | VMS code that plants dirty zeros to catch uninitialised data |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
-| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Architecturally legal — a virtual I-cache need not be coherent, and `IMB` works — but a guest that gets away with a missing `IMB` on real hardware can fail here, because stale bytes live far longer |
+| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Architecturally legal — a virtual I-cache need not be coherent, and `IMB` works — but a guest that gets away with a missing `IMB` on real hardware can fail here, because stale bytes live far longer. Its lines carry the flush generation they were filled in, so an `IMB` invalidates every one of them with a single store instead of a walk -- and it must invalidate them, whatever else a flush decides to skip: the lines are tagged by virtual address, so code mapped at an address that has held other code is a change no physically-keyed bookkeeping can see |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the only row that exists (EV68CB implements all of them). It matters the day a row is added for a part that does not |
 
@@ -126,12 +157,31 @@ against the manuals, and most of it by running code:
   `CALL_PAL` entry PC assembly, the R23 linkage including its PALmode bit,
   PALRES gating, `HW_LD`/`HW_ST` type decoding, `HW_RET`, and PALshadow
   being R4–R7 and R20–R23 under SDE.
-- **The exception path**: `EXC_ADDR` is the triggering instruction for a
-  fault *or a synchronous trap* (HRM 5.2.7 — the +4 an OpenVMS exception
-  frame needs is PALcode's job), `EXC_SUM` and `MM_STAT` bit layouts, AST
-  delivery only below IPL 2, interrupts blocked in PALmode, `lock_flag`
-  cleared on every exception except the transparent TB fills, OPCDEC
-  coverage.
+- **The exception path**: `EXC_ADDR` is the faulting instruction for a
+  *fault*, which is what a fault needs — PALcode restarts it. `EXC_SUM` and
+  `MM_STAT` bit layouts, AST delivery only below IPL 2, interrupts blocked
+  in PALmode, `lock_flag` cleared on every exception except the transparent
+  TB fills, OPCDEC coverage.
+
+  The same PC is used for an *arithmetic trap*, and that is worth the
+  paragraph it took to settle. The architecture reads the other way: "the
+  trap PC is an arbitrary number of instructions past the one triggering
+  the trap" (ARM 4.7.6.1), and the trap-shadow rules exist so a handler can
+  "find the trigger instruction via a linear scan backwards from the trap
+  PC" (ARM 4.7.6). An audit flagged this file for saying otherwise, and the
+  reading is correct — so it was changed to save the instruction after the
+  trigger, and **Windows 2000 stopped booting**: `STOP 0x00000012
+  TRAP_CAUSE_UNKNOWN`, on one processor and on two, reproducibly, where the
+  unchanged build reaches the desktop.
+
+  What that says is that the PALcode image we run makes the adjustment
+  itself, which is what the line above always claimed. The architecture
+  describes the PC the *operating system's* handler is entitled to; between
+  the hardware and that handler sits PALcode, and this one expects the
+  trigger's own PC from the processor. Anyone revisiting this needs a guest
+  boot, not a reading of the handbook: the handbook is not wrong, and
+  neither is the code, and only running one of them tells you which layer
+  you are looking at.
 - **The JIT's bail protocol**: every fault-capable helper probes without
   side effects and returns before touching memory, a register or the lock
   flag, so a fault is taken once, by the interpreter, with the instruction

@@ -41,10 +41,16 @@ To run the whole GUI stack without a window or a display server, set
 | Variable | Effect |
 |---|---|
 | `ALPHABOX_JIT_COMPILE_AFTER=<n>` | Interpret a block `n` times before compiling it. The default is 16 (1 on JIT_VERIFY builds). |
-| `ALPHABOX_JIT_NO_DLINK=1` | AArch64 only: use the tag-checked link scan for static block exits instead of epoch-keyed data links (an A/B switch for chaining issues). |
 | `ALPHABOX_JIT_FPTEST=1` | JIT_VERIFY builds only: self-test the inline IEEE FP ops against the interpreter at startup, then exit with the verdict. |
 | `ALPHABOX_NO_IDLE=1` | Disable idle pacing. |
 | `ALPHABOX_IDLESTATS=1` | Print idle-pacing counters every 2000 idle-loop visits. |
+| `ALPHABOX_STALL_SKIP=0` | Make a guest's `RPCC` delay loop wait in real time, as the hardware would, instead of being handed the cycles it is waiting for. Costs a Windows 2000 boot 35 seconds; see docs/cpu-fidelity.md for what the default buys and what it diverges on. |
+| `ALPHABOX_PORT61_PACE=0` | Spin on the ISA refresh-toggle bit of port 61h instead of sleeping to the next edge. The guest's timing is the same either way; this one only decides whether a host core burns for it. |
+| `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`, without asking whether anything was written to memory code was compiled from. `2`: flush anyway, but report any block whose source changed while the code-page map said nothing had (the audit; see test/tools/smc_test.sh). |
+| `ALPHABOX_JIT_RPCCTEST=1` | Check the generated `RPCC` stub against the helper it replaces, from six fixed starting states, and print the verdict. |
+| `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
+| `ALPHABOX_RATE=<sec>` | Every `<sec>` seconds, print each processor's instruction rate, and what its `IMB`s, its cycle-counter reads and its delay loops are costing. |
+| `ALPHABOX_JIT_OFFSETS=1` | Print the field offsets compiled code addresses `this` by. For when a member has been added in the wrong place and the emitter's displacements no longer reach. |
 
 ## Key names
 
@@ -101,6 +107,13 @@ site and routine, which is how a silent failure inside a console is read
 
 `ALPHABOX_TRACE_FLASH=1` reports the commands firmware sends the flash,
 which tells "it never found the part" from "it read what it wanted".
+
+`ALPHABOX_TRACE_SERIAL=1`, `ALPHABOX_TRACE_KBC=1` and
+`ALPHABOX_TRACE_PORT61=1` report the UARTs, the keyboard controller and the
+ISA refresh-toggle port; `ALPHABOX_TRACE_LFB=1` reports the S3's linear
+framebuffer window as it is offered and withdrawn, and
+`ALPHABOX_TRACE_CODEWRITE=1` reports the guest writing to memory some block
+was compiled from, which is what decides whether an `IMB` has work.
 
 `ALPHABOX_DUMP_MEMORY=1` writes guest memory to `memory_000000000000.dmp`
 when the emulator is asked to stop, which is how to find what a firmware

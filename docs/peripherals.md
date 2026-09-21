@@ -191,3 +191,60 @@ transfer, which the console never exercised because it only ever issues
 single-segment commands. Each of them was invisible until a guest driver
 ran. `win_storage.sh` (a file copy inside Windows) is the cheapest such
 test for a storage controller.
+
+## What a guest driver's traffic shows: the 2026-09 audit
+
+A Windows 2000 cold boot was profiled by device register (`JIT_STATS`, the
+device-address histogram in [performance.md](performance.md)) and the
+device models were then read against their data sheets for the class of
+bug the profile pointed at: a device that answers a question the real part
+answers differently, so the driver asks again -- millions of times. The
+guest's time goes on the asking, and the emulator cannot see why. Found and
+fixed, each with what the driver was doing:
+
+- **Unclaimed PCI I/O read 00h instead of FFh.** The parallel-port class
+  driver negotiated IEEE 1284 against port 0x3BC, which this board does
+  not wire, and a peripheral that answers 00h to everything is one that
+  says "present and ready" to every question: 18M status reads per boot.
+  An idle bus floats high; the read now returns all ones and the probe
+  finds no port.
+- **The UART did not identify its FIFO.** IIR bits 7:6 now reflect FCR
+  bit 0, so a driver sees a 16550 rather than a 16450 (an interrupt and
+  two register reads per character otherwise); FCR bit 1 flushes the
+  receive ring.
+- **The IDE disk aborted SET FEATURES 02h/66h**, which atapi.sys issues at
+  every device start. Accepted now, like a drive. It was not the reason the
+  guest runs PIO: see the DMA note in performance.md -- the generic Alpha
+  pciide driver picks PIO 4 on its own.
+- **The SCSI disk offered no tagged queuing** and aborted the transfer on
+  any message it did not know. INQUIRY now reports CmdQue and Sync, the
+  queue-tag, abort, reset and no-op messages are accepted, and anything
+  else gets MESSAGE REJECT. The QLogic adapter's GET TARGET PARAMS returns
+  its flags in the byte the driver reads.
+- **The port 0x61 refresh toggle** is real time, so a HAL stall loop that
+  counts its flips reads it 19M times in a second. Not a fidelity bug, but
+  paced: after 64 back-to-back reads the port sleeps the caller to the next
+  edge (same wall time, `ALPHABOX_PORT61_PACE=0` to spin).
+- **The S3's drawing engine reported busy once after every command**, so
+  the display driver's idle wait always re-polled; the input status
+  register's display-enable bit only pulsed at vertical retrace, so a
+  driver syncing to horizontal blank waited a frame; and the PCI status
+  word advertised a capability list and a parity error the card cannot
+  have. All three corrected to what an 86C764 reports.
+
+Found by reading rather than by traffic, and corrected in the same pass:
+
+- **8254 read-back command** (control word with bits 7:6 set) was not
+  modelled. It now latches the status and the count of every selected
+  counter, and the status byte -- OUT, NULL COUNT, read/write mode, mode,
+  BCD -- comes out on the next read before any latched count.
+- **OHCI never wrote the HCCA.** The controller now posts the frame number
+  (and a zero done head) into the block the driver gave it, whenever the
+  driver touches a register and the number has moved; a driver that checks
+  the HCCA to see the controller alive sees it advance.
+- **SMBus host** on the PMU function had the PIIX4's status bits, not the
+  M7101's. It now runs the M7101 protocol: IDLE, a transaction started by
+  the start register completes at once with DONE and a device error, since
+  the emulated bus carries no device; a probe finds nothing and moves on.
+
+Nothing from the audit remains open.

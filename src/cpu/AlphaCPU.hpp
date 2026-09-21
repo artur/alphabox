@@ -45,6 +45,9 @@
 #include "System.hpp"
 #include "SystemComponent.hpp"
 #include "cpu_defs.hpp"
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
 
 /// The processor executing on this thread, or nullptr on a device thread.
@@ -100,6 +103,7 @@ public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
   void irq_h(int number, bool assert, int delay);
+  void count_down_irq(int line, int step);
   inline bool int_deliverable() const;
   void irq_trace_entry(); // ALPHABOX_IRQTRACE: interrupt-storm diagnosis
   void irq_trace_ipr(const char *what, u32 fn, u64 val);
@@ -110,6 +114,10 @@ public:
   void dump_ic_flush_pcs(); // ...printed when the CPU goes away
 
   virtual void run(); // Poco Thread entry point
+  void run_loop();    // the dispatch loop run() ends in
+#ifdef ALPHABOX_HVF
+  static uint64_t hv_run_loop(void *self); // run_loop() as a VM entry
+#endif
   void execute();
   void release_threads();
 
@@ -142,7 +150,16 @@ public:
   void restore_icache();
 
   bool get_waiting() { return state.wait_for_start; };
-  void stop_waiting() { state.wait_for_start = false; };
+  /// Release a parked processor. Whoever starts one -- the console's DPR
+  /// register, or start_secondaries() -- sets its PC first and then calls
+  /// this, from ITS OWN thread. The release must therefore publish those
+  /// writes: on a weakly ordered host the parked processor could otherwise
+  /// see itself released while still holding the PC it was left with at
+  /// reset, and begin executing at the primary's console entry.
+  void stop_waiting() {
+    std::atomic_thread_fence(std::memory_order_release);
+    *const_cast<volatile bool *>(&state.wait_for_start) = false;
+  }
 #ifdef IDB
   u64 get_current_pc_physical();
   u64 get_instruction_count();
@@ -423,6 +440,115 @@ private:
     return ((u64)state.cc_offset) << 32 | (state.cc & U64(0xffffffff));
   }
 
+  // The system bus, reached the way this build must reach it. Guest DRAM is
+  // shared memory and is read directly wherever the caller already checks
+  // for it; everything else is a device, and a device model may take locks,
+  // allocate, or talk to a thread of its own -- none of which works from
+  // inside the VM. So when the dispatch loop runs at EL1 these two leave
+  // the VM and run on the host thread. Outside the VM they are the plain
+  // call they always were. The argument block is a local: inside the VM
+  // that is the vCPU stack, which both sides see.
+  struct SysCall {
+    CSystem *sys;
+    CSystemComponent *src;
+    u64 addr;
+    u64 data;
+    int size;
+  };
+  static u64 sys_read_out(void *p);
+  static u64 sys_write_out(void *p);
+  // The same instant as steady_clock::now(), but read from the generic
+  // timer. std::chrono reaches the clock through Apple's counter register,
+  // which the hypervisor traps: one VM exit per call, and the dispatch loop
+  // calls it once per batch -- which was most of the cost of running
+  // compiled code inside. cntvct_el0 is not trapped. Anchored once per
+  // processor, in the shared object, so both sides agree on the epoch.
+  inline void clock_anchor() {
+    m_clk_ticks0 = host_ticks();
+    m_clk_tp0 = std::chrono::steady_clock::now();
+  }
+  inline std::chrono::steady_clock::time_point now_fast() const {
+#if defined(__aarch64__)
+    // Read the generic timer directly. std::chrono reaches the clock through
+    // a register the hypervisor traps, which inside the VM is the difference
+    // between 1647 and 4615 MIPS; outside it is worth nothing measurable, and
+    // this is the shape that serves both.
+    if (m_clk_ticks0) {
+      const u64 hz = host_tick_hz();
+      const u64 d = host_ticks() - m_clk_ticks0;
+      // split so the nanosecond scaling cannot overflow on a long run
+      return m_clk_tp0 + std::chrono::nanoseconds((d / hz) * 1000000000ull +
+                                                  (d % hz) * 1000000000ull / hz);
+    }
+#endif
+    return std::chrono::steady_clock::now();
+  }
+  void rate_tick();
+#ifdef ES40_JIT
+  // The block is opaque here: jitengine.hpp is not included by this header.
+  struct CompileArg {
+    CAlphaCPU *cpu;
+    void *b;
+  };
+  static u64 compile_thunk(void *p);
+  void compile_outside(void *b);
+#endif
+
+public:
+#ifdef ALPHABOX_HVF
+  // An interrupt raised by a device thread, the stop flag, the instruction
+  // count the main thread reads: all of them cross the boundary, so under
+  // ALPHABOX_HV=1 the processor object lives in shared memory.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+#endif
+  inline u64 sys_read(u64 addr, int size) {
+#ifdef ALPHABOX_HVF
+    if (hv::enabled()) {
+      // A bulk data register is a transfer, not a register: served from the
+      // shared buffer without leaving the VM. The word that completes the
+      // buffer is left to the device, which clears the request and wakes
+      // its controller.
+      if (const CSystem::BulkPort *bp = cSystem->bulk_for(addr)) {
+        const int words = (size == 32) ? 2 : (size == 16 ? 1 : 0);
+        if (words && *bp->d.drq[*bp->d.selected & 1] &&
+            *bp->d.ptr + words < *bp->d.size) {
+          u64 v = bp->d.data[(*bp->d.ptr)++];
+          if (words == 2)
+            v |= (u64)bp->d.data[(*bp->d.ptr)++] << 16;
+          ++m_bulk_served;
+          return v;
+        }
+      }
+      SysCall c{cSystem, this, addr, 0, size};
+      return hv::escape(&sys_read_out, &c);
+    }
+#endif
+    return cSystem->ReadMem(addr, size, this);
+  }
+  inline void sys_write(u64 addr, int size, u64 data) {
+#ifdef ALPHABOX_HVF
+    if (hv::enabled()) {
+      if (const CSystem::BulkPort *bp = cSystem->bulk_for(addr)) {
+        const int words = (size == 32) ? 2 : (size == 16 ? 1 : 0);
+        if (words && *bp->d.drq[*bp->d.selected & 1] &&
+            *bp->d.ptr + words < *bp->d.size) {
+          bp->d.data[(*bp->d.ptr)++] = (u16)(data & 0xffff);
+          if (words == 2)
+            bp->d.data[(*bp->d.ptr)++] = (u16)((data >> 16) & 0xffff);
+          ++m_bulk_served;
+          return;
+        }
+      }
+      SysCall c{cSystem, this, addr, data, size};
+      hv::escape(&sys_write_out, &c);
+      return;
+    }
+#endif
+    cSystem->WriteMem(addr, size, data, this);
+  }
+  u64 m_bulk_served = 0; ///< transfers served without leaving the VM
+
   // DRAM fast-path cache
   char *dram_ptr; // cSystem->PtrToMem(0) - host pointer to base es40 ram array
                   // thingy
@@ -555,7 +681,6 @@ private:
   static constexpr int kTbIdxWays = 8;
   u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
   int m_tb_gh_live[2] = {0, 0}; // live entries with a granularity hint
-  bool m_tb_idx_on = true;
 #ifdef JIT_VERIFY
   u64 m_tb_idx_false_neg = 0; // index said "absent", the scan found it
   u64 m_tb_idx_probes = 0;
@@ -624,6 +749,25 @@ private:
       return (u64)dram_ptr + page;
     return (u64)cSystem->direct_host_page(page);
   }
+  /// The same, for the write half of the cache. A page some block was
+  /// compiled from answers 0, which tags the slot as one compiled code must
+  /// not write inline: the store takes the helper instead, and the helper
+  /// tells the code-page map about it. Reads are untouched.
+  inline u64 dpc_host_base_w(u64 phys) const {
+    if (m_nopflush && m_code_map && m_code_map->holds_code(phys))
+      return 0;
+    return dpc_host_base(phys);
+  }
+  /// A store landed in DRAM at phys: tell the map, so that the next IMB
+  /// knows whether it has work.
+  inline void note_dram_write(u64 phys) {
+    if (m_code_map && !m_nopflush_break)
+      m_code_map->note_write(phys);
+  }
+  /// A page became a code page after this processor had already cached it
+  /// as inline-writable. Drop those cached translations; the refill will
+  /// exclude it.
+  void honour_new_code_pages();
   /// Another thread changed what the page cache may map (the direct range
   /// moved or went away): flush on this CPU's own thread, at the next timer
   /// check, which the JIT's gate also honours.
@@ -725,6 +869,10 @@ private:
   // ALPHABOX_JIT_FPTEST=1: compiled inline IEEE FP ops vs the interpreter
   void jit_fp_selftest();
 #endif
+  // ALPHABOX_JIT_RPCCTEST=1: the inline RPCC stub against the helper it
+  // replaces. Not under JIT_VERIFY: the stub only exists on the builds
+  // that verification cannot cover, which is exactly why it needs this.
+  void jit_rpcc_selftest();
   // MISC (0x18) state reads: sel 0=RPCC (cycle counter), 1=RC, 2=RS (read
   // interrupt flag + clear/set). Value the verify can't re-derive -> replayed
   // from the load log like a load.
@@ -852,6 +1000,12 @@ private:
       u64 p_address;              /**< Physical address of first instruction */
       bool asm_bit;               /**< Address Space Match bit */
       bool valid;                 /**< Valid cache entry */
+      /** The flush generation this line was filled in. An instruction memory
+          barrier invalidates the whole cache by moving the generation on,
+          which is one store instead of a walk of every line -- and the walk
+          was a fifth of the processor's time at the console prompt, where
+          the firmware issues IMB over a million times a second. */
+      u64 gen;
       /** Which processor modes may execute this line: bit per mode, taken
           from the translation buffer when the line was filled. A hit has to
           check it, or a line filled for the kernel would go on answering
@@ -859,6 +1013,7 @@ private:
           happens. */
       u8 exec_modes;
     } icache[ICACHE_ENTRIES];     /**< Instruction cache entries [HRM p 2-11] */
+    u64 icache_gen;               /**< the generation a line must match */
     int next_icache;              /**< Number of next cache entry to use */
     int last_found_icache;        /**< Number of last cache entry found */
 
@@ -892,7 +1047,13 @@ private:
                          system) */
     u64 last_tb_virt; /**< ITB_TAG staging register for ITB_PTE writes */
     bool pal_vms; /**< True if the PALcode base is 0x8000 (=VMS PALcode base) */
-    int irq_h_timer[6]; /**< Timers for delayed IRQ_H[0:5] assertion */
+    /** Timers for delayed IRQ_H[0:5] assertion. Written by whichever device
+        thread raises or drops a line and counted down by the processor that
+        owns them, so the countdown has to be a read-modify-write: a plain
+        decrement could write back a value a deassert had just zeroed, and
+        the line would fire with nothing in DIR to service it. Same size and
+        alignment as the int this was. */
+    std::atomic<int> irq_h_timer[6];
   } state; /**< Determines CPU state that needs to be saved to the state file */
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
@@ -926,6 +1087,84 @@ private:
   u64 last_read_loc;
   u64 last_write_loc;
 #endif
+
+  // Kept last on purpose: the compiled code reaches the page cache and the
+  // register file with one displacement from `this`, and that only works
+  // while they stay near the front of the object (see kDpcEntries above).
+  // New members go here, behind everything the emitter addresses.
+  std::chrono::steady_clock::time_point m_rate_last{};
+  u64 m_rate_icount = 0;
+  // The clock anchor lives here for the same reason as everything else in
+  // this block: compiled code reaches the register file and the page
+  // caches with one displacement from `this`, and a field inserted ahead
+  // of them pushes those past the reach of that addressing. Putting these
+  // two in the middle of the class emitted code that read from a null
+  // pointer.
+  u64 m_clk_ticks0 = 0;
+  std::chrono::steady_clock::time_point m_clk_tp0{};
+  u64 m_rate_cc = 0; // the cycle counter as of the last rate report
+  u64 m_rate_escapes = 0, m_rate_entries = 0, m_rate_bulk = 0;
+  u64 m_rate_flush_skipped = 0, m_rate_flush_done = 0;
+  u64 m_rate_stall_skips = 0, m_rate_stall_cycles = 0;
+
+public:
+  /// How often compiled code leaves for the miscellaneous helper, by kind:
+  /// [0] RPCC (the cycle counter), [1] RC, [2] RS.
+  u64 m_misc_calls[3] = {0, 0, 0};
+
+private:
+  u64 m_rate_misc[3] = {0, 0, 0};
+
+public:
+  /// Interpret, never compile: set for every run inside the VM (the code
+  /// cache cannot be shared with it) and by ALPHABOX_INTERP=1, which is the
+  /// control arm that measures what running inside costs.
+  bool m_interp_only = false;
+
+  /// An IMB that has nothing to flush.
+  ///
+  /// The firmware issues IMB from a polling loop, and Windows from its
+  /// scheduler: at the SRM prompt that is a hundred thousand flushes per
+  /// hundred million instructions, each one costing an icache walk, an
+  /// epoch bump that breaks every compiled chain, and a source re-hash for
+  /// every block that runs again afterwards. Across a Windows boot those
+  /// re-hashes have never once found a changed byte (300 million of them,
+  /// measured). So the flush asks the machine's code-page map first: if
+  /// nothing has been written to a page any block was compiled from since
+  /// the last flush, there is nothing to flush, and it returns.
+  ///
+  /// What makes that safe is that every way guest memory can change reports
+  /// to the map -- the interpreter's stores, the JIT's write helpers, a
+  /// conditional store, DMA from a device thread, a firmware reload -- and
+  /// that compiled code cannot store into a code page inline: such a page
+  /// is never installed in the write half of the data page cache, so those
+  /// stores take the helper, which reports. ALPHABOX_JIT_NOPFLUSH=0 keeps
+  /// the old unconditional flush in the same binary.
+  CCodePageMap *m_code_map = nullptr;
+  u64 m_code_gen_seen = ~U64(0); // its write count at our last real flush
+  u64 m_code_pages_seen = 0;     // pages it had marked when we last looked
+  u64 m_flush_skipped = 0;       // flushes that turned out to have no work
+  u64 m_flush_done = 0;          // ... and flushes that did
+  bool m_nopflush = true;
+  /// ALPHABOX_JIT_NOPFLUSH=2: flush unconditionally, as if the map were not
+  /// there, but keep deciding what the map WOULD have said -- and shout if a
+  /// block's source words turn out to have changed while it said nothing had
+  /// been written. That is the failure this optimisation can have, and the
+  /// only way to be sure of a write path we have not thought of is to run a
+  /// guest with this on and see the count stay at zero.
+  bool m_nopflush_audit = false;
+  bool m_flush_was_clean = false; // the map said "nothing written" last time
+  /// ALPHABOX_JIT_NOPFLUSH_BREAK=1 silences the processor's own stores, as
+  /// though a write path had been forgotten. It exists so the test that
+  /// modifies guest code can be shown to fail when the tracking is wrong --
+  /// a test that cannot fail proves nothing (test/tools/smc_test.sh).
+  bool m_nopflush_break = false;
+
+  /// The processor-stall loop (ALPHABOX_STALL_SKIP=1): where it was found,
+  /// how many waits were handed their time, how many cycles that was, and
+  /// how many were too long to be a delay.
+  u64 m_stall_pc = 0;
+  u64 m_stall_skips = 0, m_stall_cycles = 0, m_stall_capped = 0;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow
@@ -954,14 +1193,36 @@ private:
  **/
 inline void CAlphaCPU::flush_icache() {
   note_ic_flush_pc();
-  if (icache_enabled) {
-    for (int i = 0; i < ICACHE_ENTRIES; i++) {
-      state.icache[i].valid = false;
-    }
-    state.next_icache = 0; // old version, may be relied on elsewhere
-    state.last_found_icache = 0;
-  }
+  // The instruction cache goes, always, and whether anything was written to
+  // guest memory has no bearing on it. Its lines are tagged by VIRTUAL
+  // address, and the code-page map speaks of physical ones: a guest that maps
+  // different code at an address it has used before writes nothing that the
+  // map can see -- the new code arrived in a page the map was never told
+  // holds any -- and a line left behind would answer the fetch with the code
+  // that used to be there. Moving the generation on costs one store, and the
+  // lines that matter are refilled as they are fetched.
+  ++state.icache_gen;
+  state.next_icache = 0; // old version, may be relied on elsewhere
+  state.last_found_icache = 0;
   break_seq_icache();
+  // What CAN be skipped is the compiled block cache below, because a block is
+  // validated against the live physical address on every dispatch and against
+  // its source words whenever a flush has been seen. A remap therefore misses
+  // on the physical, and a rewrite is what the map reports.
+  if (m_nopflush && m_code_map) {
+    if (m_code_map->code_pages() != m_code_pages_seen)
+      honour_new_code_pages(); // a page became code: drop stale inline writes
+    const u64 gen = m_code_map->write_gen();
+    m_flush_was_clean = (gen == m_code_gen_seen);
+    if (m_flush_was_clean) {
+      ++m_flush_skipped;
+      if (!m_nopflush_audit)
+        return;
+    } else {
+      m_code_gen_seen = gen;
+    }
+  }
+  ++m_flush_done;
 #ifdef ES40_JIT
   jit_flush_blocks();
   m_jit_code_seen = ++g_jit_code_flush; // our own flush is already done
@@ -1008,17 +1269,17 @@ inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
 
     printf("%%CPU-I-PALSCR: Scratch area at %016" PRIx64 ":\n", scratch);
     printf("%%CPU-I-PALSCR:   +0x00 VPTB = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x00, 64, this));
+           sys_read(scratch + 0x00, 64));
     printf("%%CPU-I-PALSCR:   +0x08 PTBR = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x08, 64, this));
+           sys_read(scratch + 0x08, 64));
     printf("%%CPU-I-PALSCR:   +0x10 PCBB = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x10, 64, this));
+           sys_read(scratch + 0x10, 64));
     printf("%%CPU-I-PALSCR:   +0x18 KSP  = %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x18, 64, this));
+           sys_read(scratch + 0x18, 64));
     printf("%%CPU-I-PALSCR:   +0x98 WHAMI= %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x98, 64, this));
+           sys_read(scratch + 0x98, 64));
     printf("%%CPU-I-PALSCR:   +0x170 SCBB= %016" PRIx64 "\n",
-           cSystem->ReadMem(scratch + 0x170, 64, this));
+           sys_read(scratch + 0x170, 64));
   } else if (!state.pal_vms && state.r[53] == 0) {
     printf(
         "%%CPU-W-NOP21: PAL switched but p21=0! Scratch area not available.\n");
@@ -1084,7 +1345,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
 
   if (icache_enabled) {
     // ---- Fast hit probe
-    if (state.icache[i].valid &&
+    if (state.icache[i].valid && state.icache[i].gen == state.icache_gen &&
         (state.icache[i].asn == state.asn || state.icache[i].asm_bit) &&
         ((state.icache[i].exec_modes >> state.cm) & 1) &&
         state.icache[i].address == (address & ICACHE_MATCH_MASK)) {
@@ -1121,6 +1382,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       // DRAM-backed: fill the direct-mapped icache line.
       memcpy(state.icache[i].data, mem, ICACHE_LINE_SIZE * 4);
       state.icache[i].valid = true;
+      state.icache[i].gen = state.icache_gen;
       state.icache[i].asn = state.asn;
       state.icache[i].asm_bit = asm_bit;
       state.icache[i].address = address & ICACHE_MATCH_MASK;
@@ -1143,10 +1405,10 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       // bus.
       const u64 p_instr = p_a + (address & ICACHE_BYTE_MASK);
       u32 ins = 0;
-      ins |= (u8)cSystem->ReadMem(p_instr + 0, 8, this);
-      ins |= ((u8)cSystem->ReadMem(p_instr + 1, 8, this)) << 8;
-      ins |= ((u8)cSystem->ReadMem(p_instr + 2, 8, this)) << 16;
-      ins |= ((u8)cSystem->ReadMem(p_instr + 3, 8, this)) << 24;
+      ins |= (u8)sys_read(p_instr + 0, 8);
+      ins |= ((u8)sys_read(p_instr + 1, 8)) << 8;
+      ins |= ((u8)sys_read(p_instr + 2, 8)) << 16;
+      ins |= ((u8)sys_read(p_instr + 3, 8)) << 24;
       *data = ins; // already in target little-endian form
 
       state.pc_phys = p_instr;
@@ -1170,7 +1432,7 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
     }
   }
 
-  *data = (u32)cSystem->ReadMem(state.pc_phys, 32, this);
+  *data = (u32)sys_read(state.pc_phys, 32);
   return 0;
 }
 
@@ -1223,11 +1485,40 @@ inline bool CAlphaCPU::int_deliverable() const {
 /**
  * Assert or release an external interrupt line to the cpu.
  **/
+/// Count one delayed interrupt line down by `step`, and raise it if this is
+/// the step that reaches zero.
+///
+/// The whole thing is one read-modify-write because the other end of this
+/// timer is a device thread: it may drop the line at any moment, and a
+/// plain decrement would write back the value it read a moment earlier and
+/// bring a cancelled interrupt back to life -- the processor would then
+/// take an interrupt with nothing in the Cchip's DIR to account for it.
+/// Whoever wins the exchange to zero is the one that raises the line, so it
+/// is raised exactly once.
+inline void CAlphaCPU::count_down_irq(int line, int step) {
+  int t = state.irq_h_timer[line].load(std::memory_order_relaxed);
+  while (t > 0) {
+    const int next = (t <= step) ? 0 : t - step;
+    if (state.irq_h_timer[line].compare_exchange_weak(
+            t, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+      if (next == 0) {
+        state.eir |= (U64(0x1) << line);
+        state.check_int = true;
+      } else {
+        state.check_timers = true;
+      }
+      return;
+    }
+    // t now holds what someone else put there; zero means they cancelled it.
+  }
+}
+
 inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
-  bool active = (state.eir & (U64(0x1) << number)) || state.irq_h_timer[number];
+  bool active = (state.eir & (U64(0x1) << number)) ||
+                state.irq_h_timer[number].load(std::memory_order_relaxed);
   if (assert && !active) {
     if (delay) {
-      state.irq_h_timer[number] = delay;
+      state.irq_h_timer[number].store(delay, std::memory_order_release);
       state.check_timers = true;
     } else {
       state.eir |= (U64(0x1) << number);
@@ -1254,10 +1545,12 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
 
   if (!assert && active) {
     state.eir &= ~(U64(0x1) << number);
-    state.irq_h_timer[number] = 0;
+    // Cancel it outright: whoever is counting down sees the zero and stops,
+    // rather than writing back what it read a moment ago.
+    state.irq_h_timer[number].exchange(0, std::memory_order_acq_rel);
     state.check_timers = false;
     for (int i = 0; i < 6; i++) {
-      if (state.irq_h_timer[i])
+      if (state.irq_h_timer[i].load(std::memory_order_relaxed))
         state.check_timers = true;
     }
   }
@@ -1350,9 +1643,9 @@ inline u64 CAlphaCPU::get_prbr(void) {
   bool b;
   if (state.r[21 + 32] && ((u64)(state.r[21 + 32] + 0xaf) <
                            (u64)((U64(0x1) << cSystem->get_memory_bits()))))
-    v_prbr = cSystem->ReadMem(state.r[21 + 32] + 0xa8, 64, this);
+    v_prbr = sys_read(state.r[21 + 32] + 0xa8, 64);
   else
-    v_prbr = cSystem->ReadMem(0x70a8 + (0x200 * get_cpuid()), 64, this);
+    v_prbr = sys_read(0x70a8 + (0x200 * get_cpuid()), 64);
   if (virt2phys(v_prbr, &p_prbr, ACCESS_READ | FAKE | NO_CHECK, &b, 0))
     p_prbr = v_prbr;
   if ((u64)p_prbr > (u64)(U64(0x1) << cSystem->get_memory_bits()))
@@ -1369,9 +1662,9 @@ inline u64 CAlphaCPU::get_hwpcb(void) {
   bool b;
   if (state.r[21 + 32] && ((u64)(state.r[21 + 32] + 0x17) <
                            (u64)((U64(0x1) << cSystem->get_memory_bits()))))
-    v_pcb = cSystem->ReadMem(state.r[21 + 32] + 0x10, 64, this);
+    v_pcb = sys_read(state.r[21 + 32] + 0x10, 64);
   else
-    v_pcb = cSystem->ReadMem(0x7010 + (0x200 * get_cpuid()), 64, this);
+    v_pcb = sys_read(0x7010 + (0x200 * get_cpuid()), 64);
   if (virt2phys(v_pcb, &p_pcb, ACCESS_READ | NO_CHECK | FAKE, &b, 0))
     p_pcb = v_pcb;
   if (p_pcb > (u64)(U64(0x1) << cSystem->get_memory_bits()))

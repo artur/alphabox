@@ -126,7 +126,111 @@ struct MPDState {
   bool ds_out = true;  // SDA
 };
 
+/// Which parts of physical memory compiled code was built from, and how
+/// many writes have landed on one of them.
+///
+/// An IMB means "I may have changed code": every compiled block then has to
+/// prove its source words are still what it was built from, and at the SRM
+/// prompt that is seven million re-hashes per hundred million instructions
+/// which have never once found a changed byte -- three hundred million of
+/// them across a Windows boot, not one of them changed. The firmware simply
+/// issues an IMB from a polling loop. This map lets the flush ask a cheaper
+/// question first: has anything been written to memory a block was compiled
+/// from since the last flush? If not, there is nothing to flush.
+///
+/// It is kept at two granularities because the two users need different
+/// things. Whether compiled code may store into a page inline is a question
+/// about a page, because that is the unit the data page cache maps. Whether
+/// a write can have changed code is a question about a much smaller range:
+/// the SRM console keeps a counter 1.5 KB away from its own code on the same
+/// page and writes it fourteen million times a second, so at page
+/// granularity every flush would still find that page written and the
+/// answer would always be "maybe". At 256 bytes the counter and the code are
+/// plainly apart.
+///
+/// The map is conservative in the only direction that is safe: bits are set
+/// when code is compiled and never cleared, so a page that once held code
+/// keeps the slower write path even after the guest reuses it. Writes are
+/// counted, not located -- one counter for the whole machine is all a flush
+/// needs, and it keeps the write path down to a load, a test and a branch
+/// that is almost never taken. Every processor and every device thread
+/// shares one map, so a write by one processor invalidates another's blocks
+/// and DMA into a code page counts like a store.
+class CSystem;
+
+class CCodePageMap {
+public:
+  static constexpr int kPageShift = 13; // the Alpha's 8 KB page
+  static constexpr int kLineShift = 8;  // 256 bytes: the dirty-decision unit
+  void init(CSystem *sys, u64 dram_bytes, void *page_bits, void *line_bits);
+  /// A block was compiled from [phys, phys+bytes): mark its page and lines.
+  void note_code(u64 phys, size_t bytes);
+  /// Something wrote guest memory somewhere we cannot place (a firmware
+  /// reload, a restored savefile): treat everything as written.
+  void note_write_all() { m_gen.fetch_add(1, std::memory_order_release); }
+  u64 write_gen() const { return m_gen.load(std::memory_order_acquire); }
+  /// Does this page hold any compiled code? (The data page cache's unit:
+  /// such a page is never offered to compiled code for an inline store.)
+  bool holds_code(u64 phys) const {
+    const u64 pg = phys >> kPageShift;
+    return m_page_bits && pg < m_pages &&
+           (__atomic_load_n(&m_page_bits[pg >> 3], __ATOMIC_RELAXED) &
+            (1u << (pg & 7)));
+  }
+  /// Was code compiled from this 256-byte line?
+  bool holds_code_line(u64 phys) const {
+    const u64 ln = phys >> kLineShift;
+    return m_line_bits && ln < m_lines &&
+           (__atomic_load_n(&m_line_bits[ln >> 3], __ATOMIC_RELAXED) &
+            (1u << (ln & 7)));
+  }
+  /// A guest store or a DMA transfer landed at phys.
+  void note_write(u64 phys) {
+    if (holds_code_line(phys)) {
+      m_gen.fetch_add(1, std::memory_order_release);
+      if (m_trace)
+        trace_write(phys);
+    }
+  }
+  void note_write_range(u64 phys, size_t bytes);
+  u64 code_pages() const { return m_marked.load(std::memory_order_relaxed); }
+  /// ALPHABOX_TRACE_CODEWRITE=1: which lines are being written and how
+  /// often. A guest that keeps busy data next to its code is what this
+  /// optimisation lives or dies by, and this is how to see it.
+  void trace_write(u64 phys);
+
+private:
+  std::atomic<u64> m_gen{0};    // writes that landed on a compiled line
+  std::atomic<u64> m_marked{0}; // code pages marked so far
+  // One bit per 8 KB page and per 256 bytes. Every processor's compiler
+  // thread sets bits in these, and one byte covers 64 KB of guest memory
+  // (8 KB for the lines), so two processors compiling anywhere near each
+  // other write the same byte. A plain |= loses one of the two, and a lost
+  // bit is permanent: writes to that line would never be reported again and
+  // a flush that should have happened would be skipped. The bits are
+  // therefore set and read atomically -- relaxed is enough, because what
+  // orders a write against a flush is m_gen's release/acquire, and a bit
+  // that is set late only costs an extra real flush.
+  u8 *m_page_bits = nullptr;
+  u8 *m_line_bits = nullptr;
+  u64 m_pages = 0, m_lines = 0;
+  CSystem *m_sys = nullptr;
+  bool m_trace = false;
+};
+
 class CSystem {
+  static void *alloc_guest_memory(size_t bytes);
+  static void free_guest_memory(void *p, size_t bytes);
+
+public:
+#ifdef ALPHABOX_HVF
+  // The device threads outside and the dispatch loop inside both read and
+  // write this object, so under ALPHABOX_HV=1 it is placed in memory the
+  // two share. Elsewhere it is an ordinary allocation.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+#endif
+
 public:
   void DumpMemory(unsigned int filenum);
   char *PtrToMem(u64 address);
@@ -143,6 +247,16 @@ public:
     return m_tick_seq.load(std::memory_order_relaxed);
   }
   int LoadROM();
+  /// The machine's code-page map: every processor's JIT marks the pages it
+  /// compiled from here, and every write path reports to it.
+  CCodePageMap *code_pages() { return &m_code_pages; }
+  void init_code_page_map();
+  /// A page has just become a code page. Every processor may hold a cached
+  /// translation that still lets compiled code store into it inline, so ask
+  /// them all to drop what they cached; each bumps the map's write count as
+  /// it does, which makes the next flush a real one and covers any store it
+  /// may already have made through such a translation.
+  void request_code_page_flush();
   u64 ReadMem(u64 address, int dsize, CSystemComponent *source);
   void WriteMem(u64 address, int dsize, u64 data, CSystemComponent *source);
   void Run();
@@ -194,6 +308,20 @@ public:
 
   int RegisterMemory(CSystemComponent *component, int index, u64 base,
                      u64 length);
+
+  /// A device's bulk data register, at its absolute physical address. The
+  /// processor consults this before leaving the VM for a device access.
+  struct BulkPort {
+    u64 addr = 0;
+    SBulkPort d;
+  };
+  static constexpr int kMaxBulkPorts = 8;
+  const BulkPort *bulk_for(u64 addr) const {
+    for (int i = 0; i < m_nbulk; i++)
+      if (m_bulk[i].addr == addr)
+        return &m_bulk[i];
+    return nullptr;
+  }
   void RegisterComponent(CSystemComponent *component);
   void UnregisterComponent(CSystemComponent *component);
   int RegisterCPU(class CAlphaCPU *cpu);
@@ -288,6 +416,7 @@ public:
 
   private:
     CSystem *system;
+    bool touched_code = false; // the transfer landed on compiled code
   };
 
   // LDx_L: record locked range + loaded value
@@ -309,6 +438,10 @@ private:
   u8 tig_read(u32 address);
   void tig_write(u32 address, u8 data);
   void tig_update_halt_lines();
+
+  CCodePageMap m_code_pages;
+  void *m_code_page_bits = nullptr, *m_code_line_bits = nullptr;
+  size_t m_code_page_bytes = 0, m_code_line_bytes = 0;
 
   // --- MPD / SPD wiring ---
   MPDState m_mpd;
@@ -560,6 +693,8 @@ private:
   int iNumComponents;
   CSystemComponent *acComponents[MAX_COMPONENTS];
   int iNumMemories;
+  BulkPort m_bulk[kMaxBulkPorts];
+  int m_nbulk = 0;
   struct SMemoryUser *asMemories[MAX_COMPONENTS];
 
   /// The same ranges again, laid out for the lookup every non-memory access
@@ -600,9 +735,13 @@ inline u64 CSystem::get_c_dir(int ProcNum) {
 
 inline u64 CSystem::get_c_dim(int ProcNum) { return state.cchip.dim[ProcNum]; }
 
-inline void CSystem::set_c_dim(int ProcNum, u64 value) {
-  state.cchip.dim[ProcNum] = value;
-}
+/// Write a processor's device interrupt mask the way the Cchip register
+/// does: under the lock that serialises with interrupt(), and re-driving
+/// that processor's lines afterwards. The bare assignment this used to be
+/// raced with interrupt() and left a masked line asserted until some
+/// unrelated event happened to re-drive it. Only the native PALcode reaches
+/// it; the CSR path always did this.
+void set_c_dim(int ProcNum, u64 value);
 
 extern CSystem *theSystem;
 

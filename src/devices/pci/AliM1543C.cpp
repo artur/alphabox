@@ -56,6 +56,8 @@ bool pic_messages = false;
 #define REFRESH_TOGGLE_NS 15085ULL // port 61h bit 4 refresh half-period
 #define PIT_LATCH_VALID 0x00010000U     // pit_counter[c + PIT_OFFSET_LATCH]
 #define PIT_LATCH_HIGH_NEXT 0x00020000U // ...LSB of a latched count was read
+#define PIT_LATCH_STATUS 0x00040000U    // ...a read-back latched the status
+#define PIT_LATCH_STATUS_SHIFT 24       // ...which sits in the top byte
 
 u32 ali_cfg_data[64] = {
     /*00*/ 0x153310b9, // CFID: vendor + device
@@ -606,16 +608,22 @@ u8 CAliM1543C::reg_61_read() {
   // half-period the thread sleeps to the NEXT toggle edge and answers with
   // the post-edge value: the guest sees the toggle sequence it would have
   // seen, at the wall-clock instants it happens (the edge is computed, not
-  // slept "for"), and the core is free in between. ALPHABOX_STALL_PACE=0
-  // turns it off (the same-binary A/B switch).
+  // slept "for"), and the core is free in between. ALPHABOX_PORT61_PACE=0
+  // turns it off.
+  //
+  // Not to be confused with ALPHABOX_STALL_SKIP, which is a different guest
+  // busy-wait and the opposite answer to it: this one keeps the guest's
+  // timing exactly and frees the host core, that one gives the guest its
+  // time back early. This port is a clock the guest is reading, so its
+  // timing cannot be shortened; a delay loop's can.
   static const bool pace = [] {
-    const char *e = getenv("ALPHABOX_STALL_PACE");
+    const char *e = getenv("ALPHABOX_PORT61_PACE");
     return !(e && e[0] == '0');
   }();
-  // ALPHABOX_TRACE_STALL=1: each burst of port 61h reads as wall-clock time
+  // ALPHABOX_TRACE_PORT61=1: each burst of port 61h reads as wall-clock time
   // and count (a burst ends when 50 ms pass without a read), so pacing can
   // be checked for what matters: the guest's stall must take the same time.
-  static const bool trace = getenv("ALPHABOX_TRACE_STALL") != nullptr;
+  static const bool trace = getenv("ALPHABOX_TRACE_PORT61") != nullptr;
   if (trace) {
     // Bursts are summed up and printed at exit (the last one never ends
     // with a read after it): what matters is that the guest's stalls take
@@ -1393,6 +1401,11 @@ u8 CAliM1543C::pit_read(u32 address) {
     return 0; // the control word is write-only
 
   u32 &latch = state.pit_counter[address + PIT_OFFSET_LATCH];
+  if (latch & PIT_LATCH_STATUS) { // a read-back's status comes out first
+    const u8 st = (u8)(latch >> PIT_LATCH_STATUS_SHIFT);
+    latch &= 0x00ffffffU & ~PIT_LATCH_STATUS;
+    return st;
+  }
   const bool latched = (latch & PIT_LATCH_VALID) != 0;
   const u16 count = latched ? (u16)latch : pit_count_now((int)address);
   const int access = (state.pit_status[address] & 0x30) >> 4;
@@ -1452,15 +1465,33 @@ u16 CAliM1543C::pit_count_now(int c) {
 void CAliM1543C::pit_write(u32 address, u8 data) {
   if (address == 3) { // control word
     const int counter = (data >> 6) & 3;
-    if (counter == 3) { // read-back command (8254): not modelled
-      state.pit_status[3] = data;
+    if (counter == 3) { // read-back command (8254 only; the 8253 has none)
+      // Bit 5 clear latches the count, bit 4 clear latches the status, for
+      // every counter whose select bit (1 << (c + 1)) is set. A latch that
+      // is already held is not replaced. The status byte is what the next
+      // read of that counter returns, before any latched count: OUT (bit
+      // 7), NULL COUNT (bit 6), the read/write mode, the mode and BCD.
+      for (int c = 0; c < 3; c++) {
+        if (!(data & (2 << c)))
+          continue;
+        u32 &latch = state.pit_counter[c + PIT_OFFSET_LATCH];
+        if (!(data & 0x10) && !(latch & PIT_LATCH_STATUS)) {
+          const u8 st =
+              (u8)((pit_out(c) ? 0x80 : 0) | (state.pit_status[c] & 0x7f));
+          latch |= PIT_LATCH_STATUS | ((u32)st << PIT_LATCH_STATUS_SHIFT);
+        }
+        if (!(data & 0x20) && !(latch & PIT_LATCH_VALID))
+          latch = (latch & (PIT_LATCH_STATUS | 0xff000000U)) |
+                  (u32)pit_count_now(c) | PIT_LATCH_VALID;
+      }
       return;
     }
     const int access = (data >> 4) & 3;
     if (access == 0) { // counter latch command; never replace an unread latch
       u32 &latch = state.pit_counter[counter + PIT_OFFSET_LATCH];
       if ((latch & PIT_LATCH_VALID) == 0)
-        latch = (u32)pit_count_now(counter) | PIT_LATCH_VALID;
+        latch = (latch & (PIT_LATCH_STATUS | 0xff000000U)) |
+                (u32)pit_count_now(counter) | PIT_LATCH_VALID;
       return;
     }
     int mode = (data >> 1) & 7;

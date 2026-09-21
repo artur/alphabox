@@ -89,6 +89,7 @@ public:
   virtual void WriteMem_Bar(int func, int bar, u32 address, int dsize,
                             u32 data);
   virtual u32 ReadMem_Bar(int func, int bar, u32 address, int dsize);
+  virtual bool get_bulk_port(int index, SBulkPort *out) override;
   void config_write_custom(int func, u32 address, int dsize, u32 old_data,
                            u32 new_data, u32 raw) override;
 
@@ -280,6 +281,7 @@ private:
 
 /* device registers */
 #define REG_COMMAND_DATA 0
+
 #define REG_COMMAND_ERROR 1
 #define REG_COMMAND_FEATURES 1
 #define REG_COMMAND_SECTOR_COUNT 2

@@ -105,8 +105,10 @@ production speed, so its own counters are part of what it measures.
   noise plus boot, and the ranked plan built on it -- branch patching, an
   inline lookup probe, a return stack, cross-page linking -- targets at most
   the 3.4% below, of which linking is a sliver. The reverse-index
-  implementation is in the tree behind `ALPHABOX_JIT_DLINK=1`, default off,
-  for whoever needs firmware to link well.
+  implementation was kept in the tree behind a switch, default off, until it
+  became clear that an option nobody runs is a code path nobody tests; it
+  has been removed, and this entry is the record of why. Every static exit
+  is an epoch-guarded data link.
 
 ## Where the host's time goes
 
@@ -210,6 +212,14 @@ inside `jit_read` at 47 ns a call, 3.7M calls per 100M instructions, with
 no TB miss and no interpreter: the 128-entry TB scan when the per-page
 hint misses, which stride's eviction pattern guarantees.
 
+*A note on the switch names below.* Several entries quote an
+`ALPHABOX_*=0` switch that was added so a change could be measured against
+itself in one binary. Once a change is settled those switches are removed:
+an option nothing exercises is a second code path nothing tests, and the
+measurement is recorded here either way. The names are kept in these
+entries because they say how the number was taken. `docs/headless.md`
+lists the hooks that actually exist.
+
 That A/B also said ldst +6.7%, sort +5.7% and byte -9.6%, none of them
 predicted. The per-window census (windowed page-cache miss causes, helper
 calls and per-call cost, TB-miss bails) found the steady-state windows of
@@ -253,6 +263,108 @@ dirty-code-page tracking is the other half, if the phase ever matters.
 The prediction was written down before the run
 (`lab/results/flushfix-prediction.md`): three of four held, and the
 fourth's miss is the finding.
+
+### The flush that has nothing to flush
+
+That other half, measured. An `IMB` says "I may have changed code", so
+every compiled block has to prove its source words again before it runs;
+the counters say what that proof finds:
+
+```
+[JIT][STATS][CPU0]   revalidate 6981432 | unchanged 6981432 | bytes changed 0 | remapped 0 | 54761154 words hashed
+```
+
+Per 100M instructions at the SRM prompt: seven million re-hashes, 54.7M
+words -- and not one changed byte. Over a whole Windows 2000 boot,
+300,798,944 of them, still not one. The firmware issues `IMB` from a
+polling loop, and nothing it polls ever writes code.
+
+So the flush asks a cheaper question first (`CCodePageMap`,
+`CAlphaCPU::flush_icache`): has anything been written to memory a block
+was compiled from since the last flush? If not it returns -- no icache
+walk, no epoch bump, no re-hash. Every path that writes guest memory
+reports to the map, and compiled code cannot store into a code page
+inline, because such a page is never installed in the write half of the
+data page cache: those stores take the helper, which reports.
+
+**Two granularities, and one page is the reason.** Whether compiled code
+may store into a page inline is a question about a page, since that is
+what the cache maps. Whether a write can have changed code is a question
+about 256 bytes. At page granularity the answer at the console was
+"maybe" every single time: `ALPHABOX_TRACE_CODEWRITE=1` shows the SRM
+console writing one counter 249 million times at offset `0xd40` of the
+page whose code sits at `0x1500`-`0x1ca0`. Same page, 1.5 KB away. At 256
+bytes the counter and the code are plainly apart, and the skip rate goes
+from 0% to 100%.
+
+Measured, same binary, `ALPHABOX_JIT_NOPFLUSH=0/1`:
+
+| workload | off | on | |
+| --- | --- | --- | --- |
+| SRM console at `P00>>>` | 441 MIPS | 1681 MIPS | **3.8x** |
+| Windows 2000 boot, instructions in 90 s | 134.1G, 135.4G | 153.0G, 152.1G | **+13%**, disjoint |
+| Windows 2000, time to the desktop | 95 s, 95 s | 95 s, 95 s | no change |
+| `perf_ab --snapshot`, 3 rounds, 9 sections | | | -0.9%, every section overlapping |
+
+**Who issues the IMBs decides all of it.** `ALPHABOX_RATE=5` through a
+boot: 1.1-1.4 **million** IMB/s while the console firmware runs, 100% of
+them with nothing to flush -- and 4 to 16 IMB/s once Windows is up, 74-96%
+with nothing to flush (Windows does load code, so some are real). That is
+why the compute sections cannot see this at all, and why the desktop
+arrives at the same second: that phase is firmware delay loops around disk
+I/O, as the flush-storm entry above already found. What this removes is
+CPU work that was provably never needed -- not wall-clock time in a boot.
+
+### The wait that did not have to be waited
+
+Where does a Windows 2000 boot actually spend its 95 seconds? Not where two
+rounds of JIT work had assumed. Aggregating the hot chain-entry PCs over a
+whole boot (`JIT_STATS`, 318 windows) gives one answer and it is not subtle:
+
+```
+ffffffff807282a8   100.8 G instructions   70.0%
+```
+
+That is `KeStallExecutionProcessor`, the Alpha HAL's microsecond delay:
+
+```
+      rpcc t1            ; start
+loop: rpcc t2            ; now
+      subl t2, t1, t2    ; elapsed
+      subl t0, t2, t2    ; remaining = asked for - elapsed
+      bgt  t2, loop
+```
+
+Weighting each window by its own duration, that loop is **62 of the 95
+seconds**. A driver asking to be delayed is asking this emulator's cycle
+counter to advance, so the dispatcher now hands it the cycles and lets the
+loop fall out (see docs/cpu-fidelity.md for the divergence that buys).
+
+Measured, same binary, two interleaved rounds each:
+
+| | time to desktop | instructions executed |
+| --- | --- | --- |
+| `ALPHABOX_STALL_SKIP=0` | 95 s, 95 s | 161.2 G, 149.5 G |
+| skip, loop left compiled | 80 s, 80 s | 141.9 G, 139.9 G |
+| skip, loop kept interpreted | **60 s, 60 s** | **106.2 G, 101.0 G** |
+
+The middle row is the lesson. Compiled, the loop chains to itself and spins
+a whole dispatch batch before the dispatcher is asked about it -- roughly
+150 turns of a six-instruction loop per wait -- so two thirds of the saving
+was still being spun away. Keeping that one block out of the JIT
+(`CJitEngine::drop_block`) was worth another 20 seconds. A block a dispatch
+loop needs to be *asked* about is worth less compiled than interpreted.
+
+**The test can fail.** `test/tools/smc_test.sh` boots a guest that runs a
+loop until the JIT compiles it, stores a branch-to-halt over an
+instruction inside that compiled block, executes `IMB` and re-enters the
+loop: the emulator halts if the new instruction runs, and hangs forever on
+the old one. Four arms -- unconditional flush (halts), flush skipped
+(halts), stores deliberately unreported through
+`ALPHABOX_JIT_NOPFLUSH_BREAK=1` (hangs, as it must), and the audit mode
+`ALPHABOX_JIT_NOPFLUSH=2`, which flushes anyway and reports a source
+change the map failed to predict (halts, and reports it). A Windows boot
+under the audit reports nothing.
 
 ## Where the time goes on a CPU-bound guest workload
 

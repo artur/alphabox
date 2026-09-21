@@ -1346,7 +1346,11 @@ uint32_t CS3Trio64::screen_update(bitmap_rgb32 &bitmap,
 /** PCI Configuration Space data block */
 static u32 s3_cfg_data[64] = {
     /*00*/ 0x88115333, // CFID: vendor + device
-    /*04*/ 0x011f0000, // CFCS: command + status
+    /*04*/ 0x02000000, // CFCS: command + status: medium DEVSEL, nothing else
+                       // -- a real 86C764 reports 0x0200. The old 0x011F
+                       // advertised a capability list (pointer 0), a
+                       // master-data-parity error latched at reset on a card
+                       // that never bus-masters, and reserved bits.
     /*08*/ 0x03000002, // CFRV: class + revision
     /*0c*/ 0x00000000, // CFLT: latency timer + cache line size
     /*10*/ 0x00000000, // BAR0: FB

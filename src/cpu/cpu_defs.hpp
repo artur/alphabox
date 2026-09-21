@@ -515,7 +515,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
         if (virt2phys(_dpc_va, &phys_address, flags, NULL, ins))               \
           ES40_EXECUTE_END();                                                  \
         _dpc.fill(_dpc_vp, phys_address & ~U64(0x1FFF),                        \
-                  dpc_host_base(phys_address), state.cm, state.asn0);          \
+                  _dpc_rw ? dpc_host_base_w(phys_address)                      \
+                          : dpc_host_base(phys_address),                       \
+                  state.cm, state.asn0);                                       \
       }                                                                        \
     } else {                                                                   \
       /* PAL privileged access (NO_CHECK, VPTE, ALT, etc) — skip cache */    \
@@ -614,7 +616,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 
 #define READ_PHYS(size)                                                        \
   (phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)          \
-                            : cSystem->ReadMem(phys_address, size, this));     \
+                            : sys_read(phys_address, size));     \
   LLR
 
 #define READ_VIRT(va, size, dest)                                              \
@@ -625,12 +627,12 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     dest = 0;                                                                  \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      dest |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));           \
+      dest |= (sys_read(phys_address, 8) << (ii * 8));           \
     }                                                                          \
   } else {                                                                     \
     dest = (phys_address < dram_size                                           \
                 ? dram_read(dram_ptr, phys_address, size)                      \
-                : cSystem->ReadMem(phys_address, size, this));                 \
+                : sys_read(phys_address, size));                 \
   }
 
 #define READ_VIRT_LOCK(va, size, dest)                                         \
@@ -644,12 +646,12 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       dest = 0;                                                                \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        dest |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));         \
+        dest |= (sys_read(phys_address, 8) << (ii * 8));         \
       }                                                                        \
     } else {                                                                   \
       dest = (phys_address < dram_size                                         \
                   ? dram_read(dram_ptr, phys_address, size)                    \
-                  : cSystem->ReadMem(phys_address, size, this));               \
+                  : sys_read(phys_address, size));               \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -662,13 +664,13 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 aa = 0;                                                                \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      aa |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));             \
+      aa |= (sys_read(phys_address, 8) << (ii * 8));             \
     }                                                                          \
     dest = f(aa);                                                              \
   } else {                                                                     \
     dest = f((phys_address < dram_size                                         \
                   ? dram_read(dram_ptr, phys_address, size)                    \
-                  : cSystem->ReadMem(phys_address, size, this)));              \
+                  : sys_read(phys_address, size)));              \
   }
 
 #define READ_VIRT_LOCK_F(va, size, dest, f)                                    \
@@ -682,13 +684,13 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       u64 aa = 0;                                                              \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        aa |= (cSystem->ReadMem(phys_address, 8, this) << (ii * 8));           \
+        aa |= (sys_read(phys_address, 8) << (ii * 8));           \
       }                                                                        \
       dest = f(aa);                                                            \
     } else {                                                                   \
       dest = f((phys_address < dram_size                                       \
                     ? dram_read(dram_ptr, phys_address, size)                  \
-                    : cSystem->ReadMem(phys_address, size, this)));            \
+                    : sys_read(phys_address, size)));            \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -702,8 +704,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define WRITE_PHYS(data, size)                                                 \
   if (phys_address < dram_size) {                                              \
     dram_write(dram_ptr, phys_address, size, data);                            \
+    note_dram_write(phys_address);                                             \
   } else                                                                       \
-    cSystem->WriteMem(phys_address, size, data, this);                         \
+    sys_write(phys_address, size, data);                         \
   LWR
 
 #define WRITE_VIRT(va, size, src)                                              \
@@ -716,15 +719,17 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       DATA_PHYS(va + ii, ACCESS_WRITE, 0);                                     \
       if (phys_address < dram_size) {                                          \
         dram_write(dram_ptr, phys_address, 8, aa);                             \
+        note_dram_write(phys_address);                                         \
       } else                                                                   \
-        cSystem->WriteMem(phys_address, 8, aa, this);                          \
+        sys_write(phys_address, 8, aa);                          \
       aa >>= 8;                                                                \
     }                                                                          \
   } else {                                                                     \
     if (phys_address < dram_size) {                                            \
       dram_write(dram_ptr, phys_address, size, src);                           \
+      note_dram_write(phys_address);                                           \
     } else                                                                     \
-      cSystem->WriteMem(phys_address, size, src, this);                        \
+      sys_write(phys_address, size, src);                        \
   }
 
 #define WRITE_VIRT_COND(va, size, src, dest)                                   \
@@ -758,7 +763,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_PHYS_NT(size)                                                     \
   (ALIGN_PHYS((size) / 8) < dram_size                                          \
        ? dram_read(dram_ptr, ALIGN_PHYS((size) / 8), size)                     \
-       : cSystem->ReadMem(ALIGN_PHYS((size) / 8), size, this));                \
+       : sys_read(ALIGN_PHYS((size) / 8), size));                \
   LLR;
 
 /**
@@ -773,8 +778,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _pa = ALIGN_PHYS((size) / 8);                                          \
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
+      note_dram_write(_pa);                                                    \
     } else                                                                     \
-      cSystem->WriteMem(_pa, size, data, this);                                \
+      sys_write(_pa, size, data);                                \
   }                                                                            \
   LWR
 #else
@@ -783,8 +789,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _pa = ALIGN_PHYS((size) / 8);                                          \
     if (_pa < dram_size) {                                                     \
       dram_write(dram_ptr, _pa, size, data);                                   \
+      note_dram_write(_pa);                                                    \
     } else                                                                     \
-      cSystem->WriteMem(_pa, size, data, this);                                \
+      sys_write(_pa, size, data);                                \
   }
 #endif
 
@@ -834,6 +841,22 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 
 #define TRAP_INT U64(0x80) /* exception register is integer reg */
 
+/* EXC_ADDR here is the trigger's OWN pc, through GO_PAL, and that is
+   deliberate -- do not "fix" it without booting a guest.
+
+   The architecture reads the other way: "the trap PC is an arbitrary number
+   of instructions past the one triggering the trap" (ARM 4.7.6.1), and the
+   trap-shadow rules exist so a handler can "find the trigger instruction
+   via a linear scan backwards from the trap PC" (ARM 4.7.6). An audit
+   raised exactly that, the change was made -- state.pc holds the following
+   instruction here, next_pc() having run before any opcode body -- and
+   Windows 2000 stopped booting: STOP 0x00000012 TRAP_CAUSE_UNKNOWN, on one
+   processor and on two, where the unchanged build reaches the desktop.
+
+   The PALcode image we run does the adjustment itself. What the handbook
+   describes is the PC the operating system's handler is entitled to; the
+   processor hands PALcode the trigger, and PALcode builds the frame. See
+   docs/cpu-fidelity.md. */
 #define ARITH_TRAP(flags, reg)                                                 \
   {                                                                            \
     state.exc_sum |= flags;             /* cause of trap */                    \

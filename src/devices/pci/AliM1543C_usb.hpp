@@ -57,6 +57,8 @@ private:
   void usb_hci_write(u64 address, int dsize, u64 data);
   bool ohci_operational() const;
   void ohci_update_irq();
+  void ohci_post_hcca(bool force);
+  u32 m_hcca_posted = 0xffffffff; // frame number last written to the HCCA
 
   // OHCI 1.0a register bits
   static constexpr u32 OHCI_CMD_HCR = 0x00000001; // HostControllerReset

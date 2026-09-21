@@ -39,10 +39,14 @@
 #endif
 
 #include <ctype.h>
+#include <map>
 #include <signal.h>
 #include <stdlib.h>
 
 #include <thread>
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 
 #define CLOCK_RATIO 10000
 
@@ -123,7 +127,8 @@ CSystem::CSystem(CConfigurator *cfg) try {
   // rather than allocate less.
   if (iNumMemoryBits >= sizeof(size_t) * 8)
     FAILURE(Configuration, "memory.bits is too large for this host");
-  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
+  CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
+  init_code_page_map();
 
   printf("%s(%s): $Id: System.cpp,v 1.79 2008/06/12 07:29:44 iamcamiel Exp $\n",
          cfg->get_myName(), cfg->get_myValue());
@@ -156,9 +161,165 @@ CSystem::~CSystem() {
  * free memory, and allocate and clear new memory.
  **/
 void CSystem::ResetMem(unsigned int membits) {
-  free(memory);
+  free_guest_memory(memory, (size_t)1 << iNumMemoryBits);
   iNumMemoryBits = membits;
-  CHECK_ALLOCATION(memory = calloc((size_t)1 << iNumMemoryBits, 1));
+  CHECK_ALLOCATION(memory = alloc_guest_memory((size_t)1 << iNumMemoryBits));
+  init_code_page_map();
+}
+
+/**
+ * Guest DRAM. Under ALPHABOX_HV=1 the processor's dispatch loop runs inside
+ * a VM and the device threads stay outside, so the array both of them read
+ * and write has to be memory the two genuinely share: the framework's own
+ * allocator, mapped into the VM at its own address. Everywhere else it is
+ * an ordinary zeroed allocation.
+ **/
+#ifdef ALPHABOX_HVF
+void *CSystem::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CSystem::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM's allocator releases everything at exit
+  ::operator delete(p);
+}
+#endif
+
+void CCodePageMap::init(CSystem *sys, u64 dram_bytes, void *page_bits,
+                        void *line_bits) {
+  m_sys = sys;
+  m_pages = dram_bytes >> kPageShift;
+  m_lines = dram_bytes >> kLineShift;
+  m_page_bits = (u8 *)page_bits;
+  m_line_bits = (u8 *)line_bits;
+  m_trace = getenv("ALPHABOX_TRACE_CODEWRITE") != nullptr;
+  m_gen.store(0, std::memory_order_relaxed);
+  m_marked.store(0, std::memory_order_relaxed);
+}
+
+void CCodePageMap::trace_write(u64 phys) {
+  static std::mutex m;
+  static std::map<u64, u64> seen; // by 256-byte line
+  static u64 n = 0;
+  std::lock_guard<std::mutex> g(m);
+  seen[phys >> kLineShift]++;
+  if ((++n % 1000000) == 0) {
+    printf("[CODEWRITE] %llu writes onto compiled lines, %zu lines:",
+           (unsigned long long)n, seen.size());
+    int k = 0;
+    for (auto it = seen.begin(); it != seen.end() && k < 10; ++it, ++k)
+      printf(" %llx(%llu)", (unsigned long long)(it->first << kLineShift),
+             (unsigned long long)it->second);
+    printf("\n");
+    fflush(stdout);
+  }
+}
+
+void CCodePageMap::note_code(u64 phys, size_t bytes) {
+  if (!m_page_bits)
+    return;
+  const u64 last = phys + (bytes ? bytes - 1 : 0);
+  for (u64 ln = phys >> kLineShift; ln <= (last >> kLineShift); ++ln) {
+    if (ln >= m_lines)
+      return;
+    __atomic_fetch_or(&m_line_bits[ln >> 3], (u8)(1u << (ln & 7)),
+                      __ATOMIC_RELAXED);
+  }
+  for (u64 pg = phys >> kPageShift; pg <= (last >> kPageShift); ++pg) {
+    if (pg >= m_pages)
+      return;
+    const u8 bit = (u8)(1u << (pg & 7));
+    // The processor that sets the bit is the one that announces the page;
+    // whoever loses the race has nothing to announce.
+    const u8 was =
+        __atomic_fetch_or(&m_page_bits[pg >> 3], bit, __ATOMIC_RELAXED);
+    if (!(was & bit)) { // a page that holds code keeps the slower write path
+      m_marked.fetch_add(1, std::memory_order_relaxed);
+      // Whatever was written to this page before we looked was written
+      // while it was not yet code, so make the next flush do its work
+      // rather than trust a count taken before this block existed.
+      m_gen.fetch_add(1, std::memory_order_release);
+      if (m_sys)
+        m_sys->request_code_page_flush();
+    }
+  }
+}
+
+/// A device wrote a range. Pages are the cheap filter -- a transfer is
+/// usually nowhere near code -- and only a page that holds some go on to
+/// the lines.
+void CCodePageMap::note_write_range(u64 phys, size_t bytes) {
+  if (!m_page_bits || !bytes)
+    return;
+  const u64 last = phys + bytes - 1;
+  for (u64 pg = phys >> kPageShift; pg <= (last >> kPageShift); ++pg) {
+    if (!holds_code(pg << kPageShift))
+      continue;
+    const u64 from = (pg << kPageShift) > phys ? (pg << kPageShift) : phys;
+    const u64 to = ((pg + 1) << kPageShift) - 1 < last
+                       ? ((pg + 1) << kPageShift) - 1
+                       : last;
+    for (u64 ln = from >> kLineShift; ln <= (to >> kLineShift); ++ln)
+      if (holds_code_line(ln << kLineShift)) {
+        m_gen.fetch_add(1, std::memory_order_release);
+        return;
+      }
+  }
+}
+
+/// One bit per page, from the same allocator as guest memory: the dispatch
+/// loop reads it inside the VM and the device threads write to it outside.
+void CSystem::init_code_page_map() {
+  if (m_code_page_bits) { // a memory resize: the old maps sized the old DRAM
+    free_guest_memory(m_code_page_bits, m_code_page_bytes);
+    free_guest_memory(m_code_line_bits, m_code_line_bytes);
+  }
+  const size_t page_bytes =
+      ((size_t)1 << (iNumMemoryBits - CCodePageMap::kPageShift)) / 8 + 1;
+  const size_t line_bytes =
+      ((size_t)1 << (iNumMemoryBits - CCodePageMap::kLineShift)) / 8 + 1;
+  void *pb = alloc_guest_memory(page_bytes);
+  void *lb = alloc_guest_memory(line_bytes);
+  CHECK_ALLOCATION(pb);
+  CHECK_ALLOCATION(lb);
+  m_code_page_bits = pb;
+  m_code_line_bits = lb;
+  m_code_page_bytes = page_bytes;
+  m_code_line_bytes = line_bytes;
+  m_code_pages.init(this, (u64)1 << iNumMemoryBits, pb, lb);
+}
+
+void *CSystem::alloc_guest_memory(size_t bytes) {
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    void *p = hv::alloc(bytes);
+    if (p) {
+      memset(p, 0, bytes);
+      printf("%%SYS-I-HVMEM: %zu MB of guest memory shared with the VM\n",
+             bytes >> 20);
+      return p;
+    }
+    printf("%%SYS-W-HVMEM: the VM's allocator could not provide %zu MB; the "
+           "guest's memory will not be visible inside\n",
+           bytes >> 20);
+  }
+#endif
+  return calloc(bytes, 1);
+}
+
+void CSystem::free_guest_memory(void *p, size_t bytes) {
+#ifdef ALPHABOX_HVF
+  if (hv::enabled())
+    return; // alloc() memory is released when the VM goes away
+  (void)bytes;
+#else
+  (void)bytes;
+#endif
+  free(p);
 }
 
 /**
@@ -205,9 +366,39 @@ void CSystem::set_direct_memory(u64 base, u64 size, u8 *host) {
     acCPUs[i]->request_dpc_flush();
 }
 
+void CSystem::request_code_page_flush() {
+  for (int i = 0; i < iNumCPUs; i++)
+    acCPUs[i]->request_dpc_flush();
+}
+
+void CSystem::set_c_dim(int ProcNum, u64 value) {
+  std::lock_guard<std::mutex> g(drir_lock);
+  state.cchip.dim[ProcNum] = value;
+  if (ProcNum >= iNumCPUs)
+    return;
+  if (state.cchip.drir & value & U64(0x00ffffffffffffff))
+    acCPUs[ProcNum]->irq_h(1, true, 100);
+  else
+    acCPUs[ProcNum]->irq_h(1, false, 0);
+  if (state.cchip.drir & value & U64(0xfc00000000000000))
+    acCPUs[ProcNum]->irq_h(0, true, 100);
+  else
+    acCPUs[ProcNum]->irq_h(0, false, 0);
+}
+
 int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
-  if (iNumCPUs >= 4)
-    return -1;
+  // The board says how many processors it takes, and nobody checked: the
+  // number this returns is used as an index straight away
+  // (cpu_lock_address[n], m_ll_seq_snap[n]), so a fifth cpuN block in the
+  // configuration used to write outside the arrays with -1. Refuse it the
+  // way an impossible memory size is refused.
+  const int board_max =
+      m_platform && m_platform->max_cpus > 0 ? m_platform->max_cpus : 4;
+  const int hard_max = (int)(sizeof(acCPUs) / sizeof(acCPUs[0]));
+  const int limit = board_max < hard_max ? board_max : hard_max;
+  if (iNumCPUs >= limit)
+    FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
+              limit, m_platform ? m_platform->description : "unknown board");
   acCPUs[iNumCPUs] = cpu;
   iNumCPUs++;
   return iNumCPUs - 1;
@@ -279,6 +470,25 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   aMemoryBounds[iNumMemories].base = base;
   aMemoryBounds[iNumMemories].end = base + length;
   iNumMemories++;
+
+  // If this range carries a bulk data register, record its absolute
+  // address so the processor can serve the transfer without leaving the
+  // VM (see SBulkPort). A range that is re-registered at a new address
+  // replaces its old entry; a stale one simply never matches again.
+  SBulkPort bp;
+  if (component->get_bulk_port(index, &bp) && bp.data) {
+    const u64 addr = base + bp.offset;
+    int slot = -1;
+    for (int k = 0; k < m_nbulk; k++)
+      if (m_bulk[k].d.data == bp.data)
+        slot = k;
+    if (slot < 0 && m_nbulk < kMaxBulkPorts)
+      slot = m_nbulk++;
+    if (slot >= 0) {
+      m_bulk[slot].addr = addr;
+      m_bulk[slot].d = bp;
+    }
+  }
   return 0;
 }
 
@@ -301,9 +511,14 @@ void CSystem::start_secondaries() {
   for (int i = 1; i < iNumCPUs; i++) {
     if (!acCPUs[i]->get_waiting())
       continue;
-    printf("%%SYS-I-SECONDARY: releasing CPU %d at the PALcode reset entry.\n",
-           i);
-    acCPUs[i]->set_pc(0x8001);
+    // The reset entry is PAL_BASE, with the PALmode bit. It was written as
+    // 0x8001 because the ES40's decompressed firmware puts PALcode at
+    // 0x8000, which is true of that board and not a rule.
+    const u64 entry = acCPUs[i]->get_pal_base() | U64(1);
+    printf("%%SYS-I-SECONDARY: releasing CPU %d at the PALcode reset entry "
+           "(%016llx).\n",
+           i, (unsigned long long)entry);
+    acCPUs[i]->set_pc(entry);
     acCPUs[i]->stop_waiting();
   }
 }
@@ -541,13 +756,27 @@ CSystem::CPCIDMAWriteGuard::CPCIDMAWriteGuard(CSystem *sys, bool active)
 }
 
 CSystem::CPCIDMAWriteGuard::~CPCIDMAWriteGuard() {
-  if (system)
+  if (system) {
+    // Again on the way out: invalidate() runs before the transfer, so a
+    // processor that flushed its instruction cache while the bytes were
+    // still arriving would have counted a write that had not happened yet.
+    if (touched_code)
+      system->m_code_pages.note_write_all();
     system->pci_dma_write_leave();
+  }
 }
 
 void CSystem::CPCIDMAWriteGuard::invalidate(u64 address, size_t bytes) {
-  if (system)
+  if (system) {
     system->cpu_clear_external_locks(address, bytes);
+    // A device writing into a page some block was compiled from changes code
+    // just as a store does -- a driver paged in over an old one is exactly
+    // that -- and the processor never sees it.
+    const u64 before = system->m_code_pages.write_gen();
+    system->m_code_pages.note_write_range(address, bytes);
+    if (system->m_code_pages.write_gen() != before)
+      touched_code = true;
+  }
 }
 
 void CSystem::cpu_llsc_enter() {
@@ -633,10 +862,16 @@ u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
   if (m_ll_seq[b].load(std::memory_order_relaxed) != m_ll_seq_snap[cpuid])
     ok = 0; // another STx_C wrote this line since our LDx_L (ABA)
   else if (same_address)
+  {
     ok = dram_cas(dram, phys, expected, value, size_bits) ? 1 : 0;
+    if (ok)
+      m_code_pages.note_write(phys); // the ordinary LDx_L/STx_C pair writes
+                                     // here, and a store is a store
+  }
   else {
     // STx_C to another quadword of the locked line: no value to compare.
     dram_write(dram, phys, size_bits, value);
+    m_code_pages.note_write(phys); // a conditional store can change code too
     ok = 1;
   }
   if (ok)
@@ -945,6 +1180,9 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
   default:
     *((u64 *)p) = endian_64((u64)data);
   }
+  // Whoever wrote it -- the native PALcode's stores come through here, and
+  // so does anything a device writes one word at a time.
+  m_code_pages.note_write(a);
 }
 
 /**
@@ -2042,6 +2280,9 @@ static bool srm_decomp_chunk(CSystem *sys, CAlphaCPU *cpu) {
 }
 
 int CSystem::LoadROM() {
+  // The firmware image lands in guest memory behind every processor's back
+  // (a reset reloads it while compiled code exists).
+  m_code_pages.note_write_all();
   FILE *f;
   char *buffer;
   int i;
@@ -2255,6 +2496,12 @@ int CSystem::LoadROM() {
       buffer = PtrToMem(0);
       (void)!fread(buffer, 1, 0x200000, f);
       fclose(f);
+      // The three paths that decompress the firmware release the processors
+      // a console does not start itself; this one, which reads the same
+      // image back from cache, did not -- so on such a board the first boot
+      // of a firmware worked and every later one left every secondary
+      // parked. (The ES40's console starts its own, so it never showed.)
+      start_secondaries();
     }
   } // !loadedFromFlash
 
@@ -2899,6 +3146,7 @@ void CSystem::SaveState(const char *fn) {
  * Restore system state from a state file.
  **/
 void CSystem::RestoreState(const char *fn) {
+  m_code_pages.note_write_all(); // the whole of memory is about to be replaced
   FILE *f;
   int i;
   u64 m;

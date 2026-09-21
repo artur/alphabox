@@ -858,19 +858,31 @@ u8 CVGACard::io_read_b(u32 address) {
 
   case 0x3ba:
   case 0x3da: {
-    // Input Status Register 1 — wall-clock vblank (no CRT timing engine)
+    // Input Status Register 1 -- wall-clock timing, no CRT engine. Bit 3
+    // (vertical retrace) for ~1 ms of each frame at the programmed refresh
+    // (70 Hz if none), bit 0 (display enable NOT) during that vertical
+    // blank and, as on the real part, during every horizontal blank: ~6 us
+    // of each ~32 us line. A driver that syncs to display enable -- the
+    // palette load, the classic wait-for-bit-0-clear-then-set -- used to
+    // wait a whole frame per call.
     using clock = std::chrono::steady_clock;
     static auto t0 = clock::now();
-    auto ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0)
-            .count();
-
-    const int frame_ms = 1000 / 70; // ~70Hz
-    const int vblank_ms = 1;
+    const u64 ns = (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       clock::now() - t0)
+                       .count();
+    const double hz =
+        (timing.vrefresh_hz > 30.0 && timing.vrefresh_hz < 200.0)
+            ? timing.vrefresh_hz
+            : 70.0;
+    const u64 frame_ns = (u64)(1e9 / hz);
+    const u64 vblank_ns = 1000000;
+    const u64 line_ns = 31778, hblank_ns = 6000;
 
     u8 data = 0;
-    if ((ms % frame_ms) < vblank_ms)
+    if ((ns % frame_ns) < vblank_ns)
       data |= 0x08 | 0x01;
+    else if ((ns % line_ns) < hblank_ns)
+      data |= 0x01;
 
     vga.attribute.state = 0; // ATC flip-flop reset
     return data;

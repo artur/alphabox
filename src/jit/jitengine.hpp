@@ -87,6 +87,7 @@ static inline double jit_tsc_ns(double ticks) {
 #endif
 
 class CAlphaCPU; // compiled blocks call back into the CPU for memory accesses
+class CCodePageMap; // which physical pages code has been compiled from
 
 class CJitEngine {
 public:
@@ -149,11 +150,6 @@ public:
                     // not compiled
     JitBlock *link[kLinkSlots]; // cached direct successors (poly-link,
                                 // round-robin back-patched); null = empty
-    uintptr_t inbound; // head of the list of static exits linked INTO this
-                       // block, as ExitRec* | slot (QEMU's jmp_list_head).
-                       // Those links carry no epoch, so invalidating this
-                       // block means walking this list and clearing them --
-                       // see unlink_inbound().
 #ifdef JIT_STATS
     uint32_t link_misses; // instrumentation: per-source link-miss count,
                           // cumulative (poly-link sizing)
@@ -170,6 +166,10 @@ public:
     uint32_t hash_len; // word count src_sum covers -- frozen at compile time;
                        // n_instr drifts (interrupt-truncated cold passes shrink
                        // it), so it must NOT key the hash
+    uint64_t code_gen; // the code-page map's write count when these words were
+                       // last known good. Only the audit reads it: a source
+                       // change with this still current is a write nothing
+                       // reported, which is the failure the map can have
     uint64_t vgen; // m_itb_gen + m_flush_gen at last full validation (phys +
                    // code bytes). Both counters are monotonic, so one sum
                    // compare detects either changing
@@ -271,6 +271,13 @@ public:
     uint32_t ier_asten, ier_sien, ier_pcen, ier_cren, ier_slen, ier_eien;
     uint32_t sir, eir, aster, astrr;
     uint32_t regs; // state.r[0] (compiled code's x20 in production)
+    // The cycle counter, for the inline RPCC stub. A guest that times
+    // anything reads RPCC constantly -- Windows 2000 does it 16 times per
+    // 100 instructions -- and a helper call spills and reloads eight
+    // pinned registers each time. The stub does the same arithmetic in
+    // scratch registers only, so the pins stay put.
+    uint32_t cc_last_sync, cc_tick_hz, cc_q32, cc_remainder, cc_borrow,
+        cc_last_read, state_cc, cc_ena, cc_offset;
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
   // Hotness threshold: a block is compiled only after it has been interpreted
@@ -387,6 +394,15 @@ public:
   /// compiles for (CpuModel.hpp). Compiled code holds them as immediates,
   /// and every engine belongs to one CPU, so a machine whose processors
   /// differ still gets the right values.
+  /// The machine's code-page map (CSystem). Every page a block is compiled
+  /// from is marked in it, which is what lets an IMB with nothing to flush
+  /// cost nothing -- see CAlphaCPU::flush_icache.
+  void set_code_page_map(CCodePageMap *m) { m_code_map = m; }
+  /// ALPHABOX_JIT_NOPFLUSH=2 points this at the processor's "the map said
+  /// nothing had been written" flag, so a source change found after such a
+  /// flush can be reported as the missed write it would have been.
+  void set_nopflush_audit(const bool *p) { m_nopflush_clean = p; }
+
   void set_cpu_identity(uint64_t amask, uint64_t implver) {
     m_amask = amask;
     m_implver = implver;
@@ -475,6 +491,25 @@ public:
   // back to blocks + re-form. See the .cpp.
   bool trace_ok(TraceFragment *t, uint64_t head_live_phys, const uint8_t *dram);
 
+  /// Drop one block's compiled code and every link into it, and leave it
+  /// looking never-compiled. For a block the dispatcher wants to be asked
+  /// about every time it runs: compiled, a loop chains to itself and spins a
+  /// whole dispatch batch before anyone is asked, which is no use when the
+  /// point of asking is to end the loop (CAlphaCPU::jit_run, the stall).
+  void drop_block(uint64_t virt_pc) {
+    JitBlock &b = m_blocks[index_of(virt_pc)];
+    if (b.tag != virt_pc)
+      return;
+    b.valid = false;
+    b.code = nullptr;
+    b.jit_body = nullptr;
+    b.compiled = false;
+    b.cold_runs = 0;
+    ++m_itb_gen; // anything holding a link or an epoch stamp must miss
+    ++m_epoch;
+    note_epoch(EPOCH_IDLE);
+  }
+
   // Lazy-flush survivor: hash-revalidate the slot in place (no interpreted
   // pass, no re-record).
   JitBlock *revalidate_flushed(uint64_t virt_pc, uint32_t asn, uint8_t cm,
@@ -531,8 +566,6 @@ public:
 
   void flush_non_global(); // flush only !asm_global blocks (the ASM-bit-clear /
                            // ASN icache flush)
-  void unlink_all();       // drop every direct static link (flush(): the code
-                           // bytes may have changed under all of them)
   void reclaim_code();     // free ALL compiled code once past kReclaimBytes
                            // (cold-path only)
   // flush() can be reached from a compiled IC_FLUSH, so it DEFERS the reclaim
@@ -698,6 +731,8 @@ private:
   bool m_traces_enabled =
       false; // global kill-switch; default OFF -> bit-identical
   int m_cpu_id;
+  CCodePageMap *m_code_map = nullptr;
+  const bool *m_nopflush_clean = nullptr;
   uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
   uint64_t m_implver = 0;
   uint64_t m_recorded;
@@ -708,12 +743,6 @@ private:
   // Which caller's icache flush we are in, so the epoch census can separate
   // an IMB from an IC_FLUSH from a PAL restart. Set by flush_icache().
   int m_flush_cause = EPOCH_FLUSH;
-  uint64_t m_direct_live = 0; // direct links currently established; lets
-                              // unlink_all() cost nothing when there are none
-  const bool m_direct_links = [] {
-    const char *e = getenv("ALPHABOX_JIT_DLINK");
-    return e && e[0] == '1';
-  }();
   uint64_t m_epoch = 0; // m_itb_gen + m_flush_gen, kept in step with both so
                         // compiled chain guards load one word
   // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
@@ -733,6 +762,26 @@ private:
   bool m_reclaim_pending =
       false; // flush() hit kReclaimBytes; reclaim at the next dispatch boundary
   void *m_rt;            // asmjit::JitRuntime*
+
+public:
+#ifdef ALPHABOX_HVF
+  // Under ALPHABOX_HV=1 the compiled code has to be reachable from inside
+  // the VM, and asmjit's JitRuntime hands out MAP_JIT memory -- the one
+  // kind the framework will not share with a guest. So the code is
+  // published into the VM allocator's memory instead, which our own
+  // stage-1 entries mark executable. The engine object itself, block cache
+  // and all, is placed there too: the compiled code reads it.
+  static void *operator new(size_t n);
+  static void operator delete(void *p) noexcept;
+  void *code_alloc(size_t bytes);
+  uint8_t *m_code_arena = nullptr;
+  size_t m_code_arena_used = 0, m_code_arena_size = 0;
+#endif
+  /// Publish an assembled CodeHolder as runnable code. Returns false if it
+  /// could not be placed.
+  bool publish_code(void *code_holder, void **out_fn);
+
+private:
   JitOffsets m_off = {}; // field offsets for the inline load fast path
   // a64 hot/cold split: memory ops record the asmjit label ids of their
   // out-of-line slow path (indexed m_cold_base + instruction index), and
@@ -742,6 +791,14 @@ private:
   // built lazily in the current code runtime; reclaim_code drops it.
   void *m_call_thunk = nullptr;
   void *a64_call_thunk();
+
+public:
+  /// The inline RPCC stub, built on first use. Public so the processor's
+  /// self-test can call it directly and compare it with the helper.
+  void *a64_rpcc_stub();
+
+private:
+  void *m_rpcc_stub = nullptr;
   // a64 static-exit data links. Each compiled block owns one ExitRec (its
   // address is baked into that block's code); the dispatcher caches the
   // successor's body and the epoch it was validated in. The record belongs to
@@ -751,71 +808,43 @@ private:
 public: // the dispatcher fills these (AlphaCPU.cpp)
   struct ExitRec {
     void *body[kLinkSlots];
-    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch). Read only
-                                // by a cross-page slot; a direct slot ignores
-                                // it.
-    // Reverse index, for direct (epoch-free) slots only: the next static exit
-    // linked into the same target block, as ExitRec* | slot. 0 = end of list.
-    uintptr_t in_next[kLinkSlots];
-    uint8_t direct_mask; // bit k: slot k is a DIRECT link -- its target is in
-                         // the source block's own guest page, so no MMU change
-                         // can invalidate it without invalidating the source
-                         // too, and the only guard left is body != null.
+    uint64_t epoch[kLinkSlots]; // ~0 = empty (never a live epoch)
   };
 
-  // Link a direct static exit to a block, and record it on that block's
-  // inbound list so the block's invalidation can undo it. The caller has
-  // already established that b is this exit's target and is compiled.
-  inline void link_direct(ExitRec *xr, unsigned slot, JitBlock *b) {
-    if (xr->body[slot])
-      return; // already linked, hence already on b's list
-    xr->body[slot] = b->jit_body;
-    xr->in_next[slot] = b->inbound;
-    b->inbound = (uintptr_t)xr | slot;
-    m_direct_live++;
-  }
-
-  // Drop every direct link INTO b (QEMU's tb_jmp_unlink). Writes data only --
-  // no code patching, so no icache maintenance and no W^X toggle -- and is
-  // safe to call while b's own code is on the stack: the exits it clears will
-  // simply miss to the dispatcher next time.
-  inline void unlink_inbound(JitBlock *b) {
-    uintptr_t p = b->inbound;
-    b->inbound = 0;
-    while (p) {
-      ExitRec *xr = (ExitRec *)(p & ~(uintptr_t)7);
-      const unsigned k = (unsigned)(p & 7);
-      p = xr->in_next[k];
-      xr->in_next[k] = 0;
-      xr->body[k] = nullptr;
-      m_direct_live--;
-    }
-  }
-
-  // ALPHABOX_JIT_DLINK=1 compiles the epoch-free static exit for same-page
-  // targets. OFF by default: measurement says a cached link misses ~1000 times
-  // per 100M instructions on CPU-bound guest code, so there is nothing here to
-  // win, and an icache flush -- which the guest's PALcode issues once per ~1000
-  // instructions during firmware -- has to walk the cache to undo the links.
-  // See docs/performance.md.
-  bool direct_links_enabled() const { return m_direct_links; }
 
 private:
   static constexpr size_t kExitChunk = 1u << 16;
   std::vector<std::unique_ptr<ExitRec[]>> m_exit_chunks;
+  // Compiled code follows these records, so inside the VM they have to come
+  // from shared memory -- and the allocation itself must not use the
+  // process allocator, whose state inside is a private copy. A fixed set of
+  // chunk pointers, filled from the VM allocator, replaces the vector
+  // there. 64 chunks of 64Ki records is the same ceiling the vector had in
+  // practice.
+  // A pool of chunks that outlives a code reclaim. The vector below owns
+  // the heap ones; inside the VM they come from an allocator that cannot
+  // free, so either way the chunks are kept and REUSED rather than
+  // reallocated. A reclaim rewinds m_chunk_cur to the start of the pool;
+  // it must never make the allocator fail, because the emitter writes the
+  // record's address into the code it generates and does not check it.
+  static constexpr int kMaxChunks = 64;
+  ExitRec *m_chunk_pool[kMaxChunks] = {};
+  int m_chunk_count = 0; // how many exist; never decreases
+  int m_chunk_cur = -1;  // which one is being filled
+  ExitRec *alloc_exit_chunk();
   size_t m_exit_used = kExitChunk;
   ExitRec *alloc_exit_rec() {
     if (m_exit_used == kExitChunk) {
-      m_exit_chunks.emplace_back(new ExitRec[kExitChunk]);
+      ExitRec *c = alloc_exit_chunk();
+      if (!c)
+        return nullptr;
       m_exit_used = 0;
     }
-    ExitRec *r = &m_exit_chunks.back()[m_exit_used++];
+    ExitRec *r = &m_chunk_pool[m_chunk_cur][m_exit_used++];
     for (int i = 0; i < kLinkSlots; ++i) {
       r->body[i] = nullptr;
       r->epoch[i] = ~(uint64_t)0;
-      r->in_next[i] = 0;
     }
-    r->direct_mask = 0;
     return r;
   }
   // AArch64 conditional-branch exit. A block ending in a PC-relative
@@ -926,6 +955,13 @@ private:
   // from cold (their hotness count restarts, so a flush every few thousand
   // instructions keeps code from ever compiling).
   uint64_t m_fng_calls = 0, m_fng_tsc = 0, m_hot_lost = 0;
+  // Windowed: what the lazy flush costs on the way back in. A flushed block
+  // misses lookup() and revalidate_flushed() re-hashes its source words to
+  // prove they are unchanged. `changed` is the only outcome that needed the
+  // flush at all -- if it stays at zero while `calls` runs into the millions,
+  // every one of those hashes proved something nothing had altered.
+  uint64_t m_rev_calls = 0, m_rev_ok = 0, m_rev_changed = 0, m_rev_phys = 0,
+           m_rev_words = 0;
   uint64_t m_dpc_miss[DM_CAUSES] = {}; // windowed: inline page-cache probe
                                        // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,

@@ -89,6 +89,36 @@ static const bool g_idle_stats = getenv("ALPHABOX_IDLESTATS") != nullptr;
 // interrupts, CALL_PAL disable interrupts, LDL t0, n(s0) (the PRCB's DPC
 // queue), BEQ t0. Matched by instruction words, not address, so any NT kernel
 // build is recognized.
+// Hand a busy-wait the time it is waiting for instead of spinning through it
+// in real time (see the dispatcher below). ALPHABOX_STALL_SKIP=0 turns it off
+// and makes the guest wait in real time, as the hardware would.
+static const bool g_stall_skip = [] {
+  const char *e = getenv("ALPHABOX_STALL_SKIP");
+  return !(e && e[0] == '0');
+}();
+
+// Windows' KeStallExecutionProcessor, as the Alpha HAL writes it: a driver
+// asks to be delayed, and the HAL spins on the cycle counter until the
+// cycles have passed.
+//
+//     rpcc t2              now
+//     zap  t2, #240, t2    (the counter is 32 bits)
+//     subl t2, t1, t2      elapsed = now - start
+//     zap  t2, #240, t2
+//     subl t0, t2, t2      remaining = asked - elapsed
+//     bgt  t2, -6          ... while there is any left
+//
+// Matched by its instruction words, which pin the registers too: t0 (r1) is
+// what was asked for and t1 (r2) is the counter when the wait began.
+static inline bool nt_stall_loop(const char *dram, u64 dram_size, u64 phys) {
+  if ((phys & 3) || phys + 24 > dram_size)
+    return false;
+  u32 w[6];
+  memcpy(w, dram + phys, sizeof(w));
+  return w[0] == 0x607fc000 && w[1] == 0x487e1603 && w[2] == 0x40620123 &&
+         w[3] == 0x487e1603 && w[4] == 0x40230123 && w[5] == 0xfc7ffffa;
+}
+
 static inline bool nt_idle_head(const char *dram, u64 dram_size, u64 phys) {
   if ((phys & 3) || phys + 16 > dram_size)
     return false;
@@ -138,6 +168,53 @@ void CAlphaCPU::jit_idle_pause() {
                          .count();
 }
 
+// Compiling is the one part of the dispatch path that cannot run inside
+// the VM: asmjit allocates heavily, and the process allocator's state in
+// there is a private copy of the outside's, so a block allocated inside
+// and freed outside corrupts it. hv::escape() performs the call on the
+// host thread; everything it writes -- the code arena, the block cache,
+// the exit records -- is memory the two sides share, so the block is there
+// when the VM resumes. Outside the VM this is a direct call.
+u64 CAlphaCPU::compile_thunk(void *p) {
+  CompileArg *a = (CompileArg *)p;
+  CAlphaCPU *c = a->cpu;
+  c->m_jit->compile_block(
+      (CJitEngine::JitBlock *)a->b, (const uint8_t *)c->dram_ptr, c->dram_size,
+      (void *)&CAlphaCPU::jit_read, (void *)&CAlphaCPU::jit_write,
+      (void *)&CAlphaCPU::jit_opcdec, (void *)&CAlphaCPU::jit_hw_mfpr,
+      (void *)&CAlphaCPU::jit_read_phys, (void *)&CAlphaCPU::jit_hw_mtpr,
+      (void *)&CAlphaCPU::jit_write_phys, (void *)&CAlphaCPU::jit_indirect,
+      (void *)&CAlphaCPU::jit_read_locked, (void *)&CAlphaCPU::jit_stc,
+      (void *)&CAlphaCPU::jit_misc, (void *)&CAlphaCPU::jit_read_vpte,
+      (void *)&CAlphaCPU::jit_read_wchk, (void *)&CAlphaCPU::jit_itof,
+      (void *)&CAlphaCPU::jit_ftoi, (void *)&CAlphaCPU::jit_fltl,
+      (void *)&CAlphaCPU::jit_fp_read, (void *)&CAlphaCPU::jit_fp_write,
+      (void *)&CAlphaCPU::jit_fltv);
+  return 0;
+}
+
+void CAlphaCPU::compile_outside(void *b) {
+  CompileArg a{this, b}; // a local: inside the VM that is the vCPU stack,
+                         // which the host can read
+#ifdef ALPHABOX_HVF
+  hv::escape(&compile_thunk, &a);
+#else
+  compile_thunk(&a);
+#endif
+  // Compiling may have made a page a code page. Until this processor drops
+  // the translations it cached for that page, its compiled code can still
+  // store into it inline -- without telling the code-page map, because the
+  // whole point of the exclusion is that such a store takes the helper. Do
+  // it here, on the spot: we are on this processor's own thread at a
+  // dispatch boundary, with no compiled frame live. Leaving it to the
+  // deferred request (which the other processors still use) left a window
+  // in which an IMB could consume the one write the marking counted and a
+  // later store in the same window then went unrecorded -- which is a guest
+  // running code that has been overwritten.
+  if (m_code_map && m_code_map->code_pages() != m_code_pages_seen)
+    honour_new_code_pages();
+}
+
 void CAlphaCPU::jit_run(int budget) {
   if (m_jit)
     m_jit->reclaim_if_pending(); // deferred code reclaim, here at a safe point
@@ -155,7 +232,7 @@ void CAlphaCPU::jit_run(int budget) {
       jit_flush_blocks();
     }
   }
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = now_fast();
   cc_last_sync += ns_to_host_ticks(
       g_diag_excluded_ns); // keep device-diagnostic print stalls out of the
                            // RPCC (diag_rpcc.h)
@@ -223,6 +300,20 @@ void CAlphaCPU::jit_run(int budget) {
         break;
       }
     }
+  }
+
+  // ALPHABOX_INTERP=1, and every run inside the VM: interpret the batch and
+  // compile nothing. execute() runs ONE instruction in a build that has the
+  // compiler (it is the bail path there; only the interpreter-only build
+  // batches internally), so the budget loop belongs here, above the
+  // per-batch housekeeping's cost rather than below it.
+  if (m_interp_only) {
+    while (budget-- > 0) {
+      if (StopThread)
+        return;
+      execute();
+    }
+    return;
   }
 
   while (budget > 0) {
@@ -329,6 +420,43 @@ void CAlphaCPU::jit_run(int budget) {
           }
         } else {
           ++m_idle_zero;
+        }
+      }
+    }
+
+    // A driver asking to be delayed is asking THIS emulator's cycle counter
+    // to advance, and spinning on it costs more than half the wall clock of
+    // a Windows 2000 boot. When the processor is in that loop with nothing
+    // else pending, give it the cycles it is waiting for and let the loop
+    // fall out on its next turn. The guest's counter then runs ahead of real
+    // time by what it would have spent waiting, which is the point: it asked
+    // for a delay, not for the host to be busy.
+    if (g_stall_skip && have_phys && !(start_virt & 1)) {
+      if (m_stall_pc == 0 && nt_stall_loop(dram_ptr, dram_size, start_phys)) {
+        m_stall_pc = start_virt;
+        // Compiled, this loop chains to itself and spins a whole dispatch
+        // batch before coming back here -- which is most of the time it was
+        // meant to save. Interpreted, every turn of it passes through the
+        // dispatcher, and the first one ends the wait.
+        if (m_jit)
+          m_jit->drop_block(start_virt);
+        printf("%%CPU-I-STALL: CPU%d processor-stall loop recognized at "
+               "%016llx\n",
+               (int)state.iProcNum, (unsigned long long)start_virt);
+      }
+      if (start_virt == m_stall_pc && !state.check_int && !state.check_timers) {
+        const u64 cc_now = rpcc_read(); // syncs the counter to the wall first
+        const u32 elapsed = (u32)cc_now - (u32)state.r[2];
+        const s32 left = (s32)((u32)state.r[1] - elapsed);
+        // A wait longer than the cap is not a delay, it is a guest waiting
+        // for something to happen; let real time carry it.
+        const u64 cap = cpu_hz / 10;
+        if (left > 0 && (u64)left <= cap) {
+          state.cc += (u64)left;
+          ++m_stall_skips;
+          m_stall_cycles += (u64)left;
+        } else if (left > 0) {
+          ++m_stall_capped;
         }
       }
     }
@@ -997,23 +1125,14 @@ void CAlphaCPU::jit_run(int budget) {
           CJitEngine::ExitRec *xr =
               (CJitEngine::ExitRec *)(lraw & ~(uintptr_t)7);
           const unsigned k = exact - 1;
-          // A direct slot (same-page target) carries no epoch: it is valid
-          // until the target block is invalidated, which unlinks it through
-          // the target's inbound list. So it can only arrive here empty.
-          const bool direct = (xr->direct_mask >> k) & 1u;
           // A static exit's slot always holds the SAME compile-time target, so
           // a body already in it means the epoch compare -- not a new target --
           // is what sent us here.
           m_jit->note_dlink_stale(xr->body[k] != nullptr);
           if (b->tag == m_link_target && b->jit_body) {
-            if (direct)
-              m_jit->link_direct(xr, k, b);
-            else {
-              xr->body[k] = b->jit_body;
-              xr->epoch[k] = m_jit->vgen();
-            }
-          } else if (!direct) { // a direct slot is already empty, and clearing
-                                // it here would cut it out of no list
+            xr->body[k] = b->jit_body;
+            xr->epoch[k] = m_jit->vgen();
+          } else {
             xr->body[k] = nullptr;
             xr->epoch[k] = ~(uint64_t)0;
           }
@@ -1141,21 +1260,11 @@ void CAlphaCPU::jit_run(int budget) {
       CJitEngine::JitBlock *nb =
           m_jit->record(start_virt, start_phys, start_asn, (uint8_t)state.cm,
                         start_asm, n, (const uint8_t *)dram_ptr);
-      // Compile only once the block has proven hot (see compile_after()).
-      if (!nb->compiled && ++nb->cold_runs >= m_jit->compile_after())
-        m_jit->compile_block(
-            nb, (const uint8_t *)dram_ptr, dram_size,
-            (void *)&CAlphaCPU::jit_read, (void *)&CAlphaCPU::jit_write,
-            (void *)&CAlphaCPU::jit_opcdec, (void *)&CAlphaCPU::jit_hw_mfpr,
-            (void *)&CAlphaCPU::jit_read_phys, (void *)&CAlphaCPU::jit_hw_mtpr,
-            (void *)&CAlphaCPU::jit_write_phys,
-            (void *)&CAlphaCPU::jit_indirect,
-            (void *)&CAlphaCPU::jit_read_locked, (void *)&CAlphaCPU::jit_stc,
-            (void *)&CAlphaCPU::jit_misc, (void *)&CAlphaCPU::jit_read_vpte,
-            (void *)&CAlphaCPU::jit_read_wchk, (void *)&CAlphaCPU::jit_itof,
-            (void *)&CAlphaCPU::jit_ftoi, (void *)&CAlphaCPU::jit_fltl,
-            (void *)&CAlphaCPU::jit_fp_read, (void *)&CAlphaCPU::jit_fp_write,
-            (void *)&CAlphaCPU::jit_fltv);
+      // Compile only once the block has proven hot (see compile_after()) --
+      // except the stall loop, which is only of use to us interpreted.
+      if (!(g_stall_skip && start_virt == m_stall_pc) && !nb->compiled &&
+          ++nb->cold_runs >= m_jit->compile_after())
+        compile_outside(nb);
     }
   }
 }
@@ -1327,7 +1436,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
     // Production: do the device read here, at the same point in the
     // instruction stream the interpreter would. Bailing instead sent every
     // MMIO load (device registers, S3 aperture) back through the interpreter.
-    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    *out = cpu->sys_read(phys, size_bits);
     return 0;
 #endif
   }
@@ -1428,6 +1537,7 @@ int CAlphaCPU::jit_fp_write(CAlphaCPU *cpu, u64 va, u32 fa, u32 descr) {
 // re-derive (cc advances only at the jit_run boundary; the flag is consumed by
 // the read), so in verify we replay the interp pass's value -- like a load.
 u64 CAlphaCPU::jit_misc(CAlphaCPU *cpu, u32 sel) {
+  cpu->m_misc_calls[sel < 3 ? sel : 2]++;
   if (cpu->m_jit_vreplay)
     return cpu->m_jit_vlog[cpu->m_jit_vlog_i++]; // replay; no re-read, no
                                                  // double side effect
@@ -1805,7 +1915,7 @@ int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
     // Production: the ordered device read happens here, as in the interpreter
     // (see jit_read).
     phys &= ~((u64)(size_bits / 8) - 1); // align like READ_PHYS_NT (ALIGN_PHYS)
-    *out = cpu->cSystem->ReadMem(phys, size_bits, cpu);
+    *out = cpu->sys_read(phys, size_bits);
     return 0;
 #endif
   }
@@ -1896,20 +2006,21 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.fill(vp, phys & ~U64(0x1FFF),
-             cpu->dpc_host_base(phys),
-             cm, cpu->state.asn0);
+    dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cm,
+             cpu->state.asn0);
   }
 
-  if (phys < cpu->dram_size)
+  if (phys < cpu->dram_size) {
     dram_write(cpu->dram_ptr, phys, size_bits, value);
-  else if (dpc.host_base) // device memory offered for direct access
+    cpu->note_dram_write(phys); // compiled code never writes a code page
+                                // inline, so its stores land here
+  } else if (dpc.host_base)     // device memory offered for direct access
     dram_write((char *)dpc.host_base, phys & U64(0x1FFF), size_bits, value);
   else {
 #ifdef JIT_STATS
     note_device_page(phys, true);
 #endif
-    cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+    cpu->sys_write(phys, size_bits, value);
   }
   return 0;
 }
@@ -1944,11 +2055,12 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 #else
     // Production: the device write happens here, in instruction order (as
     // jit_write already does for virtual stores).
-    cpu->cSystem->WriteMem(phys, size_bits, value, cpu);
+    cpu->sys_write(phys, size_bits, value);
     return 0;
 #endif
   }
   dram_write(cpu->dram_ptr, phys, size_bits, value);
+  cpu->note_dram_write(phys); // HW_ST can land on a code page too
   return 0;
 }
 
@@ -2004,9 +2116,8 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
         return U64(0x100); // fault-on-write (FOW)
       phys = e.phys | (va & e.keep_mask);
     }
-    dpc.fill(vp, phys & ~U64(0x1FFF),
-             cpu->dpc_host_base(phys),
-             cpu->state.cm, cpu->state.asn0);
+    dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cpu->state.cm,
+             cpu->state.asn0);
   }
 
   // Shared LL/SC path: consumes the reservation, applies the ABA sequence
@@ -2316,6 +2427,105 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   return b->jit_body;
 }
 
+// ALPHABOX_JIT_RPCCTEST=1: the inline RPCC stub against jit_misc, the
+// helper it replaces. Both are run from the same cycle-counter state and
+// must agree on the value returned AND on the state left behind. The live
+// clock is the one thing they cannot agree on -- each reads it for itself
+// -- so every case starts with cc_last_sync far enough in the past that
+// the elapsed time is clamped to its one-second ceiling, which makes the
+// arithmetic the same whatever the host clock says. cc_last_sync itself
+// is therefore excluded from the comparison.
+void CAlphaCPU::jit_rpcc_selftest() {
+  struct CcState {
+    u64 last_sync, remainder, borrow, last_read, cc;
+    u32 offset;
+    bool ena;
+  };
+  auto save = [&]() {
+    return CcState{cc_last_sync,  cc_wall_remainder, cc_borrow,
+                   cc_last_read,  state.cc,          state.cc_offset,
+                   state.cc_ena};
+  };
+  auto load = [&](const CcState &s) {
+    cc_last_sync = s.last_sync;
+    cc_wall_remainder = s.remainder;
+    cc_borrow = s.borrow;
+    cc_last_read = s.last_read;
+    state.cc = s.cc;
+    state.cc_offset = s.offset;
+    state.cc_ena = s.ena;
+  };
+  const CcState entry = save();
+
+  // A stub built here, so the test runs whatever the emitter would emit.
+  // It is an AArch64 thing: the x86-64 emitter still calls the helper, so
+  // there is nothing to compare against there.
+  typedef u64 (*RpccFn)();
+  // JIT_HOST_A64 is private to jitengine.cpp, so key off the architecture
+  // the same way that file does.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  RpccFn stub = m_jit ? (RpccFn)m_jit->a64_rpcc_stub() : nullptr;
+#else
+  RpccFn stub = nullptr;
+#endif
+  if (!stub) {
+    printf("%%RPCC-F-SELFTEST: no inline stub on this build\n");
+    load(entry);
+    exit(2);
+  }
+
+  const CcState cases[] = {
+      // clamped elapsed, counter running, nothing owed
+      {0, 0, 0, 0, 0, 0, true},
+      // a carry waiting in the sub-cycle remainder
+      {0, 0xffffffffull, 0, 0, 12345, 7, true},
+      // counter stopped: RPCC must not move it
+      {0, 0, 0, 999, 999, 3, false},
+      // the floor is ahead of the counter: lend, and report floor + 1
+      {~U64(0), 0, 0, 1000000, 5, 0, true},
+      // something already lent, to be repaid out of this tick's progress
+      {0, 0, 4000, 0, 0, 1, true},
+      // offset in the high half, counter near the 32-bit wrap
+      {0, 0, 0, 0xfffffff0ull, 0xfffffff0ull, 0x5a5a5a5a, true},
+  };
+
+  int bad = 0;
+  for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    load(cases[i]);
+    const u64 want = jit_misc(this, 0);
+    const CcState after_helper = save();
+
+    load(cases[i]);
+    const u64 got = stub();
+    const CcState after_stub = save();
+
+    const bool same_value = want == got;
+    const bool same_state = after_helper.remainder == after_stub.remainder &&
+                            after_helper.borrow == after_stub.borrow &&
+                            after_helper.last_read == after_stub.last_read &&
+                            after_helper.cc == after_stub.cc &&
+                            after_helper.ena == after_stub.ena;
+    if (!same_value || !same_state) {
+      bad++;
+      printf("%%RPCC-F-SELFTEST: case %u\n"
+             "   helper %016llx  cc %llu rem %llu borrow %llu floor %llu\n"
+             "   stub   %016llx  cc %llu rem %llu borrow %llu floor %llu\n",
+             i, (unsigned long long)want, (unsigned long long)after_helper.cc,
+             (unsigned long long)after_helper.remainder,
+             (unsigned long long)after_helper.borrow,
+             (unsigned long long)after_helper.last_read,
+             (unsigned long long)got, (unsigned long long)after_stub.cc,
+             (unsigned long long)after_stub.remainder,
+             (unsigned long long)after_stub.borrow,
+             (unsigned long long)after_stub.last_read);
+    }
+  }
+  load(entry);
+  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n",
+         (unsigned)(sizeof cases / sizeof cases[0]), bad);
+  exit(bad ? 1 : 0);
+}
+
 #ifdef JIT_VERIFY
 // Differential self-test of the compiled inline IEEE FP ops (FLTI 0x16 and the
 // ITFP SQRTs) against the interpreter -- SRM boot never executes them, so the
@@ -2494,6 +2704,11 @@ void CAlphaCPU::jit_fp_selftest() {
     const u32 fa = v.binary ? 1 : 31;
     const u32 ins = (v.opc << 26) | (fa << 21) | (2 << 16) | (v.func << 5) | 3;
     memcpy((u8 *)dram_ptr + page, &ins, 4);
+    // Writing guest code behind the code-page map's back: say so, or the
+    // flush below decides it has nothing to do and the next variant is
+    // measured against this one's compiled block.
+    if (m_code_map)
+      m_code_map->note_write_all();
     flush_icache(); // drop the stale fetch line; bumps the JIT flush gen too
     CJitEngine::JitBlock *b =
         m_jit->record(pc0, page, 0, (uint8_t)state.cm, true, 1, dram);
@@ -2591,6 +2806,8 @@ void CAlphaCPU::jit_fp_selftest() {
          (unsigned long long)total_cases, skipped,
          (unsigned long long)total_fail, total_fail ? "FAIL" : "PASS");
   memcpy((u8 *)dram_ptr + page, saved, 4);
+  if (m_code_map)
+    m_code_map->note_write_all(); // as above: this restores guest code
   flush_icache();
   fflush(stdout);
   std::_Exit(total_fail ? 1 : 0);

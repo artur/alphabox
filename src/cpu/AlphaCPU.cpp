@@ -68,6 +68,9 @@
 #include <xmmintrin.h> // _mm_setcsr: pin host MXCSR for the JIT SSE FP path
 #elif defined(__aarch64__) || defined(_M_ARM64)
 #include <cfenv> // fesetenv: pin the host FPCR for the JIT FP path
+#ifdef ALPHABOX_HVF
+#include "HvRuntime.hpp"
+#endif
 #endif
 
 void CAlphaCPU::release_threads() {
@@ -106,21 +109,15 @@ void CAlphaCPU::trace_call(u64 from, u64 to) {
 void CAlphaCPU::run() {
   try {
     t_running_cpu = this;
-#ifdef __APPLE__
-    // ALPHABOX_CPU_QOS=1: ask for the interactive QoS class on this thread.
-    // A std::thread starts at the default class, and on Apple Silicon that
-    // lets the scheduler place a long-running compute thread on an efficiency
-    // core -- an experiment hook to find out whether the guest CPU lands on a
-    // performance core at all before anything else about its speed is judged.
-    if (getenv("ALPHABOX_CPU_QOS"))
-      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-#endif
     mySemaphore.wait();
-    while (state.wait_for_start) {
+    while (*const_cast<volatile bool *>(&state.wait_for_start)) {
       if (StopThread)
         return;
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    // ... and acquire what the processor that released us published: the PC
+    // it set, and whatever else it arranged before saying go.
+    std::atomic_thread_fence(std::memory_order_acquire);
     printf("*** CPU%d *** STARTING ***\n", get_cpuid());
 
 #if defined(_M_X64) || defined(__x86_64__)
@@ -147,11 +144,201 @@ void CAlphaCPU::run() {
     prev_cc = 0;
     prev_time = 0;
 
+  } catch (CException &e) {
+    printf("Exception in CPU thread: %s.\n", e.displayText().c_str());
+    myThreadDead.store(true);
+    return;
+  }
+
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    // The whole dispatch loop -- interpreter, JIT compiler, compiled code,
+    // the device models it calls -- runs at EL1 inside the VM on this
+    // thread's vCPU; only system calls leave it. See docs/hypervisor.md.
+    if (hv::call(hv_run_loop, this) == ~0ULL) {
+      printf("%%HV-F-CPU%d: the VM stopped this CPU; its thread ends\n",
+             get_cpuid());
+      myThreadDead.store(true);
+    }
+    return;
+  }
+#endif
+  run_loop();
+}
+
+#ifdef ALPHABOX_HVF
+void *CAlphaCPU::operator new(size_t n) {
+  if (hv::enabled()) {
+    if (void *p = hv::alloc(n))
+      return p;
+  }
+  return ::operator new(n);
+}
+void CAlphaCPU::operator delete(void *p) noexcept {
+  if (hv::enabled())
+    return; // the VM's allocator releases everything at exit
+  ::operator delete(p);
+}
+#endif
+
+// The system-bus calls, performed on the host thread. hv::escape() lands
+// here with the argument block the caller built; see sys_read/sys_write.
+u64 CAlphaCPU::sys_read_out(void *p) {
+  SysCall *c = (SysCall *)p;
+  return c->sys->ReadMem(c->addr, c->size, c->src);
+}
+
+u64 CAlphaCPU::sys_write_out(void *p) {
+  SysCall *c = (SysCall *)p;
+  c->sys->WriteMem(c->addr, c->size, c->data, c->src);
+  return 0;
+}
+
+// ALPHABOX_RATE=<seconds>: print this processor's instruction rate every
+// <seconds> of wall time. One number, comparable between arms of the same
+// binary: how fast guest code actually runs.
+void CAlphaCPU::rate_tick() {
+  static const int period = getenv("ALPHABOX_RATE")
+                                ? atoi(getenv("ALPHABOX_RATE"))
+                                : 0;
+  if (!period)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (m_rate_last == std::chrono::steady_clock::time_point{}) {
+    m_rate_last = now;
+    m_rate_icount = state.instruction_count;
+    return;
+  }
+  const double secs =
+      std::chrono::duration<double>(now - m_rate_last).count();
+  if (secs < period)
+    return;
+  const u64 done = state.instruction_count - m_rate_icount;
+#ifdef ALPHABOX_HVF
+  const hv::Stats &hs = hv::stats();
+  const u64 esc = hs.escapes - m_rate_escapes, ent = hs.entries - m_rate_entries;
+  m_rate_escapes = hs.escapes;
+  m_rate_entries = hs.entries;
+  fprintf(stderr,
+          "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s); "
+          "%.0f escapes/s, %.0f VM exits/s, %.1f%% of a second in exits at "
+          "1 us each\n",
+          get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs,
+          esc / secs, ent / secs, ent / secs / 1e6 * 100.0);
+  {
+    const u64 bulk = m_bulk_served - m_rate_bulk;
+    m_rate_bulk = m_bulk_served;
+    if (bulk)
+      fprintf(stderr, "%%CPU%d-I-BULK: %.0f transfers/s served inside\n",
+              get_cpuid(), bulk / secs);
+  }
+  {
+    // Which exception classes those exits were. 0x16 is our own HVC (a
+    // fault handled at EL1, or an escape), 0x18 a trapped system register,
+    // 0x20/0x21 instruction aborts, 0x24/0x25 data aborts.
+    char buf[256];
+    int n = snprintf(buf, sizeof buf, "%%CPU%d-I-EXITS:", get_cpuid());
+    for (int ec = 0; ec < 64 && n < (int)sizeof buf - 24; ec++)
+      if (hs.by_ec[ec])
+        n += snprintf(buf + n, sizeof buf - n, " EC%02x=%llu", ec,
+                      (unsigned long long)hs.by_ec[ec]);
+    n += snprintf(buf + n, sizeof buf - n, " | EL1:");
+    for (int ec = 0; ec < 64 && n < (int)sizeof buf - 24; ec++)
+      if (hs.el1_ec[ec])
+        n += snprintf(buf + n, sizeof buf - n, " EC%02x=%llu", ec,
+                      (unsigned long long)hs.el1_ec[ec]);
+    fprintf(stderr,
+            "%s; sysreg iss=%llx pc %llx; last EL1 far %llx pc %llx\n", buf,
+            (unsigned long long)hs.last_sysreg, (unsigned long long)hs.last_pc,
+            (unsigned long long)hs.el1_far, (unsigned long long)hs.el1_pc);
+  }
+#else
+  fprintf(stderr, "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s)\n",
+          get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs);
+#endif
+  m_rate_last = now;
+  m_rate_icount = state.instruction_count;
+  {
+    u64 d[3];
+    for (int i = 0; i < 3; i++) {
+      d[i] = m_misc_calls[i] - m_rate_misc[i];
+      m_rate_misc[i] = m_misc_calls[i];
+    }
+    // The cycle counter alongside: a guest that spins reading RPCC is
+    // waiting for time to pass, and if the counter is frozen -- disabled
+    // through CC_CTL, or not advancing -- it waits forever.
+    const u64 cc_now = state.cc;
+    const u64 cc_moved = cc_now - m_rate_cc;
+    m_rate_cc = cc_now;
+    if (d[0] + d[1] + d[2])
+      fprintf(stderr,
+              "%%CPU%d-I-MISC: %.0f RPCC/s, %.0f RC/s, %.0f RS/s  "
+              "(%.2f per 100 instructions); cc_ena=%d cc advanced %llu\n",
+              get_cpuid(), d[0] / secs, d[1] / secs, d[2] / secs,
+              done ? 100.0 * (d[0] + d[1] + d[2]) / done : 0.0,
+              state.cc_ena ? 1 : 0, (unsigned long long)cc_moved);
+  }
+  {
+    // What the guest's IMBs cost: how many asked for a flush, how many of
+    // those had anything to flush, and how many pages hold code at all.
+    const u64 skipped = m_flush_skipped - m_rate_flush_skipped;
+    const u64 done_f = m_flush_done - m_rate_flush_done;
+    m_rate_flush_skipped = m_flush_skipped;
+    m_rate_flush_done = m_flush_done;
+    if (m_stall_skips || m_stall_capped) {
+      const u64 sk = m_stall_skips - m_rate_stall_skips;
+      const u64 cy = m_stall_cycles - m_rate_stall_cycles;
+      m_rate_stall_skips = m_stall_skips;
+      m_rate_stall_cycles = m_stall_cycles;
+      // What the guest asked to wait for, against the time it actually had:
+      // a second of stalls handed over inside a second of wall clock is the
+      // whole boot spent waiting.
+      fprintf(stderr,
+              "%%CPU%d-I-STALL: %.0f waits/s skipped, %.1f%% of the window "
+              "handed over (%llu too long)\n",
+              get_cpuid(), sk / secs, 100.0 * (double)cy / (double)cpu_hz / secs,
+              (unsigned long long)m_stall_capped);
+    }
+    if (skipped + done_f)
+      fprintf(stderr,
+              "%%CPU%d-I-FLUSH: %.0f IMB/s, %.1f%% with nothing to flush; "
+              "%llu code pages\n",
+              get_cpuid(), (skipped + done_f) / secs,
+              100.0 * (double)skipped / (double)(skipped + done_f),
+              (unsigned long long)(m_code_map ? m_code_map->code_pages() : 0));
+  }
+}
+
+void CAlphaCPU::run_loop() {
+  try {
+#ifdef ALPHABOX_HVF
+    // Phase 2a: the interpreter is what runs inside the VM. The compiler
+    // must not: it emits into MAP_JIT memory, which is the one kind of page
+    // the framework will not share with a guest, so compiled blocks would
+    // be executed from a stale private copy. See docs/hypervisor.md.
+    // ALPHABOX_INTERP=1 forces the same interpreter OUTSIDE the VM: the
+    // control arm for measuring what running inside costs, in one binary.
+    // Inside the VM the compiler's output now lives in the VM allocator's
+    // memory (docs/hypervisor.md), so compiled code can run there too --
+    // ALPHABOX_HV_JIT=1 turns it on. Default is still the interpreter,
+    // which is the configuration that is known good.
+    const bool hv_jit =
+        getenv("ALPHABOX_HV_JIT") && atoi(getenv("ALPHABOX_HV_JIT")) == 1;
+    const bool interp_only =
+        (hv::enabled() && !hv_jit) ||
+        (getenv("ALPHABOX_INTERP") && atoi(getenv("ALPHABOX_INTERP")) == 1);
+#else
+    const bool interp_only =
+        getenv("ALPHABOX_INTERP") && atoi(getenv("ALPHABOX_INTERP")) == 1;
+#endif
+    m_interp_only = interp_only;
+    clock_anchor();
     for (;;) {
       if (StopThread)
         return;
 #ifdef ES40_JIT
       jit_run(2000);
+      rate_tick();
 #else
       // execute() runs a 512-instruction batch itself; calling it 2000 times
       // here made one scheduler turn ~1M instructions, starving the other CPUs
@@ -172,11 +359,27 @@ void CAlphaCPU::run() {
   }
 }
 
+#ifdef ALPHABOX_HVF
+uint64_t CAlphaCPU::hv_run_loop(void *self) {
+  ((CAlphaCPU *)self)->run_loop();
+  return 0;
+}
+#endif
+
 /**
  * Constructor.
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
     : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+#ifdef ALPHABOX_HVF
+  // Under ALPHABOX_HV=1 the compiled code lives in the VM allocator's
+  // memory, which our stage-1 entries mark executable INSIDE the VM and
+  // which the host may only read and write. Anything that runs this
+  // processor outside the VM -- the ROM decompression at startup does,
+  // on the main thread -- must therefore interpret. run_loop() clears
+  // this once it is executing inside.
+  m_interp_only = hv::enabled();
+#endif
   s_trace_calls = getenv("ALPHABOX_TRACE_CALLS") != nullptr;
   // The configuration class names the part ("ev68cb").
   m_model = find_cpu_model(cfg->get_myValue());
@@ -248,6 +451,16 @@ CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
   }
 }
 
+/// A page this processor had cached as inline-writable has become a code
+/// page (some processor compiled a block from it). Compiled code checks the
+/// cached tag, not the map, so those cached translations have to go: the
+/// refill asks dpc_host_base_w() again and excludes the page, and from then
+/// on stores to it take the helper that reports to the map.
+void CAlphaCPU::honour_new_code_pages() {
+  m_code_pages_seen = m_code_map->code_pages();
+  flush_data_page_cache();
+}
+
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
@@ -271,11 +484,27 @@ void CAlphaCPU::init() {
 
   state.iProcNum = cSystem->RegisterCPU(this);
 
+  // An IMB with nothing to flush costs nothing: the machine's code-page map
+  // says whether anything has been written to a page code was compiled from.
+  // ALPHABOX_JIT_NOPFLUSH=0 restores the unconditional flush.
+  m_code_map = cSystem->code_pages();
+  {
+    const char *e = getenv("ALPHABOX_JIT_NOPFLUSH");
+    m_nopflush = !(e && e[0] == '0');
+    m_nopflush_audit = (e && e[0] == '2');
+    m_nopflush_break = getenv("ALPHABOX_JIT_NOPFLUSH_BREAK") != nullptr;
+    if (m_nopflush_break)
+      printf("%%CPU-W-NOPFLUSH: this processor's stores are NOT being "
+             "reported to the code-page map (test hook)\n");
+  }
+
 #ifdef ES40_JIT
   if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum);
     m_jit->set_cpu_identity(m_model->amask, m_model->implver);
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
+    m_jit->set_code_page_map(m_code_map);
+    m_jit->set_nopflush_audit(m_nopflush_audit ? &m_flush_was_clean : nullptr);
   }
   {
     // Tell the JIT the byte offsets (from `this`) of the fields its inline load
@@ -328,6 +557,15 @@ void CAlphaCPU::init() {
     o.exc_sum = (uint32_t)((char *)&state.exc_sum - (char *)this);
     o.f_base = (uint32_t)((char *)&state.f[0] - (char *)this);
     o.fpcr = (uint32_t)((char *)&state.fpcr - (char *)this);
+    o.cc_last_sync = (uint32_t)((char *)&cc_last_sync - (char *)this);
+    o.cc_tick_hz = (uint32_t)((char *)&cc_tick_hz - (char *)this);
+    o.cc_q32 = (uint32_t)((char *)&cc_cycles_per_tick_q32 - (char *)this);
+    o.cc_remainder = (uint32_t)((char *)&cc_wall_remainder - (char *)this);
+    o.cc_borrow = (uint32_t)((char *)&cc_borrow - (char *)this);
+    o.cc_last_read = (uint32_t)((char *)&cc_last_read - (char *)this);
+    o.state_cc = (uint32_t)((char *)&state.cc - (char *)this);
+    o.cc_ena = (uint32_t)((char *)&state.cc_ena - (char *)this);
+    o.cc_offset = (uint32_t)((char *)&state.cc_offset - (char *)this);
     o.exc_addr = (uint32_t)((char *)&state.exc_addr - (char *)this);
     o.pal_base = (uint32_t)((char *)&state.pal_base - (char *)this);
     o.sde = (uint32_t)((char *)&state.sde - (char *)this);
@@ -423,6 +661,13 @@ void CAlphaCPU::init() {
 #if defined(ES40_JIT) && defined(JIT_VERIFY)
   if (state.iProcNum == 0 && getenv("ALPHABOX_JIT_FPTEST"))
     jit_fp_selftest(); // exits with the verdict
+#endif
+#if defined(ES40_JIT)
+  // The inline RPCC stub is the one piece of emitted code JIT_VERIFY
+  // cannot check (it replays the helper's result, and the stub does not
+  // take part), so it gets its own comparison against that helper.
+  if (state.iProcNum == 0 && getenv("ALPHABOX_JIT_RPCCTEST"))
+    jit_rpcc_selftest(); // exits with the verdict
 #endif
 }
 
@@ -991,24 +1236,22 @@ _next_instruction:
       // timer reaches 0. Batch to reduce memory ops.
       if (state.check_timers) {
         state.check_timers = false;
-        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel))
-          flush_data_page_cache(); // the direct range changed (see CSystem)
-        for (int j = 0; j < 6; j++) {
-          if (state.irq_h_timer[j]) {
-            if (state.irq_h_timer[j] <= 32) {
-              state.irq_h_timer[j] = 0;
-              state.eir |= (U64(0x1) << j);
-              // The timer hasn't reached 0 yet; check on the timers again next
-              // clock tick.
-              state.check_int = true;
-            } else {
-              // The timer has reached 0. Set the interrupt status, and set the
-              // flag that we need to check the interrupt status
-              state.irq_h_timer[j] -= 32;
-              state.check_timers = true;
-            }
+        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+          // The direct range changed, or a page became a code page (see
+          // CSystem::request_code_page_flush).
+          flush_data_page_cache();
+          if (m_code_map) {
+            // Until this moment compiled code could still have stored into
+            // that page inline through the translation just dropped. Count
+            // one write, so the next flush does its work and any such store
+            // is caught by the source hash rather than assumed away.
+            if (!m_nopflush_break) // the break hook silences every report
+              m_code_map->note_write_all();
+            m_code_pages_seen = m_code_map->code_pages();
           }
         }
+        for (int j = 0; j < 6; j++)
+          count_down_irq(j, 32);
       }
     }
 #else
@@ -1023,18 +1266,22 @@ _next_instruction:
     // Process delayed irq_h timers one instruction at a time.
     if (state.check_timers) {
       state.check_timers = false;
-      for (int ti = 0; ti < 6; ti++) {
-        if (state.irq_h_timer[ti]) {
-          if (state.irq_h_timer[ti] <= 1) {
-            state.irq_h_timer[ti] = 0;
-            state.eir |= (U64(0x1) << ti);
-            state.check_int = true;
-          } else {
-            state.irq_h_timer[ti]--;
-            state.check_timers = true;
-          }
+      // The same page-cache flush request the interpreter arm above honours.
+      // It lived only there, so in a JIT build -- which is every build that
+      // matters -- request_dpc_flush() set a flag nothing ever read: the
+      // direct framebuffer window could move or be withdrawn while compiled
+      // code still wrote through a cached translation to where it used to
+      // be, and the code-page broadcast never reached the other processors.
+      if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+        flush_data_page_cache();
+        if (m_code_map) {
+          if (!m_nopflush_break) // the break hook silences every report
+            m_code_map->note_write_all();
+          m_code_pages_seen = m_code_map->code_pages();
         }
       }
+      for (int ti = 0; ti < 6; ti++)
+        count_down_irq(ti, 1);
     }
 #endif
 
@@ -2126,7 +2373,7 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
   // The exact index (see m_tb_idx): two validated probes, and a miss means
   // the page is not in the TB -- unless an entry with a granularity hint is
   // live, which the index cannot represent, or the switch is off.
-  if (m_tb_idx_on && m_tb_gh_live[t] == 0) {
+  if (m_tb_gh_live[t] == 0) {
     const u8 *w = m_tb_idx[t][tb_idx_set(virt)];
 #ifdef JIT_VERIFY
     m_tb_idx_probes++;
@@ -2186,14 +2433,6 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
 // round-robin victim), the same eviction bookkeeping (drop the evicted page
 // from the data page cache), then the entry copied back whole.
 int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
-  // ALPHABOX_TB_SHADOW=0 turns the refill off in the same binary, so an A/B
-  // of the shadow is free of code-layout effects (see docs/performance.md).
-  static const bool enabled = [] {
-    const char *e = getenv("ALPHABOX_TB_SHADOW");
-    return !(e && e[0] == '0');
-  }();
-  if (!enabled)
-    return -1;
   const STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
   if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
       !(sh.asm_bit || sh.asn == asn))
@@ -2745,11 +2984,6 @@ void CAlphaCPU::tb_idx_add(int t, int slot) {
 }
 
 void CAlphaCPU::tb_idx_rebuild() {
-  static const bool on = [] {
-    const char *e = getenv("ALPHABOX_TB_INDEX");
-    return !(e && e[0] == '0');
-  }();
-  m_tb_idx_on = on;
   memset(m_tb_idx, 0, sizeof(m_tb_idx));
   m_tb_gh_live[0] = m_tb_gh_live[1] = 0;
   for (int t = 0; t < 2; t++)
