@@ -608,16 +608,22 @@ u8 CAliM1543C::reg_61_read() {
   // half-period the thread sleeps to the NEXT toggle edge and answers with
   // the post-edge value: the guest sees the toggle sequence it would have
   // seen, at the wall-clock instants it happens (the edge is computed, not
-  // slept "for"), and the core is free in between. ALPHABOX_STALL_PACE=0
-  // turns it off (the same-binary A/B switch).
+  // slept "for"), and the core is free in between. ALPHABOX_PORT61_PACE=0
+  // turns it off.
+  //
+  // Not to be confused with ALPHABOX_STALL_SKIP, which is a different guest
+  // busy-wait and the opposite answer to it: this one keeps the guest's
+  // timing exactly and frees the host core, that one gives the guest its
+  // time back early. This port is a clock the guest is reading, so its
+  // timing cannot be shortened; a delay loop's can.
   static const bool pace = [] {
-    const char *e = getenv("ALPHABOX_STALL_PACE");
+    const char *e = getenv("ALPHABOX_PORT61_PACE");
     return !(e && e[0] == '0');
   }();
-  // ALPHABOX_TRACE_STALL=1: each burst of port 61h reads as wall-clock time
+  // ALPHABOX_TRACE_PORT61=1: each burst of port 61h reads as wall-clock time
   // and count (a burst ends when 50 ms pass without a read), so pacing can
   // be checked for what matters: the guest's stall must take the same time.
-  static const bool trace = getenv("ALPHABOX_TRACE_STALL") != nullptr;
+  static const bool trace = getenv("ALPHABOX_TRACE_PORT61") != nullptr;
   if (trace) {
     // Bursts are summed up and printed at exit (the last one never ends
     // with a read after it): what matters is that the guest's stalls take

@@ -109,15 +109,6 @@ void CAlphaCPU::trace_call(u64 from, u64 to) {
 void CAlphaCPU::run() {
   try {
     t_running_cpu = this;
-#ifdef __APPLE__
-    // ALPHABOX_CPU_QOS=1: ask for the interactive QoS class on this thread.
-    // A std::thread starts at the default class, and on Apple Silicon that
-    // lets the scheduler place a long-running compute thread on an efficiency
-    // core -- an experiment hook to find out whether the guest CPU lands on a
-    // performance core at all before anything else about its speed is judged.
-    if (getenv("ALPHABOX_CPU_QOS"))
-      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-#endif
     mySemaphore.wait();
     while (state.wait_for_start) {
       if (StopThread)
@@ -2401,7 +2392,7 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
   // The exact index (see m_tb_idx): two validated probes, and a miss means
   // the page is not in the TB -- unless an entry with a granularity hint is
   // live, which the index cannot represent, or the switch is off.
-  if (m_tb_idx_on && m_tb_gh_live[t] == 0) {
+  if (m_tb_gh_live[t] == 0) {
     const u8 *w = m_tb_idx[t][tb_idx_set(virt)];
 #ifdef JIT_VERIFY
     m_tb_idx_probes++;
@@ -2461,14 +2452,6 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
 // round-robin victim), the same eviction bookkeeping (drop the evicted page
 // from the data page cache), then the entry copied back whole.
 int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
-  // ALPHABOX_TB_SHADOW=0 turns the refill off in the same binary, so an A/B
-  // of the shadow is free of code-layout effects (see docs/performance.md).
-  static const bool enabled = [] {
-    const char *e = getenv("ALPHABOX_TB_SHADOW");
-    return !(e && e[0] == '0');
-  }();
-  if (!enabled)
-    return -1;
   const STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
   if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
       !(sh.asm_bit || sh.asn == asn))
@@ -3020,11 +3003,6 @@ void CAlphaCPU::tb_idx_add(int t, int slot) {
 }
 
 void CAlphaCPU::tb_idx_rebuild() {
-  static const bool on = [] {
-    const char *e = getenv("ALPHABOX_TB_INDEX");
-    return !(e && e[0] == '0');
-  }();
-  m_tb_idx_on = on;
   memset(m_tb_idx, 0, sizeof(m_tb_idx));
   m_tb_gh_live[0] = m_tb_gh_live[1] = 0;
   for (int t = 0; t < 2; t++)

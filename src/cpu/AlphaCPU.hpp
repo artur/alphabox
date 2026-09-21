@@ -459,13 +459,11 @@ private:
   }
   inline std::chrono::steady_clock::time_point now_fast() const {
 #if defined(__aarch64__)
-    // ALPHABOX_FASTCLOCK=0 goes back to std::chrono for this read, which is
-    // the A/B switch that measures what the generic timer is worth. Read
-    // once; the branch is predicted and costs nothing next to the call it
-    // replaces.
-    static const bool fast =
-        !(getenv("ALPHABOX_FASTCLOCK") && atoi(getenv("ALPHABOX_FASTCLOCK")) == 0);
-    if (fast && m_clk_ticks0) {
+    // Read the generic timer directly. std::chrono reaches the clock through
+    // a register the hypervisor traps, which inside the VM is the difference
+    // between 1647 and 4615 MIPS; outside it is worth nothing measurable, and
+    // this is the shape that serves both.
+    if (m_clk_ticks0) {
       const u64 hz = host_tick_hz();
       const u64 d = host_ticks() - m_clk_ticks0;
       // split so the nanosecond scaling cannot overflow on a long run
@@ -673,7 +671,6 @@ public:
   static constexpr int kTbIdxWays = 8;
   u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
   int m_tb_gh_live[2] = {0, 0}; // live entries with a granularity hint
-  bool m_tb_idx_on = true;
 #ifdef JIT_VERIFY
   u64 m_tb_idx_false_neg = 0; // index said "absent", the scan found it
   u64 m_tb_idx_probes = 0;

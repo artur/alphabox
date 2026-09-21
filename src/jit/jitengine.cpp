@@ -256,13 +256,9 @@ static inline bool is_ebb_branch(SafeOp op) {
 }
 static inline bool ebb_enabled() {
 #ifdef JIT_HOST_A64
-  static const bool v = [] {
-    const char *e = getenv("ALPHABOX_JIT_EBB");
-    return !(e && e[0] == '0');
-  }();
-  return v;
+  return true;
 #else
-  return false;
+  return false; // only the AArch64 emitter forwards a condition this way
 #endif
 }
 

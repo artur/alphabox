@@ -1109,7 +1109,6 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     if (op == OP_RPCC || op == OP_RC || op == OP_RS) {
       const int sel = (op == OP_RPCC) ? 0 : (op == OP_RC) ? 1 : 2;
       // RPCC goes to the stub, which keeps the pins in place.
-      // ALPHABOX_JIT_RPCC=0 sends it back through the helper (A/B switch).
       //
       // Not on a JIT_VERIFY build: the verifier runs each block twice and
       // relies on jit_misc logging what the counter returned so the
@@ -1120,8 +1119,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #ifdef JIT_VERIFY
       const bool inline_rpcc = false;
 #else
-      static const bool inline_rpcc =
-          !(getenv("ALPHABOX_JIT_RPCC") && atoi(getenv("ALPHABOX_JIT_RPCC")) == 0);
+      const bool inline_rpcc = true;
 #endif
       void *stub = (op == OP_RPCC && inline_rpcc) ? a64_rpcc_stub() : nullptr;
       if (stub) {
@@ -2175,15 +2173,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
                               const Label &lbl) {
     if (target == b->tag) {
       a.b(body); // self-loop (the gate already ran)
-      return;
-    }
-    // ALPHABOX_JIT_NO_DLINK=1: the tag-checked scan exit instead (A/B switch).
-    static const bool no_dlink = getenv("ALPHABOX_JIT_NO_DLINK") != nullptr;
-    if (no_dlink) {
-      a.mov(a64::x9, imm(target));
-      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-      emit_chain(lbl);
-      a.b(lbl);
       return;
     }
     Label miss = a.new_label();

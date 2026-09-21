@@ -223,7 +223,7 @@ fixed, each with what the driver was doing:
 - **The port 0x61 refresh toggle** is real time, so a HAL stall loop that
   counts its flips reads it 19M times in a second. Not a fidelity bug, but
   paced: after 64 back-to-back reads the port sleeps the caller to the next
-  edge (same wall time, `ALPHABOX_STALL_PACE=0` to spin).
+  edge (same wall time, `ALPHABOX_PORT61_PACE=0` to spin).
 - **The S3's drawing engine reported busy once after every command**, so
   the display driver's idle wait always re-polled; the input status
   register's display-enable bit only pulsed at vertical retrace, so a

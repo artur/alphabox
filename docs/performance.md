@@ -210,6 +210,14 @@ inside `jit_read` at 47 ns a call, 3.7M calls per 100M instructions, with
 no TB miss and no interpreter: the 128-entry TB scan when the per-page
 hint misses, which stride's eviction pattern guarantees.
 
+*A note on the switch names below.* Several entries quote an
+`ALPHABOX_*=0` switch that was added so a change could be measured against
+itself in one binary. Once a change is settled those switches are removed:
+an option nothing exercises is a second code path nothing tests, and the
+measurement is recorded here either way. The names are kept in these
+entries because they say how the number was taken. `docs/headless.md`
+lists the hooks that actually exist.
+
 That A/B also said ldst +6.7%, sort +5.7% and byte -9.6%, none of them
 predicted. The per-window census (windowed page-cache miss causes, helper
 calls and per-call cost, TB-miss bails) found the steady-state windows of
