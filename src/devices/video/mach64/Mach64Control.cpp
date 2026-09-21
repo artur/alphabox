@@ -386,6 +386,7 @@ void CMach64::reg_write8(u32 offset, u8 data) {
   case CRTC_INT_CNTL:
     if (lane == 0) {
       // Status bits stay; writing 1 to VBLANK_INT acknowledges it.
+      std::lock_guard<std::mutex> lock(m_int_lock);
       r.crtc_int_cntl = (r.crtc_int_cntl & CRTC_INT_STATUS_BITS) |
                         (data & ~CRTC_INT_STATUS_BITS);
       if (data & CRTC_VBLANK_INT)
@@ -470,6 +471,7 @@ u32 CMach64::vblank_frame() const { return u32(clock_us() / FRAME_US); }
 /// the interrupt rather than polling the status gets one.
 void CMach64::card_tick() {
   const u32 frame = vblank_frame();
+  std::lock_guard<std::mutex> lock(m_int_lock);
   if (frame != r.vblank_seen) {
     r.vblank_seen = frame;
     r.crtc_int_cntl |= CRTC_VBLANK_INT;
@@ -488,12 +490,14 @@ void CMach64::update_int_line() {
 
 u8 CMach64::crtc_int_cntl_read() {
   const u32 frame = vblank_frame();
+  std::unique_lock<std::mutex> lock(m_int_lock);
   if (frame != r.vblank_seen) {
     r.vblank_seen = frame;
     r.crtc_int_cntl |= CRTC_VBLANK_INT;
     update_int_line();
   }
   u8 v = r.crtc_int_cntl & ~CRTC_VBLANK;
+  lock.unlock();
   if ((clock_us() % FRAME_US) >= FRAME_US - 1000) // the last ~1 ms of a frame
     v |= CRTC_VBLANK;
   return v;

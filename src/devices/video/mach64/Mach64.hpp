@@ -52,6 +52,7 @@
 #define INCLUDED_MACH64_H
 
 #include <chrono>
+#include <mutex>
 
 #include "Eeprom93cx6.hpp"
 #include "Mach64Regs.hpp"
@@ -140,7 +141,7 @@ protected:
   /// Drive INTA from the interrupt the CRTC has latched and the enable
   /// beside it. Called wherever either can change: the tick that latches a
   /// vertical blank, the read that latches one, and the write that
-  /// acknowledges or masks it.
+  /// acknowledges or masks it. Call it with m_int_lock held.
   void update_int_line();
   u8 crtc_int_cntl_read();
   u32 config_cntl_read();
@@ -304,6 +305,13 @@ protected:
   /// INTA as this card is currently driving it, so the line is only moved
   /// when it changes.
   bool m_int_asserted = false;
+  /// The latch, the enable and the line they drive are touched by the
+  /// card's own thread and by a processor reading or acknowledging the
+  /// register. Interleaved, the two can decide in one order and move the
+  /// line in the other, and a level interrupt left disagreeing with the
+  /// latch stays that way: nothing asks again while the answer has not
+  /// changed. One lock over deciding and driving keeps them in step.
+  std::mutex m_int_lock;
 
   /// The 93C66 the BIOS keeps the card's settings in (256 x 16).
   CEeprom93cx6 m_eeprom;
