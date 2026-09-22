@@ -84,6 +84,7 @@ struct mach64_chip_config {
   u32 vram_bytes;     ///< default framebuffer memory
   const char *default_rom; ///< option ROM file when "rom" is not set
   bool gt;            ///< a 3D RAGE: the trapezoid engine and 3D pipe
+  bool aux_regs;      ///< BAR2: the 4 KB auxiliary register aperture
 };
 
 /// The chips this device can be (see Mach64.cpp); nullptr when unknown.
@@ -170,14 +171,16 @@ protected:
     return (r.config_cntl & mach64::CFG_MEM_VGA_AP_EN) != 0;
   }
   /// The two banked 32 KB apertures replace the VGA's memory at 0xa0000
-  /// only in accelerator mode -- the Mach64's own CRTC driving the screen
-  /// -- as well as VGA aperture mode (RRG-G02700, MEM_VGA_WP_SEL: "Apertures
-  /// exist only in accelerator modes, and only if CFG_MEM_VGA_AP_EN is
-  /// set"). A driver that enables the aperture while the VGA is still on
-  /// screen leaves the VGA's planar memory where it was.
+  /// only when memory is addressed linearly, not in the VGA's planes
+  /// (RRG-G02700, MEM_VGA_WP_SEL: "Apertures exist only in accelerator
+  /// modes, and only if CFG_MEM_VGA_AP_EN is set"). Linear means either the
+  /// Mach64's own CRTC drives the screen or CRTC_VGA_LINEAR is set -- the
+  /// second is how the Rage II+'s BIOS and its Windows miniport size the
+  /// memory, probing through the banks with the display still in VGA mode.
   bool banked_window_active() const {
     return vga_aperture_enabled() &&
-           (r.crtc_gen_cntl & mach64::CRTC_EXT_DISP_EN) != 0;
+           (r.crtc_gen_cntl &
+            (mach64::CRTC_EXT_DISP_EN | mach64::CRTC_VGA_LINEAR)) != 0;
   }
   u32 window_offset(u32 offset, bool write) const;
   u32 aperture_read(u32 offset, int dsize);
@@ -378,7 +381,7 @@ protected:
   u8 m_seen[0x1000] = {}; ///< [write][2 KB offset / 4] of trace "new"
   /// Accesses per register since the last report: a driver spinning on
   /// one shows up as the top line every million accesses.
-  u32 m_hits[0x440] = {}; ///< registers, then VGA ports 0x3c0..0x3ff
+  u32 m_hits[0x442] = {}; ///< registers, VGA ports 0x3c0..0x3ff, ROM, config
   u32 m_hits_total = 0;
   void trace_first(u32 offset, bool write, u32 data);
   void trace_hit(u32 key);

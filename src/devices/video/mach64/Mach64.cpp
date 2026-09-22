@@ -34,17 +34,20 @@ using namespace mach64;
  * shipped with; the BIOS sizes it by probing the aperture. */
 static const mach64_chip_config mach64_chips[] = {
     {"ct", "Mach64 CT", PCI_DEVICE_CT, 0x00004354, 0x40, 2u << 20,
-     "mach64ct.bin", false},
+     "mach64ct.bin", false, false},
     {"vt2", "264VT2", PCI_DEVICE_VT2, 0x40005654, 0x40, 4u << 20,
-     "mach64vt2.bin", false},
+     "mach64vt2.bin", false, false},
     {"vt3", "264VT3", PCI_DEVICE_VT3, 0x9a005655, 0x40, 4u << 20,
-     "mach64vt2.bin", false},
+     "mach64vt2.bin", false, false},
     // The 3D Rage II+: the VT's register file and the GT's 3D engine. Its
     // ASIC ID, 9Ah, is also its PCI revision (RRG-G02700 ch. 4, 7), and the
     // revision Windows 2000's DISPLAY.INF names for II+ parts; the inbox
     // driver it binds is atirage.sys/atirage.dll, which has a Direct3D HAL.
+    // It also has the auxiliary register aperture at BAR2: atirage takes
+    // its register base from the card's third PCI resource and, without
+    // one, gets the ROM's and polls the vertical blank there for ever.
     {"rage2p", "3D Rage II+ (264GT-B)", PCI_DEVICE_GTB, 0x9a004755, 0x9a,
-     4u << 20, "rageii-pci.bin", true},
+     4u << 20, "rageii-pci.bin", true, true},
 };
 
 const mach64_chip_config *mach64_chip_by_name(const char *name) {
@@ -121,7 +124,8 @@ void CMach64::init() {
 
   // PCI header: a VGA-compatible display controller with the 16 MB
   // memory aperture (BAR0, prefetchable), the 256-byte block I/O register
-  // window (BAR1) and a 64 KB expansion ROM. The console finds the BIOS
+  // window (BAR1), on the parts that have it the 4 KB register aperture
+  // (BAR2), and a 64 KB expansion ROM. The console finds the BIOS
   // at 0xc0000 like the other cards', but ATI's Windows miniport reads the
   // BIOS's data tables through the ROM BAR, so this card exposes one. 0x40
   // is ATI's I/O configuration register: bits 1..0 pick the sparse I/O
@@ -133,6 +137,10 @@ void CMach64::init() {
   cfg_data[0x08 >> 2] = 0x03000000 | m_chip.revision;
   cfg_data[0x10 >> 2] = 0x00000008; // prefetchable 32-bit memory
   cfg_data[0x14 >> 2] = 0x00000001; // I/O
+  if (m_chip.aux_regs) {
+    cfg_data[0x18 >> 2] = 0x00000000; // 32-bit memory, not prefetchable
+    cfg_mask[0x18 >> 2] = ~(AUX_APERTURE_BYTES - 1);
+  }
   cfg_data[0x3c >> 2] = 0x000000ff;
   cfg_data[0x40 >> 2] = 0x00000004;
   cfg_mask[0x04 >> 2] = 0x0000ffff;
@@ -223,6 +231,8 @@ void CMach64::init() {
 }
 
 u32 CMach64::config_read_custom(int func, u32 address, int dsize, u32 data) {
+  if (m_trace_new)
+    trace_hit(0x441);
   if (m_trace)
     printf("%s: config read  %02x/%d = %08x\n", devid_string, address, dsize,
            data);
@@ -365,30 +375,51 @@ void CMach64::card_legacy_write(int index, u32 address, int dsize, u32 data) {
 
 /**
  * BAR0 is the memory aperture; BAR1 the block I/O window onto the first
- * 256 bytes of block 0; BAR6 the option ROM.
+ * 256 bytes of block 0; BAR2 the auxiliary register aperture, block 1 at
+ * 0 and block 0 at 0x400, the upper 2 KB reserved (RRG-G03300 2-15);
+ * BAR6 the option ROM.
  **/
+static const char *bar_path(int bar) {
+  return bar == 0 ? "aperture" : bar == 2 ? "auxregs" : "blockio";
+}
+
 u32 CMach64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
-  m_trace_path = bar ? "blockio" : "aperture";
+  m_trace_path = bar_path(bar);
   switch (bar) {
   case 0:
     return aperture_read(address, dsize);
   case 1:
     return reg_read(REG_BLOCK0 | (address & 0xff), dsize / 8);
-  case 6:
-    return rom_read(address, dsize);
+  case 2:
+    if (address >= REG_BLOCK_BYTES)
+      return 0;
+    return reg_read(address, dsize / 8);
+  case 6: {
+    const u32 v = rom_read(address, dsize);
+    if (m_trace)
+      printf("%s: rom read  %05x/%d = %0*x\n", devid_string, address, dsize / 8,
+             dsize / 4, v);
+    if (m_trace_new)
+      trace_hit(0x440);
+    return v;
+  }
   }
   return 0;
 }
 
 void CMach64::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                            u32 data) {
-  m_trace_path = bar ? "blockio" : "aperture";
+  m_trace_path = bar_path(bar);
   switch (bar) {
   case 0:
     aperture_write(address, dsize, data);
     return;
   case 1:
     reg_write(REG_BLOCK0 | (address & 0xff), dsize / 8, data);
+    return;
+  case 2:
+    if (address < REG_BLOCK_BYTES)
+      reg_write(address, dsize / 8, data);
     return;
   }
 }

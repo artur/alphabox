@@ -221,7 +221,7 @@ void CMach64::trace_hit(u32 key) {
   if (++m_hits_total < (1u << 20))
     return;
   u32 top[3] = {0, 0, 0};
-  for (u32 k = 0; k < 0x440; k++)
+  for (u32 k = 0; k < 0x442; k++)
     for (int t = 0; t < 3; t++)
       if (m_hits[k] > m_hits[top[t]]) {
         for (int u = 2; u > t; u--)
@@ -233,7 +233,11 @@ void CMach64::trace_hit(u32 key) {
   for (u32 k : top) {
     if (!m_hits[k])
       continue;
-    if (k >= 0x400)
+    if (k == 0x440)
+      printf(" rom x%u", m_hits[k]);
+    else if (k == 0x441)
+      printf(" config x%u", m_hits[k]);
+    else if (k >= 0x400)
       printf(" port %03x x%u", 0x3c0 + (k - 0x400), m_hits[k]);
     else
       printf(" %s %c+%03x x%u", (k & 0x200) ? "write" : "read",

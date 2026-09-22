@@ -57,6 +57,7 @@ constexpr u32 REG_BLOCK0 = 0x400; ///< bit 10: block 0 (main), else block 1
 constexpr u32 APERTURE_BYTES = 16u << 20;
 constexpr u32 APERTURE_HALF = 8u << 20;
 constexpr u32 APERTURE_REG_PAGE = 0x1000;
+constexpr u32 AUX_APERTURE_BYTES = 0x1000; ///< BAR2, where the part has one
 
 /// Sparse I/O: 32 groups of four ports, 0x400 apart, from this base.
 constexpr u32 SPARSE_IO_BASE = 0x02ec;
@@ -248,6 +249,7 @@ constexpr u32 CRTC_PIX_WIDTH_SHIFT = 8;
 constexpr u32 CRTC_PIX_WIDTH_MASK = 7u << 8;
 constexpr u32 CRTC_EXT_DISP_EN = 1u << 24;
 constexpr u32 CRTC_EN = 1u << 25;
+constexpr u32 CRTC_VGA_LINEAR = 1u << 27; ///< VGA memory linear, not planar
 
 /// Pixel widths, CRTC_GEN_CNTL bits 10..8 and the DP_PIX_WIDTH fields.
 enum pix_width : u8 {
