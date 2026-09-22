@@ -2,7 +2,7 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus|mach64] [CHIP=gd5430|gd5434|ct|vt2] [ROM=<bios>] \
+# usage: [CARD=s3|cirrus|mach64] [CHIP=gd5430|gd5434|ct|vt2|rage2p] [ROM=<bios>] \
 #          vga_boot.sh <alphabox-binary> <label> [seconds]
 #   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP to gd5434 (cirrus) or ct
@@ -57,7 +57,8 @@ mach64)
   case $CHIP in
   ct) ROM=${ROM:-$R/roms/video/mach64/mach64-68b110b8cddfd546595673.bin} ;;
   vt2) ROM=${ROM:-$R/roms/video/mach64/atimach64vt2pci.bin} ;;
-  *) echo "vga_boot: CHIP must be ct or vt2"; exit 2 ;;
+  rage2p) ROM=${ROM:-$R/roms/video/atirageii/rageii-pci.bin} ;;
+  *) echo "vga_boot: CHIP must be ct, vt2 or rage2p"; exit 2 ;;
   esac
   EXTRA="chip = \"$CHIP\";"
   ;;

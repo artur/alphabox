@@ -125,6 +125,10 @@ void CMach64::engine_write8(u32 reg, u8 val) {
       engine_run(0, -1);
   };
 
+  // A GT reaches some registers at two addresses; take the canonical one.
+  if (is_gt())
+    reg = (reg & 3) | gt_canonical(reg & 0x3fc);
+
   switch (reg & 0x3ff) {
   case 0x100:
   case 0x101:
@@ -185,6 +189,11 @@ void CMach64::engine_write8(u32 reg, u8 val) {
   case 0x122:
   case 0x123:
     lane_set(r.dst_bres_lnth, reg, val);
+    if (is_gt()) { // the last byte decides, as the CT's does
+      if ((reg & 0x3ff) == 0x123)
+        gt_bres_lnth_written();
+      break;
+    }
     if ((reg & 0x3ff) == 0x123 && !(val & 0x80)) {
       engine_start_line();
       if ((r.dst_bres_lnth & 0x7fff) && (r.dp_src & 7) != SRC_HOST &&
@@ -431,6 +440,8 @@ void CMach64::engine_write8(u32 reg, u8 val) {
   default:
     if ((reg & 0x3ff) >= HOST_DATA0 && (reg & 0x3ff) <= HOST_DATA_LAST)
       engine_run(val, 8);
+    else if (is_gt()) // the trailing edge, Z, texture and interpolators
+      lane_set(r.gt[(reg & 0x3fc) >> 2], reg, val);
     break;
   }
 }
@@ -480,6 +491,11 @@ void CMach64::engine_write32(u32 reg, u32 val) {
       engine_run(((val & 0xff000000) >> 24) | ((val & 0x00ff0000) >> 8) |
                      ((val & 0x0000ff00) << 8) | ((val & 0x000000ff) << 24),
                  32);
+    return;
+  }
+  if (is_gt() && gt_canonical(reg) == DST_BRES_LNTH) {
+    r.dst_bres_lnth = val;
+    gt_bres_lnth_written();
     return;
   }
   switch (reg) {

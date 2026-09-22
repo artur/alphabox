@@ -46,6 +46,7 @@ constexpr u16 PCI_VENDOR_ATI = 0x1002;
 constexpr u16 PCI_DEVICE_CT = 0x4354;  ///< "TC": Mach64 CT, the part SRM names
 constexpr u16 PCI_DEVICE_VT2 = 0x5654; ///< "TV": 264VT2
 constexpr u16 PCI_DEVICE_VT3 = 0x5655; ///< "UV": 264VT3
+constexpr u16 PCI_DEVICE_GTB = 0x4755; ///< "GU": 3D Rage II+ (264GT-B)
 
 /// The register file as seen through every path (2 KB).
 constexpr u32 REG_BLOCK_BYTES = 0x800;
@@ -160,6 +161,81 @@ constexpr u32 CONTEXT_MASK = 0x320;
 constexpr u32 CONTEXT_LOAD_CNTL = 0x32c;
 constexpr u32 GUI_TRAJ_CNTL = 0x330;
 constexpr u32 GUI_STAT = 0x338;
+
+// --- block 0: the 3D RAGE (GT) additions -------------------------------------
+// From ATI's RRG-G02700 (mach64 Register Reference Guide, ATI-264VT and
+// 3D RAGE, 1996), chapters 4 and 6. Stored in regs_t::gt on a GT part.
+
+// The trapezoid's trailing edge (the leading edge is the DST_BRES_* line).
+constexpr u32 TRAIL_BRES_ERR = 0x138;
+constexpr u32 TRAIL_BRES_INC = 0x13c;
+constexpr u32 TRAIL_BRES_DEC = 0x140;
+constexpr u32 LEAD_BRES_LNTH = 0x144; ///< an alias of DST_BRES_LNTH
+constexpr u32 Z_OFF_PITCH = 0x148;
+constexpr u32 Z_CNTL = 0x14c;
+constexpr u32 ALPHA_TST_CNTL = 0x150;
+// The texture map's mip levels: TEX_n_OFF is the 2^n x 2^n map.
+constexpr u32 TEX_0_OFF = 0x1c0;
+constexpr u32 SCALE_3D_CNTL = 0x1fc;
+// Texture address interpolation. S and T step quadratically along the
+// span and the leading edge (the second-difference registers), which is
+// how the GT approximates perspective without a divide.
+constexpr u32 S_X_INC2 = 0x340;
+constexpr u32 S_Y_INC2 = 0x344;
+constexpr u32 S_XY_INC2 = 0x348;
+constexpr u32 S_XINC_START = 0x34c;
+constexpr u32 S_Y_INC = 0x350;
+constexpr u32 S_START = 0x354;
+constexpr u32 T_X_INC2 = 0x358;
+constexpr u32 T_Y_INC2 = 0x35c;
+constexpr u32 T_XY_INC2 = 0x360;
+constexpr u32 T_XINC_START = 0x364;
+constexpr u32 T_Y_INC = 0x368;
+constexpr u32 T_START = 0x36c;
+constexpr u32 TEX_SIZE_PITCH = 0x370;
+// Colour, Z and alpha interpolation: a start value at the trapezoid's
+// first pixel, a step per pixel in X and per scan line in Y.
+constexpr u32 RED_X_INC = 0x3c0;
+constexpr u32 RED_Y_INC = 0x3c4;
+constexpr u32 RED_START = 0x3c8;
+constexpr u32 GREEN_X_INC = 0x3cc;
+constexpr u32 GREEN_Y_INC = 0x3d0;
+constexpr u32 GREEN_START = 0x3d4;
+constexpr u32 BLUE_X_INC = 0x3d8;
+constexpr u32 BLUE_Y_INC = 0x3dc;
+constexpr u32 BLUE_START = 0x3e0;
+constexpr u32 Z_X_INC = 0x3e4;
+constexpr u32 Z_Y_INC = 0x3e8;
+constexpr u32 Z_START = 0x3ec;
+constexpr u32 ALPHA_X_INC = 0x3f0;
+constexpr u32 ALPHA_Y_INC = 0x3f4;
+constexpr u32 ALPHA_START = 0x3f8;
+
+/// Three registers of the scaler window are the 3D pipe's under another
+/// name at another address; the rest of the scaler aliases share theirs.
+/// The canonical (0x3xx) address of a GT register.
+constexpr u32 gt_canonical(u32 reg) {
+  return reg == 0x1ec ? S_Y_INC
+         : reg == 0x1f0 ? RED_X_INC
+         : reg == 0x1f4 ? GREEN_X_INC
+         : reg == LEAD_BRES_LNTH ? 0x120u // DST_BRES_LNTH
+                                 : reg;
+}
+
+// DST_BRES_LNTH on a GT: the leading edge's length, and a trapezoid's.
+constexpr u32 GT_LNTH_MASK = 0x7fff;       ///< aliased with DST_WIDTH[14:0]
+constexpr u32 GT_DRAW_TRAP = 1u << 15;     ///< aliased with DST_WIDTH[15]
+constexpr u32 GT_TRAIL_X_SHIFT = 16;       ///< aliased with DST_HEIGHT[12:0]
+constexpr u32 GT_TRAIL_X_MASK = 0x1fffu << 16;
+constexpr u32 GT_LINE_DIS = 1u << 31;
+
+// DST_CNTL's trapezoid bits (GT).
+constexpr u32 DST_TRAIL_X_DIR = 1u << 13;   ///< trailing edge left to right
+constexpr u32 DST_TRAP_FILL_DIR = 1u << 14; ///< trail edge right of lead
+constexpr u32 DST_TRAIL_BRES_SIGN = 1u << 15;
+
+/// DP_SRC's sixth colour source: the scaler / 3D pipe.
+constexpr u8 SRC_3D = 5;
 
 // --- CRTC_GEN_CNTL bits
 // -------------------------------------------------------

@@ -83,6 +83,7 @@ struct mach64_chip_config {
   u8 revision;        ///< PCI revision id
   u32 vram_bytes;     ///< default framebuffer memory
   const char *default_rom; ///< option ROM file when "rom" is not set
+  bool gt;            ///< a 3D RAGE: the trapezoid engine and 3D pipe
 };
 
 /// The chips this device can be (see Mach64.cpp); nullptr when unknown.
@@ -201,6 +202,19 @@ protected:
   u32 engine_source(int sel, u32 host, int src_x, int src_y, int dst_x,
                     int dst_y) const;
 
+  // --- the 3D RAGE (Mach64Engine3D.cpp) ------------------------------------
+  bool is_gt() const { return m_chip.gt; }
+  /// A GT register by its canonical address.
+  u32 &gt_reg(u32 reg) { return r.gt[(mach64::gt_canonical(reg) & 0x3fc) >> 2]; }
+  u32 gt_reg(u32 reg) const {
+    return r.gt[(mach64::gt_canonical(reg) & 0x3fc) >> 2];
+  }
+  /// DST_BRES_LNTH as a GT takes it: the leading edge's length, the
+  /// trailing edge's start and the choice between a line, a trapezoid and
+  /// nothing, all in one write.
+  void gt_bres_lnth_written();
+  void engine_start_trap();
+
   // --- display (Mach64Display.cpp) ---------------------------------------
   bool native_crtc_active() const override;
   void determine_screen_dimensions(unsigned *height, unsigned *width) override;
@@ -259,6 +273,11 @@ public:
     u8 port_3c3;
     u32 bank_r[2], bank_w[2]; ///< byte offsets of the two 32 KB windows
     u32 vblank_seen; ///< frame at which CRTC_VBLANK_INT was last raised
+    /// The 3D RAGE's block-0 registers that have no field above -- the
+    /// trailing edge, Z, the texture map and the interpolators -- by dword,
+    /// at their canonical address (mach64::gt_canonical). Unused on a CT or
+    /// VT, which have none of them.
+    u32 gt[256];
   };
 
   /// The engine's working state for the command in flight; a host-data
@@ -347,8 +366,22 @@ protected:
   uint64_t direct_view_hash() const override;
 
   /// ALPHABOX_TRACE_MACH64: print every register and configuration access
-  /// (bring-up aid; the framebuffer itself is not traced).
+  /// (bring-up aid; the framebuffer itself is not traced). With the value
+  /// "new", only the first read and the first write of each register --
+  /// what a driver touches, without the millions of lines a boot makes.
   bool m_trace = false;
+  bool m_trace_new = false;
+  /// ALPHABOX_TRACE_MACH64=trap: every register a trapezoid is drawn from,
+  /// for the first 64 of them -- the triangle setup the driver computed.
+  bool m_trace_trap = false;
+  int m_traps_traced = 0;
+  u8 m_seen[0x1000] = {}; ///< [write][2 KB offset / 4] of trace "new"
+  /// Accesses per register since the last report: a driver spinning on
+  /// one shows up as the top line every million accesses.
+  u32 m_hits[0x440] = {}; ///< registers, then VGA ports 0x3c0..0x3ff
+  u32 m_hits_total = 0;
+  void trace_first(u32 offset, bool write, u32 data);
+  void trace_hit(u32 key);
   const char *m_trace_path = "?"; ///< which way the traced access came
   u32 config_read_custom(int func, u32 address, int dsize, u32 data) override;
   void config_write_custom(int func, u32 address, int dsize, u32 old_data,

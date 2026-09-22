@@ -34,11 +34,17 @@ using namespace mach64;
  * shipped with; the BIOS sizes it by probing the aperture. */
 static const mach64_chip_config mach64_chips[] = {
     {"ct", "Mach64 CT", PCI_DEVICE_CT, 0x00004354, 0x40, 2u << 20,
-     "mach64ct.bin"},
+     "mach64ct.bin", false},
     {"vt2", "264VT2", PCI_DEVICE_VT2, 0x40005654, 0x40, 4u << 20,
-     "mach64vt2.bin"},
+     "mach64vt2.bin", false},
     {"vt3", "264VT3", PCI_DEVICE_VT3, 0x9a005655, 0x40, 4u << 20,
-     "mach64vt2.bin"},
+     "mach64vt2.bin", false},
+    // The 3D Rage II+: the VT's register file and the GT's 3D engine. Its
+    // ASIC ID, 9Ah, is also its PCI revision (RRG-G02700 ch. 4, 7), and the
+    // revision Windows 2000's DISPLAY.INF names for II+ parts; the inbox
+    // driver it binds is atirage.sys/atirage.dll, which has a Direct3D HAL.
+    {"rage2p", "3D Rage II+ (264GT-B)", PCI_DEVICE_GTB, 0x9a004755, 0x9a,
+     4u << 20, "rageii-pci.bin", true},
 };
 
 const mach64_chip_config *mach64_chip_by_name(const char *name) {
@@ -208,7 +214,11 @@ void CMach64::init() {
   timing.refresh_interval_ms = 16;
   m_last_refresh_time = std::chrono::steady_clock::now();
 
-  m_trace = getenv("ALPHABOX_TRACE_MACH64") != nullptr;
+  if (const char *t = getenv("ALPHABOX_TRACE_MACH64")) {
+    m_trace_new = strcmp(t, "new") == 0 || strcmp(t, "trap") == 0;
+    m_trace_trap = strcmp(t, "trap") == 0;
+    m_trace = !m_trace_new;
+  }
   printf("%s: ATI %s, %u KB\n", devid_string, m_chip.part, m_vram_bytes / 1024);
 }
 
@@ -270,6 +280,8 @@ void CMach64::refresh_direct_aperture() {
  * dead on this card.
  **/
 u8 CMach64::io_read_b(u32 address) {
+  if (m_trace_new && address >= 0x3c0 && address <= 0x3ff)
+    trace_hit(0x400 + (address - 0x3c0));
   if (m_trace && address != 0x3da) {
     const u8 v = io_read_b_traced(address);
     printf("%s: port read  %03x = %02x\n", devid_string, address, v);

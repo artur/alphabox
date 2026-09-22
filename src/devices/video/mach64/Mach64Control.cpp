@@ -210,10 +210,57 @@ static u32 *engine_reg(CMach64::regs_t &r, u32 reg) {
  * access at its own width (a host-data write is one transfer, whatever
  * its size).
  **/
+/**
+ * Count an access for trace "new": registers are keys 0..0x3ff (write
+ * flag 0x200, block-0 flag 0x100), VGA port reads 0x400 upward. Every
+ * million accesses the three most frequent are printed -- a driver
+ * polling one of them shows up as the top line.
+ **/
+void CMach64::trace_hit(u32 key) {
+  m_hits[key]++;
+  if (++m_hits_total < (1u << 20))
+    return;
+  u32 top[3] = {0, 0, 0};
+  for (u32 k = 0; k < 0x440; k++)
+    for (int t = 0; t < 3; t++)
+      if (m_hits[k] > m_hits[top[t]]) {
+        for (int u = 2; u > t; u--)
+          top[u] = top[u - 1];
+        top[t] = k;
+        break;
+      }
+  printf("%s: hot:", devid_string);
+  for (u32 k : top) {
+    if (!m_hits[k])
+      continue;
+    if (k >= 0x400)
+      printf(" port %03x x%u", 0x3c0 + (k - 0x400), m_hits[k]);
+    else
+      printf(" %s %c+%03x x%u", (k & 0x200) ? "write" : "read",
+             (k & 0x100) ? '0' : '1', (k & 0xff) << 2, m_hits[k]);
+  }
+  printf("\n");
+  memset(m_hits, 0, sizeof(m_hits));
+  m_hits_total = 0;
+}
+
+void CMach64::trace_first(u32 offset, bool write, u32 data) {
+  const u32 key = (write ? 0x200u : 0u) | ((offset & (REG_BLOCK_BYTES - 1)) >> 2);
+  trace_hit(key);
+  if (m_seen[key])
+    return;
+  m_seen[key] = 1;
+  printf("%s: first %s %c+%03x = %08x (%s)\n", devid_string,
+         write ? "write" : "read ", (offset & REG_BLOCK0) ? '0' : '1',
+         offset & 0x3fc, data, m_trace_path);
+}
+
 u32 CMach64::reg_read(u32 offset, int bytes) {
   u32 data = 0;
   for (int i = 0; i < bytes; i++)
     data |= u32(reg_read8(offset + i)) << (8 * i);
+  if (m_trace_new)
+    trace_first(offset, false, data);
   if (m_trace)
     printf("%s: reg read  %c+%03x/%d = %0*x (%s)\n", devid_string,
            (offset & REG_BLOCK0) ? '0' : '1', offset & 0x3ff, bytes,
@@ -222,6 +269,8 @@ u32 CMach64::reg_read(u32 offset, int bytes) {
 }
 
 void CMach64::reg_write(u32 offset, int bytes, u32 data) {
+  if (m_trace_new)
+    trace_first(offset, true, data);
   if (m_trace)
     printf("%s: reg write %c+%03x/%d = %0*x (%s)\n", devid_string,
            (offset & REG_BLOCK0) ? '0' : '1', offset & 0x3ff, bytes,
@@ -335,10 +384,14 @@ u8 CMach64::reg_read8(u32 offset) {
       }
       return 0;
     }
-    default:
-      if (u32 *p = engine_reg(r, reg))
+    default: {
+      const u32 creg = is_gt() ? gt_canonical(reg & 0x3fc) : (reg & 0x3fc);
+      if (u32 *p = engine_reg(r, creg))
         return lane_get(*p, lane);
+      if (is_gt())
+        return lane_get(r.gt[creg >> 2], lane);
       return 0;
+    }
     }
   }
 
@@ -369,6 +422,8 @@ u8 CMach64::reg_read8(u32 offset) {
   default:
     if (u32 *p = block0_reg(r, reg))
       return lane_get(*p, lane);
+    if (is_gt())
+      return lane_get(r.gt[(reg & 0x3fc) >> 2], lane);
     return 0;
   }
 }
@@ -418,6 +473,8 @@ void CMach64::reg_write8(u32 offset, u8 data) {
   default:
     if (u32 *p = block0_reg(r, reg))
       lane_set(*p, lane, data);
+    else if (is_gt())
+      lane_set(r.gt[(reg & 0x3fc) >> 2], lane, data);
     return;
   }
 }
