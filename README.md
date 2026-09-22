@@ -100,7 +100,7 @@ With the JIT build on an Apple M3 Max, real guest code -- a Windows 2000
 application benchmark that isolates one JIT datapath per section -- runs at
 about 3000 MIPS per emulated CPU (2200 to 4000 depending on the section),
 about 1.35 host cycles per Alpha instruction; a tight arithmetic loop that
-never leaves a block runs at 4560 MIPS and a load/store loop at 3300. The
+never leaves a block runs at 4600 MIPS and a load/store loop at 3300. The
 ES40's own EV68 at 667 MHz managed roughly 1300 to 1500 in practice, the
 fastest Alpha ever built about 10300. Over 99 % of guest
 instructions execute as host code. An idle two-CPU Windows 2000 desktop

@@ -43,10 +43,10 @@ iterations and means nothing.
 
   | the loop | MIPS | spread over 3 runs |
   | --- | --- | --- |
-  | 32 integer operates, pinned registers | **4560** | 0.0% |
-  | the same with a load and a store in it | **3302** | 0.2% |
-  | the same on registers the JIT does not pin | **1889** | 0.3% |
-  | 4 instructions, one block chained to itself | **7632** | see below |
+  | 32 integer operates, pinned registers | **4603** | 0.2% |
+  | the same with a load and a store in it | **3315** | 6.3% |
+  | the same on registers the JIT does not pin | **1866** | 0.5% |
+  | 4 instructions, one block chained to itself | **7721** | 2.5% |
 
   For scale, the ES40's own EV68 at 667 MHz did roughly 1300-1500 MIPS in
   practice, and the fastest Alpha ever built, the EV7z at 1.30 GHz, about
@@ -67,11 +67,23 @@ iterations and means nothing.
   The tool now reads the rate the processor measures for itself
   (`ALPHABOX_RATE`, one clock read per 256 batches) and takes the run's
   last steady stretch of windows, so a measurement is one run rather than a
-  subtraction of two. What is left is real: the four-instruction loop runs
-  at either ~7640 or ~6260 MIPS depending on the run, the same speed from
-  its first window to its last, which is what a tiny block landing at a
-  different alignment in the code cache looks like. The tool prints the
-  spread so that such a thing shows up instead of averaging away.
+  subtraction of two.
+
+  What spread is left is real, and it is a *mode* rather than noise: a run
+  is steady from its first window to its last and lands on one of two
+  rates. The four-instruction loop runs at ~7720 or ~6260 MIPS, and the
+  load/store loop at ~3315 or ~3110 -- the 6.3% in the table is one run of
+  three landing low, not a measurement wandering. That is what a compiled
+  block placed differently in the code cache looks like, decided before the
+  loop starts. The tool prints the spread so it shows up rather than
+  averaging away; a spread above about one per cent is worth looking at.
+
+  **These were measured on an otherwise-quiet host, which matters by about
+  a per cent.** The first set of figures committed on 2026-09-22 (4560,
+  3302, 1889, 7632) was taken while a runaway script from the previous
+  day's session held a core at 100%; the same loop measures 4603 with it
+  gone, and the two do not overlap. `uptime` before a measurement is
+  cheap.
 - **A CPU-bound command inside Windows 2000**: a 15-million-iteration `cmd`
   batch loop takes about 62 s (`win_workload.sh`, median of three). This is
   the most representative number we have, because it is real guest code that
