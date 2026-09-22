@@ -44,6 +44,16 @@ iterations and means nothing.
   figure within the tool's run-to-run spread and not A/B'd. For scale, the
   ES40's own EV68 at 667 MHz did roughly 1300-1500 MIPS in practice, and the
   fastest Alpha ever built, the EV7z at 1.30 GHz, about 10300.
+
+  **What this tool can and cannot resolve.** It reports the *difference*
+  between two runs of about twenty seconds, so a second of noise in either
+  one moves the answer by a quarter, and best-of-3 does not help because the
+  spread is between sittings rather than inside one. The same loop on the
+  same binary measured 3812, 4730 and 5229 MIPS in three sittings on
+  2026-09-21 and 3977 then 4392 on 2026-09-22; the load/store loop gave 3241
+  the same day. Read it as "about 4000 MIPS, and 3200-3500 with memory in
+  the loop", and do not read a change of less than about 25% out of it at
+  all -- that is what `perf_ab.py` and a runtime switch are for.
 - **A CPU-bound command inside Windows 2000**: a 15-million-iteration `cmd`
   batch loop takes about 62 s (`win_workload.sh`, median of three). This is
   the most representative number we have, because it is real guest code that

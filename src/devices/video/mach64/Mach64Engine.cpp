@@ -34,10 +34,12 @@
  * writes, each of which advances the command by the pixels or bits it
  * carries.
  *
- * Commands run to completion inside the write that starts them, so the
- * FIFO and engine status always read idle. Pixels are addressed in units
- * of their own width, as the chip does; every VRAM access wraps at the
- * installed size.
+ * Commands run to completion inside the write that starts them; the FIFO
+ * and engine status do not say so, because a chip that is never busy is
+ * one no driver can pace itself against -- the work is charged at the rate
+ * the part draws it (engine_charge) and the status answers from that.
+ * Pixels are addressed in units of their own width, as the chip does;
+ * every VRAM access wraps at the installed size.
  *
  * Ported from 86Box's vid_ati_mach64_accel.c (GPL-2; Sarah Walker, Miran
  * Grca, Connor Hyde), minus the VT3 8x8x8 brush and the video overlay.
