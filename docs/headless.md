@@ -49,7 +49,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`, without asking whether anything was written to memory code was compiled from. `2`: flush anyway, but report any block whose source changed while the code-page map said nothing had (the audit; see test/tools/smc_test.sh). |
 | `ALPHABOX_JIT_RPCCTEST=1` | Check the generated `RPCC` stub against the helper it replaces, from six fixed starting states, and print the verdict. |
 | `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
-| `ALPHABOX_RATE=<sec>` | Every `<sec>` seconds, print each processor's instruction rate, and what its `IMB`s, its cycle-counter reads and its delay loops are costing. |
+| `ALPHABOX_RATE=<sec>` | Every `<sec>` seconds (fractions allowed), print each processor's instruction rate, and what its `IMB`s, its cycle-counter reads and its delay loops are costing. Accurate enough to measure with -- it looks at the clock once every 256 batches -- and `cpu_bench.sh` reads it rather than timing runs from outside. |
 | `ALPHABOX_JIT_OFFSETS=1` | Print the field offsets compiled code addresses `this` by. For when a member has been added in the wrong place and the emitter's displacements no longer reach. |
 
 ## Key names

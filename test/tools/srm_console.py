@@ -63,13 +63,16 @@ def main():
     log = open(args.log, "wb")
     cmd_log = open(args.cmd_log, "wb") if args.cmd_log else None
 
+    # Retry quickly: the emulator opens its telnet port a moment after it
+    # starts, and a one-second retry quantised every timed run to whole
+    # seconds -- which is a quarter of what cpu_bench.sh used to measure.
     s = None
-    for _ in range(40):
+    for _ in range(800):
         try:
             s = socket.create_connection(("127.0.0.1", args.port), timeout=2)
             break
         except OSError:
-            time.sleep(1)
+            time.sleep(0.05)
     if s is None:
         print("status=noconnect")
         return 1

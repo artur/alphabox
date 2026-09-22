@@ -196,12 +196,22 @@ u64 CAlphaCPU::sys_write_out(void *p) {
 
 // ALPHABOX_RATE=<seconds>: print this processor's instruction rate every
 // <seconds> of wall time. One number, comparable between arms of the same
-// binary: how fast guest code actually runs.
+// binary: how fast guest code actually runs -- and accurate enough to be the
+// measurement itself (cpu_bench.sh reads it), which is why the clock is read
+// once every 256 batches rather than every one. A batch is 2000 instructions,
+// half a microsecond of guest time here, and a steady_clock read is tens of
+// nanoseconds: sampling it every batch would have been several per cent of
+// the number being reported. Every 256th leaves the window boundaries a
+// fraction of a millisecond wide, against a period measured in seconds.
 void CAlphaCPU::rate_tick() {
-  static const int period = getenv("ALPHABOX_RATE")
-                                ? atoi(getenv("ALPHABOX_RATE"))
-                                : 0;
-  if (!period)
+  // Fractional seconds are allowed and are what a short measurement needs:
+  // a four-instruction loop is over in a second and a half, which is one
+  // window at a period of one second and six at a quarter of one.
+  static const double period =
+      getenv("ALPHABOX_RATE") ? atof(getenv("ALPHABOX_RATE")) : 0.0;
+  if (period <= 0.0)
+    return;
+  if ((++m_rate_batches & 0xff) != 0)
     return;
   const auto now = std::chrono::steady_clock::now();
   if (m_rate_last == std::chrono::steady_clock::time_point{}) {
@@ -220,7 +230,7 @@ void CAlphaCPU::rate_tick() {
   m_rate_escapes = hs.escapes;
   m_rate_entries = hs.entries;
   fprintf(stderr,
-          "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s); "
+          "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.4f s); "
           "%.0f escapes/s, %.0f VM exits/s, %.1f%% of a second in exits at "
           "1 us each\n",
           get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs,
@@ -253,7 +263,10 @@ void CAlphaCPU::rate_tick() {
             (unsigned long long)hs.el1_far, (unsigned long long)hs.el1_pc);
   }
 #else
-  fprintf(stderr, "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.1f s)\n",
+  // Four decimals on the window: it is what the rate is computed from, and
+  // cpu_bench.sh divides by it. At a tenth of a second, a quarter-second
+  // window prints as "0.3 s" and reads seventeen per cent slow.
+  fprintf(stderr, "%%CPU%d-I-RATE: %.2f MIPS (%llu instructions in %.4f s)\n",
           get_cpuid(), done / secs / 1e6, (unsigned long long)done, secs);
 #endif
   m_rate_last = now;

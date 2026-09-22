@@ -39,21 +39,39 @@ iterations and means nothing.
   on the slowest -- roughly 1.35 host cycles per Alpha instruction on an
   M3 Max. The stats build is a few percent under production.
 - **Translated Alpha code in a tight loop** (`cpu_bench.sh`, production
-  build, same day): 4200 MIPS on an arithmetic loop and 3540 on a load/store
-  loop, per emulated CPU; earlier in the month 4300 and 4000, the memory
-  figure within the tool's run-to-run spread and not A/B'd. For scale, the
-  ES40's own EV68 at 667 MHz did roughly 1300-1500 MIPS in practice, and the
-  fastest Alpha ever built, the EV7z at 1.30 GHz, about 10300.
+  build, 2026-09-22), per emulated CPU, each the median of three runs:
 
-  **What this tool can and cannot resolve.** It reports the *difference*
-  between two runs of about twenty seconds, so a second of noise in either
-  one moves the answer by a quarter, and best-of-3 does not help because the
-  spread is between sittings rather than inside one. The same loop on the
-  same binary measured 3812, 4730 and 5229 MIPS in three sittings on
-  2026-09-21 and 3977 then 4392 on 2026-09-22; the load/store loop gave 3241
-  the same day. Read it as "about 4000 MIPS, and 3200-3500 with memory in
-  the loop", and do not read a change of less than about 25% out of it at
-  all -- that is what `perf_ab.py` and a runtime switch are for.
+  | the loop | MIPS | spread over 3 runs |
+  | --- | --- | --- |
+  | 32 integer operates, pinned registers | **4560** | 0.0% |
+  | the same with a load and a store in it | **3302** | 0.2% |
+  | the same on registers the JIT does not pin | **1889** | 0.3% |
+  | 4 instructions, one block chained to itself | **7632** | see below |
+
+  For scale, the ES40's own EV68 at 667 MHz did roughly 1300-1500 MIPS in
+  practice, and the fastest Alpha ever built, the EV7z at 1.30 GHz, about
+  10300.
+
+  **These are not comparable with the figures this file carried before
+  2026-09-22** (4200 and 3540, and 4300 and 4000 earlier in the month).
+  Those came out of a method that could not resolve them: the tool ran the
+  image at two sizes and reported the difference between the two wall-clock
+  times, and since a run is twenty seconds of which seventeen are the
+  firmware booting, it was inferring a two-second signal from the
+  difference of two twenty-second numbers. `srm_console.py` retried its
+  telnet connect once a second, which quantised the rest. The same loop on
+  the same binary read 3812, 4730 and 5229 MIPS in three sittings -- and
+  the loop was not varying at all: measured from inside, those same runs
+  were steady to 0.6%.
+
+  The tool now reads the rate the processor measures for itself
+  (`ALPHABOX_RATE`, one clock read per 256 batches) and takes the run's
+  last steady stretch of windows, so a measurement is one run rather than a
+  subtraction of two. What is left is real: the four-instruction loop runs
+  at either ~7640 or ~6260 MIPS depending on the run, the same speed from
+  its first window to its last, which is what a tiny block landing at a
+  different alignment in the code cache looks like. The tool prints the
+  spread so that such a thing shows up instead of averaging away.
 - **A CPU-bound command inside Windows 2000**: a 15-million-iteration `cmd`
   batch loop takes about 62 s (`win_workload.sh`, median of three). This is
   the most representative number we have, because it is real guest code that

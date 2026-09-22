@@ -1094,6 +1094,9 @@ public:
   // New members go here, behind everything the emitter addresses.
   std::chrono::steady_clock::time_point m_rate_last{};
   u64 m_rate_icount = 0;
+  /// Batches since the rate hook last looked at the clock. Reading it every
+  /// batch would cost several per cent of what the hook is there to measure.
+  u32 m_rate_batches = 0;
   // The clock anchor lives here for the same reason as everything else in
   // this block: compiled code reaches the register file and the page
   // caches with one displacement from `this`, and a field inserted ahead
