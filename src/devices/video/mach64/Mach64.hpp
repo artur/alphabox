@@ -163,8 +163,20 @@ protected:
   void legacy_write(u32 address, int dsize, u32 data) override;
   uint8_t mem_r(offs_t offset) override;
   void mem_w(offs_t offset, uint8_t data) override;
+  /// VGA aperture mode: the register block sits at the top of the 0xa0000
+  /// window (0xbf800).
   bool vga_aperture_enabled() const {
     return (r.config_cntl & mach64::CFG_MEM_VGA_AP_EN) != 0;
+  }
+  /// The two banked 32 KB apertures replace the VGA's memory at 0xa0000
+  /// only in accelerator mode -- the Mach64's own CRTC driving the screen
+  /// -- as well as VGA aperture mode (RRG-G02700, MEM_VGA_WP_SEL: "Apertures
+  /// exist only in accelerator modes, and only if CFG_MEM_VGA_AP_EN is
+  /// set"). A driver that enables the aperture while the VGA is still on
+  /// screen leaves the VGA's planar memory where it was.
+  bool banked_window_active() const {
+    return vga_aperture_enabled() &&
+           (r.crtc_gen_cntl & mach64::CRTC_EXT_DISP_EN) != 0;
   }
   u32 window_offset(u32 offset, bool write) const;
   u32 aperture_read(u32 offset, int dsize);

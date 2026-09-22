@@ -91,10 +91,12 @@ u32 CMach64::window_offset(u32 offset, bool write) const {
 }
 
 uint8_t CMach64::mem_r(offs_t offset) {
-  if (!vga_aperture_enabled())
+  if (vga_aperture_enabled() && offset >= 0x1f800) {
+    m_trace_path = "window";
+    return u8(reg_read(offset - 0x1f800, 1));
+  }
+  if (!banked_window_active())
     return CVGA::mem_r(offset);
-  if (offset >= 0x1f800)
-    return reg_read8(offset - 0x1f800);
   const u32 addr = window_offset(offset, false);
   if (addr >= m_vram_bytes)
     return 0xff;
@@ -102,15 +104,17 @@ uint8_t CMach64::mem_r(offs_t offset) {
 }
 
 void CMach64::mem_w(offs_t offset, uint8_t data) {
-  if (!vga_aperture_enabled()) {
-    CVGA::mem_w(offset, data);
-    state.vga_mem_updated = 1;
+  if (vga_aperture_enabled() && offset >= 0x1f800) {
+    // Through reg_write, as every other path: the engine's registers are
+    // not reg_write8's, and a byte written to one of them here used to be
+    // dropped (and none of these writes reached the trace).
+    m_trace_path = "window";
+    reg_write(offset - 0x1f800, 1, data);
     return;
   }
-  if (offset >= 0x1f800) {
-    reg_write8(offset - 0x1f800, data);
-    if ((offset - 0x1f800) & REG_BLOCK0)
-      reg_written((offset - 0x1f800) & 0x3fc);
+  if (!banked_window_active()) {
+    CVGA::mem_w(offset, data);
+    state.vga_mem_updated = 1;
     return;
   }
   const u32 addr = window_offset(offset, true);
