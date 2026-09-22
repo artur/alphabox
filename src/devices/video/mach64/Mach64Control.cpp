@@ -451,6 +451,14 @@ void CMach64::reg_written(u32 reg) {
     break;
   case GEN_TEST_CNTL:
     eeprom_clock();
+    // Clearing GUI_ENGINE_ENABLE is how a driver resets the engine: the
+    // command in flight is abandoned and the FIFO emptied. Without this a
+    // host-data command cut short by the reset would take the next
+    // command's HOST_DATA writes as its own.
+    if (!(r.gen_test_cntl & GEN_GUI_EN)) {
+      accel.busy = false;
+      m_engine_busy_until_us = 0;
+    }
     state.vga_mem_updated = 1; // the cursor enable lives here
     break;
   case CONFIG_CNTL:

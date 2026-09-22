@@ -112,6 +112,24 @@ void CMach64::palette_update() {
   }
 }
 
+/**
+ * What the extended mode reads: the frame from its start for as many lines
+ * as are shown, and the cursor image, which lives in off-screen VRAM and
+ * changes shape without any register moving. In a VGA mode the whole of
+ * VRAM, as the base does.
+ **/
+uint64_t CMach64::direct_view_hash() const {
+  if (!native_crtc_active())
+    return CVGACard::direct_view_hash();
+  const u32 start = (r.crtc_off_pitch & 0xfffff) * 8;
+  const int dbl = (r.crtc_gen_cntl & CRTC_DBL_SCAN_EN) ? 1 : 0;
+  const u32 lines = (native_height() >> dbl) + 1;
+  uint64_t h = hash_vram(start, native_pitch_bytes() * lines);
+  if (r.gen_test_cntl & GEN_CUR_EN)
+    h = hash_vram((r.cur_offset & 0xfffff) << 3, 1024, h);
+  return h;
+}
+
 uint64_t CMach64::hw_cursor_signature() const {
   if (!(r.gen_test_cntl & GEN_CUR_EN))
     return 0;

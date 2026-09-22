@@ -1276,8 +1276,13 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
 
       const u32 dst_addr = a.dst_offset + a.dst_y * a.dst_pitch + a.dst_x;
       u32 dest_dat = pix_read(vram, mask, dst_addr, a.dst_size, lsb_first);
-      if (!engine_colour_compare(src_dat, dest_dat))
+      if (!engine_colour_compare(src_dat, dest_dat)) {
+        // DP_WRITE_MASK guards every pixel the engine writes, a line's as
+        // much as a rectangle's.
+        const u32 old = dest_dat;
         dest_dat = engine_mix(mix ? a.mix_fg : a.mix_bg, src_dat, dest_dat);
+        dest_dat = (dest_dat & a.write_mask) | (old & ~a.write_mask);
+      }
       if (bpp24) {
         if (!(r.dst_cntl & DST_Y_MAJOR)) {
           if (!x)

@@ -224,6 +224,44 @@ void CMach64::config_write_custom(int func, u32 address, int dsize,
   if (m_trace)
     printf("%s: config write %02x/%d = %08x (now %08x)\n", devid_string,
            address, dsize, data, new_data);
+  // COMMAND's memory enable and BAR0 decide where, and whether, the
+  // aperture is.
+  if (address <= 0x05 || (address >= 0x10 && address <= 0x13))
+    refresh_direct_aperture();
+}
+
+/**
+ * Offer the aperture's VRAM to the CPUs as plain memory while it is
+ * decoded (COMMAND memory enable, BAR0 placed) and the card sits on the
+ * hose -- a bridge forwards its ranges elsewhere -- and withdraw it the
+ * moment either changes, which also flushes every CPU's page cache. The
+ * offer stops short of the register page at the top of the half: with 8
+ * MB installed, the last 4 KB of VRAM are behind the registers there, as
+ * on the chip. ALPHABOX_LFB_DIRECT=0 keeps every access trapping, as the
+ * S3's does.
+ **/
+void CMach64::refresh_direct_aperture() {
+  static const bool enabled = [] {
+    const char *e = getenv("ALPHABOX_LFB_DIRECT");
+    return !(e && e[0] == '0');
+  }();
+  const u32 cmd = config_read(0, 0x04, 16);
+  const u32 bar0 = config_read(0, 0x10, 32) & 0xfffffff0u;
+  u64 base = 0, size = 0;
+  if (enabled && !myBridge && (cmd & 0x0002) && bar0 != 0 && vga.memory) {
+    base = bus_address(false, bar0);
+    size = m_vram_bytes;
+    if (size > APERTURE_HALF - APERTURE_REG_PAGE)
+      size = APERTURE_HALF - APERTURE_REG_PAGE;
+  }
+  if (base == m_direct_base && size == m_direct_size)
+    return;
+  m_direct_base = base;
+  m_direct_size = size;
+  printf("%s: aperture %s for direct access (%llx + %llx)\n", devid_string,
+         size ? "offered" : "withdrawn", (unsigned long long)base,
+         (unsigned long long)size);
+  cSystem->set_direct_memory(base, size, size ? vga.memory : nullptr);
 }
 
 /**
@@ -390,4 +428,5 @@ int CMach64::restore_card_state(FILE *f) {
 void CMach64::post_restore() {
   update_banks();
   accel.busy = false;
+  refresh_direct_aperture();
 }

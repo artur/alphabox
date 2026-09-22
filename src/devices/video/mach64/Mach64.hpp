@@ -44,8 +44,9 @@
  * Register semantics are modelled on 86Box's vid_ati_mach64.c and
  * vid_ati_mach64_accel.c (GPL-2; Sarah Walker, Miran Grca, Connor Hyde),
  * against which the BIOS images this device runs are known to boot. The
- * engine is executed synchronously: a command completes inside the write
- * that starts it, so the FIFO always reads empty.
+ * engine is executed synchronously -- a command completes inside the write
+ * that starts it -- but it reports itself busy for as long as the part
+ * would have taken (see engine_charge).
  */
 
 #if !defined(INCLUDED_MACH64_H)
@@ -319,6 +320,19 @@ protected:
   /// The DDC bus to the monitor, bit-banged through DAC_CNTL; the monitor
   /// is a 24C02 holding its EDID.
   I2CBus m_ddc;
+
+  /// The little-endian half of the memory aperture, offered to the CPUs as
+  /// plain memory. Through it the card does nothing a store would not --
+  /// the bytes land in VRAM -- so a guest drawing into the framebuffer need
+  /// not trap on every access. Only the VRAM part is offered: the register
+  /// page at the top of the half, the all-ones reads beyond the installed
+  /// memory and the byte-swapping big-endian half still come here.
+  u64 m_direct_base = 0, m_direct_size = 0;
+  void refresh_direct_aperture();
+  bool direct_framebuffer_active() const override {
+    return m_direct_size != 0;
+  }
+  uint64_t direct_view_hash() const override;
 
   /// ALPHABOX_TRACE_MACH64: print every register and configuration access
   /// (bring-up aid; the framebuffer itself is not traced).

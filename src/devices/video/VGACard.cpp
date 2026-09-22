@@ -1473,6 +1473,35 @@ void CVGACard::redraw_area(unsigned x0, unsigned y0, unsigned width,
   state.vga_mem_updated = 1;
 }
 
+uint64_t CVGACard::hash_vram(u32 start, u32 bytes, uint64_t seed) const {
+  const u32 size = u32(vga.svga_intf.vram_size);
+  if (!vga.memory || start >= size)
+    return seed;
+  if (bytes > size - start)
+    bytes = size - start;
+  // Four independent lanes, so that the multiplies overlap instead of
+  // waiting on each other: the whole frame is read every refresh.
+  const u8 *p = vga.memory + start;
+  uint64_t h[4] = {seed ^ 0x9e3779b97f4a7c15ull, seed + 1, seed + 2, seed + 3};
+  const uint64_t k = 0x9e3779b97f4a7c15ull;
+  u32 i = 0;
+  for (; i + 32 <= bytes; i += 32) {
+    for (int l = 0; l < 4; l++) {
+      uint64_t w;
+      memcpy(&w, p + i + 8 * l, 8);
+      h[l] = (h[l] ^ w) * k;
+      h[l] ^= h[l] >> 29;
+    }
+  }
+  for (; i < bytes; i++)
+    h[0] = (h[0] ^ p[i]) * k;
+  return h[0] ^ (h[1] * 3) ^ (h[2] * 5) ^ (h[3] * 7) ^ bytes;
+}
+
+uint64_t CVGACard::direct_view_hash() const {
+  return hash_vram(0, u32(vga.svga_intf.vram_size));
+}
+
 void CVGACard::update() {
   unsigned iWidth = 0, iHeight = 0;
 
@@ -1521,8 +1550,17 @@ void CVGACard::update() {
   const int kBlinkRefreshFrames =
       8; // >= 2x the ~1.9 Hz VGA blink toggle at a 60 Hz refresh
   const uint64_t cursor_sig = hw_cursor_signature();
-  if (direct_framebuffer_active())
-    state.vga_mem_updated = 1; // the CPUs write VRAM behind our back
+  if (direct_framebuffer_active()) {
+    // The CPUs write VRAM behind the card's back, so the dirty flag cannot
+    // be trusted; whether what the screen shows changed can be. Forcing a
+    // redraw every frame instead cost an idle desktop five per cent of a
+    // host core.
+    const uint64_t h = direct_view_hash();
+    if (h != m_last_direct_hash) {
+      m_last_direct_hash = h;
+      state.vga_mem_updated = 1;
+    }
+  }
   if (!state.vga_mem_updated && cursor_sig == m_last_cursor_sig &&
       ++m_frames_since_render < kBlinkRefreshFrames) {
     screen().tick_frame(); // keep cursor/text-blink timing alive while skipping

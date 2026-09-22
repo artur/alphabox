@@ -82,8 +82,18 @@ public:
   virtual void post_restore() {}
   /// True while the card's framebuffer is offered to the CPUs for direct
   /// access (CSystem::set_direct_memory): writes then bypass the card, so
-  /// the renderer cannot rely on its dirty flag and redraws every frame.
+  /// the renderer cannot rely on its dirty flag and hashes what the screen
+  /// shows instead (direct_view_hash).
   virtual bool direct_framebuffer_active() const { return false; }
+  /// While the CPUs write VRAM directly, a hash of every byte the screen is
+  /// drawn from, so that a refresh redraws only when one of them changed.
+  /// The whole of VRAM unless the card narrows it to what its current mode
+  /// reads (a cursor image in off-screen memory included).
+  virtual uint64_t direct_view_hash() const;
+  /// A fast hash of VRAM bytes [start, start + bytes), clamped to VRAM, for
+  /// direct_view_hash. Not cryptographic: a collision only delays a redraw
+  /// to the refresh the dirty gate forces every few frames anyway.
+  uint64_t hash_vram(u32 start, u32 bytes, uint64_t seed = 0) const;
 
   // --- legacy (fixed-address) ranges -------------------------------------
   /// Dispatches the standard VGA ranges (see LegacyRange) and hands every
@@ -275,6 +285,7 @@ protected:
 
   std::chrono::steady_clock::time_point m_last_refresh_time;
   uint64_t m_last_cursor_sig = 0;
+  uint64_t m_last_direct_hash = 0;
   int m_frames_since_render = 0;
   /// Set by RestoreState: the render thread, once its GUI exists, pushes the
   /// restored text font and draws the first frame from the restored VRAM.
