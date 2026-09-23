@@ -198,6 +198,7 @@ constexpr u32 T_XINC_START = 0x364;
 constexpr u32 T_Y_INC = 0x368;
 constexpr u32 T_START = 0x36c;
 constexpr u32 TEX_SIZE_PITCH = 0x370;
+constexpr u32 TEX_CNTL = 0x374; ///< Rage Pro: texture cache, clamp, filter
 // Colour, Z and alpha interpolation: a start value at the trapezoid's
 // first pixel, a step per pixel in X and per scan line in Y.
 constexpr u32 RED_X_INC = 0x3c0;

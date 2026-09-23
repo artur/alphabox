@@ -34,7 +34,9 @@
  * 6-31..6-43) are missing from the copies here; the formats are what
  * atidrab writes, checked against its own numbers:
  *   X_Y   X in bits 31..16, Y in 15..0, signed, 2 fraction bits
- *   S T W IEEE single; the texel address is S/W, T/W
+ *   S T W IEEE single; S and T the texture coordinates as they are (0..1
+ *         across the texture), W the perspective 1/w: the chip
+ *         interpolates S*W, T*W and W and divides per pixel
  *   Z     unsigned 16.16
  *   ARGB  8888, specular's alpha the fog factor
  *   ONE_OVER_AREA  IEEE single, 1 / (twice the area in pixels): the
@@ -42,10 +44,13 @@
  * The pixel pipeline behind it is the GT's (SCALE_3D_CNTL, Z_CNTL,
  * ALPHA_TST_CNTL, the texture registers), in Mach64Pipe.hpp.
  *
- * Seen drawing right: dxdiag's Direct3D cube -- Gouraud shading, the
- * specular term, the scissor. Written but not yet seen: texturing (the
- * S/W, T/W scale to texels is a guess), the Z buffer, alpha blending and
- * test, fog. Dithering is not modelled; colours are truncated.
+ * Checked against D3D's own software rasteriser by test/tools/d3d_check.sh
+ * (the same scenes drawn by both, compared pixel by pixel): Gouraud and
+ * flat shading, specular, fog, alpha blending and alpha test, the Z
+ * buffer, point-sampled, bilinear, modulated and perspective-correct
+ * textures, 565 and 1555 -- identical but for pixels exactly on an edge.
+ * Not modelled: mip-maps, the second texture, dithering (colours are
+ * truncated).
  **/
 
 #include "Mach64.hpp"
@@ -110,6 +115,25 @@ void CMach64::setup_triangle() {
     u32 spec, argb;
     double z;
   } v[3];
+  if (m_trace_trap && m_traps_traced < 400) {
+    m_traps_traced++;
+    printf("%s: triangle SCALE_3D_CNTL %08x TEX_CNTL %08x TEX_SIZE_PITCH "
+           "%08x DP_PIX_WIDTH %08x Z_CNTL %08x ALPHA_TST_CNTL %08x "
+           "SETUP_CNTL %08x DST_OFF_PITCH %08x TEX_n_OFF",
+           devid_string, r.gt[SCALE_3D_CNTL >> 2], r.gt[TEX_CNTL >> 2],
+           r.gt[TEX_SIZE_PITCH >> 2], r.dp_pix_width, r.gt[Z_CNTL >> 2],
+           r.gt[ALPHA_TST_CNTL >> 2], r.block1[SETUP_CNTL], r.dst_off_pitch);
+    for (int i = 0; i < 11; i++)
+      printf(" %x", r.gt[(TEX_0_OFF >> 2) + i]);
+    printf("\n");
+    for (int i = 0; i < 3; i++) {
+      const u32 *b = &r.block1[V1_BASE + 8 * i];
+      printf("%s:   v%d xy %08x s %08x t %08x w %08x z %08x argb %08x "
+             "spec %08x\n",
+             devid_string, i + 1, b[V_XY], b[V_S], b[V_T], b[V_W], b[V_Z],
+             b[V_ARGB], b[V_SPEC]);
+    }
+  }
   for (int i = 0; i < 3; i++) {
     const u32 *b = &r.block1[V1_BASE + 8 * i];
     v[i].x = sext16(b[V_XY] >> 16);
@@ -147,7 +171,11 @@ void CMach64::setup_triangle() {
   const int blend_src = int(s3d >> 16) & 7;
   const int blend_dst = int(s3d >> 19) & 7;
   const int light = int(s3d >> 22) & 3;
-  const bool textured = (s3d >> 30) & 1;
+  // SCALE_3D_FCN (bits 7..6): 3 shades, 2 textures. Bit 30 (TEX_MAP_AEN)
+  // takes the fragment's alpha from the texel; bit 25 filters bilinearly.
+  const bool textured = fcn == 2;
+  const bool tex_alpha = (s3d >> 30) & 1;
+  const bool bilinear = (s3d >> 25) & 1;
   const u32 atst = r.gt[ALPHA_TST_CNTL >> 2];
   const bool specular = (atst >> 31) & 1;
   const bool alpha_test = atst & 1;
@@ -165,7 +193,9 @@ void CMach64::setup_triangle() {
   const int tex_w = 1 << ((tsp >> 4) & 0xf);
   const int tex_h = 1 << ((tsp >> 8) & 0xf);
   const int tex_fmt = int(r.dp_pix_width >> 28) & 0xf;
-  const u32 tex_off = r.gt[TEX_0_OFF >> 2];
+  // With MIP_MAP_DISABLE the driver leaves TEX_0_OFF at 0 and puts the
+  // texture in the TEX_n_OFF of its own size, n = log2 of the larger side.
+  const u32 tex_off = r.gt[(TEX_0_OFF >> 2) + ((tsp >> 4) & 0xf)];
   const u32 mask = vram_mask();
   u8 *mem = vga.memory;
   const u32 flat = (r.block1[SETUP_CNTL] >> 3) & 3; // 0: Gouraud
@@ -190,12 +220,19 @@ void CMach64::setup_triangle() {
 
   for (int py = y0; py <= y1; py++) {
     for (int px = x0; px <= x1; px++) {
+      // At the pixel's centre. (atidrab adds half a pixel to D3D's
+      // coordinates, 32.0 arriving as 32.5; sampling at the centre of that
+      // is what matches D3D's software rasteriser.)
       const s64 cx = 4 * px + 2, cy = 4 * py + 2;
       const s64 e0 = edge(v[1], v[2], cx, cy);
       const s64 e1 = edge(v[2], v[0], cx, cy);
       const s64 e2 = edge(v[0], v[1], cx, cy);
       if (e0 < 0 || e1 < 0 || e2 < 0)
         continue;
+      // On an edge exactly: drawn for a top or left edge only (D3D's rule).
+      // D3D's software rasteriser steps sloped edges in its own fixed
+      // point and differs from this on a few of their pixels; straight
+      // edges agree exactly.
       if ((e0 == 0 && !tl0) || (e1 == 0 && !tl1) || (e2 == 0 && !tl2))
         continue;
       const double l0 = double(e0) * inv_area, l1 = double(e1) * inv_area;
@@ -210,22 +247,55 @@ void CMach64::setup_triangle() {
                (lerp8(a, b, c, 8) << 8) | lerp8(a, b, c, 0);
       };
 
-      u32 color = flat ? v[flat - 1].argb
-                       : (fcn == 3 ? lerp_argb(v[0].argb, v[1].argb, v[2].argb)
-                                   : v[0].argb);
+      u32 color =
+          flat ? v[flat - 1].argb : lerp_argb(v[0].argb, v[1].argb, v[2].argb);
       if (textured) {
+        // S and T arrive as texture coordinates, not premultiplied by W:
+        // the chip interpolates S*W, T*W and W and divides per pixel.
         const double w = l0 * v[0].w + l1 * v[1].w + l2 * v[2].w;
-        const double s = l0 * v[0].s + l1 * v[1].s + l2 * v[2].s;
-        const double t = l0 * v[0].t + l1 * v[1].t + l2 * v[2].t;
-        int tu = w != 0.0 ? int(std::floor(s / w * tex_w)) : 0;
-        int tv = w != 0.0 ? int(std::floor(t / w * tex_h)) : 0;
-        tu &= tex_w - 1;
-        tv &= tex_h - 1;
-        const u32 addr =
-            tex_off + u32((tv * tex_pitch + tu) * pipe_texel_bytes(tex_fmt));
-        const u32 texel =
-            pipe_texel(mem, mask, addr, tex_fmt, &vga.dac.color[0],
-                       (r.dac_cntl & DAC_8BIT_EN) != 0);
+        const double s =
+            l0 * v[0].s * v[0].w + l1 * v[1].s * v[1].w + l2 * v[2].s * v[2].w;
+        const double t =
+            l0 * v[0].t * v[0].w + l1 * v[1].t * v[1].w + l2 * v[2].t * v[2].w;
+        const double fu = w != 0.0 ? s / w * tex_w : 0.0;
+        const double fv = w != 0.0 ? t / w * tex_h : 0.0;
+        auto fetch = [&](int tu, int tv) {
+          tu &= tex_w - 1; // wrap
+          tv &= tex_h - 1;
+          const u32 addr =
+              tex_off + u32((tv * tex_pitch + tu) * pipe_texel_bytes(tex_fmt));
+          return pipe_texel(mem, mask, addr, tex_fmt, &vga.dac.color[0],
+                            (r.dac_cntl & DAC_8BIT_EN) != 0);
+        };
+        u32 texel;
+        if (bilinear) { // the four texels around the sample, by distance
+          const double bu = fu - 0.5, bv = fv - 0.5;
+          const int u0 = int(std::floor(bu)), v0 = int(std::floor(bv));
+          const double au = bu - u0, av = bv - v0;
+          const u32 t00 = fetch(u0, v0), t10 = fetch(u0 + 1, v0);
+          const u32 t01 = fetch(u0, v0 + 1), t11 = fetch(u0 + 1, v0 + 1);
+          texel = 0;
+          for (int i = 0; i < 4; i++) {
+            auto c = [&](u32 t) { return double((t >> (8 * i)) & 0xff); };
+            const double top = c(t00) * (1 - au) + c(t10) * au;
+            const double bot = c(t01) * (1 - au) + c(t11) * au;
+            texel |= clamp8(s32(std::lround(top * (1 - av) + bot * av)))
+                     << (8 * i);
+          }
+        } else {
+          // Texel coordinates in fixed point, 16 fraction bits, as hardware
+          // carries them (-0.0000001 is 0, 3.9999999 is 4). A sample exactly
+          // on a texel edge then takes the texel below it, as D3D's
+          // software rasteriser does (4.0 picks texel 3, 0.0 texel 0): the
+          // coordinate is truncated a hair towards zero before rounding
+          // down.
+          const double k = 1.0 - 1.0 / (1 << 20);
+          const double qu = std::round(fu * 65536.0) / 65536.0;
+          const double qv = std::round(fv * 65536.0) / 65536.0;
+          texel = fetch(int(std::floor(qu * k)), int(std::floor(qv * k)));
+        }
+        if (!tex_alpha)
+          texel = (texel & 0xffffff) | (color & 0xff000000u);
         switch (light) {
         case 0: // the texel
           color = texel;

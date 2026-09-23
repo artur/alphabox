@@ -60,7 +60,9 @@ probes), `win_bench.sh` (headless Windows guest boot + MIPS -- meaningful only w
 busy guest), `cpu_bench.sh` + `bench_image.py` (how fast Alpha code itself
 runs: a boot block of known instruction count, two sizes, difference), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
-`build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`
+`d3d_check.sh` (a Direct3D 7 program, built with nada, renders scenes on a
+Windows guest's HAL and on D3D's software rasteriser and compares them --
+e.g. `lab/rpro-win`, the Rage Pro guest), `build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`
 (default `lab/`, git-excluded, which also holds guest images). See the
 `srm-boot-test`, `guest-boot-bench` and `build-lanes` skills. Pitfalls: `test.sh`
 deletes the tracked ROM files at the end — restore with

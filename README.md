@@ -14,6 +14,10 @@ and AArch64 hosts under Linux, macOS and Windows.
 |---|---|---|
 | ![OpenVMS 8.4 desktop](screenshots/openvms.png) | ![Windows 2000 desktop](screenshots/win2000.png) | ![Windows 2000 Task Manager showing two CPUs](screenshots/win2000-smp.png) |
 
+| Direct3D on the emulated ATI 3D Rage Pro | Perspective-correct texturing on it | dxdiag: ATI's own driver, every test passed |
+|---|---|---|
+| ![A lit cube drawn by the Rage Pro's triangle setup engine](screenshots/win2000-d3d-ragepro.png) | ![A textured floor receding into the distance, drawn by the Rage Pro model](screenshots/win2000-d3d-texture-ragepro.png) | ![dxdiag reporting DirectDraw and Direct3D enabled on the 3D Rage Pro](screenshots/win2000-dxdiag-ragepro.png) |
+
 ## Features
 
 - **Real firmware.** Boots the genuine SRM console and, from it, the
@@ -52,7 +56,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 | Memory | 64 MB – 32 GB |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
-| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp) |
+| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D) |
 | Network | DEC 21040 / 21041 / 21140 / 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) and the two-port DE602-AA / DE602-B boards behind a bridge — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 and ES1371 (AC'97 codec and sample-rate converter) |
 | Expansion | DECchip 21050/21052/21152/21153/21154 PCI-PCI bridges (nested buses, multi-port boards) |
@@ -140,7 +144,9 @@ which workload, and the optimizations that turned out not to pay.
 - Some SCSI and IDE commands; copying large files from an IDE CD-ROM to an
   IDE disk can fail (this rarely affects an OpenVMS installation).
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
-  and the Mach64's video overlay.
+  and the Mach64's video overlay, front-end scaler and bus-master DMA.
+- On the Rage Pro: mip-maps, the second texture and dithering; the 3D Rage
+  II+ has DirectDraw but no Direct3D, as Windows' own driver gives it none.
 - The guest's cycle counter runs ahead of real time: a driver busy-waiting on
   `RPCC` is handed the cycles it is waiting for instead of spinning through
   them, which used to be 62 of the 95 seconds of a Windows 2000 boot. A guest
