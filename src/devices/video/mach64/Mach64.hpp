@@ -38,7 +38,7 @@
  *
  * The CT (1994) is the first Mach64 with the DAC and clock synthesizer on
  * the chip; the VT parts keep its register file and add a video overlay
- * (stored here, not drawn). A mach64_chip_config supplies a part's
+ * (Mach64Display.cpp). A mach64_chip_config supplies a part's
  * identity; the ES40 SRM console's own PCI table names only the CT.
  *
  * Register semantics are modelled on 86Box's vid_ati_mach64.c and
@@ -236,6 +236,8 @@ protected:
   uint64_t hw_cursor_signature() const override;
   void render_native(bitmap_rgb32 &bitmap);
   void draw_hw_cursor(bitmap_rgb32 &bitmap);
+  bool overlay_active() const;
+  void draw_overlay(bitmap_rgb32 &bitmap);
   unsigned native_width() const;
   unsigned native_height() const;
   unsigned native_pitch_bytes() const;
@@ -276,7 +278,7 @@ public:
     u32 dp_pix_width, dp_mix, dp_src, dp_set_gui_engine;
     u32 clr_cmp_clr, clr_cmp_mask, clr_cmp_cntl;
     u32 context_mask, context_load_cntl, gui_traj_cntl;
-    // block 1: overlay and scaler (stored, not drawn)
+    // block 1: overlay, scaler, setup engine vertices
     u32 block1[0x100];
     // the rest of the chip
     u8 ext_index;    ///< 0x1ce
@@ -388,6 +390,7 @@ protected:
   /// for the first 64 of them -- the triangle setup the driver computed.
   bool m_trace_trap = false;
   int m_traps_traced = 0;
+  int m_scaler_traced = 0;
   u8 m_seen[0x1000] = {}; ///< [write][2 KB offset / 4] of trace "new"
   /// Accesses per register since the last report: a driver spinning on
   /// one shows up as the top line every million accesses.

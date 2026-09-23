@@ -42,7 +42,7 @@
  * every VRAM access wraps at the installed size.
  *
  * Ported from 86Box's vid_ati_mach64_accel.c (GPL-2; Sarah Walker, Miran
- * Grca, Connor Hyde), minus the VT3 8x8x8 brush and the video overlay.
+ * Grca, Connor Hyde), minus the VT3 8x8x8 brush.
  * The ALPHABOX_BLIT_STATS report matches the 8514/A engine's.
  **/
 

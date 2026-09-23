@@ -144,7 +144,8 @@ which workload, and the optimizations that turned out not to pay.
 - Some SCSI and IDE commands; copying large files from an IDE CD-ROM to an
   IDE disk can fail (this rarely affects an OpenVMS installation).
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
-  and the Mach64's video overlay, front-end scaler and bus-master DMA.
+  and the Mach64's front-end scaler and bus-master DMA (Windows 2000's
+  drivers use neither: stretched blits go through the 3D engine).
 - The 3D Rage II+ has DirectDraw but no Direct3D, as Windows' own driver
   gives it none.
 - The guest's cycle counter runs ahead of real time: a driver busy-waiting on

@@ -95,9 +95,11 @@ typedef struct {
     HRESULT_T (*CreateSurface)(IDirectDraw7 *, DDSURFACEDESC2_T *,
                                IDirectDrawSurface7 **, void *);
     void *DuplicateSurface, *EnumDisplayModes, *EnumSurfaces,
-        *FlipToGDISurface, *GetCaps;
+        *FlipToGDISurface;
+    HRESULT_T (*GetCaps)(IDirectDraw7 *, void *, void *); /* DDCAPS, HAL/HEL */
     HRESULT_T (*GetDisplayMode)(IDirectDraw7 *, DDSURFACEDESC2_T *);
-    void *GetFourCCCodes, *GetGDISurface, *GetMonitorFrequency, *GetScanLine,
+    HRESULT_T (*GetFourCCCodes)(IDirectDraw7 *, DWORD *, DWORD *);
+    void *GetGDISurface, *GetMonitorFrequency, *GetScanLine,
         *GetVerticalBlankStatus, *Initialize, *RestoreDisplayMode;
     HRESULT_T (*SetCooperativeLevel)(IDirectDraw7 *, HWND, DWORD);
     void *SetDisplayMode, *WaitForVerticalBlank;
@@ -116,7 +118,10 @@ typedef struct {
     DWORD (*Release)(IDirectDrawSurface7 *);
     HRESULT_T (*AddAttachedSurface)(IDirectDrawSurface7 *,
                                     IDirectDrawSurface7 *);
-    void *AddOverlayDirtyRect, *Blt, *BltBatch, *BltFast,
+    void *AddOverlayDirtyRect;
+    HRESULT_T (*Blt)(IDirectDrawSurface7 *, RECT *, IDirectDrawSurface7 *,
+                     RECT *, DWORD, void *);
+    void *BltBatch, *BltFast,
         *DeleteAttachedSurface, *EnumAttachedSurfaces, *EnumOverlayZOrders,
         *Flip;
     HRESULT_T (*GetAttachedSurface)(IDirectDrawSurface7 *, DDSCAPS2_T *,
@@ -131,7 +136,9 @@ typedef struct {
     HRESULT_T (*SetColorKey)(IDirectDrawSurface7 *, DWORD, DDCOLORKEY_T *);
     void *SetOverlayPosition, *SetPalette;
     HRESULT_T (*Unlock)(IDirectDrawSurface7 *, RECT *);
-    void *UpdateOverlay, *UpdateOverlayDisplay, *UpdateOverlayZOrder,
+    HRESULT_T (*UpdateOverlay)(IDirectDrawSurface7 *, RECT *,
+                               IDirectDrawSurface7 *, RECT *, DWORD, void *);
+    void *UpdateOverlayDisplay, *UpdateOverlayZOrder,
         *GetDDInterface, *PageLock, *PageUnlock, *SetSurfaceDesc,
         *SetPrivateData, *GetPrivateData, *FreePrivateData,
         *GetUniquenessValue, *ChangeUniquenessValue, *SetPriority,
@@ -204,10 +211,13 @@ typedef HRESULT_T (*DIRECTDRAWCREATEEX_FN)(GUID_T *, void **, const GUID_T *,
 #define DDCKEY_SRCBLT 0x00000008
 
 #define DDPF_ALPHAPIXELS 0x00000001
+#define DDPF_FOURCC 0x00000004
 #define DDPF_RGB 0x00000040
 #define DDPF_ZBUFFER 0x00000400
 
 #define DDSCAPS_COMPLEX 0x00000008
+#define DDSCAPS_OVERLAY 0x00000080
+#define DDSCAPS_PRIMARYSURFACE 0x00000200
 #define DDSCAPS_OFFSCREENPLAIN 0x00000040
 #define DDSCAPS_SYSTEMMEMORY 0x00000800
 #define DDSCAPS_TEXTURE 0x00001000
@@ -217,6 +227,13 @@ typedef HRESULT_T (*DIRECTDRAWCREATEEX_FN)(GUID_T *, void **, const GUID_T *,
 #define DDSCAPS_MIPMAP 0x00400000
 
 #define DDLOCK_WAIT 0x00000001
+#define DDBLT_WAIT 0x01000000
+#define DDOVER_HIDE 0x00000200
+#define DDOVER_SHOW 0x00004000
+#define FOURCC_YUY2 0x32595559u
+#define FOURCC_YV12 0x32315659u
+
+void __stdcall Sleep(DWORD ms);
 #define DDLOCK_READONLY 0x00000010
 
 #define D3DCLEAR_TARGET 1

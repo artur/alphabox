@@ -57,6 +57,7 @@ typedef struct {
     IDirectDrawSurface7 *tex_checker, *tex_small, *tex_alpha;
     IDirectDrawSurface7 *tex_mip, *tex_4444, *tex_8888, *tex_key, *tex_grad;
     IDirectDrawSurface7 *tex_mipflat;
+    IDirectDrawSurface7 *blt_src; /* 64x64 RGB 565, for stretch blits */
 } path_t;
 
 static DWORD mem_caps(int hal)
@@ -347,6 +348,12 @@ static int open_path(path_t *p)
          * rasteriser by the driver's choice, not the chip's. */
         p->tex_mip = make_texture_fmt(p->hal, 64, 5, &pf, texel_mip);
         p->tex_mipflat = make_texture_fmt(p->hal, 64, 5, &pf, texel_mipflat);
+        /* A plain surface for stretch blits: the front-end scaler's job on
+         * the HAL, DirectDraw's own code on the HEL. */
+        p->blt_src = make_surface(DDSCAPS_OFFSCREENPLAIN | mem_caps(p->hal),
+                                  64, 64, &pf);
+        if (p->blt_src)
+            fill_argb(p->blt_src, &pf, texel_key, 0);
         p->tex_key = make_texture_fmt(p->hal, 64, 1, &pf, texel_key);
         p->tex_grad = make_texture_fmt(p->hal, 64, 1, &pf, texel_grad);
         if (p->tex_key) {
@@ -711,10 +718,35 @@ static void scene_dither(path_t *p)
  * match; mipramp is a probe whose flat-coloured levels turn the smallest
  * difference in level of detail into a visible one (miplinear is the same
  * floor with a real texture, and counts). */
+/* DirectDraw stretch blits, outside any 3D scene: 64x64 up to 192x192,
+ * and down to 40x40. The HAL scales with the chip's front-end scaler,
+ * which filters; DirectDraw's emulation does not, so these are compared
+ * by eye. */
+static void blt_stretch(path_t *p, int x0, int y0, int x1, int y1)
+{
+    RECT d, s;
+    HRESULT_T hr;
+    d.left = x0;
+    d.top = y0;
+    d.right = x1;
+    d.bottom = y1;
+    s.left = s.top = 0;
+    s.right = s.bottom = 64;
+    if (!p->blt_src)
+        return;
+    hr = p->rt->lpVtbl->Blt(p->rt, &d, p->blt_src, &s, DDBLT_WAIT, 0);
+    if (FAILED_HR(hr))
+        SAY("  %s: Blt failed: %08lx\n", p->name, (unsigned long)hr);
+}
+
+static void scene_stretch(path_t *p) { blt_stretch(p, 32, 32, 224, 224); }
+static void scene_shrink(path_t *p) { blt_stretch(p, 100, 100, 140, 140); }
+
 typedef struct {
     const char *name;
     void (*draw)(path_t *);
     int info;
+    int ddraw; /* a DirectDraw operation: no BeginScene/EndScene */
 } scene_t;
 
 static const scene_t scenes[] = {
@@ -741,6 +773,8 @@ static const scene_t scenes[] = {
     {"colorkey", scene_colorkey},
     {"multitex", scene_multitex, 1},
     {"dither", scene_dither, 1},
+    {"stretch", scene_stretch, 1, 1},
+    {"shrink", scene_shrink, 1, 1},
 };
 #define NSCENES ((int)(sizeof scenes / sizeof scenes[0]))
 
@@ -771,6 +805,10 @@ static int render(path_t *p, const scene_t *s, unsigned short *out)
                           0xff000000, 1.0f, 0);
     if (FAILED_HR(hr))
         SAY("  %s: Clear failed: %08lx\n", p->name, (unsigned long)hr);
+    if (s->ddraw) {
+        s->draw(p);
+        return read_target(p, out);
+    }
     if (FAILED_HR(d->lpVtbl->BeginScene(d))) {
         SAY("  %s: BeginScene failed\n", p->name);
         return 0;
@@ -835,6 +873,125 @@ static HRESULT_T fmt_cb(DDPIXELFORMAT_T *pf, void *ctx)
 
 static unsigned short img_hw[W * H], img_sw[W * H];
 
+/* The hardware overlay: a 160x120 YUY2 surface -- eight colour bars over a
+ * grey ramp -- shown doubled at (200,150)-(520,390) on the desktop for 20
+ * seconds. What it looks like exists only in the display output, so the
+ * harness finds it in its frame dumps. */
+static void show_overlay(void)
+{
+    static const unsigned char bars[8][3] = {
+        {235, 128, 128}, {210, 16, 146}, {170, 166, 16}, {145, 54, 34},
+        {106, 202, 222}, {81, 90, 240}, {41, 240, 110}, {16, 128, 128}};
+    DDSURFACEDESC2_T sd;
+    IDirectDrawSurface7 *primary = 0, *ov = 0;
+    RECT src, dst;
+    HRESULT_T hr;
+    int x, y;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.dwFlags = DDSD_CAPS;
+    sd.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+    hr = dd->lpVtbl->CreateSurface(dd, &sd, &primary, 0);
+    SAY("overlay: primary %08lx\n", (unsigned long)hr);
+    if (FAILED_HR(hr))
+        return;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    sd.dwWidth = 160;
+    sd.dwHeight = 120;
+    sd.ddsCaps.dwCaps = DDSCAPS_OVERLAY | DDSCAPS_VIDEOMEMORY;
+    sd.ddpfPixelFormat.dwSize = sizeof sd.ddpfPixelFormat;
+    sd.ddpfPixelFormat.dwFlags = DDPF_FOURCC;
+    sd.ddpfPixelFormat.dwFourCC = FOURCC_YUY2;
+    hr = dd->lpVtbl->CreateSurface(dd, &sd, &ov, 0);
+    SAY("overlay: YUY2 surface %08lx\n", (unsigned long)hr);
+    if (FAILED_HR(hr))
+        return;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    if (FAILED_HR(ov->lpVtbl->Lock(ov, 0, &sd, DDLOCK_WAIT, 0)))
+        return;
+    for (y = 0; y < 120; y++) {
+        unsigned char *row = (unsigned char *)sd.lpSurface + y * sd.lPitch;
+        for (x = 0; x < 160; x += 2) {
+            int b = x / 20;
+            unsigned char yv = bars[b][0], u = bars[b][1], v = bars[b][2];
+            if (y >= 90) { /* a grey ramp along the bottom */
+                yv = (unsigned char)(16 + x * 219 / 159);
+                u = v = 128;
+            }
+            row[x * 2 + 0] = yv;
+            row[x * 2 + 1] = u;
+            row[x * 2 + 2] = yv;
+            row[x * 2 + 3] = v;
+        }
+    }
+    ov->lpVtbl->Unlock(ov, 0);
+    src.left = src.top = 0;
+    src.right = 160;
+    src.bottom = 120;
+    dst.left = 200;
+    dst.top = 150;
+    dst.right = 520;
+    dst.bottom = 390;
+    hr = ov->lpVtbl->UpdateOverlay(ov, &src, primary, &dst, DDOVER_SHOW, 0);
+    SAY("overlay: shown %08lx\n", (unsigned long)hr);
+    Sleep(20000);
+    ov->lpVtbl->UpdateOverlay(ov, 0, primary, 0, DDOVER_HIDE, 0);
+    SAY("overlay: hidden\n");
+    ov->lpVtbl->Release(ov);
+
+    /* The same bars as YV12: a Y plane, then V and U planes of half the
+     * width and height -- shown at (40,40)-(360,280), for 20 seconds. */
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    sd.dwWidth = 160;
+    sd.dwHeight = 120;
+    sd.ddsCaps.dwCaps = DDSCAPS_OVERLAY | DDSCAPS_VIDEOMEMORY;
+    sd.ddpfPixelFormat.dwSize = sizeof sd.ddpfPixelFormat;
+    sd.ddpfPixelFormat.dwFlags = DDPF_FOURCC;
+    sd.ddpfPixelFormat.dwFourCC = FOURCC_YV12;
+    ov = 0;
+    hr = dd->lpVtbl->CreateSurface(dd, &sd, &ov, 0);
+    SAY("overlay: YV12 surface %08lx\n", (unsigned long)hr);
+    if (FAILED_HR(hr))
+        return;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    if (FAILED_HR(ov->lpVtbl->Lock(ov, 0, &sd, DDLOCK_WAIT, 0)))
+        return;
+    SAY("overlay: YV12 pitch %ld\n", sd.lPitch);
+    {
+        unsigned char *yp = (unsigned char *)sd.lpSurface;
+        unsigned char *vp = yp + sd.lPitch * 120;
+        unsigned char *up = vp + (sd.lPitch / 2) * 60;
+        for (y = 0; y < 120; y++)
+            for (x = 0; x < 160; x++) {
+                int b = x / 20;
+                yp[y * sd.lPitch + x] =
+                    y >= 90 ? (unsigned char)(16 + x * 219 / 159) : bars[b][0];
+            }
+        for (y = 0; y < 60; y++)
+            for (x = 0; x < 80; x++) {
+                int b = x / 10;
+                vp[y * (sd.lPitch / 2) + x] = y >= 45 ? 128 : bars[b][2];
+                up[y * (sd.lPitch / 2) + x] = y >= 45 ? 128 : bars[b][1];
+            }
+    }
+    ov->lpVtbl->Unlock(ov, 0);
+    dst.left = 40;
+    dst.top = 40;
+    dst.right = 360;
+    dst.bottom = 280;
+    hr = ov->lpVtbl->UpdateOverlay(ov, &src, primary, &dst, DDOVER_SHOW, 0);
+    SAY("overlay: YV12 shown %08lx\n", (unsigned long)hr);
+    Sleep(20000);
+    ov->lpVtbl->UpdateOverlay(ov, 0, primary, 0, DDOVER_HIDE, 0);
+    SAY("overlay: YV12 hidden\n");
+}
+
 int main(int argc, char **argv)
 {
     HMODULE lib;
@@ -875,6 +1032,31 @@ int main(int argc, char **argv)
     }
     hr = dd->lpVtbl->QueryInterface(dd, &IID_IDirect3D7, (void **)&d3d);
     SAY("QueryInterface(IDirect3D7): %08lx\n", (unsigned long)hr);
+    {
+        /* DirectDraw's own view of the card: DDCAPS (DX7, 380 bytes), the
+         * first words -- dwCaps, dwCaps2, dwCKeyCaps, dwFXCaps ... -- and
+         * the FOURCC formats it takes. */
+        static DWORD hal_caps[128], hel_caps[128], codes[64];
+        DWORD n = 64, i;
+        hal_caps[0] = hel_caps[0] = 380;
+        if (!FAILED_HR(dd->lpVtbl->GetCaps(dd, hal_caps, hel_caps))) {
+            SAY("ddcaps hal:");
+            for (i = 1; i < 20; i++)
+                SAY(" %08lx", (unsigned long)hal_caps[i]);
+            SAY("\nddcaps hel:");
+            for (i = 1; i < 20; i++)
+                SAY(" %08lx", (unsigned long)hel_caps[i]);
+            SAY("\n");
+        }
+        if (!FAILED_HR(dd->lpVtbl->GetFourCCCodes(dd, &n, codes))) {
+            SAY("fourcc:");
+            for (i = 0; i < n && i < 64; i++)
+                SAY(" %c%c%c%c", (int)(codes[i] & 0xff),
+                    (int)((codes[i] >> 8) & 0xff),
+                    (int)((codes[i] >> 16) & 0xff), (int)(codes[i] >> 24));
+            SAY("\n");
+        }
+    }
     if (FAILED_HR(hr))
         return 2;
 
@@ -919,5 +1101,6 @@ int main(int argc, char **argv)
             failed++;
     }
     SAY("DONE %d of %d scenes differ\n", failed, NSCENES);
+    show_overlay();
     return failed ? 1 : 0;
 }

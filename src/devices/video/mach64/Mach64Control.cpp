@@ -21,8 +21,9 @@
 /**
  * \file
  * Mach64 register block: block 0's CRTC, cursor, clock synthesizer,
- * memory banks, DAC, EEPROM, configuration and status registers, and the
- * block 1 overlay registers (stored only). The GUI engine's registers
+ * memory banks, DAC, EEPROM, configuration and status registers, and block
+ * 1 (the overlay, drawn by Mach64Display.cpp, and the setup engine's
+ * vertices, Mach64Setup.cpp). The GUI engine's registers
  * (0x100 upward in block 0) are in Mach64Engine.cpp.
  *
  * Every path to the registers -- aperture page, VGA aperture, block I/O,
@@ -279,6 +280,18 @@ void CMach64::reg_write(u32 offset, int bytes, u32 data) {
     printf("%s: reg write %c+%03x/%d = %0*x (%s)\n", devid_string,
            (offset & REG_BLOCK0) ? '0' : '1', offset & 0x3ff, bytes,
            bytes * 2, data, m_trace_path);
+  // "trap" also follows the overlay (block 1 below 1_60) and the front-end
+  // scaler (0x1c0..0x1fc) and what the engine draws with (DP_SRC).
+  if (m_trace_trap && m_scaler_traced < 3000) {
+    const u32 o = offset & 0x3ff;
+    const bool b0 = offset & REG_BLOCK0;
+    if ((!b0 && (o < 0x180 || (o >= 0x1d0 && o < 0x1e4))) ||
+        (b0 && ((o >= 0x1c0 && o < 0x200) || o == 0x2d8))) {
+      m_scaler_traced++;
+      printf("%s: scaler write %c+%03x = %08x\n", devid_string, b0 ? '0' : '1',
+             o, data);
+    }
+  }
   if ((offset & REG_BLOCK0) && (offset & 0x3ff) >= GUI_FIRST) {
     const u32 reg = offset & 0x3ff;
     switch (bytes) {

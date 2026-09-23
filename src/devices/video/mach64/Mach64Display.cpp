@@ -127,6 +127,20 @@ uint64_t CMach64::direct_view_hash() const {
   uint64_t h = hash_vram(start, native_pitch_bytes() * lines);
   if (r.gen_test_cntl & GEN_CUR_EN)
     h = hash_vram((r.cur_offset & 0xfffff) << 3, 1024, h);
+  if (overlay_active()) { // where it is, how it is scaled, and its source
+    for (u32 i : {0x00u, 0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u, 0x08u, 0x09u,
+                  0x0au, 0x0du, 0x0fu, 0x12u})
+      h = h * 1000003u ^ r.block1[i];
+    const u32 lines = r.block1[0x0a] & 0x7ff;
+    const u32 pitch = (r.block1[0x0f] & 0xfff) * 4; // up to 4 bytes a pixel
+    h = hash_vram(r.block1[0x0d] & 0xffffff, pitch * lines, h);
+    const u32 fmt = (r.block1[0x12] >> 16) & 0xf;
+    if (fmt == 9 || fmt == 10) { // the chroma planes of planar YUV
+      const u32 c = (r.block1[0x0f] & 0xfff) * lines / (fmt == 9 ? 16 : 4);
+      h = hash_vram(r.block1[0x75] & 0xffffff, c, h);
+      h = hash_vram(r.block1[0x76] & 0xffffff, c, h);
+    }
+  }
   return h;
 }
 
@@ -265,10 +279,139 @@ void CMach64::draw_hw_cursor(bitmap_rgb32 &bitmap) {
   }
 }
 
+/**
+ * The video overlay (block 1): a window of the display, OVERLAY_Y_X_START
+ * to OVERLAY_Y_X_END inclusive (X in bits 26..16, Y in 10..0), filled from
+ * SCALER_BUF0 -- SCALER_HEIGHT_WIDTH source pixels at SCALER_BUF_PITCH,
+ * in VIDEO_FORMAT's SCALER_IN -- stepped by OVERLAY_SCALE_INC, wherever
+ * the keyers of OVERLAY_KEY_CNTL say video rather than graphics. As
+ * atidrab programs it: OVERLAY_SCALE_CNTL bits 31 and 30 on while shown,
+ * bit 30 cleared to hide; horizontal step 4.12 in bits 15..0, vertical
+ * 2.14 in bits 31..16 (0x800 and 0x2000 for twice the size). Source
+ * pixels are replicated, not filtered: the driver leaves the filter bits
+ * off. SCALER_IN: 3, 4, 6 RGB 1555, 565, 8888; 9, 10 planar YVU9, YVU12;
+ * 11, 12 packed 4:2:2 (YUY2, UYVY). YUV becomes RGB by the equations of
+ * ATI's programming guide (8.4.5).
+ **/
+bool CMach64::overlay_active() const {
+  return (r.block1[0x09] & 0xc0000000u) == 0xc0000000u;
+}
+
+static inline u32 clamp_byte(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+static inline u32 yuv_to_rgb(int y, int u, int v) {
+  const int rr = 9 * y / 8 + 25 * v / 16 - 218;
+  const int g = 9 * y / 8 - 13 * v / 16 - 25 * u / 64 + 136;
+  const int b = 9 * y / 8 + 2 * u - 274;
+  return argb(clamp_byte(rr), clamp_byte(g), clamp_byte(b));
+}
+
+void CMach64::draw_overlay(bitmap_rgb32 &bitmap) {
+  if (!overlay_active())
+    return;
+  const u32 *b1 = r.block1;
+  const int x0 = int(b1[0x00] >> 16) & 0x7ff, y0 = int(b1[0x00]) & 0x7ff;
+  const int x1 = int(b1[0x01] >> 16) & 0x7ff, y1 = int(b1[0x01]) & 0x7ff;
+  const u32 hinc = b1[0x08] & 0xffff, vinc = b1[0x08] >> 16;
+  const int src_w = int(b1[0x0a] >> 16) & 0x7ff, src_h = int(b1[0x0a]) & 0x7ff;
+  const u32 src_pitch = b1[0x0f] & 0xfff; // pixels
+  const u32 src = b1[0x0d] & 0xffffff;
+  const int fmt = int(b1[0x12] >> 16) & 0xf;
+  if (!src_w || !src_h || !hinc || !vinc)
+    return;
+  // Planar YUV (9: YVU9, chroma a quarter of the size each way; 10: YVU12,
+  // half): a Y plane at SCALER_BUF0_OFFSET, U and V planes at
+  // SCALER_BUF0_OFFSET_U and _V (1_75, 1_76), their pitch the Y pitch
+  // divided likewise.
+  const bool planar = fmt == 9 || fmt == 10;
+  const int sub = fmt == 9 ? 4 : 2;
+  const u32 u_off = b1[0x75] & 0xffffff, v_off = b1[0x76] & 0xffffff;
+  const u32 c_pitch = src_pitch / u32(sub);
+  const int bpp_src = planar ? 1 : fmt == 6 ? 4 : 2;
+
+  // The keyers: each compares a colour with its key under its mask; 0
+  // false, 1 true, 4 not equal, 5 equal. Graphics is the frame the CRTC
+  // shows, video the overlay's own pixel; bit 8 ANDs them, else ORs.
+  const u32 key = b1[0x06];
+  const u32 vfn = key & 7, gfn = (key >> 4) & 7;
+  const bool and_mix = (key >> 8) & 1;
+  auto keyer = [](u32 fn, u32 c, u32 clr, u32 msk) {
+    switch (fn) {
+    case 1:
+      return true;
+    case 4:
+      return (c & msk) != (clr & msk);
+    case 5:
+      return (c & msk) == (clr & msk);
+    }
+    return false;
+  };
+  const u32 mask = vram_mask();
+  const u8 *vram = vga.memory;
+  const u32 start = (r.crtc_off_pitch & 0xfffff) * 8;
+  const u32 pitch = native_pitch_bytes();
+  const int gbytes = native_bpp_code() == BPP_32   ? 4
+                     : native_bpp_code() == BPP_24 ? 3
+                     : native_bpp_code() >= BPP_15 ? 2
+                                                   : 1;
+
+  for (int y = std::max(0, y0); y <= y1 && y < bitmap.height(); y++) {
+    const int sy = std::min(src_h - 1, int((u64(y - y0) * vinc) >> 14));
+    const u32 srow = src + u32(sy) * src_pitch * bpp_src;
+    uint32_t *line = &bitmap.pix(y);
+    for (int x = std::max(0, x0); x <= x1 && x < bitmap.width(); x++) {
+      const int sx = std::min(src_w - 1, int((u64(x - x0) * hinc) >> 12));
+      u32 vid, raw;
+      if (planar) {
+        const int yv = vram[(srow + u32(sx)) & mask];
+        const u32 c = u32(sy / sub) * c_pitch + u32(sx / sub);
+        const int u = vram[(u_off + c) & mask];
+        const int v = vram[(v_off + c) & mask];
+        raw = (u32(yv) << 16) | (u32(u) << 8) | u32(v);
+        vid = yuv_to_rgb(yv, u, v);
+      } else if (fmt == 11 || fmt == 12) { // packed 4:2:2, a pixel pair a dword
+        const u32 a = srow + u32(sx & ~1) * 2;
+        const u32 d = vram[a & mask] | (u32(vram[(a + 1) & mask]) << 8) |
+                      (u32(vram[(a + 2) & mask]) << 16) |
+                      (u32(vram[(a + 3) & mask]) << 24);
+        // 11: Y0 U Y1 V from the lowest byte (YUY2); 12: U Y0 V Y1 (UYVY)
+        const int yv = fmt == 11 ? int((d >> ((sx & 1) ? 16 : 0)) & 0xff)
+                                 : int((d >> ((sx & 1) ? 24 : 8)) & 0xff);
+        const int u = fmt == 11 ? int((d >> 8) & 0xff) : int(d & 0xff);
+        const int v = fmt == 11 ? int(d >> 24) : int((d >> 16) & 0xff);
+        raw = (u32(yv) << 16) | (u32(u) << 8) | u32(v);
+        vid = yuv_to_rgb(yv, u, v);
+      } else {
+        const u32 a = srow + u32(sx) * bpp_src;
+        const u32 p = vram[a & mask] | (u32(vram[(a + 1) & mask]) << 8) |
+                      (bpp_src == 4 ? (u32(vram[(a + 2) & mask]) << 16) |
+                                          (u32(vram[(a + 3) & mask]) << 24)
+                                    : 0);
+        raw = p;
+        if (fmt == 6)
+          vid = argb((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
+        else if (fmt == 3)
+          vid = argb(expand5(p >> 10), expand5(p >> 5), expand5(p));
+        else
+          vid = argb(expand5(p >> 11), expand6(p >> 5), expand5(p));
+      }
+      const u32 ga = start + u32(y) * pitch + u32(x) * gbytes;
+      u32 graphics = 0;
+      for (int i = 0; i < gbytes; i++)
+        graphics |= u32(vram[(ga + i) & mask]) << (8 * i);
+      const bool kv = keyer(vfn, raw, b1[0x02], b1[0x03]);
+      const bool kg = keyer(gfn, graphics, b1[0x04], b1[0x05]);
+      if (and_mix ? (kv && kg) : (kv || kg))
+        line[x] = vid;
+    }
+  }
+}
+
 uint32_t CMach64::screen_update(bitmap_rgb32 &bitmap,
                                 const rectangle &cliprect) {
   if (native_crtc_active()) {
     render_native(bitmap);
+    draw_overlay(bitmap);
     draw_hw_cursor(bitmap);
     return 0;
   }

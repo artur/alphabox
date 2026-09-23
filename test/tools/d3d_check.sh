@@ -14,7 +14,8 @@
 # Run, and its output is read from a copy of the disk until it says EXIT.
 # Then the emulator this script started -- and only that one -- is stopped.
 #
-# Prints the program's RESULT lines. Per scene, results/<scene>.png holds
+# Prints the program's RESULT lines, and two for the hardware overlay,
+# which is checked in the frame dumps. Per scene, results/<scene>.png holds
 # the HAL image on the left, the software one on the right, and their
 # difference (bright where they differ) below. Exit status: 0 when every
 # scene matched, 1 when some differ, 2 when the run itself failed.
@@ -37,7 +38,7 @@ RUN=$WORK/runs/d3dcheck
 
 # Build.
 B=$(mktemp -d) || exit 2
-{ cat "$NADA/lib/windows/kernel32.def"; printf '    LoadLibraryA\n    GetProcAddress\n'; } > "$B/kernel32.def"
+{ cat "$NADA/lib/windows/kernel32.def"; printf '    LoadLibraryA\n    GetProcAddress\n    Sleep\n'; } > "$B/kernel32.def"
 "$NADA/nada" -t alpha-windows -o "$B/D3DCHECK.EXE" -I "$NADA/include" \
   -I "$NADA/include/windows" "$T/d3dcheck/d3dcheck.c" "$NADA/lib/windows.c" \
   "$NADA/lib/printf.c" "$NADA/lib/stdio.c" "$NADA/lib/string.c" \
@@ -141,7 +142,42 @@ for p in results/*.ppm; do
   case "$p" in *-hal.ppm|*-rgb.ppm) continue ;; esac
   python3 "$T/ppm2png.py" "$p" "${p%.ppm}.png" && rm -f "$p"
 done
+# The overlays exist only in the display output: find a frame showing each
+# (d3dcheck shows YUY2 bars at (200,150), doubled, then YV12 at (40,40))
+# and check where they are and that the bars have the colours of colour
+# bars. Written into result.txt as RESULT lines like the scenes'.
+python3 - fb results/result.txt <<'PY'
+import glob, sys
+fbdir, result = sys.argv[1], sys.argv[2]
+bars = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0),
+        (255, 0, 255), (255, 0, 0), (0, 0, 255), (0, 0, 0)]
+def check(px, x0, y0):
+    """0 when the 320x240 overlay at (x0,y0) shows the bars and the ramp."""
+    def p(x, y):
+        s = (y * 640 + x) * 3
+        return px[s], px[s + 1], px[s + 2]
+    bad = 0
+    for i, c in enumerate(bars):
+        for x, y in ((x0 + 40 * i + 20, y0 + 20), (x0 + 40 * i + 5, y0 + 170)):
+            if max(abs(a - b) for a, b in zip(p(x, y), c)) > 40:
+                bad += 1
+    ramp = [p(x0 + 2 + 79 * k, y0 + 220)[0] for k in range(5)]
+    if not all(ramp[k] + 30 < ramp[k + 1] for k in range(4)):
+        bad += 1
+    return bad
+out = []
+for name, x0, y0 in (('overlay-yuy2', 200, 150), ('overlay-yv12', 40, 40)):
+    best = None
+    for f in sorted(glob.glob(fbdir + '/fb-*-640x480.ppm')):
+        px = open(f, 'rb').read().split(b'\n', 3)[3]
+        bad = check(px, x0, y0)
+        if best is None or bad < best:
+            best = bad
+    verdict = 'same ' if best == 0 else 'DIFF '
+    out.append('RESULT %-12s %s %d of 17 checks off\n' % (name, verdict, best if best is not None else 17))
+open(result, 'a').writelines(out)
+PY
 grep -E '^(RESULT|DONE|EXIT)|failed' results/result.txt
 echo "d3d_check: images in $RUN/results"
-grep -q '^EXIT 0' results/result.txt && exit 0
+grep -q '^EXIT 0' results/result.txt && ! grep -q '^RESULT overlay.* DIFF' results/result.txt && exit 0
 exit 1
