@@ -133,6 +133,7 @@ void CPermedia2::init() {
   r.rd_indexed[RDI_MEMORY_CLOCK_1 + 1] = 0x02;
   r.rd_indexed[RDI_MEMORY_CLOCK_1 + 2] = 0x02;
   ddc_attach_monitor();
+  gp_reset();
 
   state.last_bpp = 8;
   state.x_tilesize = X_TILESIZE;
@@ -144,7 +145,12 @@ void CPermedia2::init() {
   timing.refresh_interval_ms = 16;
   m_last_refresh_time = std::chrono::steady_clock::now();
 
-  m_trace = getenv("ALPHABOX_TRACE_PERMEDIA2") != nullptr;
+  // ALPHABOX_TRACE_PERMEDIA2: every register and port access; "gp": the
+  // graphics processor's input, a register a line.
+  if (const char *t = getenv("ALPHABOX_TRACE_PERMEDIA2")) {
+    m_trace_gp = strcmp(t, "gp") == 0;
+    m_trace = !m_trace_gp;
+  }
   printf("%s: 3Dlabs Permedia 2, %u KB, subsystem %04x:%04x\n", devid_string,
          m_vram_bytes / 1024, subsystem & 0xffff, subsystem >> 16);
 }

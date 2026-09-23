@@ -217,6 +217,143 @@ constexpr int M640_BANK_B_SHIFT = 3;
 constexpr u8 M640_START_BIT16 = 1u << 6;
 constexpr u8 M640_ENABLE = 1u << 7;
 
+
+// --- graphics processor register tags (Programmer's Reference ch. 8) -----
+// A register's region 0 offset is R0_GP + tag * 8.
+enum GpTag : u32 {
+  T_START_X_DOM = 0x000,
+  T_DX_DOM = 0x001,
+  T_START_X_SUB = 0x002,
+  T_DX_SUB = 0x003,
+  T_START_Y = 0x004,
+  T_DY = 0x005,
+  T_COUNT = 0x006,
+  T_RENDER = 0x007,
+  T_CONTINUE_NEW_LINE = 0x008,
+  T_CONTINUE_NEW_DOM = 0x009,
+  T_CONTINUE_NEW_SUB = 0x00a,
+  T_CONTINUE = 0x00b,
+  T_BIT_MASK_PATTERN = 0x00d,
+  T_RASTERIZER_MODE = 0x014,
+  T_Y_LIMITS = 0x015,
+  T_WAIT_FOR_COMPLETION = 0x017,
+  T_X_LIMITS = 0x019,
+  T_RECTANGLE_ORIGIN = 0x01a,
+  T_RECTANGLE_SIZE = 0x01b,
+  T_PACKED_DATA_LIMITS = 0x02a,
+  T_SCISSOR_MODE = 0x030,
+  T_SCISSOR_MIN_XY = 0x031,
+  T_SCISSOR_MAX_XY = 0x032,
+  T_SCREEN_SIZE = 0x033,
+  T_AREA_STIPPLE_MODE = 0x034,
+  T_WINDOW_ORIGIN = 0x039,
+  T_AREA_STIPPLE_PATTERN0 = 0x040, // 0x040-0x047
+  T_TEXTURE_ADDRESS_MODE = 0x070,
+  T_S_START = 0x071,
+  T_TEXTURE_BASE_ADDRESS = 0x0b0,
+  T_TEXTURE_MAP_FORMAT = 0x0b1,
+  T_TEXTURE_DATA_FORMAT = 0x0b2,
+  T_TEXEL0 = 0x0c0,
+  T_TEXTURE_READ_MODE = 0x0ce,
+  T_TEXEL_LUT_MODE = 0x0cf,
+  T_TEXTURE_COLOR_MODE = 0x0d0,
+  T_FOG_MODE = 0x0d2,
+  T_R_START = 0x0f0,
+  T_DR_DX = 0x0f1,
+  T_DR_DY_DOM = 0x0f2,
+  T_G_START = 0x0f3,
+  T_DG_DX = 0x0f4,
+  T_DG_DY_DOM = 0x0f5,
+  T_B_START = 0x0f6,
+  T_DB_DX = 0x0f7,
+  T_DB_DY_DOM = 0x0f8,
+  T_A_START = 0x0f9,
+  T_COLOR_DDA_MODE = 0x0fc,
+  T_CONSTANT_COLOR = 0x0fd,
+  T_COLOR = 0x0fe,
+  T_ALPHA_BLEND_MODE = 0x102,
+  T_DITHER_MODE = 0x103,
+  T_FB_SOFTWARE_WRITE_MASK = 0x104,
+  T_LOGICAL_OP_MODE = 0x105,
+  T_FB_WRITE_DATA = 0x106,
+  T_LB_READ_MODE = 0x110,
+  T_LB_WINDOW_BASE = 0x117,
+  T_LB_WRITE_MODE = 0x118,
+  T_TEXTURE_DATA = 0x11d,
+  T_TEXTURE_DOWNLOAD_OFFSET = 0x11e,
+  T_WINDOW = 0x130,
+  T_STENCIL_MODE = 0x131,
+  T_STENCIL = 0x133,
+  T_DEPTH_MODE = 0x134,
+  T_DEPTH = 0x135,
+  T_FB_READ_MODE = 0x150,
+  T_FB_SOURCE_OFFSET = 0x151,
+  T_FB_PIXEL_OFFSET = 0x152,
+  T_FB_COLOR = 0x153,
+  T_FB_DATA = 0x154,
+  T_FB_SOURCE_DATA = 0x155,
+  T_FB_WINDOW_BASE = 0x156,
+  T_FB_WRITE_MODE = 0x157,
+  T_FB_HARDWARE_WRITE_MASK = 0x158,
+  T_FB_BLOCK_COLOR = 0x159,
+  T_FB_READ_PIXEL = 0x15a,
+  T_FB_WRITE_CONFIG = 0x15d,
+  T_FILTER_MODE = 0x180,
+  T_STATISTIC_MODE = 0x181,
+  T_MIN_REGION = 0x182,
+  T_MAX_REGION = 0x183,
+  T_RESET_PICK_RESULT = 0x184,
+  T_MIN_HIT_REGION = 0x185,
+  T_MAX_HIT_REGION = 0x186,
+  T_PICK_RESULT = 0x187,
+  T_SYNC = 0x188,
+  T_FB_BLOCK_COLOR_U = 0x18d,
+  T_FB_BLOCK_COLOR_L = 0x18e,
+  T_SUSPEND_UNTIL_FRAME_BLANK = 0x18f,
+  T_FB_SOURCE_BASE = 0x1b0,
+  T_FB_SOURCE_DELTA = 0x1b1,
+  T_CONFIG = 0x1b2,
+  T_DELTA_MODE = 0x260,
+  T_DRAW_TRIANGLE = 0x261,
+  T_REPEAT_TRIANGLE = 0x262,
+  T_DRAW_LINE01 = 0x263,
+  T_DRAW_LINE10 = 0x264,
+  T_REPEAT_LINE = 0x265,
+};
+constexpr u32 GP_TAGS = 0x400; // 9-bit tags, with room to spare
+
+// Render (Programmer's Reference 7, Render).
+constexpr u32 RENDER_AREA_STIPPLE = 1u << 0;
+constexpr u32 RENDER_FAST_FILL = 1u << 3;
+constexpr int RENDER_PRIMITIVE_SHIFT = 6; // 0 line, 1 trapezoid, 2 point, 3 rectangle
+constexpr u32 RENDER_SYNC_ON_BIT_MASK = 1u << 11;
+constexpr u32 RENDER_SYNC_ON_HOST_DATA = 1u << 12;
+constexpr u32 RENDER_TEXTURE = 1u << 13;
+constexpr u32 RENDER_FOG = 1u << 14;
+constexpr u32 RENDER_SUBPIXEL_CORRECTION = 1u << 16;
+constexpr u32 RENDER_REUSE_BIT_MASK = 1u << 17;
+constexpr u32 RENDER_INCREASE_X = 1u << 21;
+constexpr u32 RENDER_INCREASE_Y = 1u << 22;
+enum Primitive { PRIM_LINE = 0, PRIM_TRAPEZOID = 1, PRIM_POINT = 2, PRIM_RECTANGLE = 3 };
+
+// FBReadMode / FBWriteConfig.
+constexpr u32 FBRM_READ_SOURCE = 1u << 9;
+constexpr u32 FBRM_READ_DESTINATION = 1u << 10;
+constexpr u32 FBRM_DATA_TYPE_COLOR = 1u << 15; // FBColor: an image upload
+constexpr u32 FBRM_BOTTOM_LEFT = 1u << 16;
+constexpr u32 FBRM_PATCH = 1u << 18;
+constexpr u32 FBRM_PACKED_DATA = 1u << 19;
+constexpr int FBRM_RELATIVE_OFFSET_SHIFT = 20;
+
+// Config: fields of other registers in one (their order in 7, Config).
+constexpr u32 CONFIG_READ_SOURCE = 1u << 0;
+constexpr u32 CONFIG_READ_DESTINATION = 1u << 1;
+constexpr u32 CONFIG_PACKED_DATA = 1u << 2;
+constexpr u32 CONFIG_FB_WRITE = 1u << 3;
+constexpr u32 CONFIG_COLOR_DDA = 1u << 4;
+constexpr u32 CONFIG_LOGIC_OP_ENABLE = 1u << 5;
+constexpr int CONFIG_LOGIC_OP_SHIFT = 6;
+
 } // namespace permedia2
 
 #endif // !defined(INCLUDED_PERMEDIA2REGS_H)

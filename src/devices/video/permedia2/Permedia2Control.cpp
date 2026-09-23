@@ -80,8 +80,9 @@ void CPermedia2::control_write(u32 offset, int bytes, u32 data) {
         control_write_dword(base, data);
       return;
     }
-    const u32 old = base < R0_GP ? r.ctl[base >> 2] : r.gp[(base - R0_GP) >> 2];
-    control_write_dword(base, (old & ~mask) | ((data << shift) & mask));
+    if (base >= R0_GP || (base & 0xf000) == R0_GP_FIFO)
+      return; // the graphics processor takes whole dwords only
+    control_write_dword(base, (r.ctl[base >> 2] & ~mask) | ((data << shift) & mask));
     return;
   }
   control_write_dword(offset, data);
@@ -89,12 +90,12 @@ void CPermedia2::control_write(u32 offset, int bytes, u32 data) {
 
 u32 CPermedia2::control_read_dword(u32 offset) {
   if (offset >= R0_GP)
-    return r.gp[(offset - R0_GP) >> 2];
+    return (offset & 4) ? 0 : gp_read((offset - R0_GP) >> 3);
   switch (offset & 0xf000) {
   case R0_RAMDAC:
     return ramdac_read(int((offset >> 3) & 0xf));
   case R0_GP_FIFO:
-    return 0;
+    return gp_output_read();
   }
   switch (offset) {
   case RESET_STATUS:
@@ -107,7 +108,7 @@ u32 CPermedia2::control_read_dword(u32 offset) {
   case IN_FIFO_SPACE:
     return 0x20; // the graphics processor takes everything at once
   case OUT_FIFO_WORDS:
-    return 0;
+    return r.g.out_count;
   case COUNT: // MClk, 50 MHz at power-on
     return u32(clock_us() * 50);
   case LINE_COUNT:
@@ -123,7 +124,8 @@ u32 CPermedia2::control_read_dword(u32 offset) {
 
 void CPermedia2::control_write_dword(u32 offset, u32 data) {
   if (offset >= R0_GP) {
-    r.gp[(offset - R0_GP) >> 2] = data;
+    if (!(offset & 4))
+      gp_write((offset - R0_GP) >> 3, data);
     return;
   }
   switch (offset & 0xf000) {
@@ -131,12 +133,18 @@ void CPermedia2::control_write_dword(u32 offset, u32 data) {
     ramdac_write(int((offset >> 3) & 0xf), u8(data));
     return;
   case R0_GP_FIFO:
+    gp_fifo_word(data);
     return;
   }
   u32 &reg = r.ctl[offset >> 2];
   switch (offset) {
-  case RESET_STATUS: // a software reset of the graphics processor: it
-  case REBOOT:       // has no state yet; nor has the SGRAM's mode register
+  case RESET_STATUS: // a software reset of the graphics processor
+    gp_reset();
+    return;
+  case DMA_COUNT: // starts the input DMA, which completes at once
+    gp_dma(data & 0xffff);
+    return;
+  case REBOOT: // the SGRAM's mode register: nothing to model
   case IN_FIFO_SPACE:
   case OUT_FIFO_WORDS:
   case COUNT:
