@@ -282,11 +282,12 @@ void CMach64::reg_write(u32 offset, int bytes, u32 data) {
            bytes * 2, data, m_trace_path);
   // "trap" also follows the overlay (block 1 below 1_60) and the front-end
   // scaler (0x1c0..0x1fc) and what the engine draws with (DP_SRC).
-  if (m_trace_trap && m_scaler_traced < 3000) {
+  if (m_trace_trap && m_scaler_traced < 400000) {
     const u32 o = offset & 0x3ff;
     const bool b0 = offset & REG_BLOCK0;
     if ((!b0 && (o < 0x180 || (o >= 0x1d0 && o < 0x1e4))) ||
-        (b0 && ((o >= 0x1c0 && o < 0x200) || o == 0x2d8))) {
+        (b0 && ((o >= 0x1c0 && o < 0x200) || o == 0x2d8 ||
+                (o >= 0x120 && o <= 0x134)))) {
       m_scaler_traced++;
       printf("%s: scaler write %c+%03x = %08x\n", devid_string, b0 ? '0' : '1',
              o, data);

@@ -234,18 +234,24 @@ typedef HRESULT_T (*DIRECTDRAWCREATEEX_FN)(GUID_T *, void **, const GUID_T *,
 #define FOURCC_YV12 0x32315659u
 
 void __stdcall Sleep(DWORD ms);
+DWORD __stdcall GetTickCount(void);
 #define DDLOCK_READONLY 0x00000010
 
 #define D3DCLEAR_TARGET 1
 #define D3DCLEAR_ZBUFFER 2
 
+#define D3DPT_POINTLIST 1
+#define D3DPT_LINELIST 2
 #define D3DPT_TRIANGLELIST 4
 #define D3DPT_TRIANGLESTRIP 5
 
 /* render states */
 #define RS_TEXTUREPERSPECTIVE 4
 #define RS_ZENABLE 7
+#define RS_FILLMODE 8
 #define RS_SHADEMODE 9
+#define D3DFILL_WIREFRAME 2
+#define D3DFILL_SOLID 3
 #define RS_ZWRITEENABLE 14
 #define RS_ALPHATESTENABLE 15
 #define RS_SRCBLEND 19

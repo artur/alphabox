@@ -38,7 +38,7 @@ RUN=$WORK/runs/d3dcheck
 
 # Build.
 B=$(mktemp -d) || exit 2
-{ cat "$NADA/lib/windows/kernel32.def"; printf '    LoadLibraryA\n    GetProcAddress\n    Sleep\n'; } > "$B/kernel32.def"
+{ cat "$NADA/lib/windows/kernel32.def"; printf '    LoadLibraryA\n    GetProcAddress\n    Sleep\n    GetTickCount\n'; } > "$B/kernel32.def"
 "$NADA/nada" -t alpha-windows -o "$B/D3DCHECK.EXE" -I "$NADA/include" \
   -I "$NADA/include/windows" "$T/d3dcheck/d3dcheck.c" "$NADA/lib/windows.c" \
   "$NADA/lib/printf.c" "$NADA/lib/stdio.c" "$NADA/lib/string.c" \

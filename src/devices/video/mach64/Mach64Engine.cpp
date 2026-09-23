@@ -47,6 +47,7 @@
  **/
 
 #include "Mach64.hpp"
+#include "Mach64Pipe.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -128,6 +129,10 @@ void CMach64::engine_write8(u32 reg, u8 val) {
   // A GT reaches some registers at two addresses; take the canonical one.
   if (is_gt())
     reg = (reg & 3) | gt_canonical(reg & 0x3fc);
+  // The Rage Pro's second DST_Y_X, for the 3D pipe's lines (RRG-G03300:
+  // "aliased at 0_4Dh, 3D"); atidrab starts Direct3D lines and points there.
+  if (m_chip.pro && (reg & 0x3fc) == 0x134)
+    reg = (reg & 3) | DST_Y_X;
 
   switch (reg & 0x3ff) {
   case 0x100:
@@ -856,6 +861,7 @@ void CMach64::engine_start_line() {
   a.xinc = (r.dst_cntl & DST_X_DIR) ? 1 : -1;
   a.yinc = (r.dst_cntl & DST_Y_DIR) ? 1 : -1;
 
+  a.line_xsteps = a.line_ysteps = 0;
   a.busy = true;
   a.op = accel_t::OP_LINE;
   if (blit_stats_on())
@@ -1017,6 +1023,27 @@ void CMach64::engine_run(u32 host_data, int count) {
     blit_stats_report_line();
   }
   state.vga_mem_updated = 1;
+}
+
+/**
+ * A line's pixel from the 3D pipe (DP_SRC 5), as the Rage Pro's driver
+ * draws Direct3D lines, points and wireframe: the colour interpolators --
+ * RED, GREEN, BLUE and ALPHA _START, 8.16 fixed point, plus _X_INC for
+ * every step the line has taken in X and _Y_INC for every step in Y. (For
+ * a line along X atidrab puts the whole gradient in the X increments, for
+ * one along Y in the Y increments.)
+ **/
+u32 CMach64::engine_line_3d_colour(int xsteps, int ysteps) const {
+  // Each channel's X increment, then its Y increment, then its start.
+  auto chan = [&](u32 xinc_reg) {
+    const s64 v = s64(s32(r.gt[(xinc_reg + 8) >> 2])) +
+                  s64(xsteps) * s64(s32(r.gt[xinc_reg >> 2])) +
+                  s64(ysteps) * s64(s32(r.gt[(xinc_reg + 4) >> 2]));
+    return clamp8(s32(v >> 16));
+  };
+  const u32 argb = (chan(ALPHA_X_INC) << 24) | (chan(RED_X_INC) << 16) |
+                   (chan(GREEN_X_INC) << 8) | chan(BLUE_X_INC);
+  return pipe_pack(argb, int(r.dp_pix_width & 0xf));
 }
 
 /**
@@ -1224,6 +1251,7 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
   const u32 mask = vram_mask();
   const bool lsb_first = (r.dp_pix_width & DP_BYTE_PIX_ORDER) != 0;
   const bool bpp24 = native_bpp_code() == BPP_24;
+  const bool inc_always = m_chip.pro && a.source_fg == SRC_3D;
   uint64_t drawn = 0;
   int x = 0;
 
@@ -1289,6 +1317,8 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
         src_dat = a.dp_frgd_clr; // a line never rotates 24 bpp colours
       else if (sel == SRC_BG)
         src_dat = a.dp_bkgd_clr;
+      else if (sel == SRC_3D && has_3d_regs())
+        src_dat = engine_line_3d_colour(a.line_xsteps, a.line_ysteps);
 
       const u32 dst_addr = a.dst_offset + a.dst_y * a.dst_pitch + a.dst_x;
       u32 dest_dat = pix_read(vram, mask, dst_addr, a.dst_size, lsb_first);
@@ -1325,25 +1355,40 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
       }
     }
 
+    // A diagonal step adds DST_BRES_DEC, an axial one DST_BRES_INC, as
+    // ATI's register guide describes -- except for the Rage Pro's lines
+    // from the 3D pipe, for which atidrab computes the terms so that the
+    // increment is added on every step, before the sign is looked at, and
+    // the decrement on top of it on a diagonal step (DEC = -2dx - 1, not
+    // 2(dy - dx)); only that draws its lines at their slope, and its 45
+    // degree lines through their ends.
+    bool diagonal;
+    if (inc_always) {
+      a.err += int(r.dst_bres_inc);
+      diagonal = a.err >= 0;
+      if (diagonal)
+        a.err += int(r.dst_bres_dec);
+    } else {
+      diagonal = a.err >= 0;
+      a.err += diagonal ? int(r.dst_bres_dec) : int(r.dst_bres_inc);
+    }
     if (r.dst_cntl & DST_Y_MAJOR) {
       a.dst_y += a.yinc;
       a.src_y += a.yinc;
-      if (a.err >= 0) {
-        a.err += int(r.dst_bres_dec);
+      a.line_ysteps++;
+      if (diagonal) {
         a.dst_x += a.xinc;
         a.src_x += a.xinc;
-      } else {
-        a.err += int(r.dst_bres_inc);
+        a.line_xsteps++;
       }
     } else {
       a.dst_x += a.xinc;
       a.src_x += a.xinc;
-      if (a.err >= 0) {
-        a.err += int(r.dst_bres_dec);
+      a.line_xsteps++;
+      if (diagonal) {
         a.dst_y += a.yinc;
         a.src_y += a.yinc;
-      } else {
-        a.err += int(r.dst_bres_inc);
+        a.line_ysteps++;
       }
     }
   }

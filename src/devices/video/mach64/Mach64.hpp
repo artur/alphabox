@@ -209,6 +209,7 @@ protected:
   void engine_run_line(u32 host_data, int count);
   bool engine_colour_compare(u32 src, u32 dst) const;
   u32 engine_mix(int mix, u32 src, u32 dst) const;
+  u32 engine_line_3d_colour(int xsteps, int ysteps) const;
   u32 engine_source(int sel, u32 host, int src_x, int src_y, int dst_x,
                     int dst_y) const;
 
@@ -304,6 +305,7 @@ public:
     int src_x, src_y, src_x_start, src_y_start;
     int xinc, yinc;
     int x_count, y_count, xx_count;
+    int line_xsteps, line_ysteps; ///< a line's steps: its 3D colour's place
     int src_x_count, src_y_count;
     int src_width1, src_height1, src_width2, src_height2;
     u32 src_offset, src_pitch, dst_offset, dst_pitch;

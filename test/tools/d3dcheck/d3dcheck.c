@@ -58,6 +58,7 @@ typedef struct {
     IDirectDrawSurface7 *tex_mip, *tex_4444, *tex_8888, *tex_key, *tex_grad;
     IDirectDrawSurface7 *tex_mipflat;
     IDirectDrawSurface7 *blt_src; /* 64x64 RGB 565, for stretch blits */
+    IDirectDrawSurface7 *tex_wide; /* 64x16 */
 } path_t;
 
 static DWORD mem_caps(int hal)
@@ -210,9 +211,20 @@ static int fill_argb(IDirectDrawSurface7 *s, const DDPIXELFORMAT_T *pf,
 }
 
 /* A texture of any format, with `levels` mip levels (1: none). */
+static IDirectDrawSurface7 *make_texture_wh(int hal, int w, int h,
+                                            int levels, DDPIXELFORMAT_T *pf,
+                                            unsigned (*texel)(int, int, int));
+
 static IDirectDrawSurface7 *make_texture_fmt(int hal, int size, int levels,
                                              DDPIXELFORMAT_T *pf,
                                              unsigned (*texel)(int, int, int))
+{
+    return make_texture_wh(hal, size, size, levels, pf, texel);
+}
+
+static IDirectDrawSurface7 *make_texture_wh(int hal, int w, int h,
+                                            int levels, DDPIXELFORMAT_T *pf,
+                                            unsigned (*texel)(int, int, int))
 {
     DDSURFACEDESC2_T sd;
     IDirectDrawSurface7 *top = 0, *s;
@@ -221,8 +233,8 @@ static IDirectDrawSurface7 *make_texture_fmt(int hal, int size, int levels,
     memset(&sd, 0, sizeof sd);
     sd.dwSize = sizeof sd;
     sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
-    sd.dwWidth = size;
-    sd.dwHeight = size;
+    sd.dwWidth = w;
+    sd.dwHeight = h;
     sd.ddpfPixelFormat = *pf;
     sd.ddsCaps.dwCaps = DDSCAPS_TEXTURE | mem_caps(hal);
     if (levels > 1) {
@@ -233,8 +245,7 @@ static IDirectDrawSurface7 *make_texture_fmt(int hal, int size, int levels,
     hr = dd->lpVtbl->CreateSurface(dd, &sd, &top, 0);
     if (FAILED_HR(hr)) {
         SAY("  CreateSurface texture %dx%d, %d levels, %lu bpp failed: %08lx\n",
-            size, size, levels, (unsigned long)pf->dwRGBBitCount,
-            (unsigned long)hr);
+            w, h, levels, (unsigned long)pf->dwRGBBitCount, (unsigned long)hr);
         return 0;
     }
     s = top;
@@ -348,6 +359,7 @@ static int open_path(path_t *p)
          * rasteriser by the driver's choice, not the chip's. */
         p->tex_mip = make_texture_fmt(p->hal, 64, 5, &pf, texel_mip);
         p->tex_mipflat = make_texture_fmt(p->hal, 64, 5, &pf, texel_mipflat);
+        p->tex_wide = make_texture_wh(p->hal, 64, 16, 1, &pf, texel_key);
         /* A plain surface for stretch blits: the front-end scaler's job on
          * the HAL, DirectDraw's own code on the HEL. */
         p->blt_src = make_surface(DDSCAPS_OFFSCREENPLAIN | mem_caps(p->hal),
@@ -389,6 +401,7 @@ static void baseline(IDirect3DDevice7 *d)
     f->SetRenderState(d, RS_LIGHTING, 0);
     f->SetRenderState(d, RS_CULLMODE, D3DCULL_NONE);
     f->SetRenderState(d, RS_SHADEMODE, D3DSHADE_GOURAUD);
+    f->SetRenderState(d, RS_FILLMODE, D3DFILL_SOLID);
     f->SetRenderState(d, RS_DITHERENABLE, 0);
     f->SetRenderState(d, RS_ZENABLE, 0);
     f->SetRenderState(d, RS_ZWRITEENABLE, 0);
@@ -739,6 +752,67 @@ static void blt_stretch(path_t *p, int x0, int y0, int x1, int y1)
         SAY("  %s: Blt failed: %08lx\n", p->name, (unsigned long)hr);
 }
 
+/* Lines of every slope and colour, as a D3D line list. */
+static void scene_lines(path_t *p)
+{
+    TLVERTEX v[32];
+    int i;
+    for (i = 0; i < 16; i++) {
+        float a = (float)i * 0.19634954f; /* pi/16 */
+        /* cos and sin by Taylor series, good to 0.1% up to pi */
+        float x2 = a * a;
+        float c = 1.0f - x2 / 2 + x2 * x2 / 24 - x2 * x2 * x2 / 720 +
+                  x2 * x2 * x2 * x2 / 40320;
+        float s = a - a * x2 / 6 + a * x2 * x2 / 120 - a * x2 * x2 * x2 / 5040 +
+                  a * x2 * x2 * x2 * x2 / 362880;
+        V(&v[2 * i], 128.0f, 128.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 0, 0);
+        V(&v[2 * i + 1], 128.0f + 110.0f * c, 128.0f + 110.0f * s, 0.5f, 1.0f,
+          0xff000000u | ((unsigned)(i * 16) << 16) | 0xff00u - (i * 16 << 8),
+          0xff000000, 0, 0);
+    }
+    p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_LINELIST, FVF_TLVERTEX, v, 32,
+                                  0);
+}
+
+/* A grid of points. */
+static void scene_points(path_t *p)
+{
+    TLVERTEX v[64];
+    int i;
+    for (i = 0; i < 64; i++)
+        V(&v[i], 20.0f + 30.0f * (i % 8), 20.0f + 30.0f * (i / 8), 0.5f, 1.0f,
+          0xff000000u | (unsigned)(i * 4) << 16 | 0xff00u | (255u - i * 4),
+          0xff000000, 0, 0);
+    p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_POINTLIST, FVF_TLVERTEX, v, 64,
+                                  0);
+}
+
+/* The Gouraud triangle and a textured quad, as wireframe. */
+static void scene_wireframe(path_t *p)
+{
+    p->dev->lpVtbl->SetRenderState(p->dev, RS_FILLMODE, D3DFILL_WIREFRAME);
+    scene_gouraud(p);
+}
+
+/* A triangle reaching far outside the target on three sides: D3D clips
+ * it, and what reaches the card lies partly at its very edges. */
+static void scene_clip(path_t *p)
+{
+    TLVERTEX v[3];
+    V(&v[0], -300.0f, 40.0f, 0.5f, 1.0f, 0xffff0000, 0xff000000, 0, 0);
+    V(&v[1], 600.0f, 90.0f, 0.5f, 1.0f, 0xff00ff00, 0xff000000, 0, 0);
+    V(&v[2], 100.0f, 700.0f, 0.5f, 1.0f, 0xff0000ff, 0xff000000, 0, 0);
+    p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_TRIANGLELIST, FVF_TLVERTEX, v,
+                                  3, 0);
+}
+
+/* A 64x16 texture, point-sampled, twice across. */
+static void scene_nonsquare(path_t *p)
+{
+    use_texture(p->dev, p->tex_wide, 0);
+    quad(p->dev, 32.3f, 64.3f, 224.3f, 192.3f, 0.5f, 0xffffffff, 2.0f, 2.0f);
+}
+
 static void scene_stretch(path_t *p) { blt_stretch(p, 32, 32, 224, 224); }
 static void scene_shrink(path_t *p) { blt_stretch(p, 100, 100, 140, 140); }
 
@@ -773,16 +847,36 @@ static const scene_t scenes[] = {
     {"colorkey", scene_colorkey},
     {"multitex", scene_multitex, 1},
     {"dither", scene_dither, 1},
+    {"lines", scene_lines},
+    {"points", scene_points},
+    {"wireframe", scene_wireframe},
+    {"clip", scene_clip},
+    {"nonsquare", scene_nonsquare},
     {"stretch", scene_stretch, 1, 1},
     {"shrink", scene_shrink, 1, 1},
 };
 #define NSCENES ((int)(sizeof scenes / sizeof scenes[0]))
 
-/* 565 pixels of the target, W*H of them, into `out`. */
-static int read_target(path_t *p, unsigned short *out)
+/* A channel of a pixel, by its mask, widened to 8 bits. */
+static unsigned unpack_mask(unsigned v, DWORD mask)
+{
+    int shift = 0;
+    unsigned max;
+    if (!mask)
+        return 0;
+    while (!((mask >> shift) & 1))
+        shift++;
+    max = mask >> shift;
+    return ((v & mask) >> shift) * 255 / max;
+}
+
+/* The target's pixels, W*H of them, into `out` as RGB 888, whatever the
+ * depth of the desktop. */
+static int read_target(path_t *p, unsigned *out)
 {
     DDSURFACEDESC2_T sd;
-    int y;
+    const DDPIXELFORMAT_T *pf;
+    int x, y;
     memset(&sd, 0, sizeof sd);
     sd.dwSize = sizeof sd;
     if (FAILED_HR(p->rt->lpVtbl->Lock(p->rt, 0, &sd,
@@ -790,13 +884,23 @@ static int read_target(path_t *p, unsigned short *out)
         SAY("  %s: target Lock failed\n", p->name);
         return 0;
     }
-    for (y = 0; y < H; y++)
-        memcpy(out + y * W, (char *)sd.lpSurface + y * sd.lPitch, W * 2);
+    pf = &sd.ddpfPixelFormat;
+    for (y = 0; y < H; y++) {
+        const char *row = (const char *)sd.lpSurface + y * sd.lPitch;
+        for (x = 0; x < W; x++) {
+            unsigned v = pf->dwRGBBitCount == 32
+                             ? ((const DWORD *)row)[x]
+                             : ((const unsigned short *)row)[x];
+            out[y * W + x] = (unpack_mask(v, pf->dwRBitMask) << 16) |
+                             (unpack_mask(v, pf->dwGBitMask) << 8) |
+                             unpack_mask(v, pf->dwBBitMask);
+        }
+    }
     p->rt->lpVtbl->Unlock(p->rt, 0);
     return 1;
 }
 
-static int render(path_t *p, const scene_t *s, unsigned short *out)
+static int render(path_t *p, const scene_t *s, unsigned *out)
 {
     IDirect3DDevice7 *d = p->dev;
     HRESULT_T hr;
@@ -826,7 +930,7 @@ static int render(path_t *p, const scene_t *s, unsigned short *out)
     return read_target(p, out);
 }
 
-static void ppm(const char *scene, const char *which, const unsigned short *px)
+static void ppm(const char *scene, const char *which, const unsigned *px)
 {
     char path[260];
     FILE *f;
@@ -839,9 +943,9 @@ static void ppm(const char *scene, const char *which, const unsigned short *px)
     for (i = 0; i < W * H; i++) {
         unsigned v = px[i];
         unsigned char rgb[3];
-        rgb[0] = (unsigned char)(((v >> 11) & 31) * 255 / 31);
-        rgb[1] = (unsigned char)(((v >> 5) & 63) * 255 / 63);
-        rgb[2] = (unsigned char)((v & 31) * 255 / 31);
+        rgb[0] = (unsigned char)(v >> 16);
+        rgb[1] = (unsigned char)(v >> 8);
+        rgb[2] = (unsigned char)v;
         fwrite(rgb, 1, 3, f);
     }
     fclose(f);
@@ -849,9 +953,9 @@ static void ppm(const char *scene, const char *which, const unsigned short *px)
 
 static int chan_diff(unsigned a, unsigned b)
 {
-    int ar = ((a >> 11) & 31) * 255 / 31, br = ((b >> 11) & 31) * 255 / 31;
-    int ag = ((a >> 5) & 63) * 255 / 63, bg = ((b >> 5) & 63) * 255 / 63;
-    int ab = (a & 31) * 255 / 31, bb = (b & 31) * 255 / 31;
+    int ar = (a >> 16) & 0xff, br = (b >> 16) & 0xff;
+    int ag = (a >> 8) & 0xff, bg = (b >> 8) & 0xff;
+    int ab = a & 0xff, bb = b & 0xff;
     int d = ar > br ? ar - br : br - ar, e;
     e = ag > bg ? ag - bg : bg - ag;
     if (e > d)
@@ -871,7 +975,39 @@ static HRESULT_T fmt_cb(DDPIXELFORMAT_T *pf, void *ctx)
     return 1; /* D3DENUMRET_OK */
 }
 
-static unsigned short img_hw[W * H], img_sw[W * H];
+static unsigned img_hw[W * H], img_sw[W * H];
+
+/* How fast the HAL fills: 100 full-target quads, bilinear textured and
+ * then plain Gouraud, timed with GetTickCount around a read-back (which
+ * waits for the card). An estimate of the emulated card's fill rate, not a
+ * benchmark: one run, millisecond ticks, the guest's own clock. */
+static void fill_rate(path_t *p)
+{
+    IDirect3DDevice7 *d = p->dev;
+    const IDirect3DDevice7Vtbl *f = d->lpVtbl;
+    int pass, i;
+    for (pass = 0; pass < 2; pass++) {
+        DWORD t0, t1;
+        baseline(d);
+        if (pass == 0) {
+            use_texture(d, p->tex_checker, 1);
+            f->SetTextureStageState(d, 0, TSS_MAGFILTER, D3DTFG_LINEAR);
+            f->SetTextureStageState(d, 0, TSS_MINFILTER, D3DTFN_LINEAR);
+        }
+        t0 = GetTickCount();
+        f->BeginScene(d);
+        for (i = 0; i < 100; i++)
+            quad(d, 0.0f, 0.0f, 256.0f, 256.0f, 0.5f,
+                 0xff000000u | (unsigned)(i * 2) << 16 | 0xff00u, 1.0f, 1.0f);
+        f->EndScene(d);
+        read_target(p, img_hw);
+        t1 = GetTickCount();
+        SAY("BENCH %s: 100 x 256x256 in %lu ms, about %lu Mpixel/s "
+            "(estimate)\n",
+            pass ? "gouraud" : "bilinear", (unsigned long)(t1 - t0),
+            t1 > t0 ? (unsigned long)(6553600UL / (t1 - t0) / 1000) : 0UL);
+    }
+}
 
 /* The hardware overlay: a 160x120 YUY2 surface -- eight colour bars over a
  * grey ramp -- shown doubled at (200,150)-(520,390) on the desktop for 20
@@ -1026,8 +1162,9 @@ int main(int argc, char **argv)
     SAY("display: %lux%lu, %lu bpp\n", (unsigned long)mode.dwWidth,
         (unsigned long)mode.dwHeight,
         (unsigned long)mode.ddpfPixelFormat.dwRGBBitCount);
-    if (mode.ddpfPixelFormat.dwRGBBitCount != 16) {
-        SAY("the desktop must be in 16-bit colour\n");
+    if (mode.ddpfPixelFormat.dwRGBBitCount != 16 &&
+        mode.ddpfPixelFormat.dwRGBBitCount != 32) {
+        SAY("the desktop must be in 16- or 32-bit colour\n");
         return 2;
     }
     hr = dd->lpVtbl->QueryInterface(dd, &IID_IDirect3D7, (void **)&d3d);
@@ -1101,6 +1238,7 @@ int main(int argc, char **argv)
             failed++;
     }
     SAY("DONE %d of %d scenes differ\n", failed, NSCENES);
+    fill_rate(&hw);
     show_overlay();
     return failed ? 1 : 0;
 }
