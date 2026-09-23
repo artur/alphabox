@@ -612,20 +612,27 @@ static void scene_mipramp(path_t *p)
     floor_quad(p->dev, 8.0f);
 }
 
-/* The checker, texture coordinates -0.5..1.5, clamped. */
-static void scene_clamp(path_t *p)
+/* The checker, texture coordinates -0.5..1.5, clamped in `u`, `v` or
+ * both. */
+static void clamp_quad(path_t *p, int u, int v_)
 {
     TLVERTEX v[4];
     use_texture(p->dev, p->tex_checker, 0);
-    p->dev->lpVtbl->SetTextureStageState(p->dev, 0, TSS_ADDRESS,
-                                         D3DTADDRESS_CLAMP);
-    V(&v[0], 32.0f, 32.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, -0.5f);
-    V(&v[1], 224.0f, 32.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, -0.5f);
-    V(&v[2], 32.0f, 224.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, 1.5f);
-    V(&v[3], 224.0f, 224.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, 1.5f);
+    p->dev->lpVtbl->SetTextureStageState(
+        p->dev, 0, TSS_ADDRESSU, u ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
+    p->dev->lpVtbl->SetTextureStageState(
+        p->dev, 0, TSS_ADDRESSV, v_ ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
+    V(&v[0], 32.3f, 32.3f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, -0.5f);
+    V(&v[1], 224.3f, 32.3f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, -0.5f);
+    V(&v[2], 32.3f, 224.3f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, 1.5f);
+    V(&v[3], 224.3f, 224.3f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, 1.5f);
     p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_TRIANGLESTRIP, FVF_TLVERTEX, v,
                                   4, 0);
 }
+
+static void scene_clamp(path_t *p) { clamp_quad(p, 1, 1); }
+static void scene_clampu(path_t *p) { clamp_quad(p, 1, 0); }
+static void scene_clampv(path_t *p) { clamp_quad(p, 0, 1); }
 
 /* An alpha texture blended over a red/blue background. */
 static void alpha_texture_scene(path_t *p, IDirectDrawSurface7 *t)
@@ -727,6 +734,8 @@ static const scene_t scenes[] = {
     {"miplinear", scene_miplinear},
     {"mipramp", scene_mipramp, 1},
     {"clamp", scene_clamp},
+    {"clampu", scene_clampu},
+    {"clampv", scene_clampv},
     {"tex4444", scene_tex4444},
     {"tex8888", scene_tex8888},
     {"colorkey", scene_colorkey},

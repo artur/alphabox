@@ -51,7 +51,8 @@
  * textures in 565, 1555, 4444 and 8888, clamped and wrapped, colour-keyed,
  * and mip-mapped with nearest and blended levels -- identical but for
  * pixels exactly on an edge, and a trace of level-of-detail difference
- * towards the horizon. Not modelled: dithering (colours are truncated).
+ * towards the horizon. Dithering is a 4x4 ordered pattern, compared by
+ * eye: the chip's own pattern is not documented.
  * The second texture needs nothing: atidrab accepts a second stage and
  * never programs it.
  **/
@@ -229,6 +230,29 @@ void CMach64::setup_triangle() {
   const u32 mask = vram_mask();
   u8 *mem = vga.memory;
   const u32 flat = (r.block1[SETUP_CNTL] >> 3) & 3; // 0: Gouraud
+
+  // Down to a 15- or 16-bit destination: SCALE_3D_CNTL bit 2 dithers (a
+  // 4x4 ordered pattern here; the chip's own is not documented), as
+  // atidrab sets it for D3DRENDERSTATE_DITHERENABLE; otherwise colours are
+  // truncated. (Bit 3, which the driver always sets, may be rounding;
+  // rounding moves every scene further from D3D's software rasteriser,
+  // which truncates.)
+  const bool dither =
+      (dst_fmt == BPP_15 || dst_fmt == BPP_16) && ((s3d >> 2) & 1);
+  static const u8 bayer[4][4] = {
+      {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  auto dithered = [&](u32 c, int x, int y) {
+    // The low bits each channel loses: 3 of red and blue, 2 or 3 of green.
+    const int lost[3] = {3, dst_fmt == BPP_16 ? 2 : 3, 3};
+    u32 out = c & 0xff000000u;
+    for (int i = 0; i < 3; i++) {
+      const u32 lsb = 1u << lost[i];
+      const u32 add = (bayer[y & 3][x & 3] * lsb) / 16;
+      const u32 v = std::min<u32>(((c >> (8 * i)) & 0xff) + add, 255);
+      out |= v << (8 * i);
+    }
+    return out;
+  };
 
   // Pixels whose centres fall inside, with a top-left rule for the edges.
   const int x0 = std::max(
@@ -477,6 +501,8 @@ void CMach64::setup_triangle() {
                 pipe_add_sat(pipe_factor(blend_src, color, d, sa),
                              pipe_factor(blend_dst, d, color, sa));
       }
+      if (dither)
+        color = dithered(color, px, py);
       const u32 out =
           (pipe_pack(color, dst_fmt) & r.write_mask) | (old & ~r.write_mask);
       for (int i = 0; i < dst_bytes; i++)
