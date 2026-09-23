@@ -48,6 +48,7 @@
 #include "Keyboard.hpp"
 #include "Mach64.hpp"
 #include "PCF8584.hpp"
+#include "Permedia2.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
 #include "Serial.hpp"
@@ -595,6 +596,7 @@ static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
+static const char *const kv_permedia2[] = {"rom", "memory", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
@@ -644,6 +646,7 @@ classinfo classes[] = {
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"mach64", c_mach64, IS_PCI | ON_GUI, kv_mach64},
+    {"permedia2", c_permedia2, IS_PCI | ON_GUI, kv_permedia2},
     {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21140", c_tulip, IS_PCI | IS_NIC, kv_tulip},
@@ -933,6 +936,10 @@ void CConfigurator::initialize() {
     myDevice = new CMach64(this, theSystem, pcibus, pcidev, *c);
     break;
   }
+
+  case c_permedia2:
+    myDevice = new CPermedia2(this, theSystem, pcibus, pcidev);
+    break;
 
   case c_es137x:
 #if defined(HAVE_SDL)

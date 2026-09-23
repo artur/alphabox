@@ -44,6 +44,7 @@ file(GLOB srcs
     src/devices/video/s3/*.cpp
     src/devices/video/cirrus/*.cpp
     src/devices/video/mach64/*.cpp
+    src/devices/video/permedia2/*.cpp
     src/devices/net/*.cpp
     src/base/*.cpp
     src/gui/*.cpp)
@@ -63,7 +64,7 @@ target_include_directories(alphabox PRIVATE
     src/platforms
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
-    src/devices/video/mach64
+    src/devices/video/mach64 src/devices/video/permedia2
     src/devices/net
     src/base src/gui ${CMAKE_BINARY_DIR}/src)
 

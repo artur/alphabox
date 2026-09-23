@@ -57,6 +57,7 @@ typedef enum {
   c_s3,
   c_cirrus,
   c_mach64,
+  c_permedia2,
   c_radeon,
   c_tulip,
   c_i8255x,

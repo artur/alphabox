@@ -2,7 +2,7 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus|mach64] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro] [ROM=<bios>] \
+# usage: [CARD=s3|cirrus|mach64|permedia2] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro] [ROM=<bios>] \
 #          vga_boot.sh <alphabox-binary> <label> [seconds]
 #   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP to gd5434 (cirrus) or ct
@@ -10,7 +10,11 @@
 #   ROM defaults to test/arc/86c764x1.bin (s3), or for cirrus to the 86Box
 #   ROM set (not in git): roms/video/cirruslogic/gd5434.BIN (gd5434) or
 #   pci.bin (gd5430); for mach64 to the 86Box set in roms/video/mach64/:
-#   the Mach64 CT PCI BIOS (ct) or the 264VT2 PCI BIOS (vt2).
+#   the Mach64 CT PCI BIOS (ct) or the 264VT2 PCI BIOS (vt2); for permedia2
+#   to the ELSA GLoria Synergy PCI BIOS 8.07.00 (roms/video/permedia2/).
+#   That BIOS never runs under SRM V7.3-1, which calls option ROMs with
+#   AX = 0 where the BIOS expects its own bus and device (see es40.cfg), so
+#   permedia2 gives no frames here; AlphaBIOS runs it.
 #
 # The screen settles on two frames (text cursor on/off). With SRM V7.3-1 the
 # settled sets are:
@@ -34,7 +38,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
+[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64|permedia2] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
 [ -x "$1" ] || { echo "vga_boot: $1 is not executable"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
@@ -63,7 +67,8 @@ mach64)
   esac
   EXTRA="chip = \"$CHIP\";"
   ;;
-*) echo "vga_boot: CARD must be s3, cirrus or mach64"; exit 2 ;;
+permedia2) ROM=${ROM:-$R/roms/video/permedia2/SYN80700.PAN} ;;
+*) echo "vga_boot: CARD must be s3, cirrus, mach64 or permedia2"; exit 2 ;;
 esac
 [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }
 WORK=${ALPHABOX_WORK:-$R/lab}
