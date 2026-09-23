@@ -81,3 +81,64 @@ u8 CMach64::dac_gio_read(u8 byte3) const {
     v |= 0x02;
   return v;
 }
+
+/**
+ * The Rage Pro's I2C engine, as atirage.sys drives it: one byte per
+ * command. The driver clears I2C_CNTL_0's status nibble, puts a byte to
+ * send in I2C_CNTL_1 byte 0, and writes the command to I2C_CNTL_0 byte 1:
+ * START first (the byte is then an address), RECEIVE to read a byte into
+ * I2C_CNTL_1 byte 0, STOP to end the transfer after this byte. It then
+ * polls the status for DONE, NACK or HALT. No register guide in hand
+ * documents the engine; this is the protocol the driver's code implies.
+ * The engine clocks the same lines as DAC_CNTL, with the transfer done by
+ * the time the command's write returns.
+ **/
+void CMach64::i2c_line(bool scl, bool sda) { m_ddc.drive_from_host(scl, sda); }
+
+void CMach64::i2c_engine_command(u8 cmd) {
+  u32 &cntl0 = r.gt[I2C_CNTL_0 >> 2];
+  u32 &cntl1 = r.gt[I2C_CNTL_1 >> 2];
+  u8 status = I2C_DONE;
+
+  if (cmd & I2C_CMD_START) { // from idle, or a repeated start
+    i2c_line(false, true);
+    i2c_line(true, true);
+    i2c_line(true, false);
+    i2c_line(false, false);
+  }
+  if (cmd & I2C_CMD_RECEIVE) {
+    u8 v = 0;
+    for (int i = 0; i < 8; i++) {
+      i2c_line(false, true);
+      i2c_line(true, true);
+      v = u8((v << 1) | (m_ddc.sda() ? 1 : 0));
+      i2c_line(false, true);
+    }
+    // Acknowledge, unless this is the last byte before the stop.
+    const bool ack = !(cmd & I2C_CMD_STOP);
+    i2c_line(false, !ack);
+    i2c_line(true, !ack);
+    i2c_line(false, !ack);
+    cntl1 = (cntl1 & ~0xffu) | v;
+  } else {
+    const u8 v = u8(cntl1);
+    for (int i = 7; i >= 0; i--) {
+      const bool bit = (v >> i) & 1;
+      i2c_line(false, bit);
+      i2c_line(true, bit);
+      i2c_line(false, bit);
+    }
+    i2c_line(false, true); // release SDA for the slave's acknowledge
+    i2c_line(true, true);
+    if (m_ddc.sda())
+      status |= I2C_NACK;
+    i2c_line(false, true);
+  }
+  if (cmd & I2C_CMD_STOP) {
+    i2c_line(false, false);
+    i2c_line(true, false);
+    i2c_line(true, true);
+    ddc_drive(); // the bus back to DAC_CNTL's drivers
+  }
+  cntl0 = (cntl0 & ~0xfu) | status;
+}

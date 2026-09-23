@@ -299,6 +299,8 @@ void CMach64::reg_write(u32 offset, int bytes, u32 data) {
     reg_write8(offset + i, u8(data >> (8 * i)));
   if (offset & REG_BLOCK0)
     reg_written(offset & 0x3fc);
+  else if (m_chip.pro && (offset & 3) + bytes == 4) // a whole dword is in
+    setup_written((offset & 0x3ff) >> 2);
 }
 
 u8 CMach64::reg_read8(u32 offset) {
@@ -392,7 +394,7 @@ u8 CMach64::reg_read8(u32 offset) {
       const u32 creg = is_gt() ? gt_canonical(reg & 0x3fc) : (reg & 0x3fc);
       if (u32 *p = engine_reg(r, creg))
         return lane_get(*p, lane);
-      if (is_gt())
+      if (has_3d_regs())
         return lane_get(r.gt[creg >> 2], lane);
       return 0;
     }
@@ -426,7 +428,7 @@ u8 CMach64::reg_read8(u32 offset) {
   default:
     if (u32 *p = block0_reg(r, reg))
       return lane_get(*p, lane);
-    if (is_gt())
+    if (has_3d_regs())
       return lane_get(r.gt[(reg & 0x3fc) >> 2], lane);
     return 0;
   }
@@ -477,8 +479,10 @@ void CMach64::reg_write8(u32 offset, u8 data) {
   default:
     if (u32 *p = block0_reg(r, reg))
       lane_set(*p, lane, data);
-    else if (is_gt())
+    else if (has_3d_regs())
       lane_set(r.gt[(reg & 0x3fc) >> 2], lane, data);
+    if (m_chip.pro && (reg & 0x3fc) == I2C_CNTL_0 && lane == 1)
+      i2c_engine_command(data);
     return;
   }
 }

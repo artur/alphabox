@@ -34,11 +34,11 @@ using namespace mach64;
  * shipped with; the BIOS sizes it by probing the aperture. */
 static const mach64_chip_config mach64_chips[] = {
     {"ct", "Mach64 CT", PCI_DEVICE_CT, 0x00004354, 0x40, 2u << 20,
-     "mach64ct.bin", false, false},
+     "mach64ct.bin", false, false, false},
     {"vt2", "264VT2", PCI_DEVICE_VT2, 0x40005654, 0x40, 4u << 20,
-     "mach64vt2.bin", false, false},
+     "mach64vt2.bin", false, false, false},
     {"vt3", "264VT3", PCI_DEVICE_VT3, 0x9a005655, 0x40, 4u << 20,
-     "mach64vt2.bin", false, false},
+     "mach64vt2.bin", false, false, false},
     // The 3D Rage II+: the VT's register file and the GT's 3D engine. Its
     // ASIC ID, 9Ah, is also its PCI revision (RRG-G02700 ch. 4, 7), and the
     // revision Windows 2000's DISPLAY.INF names for II+ parts; the inbox
@@ -47,7 +47,15 @@ static const mach64_chip_config mach64_chips[] = {
     // its register base from the card's third PCI resource and, without
     // one, gets the ROM's and polls the vertical blank there for ever.
     {"rage2p", "3D Rage II+ (264GT-B)", PCI_DEVICE_GTB, 0x9a004755, 0x9a,
-     4u << 20, "rageii-pci.bin", true, true},
+     4u << 20, "rageii-pci.bin", true, false, true},
+    // The 3D Rage Pro (GB): the triangle setup engine in place of the GT's
+    // trapezoids. ASIC ID 5Ch (UMC A4, RRG-G03300's revision table) as
+    // CONFIG_CHIP_ID[31:24] and the PCI revision; Windows 2000 binds it to
+    // atimpab.sys/atidrab.dll, whose Direct3D HAL ATI offers from the Rage
+    // Pro on (their chip tables: family 8). The auxiliary register
+    // aperture is documented for it (RRG-G03300 2-15).
+    {"ragepro", "3D Rage Pro (GB)", PCI_DEVICE_GB, 0x5c004742, 0x5c, 8u << 20,
+     "rage2pr-bga-40212-103-mx27c512.bin", false, true, true},
 };
 
 const mach64_chip_config *mach64_chip_by_name(const char *name) {

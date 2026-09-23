@@ -928,7 +928,7 @@ void CConfigurator::initialize() {
     const mach64_chip_config *c = mach64_chip_by_name(chip);
     if (!c)
       FAILURE_1(Configuration,
-                "mach64: unknown chip \"%s\" (ct, vt2, vt3, rage2p)",
+                "mach64: unknown chip \"%s\" (ct, vt2, vt3, rage2p, ragepro)",
                 chip);
     myDevice = new CMach64(this, theSystem, pcibus, pcidev, *c);
     break;

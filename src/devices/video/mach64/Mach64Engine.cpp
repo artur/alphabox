@@ -440,7 +440,7 @@ void CMach64::engine_write8(u32 reg, u8 val) {
   default:
     if ((reg & 0x3ff) >= HOST_DATA0 && (reg & 0x3ff) <= HOST_DATA_LAST)
       engine_run(val, 8);
-    else if (is_gt()) // the trailing edge, Z, texture and interpolators
+    else if (has_3d_regs()) // the trailing edge, Z, texture, interpolators
       lane_set(r.gt[(reg & 0x3fc) >> 2], reg, val);
     break;
   }

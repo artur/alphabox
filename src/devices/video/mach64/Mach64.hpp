@@ -83,7 +83,8 @@ struct mach64_chip_config {
   u8 revision;        ///< PCI revision id
   u32 vram_bytes;     ///< default framebuffer memory
   const char *default_rom; ///< option ROM file when "rom" is not set
-  bool gt;            ///< a 3D RAGE: the trapezoid engine and 3D pipe
+  bool gt;            ///< a 3D RAGE (II/II+): the trapezoid engine
+  bool pro;           ///< a 3D RAGE PRO: the triangle setup engine
   bool aux_regs;      ///< BAR2: the 4 KB auxiliary register aperture
 };
 
@@ -155,6 +156,12 @@ protected:
   /// bus hangs on; the monitor answers with its EDID.
   void ddc_attach_monitor();
   void ddc_drive();
+  void i2c_engine_command(u8 cmd);
+
+  // --- the Rage Pro's setup engine (Mach64Setup.cpp) ----------------------
+  void setup_written(u32 idx);
+  void setup_triangle();
+  void i2c_line(bool scl, bool sda);
   u8 dac_gio_read(u8 byte3) const;
   void pll_write(int lane, u8 data);
   u8 pll_read(int lane) const;
@@ -207,6 +214,9 @@ protected:
 
   // --- the 3D RAGE (Mach64Engine3D.cpp) ------------------------------------
   bool is_gt() const { return m_chip.gt; }
+  /// A part with a 3D register file (GT or Rage Pro): registers without a
+  /// field of their own are kept in regs_t::gt and read back.
+  bool has_3d_regs() const { return m_chip.gt || m_chip.pro; }
   /// A GT register by its canonical address.
   u32 &gt_reg(u32 reg) { return r.gt[(mach64::gt_canonical(reg) & 0x3fc) >> 2]; }
   u32 gt_reg(u32 reg) const {

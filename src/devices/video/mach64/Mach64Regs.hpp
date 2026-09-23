@@ -47,6 +47,7 @@ constexpr u16 PCI_DEVICE_CT = 0x4354;  ///< "TC": Mach64 CT, the part SRM names
 constexpr u16 PCI_DEVICE_VT2 = 0x5654; ///< "TV": 264VT2
 constexpr u16 PCI_DEVICE_VT3 = 0x5655; ///< "UV": 264VT3
 constexpr u16 PCI_DEVICE_GTB = 0x4755; ///< "GU": 3D Rage II+ (264GT-B)
+constexpr u16 PCI_DEVICE_GB = 0x4742;  ///< "GB": 3D Rage Pro
 
 /// The register file as seen through every path (2 KB).
 constexpr u32 REG_BLOCK_BYTES = 0x800;
@@ -97,6 +98,9 @@ constexpr u32 MEM_VGA_WP_SEL = 0xb4;
 constexpr u32 MEM_VGA_RP_SEL = 0xb8;
 constexpr u32 DAC_REGS = 0xc0;
 constexpr u32 DAC_CNTL = 0xc4;
+/// Rage Pro and later: the hardware I2C engine on the DDC lines.
+constexpr u32 I2C_CNTL_0 = 0x3c;
+constexpr u32 I2C_CNTL_1 = 0xbc;
 constexpr u32 GEN_TEST_CNTL = 0xd0;
 constexpr u32 CONFIG_CNTL = 0xdc;
 constexpr u32 CONFIG_CHIP_ID = 0xe0;
@@ -296,6 +300,15 @@ constexpr u32 CFG_MEM_VGA_AP_EN = 1u
                                   << 2; ///< registers at 0xbf800, banked window
 constexpr u32 CFG_MEM_AP_LOC_SHIFT = 4; ///< aperture base, 4 MB units
 constexpr u32 CFG_MEM_AP_LOC_MASK = 0x3ff0;
+
+// --- I2C_CNTL_0 byte 0 (status) and byte 1 (command); I2C_CNTL_1 byte 0
+// is the data byte, sent or received.
+constexpr u8 I2C_DONE = 1u << 0;
+constexpr u8 I2C_NACK = 1u << 1;
+constexpr u8 I2C_HALT = 1u << 2;
+constexpr u8 I2C_CMD_START = 1u << 0;
+constexpr u8 I2C_CMD_STOP = 1u << 1;
+constexpr u8 I2C_CMD_RECEIVE = 1u << 3;
 
 // --- MEM_CNTL: bits 2..0 memory size
 // --------------------------------------------
