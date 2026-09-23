@@ -83,6 +83,22 @@ inline u32 pipe_texel(const u8 *vram, u32 mask, u32 addr, int fmt,
   return 0xffff00ffu; // an unmodelled format shows as magenta
 }
 
+/// The bits of pipe_texel's ARGB that the texel itself carries (the rest
+/// are its high bits repeated): what a texture colour key is compared on.
+inline u32 pipe_texel_key_bits(int fmt) {
+  switch (fmt) {
+  case 3:
+    return 0x00f8f8f8u; // 1555
+  case 4:
+    return 0x00f8fcf8u; // 565
+  case 7:
+    return 0x00e0e0c0u; // 332
+  case 15:
+    return 0x00f0f0f0u; // 4444
+  }
+  return 0x00ffffffu; // 8888, palette
+}
+
 inline int pipe_texel_bytes(int fmt) {
   switch (fmt) {
   case 2:

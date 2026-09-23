@@ -145,8 +145,8 @@ which workload, and the optimizations that turned out not to pay.
   IDE disk can fail (this rarely affects an OpenVMS installation).
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
   and the Mach64's video overlay, front-end scaler and bus-master DMA.
-- On the Rage Pro: mip-maps, the second texture and dithering; the 3D Rage
-  II+ has DirectDraw but no Direct3D, as Windows' own driver gives it none.
+- On the Rage Pro: dithering; the 3D Rage II+ has DirectDraw but no
+  Direct3D, as Windows' own driver gives it none.
 - The guest's cycle counter runs ahead of real time: a driver busy-waiting on
   `RPCC` is handed the cycles it is waiting for instead of spinning through
   them, which used to be 62 of the 95 seconds of a Windows 2000 boot. A guest

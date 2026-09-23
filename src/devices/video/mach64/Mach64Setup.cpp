@@ -48,9 +48,12 @@
  * (the same scenes drawn by both, compared pixel by pixel): Gouraud and
  * flat shading, specular, fog, alpha blending and alpha test, the Z
  * buffer, point-sampled, bilinear, modulated and perspective-correct
- * textures, 565 and 1555 -- identical but for pixels exactly on an edge.
- * Not modelled: mip-maps, the second texture, dithering (colours are
- * truncated).
+ * textures in 565, 1555, 4444 and 8888, clamped and wrapped, colour-keyed,
+ * and mip-mapped with nearest and blended levels -- identical but for
+ * pixels exactly on an edge, and a trace of level-of-detail difference
+ * towards the horizon. Not modelled: dithering (colours are truncated).
+ * The second texture needs nothing: atidrab accepts a second stage and
+ * never programs it.
  **/
 
 #include "Mach64.hpp"
@@ -125,6 +128,12 @@ void CMach64::setup_triangle() {
            r.gt[ALPHA_TST_CNTL >> 2], r.block1[SETUP_CNTL], r.dst_off_pitch);
     for (int i = 0; i < 11; i++)
       printf(" %x", r.gt[(TEX_0_OFF >> 2) + i]);
+    printf(" CLR_CMP %08x/%08x/%08x SEC_TEX_OFF %08x SEC_STW", r.clr_cmp_clr,
+           r.clr_cmp_mask, r.clr_cmp_cntl, r.gt[0x378 >> 2]);
+    static const u32 sec[9] = {0xca, 0xcb, 0xcc, 0xcd, 0xce,
+                               0xcf, 0xb0, 0xb1, 0xb2};
+    for (u32 i : sec)
+      printf(" %08x", r.block1[i]);
     printf("\n");
     for (int i = 0; i < 3; i++) {
       const u32 *b = &r.block1[V1_BASE + 8 * i];
@@ -195,7 +204,28 @@ void CMach64::setup_triangle() {
   const int tex_fmt = int(r.dp_pix_width >> 28) & 0xf;
   // With MIP_MAP_DISABLE the driver leaves TEX_0_OFF at 0 and puts the
   // texture in the TEX_n_OFF of its own size, n = log2 of the larger side.
-  const u32 tex_off = r.gt[(TEX_0_OFF >> 2) + ((tsp >> 4) & 0xf)];
+  // Level 0 is at the TEX_n_OFF of its size, n the log2 of its larger
+  // side; each smaller level at the one of its own size, down to the
+  // smallest the driver provides (TEX_SIZE_PITCH bits 15..12). SCALE_3D_CNTL
+  // bit 24 turns mip-mapping off, bit 26 blends between levels.
+  const int size_log2 = int(tsp >> 4) & 0xf;
+  const int min_log2 = int(tsp >> 12) & 0xf;
+  const bool mip = !((s3d >> 24) & 1);
+  const bool mip_blend = (s3d >> 26) & 1;
+  const int max_level = std::max(0, size_log2 - min_log2);
+  // TEX_CNTL bits 17 and 18 clamp S and T instead of wrapping them.
+  const u32 tex_cntl = r.gt[TEX_CNTL >> 2];
+  const bool clamp_s = (tex_cntl >> 17) & 1, clamp_t = (tex_cntl >> 18) & 1;
+  // The texture colour key: the colour compare with its source on the
+  // texel (CLR_CMP_CNTL bits 26..24 = 2).
+  const bool key_texels = ((r.clr_cmp_cntl >> 24) & 7) == 2;
+  const u32 key_fn = r.clr_cmp_cntl & 7;
+  const u32 key_mask = r.clr_cmp_mask, key_clr = r.clr_cmp_clr & r.clr_cmp_mask;
+  auto texel_keyed = [&](u32 held) {
+    const u32 kv = held & key_mask;
+    return key_fn == 1 || (key_fn == 4 && kv != key_clr) ||
+           (key_fn == 5 && kv == key_clr);
+  };
   const u32 mask = vram_mask();
   u8 *mem = vga.memory;
   const u32 flat = (r.block1[SETUP_CNTL] >> 3) & 3; // 0: Gouraud
@@ -257,32 +287,89 @@ void CMach64::setup_triangle() {
             l0 * v[0].s * v[0].w + l1 * v[1].s * v[1].w + l2 * v[2].s * v[2].w;
         const double t =
             l0 * v[0].t * v[0].w + l1 * v[1].t * v[1].w + l2 * v[2].t * v[2].w;
-        const double fu = w != 0.0 ? s / w * tex_w : 0.0;
-        const double fv = w != 0.0 ? t / w * tex_h : 0.0;
-        auto fetch = [&](int tu, int tv) {
-          tu &= tex_w - 1; // wrap
-          tv &= tex_h - 1;
-          const u32 addr =
-              tex_off + u32((tv * tex_pitch + tu) * pipe_texel_bytes(tex_fmt));
-          return pipe_texel(mem, mask, addr, tex_fmt, &vga.dac.color[0],
-                            (r.dac_cntl & DAC_8BIT_EN) != 0);
+        // Where the sample falls, as texture coordinates (0..1 across the
+        // texture), here and one pixel to the right and below: the mip
+        // level comes from how fast they change.
+        auto uv_at = [&](s64 x, s64 y, double &u, double &vv) {
+          const double m0 = double(edge(v[1], v[2], x, y)) * inv_area;
+          const double m1 = double(edge(v[2], v[0], x, y)) * inv_area;
+          const double m2 = 1.0 - m0 - m1;
+          const double ww = m0 * v[0].w + m1 * v[1].w + m2 * v[2].w;
+          const double ss = m0 * v[0].s * v[0].w + m1 * v[1].s * v[1].w +
+                            m2 * v[2].s * v[2].w;
+          const double tt = m0 * v[0].t * v[0].w + m1 * v[1].t * v[1].w +
+                            m2 * v[2].t * v[2].w;
+          u = ww != 0.0 ? ss / ww : 0.0;
+          vv = ww != 0.0 ? tt / ww : 0.0;
         };
-        u32 texel;
-        if (bilinear) { // the four texels around the sample, by distance
-          const double bu = fu - 0.5, bv = fv - 0.5;
-          const int u0 = int(std::floor(bu)), v0 = int(std::floor(bv));
-          const double au = bu - u0, av = bv - v0;
-          const u32 t00 = fetch(u0, v0), t10 = fetch(u0 + 1, v0);
-          const u32 t01 = fetch(u0, v0 + 1), t11 = fetch(u0 + 1, v0 + 1);
-          texel = 0;
-          for (int i = 0; i < 4; i++) {
-            auto c = [&](u32 t) { return double((t >> (8 * i)) & 0xff); };
-            const double top = c(t00) * (1 - au) + c(t10) * au;
-            const double bot = c(t01) * (1 - au) + c(t11) * au;
-            texel |= clamp8(s32(std::lround(top * (1 - av) + bot * av)))
+        const double u = w != 0.0 ? s / w : 0.0;
+        const double vt = w != 0.0 ? t / w : 0.0;
+
+        // The level of detail: log2 of the texels per pixel (level 0's).
+        double lod = 0.0;
+        if (mip) {
+          // Texels per pixel along each screen axis, from half a pixel
+          // either side: under perspective the rate changes along the
+          // pixel, and a one-sided difference under-reads it where the
+          // texture shrinks fastest.
+          double u0x, v0x, u1x, v1x, u0y, v0y, u1y, v1y;
+          uv_at(cx - 2, cy, u0x, v0x);
+          uv_at(cx + 2, cy, u1x, v1x);
+          uv_at(cx, cy - 2, u0y, v0y);
+          uv_at(cx, cy + 2, u1y, v1y);
+          const double dx =
+              std::hypot((u1x - u0x) * tex_w, (v1x - v0x) * tex_h);
+          const double dy =
+              std::hypot((u1y - u0y) * tex_w, (v1y - v0y) * tex_h);
+          const double rho = std::max(dx, dy);
+          lod = rho > 0.0 ? std::log2(rho) : 0.0;
+          if (lod < 0.0)
+            lod = 0.0;
+          if (lod > max_level)
+            lod = max_level;
+        }
+
+        bool keyed = false;
+        // One level's texel at (u, v): level L is 2^-L the size of level 0,
+        // at the TEX_n_OFF of its own size.
+        auto sample = [&](int L) {
+          const int lw = std::max(1, tex_w >> L), lh = std::max(1, tex_h >> L);
+          const int lpitch = L ? lw : tex_pitch;
+          const u32 loff = r.gt[(TEX_0_OFF >> 2) + (size_log2 - L)];
+          auto fetch = [&](int tu, int tv) {
+            tu = clamp_s ? std::clamp(tu, 0, lw - 1) : (tu & (lw - 1));
+            tv = clamp_t ? std::clamp(tv, 0, lh - 1) : (tv & (lh - 1));
+            const u32 addr =
+                loff + u32((tv * lpitch + tu) * pipe_texel_bytes(tex_fmt));
+            return pipe_texel(mem, mask, addr, tex_fmt, &vga.dac.color[0],
+                              (r.dac_cntl & DAC_8BIT_EN) != 0);
+          };
+          // The texel colour key compares the texel as the chip holds it,
+          // its low bits zero (565 magenta is 0xf800f8, not 0xff00ff); the
+          // texel nearest the sample decides.
+          auto check_key = [&](u32 tx) {
+            if (key_texels && texel_keyed(tx & pipe_texel_key_bits(tex_fmt)))
+              keyed = true;
+          };
+          const double fu = u * lw, fv = vt * lh;
+          if (bilinear) { // the four texels around the sample, by distance
+            const double bu = fu - 0.5, bv = fv - 0.5;
+            const int u0 = int(std::floor(bu)), v0 = int(std::floor(bv));
+            const double au = bu - u0, av = bv - v0;
+            const u32 t00 = fetch(u0, v0), t10 = fetch(u0 + 1, v0);
+            const u32 t01 = fetch(u0, v0 + 1), t11 = fetch(u0 + 1, v0 + 1);
+            check_key(au < 0.5 ? (av < 0.5 ? t00 : t01)
+                               : (av < 0.5 ? t10 : t11));
+            u32 out = 0;
+            for (int i = 0; i < 4; i++) {
+              auto c = [&](u32 tx) { return double((tx >> (8 * i)) & 0xff); };
+              const double top = c(t00) * (1 - au) + c(t10) * au;
+              const double bot = c(t01) * (1 - au) + c(t11) * au;
+              out |= clamp8(s32(std::lround(top * (1 - av) + bot * av)))
                      << (8 * i);
+            }
+            return out;
           }
-        } else {
           // Texel coordinates in fixed point, 16 fraction bits, as hardware
           // carries them (-0.0000001 is 0, 3.9999999 is 4). A sample exactly
           // on a texel edge then takes the texel below it, as D3D's
@@ -292,8 +379,35 @@ void CMach64::setup_triangle() {
           const double k = 1.0 - 1.0 / (1 << 20);
           const double qu = std::round(fu * 65536.0) / 65536.0;
           const double qv = std::round(fv * 65536.0) / 65536.0;
-          texel = fetch(int(std::floor(qu * k)), int(std::floor(qv * k)));
+          const u32 tx =
+              fetch(int(std::floor(qu * k)), int(std::floor(qv * k)));
+          check_key(tx);
+          return tx;
+        };
+
+        u32 texel;
+        if (mip && mip_blend) { // between the two nearest levels
+          // Blended linearly in texels per pixel, not in their log: halfway
+          // from level 1 (2 texels a pixel) to level 2 (4) is 3, not 2.83
+          // -- what D3D's software rasteriser does.
+          const int L0 = int(std::floor(lod));
+          const int L1 = std::min(L0 + 1, max_level);
+          const double f =
+              L1 > L0 ? std::clamp(std::exp2(lod - L0) - 1.0, 0.0, 1.0) : 0.0;
+          const u32 a0 = sample(L0), a1 = sample(L1);
+          texel = 0;
+          for (int i = 0; i < 4; i++) {
+            const double c0 = (a0 >> (8 * i)) & 0xff,
+                         c1 = (a1 >> (8 * i)) & 0xff;
+            texel |= clamp8(s32(std::lround(c0 * (1 - f) + c1 * f))) << (8 * i);
+          }
+        } else {
+          // The level whose detail the sample has reached (truncated, as
+          // D3D's software rasteriser picks it, not the nearest).
+          texel = sample(mip ? int(std::floor(lod)) : 0);
         }
+        if (keyed)
+          continue; // a colour-keyed texel is not drawn
         if (!tex_alpha)
           texel = (texel & 0xffffff) | (color & 0xff000000u);
         switch (light) {

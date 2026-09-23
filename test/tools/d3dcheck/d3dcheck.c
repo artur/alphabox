@@ -55,6 +55,8 @@ typedef struct {
     IDirectDrawSurface7 *rt, *z;
     IDirect3DDevice7 *dev;
     IDirectDrawSurface7 *tex_checker, *tex_small, *tex_alpha;
+    IDirectDrawSurface7 *tex_mip, *tex_4444, *tex_8888, *tex_key, *tex_grad;
+    IDirectDrawSurface7 *tex_mipflat;
 } path_t;
 
 static DWORD mem_caps(int hal)
@@ -159,6 +161,148 @@ static IDirectDrawSurface7 *make_texture(int hal, int w, int h, int alpha,
     return s;
 }
 
+/* ---- any format: texel functions give ARGB 8888, packed per the masks ---- */
+
+static unsigned pack_mask(unsigned c8, DWORD mask)
+{
+    int shift = 0, bits = 0;
+    if (!mask)
+        return 0;
+    while (!((mask >> shift) & 1))
+        shift++;
+    while ((mask >> (shift + bits)) & 1)
+        bits++;
+    return ((c8 >> (8 - bits)) << shift) & mask;
+}
+
+static unsigned pack_argb(unsigned argb, const DDPIXELFORMAT_T *pf)
+{
+    return pack_mask((argb >> 16) & 0xff, pf->dwRBitMask) |
+           pack_mask((argb >> 8) & 0xff, pf->dwGBitMask) |
+           pack_mask(argb & 0xff, pf->dwBBitMask) |
+           pack_mask(argb >> 24, pf->dwRGBAlphaBitMask);
+}
+
+static int fill_argb(IDirectDrawSurface7 *s, const DDPIXELFORMAT_T *pf,
+                     unsigned (*texel)(int, int, int), int level)
+{
+    DDSURFACEDESC2_T sd;
+    int x, y;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    if (FAILED_HR(s->lpVtbl->Lock(s, 0, &sd, DDLOCK_WAIT, 0))) {
+        SAY("  texture Lock failed\n");
+        return 0;
+    }
+    for (y = 0; y < (int)sd.dwHeight; y++) {
+        char *row = (char *)sd.lpSurface + y * sd.lPitch;
+        for (x = 0; x < (int)sd.dwWidth; x++) {
+            unsigned v = pack_argb(texel(x, y, level), pf);
+            if (pf->dwRGBBitCount == 32)
+                ((DWORD *)row)[x] = v;
+            else
+                ((unsigned short *)row)[x] = (unsigned short)v;
+        }
+    }
+    s->lpVtbl->Unlock(s, 0);
+    return 1;
+}
+
+/* A texture of any format, with `levels` mip levels (1: none). */
+static IDirectDrawSurface7 *make_texture_fmt(int hal, int size, int levels,
+                                             DDPIXELFORMAT_T *pf,
+                                             unsigned (*texel)(int, int, int))
+{
+    DDSURFACEDESC2_T sd;
+    IDirectDrawSurface7 *top = 0, *s;
+    HRESULT_T hr;
+    int l;
+    memset(&sd, 0, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    sd.dwWidth = size;
+    sd.dwHeight = size;
+    sd.ddpfPixelFormat = *pf;
+    sd.ddsCaps.dwCaps = DDSCAPS_TEXTURE | mem_caps(hal);
+    if (levels > 1) {
+        sd.dwFlags |= DDSD_MIPMAPCOUNT;
+        sd.dwMipMapCount = levels;
+        sd.ddsCaps.dwCaps |= DDSCAPS_MIPMAP | DDSCAPS_COMPLEX;
+    }
+    hr = dd->lpVtbl->CreateSurface(dd, &sd, &top, 0);
+    if (FAILED_HR(hr)) {
+        SAY("  CreateSurface texture %dx%d, %d levels, %lu bpp failed: %08lx\n",
+            size, size, levels, (unsigned long)pf->dwRGBBitCount,
+            (unsigned long)hr);
+        return 0;
+    }
+    s = top;
+    for (l = 0; l < levels && s; l++) {
+        DDSCAPS2_T caps;
+        IDirectDrawSurface7 *next = 0;
+        if (!fill_argb(s, pf, texel, l))
+            return 0;
+        if (l + 1 == levels)
+            break;
+        memset(&caps, 0, sizeof caps);
+        caps.dwCaps = DDSCAPS_TEXTURE | DDSCAPS_MIPMAP;
+        if (FAILED_HR(s->lpVtbl->GetAttachedSurface(s, &caps, &next))) {
+            SAY("  mip level %d missing\n", l + 1);
+            break;
+        }
+        s = next;
+    }
+    return top;
+}
+
+/* Each mip level its own colour, a checker darkening every other texel. */
+static unsigned texel_mip(int x, int y, int level)
+{
+    static const unsigned c[7] = {0xffff0000, 0xff00ff00, 0xff0000ff,
+                                  0xffffff00, 0xffff00ff, 0xff00ffff,
+                                  0xffffffff};
+    unsigned v = c[level % 7];
+    if ((x ^ y) & 1)
+        v = (v >> 1) & 0xff7f7f7f;
+    return v | 0xff000000u;
+}
+
+/* Each mip level one flat colour: how much of each level a blend takes
+ * can be read off the pixel. */
+static unsigned texel_mipflat(int x, int y, int level)
+{
+    static const unsigned c[7] = {0xffff0000, 0xff00ff00, 0xff0000ff,
+                                  0xffff0000, 0xff00ff00, 0xff0000ff,
+                                  0xffff0000};
+    (void)x;
+    (void)y;
+    return c[level % 7];
+}
+
+/* A gradient with alpha falling from left to right, for 4444 and 8888. */
+static unsigned texel_alpha_grad(int x, int y, int level)
+{
+    unsigned a = 255 - x * 4, r = y * 4, g = 255 - y * 4;
+    (void)level;
+    return (a << 24) | (r << 16) | (g << 8) | 0x40;
+}
+
+/* Magenta squares on a checker of blue and white: magenta is the key. */
+static unsigned texel_key(int x, int y, int level)
+{
+    (void)level;
+    if (((x >> 4) ^ (y >> 4)) & 1)
+        return 0xffff00ff;
+    return (((x >> 2) ^ (y >> 2)) & 1) ? 0xff0000ff : 0xffffffff;
+}
+
+/* A smooth 64x64 gradient, the second texture of the multitexture scene. */
+static unsigned texel_grad(int x, int y, int level)
+{
+    (void)level;
+    return 0xff000000u | ((x * 4) << 16) | ((y * 4) << 8) | 0x80;
+}
+
 static int open_path(path_t *p)
 {
     DDPIXELFORMAT_T zpf;
@@ -195,6 +339,26 @@ static int open_path(path_t *p)
     p->tex_checker = make_texture(p->hal, 64, 64, 0, texel_checker);
     p->tex_small = make_texture(p->hal, 8, 8, 0, texel_small);
     p->tex_alpha = make_texture(p->hal, 64, 64, 1, texel_alpha);
+    {
+        DDPIXELFORMAT_T pf;
+        pf_rgb(&pf, 16, 0xf800, 0x07e0, 0x001f, 0);
+        /* Five levels, 64 down to 4: atidrab gives the Rage Pro levels
+         * down to 4x4 only, so a longer chain would differ from D3D's
+         * rasteriser by the driver's choice, not the chip's. */
+        p->tex_mip = make_texture_fmt(p->hal, 64, 5, &pf, texel_mip);
+        p->tex_mipflat = make_texture_fmt(p->hal, 64, 5, &pf, texel_mipflat);
+        p->tex_key = make_texture_fmt(p->hal, 64, 1, &pf, texel_key);
+        p->tex_grad = make_texture_fmt(p->hal, 64, 1, &pf, texel_grad);
+        if (p->tex_key) {
+            DDCOLORKEY_T ck;
+            ck.dwColorSpaceLowValue = ck.dwColorSpaceHighValue = 0xf81f;
+            p->tex_key->lpVtbl->SetColorKey(p->tex_key, DDCKEY_SRCBLT, &ck);
+        }
+        pf_rgb(&pf, 16, 0x0f00, 0x00f0, 0x000f, 0xf000);
+        p->tex_4444 = make_texture_fmt(p->hal, 64, 1, &pf, texel_alpha_grad);
+        pf_rgb(&pf, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+        p->tex_8888 = make_texture_fmt(p->hal, 64, 1, &pf, texel_alpha_grad);
+    }
     return 1;
 }
 
@@ -236,6 +400,9 @@ static void baseline(IDirect3DDevice7 *d)
     f->SetTextureStageState(d, 0, TSS_MAGFILTER, D3DTFG_POINT);
     f->SetTextureStageState(d, 0, TSS_MINFILTER, D3DTFN_POINT);
     f->SetTextureStageState(d, 0, TSS_MIPFILTER, D3DTFP_NONE);
+    f->SetTextureStageState(d, 0, TSS_TEXCOORDINDEX, 0);
+    f->SetTextureStageState(d, 1, TSS_TEXCOORDINDEX, 1);
+    f->SetTexture(d, 1, 0);
     f->SetTextureStageState(d, 1, TSS_COLOROP, D3DTOP_DISABLE);
     f->SetTextureStageState(d, 1, TSS_ALPHAOP, D3DTOP_DISABLE);
 }
@@ -408,9 +575,139 @@ static void scene_texalpha_blend(path_t *p)
     quad(p->dev, 32.0f, 32.0f, 224.0f, 224.0f, 0.5f, 0xffffffff, 1.0f, 1.0f);
 }
 
+/* A floor going away from the viewer, heavily minified at the far end:
+ * which mip level is used where. */
+static void floor_quad(IDirect3DDevice7 *d, float reps)
+{
+    TLVERTEX v[4];
+    V(&v[0], 112.0f, 20.0f, 0.9f, 0.0625f, 0xffffffff, 0xff000000, 0.0f, 0.0f);
+    V(&v[1], 144.0f, 20.0f, 0.9f, 0.0625f, 0xffffffff, 0xff000000, reps, 0.0f);
+    V(&v[2], 0.0f, 250.0f, 0.1f, 1.0f, 0xffffffff, 0xff000000, 0.0f, reps);
+    V(&v[3], 256.0f, 250.0f, 0.1f, 1.0f, 0xffffffff, 0xff000000, reps, reps);
+    d->lpVtbl->DrawPrimitive(d, D3DPT_TRIANGLESTRIP, FVF_TLVERTEX, v, 4, 0);
+}
+
+static void scene_mipmap(path_t *p)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    use_texture(p->dev, p->tex_mip, 0);
+    f->SetTextureStageState(p->dev, 0, TSS_MIPFILTER, D3DTFP_POINT);
+    floor_quad(p->dev, 8.0f);
+}
+
+static void scene_miplinear(path_t *p)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    use_texture(p->dev, p->tex_mip, 0);
+    f->SetTextureStageState(p->dev, 0, TSS_MIPFILTER, D3DTFP_LINEAR);
+    floor_quad(p->dev, 8.0f);
+}
+
+/* Trilinear over flat-coloured levels: the blend weight shows directly. */
+static void scene_mipramp(path_t *p)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    use_texture(p->dev, p->tex_mipflat, 0);
+    f->SetTextureStageState(p->dev, 0, TSS_MIPFILTER, D3DTFP_LINEAR);
+    floor_quad(p->dev, 8.0f);
+}
+
+/* The checker, texture coordinates -0.5..1.5, clamped. */
+static void scene_clamp(path_t *p)
+{
+    TLVERTEX v[4];
+    use_texture(p->dev, p->tex_checker, 0);
+    p->dev->lpVtbl->SetTextureStageState(p->dev, 0, TSS_ADDRESS,
+                                         D3DTADDRESS_CLAMP);
+    V(&v[0], 32.0f, 32.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, -0.5f);
+    V(&v[1], 224.0f, 32.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, -0.5f);
+    V(&v[2], 32.0f, 224.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, -0.5f, 1.5f);
+    V(&v[3], 224.0f, 224.0f, 0.5f, 1.0f, 0xffffffff, 0xff000000, 1.5f, 1.5f);
+    p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_TRIANGLESTRIP, FVF_TLVERTEX, v,
+                                  4, 0);
+}
+
+/* An alpha texture blended over a red/blue background. */
+static void alpha_texture_scene(path_t *p, IDirectDrawSurface7 *t)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    quad(p->dev, 0.0f, 0.0f, 128.0f, 256.0f, 0.5f, 0xffff0000, 0, 0);
+    quad(p->dev, 128.0f, 0.0f, 256.0f, 256.0f, 0.5f, 0xff0000ff, 0, 0);
+    use_texture(p->dev, t, 0);
+    f->SetRenderState(p->dev, RS_ALPHABLENDENABLE, 1);
+    f->SetRenderState(p->dev, RS_SRCBLEND, D3DBLEND_SRCALPHA);
+    f->SetRenderState(p->dev, RS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    quad(p->dev, 32.0f, 32.0f, 224.0f, 224.0f, 0.5f, 0xffffffff, 1.0f, 1.0f);
+}
+
+static void scene_tex4444(path_t *p) { alpha_texture_scene(p, p->tex_4444); }
+static void scene_tex8888(path_t *p) { alpha_texture_scene(p, p->tex_8888); }
+
+/* Colour-keyed texture: magenta texels are not drawn. */
+static void scene_colorkey(path_t *p)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    quad(p->dev, 0.0f, 0.0f, 256.0f, 256.0f, 0.5f, 0xff00c000, 0, 0);
+    use_texture(p->dev, p->tex_key, 0);
+    f->SetRenderState(p->dev, RS_COLORKEYENABLE, 1);
+    quad(p->dev, 32.0f, 32.0f, 224.0f, 224.0f, 0.5f, 0xffffffff, 1.0f, 1.0f);
+}
+
+/* Two stages: the checker, modulated by a gradient texture with its own
+ * coordinates (twice as fine). */
+static void scene_multitex(path_t *p)
+{
+    const IDirect3DDevice7Vtbl *f = p->dev->lpVtbl;
+    TLVERTEX2 v[4];
+    int i;
+    static const float xy[4][2] = {{32, 32}, {224, 32}, {32, 224}, {224, 224}};
+    static const float uv[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+    use_texture(p->dev, p->tex_checker, 0);
+    f->SetTexture(p->dev, 1, p->tex_grad);
+    f->SetTextureStageState(p->dev, 1, TSS_COLOROP, D3DTOP_MODULATE);
+    f->SetTextureStageState(p->dev, 1, TSS_COLORARG1, D3DTA_TEXTURE);
+    f->SetTextureStageState(p->dev, 1, TSS_COLORARG2, D3DTA_CURRENT);
+    f->SetTextureStageState(p->dev, 1, TSS_ALPHAOP, D3DTOP_DISABLE);
+    f->SetTextureStageState(p->dev, 1, TSS_TEXCOORDINDEX, 1);
+    for (i = 0; i < 4; i++) {
+        v[i].sx = xy[i][0];
+        v[i].sy = xy[i][1];
+        v[i].sz = 0.5f;
+        v[i].rhw = 1.0f;
+        v[i].color = 0xffffffff;
+        v[i].specular = 0xff000000;
+        v[i].tu = uv[i][0];
+        v[i].tv = uv[i][1];
+        v[i].tu2 = uv[i][0] * 2.0f;
+        v[i].tv2 = uv[i][1] * 2.0f;
+    }
+    f->DrawPrimitive(p->dev, D3DPT_TRIANGLESTRIP, FVF_TLVERTEX2, v, 4, 0);
+}
+
+/* A slow gradient, dithered: within the tolerance either way, so this one
+ * is for looking at. */
+static void scene_dither(path_t *p)
+{
+    TLVERTEX v[4];
+    p->dev->lpVtbl->SetRenderState(p->dev, RS_DITHERENABLE, 1);
+    V(&v[0], 0.0f, 0.0f, 0.5f, 1.0f, 0xff202020, 0xff000000, 0, 0);
+    V(&v[1], 256.0f, 0.0f, 0.5f, 1.0f, 0xff303040, 0xff000000, 0, 0);
+    V(&v[2], 0.0f, 256.0f, 0.5f, 1.0f, 0xff402030, 0xff000000, 0, 0);
+    V(&v[3], 256.0f, 256.0f, 0.5f, 1.0f, 0xff504050, 0xff000000, 0, 0);
+    p->dev->lpVtbl->DrawPrimitive(p->dev, D3DPT_TRIANGLESTRIP, FVF_TLVERTEX, v,
+                                  4, 0);
+}
+
+/* `info`: reported, not counted. Dithering stays inside the tolerance
+ * either way; the second texture stage is one atidrab (the Rage Pro's
+ * driver) accepts and then ignores, so its HAL image is not expected to
+ * match; mipramp is a probe whose flat-coloured levels turn the smallest
+ * difference in level of detail into a visible one (miplinear is the same
+ * floor with a real texture, and counts). */
 typedef struct {
     const char *name;
     void (*draw)(path_t *);
+    int info;
 } scene_t;
 
 static const scene_t scenes[] = {
@@ -426,6 +723,15 @@ static const scene_t scenes[] = {
     {"bilinear", scene_bilinear},
     {"alphatest", scene_alphatest},
     {"texalpha", scene_texalpha_blend},
+    {"mipmap", scene_mipmap},
+    {"miplinear", scene_miplinear},
+    {"mipramp", scene_mipramp, 1},
+    {"clamp", scene_clamp},
+    {"tex4444", scene_tex4444},
+    {"tex8888", scene_tex8888},
+    {"colorkey", scene_colorkey},
+    {"multitex", scene_multitex, 1},
+    {"dither", scene_dither, 1},
 };
 #define NSCENES ((int)(sizeof scenes / sizeof scenes[0]))
 
@@ -462,6 +768,14 @@ static int render(path_t *p, const scene_t *s, unsigned short *out)
     }
     s->draw(p);
     d->lpVtbl->EndScene(d);
+    if (p->hal) {
+        DWORD passes = 0;
+        HRESULT_T v = d->lpVtbl->ValidateDevice(d, &passes);
+        if (FAILED_HR(v))
+            SAY("  %s: ValidateDevice says %08lx (the HAL cannot do this "
+                "state)\n",
+                p->name, (unsigned long)v);
+    }
     return read_target(p, out);
 }
 
@@ -589,9 +903,10 @@ int main(int argc, char **argv)
         ppm(s->name, "hal", img_hw);
         ppm(s->name, "rgb", img_sw);
         SAY("RESULT %-12s %s differing %6d of %d, max %3d\n", s->name,
-            diff == 0 ? "same " : diff <= EDGE_PIXELS ? "close" : "DIFF ",
+            s->info ? "info " : diff == 0 ? "same " :
+            diff <= EDGE_PIXELS ? "close" : "DIFF ",
             diff, W * H, maxd);
-        if (diff > EDGE_PIXELS)
+        if (diff > EDGE_PIXELS && !s->info)
             failed++;
     }
     SAY("DONE %d of %d scenes differ\n", failed, NSCENES);

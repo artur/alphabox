@@ -71,6 +71,15 @@ typedef struct {
 
 #define FVF_TLVERTEX (0x004 | 0x040 | 0x080 | 0x100)
 
+/* The same with two texture coordinate sets: D3DFVF_TEX2. */
+typedef struct {
+    float sx, sy, sz, rhw;
+    DWORD color, specular;
+    float tu, tv, tu2, tv2;
+} TLVERTEX2;
+
+#define FVF_TLVERTEX2 (0x004 | 0x040 | 0x080 | 0x200)
+
 /* ---- interfaces ---- */
 
 typedef struct IDirectDraw7 IDirectDraw7;
@@ -118,8 +127,9 @@ typedef struct {
     void *Initialize, *IsLost;
     HRESULT_T (*Lock)(IDirectDrawSurface7 *, RECT *, DDSURFACEDESC2_T *, DWORD,
                       HANDLE);
-    void *ReleaseDC, *Restore, *SetClipper, *SetColorKey, *SetOverlayPosition,
-        *SetPalette;
+    void *ReleaseDC, *Restore, *SetClipper;
+    HRESULT_T (*SetColorKey)(IDirectDrawSurface7 *, DWORD, DDCOLORKEY_T *);
+    void *SetOverlayPosition, *SetPalette;
     HRESULT_T (*Unlock)(IDirectDrawSurface7 *, RECT *);
     void *UpdateOverlay, *UpdateOverlayDisplay, *UpdateOverlayZOrder,
         *GetDDInterface, *PageLock, *PageUnlock, *SetSurfaceDesc,
@@ -190,6 +200,8 @@ typedef HRESULT_T (*DIRECTDRAWCREATEEX_FN)(GUID_T *, void **, const GUID_T *,
 #define DDSD_WIDTH 0x00000004
 #define DDSD_PIXELFORMAT 0x00001000
 #define DDSD_MIPMAPCOUNT 0x00020000
+
+#define DDCKEY_SRCBLT 0x00000008
 
 #define DDPF_ALPHAPIXELS 0x00000001
 #define DDPF_RGB 0x00000040
@@ -264,11 +276,15 @@ typedef HRESULT_T (*DIRECTDRAWCREATEEX_FN)(GUID_T *, void **, const GUID_T *,
 #define D3DTA_DIFFUSE 0
 #define D3DTA_TEXTURE 2
 #define D3DTADDRESS_WRAP 1
+#define D3DTADDRESS_CLAMP 3
+#define TSS_TEXCOORDINDEX 11
+#define D3DTA_CURRENT 1
 #define D3DTFG_POINT 1
 #define D3DTFG_LINEAR 2
 #define D3DTFN_POINT 1
 #define D3DTFN_LINEAR 2
 #define D3DTFP_NONE 1
 #define D3DTFP_POINT 2
+#define D3DTFP_LINEAR 3
 
 #endif

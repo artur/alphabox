@@ -133,10 +133,11 @@ void CMach64::init() {
   // PCI header: a VGA-compatible display controller with the 16 MB
   // memory aperture (BAR0, prefetchable), the 256-byte block I/O register
   // window (BAR1), on the parts that have it the 4 KB register aperture
-  // (BAR2), and a 64 KB expansion ROM. The console finds the BIOS
-  // at 0xc0000 like the other cards', but ATI's Windows miniport reads the
-  // BIOS's data tables through the ROM BAR, so this card exposes one. 0x40
-  // is ATI's I/O configuration register: bits 1..0 pick the sparse I/O
+  // (BAR2), a 64 KB expansion ROM, and interrupt pin INTA (the vertical
+  // blank; nothing reaches the CPU until a driver enables it). The console
+  // finds the BIOS at 0xc0000 like the other cards', but ATI's Windows miniport
+  // reads the BIOS's data tables through the ROM BAR, so this card exposes one.
+  // 0x40 is ATI's I/O configuration register: bits 1..0 pick the sparse I/O
   // base (0: 0x2EC), bit 2 enables the block I/O BAR, as the CT powers up.
   u32 cfg_data[64] = {};
   u32 cfg_mask[64] = {};
@@ -149,7 +150,7 @@ void CMach64::init() {
     cfg_data[0x18 >> 2] = 0x00000000; // 32-bit memory, not prefetchable
     cfg_mask[0x18 >> 2] = ~(AUX_APERTURE_BYTES - 1);
   }
-  cfg_data[0x3c >> 2] = 0x000000ff;
+  cfg_data[0x3c >> 2] = 0x000001ff; // interrupt pin INTA
   cfg_data[0x40 >> 2] = 0x00000004;
   cfg_mask[0x04 >> 2] = 0x0000ffff;
   cfg_mask[0x0c >> 2] = 0x0000ffff;
