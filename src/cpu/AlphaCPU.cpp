@@ -85,6 +85,16 @@ thread_local CAlphaCPU *t_running_cpu = nullptr;
 
 bool CAlphaCPU::s_trace_calls = false;
 
+/// ALPHABOX_JIT_DPC2=0: no second way in the data page cache -- the A/B
+/// switch for data_page_cache2, read once.
+bool CAlphaCPU::dpc2_requested() {
+  static const bool on = [] {
+    const char *e = getenv("ALPHABOX_JIT_DPC2");
+    return !(e && e[0] == '0');
+  }();
+  return on;
+}
+
 /**
  * Report a subroutine call, the first time each call site reaches each
  * routine (ALPHABOX_TRACE_CALLS).
@@ -477,6 +487,7 @@ void CAlphaCPU::honour_new_code_pages() {
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
+  m_dpc2 = dpc2_requested();
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
   cc_wall_remainder = 0;
@@ -543,6 +554,9 @@ void CAlphaCPU::init() {
     o.dpc_mask = (uint32_t)kDpcMask;
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
+    o.dpc_way1 = m_dpc2 ? (uint32_t)((char *)&data_page_cache2[0][0] -
+                                     (char *)&data_page_cache[0][0])
+                        : 0;
     // ALPHABOX_JIT_OFFSETS=1: whether the inline page-cache probe can still
     // reach both rows with one displacement. Past that the emitter falls back
     // to computing the slot address, which costs every memory op -- the limit

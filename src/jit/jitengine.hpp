@@ -253,6 +253,8 @@ public:
         dpc_mask; // direct-mapped page cache: per-slot byte stride, index mask
     uint32_t dpc_write_row; // byte distance from read cache [0] to write cache
                             // [1] (store fast path)
+    uint32_t dpc_way1; // byte distance from way 0 to the second way, which a
+                       // miss path probes; 0 when ALPHABOX_JIT_DPC2=0
     uint32_t state_cm, state_asn0, dram_ptr, dram_size, state_pc;
     uint32_t state_current_pc; // GO_PAL takes EXC_ADDR from it (FLTV traps)
     uint32_t fpen, exc_sum, fpcr,
@@ -816,6 +818,10 @@ private:
   // built lazily in the current code runtime; reclaim_code drops it.
   void *m_call_thunk = nullptr;
   void *a64_call_thunk();
+  // a64 shared probe of the data page cache's second way, entered from the
+  // memory ops' cold stubs; built lazily like the call thunk.
+  void *m_dpc2_thunk = nullptr;
+  void *a64_dpc2_thunk();
 
 public:
   /// The inline RPCC stub, built on first use. Public so the processor's

@@ -251,6 +251,63 @@ void *CJitEngine::a64_call_thunk() {
   return m_call_thunk;
 }
 
+// The data page cache's second way (CAlphaCPU::data_page_cache2), shared
+// by every memory op's cold stub, so the stubs stay a few instructions long
+// -- carrying the probe and the swap in each one made the compiled code half
+// as big again and cost the branch-heavy code more than the memory ops gained
+// (docs/performance.md). Entered with blr: x2 = va, x9 = the offset of way
+// 0's row (read or write). Returns Z set on a hit, with the two ways swapped
+// -- the page just used moves to way 0, as the helpers' promotion does, or a
+// page left in way 1 would take this detour on every access instead of once
+// per switch -- and x10 = its bias; Z clear on a miss. Uses x0, x1, x3,
+// x9-x12 and x17, which the helper call the stub otherwise makes clobbers too.
+void *CJitEngine::a64_dpc2_thunk() {
+  if (m_dpc2_thunk)
+    return m_dpc2_thunk;
+  if (!m_off.dpc_way1 || m_off.dpc_stride != 64 ||
+      m_off.dpc_bias - m_off.dpc_tag != 8)
+    return nullptr;
+  const uint32_t idx_bits = a64_popcount_low(m_off.dpc_mask);
+  if (!idx_bits || ((1u << idx_bits) - 1u) != m_off.dpc_mask)
+    return nullptr;
+  using namespace asmjit;
+  CodeHolder code;
+  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
+    return nullptr;
+  A64EmitErrors eh;
+  eh.cpu_id = m_cpu_id;
+  code.set_error_handler(&eh);
+  a64::Assembler a(&code);
+  Label out = a.new_label();
+  a.ubfx(a64::x10, a64::x2, imm(13), imm(idx_bits));
+  a.add(a64::x10, a64::x19, a64::x10, a64::lsl(6));
+  a.add(a64::x3, a64::x10, a64::x9); // way 0's slot
+  a.mov(a64::x9, imm((uint64_t)m_off.dpc_way1));
+  a.add(a64::x9, a64::x3, a64::x9);      // way 1's slot
+  a.ldr(a64::x12, a64::ptr(a64::x9, 0)); // way 1's tag
+  a.and_(a64::x11, a64::x2, imm(~(uint64_t)0x1FFF));
+  a.ldr(a64::x0, a64_cpu_field(a, m_off.dpc_key, 3));
+  a.orr(a64::x11, a64::x11, a64::x0);
+  a.cmp(a64::x12, a64::x11);
+  a.b_ne(out);
+  for (int32_t k = 0; k < 64; k += 16) { // loads and stores leave Z alone
+    a.ldp(a64::x0, a64::x1, a64::ptr(a64::x3, k));
+    a.ldp(a64::x11, a64::x12, a64::ptr(a64::x9, k));
+    a.stp(a64::x11, a64::x12, a64::ptr(a64::x3, k));
+    a.stp(a64::x0, a64::x1, a64::ptr(a64::x9, k));
+  }
+  a.ldr(a64::x10, a64::ptr(a64::x3, 8)); // the page's bias
+  a.bind(out);
+  a.ret(a64::x30);
+  if (eh.failed)
+    return nullptr;
+  JitFn fn = nullptr;
+  if (!publish_code(&code, (void **)&fn))
+    return nullptr;
+  m_dpc2_thunk = (void *)fn;
+  return m_dpc2_thunk;
+}
+
 // RPCC, without leaving the compiled frame. Same arithmetic as
 // CAlphaCPU::rpcc_read() -- wall-clock sync, then the forward-progress
 // floor -- but written in scratch registers (x0-x3, x16, x17) only, so the
@@ -650,6 +707,28 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.cmp(x12, x11);
       a.b_ne(slow);
     };
+    // The second way (CAlphaCPU::data_page_cache2), probed from a cold stub,
+    // so only after way 0 has missed: a hit in way 0 pays nothing for it.
+    // The stub is also where a misaligned access lands, so alignment is
+    // tested again. The probe and the swap live in one shared thunk
+    // (a64_dpc2_thunk). On a hit x10 = the page's bias, as after dpc_probe.
+    // False when there is no second way: go straight to the helper.
+    auto dpc_probe_way1 = [&](bool write_row, int size_bits,
+                              const Label &miss) -> bool {
+      void *thunk = a64_dpc2_thunk();
+      if (!thunk)
+        return false;
+      if (size_bits > 8) {
+        a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+        a.b_ne(miss);
+      }
+      a.mov(x9, imm((uint64_t)(m_off.dpc_tag +
+                               (write_row ? m_off.dpc_write_row : 0))));
+      a.mov(a64::x17, imm((uint64_t)thunk));
+      a.blr(a64::x17);
+      a.b_ne(miss);
+      return true;
+    };
 #endif
 
     // Memory-format loads: Ra = MEM[Rb + disp16].
@@ -697,6 +776,12 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #else
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+        Label miss = a.new_label();
+        if (dpc_probe_way1(false, size_bits, miss)) {
+          load_from(a64::ptr(x10, x2));
+          a.b(Label(m_cold_back[cold_idx]));
+          a.bind(miss);
+        }
         emit_helper();
         a.b(Label(m_cold_back[cold_idx]));
         continue;
@@ -743,6 +828,24 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #else
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+        Label miss = a.new_label();
+        if (dpc_probe_way1(true, size_bits, miss)) {
+          if (ra == 31)
+            a.mov(x12, imm(0));
+          else
+            mov_from_reg(x12, ra);
+          const a64::Mem m = a64::ptr(x10, x2);
+          if (size_bits == 64)
+            a.str(x12, m);
+          else if (size_bits == 32)
+            a.str(w12, m);
+          else if (size_bits == 16)
+            a.strh(w12, m);
+          else
+            a.strb(w12, m);
+          a.b(Label(m_cold_back[cold_idx]));
+          a.bind(miss);
+        }
         emit_helper();
         a.b(Label(m_cold_back[cold_idx]));
         continue;

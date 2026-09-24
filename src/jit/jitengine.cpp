@@ -1280,6 +1280,7 @@ void CJitEngine::reclaim_code() {
   delete (asmjit::JitRuntime *)m_rt;
   m_rt = new asmjit::JitRuntime();
   m_call_thunk = nullptr; // lived in the runtime just deleted
+  m_dpc2_thunk = nullptr;
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
   note_epoch(EPOCH_RECLAIM);

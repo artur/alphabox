@@ -508,12 +508,15 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       int _dpc_rw = (flags)&ACCESS_WRITE;                                      \
       u64 _dpc_vp = _dpc_va & ~U64(0x1FFF);                                    \
       SDataPageCache &_dpc = data_page_cache[_dpc_rw][dpc_index(_dpc_va)];     \
-      if (_dpc.valid && _dpc.virt_page == _dpc_vp && _dpc.cm == state.cm &&    \
-          _dpc.asn == state.asn0) {                                            \
+      if ((_dpc.valid && _dpc.virt_page == _dpc_vp && _dpc.cm == state.cm &&   \
+           _dpc.asn == state.asn0) ||                                          \
+          dpc_promote(_dpc_rw, dpc_index(_dpc_va), _dpc_vp, state.cm,          \
+                      state.asn0)) {                                           \
         phys_address = _dpc.phys_base | (_dpc_va & U64(0x1FFF));               \
       } else {                                                                 \
         if (virt2phys(_dpc_va, &phys_address, flags, NULL, ins))               \
           ES40_EXECUTE_END();                                                  \
+        dpc_demote(_dpc_rw, dpc_index(_dpc_va), _dpc_vp);                      \
         _dpc.fill(_dpc_vp, phys_address & ~U64(0x1FFF),                        \
                   _dpc_rw ? dpc_host_base_w(phys_address)                      \
                           : dpc_host_base(phys_address),                       \

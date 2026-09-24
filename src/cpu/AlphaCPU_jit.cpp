@@ -1383,6 +1383,9 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
+  } else if (cpu->dpc_promote(0, dpc_index(va), vp, cm,
+                              cpu->state.asn0)) { // the second way had it
+    phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     // Side-effect-free TB fast path. NOT virt2phys - that walks the page table
     // and vectors faults as a side effect, which (re-done by the interpreter
@@ -1411,6 +1414,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
+    cpu->dpc_demote(0, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
              cm, cpu->state.asn0);
@@ -1758,6 +1762,9 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
+  } else if (cpu->dpc_promote(0, dpc_index(va), vp, cpu->state.cm,
+                              cpu->state.asn0)) { // the second way had it
+    phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
     if (spe < 0)
@@ -1773,6 +1780,7 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
         return 1; // fault-on-read (FOR)
       phys = e.phys | (va & e.keep_mask);
     }
+    cpu->dpc_demote(0, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
              cpu->state.cm, cpu->state.asn0);
@@ -1983,6 +1991,9 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
+  } else if (cpu->dpc_promote(1, dpc_index(va), vp, cm,
+                              cpu->state.asn0)) { // the second way had it
+    phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     // Side-effect-free TB fast path on the write cache [1]; bail on a TB miss
     // or access fault so the interpreter does the side-effecting translation
@@ -2010,6 +2021,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
+    cpu->dpc_demote(1, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cm,
              cpu->state.asn0);
   }
@@ -2105,6 +2117,9 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
+  } else if (cpu->dpc_promote(1, dpc_index(va), vp, cpu->state.cm,
+                              cpu->state.asn0)) { // the second way had it
+    phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
     if (spe < 0)
@@ -2120,6 +2135,7 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
         return U64(0x100); // fault-on-write (FOW)
       phys = e.phys | (va & e.keep_mask);
     }
+    cpu->dpc_demote(1, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cpu->state.cm,
              cpu->state.asn0);
   }

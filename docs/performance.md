@@ -525,6 +525,40 @@ worth up to ~11% on `ldst` and ~5% on `byte`, less whatever its own miss-path
 probe costs. `stride` needs the other fix, one that reaches the
 translation sooner; its misses are cold pages.
 
+### The second way
+
+So the table got a second way, `data_page_cache2`, with the same 64
+slots per direction. A way-0 hit costs exactly what it did. On a way-0
+miss, before the helper, the load or store's cold stub probes way 1. A
+hit there **swaps the two ways**, so the page that was just used is back
+in way 0 for the inline probe next time, and does the access in the stub.
+A helper fill first moves the live way-0 entry into way 1. The helpers
+and the interpreter's `DATA_PHYS_NT` path do the same promote and demote,
+so both paths see one two-way cache. Every flush clears both ways.
+
+Three shapes were measured, same binary, `ALPHABOX_JIT_DPC2=0` as the
+base (`lab/results/ledger.md`, rows `dpc2`, `dpc2-swap`, `dpc2-thunk`;
+milliseconds, so negative is faster):
+
+| shape | `ldst` | `byte` | `sort` | `branch` | total |
+| --- | --- | --- | --- | --- | --- |
+| probe way 1, no swap | -1.4% | -3.1% | **+30.1%** | +5.6% | +4.2% |
+| probe and swap inline in every stub | -5.0% | -1.9% | -0.7% | +0.8% | +0.1% (inconclusive) |
+| probe and swap in one shared thunk | -4.4% | -2.3% | -0.4% | -1.0% | **-0.6%** |
+
+Without the swap, a page that lived in way 1 took the cold stub on every
+access, and `sort` paid 30% for it. With the swap written into every
+stub, the misses went away, but compiled code grew from 95 to 141 bytes
+per load or store, and `branch` and `call` paid for the size. A single
+thunk that every stub calls (`a64_dpc2_thunk`: pick the slot, compare the
+tag, swap the 64 bytes, hand back the bias) brings the stub back to 109
+bytes. That is the shape that landed. The gain is a
+third of what the helper time promised. Our reading, not measured: a
+way-1 hit still leaves the inline path for the stub and the thunk, and
+that costs close to what the 8-9 ns helper did. Only the AArch64 emitter has
+the stub; the x86-64 emitter still goes straight to the helper, which
+promotes and demotes the same way.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5

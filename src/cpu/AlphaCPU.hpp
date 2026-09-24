@@ -576,8 +576,9 @@ public:
   // 64 slots/dir (8KB pages -> 512KB). Raising this to 256 was measured and
   // does NOT pay: read-helper calls fell only 373634 -> 343914 per 100M
   // instructions (8%) on CPU-bound Windows code, and the workload did not move
-  // (61.7 s against 59.4 s, one run each). The misses are not conflicts, so
-  // the slot count is not the lever -- see docs/performance.md. The ceiling,
+  // (61.7 s against 59.4 s, one run each). The slot count is not the lever:
+  // the misses that remain are two pages sharing a slot, whatever its index
+  // (data_page_cache2 below; docs/performance.md). The ceiling,
   // should anyone try again, is the inline probe's addressing: it reaches both
   // rows with one displacement while dpc_tag + kDpcEntries*64 + 8 <= 32760, so
   // 256 is the largest power of two that stays free; past that the emitter has
@@ -656,6 +657,34 @@ public:
   } data_page_cache[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
   static_assert(sizeof(SDataPageCache) == 64,
                 "the JIT indexes the page cache with a shift");
+  /// The second way. A fill that pushes a live page out of its slot keeps
+  /// it here, because the misses that remain are two pages taking turns in
+  /// one slot (docs/performance.md, "The misses, split by what would fix
+  /// them"). Compiled code looks here only when way 0 misses -- a hit pays
+  /// nothing for it -- and the helpers promote what they find back to way 0.
+  /// ALPHABOX_JIT_DPC2=0 turns it off, for a same-binary A/B.
+  SDataPageCache data_page_cache2[2][kDpcEntries];
+  bool m_dpc2 = true;
+  static bool dpc2_requested();
+  /// A way-0 miss that way 1 can answer: swap the ways, so that way 0 holds
+  /// the page and the caller carries on as with a hit.
+  inline bool dpc_promote(int rw, u64 idx, u64 vp, int cm, int asn) {
+    if (!m_dpc2)
+      return false;
+    SDataPageCache &w1 = data_page_cache2[rw][idx];
+    if (!(w1.valid && w1.virt_page == vp && w1.cm == cm && w1.asn == asn))
+      return false;
+    std::swap(data_page_cache[rw][idx], w1);
+    return true;
+  }
+  /// Before way 0 is filled with vp: keep the page it displaces in way 1.
+  inline void dpc_demote(int rw, u64 idx, u64 vp) {
+    if (!m_dpc2)
+      return;
+    const SDataPageCache &w0 = data_page_cache[rw][idx];
+    if (w0.valid && w0.virt_page != vp)
+      data_page_cache2[rw][idx] = w0;
+  }
 
   /// An exact index of the TB: which slot holds each 8 KB page, two ways
   /// per set. A real EV68 looks its DTB up fully associatively in a cycle;
@@ -737,8 +766,10 @@ public:
       return;
     }
     const u64 idx = dpc_index(virt);
-    for (int rw = 0; rw < 2; rw++)
+    for (int rw = 0; rw < 2; rw++) {
       data_page_cache[rw][idx].invalidate();
+      data_page_cache2[rw][idx].invalidate();
+    }
   }
   /// The host bytes behind a physical page for the page cache: DRAM, or
   /// device memory the system offers for direct access (a framebuffer), or
@@ -783,6 +814,8 @@ public:
     for (int i = 0; i < kDpcEntries; i++) {
       data_page_cache[0][i].invalidate();
       data_page_cache[1][i].invalidate();
+      data_page_cache2[0][i].invalidate();
+      data_page_cache2[1][i].invalidate();
     }
   }
 
