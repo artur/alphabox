@@ -50,10 +50,11 @@ constexpr int32_t kA64OutSlot = 96;  // helper out-parameter
 // Global pins: guest GPR -> callee-saved host register id. kGlobalPins (the
 // x86 hot set RA/a0/PV) plus SP, GP and v0 -- AAPCS64 has callee-saved
 // registers to spare, so this is the Win64 x86 pin set on every a64 host.
-constexpr struct {
+struct A64Pin {
   int guest;
   uint32_t host;
-} kA64Pins[] = {{26, 21}, {16, 22}, {27, 23}, {30, 24}, {29, 25}, {0, 26}};
+};
+A64Pin kA64Pins[] = {{26, 21}, {16, 22}, {27, 23}, {30, 24}, {29, 25}, {0, 26}};
 
 // Caller-saved pins: more hot guest GPRs in host registers the emitter never
 // uses as scratch (x4-x8, x13-x15; x18 is platform-reserved). Helper calls
@@ -61,14 +62,57 @@ constexpr struct {
 // reload them after (a64_spill_pins / a64_reload_pins); the prologue and
 // epilogue sync them like the callee-saved pins. No helper reads state.r
 // directly, so the guest slots only need to be current across the call.
-// Guests exclude R4-7 / R20-23 (PALshadow remap). Chosen from a JIT_REGPROF
+// R4-7 / R20-23 may be pinned too: a pin holds the main bank, and a PAL
+// block, where they name the shadow bank, keeps them in memory (see
+// a64_regalloc). This set is not using them. Chosen from a JIT_REGPROF
 // Windows 2000 setup profile: the hottest pin-eligible GPRs not already pinned
 // (t0-t2 R1-R3, a1-a2 R17-R18, s0-s2 R9-R11).
+A64Pin kA64CallerPins[] = {{1, 4},  {9, 5},   {17, 6}, {2, 7},
+                           {10, 8}, {18, 13}, {3, 14}, {11, 15}};
+
+// ALPHABOX_JIT_PINSET: experiments, not pin sets -- each hands the slots of
+// pins one workload hardly touches to registers it touches most, to measure
+// what a pinned register is worth there. Read once, before any code is
+// compiled.
+//   1: the nada benchmark: s4-s6 R13-R15 in place of a1, a2, pv (R17 R18 R27).
+//   2: makecab (Microsoft's LZX): R8 and the shadow-bank temporaries R4-R6,
+//      R21-R23 in place of s0-s2, ra, pv, gp, sp (R9-R11 R26 R27 R29 R30).
+//      PAL blocks keep a shadow-bank register in memory (a64_regalloc).
 constexpr struct {
-  int guest;
-  uint32_t host;
-} kA64CallerPins[] = {{1, 4},  {9, 5},   {17, 6}, {2, 7},
-                      {10, 8}, {18, 13}, {3, 14}, {11, 15}};
+  int from, to;
+} kA64PinSwap1[] = {{17, 13}, {18, 15}, {27, 14}},
+  kA64PinSwap2[] = {{10, 8},  {11, 5}, {9, 6},  {26, 21},
+                    {30, 23}, {27, 4}, {29, 22}};
+const int g_a64_pinset = [] {
+  const char *e = getenv("ALPHABOX_JIT_PINSET");
+  const int n = e ? atoi(e) : 0;
+  auto apply = [](const auto &swaps) {
+    for (const auto &sw : swaps) {
+      for (auto &p : kA64CallerPins)
+        if (p.guest == sw.from)
+          p.guest = sw.to;
+      for (auto &p : kA64Pins)
+        if (p.guest == sw.from)
+          p.guest = sw.to;
+    }
+  };
+  if (n == 1)
+    apply(kA64PinSwap1);
+  else if (n == 2)
+    apply(kA64PinSwap2);
+  else
+    return 0;
+  fprintf(stderr, "[JIT] ALPHABOX_JIT_PINSET=%d: pinned", n);
+  for (const auto &p : kA64Pins)
+    fprintf(stderr, " R%d", p.guest);
+  for (const auto &p : kA64CallerPins)
+    fprintf(stderr, " R%d", p.guest);
+  fprintf(stderr, "\n");
+  return n;
+}();
+
+// R4-R7 and R20-R23 name the shadow bank in a PAL block (RREG).
+inline bool a64_shadow_reg(int r) { return r < 24 && (r & 0xc) == 0x4; }
 
 // Count the low contiguous set bits of a mask, to prove it is the
 // ((1 << n) - 1) form UBFX can express.
@@ -170,7 +214,9 @@ void a64_epilogue(asmjit::a64::Assembler &a) {
   a.ret(a64::x30);
 }
 
-void a64_regalloc(CJitEngine::RegAlloc &ra) {
+// A pinned R4-R7/R20-R23 holds the main bank, which a PAL block does not
+// name: there those registers are the shadow bank's, in memory.
+void a64_regalloc(CJitEngine::RegAlloc &ra, bool pal_block) {
   for (int r = 0; r < 32; ++r)
     ra.host[r] = -1;
   ra.rax_holds = -1;
@@ -178,6 +224,10 @@ void a64_regalloc(CJitEngine::RegAlloc &ra) {
     ra.host[p.guest] = (int)p.host;
   for (const auto &p : kA64CallerPins)
     ra.host[p.guest] = (int)p.host;
+  if (pal_block)
+    for (int r = 0; r < 32; ++r)
+      if (a64_shadow_reg(r))
+        ra.host[r] = -1;
 }
 
 // Around a helper call: the caller-saved pins go to their guest slots before
@@ -1629,6 +1679,13 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.add(w11, w11, imm(23)); // R23 index: 23, or 55 if SDE
       a.mov(x12, imm(ret));
       a.str(x12, a64::ptr(kRegs, x11, a64::lsl(3)));
+      if (regalloc.host_of(23) >= 0) { // a pinned R23 is the main bank's
+        Label shadow = a.new_label();
+        a.ldrb(w11, fld(m_off.sde, 0));
+        a.cbnz(w11, shadow);
+        a.mov(a64::x((uint32_t)regalloc.host_of(23)), x12);
+        a.bind(shadow);
+      }
       a.ldr(x9, fld(m_off.pal_base, 3));
       a.mov(x11, imm(voff));
       a.orr(x9, x9, x11);
@@ -2199,7 +2256,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #endif
 
   RegAlloc ra;
-  a64_regalloc(ra);
+  a64_regalloc(ra, pal_block);
   m_cold_pass = false;
   m_cold_base = 0;
   for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
@@ -2568,7 +2625,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // and branches back. A scratch RegAlloc keeps value-forwarding state local.
   {
     RegAlloc cra;
-    a64_regalloc(cra);
+    a64_regalloc(cra, pal_block);
     m_cold_pass = true;
     for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
       if (m_cold_used[i])
@@ -2615,8 +2672,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
   Label body = a.new_label(); // loop re-entry (pins + count stay live)
   a.bind(body);
 
-  RegAlloc ra;
-  a64_regalloc(ra);
+  RegAlloc ra; // allocated per segment: segments differ in PAL-ness
   m_cold_pass = false;
   for (uint32_t i = 0; i < kColdMax; ++i)
     m_cold_used[i] = false;
@@ -2628,6 +2684,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
     cold_base += plen;
     const uint32_t *words = (const uint32_t *)(dram + b->phys);
     const bool pal_block = (b->tag & 1) != 0;
+    a64_regalloc(ra, pal_block);
     // Default next PC = the sequential successor (terminators overwrite it).
     a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen));
     a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
@@ -2675,7 +2732,6 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
   // Cold section for the fused segments (see assemble_block).
   {
     RegAlloc cra;
-    a64_regalloc(cra);
     m_cold_pass = true;
     uint32_t base = 0;
     for (uint32_t bi = 0; bi < n_blocks; ++bi) {
@@ -2683,6 +2739,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
       const uint32_t plen = b->prefix_len;
       const uint32_t *words = (const uint32_t *)(dram + b->phys);
       m_cold_base = base;
+      a64_regalloc(cra, (b->tag & 1) != 0);
       for (uint32_t i = 0; i < plen && base + i < kColdMax; ++i)
         if (m_cold_used[base + i])
           emit_op(&a, nullptr, &done, hs, (b->tag & 1) != 0, b, words[i], i,

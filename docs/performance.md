@@ -195,7 +195,9 @@ How much code that is, from `JIT_REGPROF` on the same workload:
   global pin set is workload-dependent by construction, and the callee-saved
   registers are all spoken for -- freeing `x20` and `x28` (the register-file
   and epoch bases, both reachable from `x19` with a merged hot struct) buys
-  two more, and per-block allocation buys the rest.
+  two more, and per-block allocation buys the rest. (Measured later, in
+  "What a pinned register is worth, and to whom": 5-30% a section, and a
+  fixed set only moves the gain between workloads.)
 - The report's "93 bytes per instruction, execution-weighted" is **not** the
   executed path length: it weights each block's *whole* size, prologue and
   cold stubs included, by how often the block runs. The executed path is the
@@ -558,6 +560,65 @@ way-1 hit still leaves the inline path for the stub and the thunk, and
 that costs close to what the 8-9 ns helper did. Only the AArch64 emitter has
 the stub; the x86-64 emitter still goes straight to the helper, which
 promotes and demotes the same way.
+
+### What a pinned register is worth, and to whom
+
+The AArch64 emitter keeps 14 guest registers in host registers for a
+whole chain: six in callee-saved registers, eight in caller-saved ones
+that are spilled around helper calls. The set is fixed, chosen from a
+Windows 2000 *setup* profile, and every host register is spoken for.
+`JIT_REGPROF` profiles of two workloads through `nt_snap.sh` show the
+hot registers depend heavily on the workload:
+
+- **the nada benchmark** (`axp`): s0-s6 R9-R15 and v0, a0, ra, sp.
+  R13, R15, R14, R12 and R28 are among the hottest and not pinned; a1,
+  a2 (R17, R18) and pv (R27), which are pinned, are almost untouched.
+- **`makecab`** (the `cab` workload: Microsoft's LZX compressor, compiled
+  by Microsoft): R8 is the hottest register of all, and the eight
+  registers PALcode shadows, R4-R7 and R20-R23, take **about 45%** of all
+  register accesses. None of them was pin-eligible. R9-R11, R26, R27, R29
+  and R30, all pinned, are hardly touched.
+
+The shadow-bank registers were excluded because a PAL block names the
+shadow bank with them. That exclusion was broader than it needed to be.
+A pin holds the main bank, and a PAL block can simply keep its shadow
+registers in memory (`a64_regalloc(ra, pal_block)`). The one direct write
+to a guest slot from compiled code, CALL_PAL's R23 with shadowing off,
+also updates the pin.
+
+`ALPHABOX_JIT_PINSET` measures it, same binary, as experiments rather than
+candidate sets. `1` gives R17, R18 and R27's slots to R13-R15. `2` gives
+R9-R11, R26, R27, R29 and R30's slots to R8, R4-R6 and R21-R23. `perf_ab.py`
+times `cab` from the guest clock between the run's START and END and checks
+the cabinet's hash (`lab/results/ledger.md`, rows `pinset-r13-15`,
+`pinset-r13-15b`, `pinset2-cab`, `pinset1-cab`, `pinset2-axp`):
+
+| set | workload | result |
+| --- | --- | --- |
+| `1` (for the benchmark) | benchmark | faster in all six rounds of two runs: -4.2% and -7.1% total. `byte` -14.8/-17.4%, `sort` -8.8/-11.0%, `ldst` -7.8/-10.7%, `div` -4.0% |
+| `1` | `cab` | +2.3%, inconclusive (one outlier run) |
+| `2` (for `cab`) | `cab` | **-4.6%**, faster in all four rounds, the ranges overlapping by one run |
+| `2` | benchmark | `branch` +13.5%, `sort` +15.2%, `call` +9.0%, `fp` +7.4%, `ldst` +6.8%, all resolved -- but **`div` -33.1%**. Total +4.1% |
+
+The runs were taken on a host with a steady background load, which is why
+so few of them resolve on range overlap; the per-round order does not
+change. What they establish:
+
+1. **A pinned register is worth 5-30% on code that lives in it.** No other
+   single change measured here comes close on a section.
+2. **A fixed set of 14 is a trade-off between workloads.** Each set wins on
+   the workload it was chosen for and loses on the other one. The default
+   set sits between them, and so does every other fixed set.
+3. The fix is not a better fixed set. It is pins chosen from what the running
+   code uses. In increasing cost:
+   - make the shadow-bank registers eligible (done here, behind the
+     switch: the default set is unchanged);
+   - free `x20` and `x28` for two more pins;
+   - an adaptive global set: count register use per compiled block, and when
+     the hot set drifts, flush and recompile with a new one. Pins are
+     synced at every chain entry and exit, so a set change at a full flush is
+     safe;
+   - per-block allocation, the native-compiler answer.
 
 ## The cycle counter
 

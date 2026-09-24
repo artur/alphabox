@@ -50,11 +50,13 @@ function bench_obj(n) {           // allocation, property lookup, collection
 var work = [["int", bench_int, 400000], ["fp", bench_fp, 200000],
             ["str", bench_str, 60000], ["arr", bench_arr, 120000],
             ["obj", bench_obj, 150000]];
+// Seconds to two places. Not toFixed: Windows 2000's JScript 5.1 predates it.
+function secs(ms) { return Math.round(ms / 10) / 100; }
 var t0 = new Date();
 for (var w = 0; w < work.length; w++) {
   if (!want(work[w][0])) continue;
   var s0 = new Date();
   var r = work[w][1](Math.round(work[w][2] * scale));
-  WScript.Echo(work[w][0] + " " + ((new Date() - s0) / 1000).toFixed(2) + "s (" + r + ")");
+  WScript.Echo(work[w][0] + " " + secs(new Date() - s0) + "s (" + r + ")");
 }
-WScript.Echo("total " + ((new Date() - t0) / 1000).toFixed(2) + "s");
+WScript.Echo("total " + secs(new Date() - t0) + "s");

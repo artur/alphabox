@@ -161,6 +161,7 @@ run)
     exit 1
   fi
   mtype -i "$IMG" ::/NADA/OUT.TXT 2>/dev/null | grep -q DONE || { echo "   (incomplete)"; exit 1; }
+  [ "$WORKLOAD" = cab ] && echo "cab-sha $(mtype -i "$IMG" ::/NADA/OUT.CAB 2>/dev/null | shasum | cut -c1-40)"
   ;;
 *) sed -n '2,20p' "$0"; exit 2 ;;
 esac

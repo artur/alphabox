@@ -29,7 +29,7 @@ import argparse, hashlib, json, os, re, statistics, subprocess, sys, time, datet
 
 R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 WORK = os.environ.get('ALPHABOX_WORK', os.path.join(R, 'lab'))
-SECTIONS = ['alu', 'branch', 'call', 'ldst', 'stride', 'fp', 'byte', 'div', 'sort']
+SECTIONS = ['alu', 'branch', 'call', 'ldst', 'stride', 'fp', 'byte', 'div', 'sort', 'cab']
 
 def sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
@@ -106,6 +106,19 @@ def run_one(label, binary, workload, section, scale, snapshot=False, env_extra=N
         if m: ms[m.group(1)] = int(m.group(2)); res[m.group(1)] = m.group(3)
         m = re.match(r'total (\d+) ms', ln)
         if m: total = int(m.group(1))
+    if workload == 'cab':
+        # makecab times nothing itself: the section is RUN.BAT's START..END,
+        # both read from the guest's clock like every other section, and the
+        # result is the hash of the cabinet it wrote (nt_snap prints it).
+        t = {k: v for k, v in re.findall(r'\b(START|END)\s+(\d+:\d+:\d+\.\d+)', p.stdout)}
+        h = re.search(r'^cab-sha (\w+)', p.stdout, re.M)
+        if 'START' in t and 'END' in t:
+            def sec(x):
+                hh, mm, ss = x.split(':'); return int(hh) * 3600 + int(mm) * 60 + float(ss)
+            d = sec(t['END']) - sec(t['START'])
+            if d < 0: d += 86400
+            ms['cab'] = total = int(round(d * 1000))
+            res['cab'] = h.group(1)[:16] if h else 'none'
     return ms, res, total, p.stdout
 
 def main():

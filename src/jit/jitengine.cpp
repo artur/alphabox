@@ -4907,13 +4907,14 @@ void CJitEngine::regprof_report() {
       }
     if (best < 0)
       break;
-    const bool pinnable =
-        (best & 0xc) != 0x4; // exclude R4-7 / R20-23 (shadow remap; covers R23)
+    // R4-7 / R20-23 name the shadow bank in PAL code: the x86-64 emitter
+    // never pins them, the AArch64 one only outside PAL blocks.
+    const bool shadow = best < 24 && (best & 0xc) == 0x4;
     len += snprintf(buf + len, sizeof(buf) - len, " R%d=%llu%s", best,
-                    (unsigned long long)bestv, pinnable ? "" : "*");
+                    (unsigned long long)bestv, shadow ? "*" : "");
     hist[best] = 0;
   }
-  printf("%s   (* = not pin-eligible)\n", buf);
+  printf("%s   (* = PAL shadow bank)\n", buf);
   // The PALmode share since the previous report (rp_hits is cumulative per
   // block; the difference of the sums is the window, less evicted blocks).
   static uint64_t prev_instr = 0, prev_pal = 0;
