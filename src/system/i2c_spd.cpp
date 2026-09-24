@@ -216,10 +216,11 @@ void Eeprom24C02::on_scl_rise(bool sda_line) {
     break;
 
   case XMIT:
-    // Host samples our data on rising edges; bitpos_ counts 0..7
+    // Host samples our data while SCL is high; bitpos_ counts 0..7. The
+    // eighth bit stays on the wire until SCL falls -- releasing it here, as
+    // this used to, turned every byte's least significant bit into a 1 for
+    // a host that samples after the rising edge (perm2 reading the EDID).
     if (++bitpos_ == 8) {
-      // Release SDA for host ACK/NACK on the 9th clock
-      ack_pull_ = false;
       st_ = RECV_ACK;
       bitpos_ = 0;
     }
@@ -257,8 +258,13 @@ void Eeprom24C02::on_scl_fall(bool /*sda_line*/) {
     // Transition to next state after the ACK bit low-to-high phase. The
     // falling edge that ends the eighth clock comes first: the acknowledge
     // has to stay on the wire until the ninth clock has been taken.
-    if (!ack_seen_)
+    if (!ack_seen_) {
+      // The fall that ends the eighth clock: a transmitter now lets go of
+      // SDA for the host's ACK/NACK on the ninth.
+      if (ack_phase_ == ACK_DATA)
+        ack_pull_ = false;
       break;
+    }
 
     if (!addr_match_) {
       enter_idle();
