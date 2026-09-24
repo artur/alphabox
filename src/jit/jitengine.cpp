@@ -247,9 +247,7 @@ static inline bool is_terminator(SafeOp op) {
 // conditional branch that the cold pass did not take, the taken side becoming
 // an exit in the middle of the block, so the fall-through path keeps its pins
 // and the forwarded value instead of paying an exit and a link probe every
-// ~4 instructions. ALPHABOX_JIT_EBB=0 restores one branch per block in the
-// same binary (the A/B switch). BR/BSR always leave; FP branches keep ending
-// a block.
+// ~4 instructions. BR/BSR always leave; FP branches keep ending a block.
 static inline bool is_ebb_branch(SafeOp op) {
   return op >= OP_BEQ && op <= OP_FBGE && op != OP_BR && op != OP_BSR &&
          !(op >= OP_FBEQ && op <= OP_FBGE);

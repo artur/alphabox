@@ -670,7 +670,7 @@ public:
   /// return a wrong mapping; a false negative (three live pages in one set)
   /// costs a refill from the shadow at worst. In a JIT_VERIFY build the
   /// scan runs as the oracle after every index miss and counts the false
-  /// negatives. ALPHABOX_TB_INDEX=0 keeps the scan in the same binary.
+  /// negatives.
   /// Derived state: rebuilt from state.tb on reset and restore, not saved.
   static constexpr int kTbIdxBits = 11;
   static constexpr int kTbIdxEntries = 1 << kTbIdxBits;

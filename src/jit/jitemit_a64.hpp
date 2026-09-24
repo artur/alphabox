@@ -2111,16 +2111,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   {
     const uint32_t lw = plen ? words[plen - 1] : 0u;
     const uint32_t lopc = lw >> 26;
-    // ALPHABOX_JIT_PCSTORE=0: the old shape, the PC written on the hot path of
-    // every exit. A same-binary A/B switch: the emitter reads it once and
-    // emits either form, so the interpreter and the helpers keep one layout.
-    static const bool pc_on_hot_path = [] {
-      const char *e = getenv("ALPHABOX_JIT_PCSTORE");
-      return e && e[0] == '0';
-    }();
-    m_defer_branch_pc = terminator_branch && lopc >= 0x30 && lopc <= 0x3f &&
-                        !(pc_on_hot_path && (lopc == 0x30 || lopc == 0x34));
-    m_pc_on_hot_path = pc_on_hot_path;
+    m_defer_branch_pc = terminator_branch && lopc >= 0x30 && lopc <= 0x3f;
   }
 #endif
 #ifndef JIT_VERIFY
@@ -2301,13 +2292,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     const bool taken_backward = btgt <= b->tag + 4 * (uint64_t)i;
     a64_count_add(a, i + 1);
     Label gate_out = a.new_label();
-    const bool stub = taken_backward && !m_pc_on_hot_path;
-    if (m_pc_on_hot_path) {
-      a.mov(a64::x9, imm(btgt));
-      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-    }
+    const bool stub = taken_backward;
     if (taken_backward)
-      a64_emit_gate(a, m_off, stub ? gate_out : exit_all);
+      a64_emit_gate(a, m_off, gate_out);
     if (mid_slot == kLinkSlots) {
       mid_rec = nullptr;
       mid_slot = 0;
@@ -2402,9 +2389,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       const bool taken_backward = btgt <= bpc;
       if (lopc == 0x30 || lopc == 0x34) {
         Label gate_out = a.new_label();
-        const bool stub = taken_backward && !m_pc_on_hot_path;
+        const bool stub = taken_backward;
         if (taken_backward)
-          a64_emit_gate(a, m_off, stub ? gate_out : exit_chain);
+          a64_emit_gate(a, m_off, gate_out);
         emit_static_exit(btgt, xrec, 0, exit_chain);
         if (stub) { // the gate's way out: the PC, then leave
           a.bind(gate_out);
@@ -2421,20 +2408,12 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         Label not_taken = a.new_label();
         emit_cond_test(m_pending_br_op, m_pending_br_ra, not_taken);
         Label gate_out = a.new_label();
-        if (m_pc_on_hot_path) {
-          a.mov(a64::x9, imm(btgt));
-          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-        }
         if (taken_backward) // the gate clobbers only x1/x17 (and flags)
-          a64_emit_gate(a, m_off, m_pc_on_hot_path ? exit_chain : gate_out);
+          a64_emit_gate(a, m_off, gate_out);
         emit_static_exit(btgt, xrec, 0, exit_chain);
         a.bind(not_taken);
-        if (m_pc_on_hot_path) {
-          a.mov(a64::x9, imm(bfall));
-          a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-        }
         emit_static_exit(bfall, xrec, 1, exit_chain); // forward: no gate
-        if (taken_backward && !m_pc_on_hot_path) { // the gate's way out
+        if (taken_backward) { // the gate's way out
           a.bind(gate_out);
           a.mov(a64::x9, imm(btgt));
           a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
@@ -2463,12 +2442,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a.bind(exit_chain);
 #endif
   } else {
-#ifndef JIT_VERIFY
-    if (m_pc_on_hot_path) {
-      a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen)); // fall-through PC
-      a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-    }
-#endif
     a64_count_add(a, plen);
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();

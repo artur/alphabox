@@ -592,6 +592,7 @@ strictly better code; none of them is in it for a speedup.
 | Hashing the data-page-cache index instead of slicing it | fewer of the 373k read-helper calls per 100M instructions | it worked -- reads 364984 -> 242727, writes 45560 -> 115 -- and still lost: 2-3% faster on the `cmd` loop, **6.5% slower** on `nt_bench.sh axp` (24429 against 26007 ms, three runs each, no overlap). Two instructions on every hit, to remove only conflict misses. Reverted |
 | Computed-jump inline cache 1024 -> 16384 entries (`kIndBits` 10 -> 14), on QEMU's measured -8.7% wall for the same change on an Alpha guest | fewer dispatcher round-trips | dispatcher round-trips did roughly halve at matched window indices, and the wall clock did not resolve: 57.3 against 55.3 in round one, 56.2 against **58.4** in round two. Opposite signs, so no effect we can measure |
 | Data page cache 64 -> 256 slots per direction (`kDpcBits` 6 -> 8), 512 KB -> 2 MB of coverage | fewer of the 373k read-helper calls per 100M instructions | read-helper calls 373634 -> 343914, only 8%, and the workload did not move (61.7 s against 59.4 s). The probe misses are not conflict misses, so slot count is the wrong lever |
+| A victim way behind the TB index's eight: a translation pushed out of a full set parked for one more lookup | fewer false-negative index misses, the few that the eight ways leave | **+0.8%** (21046-21250 ms against 21257-21398, two builds), inside the layout band two builds differ by. With three false negatives in 6.3M probes there was almost nothing for it to catch. Dropped |
 
 And two that did, for contrast:
 
@@ -672,7 +673,7 @@ predictions on record:
 
 | change | total | verdict |
 | --- | --- | --- |
-| the PC store off the hot path: `state.pc` written only on an exit's miss path or in a gate stub, never where a link hit tails into the next body | **-1.7%**, no overlap, every section -0.8..-2.8% | kept (`ALPHABOX_JIT_PCSTORE`) |
+| the PC store off the hot path: `state.pc` written only on an exit's miss path or in a gate stub, never where a link hit tails into the next body | **-1.7%**, no overlap, every section -0.8..-2.8% | kept (the switch is gone: the old shape was collapsed away once the answer was in) |
 | `x27` as a down-counter: the gate's budget half one `tbnz` instead of a load and a compare | 0.0% (two runs, both inside the noise) | reverted; the flag-free exit that enabled it stays |
 | exit records in an arena two `add`s from `x28` instead of a 3-4 instruction 64-bit constant | +0.4%, inside the noise | reverted |
 
