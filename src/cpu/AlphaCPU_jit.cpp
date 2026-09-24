@@ -1378,6 +1378,8 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
                             : dpc.asn != cpu->state.asn0 ? CJitEngine::DM_ASN
                             : dpc.host_base == 0         ? CJitEngine::DM_MMIO
                                                          : CJitEngine::DM_HIT);
+  if (dpc.valid && dpc.virt_page != vp)
+    cpu->m_jit->note_dpc_other(0, unsigned(dpc_index(va)), vp, dpc.virt_page);
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
@@ -1976,6 +1978,8 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
       cpu->data_page_cache[1][dpc_index(va)]; // direct-mapped by virt page
+  if (dpc.valid && dpc.virt_page != vp)
+    cpu->m_jit->note_dpc_other(1, unsigned(dpc_index(va)), vp, dpc.virt_page);
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));

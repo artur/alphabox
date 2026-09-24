@@ -4684,6 +4684,14 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                          dt ? 100.0 * (double)m_dpc_miss[c] / (double)dt : 0.0);
         printf("%s\n", b2);
         memset(m_dpc_miss, 0, sizeof(m_dpc_miss)); // windowed, like the rest
+        for (int rw = 0; rw < 2; ++rw)
+          printf("[JIT][STATS][CPU%d]   %s other-page: conflict=%llu (a fold "
+                 "separates %llu) capacity/cold=%llu\n",
+                 m_cpu_id, rw ? "write" : "read",
+                 (unsigned long long)m_dpc_split[rw][0],
+                 (unsigned long long)m_dpc_split[rw][1],
+                 (unsigned long long)m_dpc_split[rw][2]);
+        memset(m_dpc_split, 0, sizeof(m_dpc_split));
       }
       {
         extern uint64_t g_watch_n[5];

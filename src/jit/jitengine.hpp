@@ -680,6 +680,30 @@ public:
     m_epoch_bumps[cause]++;
   }
   void note_dpc_miss(int cause) { m_dpc_miss[cause]++; }
+  // An other-page miss, split by what would fix it. A page this slot evicted
+  // among its last four is a conflict -- two live pages sharing one slot --
+  // which a better index removes; anything else is capacity or a cold page,
+  // which no index helps. For the conflicts: would a one-eor fold of the
+  // index, (va >> 13) ^ (va >> 31), have put the two pages in different
+  // slots? The only index change docs/performance.md leaves worth trying.
+  void note_dpc_other(int rw, unsigned slot, uint64_t vp, uint64_t occupant) {
+    uint64_t *h = m_dpc_hist[rw & 1][slot & 255];
+    bool conflict = false;
+    for (int i = 0; i < 4; ++i)
+      conflict |= h[i] == vp;
+    auto fold = [](uint64_t v) { return ((v >> 13) ^ (v >> 31)) & 63; };
+    if (conflict) {
+      m_dpc_split[rw & 1][0]++;
+      if (fold(vp) != fold(occupant))
+        m_dpc_split[rw & 1][1]++;
+    } else {
+      m_dpc_split[rw & 1][2]++;
+    }
+    h[3] = h[2];
+    h[2] = h[1];
+    h[1] = h[0];
+    h[0] = occupant;
+  }
   void note_helper_tsc(int kind, uint64_t cycles) { m_helper_tsc[kind] += cycles; }
   void note_link_bail() { m_bail_link++; }
   void note_jmp_attempt() { m_jmp_attempt++; }
@@ -689,6 +713,7 @@ public:
   void note_dlink_stale(bool) {}
   void note_epoch(int) {}
   void note_dpc_miss(int) {}
+  void note_dpc_other(int, unsigned, uint64_t, uint64_t) {}
   void note_helper_tsc(int, uint64_t) {}
   void note_link_bail() {}
   void note_jmp_attempt() {}
@@ -961,6 +986,8 @@ private:
   // every one of those hashes proved something nothing had altered.
   uint64_t m_rev_calls = 0, m_rev_ok = 0, m_rev_changed = 0, m_rev_phys = 0,
            m_rev_words = 0;
+  uint64_t m_dpc_hist[2][256][4] = {};   // per slot: the pages it last evicted
+  uint64_t m_dpc_split[2][3] = {}; // windowed: [rw][conflict, fold-separable, capacity/cold]
   uint64_t m_dpc_miss[DM_CAUSES] = {}; // windowed: inline page-cache probe
                                        // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,

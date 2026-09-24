@@ -491,6 +491,40 @@ of the workload, not of the code. And **the index lives in three places** --
 sites in the x86-64 emitter. Change one and compiled code and the helpers
 disagree about where a page lives.
 
+### The misses, split by what would fix them
+
+The classifier above says "another page is in this slot" and stops. That
+covers two misses with opposite fixes: a **conflict**, two live pages
+taking turns in one slot, which a better index or a second way removes;
+and **capacity or a cold page**, which nothing in the index helps. A
+`JIT_STATS` build now tells them apart. Each slot remembers the last four
+pages it evicted, and a miss on one of them is a conflict. For the
+conflicts it also asks whether the one-`eor` fold suggested above,
+`(va >> 13) ^ (va >> 31)`, would have put the two pages in different slots.
+
+Measured on the `nt_bench` sections through `nt_snap.sh` (scale 10, the
+busy windows averaged), per 100M guest instructions, after the
+translation shadow and the TB index:
+
+| section | read helpers | write helpers | conflicts | the fold separates | read+write helper time |
+| --- | --- | --- | --- | --- | --- |
+| `ldst` | 293k | 151k | 97% | 0.1% | 11.2% |
+| `byte` | 183k | 7k | 95% | 0.1% | 4.9% |
+| `sort` | 79k | 45k | 90% | 0.5% | 2.4% |
+| `stride` | 1.59M | 156k | -- (mostly *empty*: pages never seen) | -- | 11.8% |
+
+Three things follow. The misses on the sections that reuse memory are
+almost all ping-pong conflicts, so a larger table or a different index
+was never going to help much. The fold would separate almost none of
+them, because the two pages agree above bit 31 as well: **the fold is not
+worth trying.** And the helpers are cheap now, 8-9 ns a call, so the most
+a fix could win is that helper-time column. A second way would be the
+right shape: probed only when the first way misses, so a hit pays
+nothing, unlike the hash that lost by charging every hit. It could be
+worth up to ~11% on `ldst` and ~5% on `byte`, less whatever its own miss-path
+probe costs. `stride` needs the other fix, one that reaches the
+translation sooner; its misses are cold pages.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5
