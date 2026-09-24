@@ -662,8 +662,9 @@ public:
   /// one slot (docs/performance.md, "The misses, split by what would fix
   /// them"). Compiled code looks here only when way 0 misses -- a hit pays
   /// nothing for it -- and the helpers promote what they find back to way 0.
-  /// ALPHABOX_JIT_DPC2=0 turns it off, for a same-binary A/B.
-  SDataPageCache data_page_cache2[2][kDpcEntries];
+  /// ALPHABOX_JIT_DPC2=0 turns it off, for a same-binary A/B. The array
+  /// itself is declared after `state`, to keep the guest registers close to
+  /// the start of the object (see m_tb_idx there).
   bool m_dpc2 = true;
   static bool dpc2_requested();
   /// A way-0 miss that way 1 can answer: swap the ways, so that way 0 holds
@@ -708,7 +709,8 @@ public:
   // two ways and 270 with four, all in that one set. A probe stops at the
   // first empty way, so the width costs nothing elsewhere.
   static constexpr int kTbIdxWays = 8;
-  u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
+  // m_tb_idx itself is declared after `state`: at 32 KB it would put the
+  // guest registers out of one load's reach of compiled code's cpu pointer.
   int m_tb_gh_live[2] = {0, 0}; // live entries with a granularity hint
 #ifdef JIT_VERIFY
   u64 m_tb_idx_false_neg = 0; // index said "absent", the scan found it
@@ -835,6 +837,11 @@ public:
   void *m_link_from =
       nullptr; // JitBlock* whose successor link the dispatcher should patch
   u64 m_link_target = 0; // a static exit's target PC, recorded with link_from
+  // The JIT engine's epoch (CJitEngine::m_epoch refers to it) and its
+  // computed-jump cache, kept here so compiled code reaches both from the cpu
+  // pointer and needs no register of its own for them.
+  u64 m_jit_epoch = 0;
+  void *m_jit_ind_base = nullptr;
   u64 m_jit_code_seen = 0;     // g_jit_code_flush at this CPU's last JIT flush
   // Idle pacing (JIT dispatcher, see jit_idle_pause): a CPU spinning in the NT
   // idle loop sleeps until irq_h raises an interrupt for it or 1 ms passes.
@@ -1088,6 +1095,13 @@ public:
         alignment as the int this was. */
     std::atomic<int> irq_h_timer[6];
   } state; /**< Determines CPU state that needs to be saved to the state file */
+
+  /// The data page cache's second way and the TB index (see kTbIdxBits),
+  /// placed after `state` so that the state compiled code reads -- the guest
+  /// registers first -- stays within reach of the cpu pointer: 16 KB for a
+  /// 32-bit load, which is how compiled code reads a longword register.
+  SDataPageCache data_page_cache2[2][kDpcEntries];
+  u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
   /// them. A real EV6 has 128 DTB entries; a program walking more pages than

@@ -611,14 +611,67 @@ change. What they establish:
    set sits between them, and so does every other fixed set.
 3. The fix is not a better fixed set. It is pins chosen from what the running
    code uses. In increasing cost:
-   - make the shadow-bank registers eligible (done here, behind the
-     switch: the default set is unchanged);
-   - free `x20` and `x28` for two more pins;
-   - an adaptive global set: count register use per compiled block, and when
-     the hot set drifts, flush and recompile with a new one. Pins are
-     synced at every chain entry and exit, so a set change at a full flush is
-     safe;
+   - make the shadow-bank registers eligible (done here);
+   - free `x20` and `x28` for two more pins (done, below);
+   - an adaptive set (done, below);
    - per-block allocation, the native-compiler answer.
+
+### Sixteen pins, chosen by what runs
+
+**Two more pins.** `x20` held the guest register file's address and `x28`
+the engine's epoch and computed-jump cache. The registers were 52 KB into
+`CAlphaCPU`, out of reach of one load from `x19`, because the 32 KB TB index
+and the second data-page-cache way sat in front of `state`. Both now follow
+it, so the registers sit at 11.3 KB. The limit is 16 KB, not 32: compiled code
+reads a longword register with a 32-bit load, whose scaled offset stops at
+16380. The epoch lives in `CAlphaCPU::m_jit_epoch`, which the engine's
+`m_epoch` refers to, and the jump cache is reached through
+`m_jit_ind_base`. That frees both registers, and they take R8 and R13, the
+hottest unpinned register of `makecab` and of the benchmark. `JIT_VERIFY`
+runs compiled code on `state.r` itself now, as it already did for the FP
+registers. Deliberately breaking the harness produced 29.8M mismatch lines,
+so it still catches errors.
+
+A first build had the registers at 19.7 KB. Every block that read a
+longword register failed to encode and ran in the interpreter instead,
+**6-28 times slower**, while the SRM log still matched and `JIT_VERIFY`
+still reported 0 mismatches. `CAlphaCPU::init` now refuses a layout that
+puts the registers out of reach, and `srm_run.sh` fails on any
+`A64-EMIT-ERROR`.
+
+**An adaptive set.** Every 64th dispatch, the dispatcher decodes the block
+it is about to enter and counts the integer registers it names.
+Dispatches arrive mostly from a chain's budget or interrupt exit, so this
+approximates where the guest spends its time. In a PAL block the shadow
+bank is not counted, because it stays in memory there. Every 4096 samples,
+`pin_decide` ranks the registers. If the hottest sixteen would cover 8
+points more of the accesses than the current set, it stages them, the
+hottest eight in the callee-saved slots, and asks for a reclaim. Three
+windows must pass between changes, and the counts halve every window. The
+reclaim installs the staged set as it frees all compiled code, so code
+compiled for one set never runs under another. `JIT_VERIFY` samples too,
+so the sets it picks are the sets verified.
+
+Reclaiming exposed a bug that predates this work: the RPCC stub lived in
+the code runtime a reclaim deletes, and it was never rebuilt, so code
+compiled after any reclaim called freed memory on its first cycle-counter
+read. Reclaims were rare, only once code memory filled, which is why it had
+not shown up. They happen at every pin change now, and the stub is rebuilt.
+
+Measured on one binary, with the host quiet this time (`lab/results/ledger.md`,
+rows `pin16b-cab`, `pin16b-axp`, `adapt-cab`, `adapt-axp`; every section's
+result identical across arms):
+
+| change | `cab` | benchmark |
+| --- | --- | --- |
+| 16 pins against 14, both fixed (`ALPHABOX_JIT_PIN16=0`) | -1.5%, inconclusive by one run | **-4.1%**: `div` -16.8%, `byte` -8.3%, `ldst` -4.4%, `branch` -2.9%, `sort` -2.8% |
+| adaptive against the fixed 16 (`ALPHABOX_JIT_ADAPTPIN=0`) | **-6.6%** | **-7.4%**: `div` -33.5%, `byte` -14.3%, `ldst` -9.1%, `sort` -7.0%, `branch` -4.3% |
+
+The set changes about once per phase of the workload: six times during the
+benchmark's nine sections, five times during a Windows 2000 boot.
+`ALPHABOX_JIT_PINLOG=1` prints each change with the share of accesses the
+old and new sets cover. Unlike every fixed set above, this one gains on both
+workloads.
 
 ## The cycle counter
 

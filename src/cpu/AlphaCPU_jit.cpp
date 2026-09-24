@@ -926,8 +926,12 @@ void CAlphaCPU::jit_run(int budget) {
         // then restore.
         u64 f_interp[64];
         memcpy(f_interp, state.f, sizeof(f_interp));
-        u64 jr[64]; // 64: a compiled PALmode block may touch the shadow bank
-        memcpy(jr, snap, sizeof(jr));
+        // The GPRs the same way: compiled code on AArch64 addresses them from
+        // the cpu pointer, so it must run on state.r itself (64 entries: a
+        // compiled PALmode block may touch the shadow bank).
+        u64 r_interp[64];
+        memcpy(r_interp, state.r, sizeof(r_interp));
+        memcpy(state.r, snap, sizeof(r_interp));
         memcpy(state.f, f_pre,
                sizeof(f_pre)); // restore the FP file like the GPRs: the
                                // compiled pass reads pre-interp f
@@ -951,11 +955,16 @@ void CAlphaCPU::jit_run(int budget) {
             sn; // interp's RECORDED store count (sn), NOT the replay cursor
                 // m_jit_slog_i; a compiled pass must consume exactly this many
                 // (catches a missing/extra store)
+#if defined(__aarch64__)
+        // Sample as production does, so the pin sets adaptation picks are
+        // the ones verified.
+        m_jit->pin_sample(b, (const uint8_t *)dram_ptr);
+#endif
         m_jit_vreplay = true;
         m_jit_vlog_i = 0;
         m_jit_slog_i = 0;
         const u32 done =
-            b->code(this, jr); // also writes state.pc (the JIT's next PC)
+            b->code(this, state.r); // also writes state.pc (the JIT's next PC)
         m_jit_vreplay = false;
         if (!vtr && done == b->prefix_len) {
           if (state.pc != interp_pc) {
@@ -980,9 +989,10 @@ void CAlphaCPU::jit_run(int budget) {
                          state.icache[icl].data[(wb + w) & ICACHE_INDEX_MASK]));
             printf("\n   r1 i=%016llx j=%016llx  r2 i=%016llx j=%016llx  r5 "
                    "snap=%016llx\n",
-                   (unsigned long long)state.r[1], (unsigned long long)jr[1],
-                   (unsigned long long)state.r[2], (unsigned long long)jr[2],
-                   (unsigned long long)snap[5]);
+                   (unsigned long long)r_interp[1],
+                   (unsigned long long)state.r[1],
+                   (unsigned long long)r_interp[2],
+                   (unsigned long long)state.r[2], (unsigned long long)snap[5]);
           }
           u64 ipr_jit[27];
           cap_iprs(ipr_jit); // compiled pass wrote IPRs into live state; check
@@ -1007,7 +1017,7 @@ void CAlphaCPU::jit_run(int budget) {
                    (unsigned long long)start_virt, n_stores_interp,
                    m_jit_slog_i);
           cc_last_sync += ns_to_host_ticks(
-              m_jit->verify_compare(start_virt, state.r, jr, vw,
+              m_jit->verify_compare(start_virt, r_interp, state.r, vw,
                                     b->prefix_len) +
               g_diag_excluded_ns); // don't bill the verify progress-print OR
                                    // the PCI decode-off diag stall to the RPCC
@@ -1049,12 +1059,11 @@ void CAlphaCPU::jit_run(int budget) {
             state.astrr = astrr_pre;
             state.fpen = fpen_pre;
             state.ppcen = ppcen_pre;
-            u64 jr_t[64];
-            memcpy(jr_t, snap, sizeof(jr_t));
+            memcpy(state.r, snap, sizeof(r_interp));
             m_jit_vreplay = true;
             m_jit_vlog_i = 0;
             m_jit_slog_i = 0;
-            const u32 done_t = ((CJitEngine::JitFn)tr->code)(this, jr_t);
+            const u32 done_t = ((CJitEngine::JitFn)tr->code)(this, state.r);
             m_jit_vreplay = false;
             if (done_t != n_interp)
               printf("[JIT][VERIFY] TRACE COUNT MISMATCH at %016llx: "
@@ -1089,7 +1098,8 @@ void CAlphaCPU::jit_run(int budget) {
                        "interp=%u trace=%u\n",
                        (unsigned long long)start_virt, n_stores_interp,
                        m_jit_slog_i);
-              m_jit->verify_compare(start_virt, state.r, jr_t, vw, n_interp);
+              m_jit->verify_compare(start_virt, r_interp, state.r, vw,
+                                    n_interp);
             }
           }
         }
@@ -1098,6 +1108,7 @@ void CAlphaCPU::jit_run(int budget) {
         put_iprs(ipr_interp); // roll back the compiled pass's live IPR writes
                               // (verify-only)
         memcpy(state.f, f_interp, sizeof(f_interp)); // ...and its FP writes
+        memcpy(state.r, r_interp, sizeof(r_interp)); // ...and its GPR writes
         break_seq_icache(); // compiled pass + raw pc restore bypassed set_pc
       }
       continue;
@@ -1155,6 +1166,11 @@ void CAlphaCPU::jit_run(int budget) {
       }
       m_jit_budget =
           budget; // ceiling for compiled chains (epilogue stops at it)
+#if defined(__aarch64__)
+      // Where the guest spends its time, for the pin set (one dispatch in
+      // kPinEvery; most arrive from a chain's budget or interrupt exit).
+      m_jit->pin_sample(b, (const uint8_t *)dram_ptr);
+#endif
 #ifdef JIT_STATS
       const uint64_t _comp_t0 = jit_rdtsc();
 #endif

@@ -29,6 +29,7 @@
 #include "HvRuntime.hpp"
 #include <libkern/OSCacheControl.h>
 #endif
+#include <algorithm>
 #include <cassert>
 #include <chrono> // note_exec times its own stats-print I/O (excluded from the wall-clock RPCC)
 #include <cstdio>
@@ -832,8 +833,147 @@ SafeOp classify(uint32_t ins, bool pal_block) {
 // can use it.
 static const char *opcode_name(unsigned op);
 
-CJitEngine::CJitEngine(int cpu_id)
-    : m_cpu_id(cpu_id), m_recorded(0), m_code_bytes(0), m_rt(nullptr) {
+// The pin set compiled code starts with (CJitEngine::m_pin_guest), slot by
+// slot: eight callee-saved slots, then eight caller-saved (jitemit_a64.hpp).
+// Chosen from a JIT_REGPROF Windows 2000 setup profile -- RA, a0, PV, SP,
+// GP, v0, t0-t2, a1-a2, s0-s2 -- plus R8 and R13, the hottest unpinned
+// register of makecab and of the nada benchmark. Adaptation replaces it with
+// what the running code uses.
+//
+// Experiment switches, read when the engine is made:
+//   ALPHABOX_JIT_PIN16=0  leave the two slots that were the register-file and
+//                         epoch bases (x20, x28) empty.
+//   ALPHABOX_JIT_PINSET=1 the nada benchmark's s4-s6 R13-R15 in place of a1,
+//                         a2, pv (R17 R18 R27); =2 makecab's R8 and shadow-bank
+//                         temporaries R4-R6, R21-R23 in place of s0-s2, ra,
+//                         pv, gp, sp. Both were measured on 14 pins, so they
+//                         leave those two slots empty too.
+//   ALPHABOX_JIT_ADAPTPIN=0 keep the starting set; ALPHABOX_JIT_PINLOG=1
+//                         print every change of set.
+static void pin_defaults(int8_t *g, bool *adapt, bool *log) {
+  static const int8_t kDefault[CJitEngine::kPinSlots] = {
+      26, 16, 27, 30, 29, 0, 8, 13, 1, 9, 17, 2, 10, 18, 3, 11};
+  static const int8_t kSwap1[][2] = {{17, 13}, {18, 15}, {27, 14}};
+  static const int8_t kSwap2[][2] = {{10, 8},  {11, 5}, {9, 6},  {26, 21},
+                                     {30, 23}, {27, 4}, {29, 22}};
+  memcpy(g, kDefault, sizeof(kDefault));
+  const char *e = getenv("ALPHABOX_JIT_PINSET");
+  const int set = e ? atoi(e) : 0;
+  auto apply = [&](const int8_t(*sw)[2], int n) {
+    g[6] = g[7] = -1;
+    for (int i = 0; i < n; ++i)
+      for (int k = 0; k < CJitEngine::kPinSlots; ++k)
+        if (g[k] == sw[i][0])
+          g[k] = sw[i][1];
+  };
+  if (set == 1)
+    apply(kSwap1, 3);
+  else if (set == 2)
+    apply(kSwap2, 7);
+  e = getenv("ALPHABOX_JIT_PIN16");
+  if (e && strcmp(e, "0") == 0)
+    g[6] = g[7] = -1;
+  e = getenv("ALPHABOX_JIT_ADAPTPIN");
+  *adapt = !(e && strcmp(e, "0") == 0);
+  e = getenv("ALPHABOX_JIT_PINLOG");
+  *log = e && strcmp(e, "1") == 0;
+}
+
+// Guest registers one instruction names, added to use[] (the integer ones:
+// FP operands and R31 are not pinnable). In a PAL block R4-R7/R20-R23 are
+// the shadow bank, which stays in memory, so they do not count there.
+static void pin_count(uint32_t w, bool pal, uint64_t *use) {
+  const uint32_t op = w >> 26, ra = (w >> 21) & 31, rb = (w >> 16) & 31,
+                 rc = w & 31;
+  auto add = [&](uint32_t r) {
+    if (r != 31 && !(pal && r < 24 && (r & 0xc) == 0x4))
+      ++use[r];
+  };
+  if ((op >= 0x08 && op <= 0x0f) || (op >= 0x28 && op <= 0x2f) || op == 0x1a ||
+      op == 0x1b || op == 0x1f) { // memory, JMP, HW_LD/ST
+    add(ra);
+    add(rb);
+  } else if (op >= 0x20 && op <= 0x27) { // FP load/store: the base
+    add(rb);
+  } else if ((op >= 0x10 && op <= 0x13) || op == 0x1c) { // integer operate
+    add(ra);
+    if (!(w & 0x1000))
+      add(rb);
+    add(rc);
+  } else if (op == 0x30 || op == 0x34 || op >= 0x38 || op == 0x14 ||
+             op == 0x19 || op == 0x1d) { // BR/BSR, integer branches, ITOF,
+    add(ra);                             // HW_MFPR/MTPR
+  } else if (op == 0x18 && (w & 0xffff) == 0xc000) { // RPCC
+    add(ra);
+  }
+}
+
+void CJitEngine::pin_sample_slow(const JitBlock *b, const uint8_t *dram) {
+  m_pin_countdown = kPinEvery;
+  const uint32_t *w = (const uint32_t *)(dram + b->phys);
+  const bool pal = (b->tag & 1) != 0;
+  for (uint32_t i = 0; i < b->prefix_len; ++i)
+    pin_count(w[i], pal, m_pin_use);
+  if (++m_pin_samples >= kPinWindow)
+    pin_decide();
+}
+
+// Once a window: would the hottest sixteen registers cover clearly more of
+// the accesses than the set compiled code uses now? Changing sets frees all
+// compiled code, and the hot blocks are interpreted and compiled again, so
+// it takes a large gain (kGainPct of all accesses) and three windows since
+// the last change. The counts decay by half each window, so the set follows
+// the workload within a few windows and forgets the one before.
+void CJitEngine::pin_decide() {
+  static constexpr uint64_t kGainPct = 8;
+  m_pin_samples = 0;
+  ++m_pin_quiet;
+  uint64_t total = 0, cur = 0;
+  for (int r = 0; r < 31; ++r)
+    total += m_pin_use[r];
+  for (int k = 0; k < kPinSlots; ++k)
+    if (m_pin_guest[k] >= 0)
+      cur += m_pin_use[m_pin_guest[k]];
+  int8_t order[31];
+  for (int r = 0; r < 31; ++r)
+    order[r] = (int8_t)r;
+  std::stable_sort(order, order + 31, [&](int8_t x, int8_t y) {
+    return m_pin_use[x] > m_pin_use[y];
+  });
+  uint64_t best = 0;
+  for (int k = 0; k < kPinSlots; ++k)
+    best += m_pin_use[order[k]];
+  if (total && m_pin_quiet >= 3 && (best - cur) * 100 > total * kGainPct) {
+    // The hottest eight into the callee-saved slots, which helper calls do
+    // not disturb; a register nothing touched stays unpinned.
+    for (int k = 0; k < kPinSlots; ++k)
+      m_pin_next[k] = m_pin_use[order[k]] ? order[k] : (int8_t)-1;
+    m_pin_staged = true;
+    m_reclaim_pending = true;
+    m_pin_quiet = 0;
+    ++m_pin_switches;
+    if (m_pin_log) {
+      printf("[JIT][CPU%d] pins (%llu): cover %.0f%% of accesses, were %.0f%%:",
+             m_cpu_id, (unsigned long long)m_pin_switches,
+             100.0 * (double)best / (double)total,
+             100.0 * (double)cur / (double)total);
+      for (int k = 0; k < kPinSlots; ++k)
+        if (m_pin_next[k] >= 0)
+          printf(" R%d", m_pin_next[k]);
+      printf("\n");
+      fflush(stdout);
+    }
+  }
+  for (int r = 0; r < 31; ++r)
+    m_pin_use[r] -= m_pin_use[r] >> 1;
+}
+
+CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
+    : m_cpu_id(cpu_id), m_recorded(0),
+      m_epoch(epoch_store ? *epoch_store : m_epoch_own), m_code_bytes(0),
+      m_rt(nullptr) {
+  m_epoch = 0;
+  pin_defaults(m_pin_guest, &m_pin_adapt, &m_pin_log);
   memset(m_blocks, 0,
          sizeof(m_blocks)); // flush() is lazy (gen bump) -- zero the slots here
   memset(m_traces, 0,
@@ -1282,6 +1422,10 @@ void CJitEngine::reclaim_code() {
   m_call_thunk = nullptr; // lived in the runtime just deleted
   m_dpc2_thunk = nullptr;
   m_rpcc_stub = nullptr; // so did this: new code calling the old one crashed
+  if (m_pin_staged) {    // no code compiled for the old set survives this
+    memcpy(m_pin_guest, m_pin_next, sizeof(m_pin_guest));
+    m_pin_staged = false;
+  }
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
   note_epoch(EPOCH_RECLAIM);

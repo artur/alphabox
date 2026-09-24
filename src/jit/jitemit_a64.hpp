@@ -26,8 +26,8 @@
  * so the dispatcher, the helpers and the JIT_VERIFY harness are unchanged.
  *
  * Host register roles (AAPCS64; x18 is the platform register, never touched):
- *   x19      cpu (CAlphaCPU*)          x20      regs (guest GPR file)
- *   x21-x26  global pins: R26 R16 R27 R30 R29 R0 (callee-saved, chain-live)
+ *   x19      cpu (CAlphaCPU*); the guest registers are [x19 + regs + 8n]
+ *   x20-x26, x28  callee-saved pins (kA64PinHost, chain-live)
  *   x0       op1 / result (x86: rax)   x1       op2 (x86: rcx)
  *   x2       effective address (rdx)   x9       next PC (r10)
  *   x10-x12  scratch                   x16      helper call target
@@ -47,69 +47,24 @@ constexpr uint32_t kA64FrameSize = 112;
 constexpr int32_t kA64SavedX27 = 80; // x27/x28 pair (see a64_prologue)
 constexpr int32_t kA64OutSlot = 96;  // helper out-parameter
 
-// Global pins: guest GPR -> callee-saved host register id. kGlobalPins (the
-// x86 hot set RA/a0/PV) plus SP, GP and v0 -- AAPCS64 has callee-saved
-// registers to spare, so this is the Win64 x86 pin set on every a64 host.
-struct A64Pin {
-  int guest;
-  uint32_t host;
-};
-A64Pin kA64Pins[] = {{26, 21}, {16, 22}, {27, 23}, {30, 24}, {29, 25}, {0, 26}};
-
-// Caller-saved pins: more hot guest GPRs in host registers the emitter never
-// uses as scratch (x4-x8, x13-x15; x18 is platform-reserved). Helper calls
-// clobber them, so both call sites store them to their guest slots first and
-// reload them after (a64_spill_pins / a64_reload_pins); the prologue and
-// epilogue sync them like the callee-saved pins. No helper reads state.r
-// directly, so the guest slots only need to be current across the call.
+// Pin slots: host registers that hold a guest GPR for a whole chain. Which
+// guest each slot holds is the engine's (CJitEngine::m_pin_guest: a default
+// set, then whatever the running code turns out to use -- see pin_decide).
+// The first eight are callee-saved and survive helper calls. x20 and x28 were
+// the register-file and epoch bases until both moved within reach of x19
+// (CAlphaCPU keeps the registers below 32 KB, and the epoch itself).
+// The last eight are caller-saved registers the emitter never uses as
+// scratch (x4-x8, x13-x15; x18 is platform-reserved). Helper calls clobber
+// them, so both call sites store them to their guest slots first and reload
+// them after (a64_spill_pins / a64_reload_pins); the prologue and epilogue
+// sync them like the callee-saved pins. No helper reads state.r directly, so
+// the guest slots only need to be current across the call.
 // R4-7 / R20-23 may be pinned too: a pin holds the main bank, and a PAL
 // block, where they name the shadow bank, keeps them in memory (see
-// a64_regalloc). This set is not using them. Chosen from a JIT_REGPROF
-// Windows 2000 setup profile: the hottest pin-eligible GPRs not already pinned
-// (t0-t2 R1-R3, a1-a2 R17-R18, s0-s2 R9-R11).
-A64Pin kA64CallerPins[] = {{1, 4},  {9, 5},   {17, 6}, {2, 7},
-                           {10, 8}, {18, 13}, {3, 14}, {11, 15}};
-
-// ALPHABOX_JIT_PINSET: experiments, not pin sets -- each hands the slots of
-// pins one workload hardly touches to registers it touches most, to measure
-// what a pinned register is worth there. Read once, before any code is
-// compiled.
-//   1: the nada benchmark: s4-s6 R13-R15 in place of a1, a2, pv (R17 R18 R27).
-//   2: makecab (Microsoft's LZX): R8 and the shadow-bank temporaries R4-R6,
-//      R21-R23 in place of s0-s2, ra, pv, gp, sp (R9-R11 R26 R27 R29 R30).
-//      PAL blocks keep a shadow-bank register in memory (a64_regalloc).
-constexpr struct {
-  int from, to;
-} kA64PinSwap1[] = {{17, 13}, {18, 15}, {27, 14}},
-  kA64PinSwap2[] = {{10, 8},  {11, 5}, {9, 6},  {26, 21},
-                    {30, 23}, {27, 4}, {29, 22}};
-const int g_a64_pinset = [] {
-  const char *e = getenv("ALPHABOX_JIT_PINSET");
-  const int n = e ? atoi(e) : 0;
-  auto apply = [](const auto &swaps) {
-    for (const auto &sw : swaps) {
-      for (auto &p : kA64CallerPins)
-        if (p.guest == sw.from)
-          p.guest = sw.to;
-      for (auto &p : kA64Pins)
-        if (p.guest == sw.from)
-          p.guest = sw.to;
-    }
-  };
-  if (n == 1)
-    apply(kA64PinSwap1);
-  else if (n == 2)
-    apply(kA64PinSwap2);
-  else
-    return 0;
-  fprintf(stderr, "[JIT] ALPHABOX_JIT_PINSET=%d: pinned", n);
-  for (const auto &p : kA64Pins)
-    fprintf(stderr, " R%d", p.guest);
-  for (const auto &p : kA64CallerPins)
-    fprintf(stderr, " R%d", p.guest);
-  fprintf(stderr, "\n");
-  return n;
-}();
+// a64_regalloc).
+constexpr uint32_t kA64PinHost[CJitEngine::kPinSlots] = {
+    21, 22, 23, 24, 25, 26, 20, 28, 4, 5, 6, 7, 8, 13, 14, 15};
+constexpr int kA64CalleeSlots = 8;
 
 // R4-R7 and R20-R23 name the shadow bank in a PAL block (RREG).
 inline bool a64_shadow_reg(int r) { return r < 24 && (r & 0xc) == 0x4; }
@@ -173,8 +128,10 @@ void a64_add_imm(asmjit::a64::Assembler &a, const asmjit::a64::Gp &dst,
 // Chain-lifetime registers (callee-saved, live across the whole chain):
 //   x27 = instructions completed so far (was a stack slot: one add per block
 //         instead of load/add/store, and bails compute x0 = x27 + n),
-//   x28 = &engine epoch (m_itb_gen, m_flush_gen beside it) for the link guard.
-void a64_prologue(asmjit::a64::Assembler &a, uint64_t epoch_base) {
+// (x28 was the engine epoch's base; it is a pin now, and the epoch is read
+// from the cpu.)
+void a64_prologue(asmjit::a64::Assembler &a, uint32_t regs,
+                  const int8_t *pins) {
   using namespace asmjit;
   a.sub(a64::sp, a64::sp, imm(kA64FrameSize));
   a.stp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
@@ -185,25 +142,22 @@ void a64_prologue(asmjit::a64::Assembler &a, uint64_t epoch_base) {
   a.stp(a64::x25, a64::x26, a64::ptr(a64::sp, 64));
   a.stp(a64::x27, a64::x28, a64::ptr(a64::sp, kA64SavedX27));
   a.mov(a64::x19, a64::x0); // cpu  (arg 0)
-  a.mov(a64::x20, a64::x1); // regs (arg 1)
   a.mov(a64::x27, imm(0));  // chain count := 0
-  a.mov(a64::x28, imm(epoch_base));
   // Load the pins on cold entry; chained re-entry skips this and they stay
   // live across the chain, synced back in a64_epilogue.
-  for (const auto &p : kA64Pins)
-    a.ldr(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
-  for (const auto &p : kA64CallerPins)
-    a.ldr(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+  for (int s = 0; s < CJitEngine::kPinSlots; ++s)
+    if (pins[s] >= 0)
+      a.ldr(a64::x(kA64PinHost[s]), a64::ptr(a64::x19, regs + pins[s] * 8));
 }
 
 // Shared exit: x0 = instructions completed across the chain (the JitFn
 // result), state.pc already written by the exit path.
-void a64_epilogue(asmjit::a64::Assembler &a) {
+void a64_epilogue(asmjit::a64::Assembler &a, uint32_t regs,
+                  const int8_t *pins) {
   using namespace asmjit;
-  for (const auto &p : kA64Pins)
-    a.str(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
-  for (const auto &p : kA64CallerPins)
-    a.str(a64::x(p.host), a64::ptr(a64::x20, p.guest * 8));
+  for (int s = 0; s < CJitEngine::kPinSlots; ++s)
+    if (pins[s] >= 0)
+      a.str(a64::x(kA64PinHost[s]), a64::ptr(a64::x19, regs + pins[s] * 8));
   a.ldp(a64::x27, a64::x28, a64::ptr(a64::sp, kA64SavedX27));
   a.ldp(a64::x25, a64::x26, a64::ptr(a64::sp, 64));
   a.ldp(a64::x23, a64::x24, a64::ptr(a64::sp, 48));
@@ -216,14 +170,14 @@ void a64_epilogue(asmjit::a64::Assembler &a) {
 
 // A pinned R4-R7/R20-R23 holds the main bank, which a PAL block does not
 // name: there those registers are the shadow bank's, in memory.
-void a64_regalloc(CJitEngine::RegAlloc &ra, bool pal_block) {
+void a64_regalloc(CJitEngine::RegAlloc &ra, bool pal_block,
+                  const int8_t *pins) {
   for (int r = 0; r < 32; ++r)
     ra.host[r] = -1;
   ra.rax_holds = -1;
-  for (const auto &p : kA64Pins)
-    ra.host[p.guest] = (int)p.host;
-  for (const auto &p : kA64CallerPins)
-    ra.host[p.guest] = (int)p.host;
+  for (int s = 0; s < CJitEngine::kPinSlots; ++s)
+    if (pins[s] >= 0)
+      ra.host[pins[s]] = (int)kA64PinHost[s];
   if (pal_block)
     for (int r = 0; r < 32; ++r)
       if (a64_shadow_reg(r))
@@ -232,15 +186,19 @@ void a64_regalloc(CJitEngine::RegAlloc &ra, bool pal_block) {
 
 // Around a helper call: the caller-saved pins go to their guest slots before
 // the blr and come back after it (the result stays in x0).
-void a64_spill_pins(asmjit::a64::Assembler &a) {
-  for (const auto &p : kA64CallerPins)
-    a.str(asmjit::a64::x(p.host),
-          asmjit::a64::ptr(asmjit::a64::x20, p.guest * 8));
+void a64_spill_pins(asmjit::a64::Assembler &a, uint32_t regs,
+                    const int8_t *pins) {
+  for (int s = kA64CalleeSlots; s < CJitEngine::kPinSlots; ++s)
+    if (pins[s] >= 0)
+      a.str(asmjit::a64::x(kA64PinHost[s]),
+            asmjit::a64::ptr(asmjit::a64::x19, regs + pins[s] * 8));
 }
-void a64_reload_pins(asmjit::a64::Assembler &a) {
-  for (const auto &p : kA64CallerPins)
-    a.ldr(asmjit::a64::x(p.host),
-          asmjit::a64::ptr(asmjit::a64::x20, p.guest * 8));
+void a64_reload_pins(asmjit::a64::Assembler &a, uint32_t regs,
+                     const int8_t *pins) {
+  for (int s = kA64CalleeSlots; s < CJitEngine::kPinSlots; ++s)
+    if (pins[s] >= 0)
+      a.ldr(asmjit::a64::x(kA64PinHost[s]),
+            asmjit::a64::ptr(asmjit::a64::x19, regs + pins[s] * 8));
 }
 
 // Chain gate: branch to lbl when the chain hit the budget ceiling or an
@@ -286,9 +244,9 @@ void *CJitEngine::a64_call_thunk() {
   a64::Assembler a(&code);
   a.sub(a64::sp, a64::sp, imm(16));
   a.stp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
-  a64_spill_pins(a);
+  a64_spill_pins(a, m_off.regs, m_pin_guest);
   a.blr(a64::x16);
-  a64_reload_pins(a);
+  a64_reload_pins(a, m_off.regs, m_pin_guest);
   a.ldp(a64::x29, a64::x30, a64::ptr(a64::sp, 0));
   a.add(a64::sp, a64::sp, imm(16));
   a.ret(a64::x30);
@@ -374,9 +332,9 @@ void *CJitEngine::a64_rpcc_stub() {
   eh.cpu_id = m_cpu_id;
   code.set_error_handler(&eh);
   a64::Assembler a(&code);
-  // x19 is the CPU. Every field of it is far beyond a load's immediate
-  // range, so each access goes through a64_cpu_field, which parks the
-  // offset in x17 -- nothing of ours may live there.
+  // x19 is the CPU. A field beyond a load's immediate range goes through
+  // a64_cpu_field, which parks the offset in x17 -- nothing of ours may
+  // live there.
   const auto F = [&](uint32_t off, unsigned lg) {
     return a64_cpu_field(a, off, lg);
   };
@@ -457,7 +415,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   const a64::Gp x0 = a64::x0, x1 = a64::x1, x2 = a64::x2, x9 = a64::x9,
                 x10 = a64::x10, x11 = a64::x11, x12 = a64::x12;
   const a64::Gp w0 = a64::w0, w1 = a64::w1, w11 = a64::w11, w12 = a64::w12;
-  const a64::Gp kCpu = a64::x19, kRegs = a64::x20;
+  const a64::Gp kCpu = a64::x19;
+  const uint32_t kRegs = m_off.regs; // [kCpu + kRegs] = state.r[0]
   const a64::Mem out_slot = a64::ptr(a64::sp, kA64OutSlot);
 
   auto fld = [&](uint32_t off, unsigned lg) {
@@ -513,7 +472,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 
     auto reg = [&](int r) { // PALshadow remap (RREG), as in the x86 emitter
       int idx = (pal_block && ((r & 0xc) == 0x4)) ? r + 32 : r;
-      return a64::ptr(kRegs, idx * 8);
+      return a64::ptr(kCpu, (int32_t)(kRegs + idx * 8));
     };
     auto mov_from_reg = [&](const a64::Gp &dst, int r) { // dst is 64-bit
       int p = regalloc.host_of(r);
@@ -676,9 +635,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.mov(a64::x17, imm((uint64_t)thunk)); // spill / call x16 / reload
         a.blr(a64::x17);
       } else {
-        a64_spill_pins(a);
+        a64_spill_pins(a, m_off.regs, m_pin_guest);
         a.blr(a64::x16);
-        a64_reload_pins(a);
+        a64_reload_pins(a, m_off.regs, m_pin_guest);
       }
     };
     // Hot pass: defer this instruction's slow path (entered at `slow`, resuming
@@ -1678,7 +1637,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.lsl(w11, w11, imm(5));
       a.add(w11, w11, imm(23)); // R23 index: 23, or 55 if SDE
       a.mov(x12, imm(ret));
-      a.str(x12, a64::ptr(kRegs, x11, a64::lsl(3)));
+      a.add(x11, x11, imm(kRegs / 8)); // slot index from the cpu pointer
+      a.str(x12, a64::ptr(kCpu, x11, a64::lsl(3)));
       if (regalloc.host_of(23) >= 0) { // a pinned R23 is the main bank's
         Label shadow = a.new_label();
         a.ldrb(w11, fld(m_off.sde, 0));
@@ -2243,7 +2203,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   code.set_error_handler(&eh);
   a64::Assembler a(&code);
 
-  a64_prologue(a, (uint64_t)&m_itb_gen);
+  a64_prologue(a, m_off.regs, m_pin_guest);
   Label done = a.new_label();
   Label body = a.new_label(); // chained re-entry (after the prologue)
   a.bind(body);
@@ -2256,7 +2216,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #endif
 
   RegAlloc ra;
-  a64_regalloc(ra, pal_block);
+  a64_regalloc(ra, pal_block, m_pin_guest);
   m_cold_pass = false;
   m_cold_base = 0;
   for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
@@ -2282,7 +2242,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // compiled, mapping this PC, and validated under the current epoch --
   // else record a link-patch request and fall through to lbl.
   const int32_t off_link = (int32_t)((char *)&b->link[0] - (char *)b);
-  const int32_t epoch_rel = (int32_t)((char *)&m_epoch - (char *)&m_itb_gen);
   ExitRec *xrec = nullptr; // this code's exit record (first static exit)
   auto emit_chain = [&](const Label &lbl) {
     Label miss = a.new_label();
@@ -2295,7 +2254,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.cbz(a64::w1, miss);
       a.bind(ok);
     }
-    a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // x10 = m_epoch
+    a.ldr(a64::x10, a64_cpu_field(a, m_off.jit_epoch, 3)); // x10 = epoch
     for (int sl = 0; sl < kLinkSlots; ++sl) {
       Label nxt = (sl + 1 < kLinkSlots) ? a.new_label() : miss;
       a.ldr(a64::x0, a64::ptr(a64::x3, off_link + 8 * sl)); // b->link[sl]
@@ -2362,7 +2321,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     // compare). It stays epoch-guarded because a remap of the target's page
     // leaves this block's own page, and so this block, untouched.
     a.ldr(a64::x2, a64::ptr(a64::x3, off_lepoch + 8 * slot));
-    a.ldr(a64::x10, a64::ptr(a64::x28, epoch_rel)); // m_epoch
+    a.ldr(a64::x10, a64_cpu_field(a, m_off.jit_epoch, 3)); // epoch
     a.cmp(a64::x2, a64::x10);
     a.b_ne(miss);
     a.ldr(a64::x1, a64::ptr(a64::x3, off_lbody + 8 * slot));
@@ -2396,7 +2355,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       // instruction right before it): no reload.
     } else {
       const int idx = (pal_block && ((bra & 0xc) == 0x4)) ? bra + 32 : bra;
-      a.ldr(a64::x0, a64::ptr(a64::x20, idx * 8)); // x20 = guest register file
+      a.ldr(a64::x0, a64::ptr(a64::x19, (int32_t)(m_off.regs + idx * 8)));
       ra.rax_holds = bra;
     }
     switch (bop) {
@@ -2485,28 +2444,26 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #ifndef JIT_VERIFY
     Label exit_chain = a.new_label();
     a64_emit_gate(a, m_off, exit_chain);
-    // Inline computed-jump cache (m_ind_cache, beside the epoch counters that
-    // x28 points at): hash the target, match tag + current epoch, tail into the
-    // body. A PALmode target (SDE gate), a miss or an empty slot takes the
+    // Inline computed-jump cache (m_ind_cache, through the cpu's
+    // m_jit_ind_base): hash the target, match tag + current epoch, tail into
+    // the body. A PALmode target (SDE gate), a miss or an empty slot takes the
     // jit_indirect helper, which also fills the cache.
-    const int32_t ic_rel =
-        (int32_t)((char *)&m_ind_cache[0] - (char *)&m_itb_gen);
-    if (ic_rel > 0 && (ic_rel % 8) == 0 && ic_rel + 16 <= 32760) {
+    {
       Label slow = a.new_label();
       a.tst(a64::x9, imm(1));
       a.b_ne(slow);
+      a.ldr(a64::x10, a64_cpu_field(a, m_off.jit_ind_base, 3));
       a.lsr(a64::x1, a64::x9, imm(2));
       a.and_(a64::x1, a64::x1, imm((uint64_t)((1u << kIndBits) - 1)));
-      a.lsl(a64::x1, a64::x1, imm(5));
-      a.add(a64::x1, a64::x28, a64::x1);         // entry - ic_rel
-      a.ldr(a64::x2, a64::ptr(a64::x1, ic_rel)); // tag
+      a.add(a64::x1, a64::x10, a64::x1, a64::lsl(5)); // the entry
+      a.ldr(a64::x2, a64::ptr(a64::x1, 0));           // tag
       a.cmp(a64::x2, a64::x9);
       a.b_ne(slow);
-      a.ldr(a64::x2, a64::ptr(a64::x28, epoch_rel)); // m_epoch
-      a.ldr(a64::x3, a64::ptr(a64::x1, ic_rel + 8)); // vgen
+      a.ldr(a64::x2, a64_cpu_field(a, m_off.jit_epoch, 3)); // epoch
+      a.ldr(a64::x3, a64::ptr(a64::x1, 8));                 // vgen
       a.cmp(a64::x2, a64::x3);
       a.b_ne(slow);
-      a.ldr(a64::x0, a64::ptr(a64::x1, ic_rel + 16)); // body
+      a.ldr(a64::x0, a64::ptr(a64::x1, 16)); // body
       a.cbz(a64::x0, slow);
       a.br(a64::x0);
       a.bind(slow);
@@ -2518,9 +2475,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.mov(a64::x17, imm((uint64_t)thunk));
       a.blr(a64::x17); // jit_indirect(cpu, target) -> body | 0
     } else {
-      a64_spill_pins(a);
+      a64_spill_pins(a, m_off.regs, m_pin_guest);
       a.blr(a64::x16);
-      a64_reload_pins(a);
+      a64_reload_pins(a, m_off.regs, m_pin_guest);
     }
     a.cbz(a64::x0, exit_chain);
     a.br(a64::x0);
@@ -2619,13 +2576,13 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #endif
   a.mov(a64::x0, a64::x27);
   a.bind(done); // bails arrive with x0 already set
-  a64_epilogue(a);
+  a64_epilogue(a, m_off.regs, m_pin_guest);
   // Cold section: the recorded memory-op slow paths, after the epilogue's ret
   // so nothing falls into them. Each binds its hot-pass label, runs the helper
   // and branches back. A scratch RegAlloc keeps value-forwarding state local.
   {
     RegAlloc cra;
-    a64_regalloc(cra, pal_block);
+    a64_regalloc(cra, pal_block, m_pin_guest);
     m_cold_pass = true;
     for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
       if (m_cold_used[i])
@@ -2667,7 +2624,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
   code.set_error_handler(&eh);
   a64::Assembler a(&code);
 
-  a64_prologue(a, (uint64_t)&m_itb_gen);
+  a64_prologue(a, m_off.regs, m_pin_guest);
   Label done = a.new_label();
   Label body = a.new_label(); // loop re-entry (pins + count stay live)
   a.bind(body);
@@ -2684,7 +2641,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
     cold_base += plen;
     const uint32_t *words = (const uint32_t *)(dram + b->phys);
     const bool pal_block = (b->tag & 1) != 0;
-    a64_regalloc(ra, pal_block);
+    a64_regalloc(ra, pal_block, m_pin_guest);
     // Default next PC = the sequential successor (terminators overwrite it).
     a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen));
     a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
@@ -2728,7 +2685,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
   }
 #endif
   a.bind(done);
-  a64_epilogue(a);
+  a64_epilogue(a, m_off.regs, m_pin_guest);
   // Cold section for the fused segments (see assemble_block).
   {
     RegAlloc cra;
@@ -2739,7 +2696,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
       const uint32_t plen = b->prefix_len;
       const uint32_t *words = (const uint32_t *)(dram + b->phys);
       m_cold_base = base;
-      a64_regalloc(cra, (b->tag & 1) != 0);
+      a64_regalloc(cra, (b->tag & 1) != 0, m_pin_guest);
       for (uint32_t i = 0; i < plen && base + i < kColdMax; ++i)
         if (m_cold_used[base + i])
           emit_op(&a, nullptr, &done, hs, (b->tag & 1) != 0, b, words[i], i,

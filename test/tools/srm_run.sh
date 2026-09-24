@@ -59,4 +59,9 @@ mm=$(grep -ac MISMATCH alphabox.out)
 echo "mismatch lines: $mm"
 grep -a '\[JIT\]\[VERIFY\]' alphabox.out | tail -1
 [ "$mm" -eq 0 ] || ok=1
+# A block the emitter cannot encode is not compiled and runs in the
+# interpreter instead: the log still matches and verify still passes, only
+# many times slower. So an emit error fails the run too.
+ee=$(grep -ac 'EMIT-ERROR' alphabox.out)
+[ "$ee" -eq 0 ] || { echo "FAIL: $ee emit errors, e.g.:"; grep -a -m3 'EMIT-ERROR' alphabox.out; ok=1; }
 exit $ok

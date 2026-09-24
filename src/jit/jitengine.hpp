@@ -272,7 +272,8 @@ public:
     // std::atomic<int>).
     uint32_t ier_asten, ier_sien, ier_pcen, ier_cren, ier_slen, ier_eien;
     uint32_t sir, eir, aster, astrr;
-    uint32_t regs; // state.r[0] (compiled code's x20 in production)
+    uint32_t regs; // state.r[0]: [cpu + regs] on AArch64, x86's rbx
+    uint32_t jit_epoch, jit_ind_base; // CAlphaCPU::m_jit_epoch, m_jit_ind_base
     // The cycle counter, for the inline RPCC stub. A guest that times
     // anything reads RPCC constantly -- Windows 2000 does it 16 times per
     // 100 instructions -- and a helper call spills and reloads eight
@@ -389,8 +390,12 @@ public:
     void *fltv_helper;
   };
 
-  explicit CJitEngine(
-      int cpu_id = 0); // cpu_id tags the stats/diagnostic prints
+  // cpu_id tags the stats/diagnostic prints; epoch_store, when given, is
+  // where the epoch lives (CAlphaCPU::m_jit_epoch, reachable from compiled
+  // code's cpu pointer).
+  explicit CJitEngine(int cpu_id = 0, uint64_t *epoch_store = nullptr);
+  /// The computed-jump cache, for compiled code to reach from the cpu.
+  void *ind_cache_base() { return m_ind_cache; }
 
   /// The identity AMASK and IMPLVER report, from the processor this engine
   /// compiles for (CpuModel.hpp). Compiled code holds them as immediates,
@@ -578,6 +583,23 @@ public:
       m_reclaim_pending = false;
       reclaim_code();
     }
+  }
+
+  // Pins (AArch64 emitter): the guest register each host pin slot holds for a
+  // whole chain, -1 for none; the first eight slots are callee-saved, the
+  // rest caller-saved (jitemit_a64.hpp). A pinned register is worth 5-30% on
+  // code that lives in it, and which registers code lives in depends on the
+  // code (docs/performance.md), so the set follows what runs: the dispatcher
+  // samples the block it is about to enter (pin_sample), and when another
+  // set would cover clearly more of the accesses, pin_decide stages it and
+  // asks for a reclaim, which installs it as it frees all code -- code
+  // compiled for one set must never run under another.
+  // ALPHABOX_JIT_ADAPTPIN=0 keeps the starting set.
+  static constexpr int kPinSlots = 16;
+  int8_t m_pin_guest[kPinSlots];
+  inline void pin_sample(const JitBlock *b, const uint8_t *dram) {
+    if (m_pin_adapt && --m_pin_countdown == 0)
+      pin_sample_slow(b, dram);
   }
 
   // Why the validation epoch moved. Every bump rejects every cached link, so
@@ -770,13 +792,28 @@ private:
   // Which caller's icache flush we are in, so the epoch census can separate
   // an IMB from an IC_FLUSH from a PAL restart. Set by flush_icache().
   int m_flush_cause = EPOCH_FLUSH;
-  uint64_t m_epoch = 0; // m_itb_gen + m_flush_gen, kept in step with both so
-                        // compiled chain guards load one word
+  // Adaptive pins (see pin_sample).
+  static constexpr uint32_t kPinEvery = 64;    // sample one dispatch in this
+  static constexpr uint32_t kPinWindow = 4096; // samples between decisions
+  bool m_pin_adapt = true;
+  bool m_pin_log = false; // ALPHABOX_JIT_PINLOG=1: print every switch
+  bool m_pin_staged = false;
+  int8_t m_pin_next[kPinSlots];
+  uint32_t m_pin_countdown = kPinEvery;
+  uint32_t m_pin_samples = 0;
+  uint32_t m_pin_quiet = 0;    // windows since the last switch
+  uint64_t m_pin_use[32] = {}; // decayed register-access counts
+  uint64_t m_pin_switches = 0;
+  void pin_sample_slow(const JitBlock *b, const uint8_t *dram);
+  void pin_decide();
+  uint64_t m_epoch_own = 0; // the epoch's home when no epoch_store was given
+  uint64_t &m_epoch; // m_itb_gen + m_flush_gen, kept in step with both so
+                     // compiled chain guards load one word
   // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
   // block validated for it, valid while its epoch (m_itb_gen + m_flush_gen at
   // validation, kept in vgen) is current; any ITB invalidate, ASN change or
-  // flush bumps the epoch. Declared right after the epoch counters so compiled
-  // code reaches all three through one base register. Filled by jit_indirect,
+  // flush bumps the epoch. Compiled code reaches it through
+  // CAlphaCPU::m_jit_ind_base. Filled by jit_indirect,
   // cleared by reclaim_code (it frees the bodies).
   struct IndCacheEntry {
     uint64_t tag, vgen;

@@ -524,7 +524,8 @@ void CAlphaCPU::init() {
 
 #ifdef ES40_JIT
   if (!m_jit) {
-    m_jit = new CJitEngine((int)state.iProcNum);
+    m_jit = new CJitEngine((int)state.iProcNum, &m_jit_epoch);
+    m_jit_ind_base = m_jit->ind_cache_base();
     m_jit->set_cpu_identity(m_model->amask, m_model->implver);
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
     m_jit->set_code_page_map(m_code_map);
@@ -607,6 +608,22 @@ void CAlphaCPU::init() {
     o.aster = (uint32_t)((char *)&state.aster - (char *)this);
     o.astrr = (uint32_t)((char *)&state.astrr - (char *)this);
     o.regs = (uint32_t)((char *)&state.r[0] - (char *)this);
+    o.jit_epoch = (uint32_t)((char *)&m_jit_epoch - (char *)this);
+    o.jit_ind_base = (uint32_t)((char *)&m_jit_ind_base - (char *)this);
+#if defined(__aarch64__)
+    // The AArch64 emitter addresses every guest register, shadow bank
+    // included, as one load from the cpu pointer, 64-bit or 32-bit: a scaled
+    // 12-bit offset reaches 16380 bytes for the second. Past that the blocks
+    // fail to encode and quietly run in the interpreter -- measured at 6-28
+    // times slower, while SRM and JIT_VERIFY still pass.
+    if (o.regs + 64 * 8 > 16380 || o.jit_epoch > 32760 ||
+        o.jit_ind_base > 32760) {
+      printf("%%CPU-F-JITLAYOUT: state.r at %u is out of reach of compiled "
+             "code; CAlphaCPU's layout needs fixing\n",
+             o.regs);
+      exit(1);
+    }
+#endif
 #ifdef JIT_STATS
     if (state.iProcNum == 0)
       printf("[JIT][STATS] offsets: dpc_virt_page=%u dpc_host=%u dpc_cm=%u "
