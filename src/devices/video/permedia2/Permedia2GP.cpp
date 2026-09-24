@@ -61,7 +61,9 @@ void CPermedia2::gp_reset() {
 
 /**
  * The FIFO port's words (2.3.4.1). A tag description is the count or mask
- * in bits 31..16, the mode in bits 15..14 and the tag in bits 8..0; hold
+ * in bits 31..16, the mode in bits 15..14 and the tag in bits 9..0 -- ten
+ * bits, not the nine the manual says: the delta unit's tags run to 0x265,
+ * and perm2's Direct3D sends its vertices there; hold
  * sends every following word to the tag, increment to successive tags,
  * indexed to the tags of the group whose bits the mask sets, in order.
  **/
@@ -70,13 +72,13 @@ void CPermedia2::gp_fifo_word(u32 w) {
   if (g.want_tag) {
     g.in_mode = u8((w >> 14) & 3);
     if (g.in_mode == 2) {
-      g.in_tag = w & 0x1f0;
+      g.in_tag = w & 0x3f0;
       g.in_mask = w >> 16;
       g.want_tag = g.in_mask == 0;
     } else {
       if (g.in_mode == 3)
         gp_unimplemented("tag mode 3");
-      g.in_tag = w & 0x1ff;
+      g.in_tag = w & 0x3ff;
       g.in_left = (w >> 16) + 1;
       g.want_tag = false;
     }
@@ -213,6 +215,16 @@ void CPermedia2::gp_write(u32 tag, u32 data) {
       raster_run();
     }
     return;
+  case T_TEXEL_LUT_INDEX:
+    g.lut_index = data & 0xff;
+    return;
+  case T_TEXEL_LUT_DATA:
+    g.lut[g.lut_index & 0xff] = data;
+    g.lut_index = (g.lut_index + 1) & 0xff;
+    return;
+  case T_TEXEL_LUT_TRANSFER:
+    gp_unimplemented("texel LUT loads from memory");
+    return;
   case T_FB_READ_MODE:
     G(T_FB_WRITE_CONFIG) = data;
     g.relative_offset = sext(data >> FBRM_RELATIVE_OFFSET_SHIFT, 3);
@@ -294,12 +306,26 @@ void CPermedia2::gp_write(u32 tag, u32 data) {
     state.vga_mem_updated = 1;
     return;
   }
+  default:
+    if (tag >= T_TEXEL_LUT0 && tag < T_TEXEL_LUT0 + 16)
+      g.lut[tag - T_TEXEL_LUT0] = data;
+    else if (tag >= 0x200 && tag < 0x260)
+      delta_vertex(tag, data);
+    break;
   case T_DRAW_TRIANGLE:
+    delta_triangle(data);
+    return;
   case T_REPEAT_TRIANGLE:
+    delta_triangle(g.last_draw);
+    return;
   case T_DRAW_LINE01:
+    delta_line(data, 0, 1);
+    return;
   case T_DRAW_LINE10:
+    delta_line(data, 1, 0);
+    return;
   case T_REPEAT_LINE:
-    gp_unimplemented("the delta unit");
+    delta_line(g.last_draw, 0, 1);
     return;
   }
 }
@@ -324,12 +350,18 @@ void CPermedia2::raster_begin(u32 render) {
   g.render = render;
   g.prim = int((render >> RENDER_PRIMITIVE_SHIFT) & 3);
   const s32 bias = coordinate_bias(G(T_RASTERIZER_MODE));
-  g.xdom = s32(G(T_START_X_DOM)) + bias;
-  g.xsub = s32(G(T_START_X_SUB)) + bias;
-  g.dxdom = s32(G(T_DX_DOM));
-  g.dxsub = s32(G(T_DX_SUB));
-  g.y = s32(G(T_START_Y)) + bias;
-  g.dy = s32(G(T_DY));
+  g.xdom = s64(s32(G(T_START_X_DOM)) + bias) << 16;
+  g.xsub = s64(s32(G(T_START_X_SUB)) + bias) << 16;
+  g.dxdom = s64(s32(G(T_DX_DOM))) << 16;
+  g.dxsub = s64(s32(G(T_DX_SUB))) << 16;
+  g.y = s64(s32(G(T_START_Y)) + bias) << 16;
+  g.dy = s64(s32(G(T_DY))) << 16;
+  if (g.exact) {
+    g.xdom = g.exact_xdom;
+    g.dxdom = g.exact_dxdom;
+    g.xsub = g.exact_xsub;
+    g.dxsub = g.exact_dxsub;
+  }
   g.count = s32(G(T_COUNT) & 0xfff);
   g.in_span = false;
   g.have_host = false;
@@ -362,6 +394,13 @@ void CPermedia2::raster_begin(u32 render) {
   g.eg = s32(G(T_G_START));
   g.eb = s32(G(T_B_START));
   g.ea = s32(G(T_A_START));
+  g.ez = (s64(s32(G(T_Z_START_U))) << 11) | (G(T_Z_START_L) >> 21);
+  g.es = s32(G(T_S_START));
+  g.et = s32(G(T_T_START));
+  g.eq = s32(G(T_Q_START));
+  g.ef = s32(G(T_F_START));
+  g.tex_plane = g.tex_plane_next;
+  g.tex_plane_next = false;
   g.active = true;
   raster_run();
 }
@@ -377,28 +416,32 @@ void CPermedia2::raster_continue(int kind, u32 count) {
   const s32 bias = coordinate_bias(G(T_RASTERIZER_MODE));
   switch (kind) {
   case T_CONTINUE_NEW_DOM:
-    g.xdom = s32(G(T_START_X_DOM)) + bias;
-    g.dxdom = s32(G(T_DX_DOM));
+    g.xdom = s64(s32(G(T_START_X_DOM)) + bias) << 16;
+    g.dxdom = s64(s32(G(T_DX_DOM))) << 16;
     break;
   case T_CONTINUE_NEW_SUB:
-    g.xsub = s32(G(T_START_X_SUB)) + bias;
-    g.dxsub = s32(G(T_DX_SUB));
+    g.xsub = s64(s32(G(T_START_X_SUB)) + bias) << 16;
+    g.dxsub = s64(s32(G(T_DX_SUB))) << 16;
+    if (g.exact) {
+      g.xsub = g.exact_xsub;
+      g.dxsub = g.exact_dxsub;
+    }
     break;
   case T_CONTINUE_NEW_LINE: {
-    g.dxdom = s32(G(T_DX_DOM));
-    g.dy = s32(G(T_DY));
-    static const s32 frac[4] = {-1, 0, 0x8000, 0x7fff};
-    const s32 f = frac[(G(T_RASTERIZER_MODE) >> 2) & 3];
+    g.dxdom = s64(s32(G(T_DX_DOM))) << 16;
+    g.dy = s64(s32(G(T_DY))) << 16;
+    static const s64 frac[4] = {-1, 0, 0x80000000ll, 0x7fff0000ll};
+    const s64 f = frac[(G(T_RASTERIZER_MODE) >> 2) & 3];
     if (f >= 0) {
-      g.xdom = (g.xdom & ~0xffff) | f;
-      g.y = (g.y & ~0xffff) | f;
+      g.xdom = (g.xdom & ~0xffffffffll) | f;
+      g.y = (g.y & ~0xffffffffll) | f;
     }
     break;
   }
   default:
-    g.dxdom = s32(G(T_DX_DOM));
-    g.dxsub = s32(G(T_DX_SUB));
-    g.dy = s32(G(T_DY));
+    g.dxdom = s64(s32(G(T_DX_DOM))) << 16;
+    g.dxsub = s64(s32(G(T_DX_SUB))) << 16;
+    g.dy = s64(s32(G(T_DY))) << 16;
     break;
   }
   g.count = s32(count);
@@ -423,23 +466,24 @@ bool CPermedia2::raster_next_span() {
   switch (g.prim) {
   case PRIM_LINE:
   case PRIM_POINT:
-    g.x = g.xdom >> 16;
-    g.yi = g.y >> 16;
+    g.x = s32(g.xdom >> 32);
+    g.yi = s32(g.y >> 32);
     g.xend = g.x + 1;
     g.xstep = 1;
     g.xdom += g.dxdom;
     g.y += g.dy;
     break;
   case PRIM_RECTANGLE:
-    g.x = g.xdom;
-    g.xend = g.xsub;
+    g.x = s32(g.xdom);
+    g.xend = s32(g.xsub);
     g.xstep = g.xsub > g.xdom ? 1 : -1;
-    g.yi = g.y;
+    g.yi = s32(g.y);
     g.y += g.dy;
     break;
   default: {
-    const s32 a = g.xdom >> 16, b = g.xsub >> 16;
-    g.yi = g.y >> 16;
+    const s32 a = s32(g.xdom >> 32), b = s32(g.xsub >> 32);
+    g.span_xdom = g.xdom;
+    g.yi = s32(g.y >> 32);
     if (b >= a) {
       g.x = a;
       g.xend = b;
@@ -504,6 +548,12 @@ void CPermedia2::raster_run() {
       g.er += s32(G(T_DR_DY_DOM));
       g.eg += s32(G(T_DG_DY_DOM));
       g.eb += s32(G(T_DB_DY_DOM));
+      g.ez += (s64(s32(G(T_DZ_DY_DOM_U))) << 11) |
+              (G(T_DZ_DY_DOM_L) >> 21);
+      g.es += s32(G(T_DS_DY_DOM));
+      g.et += s32(G(T_DT_DY_DOM));
+      g.eq += s32(G(T_DQ_DY_DOM));
+      g.ef += s32(G(T_DF_DY_DOM));
       continue;
     }
     bool pass = true;
@@ -552,15 +602,25 @@ void CPermedia2::dda_span_start() {
   g.cg = g.eg;
   g.cb = g.eb;
   g.ca = g.ea;
+  g.z = g.ez;
+  g.s = g.es;
+  g.t = g.et;
+  g.q = g.eq;
+  g.f = g.ef;
+  dda_correct_span();
 }
 
 void CPermedia2::dda_step_x() {
   auto &g = r.g;
-  if ((G(T_COLOR_DDA_MODE) & 3) != 3)
-    return;
-  g.cr += s32(G(T_DR_DX)) * g.xstep;
-  g.cg += s32(G(T_DG_DX)) * g.xstep;
-  g.cb += s32(G(T_DB_DX)) * g.xstep;
+  const s32 k = g.xstep;
+  g.cr += s32(G(T_DR_DX)) * k;
+  g.cg += s32(G(T_DG_DX)) * k;
+  g.cb += s32(G(T_DB_DX)) * k;
+  g.z += ((s64(s32(G(T_DZ_DX_U))) << 11) | (G(T_DZ_DX_L) >> 21)) * k;
+  g.s += s64(s32(G(T_DS_DX))) * k;
+  g.t += s64(s32(G(T_DT_DX))) * k;
+  g.q += s64(s32(G(T_DQ_DX))) * k;
+  g.f += s32(G(T_DF_DX)) * k;
 }
 
 void CPermedia2::dda_step_y() {}
@@ -799,11 +859,6 @@ void CPermedia2::fragment(s32 x, s32 y, bool mask_pass) {
     state.vga_mem_updated = 1;
     return;
   }
-  if ((G(T_DEPTH_MODE) & 1) || (G(T_STENCIL_MODE) & 1))
-    gp_unimplemented("depth and stencil tests");
-  if ((render & RENDER_TEXTURE) && (G(T_TEXTURE_READ_MODE) & 1))
-    gp_unimplemented("texturing");
-
   const u32 rmode = G(T_FB_READ_MODE);
   if (!(rmode & FBRM_PACKED_DATA)) {
     fragment_pixel(x, y, -1, background);
@@ -859,16 +914,18 @@ void CPermedia2::fragment_pixel(s32 p, s32 y, int lane, bool background) {
     return bytes == 4 ? v : v & ((1u << (8 * bytes)) - 1);
   };
 
+  // The depth and stencil tests, against the localbuffer.
+  if (lane < 0 && ((G(T_DEPTH_MODE) & 1) || (G(T_STENCIL_MODE) & 1) ||
+                   (G(T_LB_WRITE_MODE) & 1)) &&
+      !depth_stencil(p, y))
+    return;
+
   // The source colour, raw framebuffer format.
   u32 s;
   if (background) {
     s = format_color(G(T_TEXEL0));
-  } else if (g.have_host) {
+  } else if (g.have_host && g.host_tag != T_COLOR && g.host_tag != T_TEXEL0) {
     switch (g.host_tag) {
-    case T_COLOR:
-    case T_TEXEL0:
-      s = format_color(g.host_data);
-      break;
     case T_FB_DATA:
     case T_FB_SOURCE_DATA:
       s = g.host_data;
@@ -883,10 +940,31 @@ void CPermedia2::fragment_pixel(s32 p, s32 y, int lane, bool background) {
     lane = -1; // already this pixel's
   } else if (G(T_LOGICAL_OP_MODE) & (1u << 5)) {
     s = G(T_FB_WRITE_DATA);
-  } else if (G(T_COLOR_DDA_MODE) & 1) {
-    s = format_color(fragment_color());
   } else {
-    s = 0;
+    // A colour through the 3D units: the colour DDA's or the host's, then
+    // texture, fog, alpha blend, dither, and the colour format.
+    u32 c = 0;
+    if (g.have_host)
+      c = g.host_data;
+    else if (G(T_COLOR_DDA_MODE) & 1)
+      c = fragment_color();
+    if ((g.render & RENDER_TEXTURE) &&
+        ((G(T_TEXTURE_READ_MODE) & 1) || (G(T_YUV_MODE) & 7))) {
+      u32 t = 0xffffffffu;
+      bool applied = true;
+      const u32 before = t;
+      if (!texture_color(t, p, y))
+        return; // the chroma test rejected the fragment
+      if (t == before && !(G(T_TEXTURE_READ_MODE) & 1))
+        applied = false;
+      if (applied && (G(T_TEXTURE_COLOR_MODE) & 1))
+        c = apply_texture(c, t);
+    }
+    if ((g.render & RENDER_FOG) && (G(T_FOG_MODE) & 1))
+      c = apply_fog(c);
+    if (G(T_ALPHA_BLEND_MODE) & 1)
+      c = alpha_blend(c, fb_read_pixel(dest));
+    s = format_color(dither(c, p, y));
   }
   s = pick_lane(s);
 

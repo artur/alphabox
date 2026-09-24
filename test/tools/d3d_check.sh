@@ -145,7 +145,8 @@ done
 # The overlays exist only in the display output: find a frame showing each
 # (d3dcheck shows YUY2 bars at (200,150), doubled, then YV12 at (40,40))
 # and check where they are and that the bars have the colours of colour
-# bars. Written into result.txt as RESULT lines like the scenes'.
+# bars. Written into result.txt as RESULT lines like the scenes', "n/a"
+# when the card could not show that overlay at all.
 python3 - fb results/result.txt <<'PY'
 import glob, sys
 fbdir, result = sys.argv[1], sys.argv[2]
@@ -166,7 +167,12 @@ def check(px, x0, y0):
         bad += 1
     return bad
 out = []
-for name, x0, y0 in (('overlay-yuy2', 200, 150), ('overlay-yv12', 40, 40)):
+said = open(result).read()
+for name, x0, y0, shown in (('overlay-yuy2', 200, 150, 'overlay: shown 00000000'),
+                             ('overlay-yv12', 40, 40, 'overlay: YV12 shown 00000000')):
+    if shown not in said: # the card has no such overlay
+        out.append('RESULT %-12s n/a   the program could not show one\n' % name)
+        continue
     best = None
     for f in sorted(glob.glob(fbdir + '/fb-*-640x480.ppm')):
         px = open(f, 'rb').read().split(b'\n', 3)[3]

@@ -35,6 +35,12 @@
  *   Permedia2Display.cpp  the graphics processor's display: the timing
  *                         generator's frame through the RAMDAC, and the
  *                         RAMDAC's hardware cursor
+ *   Permedia2GP.cpp       the graphics processor: FIFO, DMA and tags, the
+ *                         output FIFO, the rasterizer, the 2D fragment
+ *                         path
+ *   Permedia2Pipe.cpp     its 3D units: depth and stencil, texture, fog,
+ *                         alpha blending, dither, the parameter DDAs
+ *   Permedia2Delta.cpp    the delta unit: triangle and line set-up
  *
  * The SVGA and the graphics processor's display are exclusive: VGAControl
  * (sequencer index 5) bit 3 hands the RAMDAC to one or the other. The
@@ -144,6 +150,20 @@ protected:
   void fb_write_pixel(s64 pixel_addr, u32 value);
   u32 format_color(u32 rgba) const;
   u32 fragment_color();
+  // The 3D units (Permedia2Pipe.cpp).
+  bool depth_stencil(s32 x, s32 y);
+  bool texture_color(u32 &texel, s32 x, s32 y);
+  u32 texel_fetch(s32 u, s32 v);
+  u32 unpack_color(u32 raw, u32 fmt, bool rgb, bool no_alpha, bool shift) const;
+  u32 apply_texture(u32 c, u32 t) const;
+  u32 apply_fog(u32 c) const;
+  u32 alpha_blend(u32 c, u32 dest_raw) const;
+  u32 dither(u32 c, s32 x, s32 y) const;
+  void dda_correct_span();
+  // The delta unit (Permedia2Delta.cpp).
+  void delta_vertex(u32 tag, u32 data);
+  void delta_triangle(u32 cmd);
+  void delta_line(u32 cmd, int from, int to);
   void dda_span_start();
   void dda_step_x();
   void dda_step_y();
@@ -217,7 +237,9 @@ protected:
       bool active;
       u32 render;
       int prim;
-      s32 xdom, xsub, dxdom, dxsub, y, dy; ///< 16.16
+      /// The edge DDAs, 32.32: registers load as 16.16, the delta unit
+      /// hands over its set-up at full precision (`exact` below).
+      s64 xdom, xsub, dxdom, dxsub, y, dy;
       s32 count;                          ///< scanlines, or line pixels, left
       bool in_span;
       s32 x, xend, xstep, yi, span_x0;
@@ -233,6 +255,35 @@ protected:
       /// up with the destination, from whichever of FBReadMode and
       /// PackedDataLimits was loaded last.
       s32 relative_offset;
+      /// Where the dominant edge crossed this span's scanline (16.16):
+      /// sub-pixel correction starts each parameter at the first pixel's
+      /// centre from there.
+      s64 span_xdom;
+      /// Set by the delta unit: the next Render or ContinueNewSub takes its
+      /// edges from here rather than from the 16.16 registers.
+      bool exact;
+      s64 exact_xdom, exact_dxdom, exact_xsub, exact_dxsub;
+      // The depth, texture and fog DDAs: this span's values and the
+      // dominant edge's. Depth is 17.11, S and T 12.18, Q 2.27, fog 2.19.
+      s64 z, ez;
+      s64 s, t, q, es, et, eq;
+      s32 f, ef;
+      // The texel look-up table (TexelLUTData, TexelLUT0-15).
+      u32 lut[256];
+      u32 lut_index;
+      /// The delta unit's vertex store: three vertices of s, t, q, Ks,
+      /// Kd, red, green, blue, alpha (256 a unit), fog, x, y, z.
+      float vtx[3][16];
+      u32 last_draw; ///< the last Draw command, for the Repeats
+      bool last_was_line;
+      /// A triangle the delta unit set up has its texture coordinates
+      /// evaluated from their planes at each pixel, as Direct3D's reference
+      /// does, rather than by the 20-bit DDAs (whose error puts a pixel on
+      /// a texel's edge on the wrong texel). Texels, and Q, at (x0, y0) in
+      /// rasterizer coordinates, and per pixel in X and Y.
+      bool tex_plane, tex_plane_next;
+      double tp[3][3]; ///< s, t, q: value, d/dx, d/dy
+      double tp_x0, tp_y0;
     } g;
   } r;
 
