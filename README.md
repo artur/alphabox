@@ -18,6 +18,10 @@ and AArch64 hosts under Linux, macOS and Windows.
 |---|---|---|
 | ![A lit cube drawn by the Rage Pro's triangle setup engine](screenshots/win2000-d3d-ragepro.png) | ![A textured floor receding into the distance, drawn by the Rage Pro model](screenshots/win2000-d3d-texture-ragepro.png) | ![dxdiag reporting DirectDraw and Direct3D enabled on the 3D Rage Pro](screenshots/win2000-dxdiag-ragepro.png) |
 
+| dxdiag's Direct3D cube on the emulated 3Dlabs Permedia 2 | Perspective-correct texturing through its delta unit | dxdiag: the ELSA GLoria Synergy with 3Dlabs' driver |
+|---|---|---|
+| ![dxdiag's spinning cube drawn by the Permedia 2 model](screenshots/win2000-d3d-permedia2.png) | ![A textured floor receding into the distance, drawn by the Permedia 2 model](screenshots/win2000-d3d-texture-permedia2.png) | ![dxdiag identifying the ELSA GLoria Synergy, a Permedia 2 with a TVP4020 RAMDAC and 8 MB](screenshots/win2000-dxdiag-permedia2.png) |
+
 ## Features
 
 - **Real firmware.** Boots the genuine SRM console and, from it, the
@@ -56,7 +60,7 @@ and AArch64 hosts under Linux, macOS and Windows.
 | Memory | 64 MB – 32 GB |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
-| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D) |
+| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending) |
 | Network | DEC 21040 / 21041 / 21140 / 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) and the two-port DE602-AA / DE602-B boards behind a bridge — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 and ES1371 (AC'97 codec and sample-rate converter) |
 | Expansion | DECchip 21050/21052/21152/21153/21154 PCI-PCI bridges (nested buses, multi-port boards) |
@@ -72,7 +76,7 @@ firmware knows and which ones are coming next.
 | OpenVMS | Boots, including the CDE desktop ([installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Tru64 UNIX | Boots |
 | NetBSD | Boots ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
-| Windows NT / 2000 | Through AlphaBIOS, on the S3, Cirrus or ATI Mach64 graphics card, each with its own driver from the installation media; Windows 2000 with up to two CPUs ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
+| Windows NT / 2000 | Through AlphaBIOS, on the S3, Cirrus, ATI Mach64 or 3Dlabs Permedia 2 graphics card, each with its own driver from the installation media; Windows 2000 with up to two CPUs ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
 
 See also the upstream [guest support](https://github.com/lenticularis39/axpbox/wiki/Guest-support)
 page.
@@ -148,6 +152,11 @@ which workload, and the optimizations that turned out not to pay.
   drivers use neither: stretched blits go through the 3D engine).
 - The 3D Rage II+ has DirectDraw but no Direct3D, as Windows' own driver
   gives it none.
+- The Permedia 2 is no SRM console: SRM V7.3-1 starts a card's BIOS without
+  telling it where the card is, and every ELSA and 3Dlabs BIOS checks that
+  before doing anything. AlphaBIOS starts it properly, so Windows is
+  unaffected. Its video streams unit is not modelled; alpha test and
+  mip-mapping it lacks as the real chip does.
 - The guest's cycle counter runs ahead of real time: a driver busy-waiting on
   `RPCC` is handed the cycles it is waiting for instead of spinning through
   them, which used to be 62 of the 95 seconds of a Windows 2000 boot. A guest

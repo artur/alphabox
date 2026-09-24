@@ -865,8 +865,11 @@ void CPermedia2::fragment(s32 x, s32 y, bool mask_pass) {
     return;
   }
   // Packed data (4.11.4): the fragment is a 32-bit word of pixels, each
-  // plotted if it lies within PackedDataLimits (XStart in bits 11..0, XEnd
-  // in 27..16 -- the manual has them the other way round -- in pixels).
+  // plotted if it lies within PackedDataLimits, in pixels. The manual puts
+  // XEnd in bits 11..0 and XStart in 27..16; perm2 loads the pair both
+  // ways round -- its packed copies with (start, end) = (2, 18) as
+  // 0x00120002, its icon downloads as 0x00020012 -- so the limits are
+  // taken as the span between the two.
   const u32 bytes = fb_pixel_bytes();
   if (bytes == 3) {
     gp_unimplemented("packed 24-bit pixels");
@@ -874,7 +877,8 @@ void CPermedia2::fragment(s32 x, s32 y, bool mask_pass) {
   }
   const int ppw = int(4 / bytes);
   const u32 pdl = G(T_PACKED_DATA_LIMITS);
-  const s32 start = sext(pdl, 12), end = sext(pdl >> 16, 12);
+  const s32 x0 = sext(pdl, 12), x1 = sext(pdl >> 16, 12);
+  const s32 start = std::min(x0, x1), end = std::max(x0, x1);
   if ((rmode & FBRM_DATA_TYPE_COLOR) && (G(T_FILTER_MODE) & (3u << 8))) {
     // A packed upload returns whole words.
     u32 word = 0;
