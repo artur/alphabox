@@ -1281,6 +1281,7 @@ void CJitEngine::reclaim_code() {
   m_rt = new asmjit::JitRuntime();
   m_call_thunk = nullptr; // lived in the runtime just deleted
   m_dpc2_thunk = nullptr;
+  m_rpcc_stub = nullptr; // so did this: new code calling the old one crashed
   ++m_itb_gen;            // freed bodies: epoch-keyed data links must miss
   ++m_epoch;
   note_epoch(EPOCH_RECLAIM);
