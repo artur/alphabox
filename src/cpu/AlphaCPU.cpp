@@ -488,6 +488,12 @@ void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
   m_dpc2 = dpc2_requested();
+  {
+    const char *e = getenv("ALPHABOX_DPC_KEEP");
+    m_dpc_keep = !(e && strcmp(e, "0") == 0);
+    e = getenv("ALPHABOX_JIT_UNALIGNED");
+    m_jit_unaligned = !(e && strcmp(e, "0") == 0);
+  }
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
   cc_wall_remainder = 0;
@@ -555,9 +561,13 @@ void CAlphaCPU::init() {
     o.dpc_mask = (uint32_t)kDpcMask;
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
-    o.dpc_way1 = m_dpc2 ? (uint32_t)((char *)&data_page_cache2[0][0] -
-                                     (char *)&data_page_cache[0][0])
-                        : 0;
+    o.dpc2_base =
+        m_dpc2 ? (uint32_t)((char *)&data_page_cache2[0][0] - (char *)this) : 0;
+    o.dpc2_row = (uint32_t)((char *)&data_page_cache2[1][0] -
+                            (char *)&data_page_cache2[0][0]);
+    o.dpc2_bits = kDpc2Bits;
+    o.dpc2_gen = (uint32_t)((char *)&m_dpc2_gen - (char *)this);
+    o.dpc_slot_gen = (uint32_t)offsetof(SDataPageCache, gen);
     // ALPHABOX_JIT_OFFSETS=1: whether the inline page-cache probe can still
     // reach both rows with one displacement. Past that the emitter falls back
     // to computing the slot address, which costs every memory op -- the limit
@@ -3143,9 +3153,15 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
 #endif
 
   if (t == TB_INDEX_DATA) {
-    // Only the replaced entry's and the new entry's pages can change
-    // translation (a wholesale flush here emptied the cache on every miss).
-    if (old_valid)
+    // Only the new entry's page can change translation. The entry it evicts
+    // translates exactly as before: a page cache that keeps it is a TB that
+    // held it longer, which the architecture allows -- software must
+    // invalidate after changing a PTE, and tbis/tbia/tbiap still empty the
+    // cache. It is the rule the translation shadow (m_tb_shadow) already
+    // rests on. Emptying it here bounded the page cache by the 128-entry
+    // DTB: on makecab 43% of the inline probe's misses found such an empty
+    // slot (docs/performance.md). ALPHABOX_DPC_KEEP=0 restores it.
+    if (old_valid && !m_dpc_keep)
       flush_data_page_cache_range(old_virt, old_mask);
     flush_data_page_cache_range(virt, match_mask);
   }

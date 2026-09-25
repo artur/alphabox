@@ -122,6 +122,25 @@ much larger than hardware would.
 95 s to the desktop with it off, 60 s with it on, and a third fewer
 instructions executed (docs/performance.md).
 
+### Data translations outlive their TB entry
+
+A real EV6 has 128 data-TB entries. Once one is evicted, the next access to
+its page takes a DTB miss, and PALcode reads the PTE again. Alphabox keeps
+the translation after eviction, in two places: the translation shadow
+(`m_tb_shadow`, 4096 entries), which refills the TB without the trap, and
+the data page cache (`data_page_cache` and its second level), which a TB
+fill no longer empties for the page it evicts.
+
+This is legal. The architecture lets a TB hold a translation for as long as
+it likes, so software must invalidate after changing a PTE (`TBIS`, `TBIA`,
+`TBIAP`, and the ASN rules), and each of those still empties the shadow and
+the page cache. **The divergence:** a guest that changes a valid PTE without
+invalidating, and happens to get the new one on real hardware because the
+old entry was evicted in the meantime, keeps the old translation here for
+much longer. A missing `TBIS` is a guest bug that hardware usually hides;
+Alphabox hides it less often. `ALPHABOX_DPC_KEEP=0` makes the page cache
+drop an evicted entry's page again. The shadow has no switch.
+
 ### Smaller ones
 
 | What | Where | Consequence |

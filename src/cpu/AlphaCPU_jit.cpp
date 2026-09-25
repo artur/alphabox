@@ -1375,7 +1375,16 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   const u64 amask = (u64)(size_bits / 8) - 1;
   cpu->m_jit->note_helper(CJitEngine::HK_READ);
   HELPER_TIMER(cpu, CJitEngine::HK_READ);
-  if (va & amask) { // unaligned: let the interpreter handle it
+  // Unaligned: the interpreter does the load at the unaligned address when
+  // it stays within the page, and traps when it crosses into the next one
+  // (docs/cpu-fidelity.md, "Unaligned data accesses do not trap"). Do the
+  // first here too, from DRAM; bail for the second and for a device.
+  // Bailing on every one ended the chain -- makecab loads ~100k per 100M
+  // instructions, and they were most of its interpreter time.
+  // ALPHABOX_JIT_UNALIGNED=0 bails on all of them, as before.
+  const bool unaligned = (va & amask) != 0;
+  if (unaligned &&
+      (!cpu->m_jit_unaligned || (va & U64(0x1FFF)) + size_bits / 8 > 0x2000)) {
     cpu->m_jit->note_bail(false, CJitEngine::BK_UNALIGNED);
     return 1;
   }
@@ -1400,7 +1409,8 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else if (cpu->dpc_promote(0, dpc_index(va), vp, cm,
-                              cpu->state.asn0)) { // the second way had it
+                              cpu->state.asn0)) { // the second level had it
+    cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     // Side-effect-free TB fast path. NOT virt2phys - that walks the page table
@@ -1430,10 +1440,10 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    cpu->dpc_demote(0, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
              cm, cpu->state.asn0);
+    cpu->dpc_l2_put(0, dpc);
   }
 
   // DRAM only: bail on MMIO so the interpreter does device reads (side effects
@@ -1444,6 +1454,10 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // stops at the load (done < prefix_len) and the verify skips the compare,
   // matching prod.
   if (phys >= cpu->dram_size) {
+    if (unaligned) { // a device register read at an odd address: interpreter
+      cpu->m_jit->note_bail(false, CJitEngine::BK_UNALIGNED);
+      return 1;
+    }
 #ifdef JIT_STATS
     note_device_page(phys, false);
 #endif
@@ -1779,7 +1793,8 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else if (cpu->dpc_promote(0, dpc_index(va), vp, cpu->state.cm,
-                              cpu->state.asn0)) { // the second way had it
+                              cpu->state.asn0)) { // the second level had it
+    cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
@@ -1796,10 +1811,10 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
         return 1; // fault-on-read (FOR)
       phys = e.phys | (va & e.keep_mask);
     }
-    cpu->dpc_demote(0, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
              cpu->state.cm, cpu->state.asn0);
+    cpu->dpc_l2_put(0, dpc);
   }
 
   if (phys >=
@@ -2008,7 +2023,8 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else if (cpu->dpc_promote(1, dpc_index(va), vp, cm,
-                              cpu->state.asn0)) { // the second way had it
+                              cpu->state.asn0)) { // the second level had it
+    cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     // Side-effect-free TB fast path on the write cache [1]; bail on a TB miss
@@ -2037,9 +2053,9 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       }
       phys = e.phys | (va & e.keep_mask);
     }
-    cpu->dpc_demote(1, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cm,
              cpu->state.asn0);
+    cpu->dpc_l2_put(1, dpc);
   }
 
   if (phys < cpu->dram_size) {
@@ -2134,7 +2150,8 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else if (cpu->dpc_promote(1, dpc_index(va), vp, cpu->state.cm,
-                              cpu->state.asn0)) { // the second way had it
+                              cpu->state.asn0)) { // the second level had it
+    cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
     const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
@@ -2151,9 +2168,9 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
         return U64(0x100); // fault-on-write (FOW)
       phys = e.phys | (va & e.keep_mask);
     }
-    cpu->dpc_demote(1, dpc_index(va), vp);
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cpu->state.cm,
              cpu->state.asn0);
+    cpu->dpc_l2_put(1, dpc);
   }
 
   // Shared LL/SC path: consumes the reservation, applies the ABA sequence

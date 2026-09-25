@@ -47,7 +47,9 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_STALL_SKIP=0` | Make a guest's `RPCC` delay loop wait in real time, as the hardware would, instead of being handed the cycles it is waiting for. Costs a Windows 2000 boot 35 seconds; see docs/cpu-fidelity.md for what the default buys and what it diverges on. |
 | `ALPHABOX_PORT61_PACE=0` | Spin on the ISA refresh-toggle bit of port 61h instead of sleeping to the next edge. The guest's timing is the same either way; this one only decides whether a host core burns for it. |
 | `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`, without asking whether anything was written to memory code was compiled from. `2`: flush anyway, but report any block whose source changed while the code-page map said nothing had (the audit; see test/tools/smc_test.sh). |
-| `ALPHABOX_JIT_DPC2=0` | Use one way of the data page cache instead of two: the second way is neither probed nor filled. AArch64 compiled code and the helpers; the x86-64 emitter probes one way either way. |
+| `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. AArch64 compiled code and the helpers; the x86-64 emitter never probes it. |
+| `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, whatever they hold, as before. See docs/cpu-fidelity.md, "Data translations outlive their TB entry". |
+| `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
 | `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64 emitter). See docs/performance.md, "Sixteen pins, chosen by what runs". |
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
 | `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |

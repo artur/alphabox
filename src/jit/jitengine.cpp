@@ -1420,7 +1420,7 @@ void CJitEngine::reclaim_code() {
   delete (asmjit::JitRuntime *)m_rt;
   m_rt = new asmjit::JitRuntime();
   m_call_thunk = nullptr; // lived in the runtime just deleted
-  m_dpc2_thunk = nullptr;
+  m_dpc2_thunk[0] = m_dpc2_thunk[1] = nullptr;
   m_rpcc_stub = nullptr; // so did this: new code calling the old one crashed
   if (m_pin_staged) {    // no code compiled for the old set survives this
     memcpy(m_pin_guest, m_pin_next, sizeof(m_pin_guest));
@@ -4828,7 +4828,9 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                 snprintf(b2 + l2, sizeof(b2) - l2, " %s=%llu(%.0f%%)",
                          dpc_miss_name(c), (unsigned long long)m_dpc_miss[c],
                          dt ? 100.0 * (double)m_dpc_miss[c] / (double)dt : 0.0);
-        printf("%s\n", b2);
+        printf("%s | level 2 found by a helper=%llu\n", b2,
+               (unsigned long long)m_dpc_l2_helper);
+        m_dpc_l2_helper = 0;
         memset(m_dpc_miss, 0, sizeof(m_dpc_miss)); // windowed, like the rest
         for (int rw = 0; rw < 2; ++rw)
           printf("[JIT][STATS][CPU%d]   %s other-page: conflict=%llu (a fold "

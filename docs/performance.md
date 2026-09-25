@@ -529,6 +529,8 @@ translation sooner; its misses are cold pages.
 
 ### The second way
 
+(Since replaced by a second level, below: "Real code misses the page cache".)
+
 So the table got a second way, `data_page_cache2`, with the same 64
 slots per direction. A way-0 hit costs exactly what it did. On a way-0
 miss, before the helper, the load or store's cold stub probes way 1. A
@@ -672,6 +674,51 @@ benchmark's nine sections, five times during a Windows 2000 boot.
 `ALPHABOX_JIT_PINLOG=1` prints each change with the share of accesses the
 old and new sets cover. Unlike every fixed set above, this one gains on both
 workloads.
+
+### Real code misses the page cache: makecab
+
+The benchmark hardly calls the memory helpers any more; Microsoft's
+`makecab` does. `JIT_STATS` on the `cab` workload, median over its busy
+windows, per 100M instructions: **25% of the time in helpers**, 856k read
+and 446k write helper calls at 27 ns a call, and 4.3% in the interpreter.
+The inline probe's misses were 43% *empty* slots and 53% another page.
+There were also ~80k unaligned loads, and each one bailed to the
+interpreter and ended the chain.
+
+Three changes, each behind its own switch:
+
+- **Keep what a TB fill does not touch** (`ALPHABOX_DPC_KEEP`). A data-TB
+  fill emptied the slot of the page it inserted and of the page it evicted,
+  in both ways, whatever those slots held. So each fill threw away up to two
+  unrelated hot pages, and the page cache could never hold more than the
+  128-entry DTB. Now only a slot that holds the inserted page is emptied,
+  and an evicted entry's page stays cached. That is architecturally legal
+  (docs/cpu-fidelity.md), and it is the same rule the translation shadow
+  relies on. Empty-slot misses fell to a third.
+- **A second level** (`ALPHABOX_JIT_DPC2`). It replaces the second way: 1024
+  slots a row behind `state`, 8 MB of coverage against level 1's 512 KB,
+  and inclusive, so a hit is a copy back into level 1. A full flush bumps
+  a generation instead of clearing 128 KB. The memory ops' cold stubs call
+  one thunk per row, and the inline hit path is unchanged. It removed
+  another 13% of the helper calls. A 16x larger level 2 removed only 11%
+  more, so what is left is mostly pages touched for the first time, not
+  capacity.
+- **Unaligned loads in the helper** (`ALPHABOX_JIT_UNALIGNED`). The
+  interpreter does an unaligned load at the unaligned address when it stays
+  within the page, and traps when it crosses into the next one. The read
+  helper now does the first itself, from DRAM, and bails only for the
+  second or for a device. Unaligned bails went from ~80k to 63 per 100M
+  instructions, and interpreter time from 4.3% to 0.2%.
+
+Measured on one binary (`lab/results/ledger.md`, rows `mem3-cab`,
+`mem3-axp`, `keep-cab`, `l2-cab`, `unal-cab`; results identical):
+
+| change | `cab` | benchmark |
+| --- | --- | --- |
+| all three against none | **-10.5%** | **-1.9%**: `ldst` -12.3%, `byte` -5.9% |
+| keeping, alone | -0.6%, inconclusive | |
+| the second level, alone | -4.4%, inconclusive (the host drifted during the run) | |
+| unaligned loads, alone | **-5.7%** | |
 
 ## The cycle counter
 

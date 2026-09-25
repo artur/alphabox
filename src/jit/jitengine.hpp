@@ -253,8 +253,12 @@ public:
         dpc_mask; // direct-mapped page cache: per-slot byte stride, index mask
     uint32_t dpc_write_row; // byte distance from read cache [0] to write cache
                             // [1] (store fast path)
-    uint32_t dpc_way1; // byte distance from way 0 to the second way, which a
-                       // miss path probes; 0 when ALPHABOX_JIT_DPC2=0
+    // The page cache's second level (CAlphaCPU::data_page_cache2), which a
+    // miss path probes: its read row from the cpu (0 when ALPHABOX_JIT_DPC2=0),
+    // the bytes from the read row to the write row, its index width, and
+    // m_dpc2_gen.
+    uint32_t dpc2_base, dpc2_row, dpc2_bits, dpc2_gen;
+    uint32_t dpc_slot_gen; // a slot's gen field, from the slot
     uint32_t state_cm, state_asn0, dram_ptr, dram_size, state_pc;
     uint32_t state_current_pc; // GO_PAL takes EXC_ADDR from it (FLTV traps)
     uint32_t fpen, exc_sum, fpcr,
@@ -704,6 +708,10 @@ public:
     m_epoch_bumps[cause]++;
   }
   void note_dpc_miss(int cause) { m_dpc_miss[cause]++; }
+  // A helper found the page in the second level, which the stub's thunk had
+  // just probed: should be ~0, or the thunk and the helpers disagree.
+  void note_dpc_l2_helper() { m_dpc_l2_helper++; }
+  uint64_t m_dpc_l2_helper = 0;
   // An other-page miss, split by what would fix it. A page this slot evicted
   // among its last four is a conflict -- two live pages sharing one slot --
   // which a better index removes; anything else is capacity or a cold page,
@@ -737,6 +745,7 @@ public:
   void note_dlink_stale(bool) {}
   void note_epoch(int) {}
   void note_dpc_miss(int) {}
+  void note_dpc_l2_helper() {}
   void note_dpc_other(int, unsigned, uint64_t, uint64_t) {}
   void note_helper_tsc(int, uint64_t) {}
   void note_link_bail() {}
@@ -857,8 +866,8 @@ private:
   void *a64_call_thunk();
   // a64 shared probe of the data page cache's second way, entered from the
   // memory ops' cold stubs; built lazily like the call thunk.
-  void *m_dpc2_thunk = nullptr;
-  void *a64_dpc2_thunk();
+  void *m_dpc2_thunk[2] = {nullptr, nullptr}; // [read, write]
+  void *a64_dpc2_thunk(bool write_row);
 
 public:
   /// The inline RPCC stub, built on first use. Public so the processor's

@@ -516,11 +516,11 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       } else {                                                                 \
         if (virt2phys(_dpc_va, &phys_address, flags, NULL, ins))               \
           ES40_EXECUTE_END();                                                  \
-        dpc_demote(_dpc_rw, dpc_index(_dpc_va), _dpc_vp);                      \
         _dpc.fill(_dpc_vp, phys_address & ~U64(0x1FFF),                        \
                   _dpc_rw ? dpc_host_base_w(phys_address)                      \
                           : dpc_host_base(phys_address),                       \
                   state.cm, state.asn0);                                       \
+        dpc_l2_put(_dpc_rw, _dpc);                                             \
       }                                                                        \
     } else {                                                                   \
       /* PAL privileged access (NO_CHECK, VPTE, ALT, etc) — skip cache */    \

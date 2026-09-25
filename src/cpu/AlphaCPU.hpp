@@ -627,7 +627,9 @@ public:
     int cm;        // current mode (CM) at fill time
     int asn;       // data ASN (asn0) at fill time
     bool valid;
-    char pad[15]; // a 64-byte slot: the JIT's index is a shift
+    char pad0[3];
+    u32 gen;     // level 2 only: m_dpc2_gen at fill; any other value is empty
+    char pad[8]; // a 64-byte slot: the JIT's index is a shift
 
     /// What compiled code compares against: the page, the address space and
     /// the mode in one word. `mmio` sets a bit no key ever has, so such a
@@ -657,34 +659,42 @@ public:
   } data_page_cache[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
   static_assert(sizeof(SDataPageCache) == 64,
                 "the JIT indexes the page cache with a shift");
-  /// The second way. A fill that pushes a live page out of its slot keeps
-  /// it here, because the misses that remain are two pages taking turns in
-  /// one slot (docs/performance.md, "The misses, split by what would fix
-  /// them"). Compiled code looks here only when way 0 misses -- a hit pays
-  /// nothing for it -- and the helpers promote what they find back to way 0.
-  /// ALPHABOX_JIT_DPC2=0 turns it off, for a same-binary A/B. The array
-  /// itself is declared after `state`, to keep the guest registers close to
-  /// the start of the object (see m_tb_idx there).
+  /// The second level: a larger direct-mapped page cache behind the first,
+  /// inclusive of it -- every fill goes into both, so a level-2 hit is just a
+  /// copy back into level 1. The first level has to stay small and near the
+  /// front of the object, where compiled code probes it inline with short
+  /// displacements; this one is probed from the memory ops' cold stubs
+  /// (a64_dpc2_thunk) and the helpers, so it can be large and live after
+  /// `state`. 1024 slots a row cover 8 MB, against level 1's 512 KB: on
+  /// makecab the misses left after the first level were mostly pages it had
+  /// no room for (docs/performance.md). A full flush bumps m_dpc2_gen
+  /// instead of clearing 128 KB. ALPHABOX_JIT_DPC2=0 turns it off.
+  static constexpr int kDpc2Bits = 10;
+  static constexpr int kDpc2Entries = 1 << kDpc2Bits;
+  static inline u64 dpc2_index(u64 va) {
+    return (va >> 13) & (u64)(kDpc2Entries - 1);
+  }
   bool m_dpc2 = true;
   static bool dpc2_requested();
-  /// A way-0 miss that way 1 can answer: swap the ways, so that way 0 holds
-  /// the page and the caller carries on as with a hit.
+  /// A level-1 miss that level 2 can answer: copy the slot into level 1, and
+  /// the caller carries on as with a hit.
   inline bool dpc_promote(int rw, u64 idx, u64 vp, int cm, int asn) {
     if (!m_dpc2)
       return false;
-    SDataPageCache &w1 = data_page_cache2[rw][idx];
-    if (!(w1.valid && w1.virt_page == vp && w1.cm == cm && w1.asn == asn))
+    const SDataPageCache &l2 = data_page_cache2[rw][dpc2_index(vp)];
+    if (!(l2.valid && l2.gen == m_dpc2_gen && l2.virt_page == vp &&
+          l2.cm == cm && l2.asn == asn))
       return false;
-    std::swap(data_page_cache[rw][idx], w1);
+    data_page_cache[rw][idx] = l2;
     return true;
   }
-  /// Before way 0 is filled with vp: keep the page it displaces in way 1.
-  inline void dpc_demote(int rw, u64 idx, u64 vp) {
+  /// After a level-1 fill: the same translation into level 2.
+  inline void dpc_l2_put(int rw, const SDataPageCache &l1) {
     if (!m_dpc2)
       return;
-    const SDataPageCache &w0 = data_page_cache[rw][idx];
-    if (w0.valid && w0.virt_page != vp)
-      data_page_cache2[rw][idx] = w0;
+    SDataPageCache &l2 = data_page_cache2[rw][dpc2_index(l1.virt_page)];
+    l2 = l1;
+    l2.gen = m_dpc2_gen;
   }
 
   /// An exact index of the TB: which slot holds each 8 KB page, two ways
@@ -755,24 +765,38 @@ public:
   /// Kept beside the state it is made of so compiled code can load it in one
   /// instruction; dpc_context_changed() is what keeps it true.
   u64 m_dpc_key = 0;
+  u32 m_dpc2_gen = 1; // level 2's current generation (see data_page_cache2)
   inline void dpc_context_changed() {
     m_dpc_key = ((u64)(state.asn0 & 0xff) << 2) | (u64)(state.cm & 3);
   }
 
   // Drop only the cached translation(s) a single data-TB entry could have
-  // produced: its page's slot in both rows for an 8K entry (match_mask bit 13
-  // set), or everything for a granularity-hint (large page) entry.
+  // produced: its page in both rows for an 8K entry (match_mask bit 13 set),
+  // or everything for a granularity-hint (large page) entry. Another page
+  // sharing the slot is left alone (m_dpc_keep): emptying the whole slot threw
+  // away a hot unrelated page on every TB fill.
   inline void flush_data_page_cache_range(u64 virt, u64 match_mask) {
     if (!(match_mask & U64(0x2000))) {
       flush_data_page_cache();
       return;
     }
     const u64 idx = dpc_index(virt);
+    const u64 idx2 = dpc2_index(virt);
+    const u64 vp = virt & ~U64(0x1FFF);
     for (int rw = 0; rw < 2; rw++) {
-      data_page_cache[rw][idx].invalidate();
-      data_page_cache2[rw][idx].invalidate();
+      if (!m_dpc_keep || data_page_cache[rw][idx].virt_page == vp)
+        data_page_cache[rw][idx].invalidate();
+      if (!m_dpc_keep || data_page_cache2[rw][idx2].virt_page == vp)
+        data_page_cache2[rw][idx2].invalidate();
     }
   }
+  /// ALPHABOX_DPC_KEEP=0: the page cache as it was -- a TB fill empties the
+  /// slot of the page it evicts and of the page it inserts, whatever they
+  /// hold. The default keeps what those do not touch (see add_tb).
+  bool m_dpc_keep = true;
+  /// ALPHABOX_JIT_UNALIGNED=0: every unaligned load from compiled code bails
+  /// to the interpreter, instead of the read helper doing it (jit_read).
+  bool m_jit_unaligned = true;
   /// The host bytes behind a physical page for the page cache: DRAM, or
   /// device memory the system offers for direct access (a framebuffer), or
   /// 0 for everything else (MMIO: every access goes through the device).
@@ -816,8 +840,13 @@ public:
     for (int i = 0; i < kDpcEntries; i++) {
       data_page_cache[0][i].invalidate();
       data_page_cache[1][i].invalidate();
-      data_page_cache2[0][i].invalidate();
-      data_page_cache2[1][i].invalidate();
+    }
+    if (++m_dpc2_gen == 0) { // wrapped: an old slot could match again
+      for (int i = 0; i < kDpc2Entries; i++) {
+        data_page_cache2[0][i].invalidate();
+        data_page_cache2[1][i].invalidate();
+      }
+      m_dpc2_gen = 1;
     }
   }
 
@@ -1096,11 +1125,11 @@ public:
     std::atomic<int> irq_h_timer[6];
   } state; /**< Determines CPU state that needs to be saved to the state file */
 
-  /// The data page cache's second way and the TB index (see kTbIdxBits),
+  /// The data page cache's second level and the TB index (see kTbIdxBits),
   /// placed after `state` so that the state compiled code reads -- the guest
   /// registers first -- stays within reach of the cpu pointer: 16 KB for a
   /// 32-bit load, which is how compiled code reads a longword register.
-  SDataPageCache data_page_cache2[2][kDpcEntries];
+  SDataPageCache data_page_cache2[2][kDpc2Entries];
   u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
