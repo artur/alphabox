@@ -2404,6 +2404,22 @@ int CSystem::LoadROM() {
   if (!loadedFromFlash) {
     f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
               "rb");
+    // A decompressed image is the entry PC, PAL_BASE and 2 MB of memory. One
+    // of any other size is a write that never finished (the emulator stopped
+    // during it): decompress again rather than boot from half an image.
+    if (f) {
+      fseek(f, 0, SEEK_END);
+      const long have = ftell(f);
+      fseek(f, 0, SEEK_SET);
+      if (have != (long)(2 * sizeof(u64) + 0x200000)) {
+        printf("%%SYS-W-ROMSIZE: %s is %ld bytes, not a whole image; "
+               "decompressing again.\n",
+               myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
+               have);
+        fclose(f);
+        f = nullptr;
+      }
+    }
     if (!f) {
       const char *srm =
           myCfg->get_text_value("rom.srm", m_platform->firmware_file);
@@ -2468,21 +2484,30 @@ int CSystem::LoadROM() {
       acCPUs[0]->restore_icache();
       start_secondaries();
 
-      f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
-                "wb");
+      // Written beside the final name and renamed into place, so an image
+      // under that name is always whole.
+      const std::string dec =
+          myCfg->get_text_value("rom.decompressed", "decompressed.rom");
+      const std::string tmp = dec + ".tmp";
+      f = fopen(tmp.c_str(), "wb");
       if (!f) {
         printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
-               myCfg->get_text_value("rom.decompressed", "decompressed.rom"));
+               dec.c_str());
       } else {
         printf("%%SYS-I-ROMWRT: Writing decompressed rom to %s.\n",
-               myCfg->get_text_value("rom.decompressed", "decompressed.rom"));
+               dec.c_str());
         temp = endian_64(acCPUs[0]->get_pc());
-        fwrite(&temp, 1, sizeof(u64), f);
+        bool ok = fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
         temp = endian_64(acCPUs[0]->get_pal_base());
-        fwrite(&temp, 1, sizeof(u64), f);
+        ok = ok && fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
         buffer = PtrToMem(0);
-        fwrite(buffer, 1, 0x200000, f);
-        fclose(f);
+        ok = ok && fwrite(buffer, 1, 0x200000, f) == 0x200000;
+        ok = (fclose(f) == 0) && ok;
+        if (!ok || rename(tmp.c_str(), dec.c_str()) != 0) {
+          printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
+                 dec.c_str());
+          remove(tmp.c_str());
+        }
       }
     } else {
       printf("%%SYS-I-READROM: Reading decompressed ROM image from %s.\n",
