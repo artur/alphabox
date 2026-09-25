@@ -58,7 +58,8 @@ tools live in `test/tools/`: `srm_run.sh` (per-lane SRM boot + log diff, own
 port per lane), `srm_probe.sh` (SMP init, memory layout, SCSI, exit-path
 probes), `win_bench.sh` (headless Windows guest boot + MIPS -- meaningful only with a
 busy guest), `cpu_bench.sh` + `bench_image.py` (how fast Alpha code itself
-runs: a boot block of known instruction count, two sizes, difference), `vga_boot.sh`
+runs: a boot block of known instruction count, two sizes, difference),
+`sect_mips.sh` (the guest's MIPS on one benchmark section, from the desktop snapshot), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
 `d3d_check.sh` (a Direct3D 7 program, built with nada, renders scenes on a
 Windows guest's HAL and on D3D's software rasteriser and compares them --

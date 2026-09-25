@@ -665,11 +665,12 @@ public:
   /// front of the object, where compiled code probes it inline with short
   /// displacements; this one is probed from the memory ops' cold stubs
   /// (a64_dpc2_thunk) and the helpers, so it can be large and live after
-  /// `state`. 1024 slots a row cover 8 MB, against level 1's 512 KB: on
-  /// makecab the misses left after the first level were mostly pages it had
-  /// no room for (docs/performance.md). A full flush bumps m_dpc2_gen
-  /// instead of clearing 128 KB. ALPHABOX_JIT_DPC2=0 turns it off.
-  static constexpr int kDpc2Bits = 10;
+  /// `state`. 16384 slots a row cover 128 MB, against level 1's 512 KB, in
+  /// 2 MB of memory per processor: the nada benchmark's stride section walks
+  /// 6144 pages and ran 2.4-3x faster at 8192+ slots once evicted pages
+  /// stayed cached (docs/performance.md). A full flush bumps m_dpc2_gen
+  /// instead of clearing 2 MB. ALPHABOX_JIT_DPC2=0 turns it off.
+  static constexpr int kDpc2Bits = 14;
   static constexpr int kDpc2Entries = 1 << kDpc2Bits;
   static inline u64 dpc2_index(u64 va) {
     return (va >> 13) & (u64)(kDpc2Entries - 1);

@@ -2484,8 +2484,10 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
 }
 
 // Refill the data TB from the shadow: the same slot choice as add_tb (a
-// round-robin victim), the same eviction bookkeeping (drop the evicted page
-// from the data page cache), then the entry copied back whole.
+// round-robin victim), the same eviction rule (the evicted page stays in the
+// data page cache unless ALPHABOX_DPC_KEEP=0 -- see add_tb), then the entry
+// copied back whole. Emptying it here too kept the page cache no larger than
+// the TB on exactly the code that refills from the shadow on every access.
 int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
   const STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
   if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
@@ -2495,7 +2497,9 @@ int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
   const int i = state.next_tb[t];
   state.next_tb[t] = (i + 1 == TB_ENTRIES) ? 0 : i + 1;
   if (state.tb[t][i].valid) {
-    flush_data_page_cache_range(state.tb[t][i].virt, state.tb[t][i].match_mask);
+    if (!m_dpc_keep)
+      flush_data_page_cache_range(state.tb[t][i].virt,
+                                  state.tb[t][i].match_mask);
     tb_idx_drop(t, i);
   }
   state.tb[t][i] = sh;

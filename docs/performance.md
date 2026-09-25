@@ -696,8 +696,8 @@ Three changes, each behind its own switch:
   (docs/cpu-fidelity.md), and it is the same rule the translation shadow
   relies on. Empty-slot misses fell to a third.
 - **A second level** (`ALPHABOX_JIT_DPC2`). It replaces the second way: 1024
-  slots a row behind `state`, 8 MB of coverage against level 1's 512 KB,
-  and inclusive, so a hit is a copy back into level 1. A full flush bumps
+  slots a row behind `state` at first (16384 now, see below), against level
+  1's 512 KB of coverage, and inclusive, so a hit is a copy back into level 1. A full flush bumps
   a generation instead of clearing 128 KB. The memory ops' cold stubs call
   one thunk per row, and the inline hit path is unchanged. It removed
   another 13% of the helper calls. A 16x larger level 2 removed only 11%
@@ -719,6 +719,53 @@ Measured on one binary (`lab/results/ledger.md`, rows `mem3-cab`,
 | keeping, alone | -0.6%, inconclusive | |
 | the second level, alone | -4.4%, inconclusive (the host drifted during the run) | |
 | unaligned loads, alone | **-5.7%** | |
+
+### The refill path kept the page cache as small as the TB
+
+After those three changes, `stride` was still 7% slower than before them.
+`JIT_STATS` explained it: 8.4M read-helper calls per 100M instructions (one
+every 12 instructions), 43% of the section's time, all of them misses in
+both levels. But only ~1000 of them were TB misses, and a 4x larger
+translation shadow changed nothing. So translation was not the problem;
+the page cache was. `tb_refill_from_shadow`, which refills the DTB from
+the shadow, still emptied the evicted entry's page, even though `add_tb`
+no longer did. `stride` refills on every access, so every refill threw away
+the page used 128 accesses earlier. The level-2 probe then missed every
+time and was pure cost. That path now follows the same rule, under the
+same `ALPHABOX_DPC_KEEP`.
+
+With pages surviving, level 2's size matters. `stride` walks 6144 pages.
+Single runs through `test/tools/sect_mips.sh`: 348 MIPS at 1024 slots a
+row, 835 at 8192, 1035 at 16384. `makecab` was about the same at the two
+larger sizes (1217 and 1179). Level 2 is 16384 slots a row now: 128 MB of
+coverage in 2 MB per processor.
+
+Same binary, `ALPHABOX_DPC_KEEP=0` as the base (`lab/results/ledger.md`,
+rows `keep2-axp`, `keep2-cab`; results identical): `stride` **-65.4%**
+(171-179 ms -> 54-62), `makecab` **-22.5%**, every other section within
+noise. So the rule is worth far more than "keep, alone" measured above:
+half of it was missing.
+
+### This round in MIPS
+
+`test/tools/sect_mips.sh` reads the guest's instruction rate
+(`ALPHABOX_RATE`) over a section's plateau. The build before this round's
+JIT work (`60c859e`) against this one, two alternating runs each, means
+(`div`: its plateau; the first `div` run of the new build measured the
+warm-up):
+
+| section | before | after |
+| --- | --- | --- |
+| `alu` | 3991 | 4190 |
+| `branch` | 2762 | 2975 |
+| `call` | 3448 | 3604 |
+| `ldst` | 3157 | 3987 |
+| `stride` | 371 | 982 |
+| `fp` | 2148 | 2404 |
+| `byte` | 3360 | 4528 |
+| `div` | 2844 | 5623 |
+| `sort` | 2712 | 3069 |
+| `makecab` | 815 | 1277 |
 
 ## The cycle counter
 
