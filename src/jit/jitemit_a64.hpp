@@ -66,6 +66,15 @@ constexpr uint32_t kA64PinHost[CJitEngine::kPinSlots] = {
     21, 22, 23, 24, 25, 26, 20, 28, 4, 5, 6, 7, 8, 13, 14, 15};
 constexpr int kA64CalleeSlots = 8;
 
+// ALPHABOX_JIT_PEEP=0: the operate emitter as it was -- operands shuttled
+// through x0/x1 and literals materialised -- for a same-binary A/B of the
+// in-place forms (docs/performance.md, "The hot path, by what it is made
+// of").
+const bool g_a64_peep = [] {
+  const char *e = getenv("ALPHABOX_JIT_PEEP");
+  return !(e && strcmp(e, "0") == 0);
+}();
+
 // R4-R7 and R20-R23 name the shadow bank in a PAL block (RREG).
 inline bool a64_shadow_reg(int r) { return r < 24 && (r & 0xc) == 0x4; }
 
@@ -1822,6 +1831,159 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
+    // INTS byte-manipulation, in place. A literal selector makes every
+    // shift and mask a constant: EXT and INS are one UBFX/UBFIZ, MSK and ZAP
+    // one AND with an immediate where the mask encodes. A register selector
+    // leans on AArch64's variable shifts using the count modulo 64, so
+    // (pos*8) and (64-pos*8)&63 need no masking: EXTBL is lsl, lsr, and.
+    if (g_a64_peep &&
+        (op == OP_EXTL || op == OP_EXTH || op == OP_INSL || op == OP_INSH ||
+         op == OP_MSKL || op == OP_MSKH || op == OP_ZAP)) {
+      if (rc == 31)
+        continue;
+      const uint32_t f = (ins >> 5) & 0x7f;
+      const int size = (f >> 4) & 3;
+      const int mbits = (size == 0)   ? 8
+                        : (size == 1) ? 16
+                        : (size == 2) ? 32
+                                      : 64;
+      const uint64_t mask =
+          (size == 3) ? ~(uint64_t)0 : (((uint64_t)1 << mbits) - 1);
+      const a64::Gp s1 = op1_src();
+      // d = s1 & m, for any constant m.
+      auto and_const = [&](const a64::Gp &d, uint64_t m) {
+        if (m == 0)
+          a.mov(d, imm(0));
+        else if (m == ~(uint64_t)0) {
+          if (d.id() != s1.id())
+            a.mov(d, s1);
+        } else if (asmjit::arm::Utils::is_logical_imm(m, 64))
+          a.and_(d, s1, imm(m));
+        else {
+          a.mov(x9, imm(m));
+          a.and_(d, s1, x9);
+        }
+      };
+      if (islit) {
+        const int pos = (int)(lit & 7);
+        const a64::Gp d = rc_dst();
+        switch (op) {
+        case OP_EXTL: { // (Ra >> pos*8) & mask
+          const int sh = pos * 8, w = std::min(mbits, 64 - sh);
+          if (sh == 0 && w == 64) {
+            if (d.id() != s1.id())
+              a.mov(d, s1);
+          } else
+            a.ubfx(d, s1, imm(sh), imm(w));
+          break;
+        }
+        case OP_EXTH: { // (Ra << ((64-pos*8)&63)) & mask
+          const int sh = (64 - pos * 8) & 63;
+          if (sh == 0)
+            and_const(d, mask);
+          else if (mbits - sh <= 0)
+            a.mov(d, imm(0));
+          else
+            a.ubfiz(d, s1, imm(sh), imm(mbits - sh));
+          break;
+        }
+        case OP_INSL: { // (Ra & mask) << pos*8
+          const int sh = pos * 8, w = std::min(mbits, 64 - sh);
+          if (sh == 0 && w == 64) {
+            if (d.id() != s1.id())
+              a.mov(d, s1);
+          } else
+            a.ubfiz(d, s1, imm(sh), imm(w));
+          break;
+        }
+        case OP_INSH: { // pos ? (Ra & mask) >> (64-pos*8) : 0
+          const int sh = 64 - pos * 8;
+          if (pos == 0 || mbits - sh <= 0)
+            a.mov(d, imm(0));
+          else
+            a.ubfx(d, s1, imm(sh), imm(mbits - sh));
+          break;
+        }
+        case OP_MSKL: // Ra & ~(mask << pos*8)
+          and_const(d, ~(mask << (pos * 8)));
+          break;
+        case OP_MSKH: // pos ? Ra & ~(mask >> (64-pos*8)) : Ra
+          and_const(d, pos ? ~(mask >> (64 - pos * 8)) : ~(uint64_t)0);
+          break;
+        default: { // ZAP / ZAPNOT: the byte mask is a constant too
+          uint64_t m = g_zapnot_mask[lit & 0xff];
+          if (f == 0x30)
+            m = ~m; // ZAP keeps bytes whose bit is CLEAR
+          and_const(d, m);
+          break;
+        }
+        }
+        rc_done(d);
+        continue;
+      }
+      const a64::Gp s2 = op2_src();
+      const a64::Gp d = rc_dst();
+      switch (op) {
+      case OP_EXTL:
+        a.lsl(x9, s2, imm(3));
+        a.lsr(d, s1, x9);
+        if (size != 3)
+          a.and_(d, d, imm(mask));
+        break;
+      case OP_EXTH:
+        a.lsl(x9, s2, imm(3));
+        a.neg(x9, x9);
+        a.lsl(d, s1, x9);
+        if (size != 3)
+          a.and_(d, d, imm(mask));
+        break;
+      case OP_INSL:
+        a.lsl(x9, s2, imm(3));
+        if (size != 3) {
+          a.and_(x10, s1, imm(mask));
+          a.lsl(d, x10, x9);
+        } else
+          a.lsl(d, s1, x9);
+        break;
+      case OP_INSH:
+        a.lsl(x9, s2, imm(3));
+        a.neg(x9, x9);
+        if (size != 3) {
+          a.and_(x10, s1, imm(mask));
+          a.lsr(x10, x10, x9);
+        } else
+          a.lsr(x10, s1, x9);
+        a.tst(s2, imm(7));
+        a.csel(d, x10, a64::xzr, a64_cc(CondCode::kNE));
+        break;
+      case OP_MSKL:
+        a.lsl(x9, s2, imm(3));
+        a.mov(x10, imm(mask));
+        a.lsl(x10, x10, x9);
+        a.bic(d, s1, x10);
+        break;
+      case OP_MSKH:
+        a.lsl(x9, s2, imm(3));
+        a.neg(x9, x9);
+        a.mov(x10, imm(mask));
+        a.lsr(x10, x10, x9);
+        a.bic(x10, s1, x10);
+        a.tst(s2, imm(7));
+        a.csel(d, x10, s1, a64_cc(CondCode::kNE));
+        break;
+      default: // ZAP / ZAPNOT
+        a.and_(x9, s2, imm(0xff));
+        a.mov(x10, imm((uint64_t)&g_zapnot_mask[0]));
+        a.ldr(x9, a64::ptr(x10, x9, a64::lsl(3)));
+        if (f == 0x30)
+          a.mvn(x9, x9);
+        a.and_(d, s1, x9);
+        break;
+      }
+      rc_done(d);
+      continue;
+    }
+
     // INTS byte-manipulation (EXT/INS/MSK/ZAP), keyed on pos = op2 & 7.
     if (op == OP_EXTL || op == OP_EXTH || op == OP_INSL || op == OP_INSH ||
         op == OP_MSKL || op == OP_MSKH || op == OP_ZAP) {
@@ -1931,6 +2093,25 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         rc_done(d);
         return;
       }
+      // A literal the logical instructions can take as an immediate (for
+      // BIC/ORNOT/EQV, its complement): one instruction, no x1.
+      if (g_a64_peep && islit &&
+          (kind == B_AND || kind == B_ORR || kind == B_EOR || kind == B_BIC ||
+           kind == B_ORN || kind == B_EON)) {
+        const bool inv = kind == B_BIC || kind == B_ORN || kind == B_EON;
+        const uint64_t v = inv ? ~(uint64_t)lit : (uint64_t)lit;
+        if (asmjit::arm::Utils::is_logical_imm(v, 64)) {
+          const a64::Gp d = rc_dst();
+          if (kind == B_AND || kind == B_BIC)
+            a.and_(d, s1, imm(v));
+          else if (kind == B_ORR || kind == B_ORN)
+            a.orr(d, s1, imm(v));
+          else
+            a.eor(d, s1, imm(v));
+          rc_done(d);
+          return;
+        }
+      }
       if (islit)
         a.mov(x1, imm(lit));
       else
@@ -1989,6 +2170,72 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         } else
           a.ldr(d, reg(rb));
       }
+      rc_done(d);
+      continue;
+    }
+
+    // Longword add/subtract, scaled or not: in place in 32-bit registers --
+    // the scale as a shifted operand, a literal as an immediate -- and the
+    // sign extension straight into the destination. addl Ra,#lit is 2
+    // instructions, s4addl Ra,Rb 2 (they were 5 and 6).
+    if (g_a64_peep && (op == OP_ADDL || op == OP_SUBL || op == OP_S4ADDL ||
+                       op == OP_S8ADDL || op == OP_S4SUBL || op == OP_S8SUBL)) {
+      if (rc == 31)
+        continue;
+      const bool issub = (op == OP_SUBL || op == OP_S4SUBL || op == OP_S8SUBL);
+      const int sh = (op == OP_S4ADDL || op == OP_S4SUBL)   ? 2
+                     : (op == OP_S8ADDL || op == OP_S8SUBL) ? 3
+                                                            : 0;
+      // R31 operands are zero, not a register to fetch: addl zero, Rb is
+      // Alpha's sign-extend-longword idiom and becomes one SXTW.
+      if (ra == 31 && !issub) {
+        const a64::Gp d = rc_dst();
+        if (islit)
+          a.mov(d, imm((uint64_t)lit));
+        else if (rb == 31)
+          a.mov(d, imm(0));
+        else
+          a.sxtw(d, a64::w(op2_src().id()));
+        rc_done(d);
+        continue;
+      }
+      if (ra != 31 && !islit && rb == 31) {
+        const a64::Gp w1z = a64::w(op1_src().id());
+        const a64::Gp d = rc_dst();
+        if (sh) {
+          a.lsl(w0, w1z, imm(sh));
+          a.sxtw(d, w0);
+        } else
+          a.sxtw(d, w1z);
+        rc_done(d);
+        continue;
+      }
+      const a64::Gp s1 = op1_src();
+      const a64::Gp w1s = a64::w(s1.id());
+      if (islit) {
+        const a64::Gp base = sh ? w0 : w1s;
+        if (sh)
+          a.lsl(w0, w1s, imm(sh));
+        if (issub)
+          a.sub(w0, base, imm(lit));
+        else
+          a.add(w0, base, imm(lit));
+      } else {
+        const a64::Gp s2 = op2_src();
+        const a64::Gp w2s = a64::w(s2.id());
+        if (issub) {
+          if (sh) {
+            a.lsl(w0, w1s, imm(sh));
+            a.sub(w0, w0, w2s);
+          } else
+            a.sub(w0, w1s, w2s);
+        } else if (sh)
+          a.add(w0, w2s, w1s, a64::lsl(sh));
+        else
+          a.add(w0, w1s, w2s);
+      }
+      const a64::Gp d = rc_dst();
+      a.sxtw(d, w0);
       rc_done(d);
       continue;
     }

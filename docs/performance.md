@@ -855,6 +855,45 @@ Next, by instructions saved (not time until measured): peepholes for #4 and
 page (37% of the benchmark's memory ops are candidates, ~8 instructions
 each, on the address chain); a cheaper exit (~4 of its 10); stores 14 -> 11.
 
+### Peepholes: the operate emitter in place
+
+From the map (#4 and #5 above), behind `ALPHABOX_JIT_PEEP=0`:
+
+- `ADDL`/`SUBL`/`S4`/`S8` in 32-bit registers, in place: the scale is a
+  shifted operand, a literal an immediate, and the sign extension goes
+  straight into the destination. `addl zero, Rb`, Alpha's
+  sign-extend-longword idiom, is one `SXTW`. `addl Ra,#1` went 5 -> 2
+  instructions, `s4addl` 6 -> 2.
+- Logical operations with a literal take it as an AArch64 logical immediate
+  where it encodes (the complement for `BIC`/`ORNOT`/`EQV`): 3 -> 1.
+- `EXT`/`INS`/`MSK`/`ZAP` with a literal selector: one `UBFX`/`UBFIZ`, or one
+  `AND` with an immediate (`zapnot` 7 -> 1). With a register selector they
+  rely on variable shifts taking the count modulo 64, which drops the masking
+  (`extbl` 7 -> 3).
+
+JIT_VERIFY on the snapshot: the whole benchmark (4.05G compiled-block
+executions) and `makecab` (994M), 0 mismatches. Same binary, host busy
+with another session's builds and guests (`--busy-ok`; ledger rows
+`peep-axp`, `peep-cab`), results identical, both resolved:
+
+| section | MIPS without | MIPS with |
+| --- | --- | --- |
+| `alu` | 4183 | 4468 |
+| `branch` | 3135 | 3234 |
+| `call` | 3662 | 3847 |
+| `ldst` | 4158 | 4701 |
+| `fp` | 2371 | 2440 |
+| `byte` | 4654 | 5411 |
+| `div` | 5323 | 5829 |
+| `sort` | 3081 | 3202 |
+| `makecab` | 1315 | 1394 |
+
+MIPS here come from the same runs as the timings. In `--snapshot` mode
+`perf_ab.py` records `ALPHABOX_RATE` every 0.1 s, finds each section's
+plateau, and matches it to the section by length (the guest benchmark
+sleeps 300 ms before each section). No separate runs are needed, and an
+A/B of both workloads takes about 7 minutes.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5
