@@ -1,0 +1,5 @@
+; kernel32x.def: the kernel32 call axpbench.c makes that nada's own
+; kernel32.def does not list (the section gap).
+LIBRARY kernel32.dll
+EXPORTS
+    Sleep

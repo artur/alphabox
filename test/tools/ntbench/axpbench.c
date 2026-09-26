@@ -25,6 +25,12 @@
 
 #define N_STRIDE (6 << 20) /* bigger than any plausible page-cache reach */
 
+/* A pause before each section. The emulator's idle pacing turns it into a
+ * stretch of near-zero MIPS in ALPHABOX_RATE's report, so perf_ab.py can
+ * tell the sections apart and give each its own MIPS from the same run. */
+void __stdcall Sleep(unsigned long ms);
+#define SECTION_GAP_MS 300
+
 static unsigned long lfsr_state = 0xACE1u;
 static unsigned long lfsr(void) { /* deterministic, data-dependent branches */
   lfsr_state = (lfsr_state >> 1) ^ (-(lfsr_state & 1ul) & 0xB400u);
@@ -138,6 +144,7 @@ int main(int argc, char **argv) {
   tall = clock();
 #define RUN(nm, expr)                                                          \
   if (!strcmp(only, "all") || !strcmp(only, nm)) {                             \
+    Sleep(SECTION_GAP_MS);                                                     \
     t0 = clock();                                                              \
     report(nm, t0, (expr));                                                    \
   }

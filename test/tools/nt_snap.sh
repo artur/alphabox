@@ -55,7 +55,7 @@ make)
   rm -rf "$SNAP"; cp -c -R "$SRC" "$SNAP" 2>/dev/null || cp -R "$SRC" "$SNAP" || exit 2
   IMG="$SNAP/disk0.img@@16384"
   STAGE=$(mktemp -d) || exit 2
-  nada_build "$STAGE/AXPBENCH.EXE" "$T/ntbench/axpbench.c" || exit 2
+  nada_build "$STAGE/AXPBENCH.EXE" "$T/ntbench/axpbench.c" "$T/ntbench/kernel32x.def" || exit 2
   nada_build "$STAGE/SHUTDOWN.EXE" "$T/ntbench/shutdown.c" "$T/ntbench/user32.def" "$T/ntbench/advapi32.def" || exit 2
   cp "$T/ntbench/jsbench.js" "$STAGE/JSBENCH.JS"
   python3 - "$STAGE/CABIN.BIN" <<'PY'
@@ -123,7 +123,9 @@ run)
   pressure_ok || { echo "nt_snap: memory pressure critical"; exit 2; }
   D=$WORK/ntsnap-$LABEL
   rm -rf "$D"; cp -c -R "$SNAP" "$D" 2>/dev/null || cp -R "$SNAP" "$D" || exit 2
-  [ "${KEEP:-0}" = 1 ] || trap 'rm -rf "$D"' EXIT
+  # RUNLOG=<path>: keep the emulator's log (e.g. its ALPHABOX_RATE lines)
+  # after the clone is removed.
+  [ "${KEEP:-0}" = 1 ] || trap '[ -n "${RUNLOG:-}" ] && mkdir -p "$(dirname "$RUNLOG")" && cp "$D/run.log" "$RUNLOG"; rm -rf "$D"' EXIT
   IMG="$D/disk0.img@@16384"
   cd "$D" || exit 2
   CFG=$(cat snap.cfgname 2>/dev/null)

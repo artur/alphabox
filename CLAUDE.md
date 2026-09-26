@@ -92,7 +92,9 @@ differ by 5-10% per section from code layout alone, so an effect under
 (`ALPHABOX_JIT_*=0` for an emitter shape, read once with `getenv`) and run
 `perf_ab.py label bin bin --env-base SWITCH=0`. `--snapshot` resumes the
 desktop snapshot from `nt_snap.sh make` instead of cold-booting: minutes
-per A/B instead of a quarter of an hour. A number that did not come out
+per A/B instead of a quarter of an hour, and a MIPS column per section
+from the same runs. `--busy-ok` times on a busy host when asked to; the
+ledger row then says so. A number that did not come out
 of it is an estimate and must be labelled one. Static figures (bytes per
 instruction, block size) are never quoted as dynamic cost -- on this host,
 instructions off the address and branch chains cost nothing measurable.
