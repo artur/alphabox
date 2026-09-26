@@ -133,6 +133,67 @@ public:
       2; // cached direct successors per block (poly-link). Instrumentation
          // showed the thrashing fanout is EXACTLY 2; bump only if f3/f4 appear.
 
+#ifdef JIT_REGPROF
+  // REGPROF: what a guest instruction is, for the hot-path breakdown.
+  enum RpClass {
+    RP_LDA,   // LDA/LDAH: address arithmetic
+    RP_INTA,  // 10.x: add, sub, compare
+    RP_INTL,  // 11.x: logical, conditional move
+    RP_INTS,  // 12.x: shifts and byte manipulation (EXT/INS/MSK/ZAP)
+    RP_INTM,  // 13.x: multiply
+    RP_FPTI,  // 1C.x: sign extension, count, FTOI
+    RP_LOAD,  // integer loads, LDx_L
+    RP_STORE, // integer stores, STx_C
+    RP_FPMEM, // FP loads and stores
+    RP_FPOP,  // FP operate (14-17), ITOF
+    RP_CBR,   // conditional branches (integer and FP)
+    RP_BR,    // BR, BSR
+    RP_JMP,   // JMP/JSR/RET/JSR_COROUTINE
+    RP_MISC,  // 18.x: barriers, RPCC, prefetch hints
+    RP_PAL,   // CALL_PAL and the PALmode hardware instructions
+    kRpClasses
+  };
+  static int rp_class(uint32_t w) {
+    const uint32_t op = w >> 26;
+    if (op == 0x08 || op == 0x09)
+      return RP_LDA;
+    if (op == 0x10)
+      return RP_INTA;
+    if (op == 0x11)
+      return RP_INTL;
+    if (op == 0x12)
+      return RP_INTS;
+    if (op == 0x13)
+      return RP_INTM;
+    if (op == 0x1C)
+      return RP_FPTI;
+    if (op == 0x0A || op == 0x0B || op == 0x0C || (op >= 0x28 && op <= 0x2B))
+      return RP_LOAD;
+    if (op == 0x0D || op == 0x0E || op == 0x0F || (op >= 0x2C && op <= 0x2F))
+      return RP_STORE;
+    if (op >= 0x20 && op <= 0x27)
+      return RP_FPMEM;
+    if (op >= 0x14 && op <= 0x17)
+      return RP_FPOP;
+    if (op == 0x30 || op == 0x34)
+      return RP_BR;
+    if (op >= 0x31)
+      return RP_CBR;
+    if (op == 0x1A)
+      return RP_JMP;
+    if (op == 0x18)
+      return RP_MISC;
+    return RP_PAL;
+  }
+  static const char *rp_class_name(int c) {
+    static const char *const n[kRpClasses] = {
+        "lda",         "int-arith", "int-logic",   "shift/byte", "multiply",
+        "sext/count",  "load",      "store",       "fp-mem",     "fp-op",
+        "cond-branch", "br/bsr",    "jmp/jsr/ret", "misc/rpcc",  "pal"};
+    return (c >= 0 && c < kRpClasses) ? n[c] : "?";
+  }
+  uint32_t m_rp_regmem = 0; // guest register accesses to memory, this block
+#endif
   struct JitBlock {
     uint64_t tag;     // start VIRTUAL PC (validity tag / key)
     uint64_t phys;    // start physical PC (source bytes for compilation)
@@ -194,6 +255,14 @@ public:
     uint32_t rp_memops;
     uint32_t rp_dpc_pairs;
     uint32_t rp_dpc_near;
+    // REGPROF (AArch64): the hot path by what it is made of -- guest
+    // operations per class and the host bytes their hot-pass code took, the
+    // in-block exits' taken sides, the block's own exit, and how many guest
+    // register accesses went to memory (no pin). Cold stubs and the prologue
+    // (skipped by chained entry) are not counted.
+    uint16_t rp_cls_ops[kRpClasses];
+    uint16_t rp_cls_bytes[kRpClasses];
+    uint16_t rp_midexit_bytes, rp_exit_bytes, rp_regmem;
 #endif
   };
 

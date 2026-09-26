@@ -479,6 +479,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     regalloc.rax_holds = -1;
 
     auto reg = [&](int r) { // PALshadow remap (RREG), as in the x86 emitter
+#ifdef JIT_REGPROF
+      if (!m_cold_pass)
+        ++m_rp_regmem;
+#endif
       int idx = (pal_block && ((r & 0xc) == 0x4)) ? r + 32 : r;
       return a64::ptr(kCpu, (int32_t)(kRegs + idx * 8));
     };
@@ -2362,6 +2366,9 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     } else {
       const int idx = (pal_block && ((bra & 0xc) == 0x4)) ? bra + 32 : bra;
       a.ldr(a64::x0, a64::ptr(a64::x19, (int32_t)(m_off.regs + idx * 8)));
+#ifdef JIT_REGPROF
+      ++m_rp_regmem;
+#endif
       ra.rax_holds = bra;
     }
     switch (bop) {
@@ -2436,11 +2443,43 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     m_pending_br_op = -1;
   };
   m_block_last = plen ? plen - 1 : 0;
+#ifdef JIT_REGPROF
+  memset(b->rp_cls_ops, 0, sizeof(b->rp_cls_ops));
+  memset(b->rp_cls_bytes, 0, sizeof(b->rp_cls_bytes));
+  b->rp_midexit_bytes = 0;
+  m_rp_regmem = 0;
+  auto rp_add = [](uint16_t &f, size_t v) {
+    f = (uint16_t)std::min<size_t>(0xFFFF, f + v);
+  };
+#endif
   for (uint32_t i = 0; i < plen; ++i) {
+#ifdef JIT_REGPROF
+    const size_t rp0 = code.code_size();
+#endif
+#ifdef JIT_DISASM
+    {
+      char cm[24];
+      snprintf(cm, sizeof(cm), "alpha %08x", words[i]);
+      a.comment(cm); // lab/alphadis.py decodes it
+    }
+#endif
     emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
+#ifdef JIT_REGPROF
+    const int rc = rp_class(words[i]);
+    rp_add(b->rp_cls_ops[rc], 1);
+    rp_add(b->rp_cls_bytes[rc], code.code_size() - rp0);
+    const size_t rp1 = code.code_size();
+#endif
     if (m_pending_br_op >= 0 && i + 1 < plen)
       emit_mid_exit(i);
+#ifdef JIT_REGPROF
+    rp_add(b->rp_midexit_bytes, code.code_size() - rp1);
+#endif
   }
+#ifdef JIT_REGPROF
+  const size_t rp_exit0 = code.code_size();
+  b->rp_regmem = (uint16_t)std::min<uint32_t>(0xFFFF, m_rp_regmem);
+#endif
   m_block_last = ~0u;
   m_defer_branch_pc = false;
 
@@ -2579,6 +2618,10 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   }
 #ifndef JIT_VERIFY
   a.bind(exit_all);
+#endif
+#ifdef JIT_REGPROF
+  b->rp_exit_bytes =
+      (uint16_t)std::min<size_t>(0xFFFF, code.code_size() - rp_exit0);
 #endif
   a.mov(a64::x0, a64::x27);
   a.bind(done); // bails arrive with x0 already set

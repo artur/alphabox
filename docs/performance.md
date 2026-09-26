@@ -767,6 +767,65 @@ warm-up):
 | `sort` | 2712 | 3069 |
 | `makecab` | 815 | 1277 |
 
+### The hot path, by what it is made of
+
+`JIT_REGPROF` now splits each block's hot path by guest instruction class.
+For each class it records how many operations there are and the host bytes
+their hot-pass code took; AArch64 instructions are 4 bytes, so bytes / 4 is
+exact. The in-block exits' taken sides and the block's exit code are
+separate buckets, and a count of guest-register accesses that go to memory
+(no pin) is kept too. The report is windowed and weighted by block
+executions. Cold stubs, and the prologue that chained entry skips, are left
+out. `JIT_DISASM` marks each guest instruction in its listing
+(`alpha <word>`; `lab/alphadis.py` decodes it).
+
+Each section run alone from the snapshot, plus `makecab`, windows over 500
+MIPS (logs in `lab/results/stats-logs/rpb-*.log`). "Host/guest" is emitted
+hot-path instructions per guest instruction. These are **instruction
+counts**. Instructions off the address and branch chains cost little on
+this host, so they rank the work; they do not measure time.
+
+| workload | guest instrs per block run | host/guest (ops + exits) | loads | stores | block exit | helper time |
+| --- | --- | --- | --- | --- | --- | --- |
+| `alu` | 38.3 | 7.05 | 22.9% x 12.0 | 15.2% x 14.0 | 4.5% | 0.1% |
+| `branch` | 9.2 | 9.44 | 19.5% x 12.7 | 13.0% x 14.0 | 30.3% | 0.1% |
+| `call` | 8.7 | 9.42 | 15.3% x 12.1 | 15.1% x 14.0 | 36.3% | 1.0% |
+| `ldst` | 21.9 | 7.62 | 22.4% x 12.0 | 9.0% x 14.0 | 7.2% | 0.1% |
+| `stride` | 10.8 | 9.82 | 21.6% x 12.4 | 15.7% x 14.0 | 23.3% | 8.9% |
+| `fp` | 24.7 | 13.68 | 9.9% x 12.1 | 16.0% x 14.0 | 6.8% | 1.4% |
+| `byte` | 16.7 | 7.39 | 14.7% x 12.6 | 6.6% x 14.4 | 11.3% | 1.1% |
+| `div` | 6.2 | 7.73 | 0.2% | 0.1% | 63.4% | 0.1% |
+| `sort` | 16.1 | 8.69 | 26.2% x 12.3 | 8.9% x 14.3 | 18.9% | 0.1% |
+| `makecab` | 10.8 | 9.61 | 17.0% x 12.7 | 6.1% x 14.4 | 31.4% | 1.6% |
+
+(Loads and stores: share of guest instructions x host instructions each.
+Block exit: share of the emitted hot path.) The other classes, per
+operation: integer arithmetic 4.3-4.7 (`makecab`: 36% of its instructions),
+logical 1-2.8, shift and byte manipulation 4-7, multiply 5, FP operate 16-36,
+FP load/store 17-18.
+
+What the listings show those costs are made of:
+
+- **A load is 12**: address 1, alignment test 2, slot index 2, tag and bias
+  1 (`ldp`), building the key from page, ASN and mode 3, compare and branch
+  2, the access 1. **A store is 14**: the write row sits beyond `ldp`'s
+  reach, so tag and bias are two loads, and the value takes a `mov` before
+  the store even when it is already in a pinned register. `ldq_u` tests the
+  alignment of an address it has just aligned.
+- **A block exit** to a cached successor is about 10 on its hit path: the
+  count, a 64-bit exit-record address (up to 4 `mov`s), two epoch loads,
+  compare, branch, body load, `br`. A backward branch adds the 6-instruction
+  gate. Branchy code runs 6-11 guest instructions per block, so exits are
+  a third of `makecab`'s and `call`'s hot path, and two thirds of `div`'s.
+- **The operate emitter shuttles through x0/x1.** `addl r4, 1` is `mov w0,w4;
+  mov w1,1; add; sxtw; mov x4,x0` (5) where `add w4,w4,#1; sxtw` would do
+  (2). `extbl` is 7 where `lsl; lsr; and` would do (3, since AArch64 shifts
+  take the low 6 bits of the count). `zapnot` with a literal loads its mask
+  from a table (7) instead of using an immediate (1). `s4addl` is 6 for 2.
+- **Unpinned registers** cost 0.02-0.4 memory accesses per guest
+  instruction. `makecab` (0.31) and `stride` (0.40) are the highest, even
+  with the adaptive set.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5

@@ -3756,6 +3756,9 @@ void CJitEngine::compile_block(
   if (plen == 0)
     return;
 #ifdef JIT_REGPROF
+  memset(b->rp_cls_ops, 0, sizeof(b->rp_cls_ops)); // a64 emitter fills these
+  memset(b->rp_cls_bytes, 0, sizeof(b->rp_cls_bytes));
+  b->rp_midexit_bytes = b->rp_exit_bytes = b->rp_regmem = 0;
   b->rp_mask = regprof_mask(
       words, plen); // GPR-access fingerprint; exec-weighted at report time
   {
@@ -5040,6 +5043,86 @@ void CJitEngine::regprof_report() {
   printf("[JIT][REGPROF][CPU%d] exec-weighted expansion: %.1f x86-bytes/instr "
          "(hot path)\n",
          m_cpu_id, exec_instr ? (double)exec_bytes / (double)exec_instr : 0.0);
+  // The hot path by what it is made of (AArch64: 4 bytes an instruction),
+  // over this report's window, weighted by executions; the in-block
+  // exits' taken sides and the block exit are emitted code, so what one
+  // execution runs of them is less.
+  {
+    uint64_t ops[kRpClasses] = {0}, byt[kRpClasses] = {0};
+    uint64_t hits = 0, mid = 0, ex = 0, rmem = 0, g = 0, hb = 0;
+    for (int s2 = 0; s2 < kCacheEntries; ++s2) {
+      const JitBlock &b = m_blocks[s2];
+      if (!b.valid || b.rp_hits == 0)
+        continue;
+      hits += b.rp_hits;
+      for (int c = 0; c < kRpClasses; ++c) {
+        ops[c] += b.rp_hits * b.rp_cls_ops[c];
+        byt[c] += b.rp_hits * b.rp_cls_bytes[c];
+      }
+      mid += b.rp_hits * b.rp_midexit_bytes;
+      ex += b.rp_hits * b.rp_exit_bytes;
+      rmem += b.rp_hits * b.rp_regmem;
+    }
+    // This window only: the difference from the previous report. A reclaim
+    // (a pin-set change, a full cache) resets the blocks' counts, and such a
+    // window is skipped rather than reported wrong.
+    {
+      static uint64_t p_ops[kRpClasses], p_byt[kRpClasses], p_hits, p_mid, p_ex,
+          p_rmem;
+      bool sane =
+          hits >= p_hits && mid >= p_mid && ex >= p_ex && rmem >= p_rmem;
+      for (int c = 0; c < kRpClasses; ++c)
+        sane = sane && ops[c] >= p_ops[c] && byt[c] >= p_byt[c];
+      uint64_t n_ops[kRpClasses], n_byt[kRpClasses];
+      memcpy(n_ops, ops, sizeof(ops));
+      memcpy(n_byt, byt, sizeof(byt));
+      const uint64_t n_hits = hits, n_mid = mid, n_ex = ex, n_rmem = rmem;
+      for (int c = 0; c < kRpClasses; ++c) {
+        ops[c] = sane ? ops[c] - p_ops[c] : 0;
+        byt[c] = sane ? byt[c] - p_byt[c] : 0;
+      }
+      hits = sane ? hits - p_hits : 0;
+      mid = sane ? mid - p_mid : 0;
+      ex = sane ? ex - p_ex : 0;
+      rmem = sane ? rmem - p_rmem : 0;
+      memcpy(p_ops, n_ops, sizeof(p_ops));
+      memcpy(p_byt, n_byt, sizeof(p_byt));
+      p_hits = n_hits;
+      p_mid = n_mid;
+      p_ex = n_ex;
+      p_rmem = n_rmem;
+    }
+    for (int c = 0; c < kRpClasses; ++c) {
+      g += ops[c];
+      hb += byt[c];
+    }
+    if (g && hits) {
+      const double all = (double)(hb + mid + ex);
+      printf("[JIT][REGPROF][CPU%d] breakdown: %.2f guest instrs per block "
+             "run; ops %.2f host instrs/guest instr; mid-exits %.1f and block "
+             "exit %.1f emitted host instrs per run; %.2f guest-register "
+             "memory accesses per guest instr [hits=%llu mid=%llu exit=%llu "
+             "rmem=%llu]\n",
+             m_cpu_id, (double)g / hits, (double)hb / 4.0 / (double)g,
+             (double)mid / 4.0 / hits, (double)ex / 4.0 / hits,
+             (double)rmem / (double)g, (unsigned long long)hits,
+             (unsigned long long)mid, (unsigned long long)ex,
+             (unsigned long long)rmem);
+      for (int c = 0; c < kRpClasses; ++c)
+        if (ops[c])
+          printf("[JIT][REGPROF][CPU%d]   %-11s %5.1f%% of guest instrs | "
+                 "%5.2f host instrs each | %5.1f%% of emitted hot path "
+                 "[ops=%llu bytes=%llu]\n",
+                 m_cpu_id, rp_class_name(c), 100.0 * (double)ops[c] / g,
+                 (double)byt[c] / 4.0 / (double)ops[c],
+                 100.0 * (double)byt[c] / all, (unsigned long long)ops[c],
+                 (unsigned long long)byt[c]);
+      printf("[JIT][REGPROF][CPU%d]   %-11s %5.1f%% of emitted hot path\n",
+             m_cpu_id, "mid-exits", 100.0 * (double)mid / all);
+      printf("[JIT][REGPROF][CPU%d]   %-11s %5.1f%% of emitted hot path\n",
+             m_cpu_id, "block exit", 100.0 * (double)ex / all);
+    }
+  }
   char buf[512];
   int len =
       snprintf(buf, sizeof(buf),
