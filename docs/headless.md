@@ -50,6 +50,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. AArch64 compiled code and the helpers; the x86-64 emitter never probes it. |
 | `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, whatever they hold, as before. See docs/cpu-fidelity.md, "Data translations outlive their TB entry". |
 | `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
+| `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe when it is on the same page (AArch64). |
 | `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms (longword arithmetic, logical immediates, byte manipulation): operands shuttled through x0/x1 as before. For a same-binary A/B. |
 | `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64 emitter). See docs/performance.md, "Sixteen pins, chosen by what runs". |
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |

@@ -75,6 +75,117 @@ const bool g_a64_peep = [] {
   return !(e && strcmp(e, "0") == 0);
 }();
 
+// ALPHABOX_JIT_REUSE=0: every memory op probes the page cache itself.
+const bool g_a64_reuse = [] {
+  const char *e = getenv("ALPHABOX_JIT_REUSE");
+  return !(e && strcmp(e, "0") == 0);
+}();
+
+// Probe reuse. A memory op on the same base register as the block's previous
+// one, same page-cache row, displacement within 8 KB and the base unchanged,
+// is probably on the same page: it tests that at run time against the page
+// the previous probe kept (x16, its bias in x3) and, if so, skips the probe
+// -- 6-8 instructions instead of 12-14. If not, it probes as usual. Only the
+// ops known to leave x3 and x16 alone may come between: integer operates,
+// LDA/LDAH, integer branches (their taken side leaves the block) and integer
+// loads and stores. A producer's cold stub leaves x16 = 1, which no aligned
+// address matches (the test includes bit 0), so only accesses known to be
+// aligned consume: all but byte loads and stores. Bits per op: 1 consume,
+// 2 keep, 4 alignment implied by the previous op's.
+void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
+  int prev = -1, prev_rb = -1, prev_size = 0;
+  bool prev_write = false, prev_u = false;
+  int32_t prev_disp = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    plan[i] = 0;
+    if (!g_a64_reuse)
+      continue;
+    const uint32_t ins = w[i], op = ins >> 26;
+    const int ra = (ins >> 21) & 0x1f, rb = (ins >> 16) & 0x1f, rc = ins & 0x1f;
+    const int32_t disp = (int32_t)(int16_t)(ins & 0xffff);
+    int size = 0;
+    bool write = false, unal = false;
+    switch (op) {
+    case 0x0a:
+      size = 1;
+      break; // LDBU
+    case 0x0b:
+      size = 8;
+      unal = true;
+      break; // LDQ_U
+    case 0x0c:
+      size = 2;
+      break; // LDWU
+    case 0x28:
+      size = 4;
+      break; // LDL
+    case 0x29:
+      size = 8;
+      break; // LDQ
+    case 0x0d:
+      size = 2;
+      write = true;
+      break; // STW
+    case 0x0e:
+      size = 1;
+      write = true;
+      break; // STB
+    case 0x0f:
+      size = 8;
+      write = unal = true;
+      break; // STQ_U
+    case 0x2c:
+      size = 4;
+      write = true;
+      break; // STL
+    case 0x2d:
+      size = 8;
+      write = true;
+      break; // STQ
+    default:
+      break;
+    }
+    // A load into R31 emits no code at all (UNOP is LDQ_U R31, 0(SP)): it
+    // neither probes nor disturbs anything, so it is invisible here. Counting
+    // it as a probe let the next op reuse x3/x16 left by an earlier block --
+    // another address space, another row -- and Windows 2000 died booting.
+    if (size && !write && ra == 31)
+      continue;
+    if (size) {
+      if (prev >= 0 && prev_rb == rb && prev_write == write && size > 1 &&
+          disp - prev_disp > -0x2000 && disp - prev_disp < 0x2000) {
+        plan[i] |= 1;
+        plan[prev] |= 2;
+        if (unal ||
+            (!prev_u && prev_size >= size && (disp - prev_disp) % size == 0))
+          plan[i] |= 4;
+      }
+      prev = (int)i;
+      prev_rb = rb;
+      prev_write = write;
+      prev_disp = disp;
+      prev_size = size;
+      prev_u = unal;
+      if (!write && ra == rb) // a load into its own base ends the chain
+        prev = -1;
+      continue;
+    }
+    if (op >= 0x10 && op <= 0x13) { // integer operate
+      if (rc == prev_rb)
+        prev = -1;
+      continue;
+    }
+    if (op == 0x08 || op == 0x09) { // LDA, LDAH
+      if (ra == prev_rb)
+        prev = -1;
+      continue;
+    }
+    if (op >= 0x38) // integer conditional branch: writes nothing
+      continue;
+    prev = -1; // anything else may disturb x3/x16
+  }
+}
+
 // R4-R7 and R20-R23 name the shadow bank in a PAL block (RREG).
 inline bool a64_shadow_reg(int r) { return r < 24 && (r & 0xc) == 0x4; }
 
@@ -802,15 +913,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
         Label miss = a.new_label();
         if (dpc_probe_way1(false, size_bits, miss)) {
           load_from(a64::ptr(x10, x2));
+          if (rp & 2)
+            a.mov(a64::x16, imm(1)); // no probe kept: no later op reuses it
           a.b(Label(m_cold_back[cold_idx]));
           a.bind(miss);
         }
         emit_helper();
+        if (rp & 2)
+          a.mov(a64::x16, imm(1));
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }
@@ -818,11 +934,30 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       if (op == OP_LDQ_U)
         a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), ldone = a.new_label();
-      if (size_bits > 8) {
+      // LDQ_U's address is aligned by the AND above.
+      const bool align = size_bits > 8 && op != OP_LDQ_U;
+      auto align_test = [&]() {
         a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
         a.b_ne(slow);
+      };
+      if (align && !((rp & 1) && (rp & 4)))
+        align_test();
+      if (rp & 1) { // the previous probe's page, if this is on it
+        Label full = a.new_label();
+        a.eor(x11, x2, a64::x16);
+        a.tst(x11, imm(0xFFFFFFFFFFFFE001ull));
+        a.b_ne(full);
+        load_from(a64::ptr(a64::x3, x2));
+        a.b(ldone);
+        a.bind(full);
+        if (align && (rp & 4))
+          align_test();
       }
       dpc_probe(false, slow);
+      if (rp & 2) { // keep this probe for a later op
+        a.mov(a64::x3, x10);
+        a.and_(a64::x16, x2, imm(~(uint64_t)0x1FFF));
+      }
       load_from(a64::ptr(x10, x2));
       if (!cold_record(slow, ldone)) {
         a.b(ldone);
@@ -854,27 +989,40 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      // Store Ra: straight from its pin where it has one (or from XZR for
+      // R31), else from x12 after a load of its guest slot.
+      auto store_to = [&](const a64::Mem &m) {
+        const int p = (ra == 31) ? -1 : regalloc.host_of(ra);
+        uint32_t id = 12;
+        if (ra == 31)
+          id = 31;
+        else if (p >= 0)
+          id = (uint32_t)p;
+        else
+          mov_from_reg(x12, ra);
+        if (size_bits == 64)
+          a.str(id == 31 ? a64::xzr : a64::x(id), m);
+        else if (size_bits == 32)
+          a.str(id == 31 ? a64::wzr : a64::w(id), m);
+        else if (size_bits == 16)
+          a.strh(id == 31 ? a64::wzr : a64::w(id), m);
+        else
+          a.strb(id == 31 ? a64::wzr : a64::w(id), m);
+      };
+      const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
         Label miss = a.new_label();
         if (dpc_probe_way1(true, size_bits, miss)) {
-          if (ra == 31)
-            a.mov(x12, imm(0));
-          else
-            mov_from_reg(x12, ra);
-          const a64::Mem m = a64::ptr(x10, x2);
-          if (size_bits == 64)
-            a.str(x12, m);
-          else if (size_bits == 32)
-            a.str(w12, m);
-          else if (size_bits == 16)
-            a.strh(w12, m);
-          else
-            a.strb(w12, m);
+          store_to(a64::ptr(x10, x2));
+          if (rp & 2)
+            a.mov(a64::x16, imm(1)); // no probe kept: no later op reuses it
           a.b(Label(m_cold_back[cold_idx]));
           a.bind(miss);
         }
         emit_helper();
+        if (rp & 2)
+          a.mov(a64::x16, imm(1));
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }
@@ -882,24 +1030,31 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       if (op == OP_STQ_U)
         a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), sdone = a.new_label();
-      if (size_bits > 8) {
+      // STQ_U's address is aligned by the AND above.
+      const bool align = size_bits > 8 && op != OP_STQ_U;
+      auto align_test = [&]() {
         a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
         a.b_ne(slow);
+      };
+      if (align && !((rp & 1) && (rp & 4)))
+        align_test();
+      if (rp & 1) { // the previous probe's page, if this is on it
+        Label full = a.new_label();
+        a.eor(x11, x2, a64::x16);
+        a.tst(x11, imm(0xFFFFFFFFFFFFE001ull));
+        a.b_ne(full);
+        store_to(a64::ptr(a64::x3, x2));
+        a.b(sdone);
+        a.bind(full);
+        if (align && (rp & 4))
+          align_test();
       }
       dpc_probe(true, slow);
-      if (ra == 31)
-        a.mov(x12, imm(0));
-      else
-        mov_from_reg(x12, ra);
-      const a64::Mem m = a64::ptr(x10, x2);
-      if (size_bits == 64)
-        a.str(x12, m);
-      else if (size_bits == 32)
-        a.str(w12, m);
-      else if (size_bits == 16)
-        a.strh(w12, m);
-      else
-        a.strb(w12, m);
+      if (rp & 2) { // keep this probe for a later op
+        a.mov(a64::x3, x10);
+        a.and_(a64::x16, x2, imm(~(uint64_t)0x1FFF));
+      }
+      store_to(a64::ptr(x10, x2));
       if (!cold_record(slow, sdone)) {
         a.b(sdone);
         a.bind(slow);
@@ -2478,6 +2633,11 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   m_cold_base = 0;
   for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
     m_cold_used[i] = false;
+#ifndef JIT_VERIFY
+  a64_plan_reuse(words, std::min<uint32_t>(plen, kColdMax), m_reuse_plan);
+#else
+  memset(m_reuse_plan, 0, sizeof(m_reuse_plan));
+#endif
   // Opt this pass into the condition-branching exit: a block ends at its
   // branch, so at most one op can leave a condition pending, and the epilogue
   // below is the only consumer. A JIT_VERIFY build has no epilogue, and the
@@ -2926,6 +3086,7 @@ bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
   a.bind(body);
 
   RegAlloc ra; // allocated per segment: segments differ in PAL-ness
+  memset(m_reuse_plan, 0, sizeof(m_reuse_plan)); // no probe reuse in traces
   m_cold_pass = false;
   for (uint32_t i = 0; i < kColdMax; ++i)
     m_cold_used[i] = false;

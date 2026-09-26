@@ -894,6 +894,45 @@ plateau, and matches it to the section by length (the guest benchmark
 sleeps 300 ms before each section). No separate runs are needed, and an
 A/B of both workloads takes about 7 minutes.
 
+### Probe reuse
+
+A memory op on the same base register as the block's previous one (same
+page-cache row, displacement within 8 KB, base unchanged in between) tests
+at run time whether it is on the page the previous probe found. The page
+is kept in x16 and its bias in x3. If it is, the op goes straight to the
+access: 6 instructions for a store, where the probe and store took 14. If
+not, it probes as usual. `a64_plan_reuse` decides per block, allowing only
+ops known to leave x3 and x16 alone between producer and consumer. A
+producer's cold stub leaves x16 = 1, which no aligned address matches (the
+test includes bit 0), so only aligned accesses consume. Byte loads and
+stores do not. `ALPHABOX_JIT_REUSE=0` turns it off. The store path also
+stores straight from the pin (or XZR) instead of copying to x12 first, and
+LDQ_U/STQ_U no longer test the alignment of an address they have just
+aligned.
+
+The first version counted `LDQ_U R31, 0(SP)` (UNOP, which emits nothing) as
+a probe. The next op then reused x3/x16 left by an earlier block, from
+another address space or the other row, and Windows 2000 died during
+start-up. The planner now skips loads into R31. The verify lane cannot
+catch such a bug: it sends every memory op through the helper. The checks
+are a Windows boot and `perf_ab`'s identical results.
+
+Same binary, busy host (`--busy-ok`; ledger rows `reuse-axp`,
+`reuse-cab`), results identical. The benchmark resolved at -11.0% total;
+`makecab` is inconclusive (-0.9%; 5% of its memory ops are candidates):
+
+| section | MIPS without | MIPS with |
+| --- | --- | --- |
+| `alu` | 4487 | 4843 |
+| `branch` | 3295 | 3633 |
+| `call` | 3633 | 4577 |
+| `ldst` | 4642 | 4790 |
+| `fp` | 2475 | 2510 |
+| `byte` | 5646 | 5690 |
+| `div` | 5794 | 5852 |
+| `sort` | 3263 | 3768 |
+| `makecab` | 1365 | 1375 |
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5

@@ -1017,6 +1017,11 @@ private:
   uint32_t m_cold_slow[kColdMax];
   uint32_t m_cold_back[kColdMax];
   bool m_cold_used[kColdMax] = {};
+  // Probe reuse (AArch64, a64_plan_reuse): per instruction of the block being
+  // assembled, bit 0 = test whether the last probe's page (x16, bias in x3)
+  // still applies, bit 1 = keep this probe for a later op, bit 2 = the
+  // alignment is implied by the last probe's.
+  uint8_t m_reuse_plan[kColdMax] = {};
   uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
   // Interpreted passes before a block compiles (ALPHABOX_JIT_COMPILE_AFTER
