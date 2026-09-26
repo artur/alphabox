@@ -826,6 +826,35 @@ What the listings show those costs are made of:
   instruction. `makecab` (0.31) and `stride` (0.40) are the highest, even
   with the adaptive set.
 
+### The map, ranked (2026-09-26)
+
+Ranked by share of the emitted hot path over the benchmark sections and
+`makecab`, from the tables above. At 4.05 GHz, `makecab` at 1277 MIPS
+spends ~3.2 host cycles per guest instruction and `alu` at 4190 ~1.
+
+| # | part | frequency | host instrs each | share of hot path | why |
+| --- | --- | --- | --- | --- | --- |
+| 1 | loads | 15-26% of guest instrs | 12 | 22-39% | 9 of the 12 re-check the translation |
+| 2 | block exits | one per 6-11 guest instrs in branchy code | ~10 on a cached link, +6 gate if backward | 30-36% of `makecab`/`call`/`branch`, 63% of `div` | count, 64-bit exit-record address, epoch check, indirect branch |
+| 3 | stores | 6-20% | 14 | 7-30% | the load's probe, but tag and bias in two loads, and a copy of the value |
+| 4 | integer arithmetic | 36% of `makecab`, 10-32% elsewhere | 4.5 | up to 19% | shuttled through x0/x1; literals materialised |
+| 5 | shift / byte manipulation | 5-34% | 4-7 | 6-18% | no AArch64 bitfield idioms; `zapnot` masks from a table |
+| 6 | FP | the `fp` section | 17-18 (memory), 16-36 (operate) | ~60% of `fp` | the probe, plus FPCR rounding and trap emulation |
+| 7 | in-block exits | per taken mid-block branch | as #2 | 3-14% | as #2 |
+| 8 | unpinned registers | 0.02-0.4 memory accesses per guest instr | | | `stride`, `makecab` highest |
+| 9 | helpers | | | time: 1.6% of `makecab`, 8.9% of `stride` | first-touch pages |
+| 10 | dispatch + interpreter | | | time: 4-7% | the gate returning to the dispatcher |
+
+A native compiler emits ~1-1.5 host instructions per Alpha instruction;
+this one emits 7-14. Most of the gap is structural: a translation check on
+every access, and a hand-off on every short block. Emitter quality (#4,
+#5) is the rest, and the easiest part.
+
+Next, by instructions saved (not time until measured): peepholes for #4 and
+#5, ~1 host instr per guest instr on `makecab`; reusing a probe for the same
+page (37% of the benchmark's memory ops are candidates, ~8 instructions
+each, on the address chain); a cheaper exit (~4 of its 10); stores 14 -> 11.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5
