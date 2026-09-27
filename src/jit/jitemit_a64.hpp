@@ -186,6 +186,7 @@ void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
   }
 }
 
+
 // R4-R7 and R20-R23 name the shadow bank in a PAL block (RREG).
 inline bool a64_shadow_reg(int r) { return r < 24 && (r & 0xc) == 0x4; }
 
@@ -2660,6 +2661,18 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   // else record a link-patch request and fall through to lbl.
   const int32_t off_link = (int32_t)((char *)&b->link[0] - (char *)b);
   ExitRec *xrec = nullptr; // this code's exit record (first static exit)
+  // The block's literal pool, emitted after its cold section: 64-bit
+  // constants an exit loads with one PC-relative LDR rather than building.
+  std::vector<std::pair<Label, uint64_t>> lits;
+  auto load_lit = [&](const a64::Gp &r, uint64_t v) {
+    for (const auto &l : lits)
+      if (l.second == v) {
+        a.ldr(r, a64::ptr(l.first));
+        return;
+      }
+    lits.emplace_back(a.new_label(), v);
+    a.ldr(r, a64::ptr(lits.back().first));
+  };
   auto emit_chain = [&](const Label &lbl) {
     Label miss = a.new_label();
     a.mov(a64::x3, imm((uint64_t)b)); // this block: link table + miss record
@@ -2712,7 +2725,10 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.b(lbl);
       return;
     }
-    a.mov(a64::x3, imm((uint64_t)xr)); // this exit's record
+    // This exit's record: one PC-relative load from the block's literal pool
+    // rather than a 3-instruction MOVZ/MOVK. Measured no faster -- those were
+    // off the critical path (docs/performance.md) -- but it is less code.
+    load_lit(a64::x3, (uint64_t)xr);
     const int32_t off_lbody = (int32_t)offsetof(ExitRec, body);
     const int32_t off_lepoch = (int32_t)offsetof(ExitRec, epoch);
     // Every static exit is an epoch-guarded data link: the body cached for
@@ -3045,6 +3061,15 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
         emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, cra);
     m_cold_pass = false;
   }
+#ifndef JIT_VERIFY
+  if (!lits.empty()) {
+    a.align(AlignMode::kData, 8);
+    for (const auto &l : lits) {
+      a.bind(l.first);
+      a.embed_uint64(l.second);
+    }
+  }
+#endif
 
   const size_t csz = code.code_size();
 #ifdef JIT_DISASM
