@@ -1392,7 +1392,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   u64 phys;
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
-      cpu->data_page_cache[0][dpc_index(va)]; // direct-mapped by virt page
+      cpu->data_page_cache[0][cpu->dpc_index(va)]; // direct-mapped by virt page
   // Why the INLINE probe sent us here, which is not the same question as why
   // this helper bails. The inline probe compares one packed tag, so it rejects
   // an empty slot, another page in the slot, a different address space or
@@ -1404,11 +1404,12 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
                             : dpc.host_base == 0         ? CJitEngine::DM_MMIO
                                                          : CJitEngine::DM_HIT);
   if (dpc.valid && dpc.virt_page != vp)
-    cpu->m_jit->note_dpc_other(0, unsigned(dpc_index(va)), vp, dpc.virt_page);
+    cpu->m_jit->note_dpc_other(0, unsigned(cpu->dpc_index(va)), vp,
+                               dpc.virt_page);
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
-  } else if (cpu->dpc_promote(0, dpc_index(va), vp, cm,
+  } else if (cpu->dpc_promote(0, cpu->dpc_index(va), vp, cm,
                               cpu->state.asn0)) { // the second level had it
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
@@ -1788,11 +1789,11 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
 
   u64 phys;
   const u64 vp = va & ~U64(0x1FFF);
-  SDataPageCache &dpc = cpu->data_page_cache[0][dpc_index(va)];
+  SDataPageCache &dpc = cpu->data_page_cache[0][cpu->dpc_index(va)];
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
-  } else if (cpu->dpc_promote(0, dpc_index(va), vp, cpu->state.cm,
+  } else if (cpu->dpc_promote(0, cpu->dpc_index(va), vp, cpu->state.cm,
                               cpu->state.asn0)) { // the second level had it
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
@@ -2016,13 +2017,14 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   u64 phys;
   const u64 vp = va & ~U64(0x1FFF);
   SDataPageCache &dpc =
-      cpu->data_page_cache[1][dpc_index(va)]; // direct-mapped by virt page
+      cpu->data_page_cache[1][cpu->dpc_index(va)]; // direct-mapped by virt page
   if (dpc.valid && dpc.virt_page != vp)
-    cpu->m_jit->note_dpc_other(1, unsigned(dpc_index(va)), vp, dpc.virt_page);
+    cpu->m_jit->note_dpc_other(1, unsigned(cpu->dpc_index(va)), vp,
+                               dpc.virt_page);
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
-  } else if (cpu->dpc_promote(1, dpc_index(va), vp, cm,
+  } else if (cpu->dpc_promote(1, cpu->dpc_index(va), vp, cm,
                               cpu->state.asn0)) { // the second level had it
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
@@ -2145,11 +2147,11 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   // side-effecting translation.
   u64 phys;
   const u64 vp = va & ~U64(0x1FFF);
-  SDataPageCache &dpc = cpu->data_page_cache[1][dpc_index(va)];
+  SDataPageCache &dpc = cpu->data_page_cache[1][cpu->dpc_index(va)];
   if (dpc.valid && dpc.virt_page == vp && dpc.cm == cpu->state.cm &&
       dpc.asn == cpu->state.asn0) {
     phys = dpc.phys_base | (va & U64(0x1FFF));
-  } else if (cpu->dpc_promote(1, dpc_index(va), vp, cpu->state.cm,
+  } else if (cpu->dpc_promote(1, cpu->dpc_index(va), vp, cpu->state.cm,
                               cpu->state.asn0)) { // the second level had it
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));

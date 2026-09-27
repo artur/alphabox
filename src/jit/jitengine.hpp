@@ -322,6 +322,9 @@ public:
         dpc_mask; // direct-mapped page cache: per-slot byte stride, index mask
     uint32_t dpc_write_row; // byte distance from read cache [0] to write cache
                             // [1] (store fast path)
+    // The level-1 mirror (CAlphaCPU::dpc_l1) the AArch64 probe reads: row 0's
+    // first tag, the bytes from row 0 to row 1, and the slot size (16).
+    uint32_t dpc_c_tag, dpc_c_write_row, dpc_c_stride;
     // The page cache's second level (CAlphaCPU::data_page_cache2), which a
     // miss path probes: its read row from the cpu (0 when ALPHABOX_JIT_DPC2=0),
     // the bytes from the read row to the write row, its index width, and
@@ -780,6 +783,24 @@ public:
   // A helper found the page in the second level, which the stub's thunk had
   // just probed: should be ~0, or the thunk and the helpers disagree.
   void note_dpc_l2_helper() { m_dpc_l2_helper++; }
+  // JIT_STATS: memory ops' cold stubs, per site -- entries, and at the last
+  // entry the address and what the level-1 slot held (x12 after the probe:
+  // the occupant's page | key). Compiled code writes these directly.
+  struct StubSite {
+    uint64_t count, occupant, va, pc, prev;
+  };
+  static constexpr int kStubSites = 1 << 19;
+  StubSite *m_stub_sites = nullptr; // allocated on first use, never freed
+  int m_stub_used = 0;
+  StubSite *stub_site(uint64_t pc) {
+    if (!m_stub_sites)
+      m_stub_sites = new StubSite[kStubSites]();
+    if (m_stub_used >= kStubSites)
+      return nullptr;
+    StubSite *st = &m_stub_sites[m_stub_used++];
+    st->pc = pc;
+    return st;
+  }
   uint64_t m_dpc_l2_helper = 0;
   // An other-page miss, split by what would fix it. A page this slot evicted
   // among its last four is a conflict -- two live pages sharing one slot --

@@ -1422,6 +1422,11 @@ void CJitEngine::reclaim_code() {
   m_call_thunk = nullptr; // lived in the runtime just deleted
   m_dpc2_thunk[0] = m_dpc2_thunk[1] = nullptr;
   m_rpcc_stub = nullptr; // so did this: new code calling the old one crashed
+#ifdef JIT_STATS
+  m_stub_used = 0; // the code that wrote the stub sites is gone
+  if (m_stub_sites)
+    memset(m_stub_sites, 0, sizeof(StubSite) * kStubSites);
+#endif
   if (m_pin_staged) {    // no code compiled for the old set survives this
     memcpy(m_pin_guest, m_pin_next, sizeof(m_pin_guest));
     m_pin_staged = false;
@@ -4831,6 +4836,29 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                 snprintf(b2 + l2, sizeof(b2) - l2, " %s=%llu(%.0f%%)",
                          dpc_miss_name(c), (unsigned long long)m_dpc_miss[c],
                          dt ? 100.0 * (double)m_dpc_miss[c] / (double)dt : 0.0);
+        if (m_stub_sites) { // the busiest cold stubs this window
+          std::vector<int> ix;
+          for (int k = 0; k < m_stub_used; ++k)
+            if (m_stub_sites[k].count - m_stub_sites[k].prev)
+              ix.push_back(k);
+          std::sort(ix.begin(), ix.end(), [&](int x, int y) {
+            return m_stub_sites[x].count - m_stub_sites[x].prev >
+                   m_stub_sites[y].count - m_stub_sites[y].prev;
+          });
+          for (size_t k = 0; k < ix.size() && k < 8; ++k) {
+            StubSite &st = m_stub_sites[ix[k]];
+            printf(
+                "[JIT][STATS][CPU%d]   cold stub pc=%llx entries=%llu va=%llx "
+                "slot held page %llx key %llx\n",
+                m_cpu_id, (unsigned long long)st.pc,
+                (unsigned long long)(st.count - st.prev),
+                (unsigned long long)st.va,
+                (unsigned long long)(st.occupant & ~0x1FFFull),
+                (unsigned long long)(st.occupant & 0x1FFFull));
+          }
+          for (int k = 0; k < m_stub_used; ++k)
+            m_stub_sites[k].prev = m_stub_sites[k].count;
+        }
         printf("%s | level 2 found by a helper=%llu\n", b2,
                (unsigned long long)m_dpc_l2_helper);
         m_dpc_l2_helper = 0;

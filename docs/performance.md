@@ -960,6 +960,38 @@ Annotated, the top block's samples split roughly as follows:
 So `makecab` is bound by stalls: mispredictions, one missing probe, memory.
 Instruction count is not the limit.
 
+### A compact level 1: four times the slots in the same 4 KB
+
+The profile's second item was one load's page-cache detour. `JIT_STATS` now
+counts the memory ops' cold stubs per site: entries, and at the last entry
+the address and what occupied the level-1 slot. The `t1` load (guest
+`101d904`) entered its stub ~290k times per 100M instructions, and
+`makecab`'s top eight stubs together ~1.15M. Every entry was a conflict: a
+different page held the slot each time (LZX's window, its match candidates
+and its hash tables all over memory). At ~40-50 cycles a detour, that was
+~15% of `makecab`'s time.
+
+The inline probe reads only two words of a 64-byte slot, tag and bias. So
+compiled code now probes a mirror of level 1, `dpc_l1`: 16-byte `{tag, bias}`
+slots, 256 a row, in the same 4 KB a row that 64 full slots took. The full
+slots (`data_page_cache`, for the C helpers and the x86-64 emitter's probe)
+moved after `state`, and every write to one updates its mirror entry
+(`dpc_sync`; the level-2 thunk writes both). The layout in front of
+`state`, and with it the guest registers' reach, is unchanged.
+`ALPHABOX_JIT_DPC_SLOTS=64` masks the index back down, for a same-binary
+A/B.
+
+Stats lane, `makecab`, median per busy window: top-8 stub entries 1.15M ->
+0.55M, the `t1` load's 296k -> 126k. Not a quarter: the rest are pages
+colliding at random, or capacity. `perf_ab` (ledger `l1slots-cab`,
+`l1slots-axp`, busy host, results identical): **`makecab` -7.4%, 1378 ->
+1448 MIPS, resolved**. The benchmark is inconclusive at -1.0%, but every
+section's MIPS moved up (`ldst` 4564 -> 4822, `div` 5418 -> 5795).
+
+(The first build's thunk used `STP` with a register offset, which does not
+exist. It failed to assemble, every stub fell back to the helper, and SRM
+and Windows both still passed. `srm_run.sh`'s emit-error check caught it.)
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5

@@ -401,6 +401,8 @@ void *CJitEngine::a64_dpc2_thunk(bool write_row) {
   if (!idx_bits || ((1u << idx_bits) - 1u) != m_off.dpc_mask)
     return nullptr;
   const uint64_t l1_row = m_off.dpc_tag + (write_row ? m_off.dpc_write_row : 0);
+  const uint64_t l1_mirror_row =
+      m_off.dpc_c_tag + (write_row ? m_off.dpc_c_write_row : 0);
   const uint64_t l2_row = m_off.dpc2_base + (write_row ? m_off.dpc2_row : 0);
   using namespace asmjit;
   CodeHolder code;
@@ -426,6 +428,13 @@ void *CJitEngine::a64_dpc2_thunk(bool write_row) {
   a.cmp(a64::w0, a64::w1);
   a.b_ne(out);
   a.ubfx(a64::x10, a64::x2, imm(13), imm(idx_bits));
+  // The mirror compiled code probes: tag and bias.
+  a.mov(a64::x11, imm(l1_mirror_row));
+  a.add(a64::x11, a64::x11, a64::x10, a64::lsl(4));
+  a.add(a64::x11, a64::x19, a64::x11); // STP has no register offset
+  a.ldp(a64::x0, a64::x1, a64::ptr(a64::x9, 0));
+  a.stp(a64::x0, a64::x1, a64::ptr(a64::x11));
+  // The full slot the C helpers read.
   a.mov(a64::x3, imm(l1_row));
   a.add(a64::x3, a64::x3, a64::x10, a64::lsl(6));
   a.add(a64::x3, a64::x19, a64::x3);     // level 1's slot
@@ -803,45 +812,25 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // the question "is this page here, mine, and safe to touch inline?" is
     // one comparison, and a page the fast path must not touch (MMIO) simply
     // carries a tag no key can equal.
-    const uint32_t dpc_bias_rel = m_off.dpc_bias - m_off.dpc_tag;
+    // The probe reads level 1's mirror (CAlphaCPU::dpc_l1): 16-byte slots of
+    // {tag, bias}, so the index is a shift by 4 and the pair is one LDP.
     auto dpc_probe = [&](bool write_row, const Label &slow) {
       const uint32_t row =
-          m_off.dpc_tag + (write_row ? m_off.dpc_write_row : 0);
-      // Index: one UBFX instead of LSR+AND. kDpcMask is a contiguous run of
-      // low bits by construction (kDpcEntries is a power of two), so the two
-      // forms are identical -- and this must keep matching
+          m_off.dpc_c_tag + (write_row ? m_off.dpc_c_write_row : 0);
+      // Index: one UBFX. The mask is a contiguous run of low bits by
+      // construction (a power-of-two slot count), and this must keep matching
       // CAlphaCPU::dpc_index.
       const uint32_t idx_bits = a64_popcount_low(m_off.dpc_mask);
-      if (idx_bits && ((1u << idx_bits) - 1u) == m_off.dpc_mask &&
-          13 + idx_bits <= 64) {
-        a.ubfx(x10, x2, imm(13), imm(idx_bits));
+      a.ubfx(x10, x2, imm(13), imm(idx_bits));
+      a.add(x10, kCpu, x10, a64::lsl(4));
+      // LDP's immediate is a signed 7-bit value scaled by 8, so it reaches
+      // +504: the read row (offset 408) fits, the write row does not and
+      // keeps two loads.
+      if ((row % 8) == 0 && row <= 504) {
+        a.ldp(x12, x10, a64::ptr(x10, (int32_t)row)); // slot tag, slot bias
       } else {
-        a.lsr(x10, x2, imm(13)); // must match CAlphaCPU::dpc_index
-        a.and_(x10, x10, imm((uint64_t)m_off.dpc_mask));
-      }
-      if (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) {
-        // A 64-byte slot makes the index a shift, and both fields sit within
-        // one load's displacement of the slot.
-        a.add(x10, kCpu, x10, a64::lsl(6));
-      } else {
-        a.mov(x11, imm(m_off.dpc_stride));
-        a.mul(x10, x10, x11);
-        a.mov(x11, imm((uint64_t)row));
-        a.add(x10, x10, x11);
-        a.add(x10, kCpu, x10);
-      }
-      const int32_t base =
-          (m_off.dpc_stride == 64 && row + dpc_bias_rel <= 32760) ? (int32_t)row
-                                                                  : 0;
-      // Tag and bias are adjacent 8-byte fields, so one LDP fetches the pair
-      // -- which is what the slot layout was designed for. LDP's immediate is
-      // a signed 7-bit value scaled by 8, so it reaches +504: the read row
-      // (offset 400) fits, the write row (4496) does not and keeps two loads.
-      if (dpc_bias_rel == 8 && (base % 8) == 0 && base >= -512 && base <= 504) {
-        a.ldp(x12, x10, a64::ptr(x10, base)); // slot tag, slot bias
-      } else {
-        a.ldr(x12, a64::ptr(x10, base));                         // slot tag
-        a.ldr(x10, a64::ptr(x10, base + (int32_t)dpc_bias_rel)); // slot bias
+        a.ldr(x12, a64::ptr(x10, (int32_t)row));     // slot tag
+        a.ldr(x10, a64::ptr(x10, (int32_t)row + 8)); // slot bias
       }
       a.and_(x11, x2, imm(~(uint64_t)0x1FFF));                  // this page
       a.ldr(x9, fld(m_off.dpc_key, 3)); // the live address space and mode
@@ -855,6 +844,22 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // tested again. The probe and the copy live in one shared thunk per row
     // (a64_dpc2_thunk). On a hit x10 = the page's bias, as after dpc_probe.
     // False when there is no second level: go straight to the helper.
+#ifdef JIT_STATS
+    // Count this cold stub's entries and keep the address and the level-1
+    // slot's occupant (x12, the tag the probe compared) -- the stub-site
+    // report in the stats window. x9 and x17 are free here.
+    auto stub_count = [&]() {
+      StubSite *st = stub_site(b->tag + 4 * (uint64_t)i);
+      if (!st)
+        return;
+      a.mov(a64::x17, imm((uint64_t)st));
+      a.ldr(a64::x9, a64::ptr(a64::x17, 0));
+      a.add(a64::x9, a64::x9, imm(1));
+      a.str(a64::x9, a64::ptr(a64::x17, 0));
+      a.str(a64::x12, a64::ptr(a64::x17, 8));
+      a.str(a64::x2, a64::ptr(a64::x17, 16));
+    };
+#endif
     auto dpc_probe_way1 = [&](bool write_row, int size_bits,
                               const Label &miss) -> bool {
       void *thunk = a64_dpc2_thunk(write_row);
@@ -917,6 +922,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+#ifdef JIT_STATS
+        stub_count();
+#endif
         Label miss = a.new_label();
         if (dpc_probe_way1(false, size_bits, miss)) {
           load_from(a64::ptr(x10, x2));
@@ -1013,6 +1021,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+#ifdef JIT_STATS
+        stub_count();
+#endif
         Label miss = a.new_label();
         if (dpc_probe_way1(true, size_bits, miss)) {
           store_to(a64::ptr(x10, x2));

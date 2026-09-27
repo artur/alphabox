@@ -493,6 +493,11 @@ void CAlphaCPU::init() {
     m_dpc_keep = !(e && strcmp(e, "0") == 0);
     e = getenv("ALPHABOX_JIT_UNALIGNED");
     m_jit_unaligned = !(e && strcmp(e, "0") == 0);
+    e = getenv("ALPHABOX_JIT_DPC_SLOTS");
+    const long slots = e ? atol(e) : kDpcEntries;
+    m_dpc_mask = (slots == 64 || slots == 128 || slots == kDpcEntries)
+                     ? (u64)(slots - 1)
+                     : kDpcMask;
   }
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
@@ -558,7 +563,11 @@ void CAlphaCPU::init() {
     o.dpc_cm = (uint32_t)((char *)&data_page_cache[0][0].cm - (char *)this);
     o.dpc_asn = (uint32_t)((char *)&data_page_cache[0][0].asn - (char *)this);
     o.dpc_stride = (uint32_t)sizeof(data_page_cache[0][0]);
-    o.dpc_mask = (uint32_t)kDpcMask;
+    o.dpc_mask = (uint32_t)m_dpc_mask;
+    o.dpc_c_tag = (uint32_t)((char *)&dpc_l1[0][0].tag - (char *)this);
+    o.dpc_c_write_row =
+        (uint32_t)((char *)&dpc_l1[1][0] - (char *)&dpc_l1[0][0]);
+    o.dpc_c_stride = (uint32_t)sizeof(dpc_l1[0][0]);
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
     o.dpc2_base =

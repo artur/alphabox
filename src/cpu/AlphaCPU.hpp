@@ -583,7 +583,7 @@ public:
   // rows with one displacement while dpc_tag + kDpcEntries*64 + 8 <= 32760, so
   // 256 is the largest power of two that stays free; past that the emitter has
   // to compute the slot address, on every memory op.
-  static constexpr int kDpcBits = 6;
+  static constexpr int kDpcBits = 8;
   static constexpr int kDpcEntries = 1 << kDpcBits;
   static constexpr u64 kDpcMask = (u64)kDpcEntries - 1;
   // A slice of the address, not a hash -- and that is a measured decision, not
@@ -603,7 +603,10 @@ public:
   // pages. Code that fits the cache pays the two instructions for nothing, and
   // code that streams past it misses anyway. Anyone retrying this needs an
   // index that costs at most one extra instruction. See docs/performance.md.
-  static inline u64 dpc_index(u64 va) { return (va >> 13) & kDpcMask; }
+  /// ALPHABOX_JIT_DPC_SLOTS=64|128 masks the index down, for a same-binary
+  /// A/B of the slot count.
+  u64 m_dpc_mask = kDpcMask;
+  inline u64 dpc_index(u64 va) const { return (va >> 13) & m_dpc_mask; }
   /// One translated page.
   ///
   /// The first two fields are the only ones compiled code reads, and it
@@ -656,9 +659,23 @@ public:
       host_base = 0;
       tag = ~U64(0); // matches no key
     }
-  } data_page_cache[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
+  };
   static_assert(sizeof(SDataPageCache) == 64,
                 "the JIT indexes the page cache with a shift");
+  /// Level 1 as compiled code sees it: the tag and bias of each slot of
+  /// data_page_cache (declared after `state`), 16 bytes a slot, in step with
+  /// it (dpc_sync). The inline probe reads only these two words, and at 16
+  /// bytes the 4 KB a row that 64 slots used to take holds 256 -- a quarter
+  /// of the conflict misses, which on makecab were ~15% of its time
+  /// (docs/performance.md) -- without moving `state` out of reach.
+  struct SDpcMirror {
+    u64 tag, bias;
+  } dpc_l1[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
+  static_assert(sizeof(SDpcMirror) == 16, "the JIT indexes it with a shift");
+  inline void dpc_sync(int rw, u64 idx) {
+    dpc_l1[rw][idx].tag = data_page_cache[rw][idx].tag;
+    dpc_l1[rw][idx].bias = data_page_cache[rw][idx].bias;
+  }
   /// The second level: a larger direct-mapped page cache behind the first,
   /// inclusive of it -- every fill goes into both, so a level-2 hit is just a
   /// copy back into level 1. The first level has to stay small and near the
@@ -687,10 +704,12 @@ public:
           l2.cm == cm && l2.asn == asn))
       return false;
     data_page_cache[rw][idx] = l2;
+    dpc_sync(rw, idx);
     return true;
   }
-  /// After a level-1 fill: the same translation into level 2.
+  /// After a level-1 fill: its mirror, and the same translation into level 2.
   inline void dpc_l2_put(int rw, const SDataPageCache &l1) {
+    dpc_sync(rw, dpc_index(l1.virt_page));
     if (!m_dpc2)
       return;
     SDataPageCache &l2 = data_page_cache2[rw][dpc2_index(l1.virt_page)];
@@ -785,8 +804,10 @@ public:
     const u64 idx2 = dpc2_index(virt);
     const u64 vp = virt & ~U64(0x1FFF);
     for (int rw = 0; rw < 2; rw++) {
-      if (!m_dpc_keep || data_page_cache[rw][idx].virt_page == vp)
+      if (!m_dpc_keep || data_page_cache[rw][idx].virt_page == vp) {
         data_page_cache[rw][idx].invalidate();
+        dpc_sync(rw, idx);
+      }
       if (!m_dpc_keep || data_page_cache2[rw][idx2].virt_page == vp)
         data_page_cache2[rw][idx2].invalidate();
     }
@@ -841,6 +862,7 @@ public:
     for (int i = 0; i < kDpcEntries; i++) {
       data_page_cache[0][i].invalidate();
       data_page_cache[1][i].invalidate();
+      dpc_l1[0][i].tag = dpc_l1[1][i].tag = ~U64(0);
     }
     if (++m_dpc2_gen == 0) { // wrapped: an old slot could match again
       for (int i = 0; i < kDpc2Entries; i++) {
@@ -1131,6 +1153,9 @@ public:
   /// registers first -- stays within reach of the cpu pointer: 16 KB for a
   /// 32-bit load, which is how compiled code reads a longword register.
   SDataPageCache data_page_cache2[2][kDpc2Entries];
+  /// Level 1 in full, for the C helpers (and the x86-64 emitter's probe);
+  /// compiled AArch64 code reads its mirror, dpc_l1, near the front.
+  SDataPageCache data_page_cache[2][kDpcEntries];
   u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
