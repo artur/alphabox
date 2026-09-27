@@ -933,6 +933,33 @@ Same binary, busy host (`--busy-ok`; ledger rows `reuse-axp`,
 | `sort` | 3263 | 3768 |
 | `makecab` | 1365 | 1375 |
 
+### Where makecab's time goes: a host profile
+
+`test/tools/jit_profile.sh` samples the emulator with macOS `sample` while
+a workload runs from the snapshot, on the `JIT_DISASM` lane. That lane
+lists every block with its host address, compile time and instruction
+bytes, so each sampled address maps to its block and instruction, even
+after a reclaim has reused the address. On `makecab`, the CPU thread spends
+**94-95% in compiled code**; the dispatcher, helpers and devices are under
+5% together. Most of that time is in the LZX match finder: the hottest
+block (guest `101d8ec`, 16 instructions) takes 26-27%, the top two 37-40%.
+
+Annotated, the top block's samples split roughly as follows:
+
+- **~40%** right after the data-dependent branch of the byte-compare loop
+  (`subl`, `bne`): mispredictions. The next block, `bge` then `cmple`, is
+  almost all mispredictions too. Native code pays the same penalty.
+- **~31%** at the cold stub of one load (`ldq_u a2, 0(t1)`): its inline
+  probe misses often and goes through the second-level thunk. That is ~8% of
+  all compiled-code time. The other window load, `ldq_u a5, 0(t4)`, rarely
+  misses.
+- **~13%** on the window byte load itself: host memory latency.
+- The arithmetic (`addl`, `extbl`, `lda` and their `sxtw`s) is 0-1 samples
+  each. That is why the peepholes and the exit trim measured little here.
+
+So `makecab` is bound by stalls: mispredictions, one missing probe, memory.
+Instruction count is not the limit.
+
 ## The cycle counter
 
 A Windows 2000 guest reads RPCC about **21 million times a second** -- 1.5

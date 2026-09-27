@@ -59,7 +59,8 @@ port per lane), `srm_probe.sh` (SMP init, memory layout, SCSI, exit-path
 probes), `win_bench.sh` (headless Windows guest boot + MIPS -- meaningful only with a
 busy guest), `cpu_bench.sh` + `bench_image.py` (how fast Alpha code itself
 runs: a boot block of known instruction count, two sizes, difference),
-`sect_mips.sh` (the guest's MIPS on one benchmark section, from the desktop snapshot), `vga_boot.sh`
+`sect_mips.sh` (the guest's MIPS on one benchmark section, from the desktop snapshot),
+`jit_profile.sh` (host sampling profile of compiled code, mapped to guest blocks and instructions), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
 `d3d_check.sh` (a Direct3D 7 program, built with nada, renders scenes on a
 Windows guest's HAL and on D3D's software rasteriser and compares them --

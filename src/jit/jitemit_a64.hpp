@@ -2609,6 +2609,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     return false;
 #ifdef JIT_DISASM
   StringLogger logger;
+  logger.add_flags(FormatFlags::kMachineCode); // bytes: offsets for profiles
   code.set_logger(&logger);
 #endif
   A64EmitErrors eh;
@@ -3072,21 +3073,32 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #endif
 
   const size_t csz = code.code_size();
-#ifdef JIT_DISASM
-  {
-    FILE *out = m_disasm_fp ? m_disasm_fp : stderr;
-    fprintf(out, "[JIT][CPU%d] block @ %016llx%s  (%u instr, %llu bytes)\n%s\n",
-            m_cpu_id, (unsigned long long)(b->tag & ~(uint64_t)1),
-            (b->tag & 1) ? " PAL" : "", plen, (unsigned long long)csz,
-            logger.data());
-    fflush(out);
-  }
-#endif
   if (eh.failed)
     return false; // an instruction failed to encode -- don't ship the block
   JitFn fn = nullptr;
   if (!publish_code(&code, (void **)&fn))
     return false;
+#ifdef JIT_DISASM
+  {
+    // After publishing, so the listing carries the host address: a host
+    // profile's samples map back to the block and, through each line's
+    // bytes, to the instruction. The time (ms since the epoch) tells blocks
+    // at the same address apart: a reclaim frees code, and later blocks can
+    // land where it was.
+    FILE *out = m_disasm_fp ? m_disasm_fp : stderr;
+    fprintf(out,
+            "[JIT][CPU%d] block @ %016llx%s  (%u instr, %llu bytes) host "
+            "%016llx at %lld\n%s\n",
+            m_cpu_id, (unsigned long long)(b->tag & ~(uint64_t)1),
+            (b->tag & 1) ? " PAL" : "", plen, (unsigned long long)csz,
+            (unsigned long long)(uintptr_t)fn,
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count(),
+            logger.data());
+    fflush(out);
+  }
+#endif
   *out_fn = fn;
   *out_body_off = (uint32_t)body_off;
   *out_csz = csz;
