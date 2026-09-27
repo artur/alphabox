@@ -322,8 +322,9 @@ public:
         dpc_mask; // direct-mapped page cache: per-slot byte stride, index mask
     uint32_t dpc_write_row; // byte distance from read cache [0] to write cache
                             // [1] (store fast path)
-    // The level-1 mirror (CAlphaCPU::dpc_l1) the AArch64 probe reads: row 0's
-    // first tag, the bytes from row 0 to row 1, and the slot size (16).
+    // The level-1 mirror (CAlphaCPU::dpc_l1) the AArch64 probe reads: the
+    // first read entry's tag, the bytes from a read entry to its write entry
+    // (16), and the bytes from one index to the next (32).
     uint32_t dpc_c_tag, dpc_c_write_row, dpc_c_stride;
     // The page cache's second level (CAlphaCPU::data_page_cache2), which a
     // miss path probes: its read row from the cpu (0 when ALPHABOX_JIT_DPC2=0),

@@ -668,13 +668,17 @@ public:
   /// bytes the 4 KB a row that 64 slots used to take holds 256 -- a quarter
   /// of the conflict misses, which on makecab were ~15% of its time
   /// (docs/performance.md) -- without moving `state` out of reach.
+  ///
+  /// A slot's read and write entries sit side by side (32 bytes an index),
+  /// so both are within one LDP's reach of the mirror's start: a store's
+  /// probe loads its tag and bias in one instruction, like a load's.
   struct SDpcMirror {
     u64 tag, bias;
-  } dpc_l1[2][kDpcEntries]; // [rw][dpc_index(va)]; [0]=read, [1]=write
+  } dpc_l1[kDpcEntries][2]; // [dpc_index(va)][rw]; [0]=read, [1]=write
   static_assert(sizeof(SDpcMirror) == 16, "the JIT indexes it with a shift");
   inline void dpc_sync(int rw, u64 idx) {
-    dpc_l1[rw][idx].tag = data_page_cache[rw][idx].tag;
-    dpc_l1[rw][idx].bias = data_page_cache[rw][idx].bias;
+    dpc_l1[idx][rw].tag = data_page_cache[rw][idx].tag;
+    dpc_l1[idx][rw].bias = data_page_cache[rw][idx].bias;
   }
   /// The second level: a larger direct-mapped page cache behind the first,
   /// inclusive of it -- every fill goes into both, so a level-2 hit is just a
@@ -862,7 +866,7 @@ public:
     for (int i = 0; i < kDpcEntries; i++) {
       data_page_cache[0][i].invalidate();
       data_page_cache[1][i].invalidate();
-      dpc_l1[0][i].tag = dpc_l1[1][i].tag = ~U64(0);
+      dpc_l1[i][0].tag = dpc_l1[i][1].tag = ~U64(0);
     }
     if (++m_dpc2_gen == 0) { // wrapped: an old slot could match again
       for (int i = 0; i < kDpc2Entries; i++) {

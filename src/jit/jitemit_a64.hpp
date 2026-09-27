@@ -430,7 +430,8 @@ void *CJitEngine::a64_dpc2_thunk(bool write_row) {
   a.ubfx(a64::x10, a64::x2, imm(13), imm(idx_bits));
   // The mirror compiled code probes: tag and bias.
   a.mov(a64::x11, imm(l1_mirror_row));
-  a.add(a64::x11, a64::x11, a64::x10, a64::lsl(4));
+  a.add(a64::x11, a64::x11, a64::x10,
+        a64::lsl(a64_popcount_low(m_off.dpc_c_stride - 1)));
   a.add(a64::x11, a64::x19, a64::x11); // STP has no register offset
   a.ldp(a64::x0, a64::x1, a64::ptr(a64::x9, 0));
   a.stp(a64::x0, a64::x1, a64::ptr(a64::x11));
@@ -814,25 +815,26 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // carries a tag no key can equal.
     // The probe reads level 1's mirror (CAlphaCPU::dpc_l1): 16-byte slots of
     // {tag, bias}, so the index is a shift by 4 and the pair is one LDP.
-    auto dpc_probe = [&](bool write_row, const Label &slow) {
+    // `va` is the guest address: x2, or the base's own pin for a
+    // zero-displacement access (see the loads and stores below).
+    auto dpc_probe = [&](bool write_row, const Label &slow, const a64::Gp &va) {
       const uint32_t row =
           m_off.dpc_c_tag + (write_row ? m_off.dpc_c_write_row : 0);
       // Index: one UBFX. The mask is a contiguous run of low bits by
       // construction (a power-of-two slot count), and this must keep matching
       // CAlphaCPU::dpc_index.
       const uint32_t idx_bits = a64_popcount_low(m_off.dpc_mask);
-      a.ubfx(x10, x2, imm(13), imm(idx_bits));
-      a.add(x10, kCpu, x10, a64::lsl(4));
+      a.ubfx(x10, va, imm(13), imm(idx_bits));
+      a.add(x10, kCpu, x10, a64::lsl(a64_popcount_low(m_off.dpc_c_stride - 1)));
       // LDP's immediate is a signed 7-bit value scaled by 8, so it reaches
-      // +504: the read row (offset 408) fits, the write row does not and
-      // keeps two loads.
+      // +504: both entries of an index (offsets 408 and 424) fit.
       if ((row % 8) == 0 && row <= 504) {
         a.ldp(x12, x10, a64::ptr(x10, (int32_t)row)); // slot tag, slot bias
       } else {
         a.ldr(x12, a64::ptr(x10, (int32_t)row));     // slot tag
         a.ldr(x10, a64::ptr(x10, (int32_t)row + 8)); // slot bias
       }
-      a.and_(x11, x2, imm(~(uint64_t)0x1FFF));                  // this page
+      a.and_(x11, va, imm(~(uint64_t)0x1FFF)); // this page
       a.ldr(x9, fld(m_off.dpc_key, 3)); // the live address space and mode
       a.orr(x11, x11, x9);              // ... which together are the key
       a.cmp(x12, x11);
@@ -920,8 +922,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       emit_helper();
 #else
       const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
+      // A zero-displacement access on a pinned base probes and accesses
+      // through the pin itself: no copy into x2 on the hot path.
+      const int va_pin = ((ins & 0xFFFF) == 0 && rb != 31 && op != OP_LDQ_U)
+                             ? regalloc.host_of(rb)
+                             : -1;
+      const a64::Gp va = (va_pin >= 0) ? a64::x((uint32_t)va_pin) : x2;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+        if (va_pin >= 0)
+          a.mov(x2, va); // the hot path kept it in the base's pin
 #ifdef JIT_STATS
         stub_count();
 #endif
@@ -939,35 +949,36 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }
-      ea_x2((int16_t)(ins & 0xFFFF));
+      if (va_pin < 0)
+        ea_x2((int16_t)(ins & 0xFFFF));
       if (op == OP_LDQ_U)
         a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), ldone = a.new_label();
       // LDQ_U's address is aligned by the AND above.
       const bool align = size_bits > 8 && op != OP_LDQ_U;
       auto align_test = [&]() {
-        a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+        a.tst(va, imm((uint64_t)(size_bits / 8 - 1)));
         a.b_ne(slow);
       };
       if (align && !((rp & 1) && (rp & 4)))
         align_test();
       if (rp & 1) { // the previous probe's page, if this is on it
         Label full = a.new_label();
-        a.eor(x11, x2, a64::x16);
+        a.eor(x11, va, a64::x16);
         a.tst(x11, imm(0xFFFFFFFFFFFFE001ull));
         a.b_ne(full);
-        load_from(a64::ptr(a64::x3, x2));
+        load_from(a64::ptr(a64::x3, va));
         a.b(ldone);
         a.bind(full);
         if (align && (rp & 4))
           align_test();
       }
-      dpc_probe(false, slow);
+      dpc_probe(false, slow, va);
       if (rp & 2) { // keep this probe for a later op
         a.mov(a64::x3, x10);
-        a.and_(a64::x16, x2, imm(~(uint64_t)0x1FFF));
+        a.and_(a64::x16, va, imm(~(uint64_t)0x1FFF));
       }
-      load_from(a64::ptr(x10, x2));
+      load_from(a64::ptr(x10, va));
       if (!cold_record(slow, ldone)) {
         a.b(ldone);
         a.bind(slow);
@@ -1019,8 +1030,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
           a.strb(id == 31 ? a64::wzr : a64::w(id), m);
       };
       const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
+      // A zero-displacement access on a pinned base probes and accesses
+      // through the pin itself: no copy into x2 on the hot path.
+      const int va_pin = ((ins & 0xFFFF) == 0 && rb != 31 && op != OP_STQ_U)
+                             ? regalloc.host_of(rb)
+                             : -1;
+      const a64::Gp va = (va_pin >= 0) ? a64::x((uint32_t)va_pin) : x2;
       if (m_cold_pass) { // x2 = va, as the hot path left it
         a.bind(Label(m_cold_slow[cold_idx]));
+        if (va_pin >= 0)
+          a.mov(x2, va); // the hot path kept it in the base's pin
 #ifdef JIT_STATS
         stub_count();
 #endif
@@ -1038,35 +1057,36 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }
-      ea_x2((int16_t)(ins & 0xFFFF));
+      if (va_pin < 0)
+        ea_x2((int16_t)(ins & 0xFFFF));
       if (op == OP_STQ_U)
         a.and_(x2, x2, imm(~(uint64_t)7));
       Label slow = a.new_label(), sdone = a.new_label();
       // STQ_U's address is aligned by the AND above.
       const bool align = size_bits > 8 && op != OP_STQ_U;
       auto align_test = [&]() {
-        a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+        a.tst(va, imm((uint64_t)(size_bits / 8 - 1)));
         a.b_ne(slow);
       };
       if (align && !((rp & 1) && (rp & 4)))
         align_test();
       if (rp & 1) { // the previous probe's page, if this is on it
         Label full = a.new_label();
-        a.eor(x11, x2, a64::x16);
+        a.eor(x11, va, a64::x16);
         a.tst(x11, imm(0xFFFFFFFFFFFFE001ull));
         a.b_ne(full);
-        store_to(a64::ptr(a64::x3, x2));
+        store_to(a64::ptr(a64::x3, va));
         a.b(sdone);
         a.bind(full);
         if (align && (rp & 4))
           align_test();
       }
-      dpc_probe(true, slow);
+      dpc_probe(true, slow, va);
       if (rp & 2) { // keep this probe for a later op
         a.mov(a64::x3, x10);
-        a.and_(a64::x16, x2, imm(~(uint64_t)0x1FFF));
+        a.and_(a64::x16, va, imm(~(uint64_t)0x1FFF));
       }
-      store_to(a64::ptr(x10, x2));
+      store_to(a64::ptr(x10, va));
       if (!cold_record(slow, sdone)) {
         a.b(sdone);
         a.bind(slow);
@@ -1130,7 +1150,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.str(a64::xzr, fld(m_off.exc_sum, 3));
       a.tst(x2, imm(7));
       a.b_ne(slow);
-      dpc_probe(!isload, slow);
+      dpc_probe(!isload, slow, x2);
       if (isload) {
         a.ldr(x0, a64::ptr(x10, x2));
         a.str(x0, fld(m_off.f_base + (uint32_t)fa * 8, 3));

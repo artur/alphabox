@@ -566,8 +566,8 @@ void CAlphaCPU::init() {
     o.dpc_mask = (uint32_t)m_dpc_mask;
     o.dpc_c_tag = (uint32_t)((char *)&dpc_l1[0][0].tag - (char *)this);
     o.dpc_c_write_row =
-        (uint32_t)((char *)&dpc_l1[1][0] - (char *)&dpc_l1[0][0]);
-    o.dpc_c_stride = (uint32_t)sizeof(dpc_l1[0][0]);
+        (uint32_t)((char *)&dpc_l1[0][1] - (char *)&dpc_l1[0][0]);
+    o.dpc_c_stride = (uint32_t)sizeof(dpc_l1[0]);
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
     o.dpc2_base =
