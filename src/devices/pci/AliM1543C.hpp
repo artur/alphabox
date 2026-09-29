@@ -69,6 +69,9 @@ public:
   void pic_interrupt(int index, int intno);
   void pic_deassert(int index, int intno);
   void pic_set_line(int index, int intno, bool active);
+  /// The ISA IRQ a routing byte of the bridge's configuration space (such
+  /// as 0x74, USBIR) selects, or -1 when it routes nowhere.
+  int routed_irq(int config_offset) const;
 
   void set_floppy_presence(bool driveA, bool driveB);
 

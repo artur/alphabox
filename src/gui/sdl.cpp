@@ -37,6 +37,7 @@
  * SDL.
  **/
 #include "StdAfx.hpp"
+#include "UsbTablet.hpp"
 
 #if defined(HAVE_SDL)
 #include "System.hpp"
@@ -1026,7 +1027,33 @@ static u32 sdl_debug_key_lookup(const char *name) {
 // preceded by modifiers joined with '-' ("win-r", "shift-5", "ctrl-alt-del").
 // The modifiers are held around the key and released in reverse order. With
 // press=false the token is only validated. Returns false for an unknown name.
+// "tablet:X:Y[:B]" puts the USB tablet's pointer at X,Y -- fractions of the
+// screen when at most 1, else guest pixels -- with buttons B (bit 0 left,
+// 1 right, 2 middle). Returns false when the token is not a tablet one or
+// is malformed; with press false it only checks the token.
+static bool sdl_debug_tablet(const char *token, bool press, bool &handled) {
+  handled = strncmp(token, "tablet:", 7) == 0;
+  if (!handled)
+    return false;
+  double x, y;
+  unsigned b = 0;
+  if (sscanf(token + 7, "%lf:%lf:%u", &x, &y, &b) < 2)
+    return false;
+  if (x > 1.0 && res_x)
+    x /= res_x;
+  if (y > 1.0 && res_y)
+    y /= res_y;
+  CUsbTablet *t = theUsbTablet.load();
+  if (press && t)
+    t->set_position(x, y, b);
+  return t != nullptr;
+}
+
 static bool sdl_debug_press(const char *token, bool press) {
+  bool tablet;
+  const bool tablet_ok = sdl_debug_tablet(token, press, tablet);
+  if (tablet)
+    return tablet_ok;
   static const struct {
     const char *name;
     u32 key;
@@ -1253,7 +1280,15 @@ void bx_sdl_gui_c::handle_events(void) {
         fprintf(stderr, "MOUSEDBG motion xrel=%d yrel=%d grab=%d\n",
                 (int)sdl_event.motion.xrel, (int)sdl_event.motion.yrel,
                 sdl_grab);
-      if (sdl_grab) {
+      if (CUsbTablet *t = theUsbTablet.load()) {
+        // The USB tablet: where the host pointer is over the window, which
+        // shows the whole guest screen.
+        int w = 0, h = 0;
+        SDL_GetWindowSize(sdl_window, &w, &h);
+        if (w > 0 && h > 0)
+          t->set_position(sdl_event.motion.x / w, sdl_event.motion.y / h,
+                          sdl_mouse_button_state);
+      } else if (sdl_grab) {
         // PS/2 mouse Y is positive-up, SDL is positive-down; hence the
         // baseline Y negation. invert_x/y flip on top of that.
         double mx = (double)sdl_event.motion.xrel * mouse_speed;
@@ -1274,7 +1309,8 @@ void bx_sdl_gui_c::handle_events(void) {
 
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
-      if (!sdl_grab) {
+      CUsbTablet *tablet = theUsbTablet.load();
+      if (!sdl_grab && !tablet) {
         if (sdl_event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
             sdl_event.button.button == SDL_BUTTON_LEFT) {
           sdl_regrab_attempts = 0; // fresh user grab: reset the bounce budget
@@ -1303,12 +1339,21 @@ void bx_sdl_gui_c::handle_events(void) {
       else
         sdl_mouse_button_state &= ~bitmask;
 
-      theKeyboard->mouse_motion(0, 0, 0, sdl_mouse_button_state);
+      if (tablet)
+        tablet->set_buttons(sdl_mouse_button_state);
+      else
+        theKeyboard->mouse_motion(0, 0, 0, sdl_mouse_button_state);
       break;
     }
 
     case SDL_EVENT_MOUSE_WHEEL:
-      if (sdl_grab) {
+      if (CUsbTablet *t = theUsbTablet.load()) {
+        float wy = sdl_event.wheel.y;
+        if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+          wy = -wy;
+        if ((int)wy)
+          t->add_wheel((int)wy);
+      } else if (sdl_grab) {
         float wy =
             sdl_event.wheel.y; // SDL3: float; +y = away from user (scroll up)
         if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
@@ -1510,6 +1555,10 @@ void bx_sdl_gui_c::dimension_update(unsigned x, unsigned y, unsigned fheight,
       FAILURE_3(SDL, "Unable to create SDL3 window: %ix%i: %s\n", x, y,
                 SDL_GetError());
     }
+    // With the USB tablet the guest draws the pointer where the host's is;
+    // the host's own would sit on top of it.
+    if (theUsbTablet.load())
+      SDL_HideCursor();
 
     sdl_renderer = SDL_CreateRenderer(sdl_window, NULL);
     if (!sdl_renderer) {

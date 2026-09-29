@@ -2247,6 +2247,15 @@ void CAliM1543C::pic_set_line(int index, int intno, bool active) {
   pic_set_line_inner(index, intno, active);
 }
 
+// M1543C interrupt routing bytes (PIRT, USBIR, ...): the low four bits name
+// the ISA IRQ through a fixed table, 0 and the gaps meaning none.
+int CAliM1543C::routed_irq(int config_offset) const {
+  static const int table[16] = {-1, 9,  3,  10, 4,  5,  7,  6,
+                                -1, 11, -1, 12, -1, 14, -1, 15};
+  const u32 dw = endian_32(pci_state.config_data[0][config_offset / 4]);
+  return table[(dw >> (8 * (config_offset & 3))) & 0xf];
+}
+
 static u32 ali_magic1 = 0xA111543C;
 static u32 ali_magic2 = 0xC345111A;
 
