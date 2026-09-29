@@ -43,6 +43,7 @@
 #include "DiskDevice.hpp"
 #include "DiskFile.hpp"
 #include "DiskRam.hpp"
+#include "Ehci.hpp"
 #include "Flash.hpp"
 #include "FloppyController.hpp"
 #include "Keyboard.hpp"
@@ -594,6 +595,7 @@ static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
                                      0};
 static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_ali_usb[] = {"port1", "port2", "port3", 0};
+static const char *const kv_ehci[] = {"port1", "port2", "port3", "port4", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
@@ -682,6 +684,7 @@ classinfo classes[] = {
     {"win32", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
     {"mpu401", c_mpu401, ON_CS, kv_mpu401},
+    {"ehci", c_ehci, IS_PCI | HAS_DISK, kv_ehci},
     {"es1370", c_es137x, IS_PCI, kv_none},
     {"es1371", c_es137x, IS_PCI, kv_none},
     {0, c_none, 0, 0}};
@@ -942,6 +945,11 @@ void CConfigurator::initialize() {
 
   case c_permedia2:
     myDevice = new CPermedia2(this, theSystem, pcibus, pcidev);
+    break;
+
+  case c_ehci:
+    // A disk controller too (USB mass storage): see c_ali_ide.
+    myDevice = (CDiskController *)new CEhci(this, theSystem, pcibus, pcidev);
     break;
 
   case c_es137x:

@@ -61,6 +61,11 @@ public:
   virtual void reset();
 
   virtual bool low_speed() const { return false; }
+  /// Whether the device can run at high speed (USB 2.0); only then does an
+  /// EHCI port keep it. The port it is on says which it is running at.
+  virtual bool can_high_speed() const { return false; }
+  void set_high_speed(bool hs) { m_hs = hs; }
+  bool high_speed() const { return m_hs; }
 
   /// Set by the controller: a device whose transfers finish on another
   /// thread (a host device behind libusb) calls it when one does, so the
@@ -72,6 +77,7 @@ public:
 
 protected:
   int m_configuration = 0;
+  bool m_hs = false; // attached to a high-speed port, running at 480 Mb/s
 
   /// Standard descriptors. The configuration descriptor is the whole block
   /// (configuration + interfaces + class descriptors + endpoints).

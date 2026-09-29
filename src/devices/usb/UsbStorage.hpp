@@ -45,12 +45,14 @@ class CUsbStorage : public CUsbDevice, public CSCSIDevice {
 public:
   CUsbStorage(CSCSIBus *bus, CDisk *disk);
   const char *name() const override { return "storage"; }
+  bool can_high_speed() const override { return true; }
   void reset() override;
 
 protected:
   const std::vector<u8> &device_descriptor() const override;
   const std::vector<u8> &configuration_descriptor() const override;
   std::vector<u8> string_descriptor(int index) const override;
+  bool other_descriptor(const u8 *setup, std::vector<u8> &out) override;
   bool class_request(const u8 *setup, const std::vector<u8> &data,
                      std::vector<u8> &out) override;
   Result data_in(int ep, u8 *buf, int &len) override;

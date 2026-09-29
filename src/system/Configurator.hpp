@@ -66,6 +66,7 @@ typedef enum {
   c_isp1040,
   c_mpu401,
   c_es137x,
+  c_ehci,
 
   // disk devices
   c_file,

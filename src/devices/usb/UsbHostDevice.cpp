@@ -380,7 +380,7 @@ bool CUsbHostDevice::local_request(bool &ok) {
 // packets of at most 64 bytes, a 64-byte endpoint 0, and interrupt
 // intervals in frames (a high-speed bInterval n means 2^(n-1) microframes).
 void CUsbHostDevice::to_full_speed(std::vector<u8> &d) const {
-  if (!m_high_speed)
+  if (!m_high_speed || m_hs) // a full-speed device, or on a high-speed port
     return;
   for (size_t p = 0; p + 2 <= d.size() && d[p] >= 2; p += d[p]) {
     const u8 len = d[p], type = d[p + 1];

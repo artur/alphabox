@@ -74,12 +74,50 @@ void CUsbStorage::reset() {
   m_buf.clear();
 }
 
+// At high speed: USB 2.0, and 512-byte bulk packets (the only size a
+// high-speed bulk endpoint may have).
+static std::vector<u8> high_speed_form(std::vector<u8> d, bool config) {
+  if (!config) {
+    d[2] = 0x00; // bcdUSB 2.00
+    d[3] = 0x02;
+    return d;
+  }
+  for (size_t p = 0; p + 2 <= d.size() && d[p] >= 2; p += d[p])
+    if (d[p + 1] == 5) { // endpoint: 512 bytes
+      d[p + 4] = 0x00;
+      d[p + 5] = 0x02;
+    }
+  return d;
+}
+static const std::vector<u8> kDeviceDescriptorHS =
+    high_speed_form(kDeviceDescriptor, false);
+static const std::vector<u8> kConfigurationDescriptorHS =
+    high_speed_form(kConfigurationDescriptor, true);
+
 const std::vector<u8> &CUsbStorage::device_descriptor() const {
-  return kDeviceDescriptor;
+  return m_hs ? kDeviceDescriptorHS : kDeviceDescriptor;
 }
 
 const std::vector<u8> &CUsbStorage::configuration_descriptor() const {
-  return kConfigurationDescriptor;
+  return m_hs ? kConfigurationDescriptorHS : kConfigurationDescriptor;
+}
+
+// DEVICE_QUALIFIER (6): what the device would be at the other speed -- a
+// USB 2.0 host asks, to tell a high-speed-capable device from one that is
+// not. OTHER_SPEED_CONFIGURATION (7): that speed's configuration.
+bool CUsbStorage::other_descriptor(const u8 *setup, std::vector<u8> &out) {
+  if ((setup[0] & 0x1f) != 0)
+    return false;
+  if (setup[3] == 6) {
+    out = {10, 6, 0x00, 0x02, 0, 0, 0, 64, 1, 0};
+    return true;
+  }
+  if (setup[3] == 7) {
+    out = m_hs ? kConfigurationDescriptor : kConfigurationDescriptorHS;
+    out[1] = 7;
+    return true;
+  }
+  return false;
 }
 
 std::vector<u8> CUsbStorage::string_descriptor(int index) const {

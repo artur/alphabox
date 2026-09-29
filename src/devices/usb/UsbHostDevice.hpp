@@ -42,10 +42,11 @@ struct libusb_transfer;
  * SET_CONFIGURATION and SET_INTERFACE (libusb must know, to claim the
  * interfaces), and clearing an endpoint's halt.
  *
- * The emulated controller is full speed. A high-speed device's descriptors
+ * On the OHCI (full-speed) controller, a high-speed device's descriptors
  * are rewritten on their way to the guest to what a full-speed port allows
- * (64-byte bulk and interrupt packets, intervals in frames); libusb moves
- * the data at whatever speed the device really runs.
+ * (64-byte bulk and interrupt packets, intervals in frames); on an EHCI
+ * port they pass unchanged. libusb moves the data at whatever speed the
+ * device really runs.
  *
  * On macOS the host keeps interfaces its own drivers hold (keyboards, mice,
  * storage, audio): the guest can enumerate such a device, but not claim
@@ -60,6 +61,7 @@ public:
   Result transfer(int pid, int ep, u8 *buf, int &len) override;
   void reset() override;
   bool low_speed() const override { return m_low_speed; }
+  bool can_high_speed() const override { return m_high_speed; }
 
 protected:
   // Endpoint 0 is served by transfer(); the base class's descriptors are
