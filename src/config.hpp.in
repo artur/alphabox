@@ -277,6 +277,7 @@
 
 /* Optional features */
 #cmakedefine HAVE_PCAP
+#cmakedefine HAVE_LIBUSB
 #cmakedefine HAVE_SDL
 #cmakedefine HAVE_SDL3
 #cmakedefine HAVE_X11

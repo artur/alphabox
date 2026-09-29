@@ -33,6 +33,7 @@
 #include "SCSIBus.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "UsbHostDevice.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
 #include <chrono>
@@ -193,6 +194,15 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
       theUsbTablet.store(t.get());
       m_dev[p] = std::move(t);
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strncmp(what, "host:", 5)) {
+#if defined(HAVE_LIBUSB)
+      m_dev[p] = std::make_unique<CUsbHostDevice>(what + 5);
+      printf("%s: USB host device %s on port %d.\n", devid_string, what + 5,
+             p + 1);
+#else
+      FAILURE_1(Configuration,
+                "%s: USB host passthrough needs a build with libusb", key);
+#endif
     } else if (*what) {
       FAILURE_2(Configuration, "%s: unknown USB device \"%s\"", key, what);
     }

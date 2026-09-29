@@ -225,6 +225,35 @@ else()
     message(STATUS "pcap disabled. Networking support disabled")
 endif()
 
+# libusb: USB host passthrough (a real device on an emulated root hub port).
+# The host's libusb may be for another architecture than this lane (an x86-64
+# lane on an arm64 Mac finds Homebrew's arm64 build), so it is used only if a
+# program built for this lane links against it.
+if (NOT DISABLE_LIBUSB STREQUAL "yes")
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBUSB QUIET IMPORTED_TARGET libusb-1.0)
+    endif()
+    if(LIBUSB_FOUND)
+        include(CheckCXXSourceCompiles)
+        set(CMAKE_REQUIRED_INCLUDES ${LIBUSB_INCLUDE_DIRS})
+        set(CMAKE_REQUIRED_LIBRARIES ${LIBUSB_LDFLAGS})
+        check_cxx_source_compiles(
+            "#include <libusb.h>\nint main() { return libusb_init(nullptr); }"
+            HAVE_LIBUSB)
+        unset(CMAKE_REQUIRED_INCLUDES)
+        unset(CMAKE_REQUIRED_LIBRARIES)
+    endif()
+    if(HAVE_LIBUSB)
+        target_link_libraries(alphabox PkgConfig::LIBUSB)
+        message(STATUS "libusb found. USB host passthrough enabled")
+    else()
+        message(STATUS "libusb not found (or not for this architecture). USB host passthrough disabled")
+    endif()
+else()
+    message(STATUS "libusb disabled. USB host passthrough disabled")
+endif()
+
 if (DISABLE_SDL STREQUAL "yes")
     set(HAVE_SDL 0)
 else()

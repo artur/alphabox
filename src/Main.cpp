@@ -68,6 +68,10 @@ static void print_version() {
   printf(" PCap");
   features++;
 #endif
+#if defined(HAVE_LIBUSB)
+  printf(" libusb");
+  features++;
+#endif
 #if defined(__linux__)
   printf(" TAP");
   features++;

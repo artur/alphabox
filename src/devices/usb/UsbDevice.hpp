@@ -52,8 +52,9 @@ public:
 
   /// One transfer. For SETUP and OUT, buf holds len bytes; for IN, up to
   /// len bytes may be written and len is set to the count. Called with the
-  /// controller's lock held.
-  Result transfer(int pid, int ep, u8 *buf, int &len);
+  /// controller's lock held. A device that is not emulated here (a host
+  /// device passed through) takes over the whole of it, endpoint 0 included.
+  virtual Result transfer(int pid, int ep, u8 *buf, int &len);
 
   /// Bus reset (the port was reset): default address, unconfigured.
   virtual void reset();
@@ -105,6 +106,8 @@ protected:
   virtual void configured() {}
 
   static std::vector<u8> utf16_string(const char *s);
+  /// For a device that serves endpoint 0 itself (and so SET_ADDRESS).
+  void set_address(int address) { m_address = address; }
 
 private:
   Result control(int pid, u8 *buf, int &len);
