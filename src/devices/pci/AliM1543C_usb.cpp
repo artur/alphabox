@@ -182,9 +182,6 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
 
   ResetPCI();
 
-  state.usb_data[0x34 / 4] = 0x2edf;
-  state.usb_data[0x48 / 4] = 0x01000003;
-
   m_xfer.resize(kMaxRun + 0x2000);
 
   // Devices on the root hub's ports: port1..port3 = "tablet".
@@ -242,6 +239,26 @@ void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
   }
   attach(bus - 1, std::move(d));
   printf("%s: USB storage on port %d.\n", devid_string, bus);
+}
+
+void CAliM1543C_usb::ResetPCI() {
+  CPCIDevice::ResetPCI();
+  std::lock_guard<std::mutex> lk(m_mx);
+  // UsbReset with every register at its power-on value: no schedule runs,
+  // no HCCA is written, the root hub's ports are off.
+  memset(state.usb_data, 0, sizeof(state.usb_data));
+  state.usb_data[0x34 / 4] = 0x2edf;     // HcFmInterval
+  state.usb_data[0x44 / 4] = 0x0628;     // HcLSThreshold
+  state.usb_data[0x48 / 4] = 0x01000003; // HcRhDescriptorA
+  m_frame = 0;
+  m_done_head = 0;
+  m_done_delay = 7;
+  for (auto &d : m_dev)
+    if (d)
+      d->reset();
+  if (m_irq >= 0 && m_irq_level && theAli)
+    theAli->pic_set_line(m_irq >> 3, m_irq & 7, false);
+  m_irq_level = false;
 }
 
 void CAliM1543C_usb::attach(int p, std::unique_ptr<CUsbDevice> dev) {

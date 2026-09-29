@@ -59,6 +59,9 @@ static const std::vector<u8> kConfigurationDescriptor = {
     7, 5, 0x02, 2, 64, 0, 0};
 
 CUsbStorage::CUsbStorage(CSCSIBus *bus, CDisk *disk) : m_disk(disk) {
+  // Numbered in configuration order, so a machine keeps its serials.
+  static int instances = 0;
+  snprintf(m_serial, sizeof(m_serial), "0000A1FA%04X", ++instances);
   scsi_register(0, bus, 7);
   disk->scsi_register(0, bus, 0);
   disk->set_atapi_mode(); // command, data, status: no message phases
@@ -127,8 +130,10 @@ std::vector<u8> CUsbStorage::string_descriptor(int index) const {
   case 2:
     return utf16_string("Alphabox USB Disk");
   case 3:
-    // Bulk-Only Transport asks for at least 12 hexadecimal digits.
-    return utf16_string("0000A1FA0001");
+    // Bulk-Only Transport asks for at least 12 hexadecimal digits. Each disk
+    // has its own: a host sees two disks with one serial as one device
+    // (Windows 2000 bugchecks 0xCA on two copies of an image).
+    return utf16_string(m_serial);
   default:
     return {};
   }

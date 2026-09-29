@@ -76,6 +76,9 @@ public:
   /// A disk declared as disk<port>.0 plugs a USB mass storage device into
   /// that root hub port (1 to 3).
   void register_disk(class CDisk *dsk, int bus, int dev) override;
+  /// A machine reset resets the controller (UsbReset, registers at their
+  /// defaults, ports unpowered) and its devices.
+  void ResetPCI() override;
 
 private:
   u64 usb_hci_read(u64 address, int dsize);

@@ -63,6 +63,7 @@ private:
   void finish(); // the SCSI status, and the CSW it becomes
 
   CDisk *m_disk;
+  char m_serial[16]; // the iSerialNumber string, one per disk
   // Bulk-Only Transport state: waiting for a CBW, moving data, or holding
   // the CSW for the host to collect.
   enum Stage { BOT_CBW, BOT_DATA_IN, BOT_DATA_OUT, BOT_CSW };

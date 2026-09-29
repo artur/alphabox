@@ -92,6 +92,19 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
 
 CEhci::~CEhci() { stop_threads(); }
 
+void CEhci::ResetPCI() {
+  CPCIDevice::ResetPCI();
+  // The start-up self-test runs while the firmware resets the PCI bus; it
+  // owns the controller until it is done (and resets it itself then).
+  if (m_selftest)
+    return;
+  std::lock_guard<std::mutex> lk(m_mx);
+  for (auto &d : m_dev)
+    if (d)
+      d->reset();
+  reset_controller();
+}
+
 void CEhci::register_disk(class CDisk *dsk, int bus, int dev) {
   if (bus < 1 || bus > kPorts || dev != 0)
     FAILURE(Configuration, "EHCI disks are named disk<port>.0, port 1 to 4");
@@ -391,6 +404,12 @@ void CEhci::run() {
   using clk = std::chrono::steady_clock;
   try {
     auto next_frame = clk::now() + std::chrono::milliseconds(1);
+    // A real EHCI walks the asynchronous ring continuously, and a driver
+    // queues qTDs with plain memory writes -- nothing tells the card. So for
+    // a while after the ring last had work, it is walked every microframe
+    // even when idle, which is when the next transfer usually arrives; after
+    // that, once a frame (and at once on a wake-up).
+    auto last_work = clk::now() - std::chrono::seconds(1);
     bool busy = false;
     while (!StopThread) {
       const auto wake =
@@ -431,7 +450,10 @@ void CEhci::run() {
         frame();
       }
       async_pass();
-      busy = (state.usbcmd & CMD_ASE) && (state.usbsts & STS_RECL);
+      if (state.usbsts & STS_RECL)
+        last_work = now;
+      busy = (state.usbcmd & CMD_ASE) &&
+             now - last_work < std::chrono::milliseconds(50);
     }
   } catch (CException &e) {
     printf("Exception in EHCI thread: %s.\n", e.displayText().c_str());

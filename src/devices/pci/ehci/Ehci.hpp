@@ -75,6 +75,9 @@ public:
   void stop_threads() override;
   void check_state() override;
   void register_disk(class CDisk *dsk, int bus, int dev) override;
+  /// A machine reset resets the card: halted, schedules off, ports
+  /// unpowered, devices back to their default state.
+  void ResetPCI() override;
 
   static constexpr int kPorts = 4;
 
@@ -100,7 +103,7 @@ private:
   // guest physical addresses as they are.
   void dma_read(u32 a, void *d, size_t size, size_t count);
   void dma_write(u32 a, const void *s, size_t size, size_t count);
-  bool m_selftest = false;
+  std::atomic_bool m_selftest{false}; // read by the schedule and the CPUs
   std::unique_ptr<std::thread> m_selftest_thread;
   void selftest();
   void kick();
