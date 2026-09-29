@@ -11,7 +11,15 @@
 #   figure). Checks the written-back copy byte for byte.
 #   VAR=value pairs go to the emulator's environment, e.g.
 #   ALPHABOX_USB_ASYNC_US=250 (answer like hardware behind libusb).
+#   FAULTS="<s>:<token> ..." fires usb:... fault tokens (docs/headless.md)
+#   that many seconds after the batch starts, e.g.
+#   FAULTS="1:usb:stall:2:0x81 2:usb:phase:2 3:usb:nak:2:0x81:500": the
+#   copy must still come back identical -- the guest's driver recovered.
+#   PRE_FAULTS: the same, fired (and waited out) before the batch starts --
+#   e.g. "0:usb:detach:2 5:usb:attach:2 20:" unplugs and replugs the disk,
+#   and the copy then shows the guest found it again.
 # Needs mtools (mformat, mcopy, mtype). Stop only this script's emulator.
+# KEEP=1 keeps the run directory (its run.log) after a good run.
 set -u
 [ $# -ge 2 ] || { sed -n 2,16p "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); L=$2; shift 2
@@ -66,9 +74,25 @@ while [ $t -lt 600 ]; do
   sleep 5; t=$((t+5))
 done
 echo "$L: desktop after $t s"
+if [ -n "${PRE_FAULTS:-}" ]; then
+  t0=$(date +%s)
+  for f in $PRE_FAULTS; do
+    at=${f%%:*}; tok=${f#*:}
+    while [ $(( $(date +%s) - t0 )) -lt "$at" ]; do sleep 0.2; done
+    [ -n "$tok" ] && echo "$tok" >> keys.txt
+  done
+fi
 echo "win-r" >> keys.txt; sleep 3
 python3 -c "import sys; sys.path.insert(0,'$T'); import keys_for; print(' '.join(keys_for.tokens('f:/t.bat')))" >> keys.txt
 sleep 4; echo "enter" >> keys.txt
+if [ -n "${FAULTS:-}" ]; then
+  ( t0=$(date +%s)
+    for f in $FAULTS; do
+      at=${f%%:*}; tok=${f#*:}
+      while [ $(( $(date +%s) - t0 )) -lt "$at" ]; do sleep 0.2; done
+      echo "$tok" >> keys.txt
+    done ) &
+fi
 s=$(date +%s)
 while [ $(( $(date +%s) - s )) -lt 900 ]; do
   cp -c "$D/run.img" peek.img 2>/dev/null || cp "$D/run.img" peek.img
@@ -90,4 +114,4 @@ PY
 a=$(mtype -i "$D/run.img@@32256" ::/BIG2.BIN 2>/dev/null | shasum | cut -c1-16)
 b=$(shasum "$D/BIG.BIN" | cut -c1-16)
 [ "$a" = "$b" ] && echo "written-back copy: identical" || { echo "written-back copy: DIFFERS ($a vs $b)"; exit 1; }
-cd "$WORK" && rm -rf "$R" "$D/run.img"
+[ "${KEEP:-0}" = 1 ] || { cd "$WORK" && rm -rf "$R" "$D/run.img"; }

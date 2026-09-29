@@ -30,7 +30,7 @@
 #include <thread>
 #include <vector>
 
-class CUsbDevice;
+#include "UsbDevice.hpp"
 
 /**
  * \brief A USB 2.0 host controller on a PCI card: EHCI 1.0.
@@ -62,7 +62,9 @@ class CUsbDevice;
  * for Universal Serial Bus, revision 1.0 (Intel, 2002); Universal Serial Bus
  * Specification 2.0, chapters 8, 9 and 11.
  **/
-class CEhci : public CPCIDevice, public CDiskController {
+class CEhci : public CPCIDevice,
+              public CDiskController,
+              public CUsbFaultTarget {
 public:
   CEhci(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
   ~CEhci() override;
@@ -78,6 +80,7 @@ public:
   /// A machine reset resets the card: halted, schedules off, ports
   /// unpowered, devices back to their default state.
   void ResetPCI() override;
+  bool inject_fault(const char *op, int port, int ep, int arg) override;
 
   static constexpr int kPorts = 4;
 
@@ -111,6 +114,13 @@ private:
   void port_write(int p, u32 data);
 
   std::unique_ptr<CUsbDevice> m_dev[kPorts];
+  CUsbPortFaults m_faults[kPorts]; // injected by tests (usb:... tokens)
+  CUsbPortFaults *faults_for(const CUsbDevice *d) {
+    for (int p = 0; p < kPorts; ++p)
+      if (m_dev[p].get() == d)
+        return &m_faults[p];
+    return nullptr;
+  }
   std::mutex m_mx;
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool StopThread{false};

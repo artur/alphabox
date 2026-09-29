@@ -69,6 +69,11 @@ CUsbStorage::CUsbStorage(CSCSIBus *bus, CDisk *disk) : m_disk(disk) {
 
 void CUsbStorage::reset() {
   CUsbDevice::reset();
+  transport_reset();
+}
+
+// Ready for a CBW, whatever was in progress (Bulk-Only Transport 3.1).
+void CUsbStorage::transport_reset() {
   // A command the host abandoned mid-data leaves the disk selected; free
   // the bus so the next command selects it afresh.
   if (scsi_get_phase(0) != SCSI_PHASE_FREE)
@@ -143,8 +148,9 @@ bool CUsbStorage::class_request(const u8 *setup, const std::vector<u8> &data,
                                 std::vector<u8> &out) {
   (void)data;
   switch (setup[1]) {
-  case 0xff: // Bulk-Only Mass Storage Reset
-    reset();
+  case 0xff: // Bulk-Only Mass Storage Reset: the transport only -- unlike a
+             // bus reset, the device keeps its address and configuration
+    transport_reset();
     return true;
   case 0xfe: // Get Max LUN: one logical unit
     out = {0};
@@ -237,6 +243,25 @@ void CUsbStorage::finish() {
   m_status = status ? CSW_FAILED : CSW_PASSED;
 }
 
+// A test made an endpoint halt (CUsbPortFaults). A real Bulk-Only device
+// that stalls its IN pipe mid-data has ended the data stage (the residue
+// says how much was not sent) and the host collects the CSW once it has
+// cleared the halt; one that stalls its OUT pipe mid-data has given up on
+// the command.
+void CUsbStorage::endpoint_halted(int ep_addr) {
+  if (ep_addr == 0x81 && m_stage == BOT_DATA_IN) {
+    m_buf.clear();
+    m_stage = BOT_CSW;
+  } else if (ep_addr == 0x02 && m_stage == BOT_DATA_OUT) {
+    if (scsi_get_phase(0) != SCSI_PHASE_FREE)
+      scsi_bus[0]->reset_bus();
+    m_buf.clear();
+    m_moved = 0;
+    m_status = CSW_FAILED;
+    m_stage = BOT_CSW;
+  }
+}
+
 CUsbDevice::Result CUsbStorage::data_out(int ep, const u8 *buf, int len) {
   if (ep != 2 || !m_configuration)
     return USB_STALL;
@@ -303,6 +328,10 @@ CUsbDevice::Result CUsbStorage::data_in(int ep, u8 *buf, int &len) {
     const u32 w[3] = {kCswSignature, m_tag, residue};
     for (int i = 0; i < 12; ++i)
       buf[i] = (u8)(w[i / 4] >> (8 * (i % 4)));
+    if (m_phase_error) { // usb:phase
+      m_status = CSW_PHASE_ERROR;
+      m_phase_error = false;
+    }
     buf[12] = m_status;
     len = 13;
     if (g_usbtrace)

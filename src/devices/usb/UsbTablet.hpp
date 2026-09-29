@@ -42,6 +42,8 @@ class CUsbTablet : public CUsbDevice {
 public:
   CUsbTablet();
   const char *name() const override { return "tablet"; }
+  /// On an EHCI port it runs at high speed: USB 2.0, polled every 1 ms.
+  bool can_high_speed() const override { return true; }
   void reset() override;
 
   /// The host pointer, as fractions of the guest screen (0..1, clamped),

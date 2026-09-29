@@ -208,6 +208,10 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
     }
   }
 
+  // Tests' usb:... faults come here unless an EHCI card takes them.
+  CUsbFaultTarget *none = nullptr;
+  theUsbFaultTarget.compare_exchange_strong(none, this);
+
   printf(
       "%s: $Id: AliM1543C_usb.cpp,v 1.6 2008/03/14 15:30:50 iamcamiel Exp $\n",
       devid_string);
@@ -215,6 +219,8 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
 
 CAliM1543C_usb::~CAliM1543C_usb() {
   stop_threads();
+  CUsbFaultTarget *me = this;
+  theUsbFaultTarget.compare_exchange_strong(me, nullptr);
   for (auto &d : m_dev)
     if (d && theUsbTablet.load() == d.get())
       theUsbTablet.store(nullptr);
@@ -259,6 +265,36 @@ void CAliM1543C_usb::ResetPCI() {
   if (m_irq >= 0 && m_irq_level && theAli)
     theAli->pic_set_line(m_irq >> 3, m_irq & 7, false);
   m_irq_level = false;
+}
+
+// Test faults (CUsbPortFaults, docs/headless.md): from the GUI thread.
+bool CAliM1543C_usb::inject_fault(const char *op, int port, int ep, int arg) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  if (port < 1 || port > kPorts || !m_dev[port - 1])
+    return false;
+  const int p = port - 1;
+  CUsbPortFaults &f = m_faults[p];
+  if (!strcmp(op, "detach") || !strcmp(op, "attach")) {
+    f.unplugged = !strcmp(op, "detach");
+    if (f.unplugged)
+      m_dev[p]->reset();
+    port_refresh(p);
+  } else if (!strcmp(op, "stall")) {
+    f.stall_ep = ep;
+    f.stall_left = arg > 0 ? arg : 1;
+  } else if (!strcmp(op, "nak")) {
+    f.nak_ep = ep;
+    f.nak_until_ms = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count() +
+                     (u64)arg;
+  } else if (!strcmp(op, "phase")) {
+    return m_dev[p]->inject_phase_error();
+  } else {
+    return false;
+  }
+  kick();
+  return true;
 }
 
 void CAliM1543C_usb::attach(int p, std::unique_ptr<CUsbDevice> dev) {
@@ -469,7 +505,8 @@ bool CAliM1543C_usb::service_list(u32 head) {
 
 CUsbDevice *CAliM1543C_usb::device_at(int address) {
   for (int p = 0; p < kPorts; ++p)
-    if (m_dev[p] && (port_reg(p) & RH_PES) && m_dev[p]->address() == address)
+    if (m_dev[p] && (port_reg(p) & RH_PES) && !m_faults[p].unplugged &&
+        m_dev[p]->address() == address)
       return m_dev[p].get();
   return nullptr;
 }
@@ -609,7 +646,12 @@ int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
       break;
     }
     int n = total;
-    const CUsbDevice::Result r = dev->transfer(pid, ep, buf, n);
+    CUsbDevice::Result r;
+    CUsbPortFaults *f = faults_for(dev);
+    if (f && f->intercept(dev, pid, ep, buf, n, r))
+      n = 0; // a test fault answered it
+    else
+      r = dev->transfer(pid, ep, buf, n);
     if (r == CUsbDevice::USB_NAK)
       break; // retried when the device answers, or next frame
     if (r == CUsbDevice::USB_STALL) {
@@ -685,7 +727,7 @@ void CAliM1543C_usb::ohci_status(u32 bits) {
 void CAliM1543C_usb::port_refresh(int p) {
   u32 &r = port_reg(p);
   const bool powered = (r & RH_PPS) != 0;
-  const bool present = m_dev[p] && powered;
+  const bool present = m_dev[p] && powered && !m_faults[p].unplugged;
   const bool was = (r & RH_CCS) != 0;
   r &= ~(RH_CCS | RH_LSDA);
   if (present) {

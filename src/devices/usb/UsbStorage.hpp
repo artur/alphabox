@@ -47,6 +47,11 @@ public:
   const char *name() const override { return "storage"; }
   bool can_high_speed() const override { return true; }
   void reset() override;
+  void endpoint_halted(int ep_addr) override;
+  bool inject_phase_error() override {
+    m_phase_error = true;
+    return true;
+  }
 
 protected:
   const std::vector<u8> &device_descriptor() const override;
@@ -60,6 +65,7 @@ protected:
 
 private:
   void command(const u8 *cbw);
+  void transport_reset();
   void finish(); // the SCSI status, and the CSW it becomes
 
   CDisk *m_disk;
@@ -73,7 +79,8 @@ private:
   u32 m_moved = 0;       // bytes of the data stage moved so far
   std::vector<u8> m_buf; // the data stage (IN: the disk's answer)
   size_t m_pos = 0;
-  u8 m_status = 0; // bCSWStatus
+  u8 m_status = 0;            // bCSWStatus
+  bool m_phase_error = false; // usb:phase: the next CSW says phase error
 };
 
 #endif

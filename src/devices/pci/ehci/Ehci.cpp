@@ -25,6 +25,7 @@
 #include "UsbAsyncShim.hpp"
 #include "UsbHostDevice.hpp"
 #include "UsbStorage.hpp"
+#include "UsbTablet.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -71,7 +72,12 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     char key[8];
     snprintf(key, sizeof(key), "port%d", p + 1);
     const char *what = myCfg->get_text_value(key, "");
-    if (!strncmp(what, "host:", 5)) {
+    if (!strcmp(what, "tablet")) {
+      auto t = std::make_unique<CUsbTablet>();
+      theUsbTablet.store(t.get());
+      attach(p, std::move(t));
+      printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
       attach(p, std::make_unique<CUsbHostDevice>(what + 5));
       printf("%s: USB host device %s on port %d.\n", devid_string, what + 5,
@@ -83,14 +89,52 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     } else if (*what) {
       FAILURE_2(Configuration,
                 "%s: unknown USB device \"%s\" (EHCI ports "
-                "take host:vvvv:pppp; disks are disk<port>.0)",
+                "take tablet or host:vvvv:pppp; disks are disk<port>.0)",
                 key, what);
     }
   }
   printf("%s: EHCI USB 2.0 controller, %d ports.\n", devid_string, kPorts);
+  theUsbFaultTarget.store(this); // tests address the USB 2.0 card first
 }
 
-CEhci::~CEhci() { stop_threads(); }
+CEhci::~CEhci() {
+  stop_threads();
+  for (auto &d : m_dev)
+    if (d && theUsbTablet.load() == d.get())
+      theUsbTablet.store(nullptr);
+  CUsbFaultTarget *me = this;
+  theUsbFaultTarget.compare_exchange_strong(me, nullptr);
+}
+
+// Test faults (CUsbPortFaults, docs/headless.md): from the GUI thread.
+bool CEhci::inject_fault(const char *op, int port, int ep, int arg) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  if (port < 1 || port > kPorts || !m_dev[port - 1])
+    return false;
+  const int p = port - 1;
+  CUsbPortFaults &f = m_faults[p];
+  if (!strcmp(op, "detach") || !strcmp(op, "attach")) {
+    f.unplugged = !strcmp(op, "detach");
+    if (f.unplugged)
+      m_dev[p]->reset(); // what is left of it when it comes back
+    port_refresh(p);
+  } else if (!strcmp(op, "stall")) {
+    f.stall_ep = ep;
+    f.stall_left = arg > 0 ? arg : 1;
+  } else if (!strcmp(op, "nak")) {
+    f.nak_ep = ep;
+    f.nak_until_ms = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count() +
+                     (u64)arg;
+  } else if (!strcmp(op, "phase")) {
+    return m_dev[p]->inject_phase_error();
+  } else {
+    return false;
+  }
+  kick();
+  return true;
+}
 
 void CEhci::ResetPCI() {
   CPCIDevice::ResetPCI();
@@ -216,7 +260,8 @@ void CEhci::status(u32 bits) {
 // a companion). A change sets CSC and Port Change Detect.
 void CEhci::port_refresh(int p) {
   u32 &r = state.portsc[p];
-  const bool present = m_dev[p] && (r & PS_PP) && !(r & PS_OWNER);
+  const bool present =
+      m_dev[p] && !m_faults[p].unplugged && (r & PS_PP) && !(r & PS_OWNER);
   const bool was = (r & PS_CCS) != 0;
   r &= ~(PS_CCS | (3u << 10));
   if (present) {
@@ -412,13 +457,29 @@ void CEhci::run() {
     auto last_work = clk::now() - std::chrono::seconds(1);
     bool busy = false;
     while (!StopThread) {
-      const auto wake =
-          busy ? std::min(clk::now() + std::chrono::microseconds(125),
-                          next_frame)
-               : next_frame;
-      {
+      if (busy) {
+        // A microframe. Not a timed wait: on macOS one that short sleeps
+        // for about a millisecond (timer coalescing), which is what a
+        // transfer then waited -- nada's EHCI driver read 16 MB in ~850 ms
+        // against 79 ms with a wake-up per transfer. Yielding costs host
+        // CPU only while the ring is busy.
+        const auto wake =
+            std::min(clk::now() + std::chrono::microseconds(125), next_frame);
+        for (;;) {
+          {
+            std::lock_guard<std::mutex> klk(m_kick_mx);
+            if (m_kicked || StopThread) {
+              m_kicked = false;
+              break;
+            }
+          }
+          if (clk::now() >= wake)
+            break;
+          std::this_thread::yield();
+        }
+      } else {
         std::unique_lock<std::mutex> klk(m_kick_mx);
-        m_kick_cv.wait_until(klk, wake, [this]() { return m_kicked; });
+        m_kick_cv.wait_until(klk, next_frame, [this]() { return m_kicked; });
         m_kicked = false;
       }
       if (StopThread)
@@ -449,8 +510,8 @@ void CEhci::run() {
           status(STS_FLR);
         frame();
       }
-      // Work retired within the pass counts too: an emulated device finishes
-      // every qTD in the pass that finds it, leaving nothing active.
+      // Data moved in this pass (an emulated device finishes every qTD in
+      // the pass that finds it, so Reclamation alone would miss it).
       if (async_pass())
         last_work = now;
       busy = (state.usbcmd & CMD_ASE) &&
@@ -499,8 +560,10 @@ void CEhci::periodic_frame() {
 // The asynchronous ring, from ASYNCLISTADDR round to it again, repeated
 // while it moves data. Reclamation says whether any queue head had an active
 // qTD on the last round (the thread keeps polling while it does). The
-// async-advance doorbell is answered after a full round. True if the ring
-// had work: a qTD moved data, or one is waiting on its device.
+// async-advance doorbell is answered after a full round. True if a qTD
+// moved data. (One that is only waiting -- NAKed -- does not count: its
+// device wakes the thread when it answers, and a pipe a passed-through
+// device keeps pending would otherwise keep the thread spinning.)
 bool CEhci::async_pass() {
   if (!(state.usbcmd & CMD_ASE) || !state.async_addr) {
     state.usbsts &= ~STS_RECL;
@@ -542,12 +605,12 @@ bool CEhci::async_pass() {
     state.usbcmd &= ~CMD_IAAD;
     status(STS_IAA);
   }
-  return worked || active;
+  return worked;
 }
 
 CUsbDevice *CEhci::device_at(int address) {
   for (int p = 0; p < kPorts; ++p)
-    if (m_dev[p] && (state.portsc[p] & PS_PED) &&
+    if (m_dev[p] && (state.portsc[p] & PS_PED) && !m_faults[p].unplugged &&
         m_dev[p]->address() == address)
       return m_dev[p].get();
   return nullptr;
@@ -644,7 +707,12 @@ int CEhci::service_qh(u32 qh_addr, bool periodic) {
     if (!in && want)
       span(buf, want, false);
     int n = want;
-    const CUsbDevice::Result r = dev->transfer(pid, ep, buf, n);
+    CUsbDevice::Result r;
+    CUsbPortFaults *f = faults_for(dev);
+    if (f && f->intercept(dev, pid, ep, buf, n, r))
+      n = 0; // a test fault answered it
+    else
+      r = dev->transfer(pid, ep, buf, n);
     if (r == CUsbDevice::USB_NAK) {
       waited = true;
       break; // the next round, or the device's wake-up, retries

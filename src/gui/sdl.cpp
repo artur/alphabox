@@ -1049,11 +1049,53 @@ static bool sdl_debug_tablet(const char *token, bool press, bool &handled) {
   return t != nullptr;
 }
 
+// "usb:<op>:<port>[:<ep>[:<n>]]" injects a fault on a USB port for a test
+// (CUsbPortFaults): detach, attach, stall <ep> [n], phase, nak <ep> <ms>.
+// The endpoint is an address: 0x81 = IN 1, 0x02 = OUT 2. It goes to the
+// EHCI card if there is one, else the ALi's OHCI. With press false it only
+// checks the token.
+static bool sdl_debug_usb(const char *token, bool press, bool &handled) {
+  handled = strncmp(token, "usb:", 4) == 0;
+  if (!handled)
+    return false;
+  char op[16] = {0};
+  const char *p = token + 4;
+  const char *colon = strchr(p, ':');
+  if (!colon || colon - p >= (long)sizeof(op))
+    return false;
+  memcpy(op, p, colon - p);
+  char *end = nullptr;
+  const long port = strtol(colon + 1, &end, 10);
+  long ep = -1, arg = 0;
+  if (*end == ':') {
+    ep = strtol(end + 1, &end, 0);
+    if (*end == ':')
+      arg = strtol(end + 1, &end, 0);
+  }
+  if (*end)
+    return false;
+  const bool needs_ep = !strcmp(op, "stall") || !strcmp(op, "nak");
+  if ((needs_ep && ep < 0) || (strcmp(op, "detach") && strcmp(op, "attach") &&
+                               strcmp(op, "phase") && !needs_ep))
+    return false;
+  CUsbFaultTarget *t = theUsbFaultTarget.load();
+  if (!t)
+    return false;
+  if (press && !t->inject_fault(op, (int)port, (int)ep, (int)arg))
+    printf("%%SDL-W-USBFAULT: %s: no such port or device, or not supported\n",
+           token);
+  return true;
+}
+
 static bool sdl_debug_press(const char *token, bool press) {
   bool tablet;
   const bool tablet_ok = sdl_debug_tablet(token, press, tablet);
   if (tablet)
     return tablet_ok;
+  bool usb;
+  const bool usb_ok = sdl_debug_usb(token, press, usb);
+  if (usb)
+    return usb_ok;
   static const struct {
     const char *name;
     u32 key;

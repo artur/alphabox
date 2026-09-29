@@ -20,6 +20,7 @@
 
 #include "UsbDevice.hpp"
 #include "StdAfx.hpp"
+#include <chrono>
 #include <cstring>
 
 // ALPHABOX_USBTRACE=1 also logs each control request a device serves.
@@ -204,4 +205,37 @@ bool CUsbDevice::standard_request(const u8 *setup, const std::vector<u8> &data,
   default:
     return false;
   }
+}
+
+std::atomic<CUsbFaultTarget *> theUsbFaultTarget{nullptr};
+
+bool CUsbPortFaults::intercept(CUsbDevice *dev, int pid, int ep, const u8 *buf,
+                               int len, CUsbDevice::Result &r) {
+  // CLEAR_FEATURE(ENDPOINT_HALT) on its way to the device lifts the halt.
+  if (pid == CUsbDevice::PID_SETUP && ep == 0 && len == 8 && buf[0] == 0x02 &&
+      buf[1] == 0x01 && buf[2] == 0 && buf[3] == 0)
+    halted &= ~(1u << bit(buf[4]));
+  if (ep == 0 && pid == CUsbDevice::PID_SETUP)
+    return false;
+  const int addr = ep | (pid == CUsbDevice::PID_IN ? 0x80 : 0);
+  if (addr == nak_ep) {
+    const u64 now = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    if (now < nak_until_ms) {
+      r = CUsbDevice::USB_NAK;
+      return true;
+    }
+    nak_ep = -1;
+  }
+  if (addr == stall_ep && stall_left > 0 && !(halted & (1u << bit(addr)))) {
+    halted |= 1u << bit(addr);
+    --stall_left;
+    dev->endpoint_halted(addr);
+  }
+  if (halted & (1u << bit(addr))) {
+    r = CUsbDevice::USB_STALL;
+    return true;
+  }
+  return false;
 }

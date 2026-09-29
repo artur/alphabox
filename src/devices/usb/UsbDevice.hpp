@@ -24,6 +24,7 @@
 #include <cstdint> // datatypes.hpp needs the fixed-width types
 
 #include "datatypes.hpp"
+#include <atomic>
 #include <functional>
 #include <vector>
 
@@ -64,7 +65,7 @@ public:
   /// Whether the device can run at high speed (USB 2.0); only then does an
   /// EHCI port keep it. The port it is on says which it is running at.
   virtual bool can_high_speed() const { return false; }
-  void set_high_speed(bool hs) { m_hs = hs; }
+  virtual void set_high_speed(bool hs) { m_hs = hs; }
   bool high_speed() const { return m_hs; }
 
   /// Set by the controller: a device whose transfers finish on another
@@ -74,6 +75,14 @@ public:
   std::function<void()> on_complete;
   virtual const char *name() const = 0;
   int address() const { return m_address; }
+
+  /// Test faults (see CUsbPortFaults). The endpoint `ep_addr` (0x81 = IN
+  /// 1, 0x02 = OUT 2) was just made to halt: a device with a transfer in
+  /// progress there moves on as a real one does after a STALL.
+  virtual void endpoint_halted(int ep_addr) { (void)ep_addr; }
+  /// usb:phase -- the device's next command ends in a phase error, where
+  /// that means something (USB mass storage). False: not supported.
+  virtual bool inject_phase_error() { return false; }
 
 protected:
   int m_configuration = 0;
@@ -137,5 +146,44 @@ private:
   size_t m_ctl_pos = 0;
   bool m_ctl_stall = false;
 };
+
+/**
+ * \brief Faults a test injects on one root hub port (ALPHABOX_KEYPIPE /
+ * ALPHABOX_KEYSCRIPT tokens usb:detach, usb:attach, usb:stall, usb:nak;
+ * docs/headless.md). The controller asks intercept() before each transfer
+ * to the port's device, under its own lock.
+ *
+ * A stalled endpoint behaves as a halted one does: every transaction to it
+ * is answered STALL until the host clears the halt with CLEAR_FEATURE
+ * (ENDPOINT_HALT) -- seen here as it goes past to the device -- and it
+ * halts again on its next transaction while injections remain.
+ **/
+struct CUsbPortFaults {
+  bool unplugged = false; // usb:detach: the port shows nothing connected
+  int stall_ep = -1;      // endpoint address to halt (0x81, 0x02, ...)
+  int stall_left = 0;     // halts still to inject there
+  u32 halted = 0;         // halted endpoints: bit (num | in << 4)
+  int nak_ep = -1;        // usb:nak: this endpoint NAKs ...
+  u64 nak_until_ms = 0;   // ... until then (steady clock, ms)
+
+  static int bit(int ep_addr) {
+    return (ep_addr & 15) | ((ep_addr & 0x80) >> 3);
+  }
+  /// Before the device sees a transfer: true, with the answer in r, when
+  /// the fault answers it instead.
+  bool intercept(CUsbDevice *dev, int pid, int ep, const u8 *buf, int len,
+                 CUsbDevice::Result &r);
+};
+
+/// A controller that takes injected faults: the EHCI card when there is
+/// one, else the ALi's OHCI. op is "detach", "attach", "stall", "phase" or
+/// "nak"; port counts from 1. False: no such port or device.
+class CUsbFaultTarget {
+public:
+  virtual ~CUsbFaultTarget() = default;
+  virtual bool inject_fault(const char *op, int port, int ep, int arg) = 0;
+};
+/// Where usb:... tokens go (see CUsbFaultTarget).
+extern std::atomic<CUsbFaultTarget *> theUsbFaultTarget;
 
 #endif

@@ -45,6 +45,20 @@ public:
   ~CUsbAsyncShim() override;
   const char *name() const override { return m_inner->name(); }
   bool low_speed() const override { return m_inner->low_speed(); }
+  bool can_high_speed() const override { return m_inner->can_high_speed(); }
+  void set_high_speed(bool hs) override {
+    CUsbDevice::set_high_speed(hs);
+    std::lock_guard<std::mutex> lk(m_inner_mx);
+    m_inner->set_high_speed(hs);
+  }
+  void endpoint_halted(int ep_addr) override {
+    std::lock_guard<std::mutex> lk(m_inner_mx);
+    m_inner->endpoint_halted(ep_addr);
+  }
+  bool inject_phase_error() override {
+    std::lock_guard<std::mutex> lk(m_inner_mx);
+    return m_inner->inject_phase_error();
+  }
   Result transfer(int pid, int ep, u8 *buf, int &len) override;
   void reset() override;
 

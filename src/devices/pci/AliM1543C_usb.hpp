@@ -37,7 +37,7 @@
 #include <mutex>
 #include <thread>
 
-class CUsbDevice;
+#include "UsbDevice.hpp"
 
 /**
  * \brief The USB function of the ALi M1543C: an OHCI 1.0a host controller.
@@ -60,7 +60,9 @@ class CUsbDevice;
  *    (http://mds.gotdns.com/sensors/docs/ali/1543dScb1-120.pdf)
  *  .
  **/
-class CAliM1543C_usb : public CPCIDevice, public CDiskController {
+class CAliM1543C_usb : public CPCIDevice,
+                       public CDiskController,
+                       public CUsbFaultTarget {
 public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
@@ -79,6 +81,7 @@ public:
   /// A machine reset resets the controller (UsbReset, registers at their
   /// defaults, ports unpowered) and its devices.
   void ResetPCI() override;
+  bool inject_fault(const char *op, int port, int ep, int arg) override;
 
 private:
   u64 usb_hci_read(u64 address, int dsize);
@@ -104,6 +107,13 @@ private:
   void port_write(int p, u32 data);
   void port_change(int p, u32 bits);
   std::unique_ptr<CUsbDevice> m_dev[kPorts];
+  CUsbPortFaults m_faults[kPorts]; // injected by tests (usb:... tokens)
+  CUsbPortFaults *faults_for(const CUsbDevice *d) {
+    for (int p = 0; p < kPorts; ++p)
+      if (m_dev[p].get() == d)
+        return &m_faults[p];
+    return nullptr;
+  }
   void attach(int p, std::unique_ptr<CUsbDevice> dev);
 
   // A device finishing a transfer on another thread wakes the frame thread,

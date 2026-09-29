@@ -95,6 +95,24 @@ static const std::vector<u8> kConfigurationDescriptor = {
     // Endpoint 1 IN, interrupt, 8 bytes, every 10 ms
     7, 5, 0x81, 3, 8, 0, 10};
 
+// At high speed: USB 2.0, and the interrupt endpoint's interval in the
+// high-speed unit (2^(bInterval-1) microframes: 4 = 8 microframes = 1 ms).
+static std::vector<u8> high_speed_form(std::vector<u8> d, bool config) {
+  if (!config) {
+    d[2] = 0x00; // bcdUSB 2.00
+    d[3] = 0x02;
+    return d;
+  }
+  for (size_t p = 0; p + 2 <= d.size() && d[p] >= 2; p += d[p])
+    if (d[p + 1] == 5)
+      d[p + 6] = 4;
+  return d;
+}
+static const std::vector<u8> kDeviceDescriptorHS =
+    high_speed_form(kDeviceDescriptor, false);
+static const std::vector<u8> kConfigurationDescriptorHS =
+    high_speed_form(kConfigurationDescriptor, true);
+
 CUsbTablet::CUsbTablet() {}
 
 void CUsbTablet::reset() {
@@ -106,11 +124,11 @@ void CUsbTablet::reset() {
 }
 
 const std::vector<u8> &CUsbTablet::device_descriptor() const {
-  return kDeviceDescriptor;
+  return m_hs ? kDeviceDescriptorHS : kDeviceDescriptor;
 }
 
 const std::vector<u8> &CUsbTablet::configuration_descriptor() const {
-  return kConfigurationDescriptor;
+  return m_hs ? kConfigurationDescriptorHS : kConfigurationDescriptor;
 }
 
 std::vector<u8> CUsbTablet::string_descriptor(int index) const {
@@ -130,6 +148,18 @@ std::vector<u8> CUsbTablet::string_descriptor(int index) const {
 // descriptor.
 bool CUsbTablet::other_descriptor(const u8 *setup, std::vector<u8> &out) {
   const int type = setup[3];
+  if ((setup[0] & 0x1f) == 0) { // to the device: the other speed's view
+    if (type == 6) {            // DEVICE_QUALIFIER
+      out = {10, 6, 0x00, 0x02, 0, 0, 0, 8, 1, 0};
+      return true;
+    }
+    if (type == 7) { // OTHER_SPEED_CONFIGURATION
+      out = m_hs ? kConfigurationDescriptor : kConfigurationDescriptorHS;
+      out[1] = 7;
+      return true;
+    }
+    return false;
+  }
   if (type == 0x22) {
     out = kReportDescriptor;
     return true;
