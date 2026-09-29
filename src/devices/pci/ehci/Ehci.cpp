@@ -449,8 +449,9 @@ void CEhci::run() {
           status(STS_FLR);
         frame();
       }
-      async_pass();
-      if (state.usbsts & STS_RECL)
+      // Work retired within the pass counts too: an emulated device finishes
+      // every qTD in the pass that finds it, leaving nothing active.
+      if (async_pass())
         last_work = now;
       busy = (state.usbcmd & CMD_ASE) &&
              now - last_work < std::chrono::milliseconds(50);
@@ -498,8 +499,9 @@ void CEhci::periodic_frame() {
 // The asynchronous ring, from ASYNCLISTADDR round to it again, repeated
 // while it moves data. Reclamation says whether any queue head had an active
 // qTD on the last round (the thread keeps polling while it does). The
-// async-advance doorbell is answered after a full round.
-void CEhci::async_pass() {
+// async-advance doorbell is answered after a full round. True if the ring
+// had work: a qTD moved data, or one is waiting on its device.
+bool CEhci::async_pass() {
   if (!(state.usbcmd & CMD_ASE) || !state.async_addr) {
     state.usbsts &= ~STS_RECL;
     if (state.doorbell) {
@@ -507,9 +509,9 @@ void CEhci::async_pass() {
       state.usbcmd &= ~CMD_IAAD;
       status(STS_IAA);
     }
-    return;
+    return false;
   }
-  bool active = false;
+  bool active = false, worked = false;
   for (int round = 0; round < 16; ++round) {
     int moved = 0;
     active = false;
@@ -529,6 +531,7 @@ void CEhci::async_pass() {
     }
     if (!moved)
       break;
+    worked = true;
   }
   if (active)
     state.usbsts |= STS_RECL;
@@ -539,6 +542,7 @@ void CEhci::async_pass() {
     state.usbcmd &= ~CMD_IAAD;
     status(STS_IAA);
   }
+  return worked || active;
 }
 
 CUsbDevice *CEhci::device_at(int address) {

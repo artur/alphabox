@@ -91,7 +91,7 @@ private:
   // The schedule, called with m_mx held.
   void run();
   void frame();
-  void async_pass();
+  bool async_pass(); // true if the ring had work
   void periodic_frame();
   int service_qh(u32 qh_addr, bool periodic);
   CUsbDevice *device_at(int address);
