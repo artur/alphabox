@@ -32,6 +32,7 @@
 #include "DiskController.hpp"
 #include "PCIDevice.hpp"
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -87,7 +88,8 @@ private:
   void run();
   void frame();
   bool service_list(u32 head);
-  int service_ed(u32 ed_addr, bool periodic);
+  void service_async_lists(); // control and bulk, between frames
+  int service_ed(u32 ed_addr, bool periodic, bool *found = nullptr);
   void retire_td(u32 td_addr, u32 td[4], int cc);
   void write_back_done();
   CUsbDevice *device_at(int address);
@@ -99,6 +101,20 @@ private:
   void port_write(int p, u32 data);
   void port_change(int p, u32 bits);
   std::unique_ptr<CUsbDevice> m_dev[kPorts];
+  void attach(int p, std::unique_ptr<CUsbDevice> dev);
+
+  // A device finishing a transfer on another thread wakes the frame thread,
+  // which retries the control and bulk lists at once (kick()).
+  void kick();
+  std::mutex m_kick_mx;
+  std::condition_variable m_kick_cv;
+  bool m_kicked = false;
+  // A pass between frames that retires TDs wanting an interrupt at once
+  // (DI=0) writes the done queue back then, not at the frame's end.
+  // Consecutive bulk TDs of an endpoint are moved as one transfer (see
+  // service_ed), in this buffer:
+  static constexpr int kMaxRun = 0x10000; // bytes in one coalesced transfer
+  std::vector<u8> m_xfer;
 
   std::mutex m_mx; // registers and schedule: MMIO thread vs frame thread
   std::unique_ptr<std::thread> myThread;

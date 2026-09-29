@@ -21,6 +21,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_KEYSCRIPT="<sec>:<key>,..."` | Press named keys at fixed second offsets from GUI start, e.g. `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` + Enter at the SRM prompt 40 s in. |
 | `ALPHABOX_KEYPIPE=<file>` | Interactive variant: keys appended to `<file>` while the emulator runs are typed into the guest, one token per ~120 ms. Example: `echo "f2 down down enter" >> keys.txt`. Start with an empty file; the emulator remembers how far it has read. |
 | `tablet:X:Y[:B]` (a `KEYSCRIPT`/`KEYPIPE` token) | Put the USB tablet's pointer (`port1 = "tablet";` on `ali_usb`) at X,Y -- fractions of the screen when at most 1, else guest pixels -- with buttons B (bit 0 left, 1 right, 2 middle). |
+| `ALPHABOX_USB_ASYNC_US=<us>` | USB storage answers like a device behind libusb: data transfers finish on another thread after `<us>` microseconds, NAKed until then. Tests and times the controller's passthrough path without a host device (`test/tools/usb_bench.sh`). |
 | `ALPHABOX_USBTRACE=1` | Trace OHCI register writes (with read counts in between) and every control request a USB device serves, and each USB storage command and status wrapper (`USBT` lines). |
 | `ALPHABOX_AUTOKEY_ENTER=<sec>` | Press Enter every `<sec>` seconds (a blunt tool for firmware "press any key" prompts). |
 | `ALPHABOX_AUTOMOUSE=<sec>` | From `<sec>` seconds in, inject synthetic PS/2 mouse motion (a square pattern plus a periodic left click) straight into the guest, bypassing host input. As with a real PS/2 mouse, nothing is sent until the guest driver enables data reporting. |
@@ -35,7 +36,6 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
 | `ALPHABOX_IDETRACE=1` | Timestamped IDE timeline: commands, ATAPI packet opcodes, bus-master starts and interrupts, and every ATAPI check condition with its sense key. |
 | `ALPHABOX_MEDIA_SWAP=<image1>:<image2>:<ms>` | Media-change stress test: alternate two images in the first CD drive every `<ms>` ms, forced past a guest lock, applied between guest commands. |
-| `ALPHABOX_USBTRACE=1` | Log each OHCI register write with the per-register read counts since the previous write. |
 | `ALPHABOX_BLIT_STATS=1` | Every 5 s, print what the 8514/A drawing engine has drawn: pixels, drawing commands and host-data transfers, with the host time the commands took. Says whether a sluggish-feeling guest is drawing-bound, and how the driver is drawing (a listing that scrolls a console draws ~900 million pixels, one transfer each). The timing is per command, not per pixel, so it does not swamp what it measures -- but it does slow a drawing-heavy guest noticeably, so leave it off when timing anything. |
 
 **JIT builds**

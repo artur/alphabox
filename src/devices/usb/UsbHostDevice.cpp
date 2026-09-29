@@ -88,12 +88,33 @@ CUsbHostDevice::CUsbHostDevice(const char *spec) {
   snprintf(nm, sizeof(nm), "host %04x:%04x", vid, pid);
   m_name = nm;
   ctx_acquire();
-  m_h = libusb_open_device_with_vid_pid(g_ctx, (u16)vid, (u16)pid);
+  // The first device with those IDs; the error, when opening it fails, is
+  // what libusb says (libusb_open_device_with_vid_pid keeps it to itself).
+  const char *why = "not found";
+  libusb_device **list = nullptr;
+  const ssize_t n = libusb_get_device_list(g_ctx, &list);
+  for (ssize_t i = 0; i < n && !m_h; ++i) {
+    libusb_device_descriptor dd;
+    if (libusb_get_device_descriptor(list[i], &dd) != 0 || dd.idVendor != vid ||
+        dd.idProduct != pid)
+      continue;
+    const int r = libusb_open(list[i], &m_h);
+    if (r != 0) {
+      why = libusb_error_name(r);
+      m_h = nullptr;
+    }
+  }
+  if (list)
+    libusb_free_device_list(list, 1);
   if (!m_h) {
     ctx_release();
-    FAILURE_2(Configuration,
-              "USB host device %04x:%04x: not found, or not accessible", vid,
-              pid);
+    // On macOS "not found" can also mean the host will not hand the device
+    // to a user program: some classes need an entitlement, or an unlocked
+    // Mac (ioreg shows UsbUserClientEntitlementRequired on the device).
+    FAILURE_3(Configuration,
+              "USB host device %04x:%04x: %s (or the host keeps it from user "
+              "programs)",
+              vid, pid, why);
   }
   // Take interfaces from host drivers where the host allows it (Linux; on
   // macOS only as root). Where it does not, the claim fails later, per
@@ -149,6 +170,11 @@ void CUsbHostDevice::completed(libusb_transfer *t) {
         printf("USBT %s slot %d done status %d len %d\n", d->m_name.c_str(),
                x->slot, t->status, t->actual_length);
     }
+    // The controller's wake-up takes only its own small lock, never one a
+    // thread calling into this device holds; and it must run before the
+    // count drops, after which the destructor may free the device.
+    if (d->on_complete)
+      d->on_complete();
     --d->m_in_flight;
   }
   d->m_idle.notify_all();
@@ -520,7 +546,10 @@ CUsbDevice::Result CUsbHostDevice::transfer(int pid, int ep, u8 *buf,
         len = 0;
         return USB_STALL;
       }
-      return USB_ACK; // len: the TD's own, all of it sent
+      // What the device took (s.data holds the bytes sent): a retry of a
+      // TD run may name more than the transfer it started carried.
+      len = std::min(len, (int)s.data.size());
+      return USB_ACK;
     }
     return take(slot, buf, len, 0);
   }

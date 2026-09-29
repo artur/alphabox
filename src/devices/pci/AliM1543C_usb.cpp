@@ -33,6 +33,7 @@
 #include "SCSIBus.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "UsbAsyncShim.hpp"
 #include "UsbHostDevice.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
@@ -184,6 +185,8 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
   state.usb_data[0x34 / 4] = 0x2edf;
   state.usb_data[0x48 / 4] = 0x01000003;
 
+  m_xfer.resize(kMaxRun + 0x2000);
+
   // Devices on the root hub's ports: port1..port3 = "tablet".
   for (int p = 0; p < kPorts; ++p) {
     char key[8];
@@ -192,11 +195,11 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
     if (!strcmp(what, "tablet")) {
       auto t = std::make_unique<CUsbTablet>();
       theUsbTablet.store(t.get());
-      m_dev[p] = std::move(t);
+      attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
     } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
-      m_dev[p] = std::make_unique<CUsbHostDevice>(what + 5);
+      attach(p, std::make_unique<CUsbHostDevice>(what + 5));
       printf("%s: USB host device %s on port %d.\n", devid_string, what + 5,
              p + 1);
 #else
@@ -228,9 +231,30 @@ void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
     FAILURE_1(Configuration, "USB port %d already has a device", bus);
   CDiskController::register_disk(dsk, bus, dev);
   // Each storage device is the initiator on a SCSI bus of its own.
-  m_dev[bus - 1] =
+  std::unique_ptr<CUsbDevice> d =
       std::make_unique<CUsbStorage>(new CSCSIBus(myCfg, cSystem), dsk);
+  // ALPHABOX_USB_ASYNC_US=<us>: answer like hardware behind libusb (the
+  // passthrough path's timing, with data that can be checked).
+  if (const char *e = getenv("ALPHABOX_USB_ASYNC_US")) {
+    d = std::make_unique<CUsbAsyncShim>(std::move(d), atoi(e));
+    printf("%s: USB storage on port %d answers after %d us.\n", devid_string,
+           bus, atoi(e));
+  }
+  attach(bus - 1, std::move(d));
   printf("%s: USB storage on port %d.\n", devid_string, bus);
+}
+
+void CAliM1543C_usb::attach(int p, std::unique_ptr<CUsbDevice> dev) {
+  dev->on_complete = [this]() { kick(); };
+  m_dev[p] = std::move(dev);
+}
+
+void CAliM1543C_usb::kick() {
+  {
+    std::lock_guard<std::mutex> lk(m_kick_mx);
+    m_kicked = true;
+  }
+  m_kick_cv.notify_one();
 }
 
 void CAliM1543C_usb::start_threads() {
@@ -243,6 +267,7 @@ void CAliM1543C_usb::start_threads() {
 
 void CAliM1543C_usb::stop_threads() {
   StopThread = true;
+  kick(); // out of its wait
   if (myThread) {
     printf(" usb");
     myThread->join();
@@ -312,7 +337,27 @@ void CAliM1543C_usb::run() {
     auto next = std::chrono::steady_clock::now();
     while (!StopThread) {
       next += std::chrono::milliseconds(1);
-      std::this_thread::sleep_until(next);
+      // Sleep to the next frame -- or less, when a device finishes a
+      // transfer first: then the control and bulk lists run again at once,
+      // the way a real controller would have seen the device answer.
+      for (;;) {
+        std::unique_lock<std::mutex> klk(m_kick_mx);
+        if (!m_kick_cv.wait_until(klk, next, [this]() { return m_kicked; }))
+          break; // the frame is due
+        m_kicked = false;
+        klk.unlock();
+        if (StopThread)
+          break;
+        std::lock_guard<std::mutex> lk(m_mx);
+        if (ohci_operational()) {
+          service_async_lists();
+          // TDs that want their interrupt at once get it now, not at the
+          // frame's end: a driver waiting on each transfer (usbstor waits on
+          // three per command) would otherwise wait a frame for each.
+          if (m_done_head && m_done_delay == 0)
+            write_back_done();
+        }
+      }
       const auto now = std::chrono::steady_clock::now();
       int elapsed = 1;
       if (now - next > std::chrono::milliseconds(1)) {
@@ -357,16 +402,8 @@ void CAliM1543C_usb::frame() {
       ed = e[3] & ~0xfu;
     }
   }
-  if ((control & OHCI_CTL_CLE) && (cmd & OHCI_CMD_CLF)) {
-    if (!service_list(state.usb_data[0x20 / 4]))
-      cmd &= ~OHCI_CMD_CLF;
-    state.usb_data[0x24 / 4] = 0; // HcControlCurrentED: at the list's end
-  }
-  if ((control & OHCI_CTL_BLE) && (cmd & OHCI_CMD_BLF)) {
-    if (!service_list(state.usb_data[0x28 / 4]))
-      cmd &= ~OHCI_CMD_BLF;
-    state.usb_data[0x2c / 4] = 0;
-  }
+  (void)cmd;
+  service_async_lists();
   // The done queue goes out when its interrupt delay runs out.
   if (m_done_head && m_done_delay != 7) {
     if (m_done_delay == 0)
@@ -377,17 +414,40 @@ void CAliM1543C_usb::frame() {
   ohci_status(OHCI_INT_SF);
 }
 
-// A whole control or bulk list, from its head. True if any TD ran.
+// The control and bulk lists, each while its filled bit is set. The bit is
+// cleared as a list starts and set again if any of its endpoints had a TD
+// queued -- run or NAKed -- so an endpoint waiting on its device is retried
+// without the driver having to ask (OHCI 1.0a 7.2.2, HcCommandStatus).
+void CAliM1543C_usb::service_async_lists() {
+  const u32 control = state.usb_data[4 / 4];
+  u32 &cmd = state.usb_data[8 / 4];
+  if ((control & OHCI_CTL_CLE) && (cmd & OHCI_CMD_CLF)) {
+    cmd &= ~OHCI_CMD_CLF;
+    if (service_list(state.usb_data[0x20 / 4]))
+      cmd |= OHCI_CMD_CLF;
+    state.usb_data[0x24 / 4] = 0; // HcControlCurrentED: at the list's end
+  }
+  if ((control & OHCI_CTL_BLE) && (cmd & OHCI_CMD_BLF)) {
+    cmd &= ~OHCI_CMD_BLF;
+    if (service_list(state.usb_data[0x28 / 4]))
+      cmd |= OHCI_CMD_BLF;
+    state.usb_data[0x2c / 4] = 0;
+  }
+}
+
+// A whole control or bulk list, from its head. True if any endpoint on it
+// had a TD queued.
 bool CAliM1543C_usb::service_list(u32 head) {
-  bool active = false;
+  bool found = false;
   for (u32 ed = head & ~0xfu, n = 0; ed && n < 256; ++n) {
     u32 e[4];
     do_pci_read(ed, e, sizeof(u32), 4);
-    if (service_ed(ed, false))
-      active = true;
+    bool f = false;
+    service_ed(ed, false, &f);
+    found |= f;
     ed = e[3] & ~0xfu;
   }
-  return active;
+  return found;
 }
 
 CUsbDevice *CAliM1543C_usb::device_at(int address) {
@@ -399,98 +459,171 @@ CUsbDevice *CAliM1543C_usb::device_at(int address) {
 
 // The TDs queued on one endpoint (OHCI 1.0a 4.2, 4.3.1). A periodic endpoint
 // gets one TD a visit; control and bulk run until a TD NAKs or the queue is
-// empty. Returns how many TDs made progress.
-int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic) {
+// empty. Returns how many TDs made progress; *found says whether the
+// endpoint had any queued at all.
+//
+// On a bulk endpoint, consecutive TDs are handed to the device as ONE
+// transfer while each but the last is a whole number of max-size packets:
+// exactly the stream a real device would see, since the controller moves
+// packets and the device only ever notices a short one. When the data ends
+// early (a short packet), the TD it ends in is retired short and the rest
+// stay queued -- as on the bus. For a device behind libusb that is one
+// round trip for the whole run instead of one per TD.
+int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
   u32 ed[4];
   do_pci_read(ed_addr, ed, sizeof(u32), 4);
   const u32 flags = ed[0];
+  if (found)
+    *found = false;
   if (flags & (1u << 14)) // sKip
     return 0;
-  int done = 0;
-  for (int guard = 0; guard < 64; ++guard) {
-    const u32 head = ed[2] & ~0xfu, tail = ed[1] & ~0xfu;
-    if ((ed[2] & 1) || head == tail) // Halted, or nothing queued
-      break;
-    u32 td[4];
-    do_pci_read(head, td, sizeof(u32), 4);
-    if (flags & (1u << 15)) {   // isochronous format: not implemented
-      retire_td(head, td, 0xf); // NotAccessed
-      ed[2] = (td[2] & ~0xfu) | (ed[2] & 3);
-      ++done;
-      continue;
-    }
-    // Direction: the endpoint's, or the TD's when the endpoint says so.
-    const int ed_dir = (flags >> 11) & 3;
-    const int dir = (ed_dir == 1 || ed_dir == 2) ? ed_dir : (td[0] >> 19) & 3;
-    const int pid = dir == 0   ? CUsbDevice::PID_SETUP
-                    : dir == 1 ? CUsbDevice::PID_OUT
-                               : CUsbDevice::PID_IN;
-    // The buffer: CBP..BE, possibly across one 4 KB page boundary.
-    const u32 cbp = td[1], be = td[3];
+  const int ep = (flags >> 7) & 0xf;
+  const int mps = std::max(1, (int)((flags >> 16) & 0x7ff));
+  const int ed_dir = (flags >> 11) & 3;
+  struct Td {
+    u32 addr;
+    u32 w[4];
+    int len;
+  };
+  auto td_len = [](const u32 w[4]) {
+    const u32 cbp = w[1], be = w[3];
     int len = 0;
     if (cbp)
       len = (int)((be & 0xfff) - (cbp & 0xfff) + 1 +
                   (((cbp ^ be) & ~0xfffu) ? 0x1000 : 0));
-    if (len < 0 || len > 0x2000)
-      len = 0;
-    u8 buf[0x2000];
-    auto copy = [&](bool to_guest, int n) {
-      const int first = std::min(n, (int)(0x1000 - (cbp & 0xfff)));
-      if (to_guest) {
-        do_pci_write(cbp, buf, 1, first);
-        if (n > first)
-          do_pci_write(be & ~0xfffu, buf + first, 1, n - first);
-      } else {
-        do_pci_read(cbp, buf, 1, first);
-        if (n > first)
-          do_pci_read(be & ~0xfffu, buf + first, 1, n - first);
-      }
-    };
-    CUsbDevice *dev = device_at(flags & 0x7f);
-    int cc = 0; // NoError
-    int n = len;
-    if (!dev) {
-      cc = 5; // DeviceNotResponding
-      n = 0;
+    return (len < 0 || len > 0x2000) ? 0 : len;
+  };
+  auto td_pid = [&](const u32 w[4]) {
+    // Direction: the endpoint's, or the TD's when the endpoint says so.
+    const int dir = (ed_dir == 1 || ed_dir == 2) ? ed_dir : (w[0] >> 19) & 3;
+    return dir == 0   ? CUsbDevice::PID_SETUP
+           : dir == 1 ? CUsbDevice::PID_OUT
+                      : CUsbDevice::PID_IN;
+  };
+  // A TD's buffer, CBP..BE, possibly across one 4 KB page boundary.
+  auto copy = [&](const Td &t, u8 *data, bool to_guest, int n) {
+    const u32 cbp = t.w[1], be = t.w[3];
+    const int first = std::min(n, (int)(0x1000 - (cbp & 0xfff)));
+    if (to_guest) {
+      do_pci_write(cbp, data, 1, first);
+      if (n > first)
+        do_pci_write(be & ~0xfffu, data + first, 1, n - first);
     } else {
-      if (pid != CUsbDevice::PID_IN && len)
-        copy(false, len);
-      const CUsbDevice::Result r =
-          dev->transfer(pid, (flags >> 7) & 0xf, buf, n);
-      if (r == CUsbDevice::USB_NAK)
-        break; // retried next frame
-      if (r == CUsbDevice::USB_STALL) {
-        cc = 4; // Stall
-        n = 0;
-      } else if (pid == CUsbDevice::PID_IN && n)
-        copy(true, n);
+      do_pci_read(cbp, data, 1, first);
+      if (n > first)
+        do_pci_read(be & ~0xfffu, data + first, 1, n - first);
     }
+  };
+  // Retire one TD that moved n bytes with condition cc: data toggle, CBP,
+  // an underrun for a short IN without bufferRounding, the done queue, and
+  // the endpoint's new head (halted on an error). Returns the final cc.
+  auto finish = [&](Td &t, int n, int cc, bool in) {
     // Data toggle: one per max-size packet moved (at least one).
-    const int mps = std::max(1, (int)((flags >> 16) & 0x7ff));
     const int packets = std::max(1, (n + mps - 1) / mps);
-    int toggle = (td[0] & (1u << 25)) ? (td[0] >> 24) & 1 : (ed[2] >> 1) & 1;
+    int toggle = (t.w[0] & (1u << 25)) ? (t.w[0] >> 24) & 1 : (ed[2] >> 1) & 1;
     if (cc == 0)
       toggle ^= packets & 1;
-    td[0] = (td[0] & ~(3u << 24)) | (2u << 24) | ((u32)toggle << 24);
-    // Short IN: an underrun unless bufferRounding allows it. CBP is left at
-    // the first byte not transferred, or 0 when all were.
-    if (cc == 0 && n < len && !(td[0] & (1u << 18)))
+    t.w[0] = (t.w[0] & ~(3u << 24)) | (2u << 24) | ((u32)toggle << 24);
+    if (cc == 0 && in && n < t.len && !(t.w[0] & (1u << 18)))
       cc = 9; // DataUnderrun
-    if (n >= len)
-      td[1] = 0;
-    else {
-      u32 next = cbp + n;
-      if (((cbp & 0xfff) + n) >= 0x1000) // continued on BE's page
-        next = (be & ~0xfffu) + ((cbp & 0xfff) + n - 0x1000);
-      td[1] = next;
-    }
-    const u32 next_td = td[2] & ~0xfu;
-    retire_td(head, td, cc);
-    // The endpoint: new head, toggle carry, halted on an error.
+    // CBP: the first byte not transferred, or 0 when all were.
+    const u32 cbp = t.w[1], be = t.w[3];
+    if (n >= t.len)
+      t.w[1] = 0;
+    else if (((cbp & 0xfff) + n) >= 0x1000) // continued on BE's page
+      t.w[1] = (be & ~0xfffu) + ((cbp & 0xfff) + n - 0x1000);
+    else
+      t.w[1] = cbp + n;
+    const u32 next_td = t.w[2] & ~0xfu;
+    retire_td(t.addr, t.w, cc);
     ed[2] = next_td | ((u32)toggle << 1) | (cc ? 1u : 0u);
     do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1);
-    ++done;
-    if (cc || periodic)
+    return cc;
+  };
+
+  int done = 0;
+  Td run[32];
+  for (int guard = 0; guard < 64; ++guard) {
+    const u32 head = ed[2] & ~0xfu, tail = ed[1] & ~0xfu;
+    if ((ed[2] & 1) || head == tail) // Halted, or nothing queued
+      break;
+    if (found)
+      *found = true;
+    Td &first = run[0];
+    first.addr = head;
+    do_pci_read(head, first.w, sizeof(u32), 4);
+    first.len = td_len(first.w);
+    if (flags & (1u << 15)) {        // isochronous format: not implemented
+      retire_td(head, first.w, 0xf); // NotAccessed
+      ed[2] = (first.w[2] & ~0xfu) | (ed[2] & 3);
+      ++done;
+      continue;
+    }
+    const int pid = td_pid(first.w);
+    const bool in = pid == CUsbDevice::PID_IN;
+    // The run: this TD, and on a bulk endpoint the ones after it while the
+    // stream stays unbroken (whole packets) and the buffer holds them.
+    int count = 1, total = first.len;
+    if (!periodic && ep != 0 && pid != CUsbDevice::PID_SETUP) {
+      while (count < 32 && run[count - 1].len > 0 &&
+             run[count - 1].len % mps == 0) {
+        const u32 next = run[count - 1].w[2] & ~0xfu;
+        if (!next || next == tail)
+          break;
+        Td &t = run[count];
+        t.addr = next;
+        do_pci_read(next, t.w, sizeof(u32), 4);
+        t.len = td_len(t.w);
+        if (td_pid(t.w) != pid || total + t.len > kMaxRun)
+          break;
+        total += t.len;
+        ++count;
+      }
+    }
+    u8 *buf = m_xfer.data();
+    if (!in)
+      for (int i = 0, at = 0; i < count; at += run[i].len, ++i)
+        if (run[i].len)
+          copy(run[i], buf + at, false, run[i].len);
+    CUsbDevice *dev = device_at(flags & 0x7f);
+    if (!dev) {
+      finish(first, 0, 5, in); // DeviceNotResponding
+      ++done;
+      break;
+    }
+    int n = total;
+    const CUsbDevice::Result r = dev->transfer(pid, ep, buf, n);
+    if (r == CUsbDevice::USB_NAK)
+      break; // retried when the device answers, or next frame
+    if (r == CUsbDevice::USB_STALL) {
+      finish(first, 0, 4, in); // Stall
+      ++done;
+      break;
+    }
+    // Hand the bytes out to the run's TDs in order. The TD the data ends
+    // in is short; if it ended exactly between TDs yet short of the run,
+    // the device sent a zero-length packet, which lands in the next TD.
+    int at = 0, cc = 0;
+    for (int i = 0; i < count; ++i) {
+      const int k = std::min(run[i].len, n - at);
+      if (in && k)
+        copy(run[i], buf + at, true, k);
+      at += k;
+      cc = finish(run[i], k, 0, in);
+      ++done;
+      if (cc || k < run[i].len)
+        break;
+      if (at == n && n < total) {
+        // IN: a zero-length packet ended it, and it lands in the next TD.
+        // OUT: the device took less; the rest stays queued for next time.
+        if (in && i + 1 < count) {
+          cc = finish(run[i + 1], 0, 0, in);
+          ++done;
+        }
+        break;
+      }
+    }
+    if (cc || periodic || n < total)
       break;
   }
   return done;
@@ -717,6 +850,12 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
       state.usb_data[0x0c / 4] |= OHCI_INT_OC;
     }
     state.usb_data[8 / 4] |= (u32)data & 0x06; // CLF/BLF; HCR/OCR self-clear
+    // A real controller walks the control and bulk lists for the rest of
+    // the frame, so a TD the driver has just queued runs within it, not at
+    // the next frame: wake the frame thread (not here -- a device may do
+    // disk I/O, and this is a processor's thread).
+    if (data & 0x06)
+      kick();
     break;
 
   case 0x0c: // HcInterruptStatus: write 1 to clear

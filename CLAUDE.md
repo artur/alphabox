@@ -62,6 +62,7 @@ runs: a boot block of known instruction count, two sizes, difference),
 `sect_mips.sh` (the guest's MIPS on one benchmark section, from the desktop snapshot),
 `jit_profile.sh` (host sampling profile of compiled code, mapped to guest blocks and instructions), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
+`usb_bench.sh` (USB storage throughput in a Windows 2000 guest, by the guest's clock, with a byte-for-byte check),
 `d3d_check.sh` (a Direct3D 7 program, built with nada, renders scenes on a
 Windows guest's HAL and on D3D's software rasteriser and compares them --
 e.g. `lab/rpro-win`, the Rage Pro guest), `build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`
@@ -124,7 +125,7 @@ Source layout under `src/`:
 | `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions, `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `isp1040/` (the QLogic ISP SCSI adapters: mailboxes and request/response queues rather than SCRIPTS); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`); `tulip/` (`CTulip`: the DECchip 21040/21041/21140/21143 NICs, whose parts differ in how they name themselves and pick a medium -- `TulipMedia.cpp`); `es137x/` (`CES137x`: the Ensoniq AudioPCI sound cards, sharing one DMA engine; the ES1371's AC'97 codec and sample rate converter are in `ES137xCodec.cpp`) |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
 | `devices/video/` | `VGA` (MAME-derived core), `VGACard` (shared card plumbing + standard VGA registers), `ibm8514a`, MAME-derived shims, the dead pre-MAME `Cirrus`; one subdirectory per card family: `s3/` (`S3Trio64`), `cirrus/` (`CirrusGD54xx` split by concern, the device-independent `CirrusBlitter`, `CirrusGD5430`/`CirrusGD5434`), `mach64/` (the ATI Mach64 family through the Rage Pro), `permedia2/` (the 3Dlabs Permedia 2: SVGA, RAMDAC, graphics processor, delta unit) |
-| `devices/usb/` | devices on the emulated USB, behind the OHCI controller in `AliM1543C_usb`: `UsbDevice` (endpoint 0, chapter 9 requests), `UsbTablet` (absolute HID pointer), `UsbStorage` (Bulk-Only mass storage around a `CDisk`, declared as `disk<port>.0`), `UsbHostDevice` (a host device passed through with libusb, `port<n> = "host:vvvv:pppp"`; optional, `HAVE_LIBUSB`) |
+| `devices/usb/` | devices on the emulated USB, behind the OHCI controller in `AliM1543C_usb`: `UsbDevice` (endpoint 0, chapter 9 requests), `UsbTablet` (absolute HID pointer), `UsbStorage` (Bulk-Only mass storage around a `CDisk`, declared as `disk<port>.0`), `UsbHostDevice` (a host device passed through with libusb, `port<n> = "host:vvvv:pppp"`; optional, `HAVE_LIBUSB`), `UsbAsyncShim` (test harness: an emulated device with libusb-like timing) |
 | `devices/net/` | `Ethernet`, `NicAddress` (shared station-address default), `NetworkBackend` and its backends `NetworkPcap`, `NetworkTap`, `NetworkUdp`, `NetworkNull` |
 | `gui/` | `bx_gui` backends; SDL3 (`sdl.cpp`) is the maintained one |
 | `base/` | inherited Poco-style wrappers — do NOT use in new code |

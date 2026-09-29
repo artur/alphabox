@@ -24,6 +24,7 @@
 #include <cstdint> // datatypes.hpp needs the fixed-width types
 
 #include "datatypes.hpp"
+#include <functional>
 #include <vector>
 
 /**
@@ -60,6 +61,12 @@ public:
   virtual void reset();
 
   virtual bool low_speed() const { return false; }
+
+  /// Set by the controller: a device whose transfers finish on another
+  /// thread (a host device behind libusb) calls it when one does, so the
+  /// controller retries the NAKed TD at once instead of at the next frame.
+  /// Called without the device's own locks held.
+  std::function<void()> on_complete;
   virtual const char *name() const = 0;
   int address() const { return m_address; }
 
