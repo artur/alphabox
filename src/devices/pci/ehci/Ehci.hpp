@@ -129,6 +129,7 @@ private:
   std::condition_variable m_kick_cv;
   bool m_kicked = false;
   std::vector<u8> m_xfer; // one qTD's data (up to 20 KB)
+  bool m_irq_traced = false; // ALPHABOX_USBTRACE: last level reported
 
   // Operational registers (the capability ones are constant).
   struct SEhci_state {

@@ -159,7 +159,7 @@ void CAlphaCPU::jit_idle_pause() {
   const auto t0 = std::chrono::steady_clock::now();
   std::unique_lock<std::mutex> lk(m_idle_mx);
   m_idle_sleeping.store(true);
-  if (!state.check_int && !state.check_timers)
+  if (!state.check_int && !state.check_timers && !state.eir)
     m_idle_cv.wait_until(lk, deadline);
   m_idle_sleeping.store(false);
   ++m_idle_sleeps;
@@ -409,7 +409,14 @@ void CAlphaCPU::jit_run(int budget) {
           m_idle_streak = (delta <= 16000) ? m_idle_streak + 1 : 0;
           m_idle_last_icount = ic;
           if (m_idle_streak >= 4) {
-            if (state.check_int)
+            // An external interrupt already raised counts as pending even
+            // while masked: NT's idle loop starts "ei; di" -- interrupts are
+            // enabled for one instruction at its head, which is where this
+            // runs, with the previous turn's di still in force. A device
+            // interrupt that fired then was found masked and its doorbell
+            // consumed; sleeping now held it until the next timer tick,
+            // ~1.5 ms per interrupt (nada's EHCI driver: every USB transfer).
+            if (state.check_int || state.eir)
               ++m_idle_blk_int;
             else if (state.check_timers)
               ++m_idle_blk_tmr;

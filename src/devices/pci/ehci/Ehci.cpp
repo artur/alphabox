@@ -32,6 +32,13 @@
 
 // ALPHABOX_USBTRACE=1: register writes and schedule events.
 static const bool g_trace = getenv("ALPHABOX_USBTRACE") != nullptr;
+static const auto g_trace_t0 = std::chrono::steady_clock::now();
+// Microseconds since start, for the trace.
+static double trace_us() {
+  return std::chrono::duration<double, std::micro>(
+             std::chrono::steady_clock::now() - g_trace_t0)
+      .count();
+}
 
 // PCI configuration space: the EHCI function of a NEC uPD720101.
 static void ehci_config_space(u32 *data, u32 *mask) {
@@ -247,7 +254,13 @@ void CEhci::reset_controller() {
 }
 
 void CEhci::update_irq() {
-  do_pci_interrupt(0, (state.usbsts & state.usbintr & 0x3f) != 0);
+  const bool level = (state.usbsts & state.usbintr & 0x3f) != 0;
+  if (g_trace && level != m_irq_traced) {
+    printf("EHCIT %12.1f irq %d sts=%04x\n", trace_us(), (int)level,
+           state.usbsts & 0x3f);
+    m_irq_traced = level;
+  }
+  do_pci_interrupt(0, level);
 }
 
 void CEhci::status(u32 bits) {
@@ -329,6 +342,9 @@ u32 CEhci::reg_read(u32 off) {
   case 0x20:
     return state.usbcmd;
   case 0x24:
+    if (g_trace)
+      printf("EHCIT %12.1f read usbsts=%04x\n", trace_us(),
+             state.usbsts & 0xffff);
     return state.usbsts;
   case 0x28:
     return state.usbintr;
@@ -374,6 +390,8 @@ void CEhci::reg_write(u32 off, u32 data) {
     break;
   }
   case 0x24: // USBSTS: write 1 to clear the interrupt causes
+    if (g_trace)
+      printf("EHCIT %12.1f clear usbsts %04x\n", trace_us(), data & 0x3f);
     state.usbsts &= ~(data & 0x3f);
     break;
   case 0x28:
@@ -514,8 +532,11 @@ void CEhci::run() {
       // the pass that finds it, so Reclamation alone would miss it).
       if (async_pass())
         last_work = now;
+      const bool was_busy = busy;
       busy = (state.usbcmd & CMD_ASE) &&
              now - last_work < std::chrono::milliseconds(50);
+      if (g_trace && busy != was_busy)
+        printf("EHCIT %12.1f busy %d\n", trace_us(), (int)busy);
     }
   } catch (CException &e) {
     printf("Exception in EHCI thread: %s.\n", e.displayText().c_str());
@@ -651,6 +672,10 @@ int CEhci::service_qh(u32 qh_addr, bool periodic) {
       dma_read(next, t, sizeof(u32), 8);
       if (!(t[2] & ACTIVE))
         break; // not handed over yet
+      if (g_trace)
+        printf("EHCIT %12.1f pickup qh=%08x td=%08x pid=%d len=%d\n",
+               trace_us(), qh_addr, next, (int)((t[2] >> 8) & 3),
+               (int)((t[2] >> 16) & 0x7fff));
       q[3] = next;
       q[4] = t[0];
       q[5] = t[1];
@@ -685,6 +710,9 @@ int CEhci::service_qh(u32 qh_addr, bool periodic) {
       }
     };
     auto retire = [&](u32 tok) {
+      if (g_trace)
+        printf("EHCIT %12.1f retire qh=%08x td=%08x token=%08x\n", trace_us(),
+               qh_addr, q[3], tok);
       q[6] = tok;
       write_overlay();
       dma_write(q[3] + 8, &tok, sizeof(u32), 1);   // the qTD's token
