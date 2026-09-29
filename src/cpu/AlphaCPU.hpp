@@ -582,7 +582,11 @@ public:
   // should anyone try again, is the inline probe's addressing: it reaches both
   // rows with one displacement while dpc_tag + kDpcEntries*64 + 8 <= 32760, so
   // 256 is the largest power of two that stays free; past that the emitter has
-  // to compute the slot address, on every memory op.
+  // to compute the slot address, on every memory op. (Since then level 1 is
+  // the 32-byte dpc_l1 mirror, and it is the fields behind it that run out of
+  // reach: at 512 slots state.r lands at 19760, and the JITLAYOUT check
+  // refuses to start. Measured with JIT_STATS, 128 -> 256 slots took the
+  // cold-stub entries 772K -> 550K.)
   static constexpr int kDpcBits = 8;
   static constexpr int kDpcEntries = 1 << kDpcBits;
   static constexpr u64 kDpcMask = (u64)kDpcEntries - 1;
