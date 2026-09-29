@@ -1160,7 +1160,16 @@ All of these live in `test/tools/` and are described in
   hit or miss after it. It refuses to start while a build or another guest
   is running. Everything it measures is appended to `lab/results/ledger.md`;
   quote that file, not memory. Each of those refusals corresponds to a
-  mistake that was actually made on 2026-09-19.
+  mistake that was actually made on 2026-09-19. `--workload` picks what the
+  guest runs: `axp` (the nada benchmark, one section per JIT datapath),
+  `cab` (makecab: Microsoft's compiled LZX compressor) and `js` (JScript
+  under cscript: `int fp str arr obj`, Microsoft's interpreter DLL with its
+  own allocator and garbage collector). The last two are the real-code
+  checks: a change that only the benchmark likes is not a win. `js`'s
+  sections are sized to ~3 s each; the same binary against itself moved
+  them by up to 1.3% (ledger row `js-drift`: int 2185, fp 1515, str 3956,
+  arr 2143, obj 1970 MIPS), so a `js` section needs more than that to mean
+  anything, whatever the overlap flag says.
 - `s3_bench.sh` -- times a directory listing scrolling in a console window,
   and reports the drawing engine's own counters. It writes the emulator's
   pid to `emulator.pid` in its run directory: **profile that pid**, because

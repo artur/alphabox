@@ -8,7 +8,8 @@
 #           alu branch call ldst stride fp byte div sort, or all (default).
 #           Each isolates one JIT datapath and times itself.
 #     js    JScript under cscript: int fp str arr obj, or all -- Microsoft's
-#           own optimized code (jscript.dll) with a real working set.
+#           own optimized code (jscript.dll) with a real working set. Each
+#           section ~3 s under the JIT; output as axpbench's.
 #     cab   makecab LZX over 8 MB: integer-heavy, large working set.
 #   scale     multiplier on the section sizes (default 1)
 # Environment: NADA=<dir> (default ~/Documents/proj/nada), TIMEOUT=<s>,

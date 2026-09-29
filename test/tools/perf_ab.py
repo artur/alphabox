@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A/B two emulator binaries on the NT benchmark, and refuse to be misread.
 
-usage: perf_ab.py <label> <base-binary> <head-binary> [--rounds N] [--workload axp]
+usage: perf_ab.py <label> <base-binary> <head-binary> [--rounds N] [--workload axp|cab|js]
                   [--section all] [--scale 1] [--expect stride:-20,alu:0,...]
 
 Every performance claim in this project goes through here, because the ways
@@ -29,7 +29,15 @@ import argparse, hashlib, json, os, re, statistics, subprocess, sys, time, datet
 
 R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 WORK = os.environ.get('ALPHABOX_WORK', os.path.join(R, 'lab'))
-SECTIONS = ['alu', 'branch', 'call', 'ldst', 'stride', 'fp', 'byte', 'div', 'sort', 'cab']
+# The sections of each workload, in the order the guest runs them: axpbench
+# (compiled C, nada), makecab (one section, Microsoft's LZX compressor) and
+# jsbench (JScript under cscript: Microsoft's interpreter DLL).
+WORKLOAD_SECTIONS = {
+    'axp': ['alu', 'branch', 'call', 'ldst', 'stride', 'fp', 'byte', 'div', 'sort'],
+    'cab': ['cab'],
+    'js': ['int', 'fp', 'str', 'arr', 'obj'],
+}
+SECTIONS = WORKLOAD_SECTIONS['axp']  # set from --workload in main()
 
 def sh(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
@@ -202,8 +210,11 @@ def main():
     ap.add_argument('--env-head', action='append', default=[], metavar='K=V',
                     help='environment for the head arm only (repeatable)')
     a = ap.parse_args()
-    global BUSY_OK
+    global BUSY_OK, SECTIONS
     BUSY_OK = a.busy_ok
+    if a.workload not in WORKLOAD_SECTIONS:
+        sys.exit(f"perf_ab: unknown workload {a.workload}; one of {', '.join(WORKLOAD_SECTIONS)}")
+    SECTIONS = WORKLOAD_SECTIONS[a.workload]
     env_arm = {'base': dict(kv.split('=', 1) for kv in a.env_base),
                'head': dict(kv.split('=', 1) for kv in a.env_head)}
     if a.rounds < 2:
