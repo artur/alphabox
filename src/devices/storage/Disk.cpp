@@ -2574,8 +2574,15 @@ int CDisk::do_scsi_command() {
     break;
 
   default:
-    FAILURE_2(NotImplemented, "%s: Unknown SCSI command 0x%02x.\n",
-              devid_string, state.scsi.cmd.data[0]);
+    // What a real target does with an opcode it lacks: CHECK CONDITION,
+    // ILLEGAL REQUEST / invalid command operation code. Hosts probe with
+    // such commands (Windows' USB storage driver sends READ FORMAT
+    // CAPACITIES) and fall back when they fail.
+    printf("%%DSK-W-UNKNOWNCMD: %s: SCSI command 0x%02x not implemented; "
+           "answered ILLEGAL REQUEST.\n",
+           devid_string, state.scsi.cmd.data[0]);
+    do_scsi_error(SCSI_ILL_CMD);
+    break;
   }
 
   return 0;

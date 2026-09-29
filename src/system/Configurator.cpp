@@ -641,7 +641,7 @@ classinfo classes[] = {
     {"ev68cb", c_ev68cb, ON_CS, kv_ev68cb},
     {"ali", c_ali, IS_PCI | HAS_ISA, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
-    {"ali_usb", c_ali_usb, IS_PCI, kv_ali_usb},
+    {"ali_usb", c_ali_usb, IS_PCI | HAS_DISK, kv_ali_usb},
     {"ali_pmu", c_ali_pmu, IS_PCI, kv_none},
     {"serial", c_serial, ON_CS, kv_serial},
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
@@ -898,7 +898,9 @@ void CConfigurator::initialize() {
     break;
 
   case c_ali_usb:
-    myDevice = new CAliM1543C_usb(this, theSystem, pcibus, pcidev);
+    // A disk controller too (USB mass storage): see c_ali_ide.
+    myDevice =
+        (CDiskController *)new CAliM1543C_usb(this, theSystem, pcibus, pcidev);
     break;
 
 #ifdef _WIN32

@@ -21,7 +21,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_KEYSCRIPT="<sec>:<key>,..."` | Press named keys at fixed second offsets from GUI start, e.g. `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` + Enter at the SRM prompt 40 s in. |
 | `ALPHABOX_KEYPIPE=<file>` | Interactive variant: keys appended to `<file>` while the emulator runs are typed into the guest, one token per ~120 ms. Example: `echo "f2 down down enter" >> keys.txt`. Start with an empty file; the emulator remembers how far it has read. |
 | `tablet:X:Y[:B]` (a `KEYSCRIPT`/`KEYPIPE` token) | Put the USB tablet's pointer (`port1 = "tablet";` on `ali_usb`) at X,Y -- fractions of the screen when at most 1, else guest pixels -- with buttons B (bit 0 left, 1 right, 2 middle). |
-| `ALPHABOX_USBTRACE=1` | Trace OHCI register writes (with read counts in between) and every control request a USB device serves (`USBT` lines). |
+| `ALPHABOX_USBTRACE=1` | Trace OHCI register writes (with read counts in between) and every control request a USB device serves, and each USB storage command and status wrapper (`USBT` lines). |
 | `ALPHABOX_AUTOKEY_ENTER=<sec>` | Press Enter every `<sec>` seconds (a blunt tool for firmware "press any key" prompts). |
 | `ALPHABOX_AUTOMOUSE=<sec>` | From `<sec>` seconds in, inject synthetic PS/2 mouse motion (a square pattern plus a periodic left click) straight into the guest, bypassing host input. As with a real PS/2 mouse, nothing is sent until the guest driver enables data reporting. |
 | `ALPHABOX_MOUSE_DEBUG=1` | Trace host mouse motion, grab/focus transitions, relative-mode failures, the guest's aux commands and any dropped mouse bytes (`MOUSEDBG` lines). |

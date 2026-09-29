@@ -30,8 +30,10 @@
 
 #include "AliM1543C_usb.hpp"
 #include "AliM1543C.hpp"
+#include "SCSIBus.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
 #include <chrono>
 #include <cstring>
@@ -173,7 +175,7 @@ u32 usb_cfg_mask[64] = {
  **/
 CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
                                int pcidev)
-    : CPCIDevice(cfg, c, pcibus, pcidev) {
+    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1) {
   add_function(0, usb_cfg_data, usb_cfg_mask);
 
   ResetPCI();
@@ -206,6 +208,19 @@ CAliM1543C_usb::~CAliM1543C_usb() {
   for (auto &d : m_dev)
     if (d && theUsbTablet.load() == d.get())
       theUsbTablet.store(nullptr);
+}
+
+void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
+  if (bus < 1 || bus > kPorts || dev != 0)
+    FAILURE(Configuration,
+            "USB disks are named disk<port>.0, with port 1 to 3");
+  if (m_dev[bus - 1])
+    FAILURE_1(Configuration, "USB port %d already has a device", bus);
+  CDiskController::register_disk(dsk, bus, dev);
+  // Each storage device is the initiator on a SCSI bus of its own.
+  m_dev[bus - 1] =
+      std::make_unique<CUsbStorage>(new CSCSIBus(myCfg, cSystem), dsk);
+  printf("%s: USB storage on port %d.\n", devid_string, bus);
 }
 
 void CAliM1543C_usb::start_threads() {

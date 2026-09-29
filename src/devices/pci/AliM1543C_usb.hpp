@@ -29,6 +29,7 @@
 #if !defined(INCLUDED_ALIM1543C_USB_H_)
 #define INCLUDED_ALIM1543C_USB_H_
 
+#include "DiskController.hpp"
 #include "PCIDevice.hpp"
 #include <atomic>
 #include <memory>
@@ -58,7 +59,7 @@ class CUsbDevice;
  *    (http://mds.gotdns.com/sensors/docs/ali/1543dScb1-120.pdf)
  *  .
  **/
-class CAliM1543C_usb : public CPCIDevice {
+class CAliM1543C_usb : public CPCIDevice, public CDiskController {
 public:
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
@@ -71,6 +72,9 @@ public:
   void start_threads() override;
   void stop_threads() override;
   void check_state() override;
+  /// A disk declared as disk<port>.0 plugs a USB mass storage device into
+  /// that root hub port (1 to 3).
+  void register_disk(class CDisk *dsk, int bus, int dev) override;
 
 private:
   u64 usb_hci_read(u64 address, int dsize);
