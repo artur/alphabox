@@ -6,10 +6,30 @@ virtio-pci interface** -- the virtio 0.9.5 register layout, as the OASIS
 *Virtual I/O Device (VIRTIO) Version 1.0* specification describes it in its
 "Legacy Interface" sections (2.4.2 split virtqueue layout, 4.1.4.8 legacy
 PCI registers, 5.1 network device, 5.2 block device). No Alpha operating
-system ships a driver: this page is the reference for writing one (the
-Windows 2000 drivers are nada's). Everything here is what the code in
+system ships a driver: this page is the reference for writing one. Windows
+2000 drivers for both exist, written from this page with the nada compiler
+(a separate project); see [Drivers](#drivers). Everything here is what the code in
 `src/devices/pci/virtio/` does; where it chose among what the specification
 allows, the choice is stated.
+
+## Drivers
+
+nada's `nadavblk.sys` (a SCSI miniport) and `nadavnet.sys` (an NDIS 5
+miniport) drive these devices on Windows 2000/Alpha. Both install at boot;
+they were written from this page and found no divergence from it. Measured
+by nada's own test harness by the guest's clock (not perf_ab
+measurements), on alphabox 13e5cbc:
+
+| | virtio | the same image on IDE |
+| --- | --- | --- |
+| 16 MiB unbuffered read | 125-141 ms | 227-242 ms |
+| 16 MiB write-through | 86-94 ms | 210-242 ms |
+
+The network driver takes a DHCP lease through the UDP back end, pings at 32
+and 1400 bytes without loss, passes checked UDP and TCP echoes, and sends
+TCP at about 60 MB/s (the host-side echo peer is the limit). Not yet
+exercised by a guest: FLUSH (Windows' disk driver never sent SYNCHRONIZE
+CACHE) and more than one block request in flight.
 
 ## Configuration
 

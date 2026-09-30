@@ -57,7 +57,9 @@ cards, so that software written for the real thing runs unmodified.
 - **Drivers the Alpha never had.** No Windows for Alpha ever shipped a USB
   2.0 driver. With the companion project *nada* -- a C compiler that targets
   Alpha Windows, 32- and 64-bit, user mode and kernel mode -- a new one was
-  written, and Windows 2000/Alpha reads USB 2.0 disks with it today.
+  written, and Windows 2000/Alpha reads USB 2.0 disks with it today -- as well
+as paravirtual virtio disk and network drivers for the emulator's own
+virtio devices.
 - **Quiet when idle.** Idle pacing recognizes the guest's idle loop and
   sleeps until an interrupt arrives; an idle Windows desktop costs a few
   percent of one host core.
