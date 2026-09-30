@@ -26,6 +26,7 @@
 #include "datatypes.hpp"
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <vector>
 
 /**
@@ -199,6 +200,23 @@ struct CUsbPortFaults {
   /// the fault answers it instead.
   bool intercept(CUsbDevice *dev, int pid, int ep, const u8 *buf, int len,
                  CUsbDevice::Result &r);
+};
+
+/**
+ * \brief A root hub port: the device plugged into it, and the faults a test
+ * injected there.
+ *
+ * The device belongs to the port, not to a controller. On the ALi an OHCI
+ * owns the port for good; on the EHCI card the port is routed to the EHCI
+ * or to one of its OHCI companions (EHCI 1.0 4.2), and whichever has it
+ * services the device -- `ohci_owns` says which, for the companion's view.
+ **/
+struct CUsbPort {
+  std::unique_ptr<CUsbDevice> dev;
+  CUsbPortFaults faults;
+  /// The OHCI serving this port has it (always so on the ALi). Changed
+  /// only by the EHCI, with both controllers' locks held.
+  std::atomic_bool ohci_owns{true};
 };
 
 /// A controller that takes injected faults: the EHCI card when there is

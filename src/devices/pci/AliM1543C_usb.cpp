@@ -178,12 +178,13 @@ u32 usb_cfg_mask[64] = {
  **/
 CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
                                int pcidev)
-    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1) {
+    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1),
+      m_ohci(*this, kPorts, true, "usb") {
   add_function(0, usb_cfg_data, usb_cfg_mask);
+  for (int p = 0; p < kPorts; ++p)
+    m_ohci.bind_port(p, &m_port[p]);
 
   ResetPCI();
-
-  m_xfer.resize(kMaxRun + 0x2000);
 
   // Devices on the root hub's ports: port1..port3 = "tablet".
   for (int p = 0; p < kPorts; ++p) {
@@ -225,8 +226,8 @@ CAliM1543C_usb::~CAliM1543C_usb() {
   stop_threads();
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
-  for (auto &d : m_dev)
-    if (d && theUsbTablet.load() == d.get())
+  for (auto &port : m_port)
+    if (port.dev && theUsbTablet.load() == port.dev.get())
       theUsbTablet.store(nullptr);
 }
 
@@ -234,7 +235,7 @@ void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
   if (bus < 1 || bus > kPorts || dev != 0)
     FAILURE(Configuration,
             "USB disks are named disk<port>.0, with port 1 to 3");
-  if (m_dev[bus - 1])
+  if (m_port[bus - 1].dev)
     FAILURE_1(Configuration, "USB port %d already has a device", bus);
   CDiskController::register_disk(dsk, bus, dev);
   // Each storage device is the initiator on a SCSI bus of its own.
@@ -253,94 +254,48 @@ void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
 
 void CAliM1543C_usb::ResetPCI() {
   CPCIDevice::ResetPCI();
-  std::lock_guard<std::mutex> lk(m_mx);
-  // UsbReset with every register at its power-on value: no schedule runs,
-  // no HCCA is written, the root hub's ports are off.
-  memset(state.usb_data, 0, sizeof(state.usb_data));
-  state.usb_data[0x34 / 4] = 0x2edf;     // HcFmInterval
-  state.usb_data[0x44 / 4] = 0x0628;     // HcLSThreshold
-  state.usb_data[0x48 / 4] = 0x01000003; // HcRhDescriptorA
-  m_frame = 0;
-  m_done_head = 0;
-  m_done_delay = 7;
-  for (auto &d : m_dev)
-    if (d)
-      d->reset();
-  if (m_irq >= 0 && m_irq_level && theAli)
-    theAli->pic_set_line(m_irq >> 3, m_irq & 7, false);
-  m_irq_level = false;
+  m_ohci.reset();
+  std::lock_guard<std::mutex> lk(m_ohci.mutex());
+  for (auto &port : m_port)
+    if (port.dev)
+      port.dev->reset();
 }
 
-// Test faults (CUsbPortFaults, docs/headless.md): from the GUI thread.
+// The function's interrupt leaves through the bridge's USBIR routing byte
+// to an ISA IRQ (IRQ 10 unless the firmware moves it), as a level.
+void CAliM1543C_usb::ohci_irq(bool level) {
+  const int irq = theAli ? theAli->routed_irq(0x74) : -1;
+  if (irq != m_irq && m_irq >= 0 && m_irq_level)
+    theAli->pic_set_line(m_irq >> 3, m_irq & 7, false);
+  if (irq >= 0 && (level != m_irq_level || irq != m_irq))
+    theAli->pic_set_line(irq >> 3, irq & 7, level);
+  m_irq = irq;
+  m_irq_level = level;
+}
+
 bool CAliM1543C_usb::inject_fault(const char *op, int port, int ep, int arg) {
-  std::lock_guard<std::mutex> lk(m_mx);
-  if (port < 1 || port > kPorts || !m_dev[port - 1])
-    return false;
-  const int p = port - 1;
-  CUsbPortFaults &f = m_faults[p];
-  if (!strcmp(op, "detach") || !strcmp(op, "attach")) {
-    f.unplugged = !strcmp(op, "detach");
-    if (f.unplugged)
-      m_dev[p]->reset();
-    port_refresh(p);
-  } else if (!strcmp(op, "stall")) {
-    f.stall_ep = ep;
-    f.stall_left = arg > 0 ? arg : 1;
-  } else if (!strcmp(op, "nak")) {
-    f.nak_ep = ep;
-    f.nak_until_ms = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::steady_clock::now().time_since_epoch())
-                         .count() +
-                     (u64)arg;
-  } else if (!strcmp(op, "phase")) {
-    return m_dev[p]->inject_phase_error();
-  } else {
-    return false;
-  }
-  kick();
-  return true;
+  return m_ohci.inject_fault(op, port, ep, arg);
 }
 
 void CAliM1543C_usb::attach(int p, std::unique_ptr<CUsbDevice> dev) {
-  dev->on_complete = [this]() { kick(); };
-  m_dev[p] = std::move(dev);
+  dev->on_complete = [this]() { m_ohci.kick(); };
+  m_port[p].dev = std::move(dev);
 }
 
-void CAliM1543C_usb::kick() {
-  {
-    std::lock_guard<std::mutex> lk(m_kick_mx);
-    m_kicked = true;
-  }
-  m_kick_cv.notify_one();
-}
+void CAliM1543C_usb::start_threads() { m_ohci.start_threads(); }
 
-void CAliM1543C_usb::start_threads() {
-  if (!myThread) {
-    printf(" usb");
-    StopThread = false;
-    myThread = std::make_unique<std::thread>([this]() { this->run(); });
-  }
-}
-
-void CAliM1543C_usb::stop_threads() {
-  StopThread = true;
-  kick(); // out of its wait
-  if (myThread) {
-    printf(" usb");
-    myThread->join();
-    myThread = nullptr;
-  }
-}
+void CAliM1543C_usb::stop_threads() { m_ohci.stop_threads(); }
 
 void CAliM1543C_usb::check_state() {
-  if (myThreadDead.load())
+  if (m_ohci.thread_dead())
     FAILURE(Thread, "USB thread has died");
 }
+
 u32 CAliM1543C_usb::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   u32 data = 0;
   switch (bar) {
   case 0:
-    data = usb_hci_read(address, dsize);
+    data = (u32)m_ohci.usb_hci_read(address, dsize);
     break;
   default:
     printf("%%USB-W-READBAR: Bad BAR %d selected.\n", bar);
@@ -353,7 +308,7 @@ void CAliM1543C_usb::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                                   u32 data) {
   switch (bar) {
   case 0:
-    usb_hci_write(address, dsize, data);
+    m_ohci.usb_hci_write(address, dsize, data);
     break;
   default:
     printf("%%USB-W-WRITEBAR: Bad BAR %d selected.\n", bar);
@@ -386,10 +341,104 @@ static void usbtrace_line(const char *what, u64 address, u64 data) {
   printf("%s\n", buf);
 }
 
+COhci::COhci(COhciHost &host, int ports, bool legacy, const char *name)
+    : m_host(host), m_ports(ports), m_legacy(legacy), m_name(name) {
+  m_xfer.resize(kMaxRun + 0x2000);
+  memset(&state, 0, sizeof(state));
+}
+
+COhci::~COhci() { stop_threads(); }
+
+// UsbReset with every register at its power-on value: no schedule runs,
+// no HCCA is written, the root hub's ports are off.
+void COhci::reset() {
+  std::lock_guard<std::mutex> lk(m_mx);
+  memset(state.usb_data, 0, sizeof(state.usb_data));
+  state.usb_data[0x34 / 4] = 0x2edf;                    // HcFmInterval
+  state.usb_data[0x44 / 4] = 0x0628;                    // HcLSThreshold
+  state.usb_data[0x48 / 4] = 0x01000000 | (u32)m_ports; // HcRhDescriptorA
+  m_frame = 0;
+  m_done_head = 0;
+  m_done_delay = 7;
+  ohci_update_irq();
+}
+
+// Test faults (CUsbPortFaults, docs/headless.md): from the GUI thread.
+bool COhci::inject_fault(const char *op, int port, int ep, int arg) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  if (port < 1 || port > m_ports || !port_dev(port - 1))
+    return false;
+  const int p = port - 1;
+  CUsbPortFaults &f = m_port[p]->faults;
+  if (!strcmp(op, "detach") || !strcmp(op, "attach")) {
+    f.unplugged = !strcmp(op, "detach");
+    if (f.unplugged)
+      port_dev(p)->reset();
+    port_refresh(p);
+  } else if (!strcmp(op, "stall")) {
+    f.stall_ep = ep;
+    f.stall_left = arg > 0 ? arg : 1;
+  } else if (!strcmp(op, "nak")) {
+    f.nak_ep = ep;
+    f.nak_until_ms = (u64)std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count() +
+                     (u64)arg;
+  } else if (!strcmp(op, "phase")) {
+    return port_dev(p)->inject_phase_error();
+  } else {
+    return false;
+  }
+  kick();
+  return true;
+}
+
+void COhci::port_routed(int p, bool owns) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  if (!m_port[p])
+    return;
+  m_port[p]->ohci_owns = owns;
+  port_refresh(p);
+}
+
+void COhci::reconnect(int p) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  if (!port_dev(p))
+    return;
+  port_reg(p) &= ~(RH_PES | RH_PSS);
+  port_change(p, RH_CSC | RH_PESC);
+}
+
+void COhci::kick() {
+  {
+    std::lock_guard<std::mutex> lk(m_kick_mx);
+    m_kicked = true;
+  }
+  m_kick_cv.notify_one();
+}
+
+void COhci::start_threads() {
+  if (!myThread) {
+    printf(" %s", m_name);
+    StopThread = false;
+    myThread = std::make_unique<std::thread>([this]() { this->run(); });
+  }
+}
+
+void COhci::stop_threads() {
+  StopThread = true;
+  kick(); // out of its wait
+  if (myThread) {
+    printf(" %s", m_name);
+    myThread->join();
+    myThread = nullptr;
+  }
+}
+
 // The frame clock: 1 ms, paced by wall time; frames missed while the host
 // thread was not scheduled are not replayed (the frame number still counts
 // them, as a real controller's would).
-void CAliM1543C_usb::run() {
+void COhci::run() {
   try {
     auto next = std::chrono::steady_clock::now();
     while (!StopThread) {
@@ -441,7 +490,7 @@ void CAliM1543C_usb::run() {
       }
     }
   } catch (CException &e) {
-    printf("Exception in USB thread: %s.\n", e.displayText().c_str());
+    printf("Exception in %s thread: %s.\n", m_name, e.displayText().c_str());
     myThreadDead.store(true);
   }
 }
@@ -449,7 +498,7 @@ void CAliM1543C_usb::run() {
 // One frame (OHCI 1.0a 6.3, 6.4): the frame number into the HCCA, then the
 // periodic list for this frame, then the control and bulk lists, then the
 // done queue.
-void CAliM1543C_usb::frame() {
+void COhci::frame() {
   const u32 hcca = state.usb_data[0x18 / 4];
   if (hcca) {
     u32 fn = m_frame; // HccaFrameNumber, and HccaPad1 cleared
@@ -487,7 +536,7 @@ void CAliM1543C_usb::frame() {
 // cleared as a list starts and set again if any of its endpoints had a TD
 // queued -- run or NAKed -- so an endpoint waiting on its device is retried
 // without the driver having to ask (OHCI 1.0a 7.2.2, HcCommandStatus).
-void CAliM1543C_usb::service_async_lists() {
+void COhci::service_async_lists() {
   const u32 control = state.usb_data[4 / 4];
   u32 &cmd = state.usb_data[8 / 4];
   if ((control & OHCI_CTL_CLE) && (cmd & OHCI_CMD_CLF)) {
@@ -506,7 +555,7 @@ void CAliM1543C_usb::service_async_lists() {
 
 // A whole control or bulk list, from its head. True if any endpoint on it
 // had a TD queued.
-bool CAliM1543C_usb::service_list(u32 head) {
+bool COhci::service_list(u32 head) {
   bool found = false;
   for (u32 ed = head & ~0xfu, n = 0; ed && n < 256; ++n) {
     u32 e[4];
@@ -519,11 +568,11 @@ bool CAliM1543C_usb::service_list(u32 head) {
   return found;
 }
 
-CUsbDevice *CAliM1543C_usb::device_at(int address) {
-  for (int p = 0; p < kPorts; ++p)
-    if (m_dev[p] && (port_reg(p) & RH_PES) && !m_faults[p].unplugged &&
-        m_dev[p]->address() == address)
-      return m_dev[p].get();
+CUsbDevice *COhci::device_at(int address) {
+  for (int p = 0; p < m_ports; ++p)
+    if (port_dev(p) && (port_reg(p) & RH_PES) && !m_port[p]->faults.unplugged &&
+        port_dev(p)->address() == address)
+      return port_dev(p);
   return nullptr;
 }
 
@@ -539,7 +588,7 @@ CUsbDevice *CAliM1543C_usb::device_at(int address) {
 // early (a short packet), the TD it ends in is retired short and the rest
 // stay queued -- as on the bus. For a device behind libusb that is one
 // round trip for the whole run instead of one per TD.
-int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
+int COhci::service_ed(u32 ed_addr, bool periodic, bool *found) {
   u32 ed[4];
   do_pci_read(ed_addr, ed, sizeof(u32), 4);
   const u32 flags = ed[0];
@@ -719,7 +768,7 @@ int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
 // is retired with DataOverrun; one whose first frame is still to come waits.
 // An isochronous pipe has no handshake and no data toggle, and an error in
 // one packet does not halt the endpoint.
-int CAliM1543C_usb::service_iso_ed(u32 ed_addr, u32 ed[4]) {
+int COhci::service_iso_ed(u32 ed_addr, u32 ed[4]) {
   const u32 flags = ed[0];
   const int ep = (flags >> 7) & 0xf;
   const bool in = ((flags >> 11) & 3) == 2;
@@ -813,7 +862,7 @@ int CAliM1543C_usb::service_iso_ed(u32 ed_addr, u32 ed[4]) {
 // An isochronous TD onto the done queue: the whole TD goes back, with its
 // packet status words; its FrameCount stays where a general TD's error
 // count would be cleared.
-void CAliM1543C_usb::retire_iso_td(u32 td_addr, u32 td[8], int cc) {
+void COhci::retire_iso_td(u32 td_addr, u32 td[8], int cc) {
   td[0] = (td[0] & 0x0fffffff) | ((u32)cc << 28);
   td[2] = m_done_head;
   do_pci_write(td_addr, td, sizeof(u32), 8);
@@ -825,7 +874,7 @@ void CAliM1543C_usb::retire_iso_td(u32 td_addr, u32 td[8], int cc) {
 
 // A TD onto the done queue, with its condition code; the queue's interrupt
 // delay is the smallest any of its TDs asks for.
-void CAliM1543C_usb::retire_td(u32 td_addr, u32 td[4], int cc) {
+void COhci::retire_td(u32 td_addr, u32 td[4], int cc) {
   td[0] = (td[0] & 0x0fffffff & ~(3u << 26)) | ((u32)cc << 28);
   td[2] = m_done_head;
   do_pci_write(td_addr, td, sizeof(u32), 4);
@@ -837,7 +886,7 @@ void CAliM1543C_usb::retire_td(u32 td_addr, u32 td[4], int cc) {
 
 // HccaDoneHead, when the previous one has been consumed (WDH clear); bit 0
 // says other interrupt status is pending too.
-void CAliM1543C_usb::write_back_done() {
+void COhci::write_back_done() {
   if (state.usb_data[0x0c / 4] & OHCI_INT_WDH)
     return;
   const u32 hcca = state.usb_data[0x18 / 4];
@@ -852,22 +901,22 @@ void CAliM1543C_usb::write_back_done() {
   ohci_status(OHCI_INT_WDH);
 }
 
-void CAliM1543C_usb::ohci_status(u32 bits) {
+void COhci::ohci_status(u32 bits) {
   state.usb_data[0x0c / 4] |= bits;
   ohci_update_irq();
 }
 
 // Root hub ports (OHCI 1.0a 7.4.4). CCS follows attachment and power; a
 // reset completes at once.
-void CAliM1543C_usb::port_refresh(int p) {
+void COhci::port_refresh(int p) {
   u32 &r = port_reg(p);
   const bool powered = (r & RH_PPS) != 0;
-  const bool present = m_dev[p] && powered && !m_faults[p].unplugged;
+  const bool present = port_dev(p) && powered && !m_port[p]->faults.unplugged;
   const bool was = (r & RH_CCS) != 0;
   r &= ~(RH_CCS | RH_LSDA);
   if (present) {
     r |= RH_CCS;
-    if (m_dev[p]->low_speed())
+    if (port_dev(p)->low_speed())
       r |= RH_LSDA;
   } else {
     r &= ~(RH_PES | RH_PSS);
@@ -876,12 +925,12 @@ void CAliM1543C_usb::port_refresh(int p) {
     port_change(p, RH_CSC);
 }
 
-void CAliM1543C_usb::port_change(int p, u32 bits) {
+void COhci::port_change(int p, u32 bits) {
   port_reg(p) |= bits;
   ohci_status(OHCI_INT_RHSC);
 }
 
-void CAliM1543C_usb::port_write(int p, u32 data) {
+void COhci::port_write(int p, u32 data) {
   u32 &r = port_reg(p);
   // Change bits: write 1 to clear.
   r &= ~(data & (RH_CSC | RH_PESC | RH_PSSC | (1u << 19) | RH_PRSC));
@@ -905,7 +954,8 @@ void CAliM1543C_usb::port_write(int p, u32 data) {
   }
   if (data & (1u << 4)) { // SetPortReset
     if (r & RH_CCS) {
-      m_dev[p]->reset();
+      port_dev(p)->reset();
+      port_dev(p)->set_high_speed(false); // an OHCI port is full speed
       r |= RH_PES;
       port_change(p, RH_PRSC);
     } else {
@@ -919,7 +969,7 @@ void CAliM1543C_usb::port_write(int p, u32 data) {
   port_refresh(p);
 }
 
-u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
+u64 COhci::usb_hci_read(u64 address, int dsize) {
   std::lock_guard<std::mutex> lk(m_mx);
   u64 data = 0;
   if (g_usbtrace && address < 0x110) {
@@ -930,8 +980,8 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
   if (dsize != 32)
     printf("%%USB-W-HCIREAD: Non dword read, returning 32 bits anyway.\n");
   switch (address) {
-  case 0: // HcRevision
-    data = 0x00000110;
+  case 0: // HcRevision: 1.0, with legacy support where the part has it
+    data = m_legacy ? 0x00000110 : 0x00000010;
     break;
 
   case 0x14: // HcInterruptDisable reads back the enable mask
@@ -969,11 +1019,14 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
   case 0x54:  // HcRhPortStatus1
   case 0x58:  // HcRhPortStatus2
   case 0x5c:  // HcRhPortStatus3
+    data = state.usb_data[address / 4];
+    break;
+
   case 0x100: // HceControlRegister
   case 0x104: // HceInputRegister
   case 0x108: // HceOutputRegister
   case 0x10c: // HceStatusRegister
-    data = state.usb_data[address / 4];
+    data = m_legacy ? state.usb_data[address / 4] : 0;
     break;
 
   default:
@@ -984,27 +1037,20 @@ u64 CAliM1543C_usb::usb_hci_read(u64 address, int dsize) {
 }
 
 // HcControl HCFS == UsbOperational (OHCI 1.0a 7.1.2).
-bool CAliM1543C_usb::ohci_operational() const {
+bool COhci::ohci_operational() const {
   return ((state.usb_data[4 / 4] >> 6) & 3) == 2;
 }
 
-// Level-sensitive INTA: an enabled status bit with MasterInterruptEnable set.
-void CAliM1543C_usb::ohci_update_irq() {
+// A level: an enabled status bit with MasterInterruptEnable set. Where it
+// goes is the host function's business.
+void COhci::ohci_update_irq() {
   const u32 enable = state.usb_data[0x10 / 4];
   const bool level = (enable & OHCI_INT_MIE) &&
                      (state.usb_data[0x0c / 4] & enable & 0x4000007f);
-  // The function's interrupt leaves through the bridge's USBIR routing byte
-  // to an ISA IRQ (IRQ 10 unless the firmware moves it), as a level.
-  const int irq = theAli ? theAli->routed_irq(0x74) : -1;
-  if (irq != m_irq && m_irq >= 0 && m_irq_level)
-    theAli->pic_set_line(m_irq >> 3, m_irq & 7, false);
-  if (irq >= 0 && (level != m_irq_level || irq != m_irq))
-    theAli->pic_set_line(irq >> 3, irq & 7, level);
-  m_irq = irq;
-  m_irq_level = level;
+  m_host.ohci_irq(level);
 }
 
-void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
+void COhci::usb_hci_write(u64 address, int dsize, u64 data) {
   std::lock_guard<std::mutex> lk(m_mx);
   if (g_usbtrace)
     usbtrace_line("W", address, data);
@@ -1016,7 +1062,7 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
     state.usb_data[address / 4] = (u32)data & 0x7ff;
     const u32 now = (state.usb_data[4 / 4] >> 6) & 3;
     if (now == 0 && was != 0) { // UsbReset: the bus resets, ports disable
-      for (int p = 0; p < kPorts; ++p)
+      for (int p = 0; p < m_ports; ++p)
         port_reg(p) &= ~(RH_PES | RH_PSS);
     }
     break;
@@ -1087,12 +1133,12 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
   case 0x50: // HcRhStatus
     // SetGlobalPower (LPSC)
     if (data & (1u << 16))
-      for (int p = 0; p < kPorts; ++p) {
+      for (int p = 0; p < m_ports; ++p) {
         port_reg(p) |= RH_PPS;
         port_refresh(p);
       }
     if (data & 1u) // ClearGlobalPower (LPS)
-      for (int p = 0; p < kPorts; ++p) {
+      for (int p = 0; p < m_ports; ++p) {
         port_reg(p) &= ~(RH_PPS | RH_PES | RH_PSS);
         port_refresh(p);
       }
@@ -1105,7 +1151,8 @@ void CAliM1543C_usb::usb_hci_write(u64 address, int dsize, u64 data) {
   case 0x54: // HcRhPortStatus1..3
   case 0x58:
   case 0x5c:
-    port_write((int)(address - 0x54) / 4, (u32)data);
+    if ((int)(address - 0x54) / 4 < m_ports)
+      port_write((int)(address - 0x54) / 4, (u32)data);
     break;
 
   case 0x34:  // HcFmInterval
@@ -1134,6 +1181,7 @@ static u32 usb_magic2 = 0xB2340009;
  * Save state to a Virtual Machine State file.
  **/
 int CAliM1543C_usb::SaveState(FILE *f) {
+  COhci::SUSB_state &state = m_ohci.state;
   long ss = sizeof(state);
   int res;
 
@@ -1152,6 +1200,7 @@ int CAliM1543C_usb::SaveState(FILE *f) {
  * Restore state from a Virtual Machine State file.
  **/
 int CAliM1543C_usb::RestoreState(FILE *f) {
+  COhci::SUSB_state &state = m_ohci.state;
   long ss;
   u32 m1;
   u32 m2;
@@ -1204,11 +1253,10 @@ int CAliM1543C_usb::RestoreState(FILE *f) {
   // is reset and shown to the guest as reconnected, so its driver enumerates
   // it again.
   for (int p = 0; p < kPorts; ++p) {
-    if (!m_dev[p])
+    if (!m_port[p].dev)
       continue;
-    m_dev[p]->reset();
-    port_reg(p) &= ~(RH_PES | RH_PSS);
-    port_change(p, RH_CSC | RH_PESC);
+    m_port[p].dev->reset();
+    m_ohci.reconnect(p);
   }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);

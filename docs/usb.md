@@ -6,7 +6,7 @@ them, and the test hooks to make a guest's USB driver prove itself.
 | | Controller | Speed | Ports | Guest drivers |
 | --- | --- | --- | --- | --- |
 | `ali_usb` (pci0.19) | the ALi M1543C's own OHCI 1.0a function, on every ES40 | USB 1.1 (12 Mb/s) | 3 | Windows 2000 and Whistler (AXP64) ship `openhci.sys`, `usbhub.sys`, `usbstor.sys`, `hidusb.sys`, `mouhid.sys` |
-| `ehci` (an add-in card) | EHCI 1.0, presenting itself as the EHCI function of a NEC uPD720101 (1033:00e0, class 0C0320) | USB 2.0 (480 Mb/s) | 4 | none shipped for any Alpha Windows; `nadaehci.sys`, written for this card with the nada compiler (a separate project), drives it on Windows 2000 |
+| `ehci` (an add-in card) | a NEC uPD720101: EHCI 1.0 (function 2, 1033:00e0, class 0C0320) with two OHCI 1.0a companions (functions 0 and 1, 1033:0035, class 0C0310) | USB 2.0 (480 Mb/s); full speed through the companions | 4 | EHCI: none shipped for any Alpha Windows; `nadaehci.sys`, written for this card with the nada compiler (a separate project), drives it on Windows 2000. The companions: Windows' own `openhci.sys` |
 
 ## Configuration
 
@@ -26,12 +26,13 @@ pci0.3 = ehci                  // a USB 2.0 card in a free slot
 {
   disk1.0 = file { file = "usb2.img"; }
   port2 = "tablet";
+  companions = true;           // the default; false: the EHCI alone
 }
 ```
 
 A port takes one device. Disks are named `disk<port>.0`, with the port
-counted from 1; `port<n>` takes `tablet`, `audio` (the OHCI only) or
-`host:vvvv:pppp`. The sample
+counted from 1; `port<n>` takes `tablet`, `audio` (not on a card without
+companions) or `host:vvvv:pppp`. The sample
 [`es40.cfg`](../es40.cfg) documents every value.
 
 ## Devices
@@ -39,8 +40,9 @@ counted from 1; `port<n>` takes `tablet`, `audio` (the OHCI only) or
 **Tablet.** A HID pointer with absolute coordinates (0..32767 on each axis,
 three buttons, a wheel). In the SDL window the guest's cursor simply goes
 where the host's is: no mouse capture, no acceleration to fight, and the
-host cursor is hidden over the window. On an EHCI port it is a USB 2.0
-device polled every millisecond. Headless runs place it with
+host cursor is hidden over the window. On an EHCI card without companions
+it is a USB 2.0 device polled every millisecond; everywhere else it is the
+full-speed device a real tablet is (on the card: its companion's). Headless runs place it with
 `tablet:X:Y[:B]` key-pipe tokens ([headless.md](headless.md)).
 
 **Mass storage.** Any disk image (`file`, `device` or `ramdisk`, as on the
@@ -50,8 +52,8 @@ the same engine the IDE ATAPI path and the SCSI adapters use. On an EHCI
 port it is USB 2.0 (512-byte bulk packets, a device qualifier). Each disk
 has its own serial number, so two copies of one image are two devices.
 
-**Speaker** (`audio`, OHCI only: it is a full-speed device, which the
-EHCI card, having no companion controllers, does not keep). A USB Audio
+**Speaker** (`audio`: a full-speed device, so on the EHCI card it is
+served by a companion, and a card with `companions = false` refuses it). A USB Audio
 Class 1.0 speaker: an input terminal fed by the streaming interface, a
 feature unit with master mute and volume (-60 to 0 dB), a speaker output
 terminal. Alternate setting 1 of the streaming interface has an adaptive
@@ -98,12 +100,30 @@ and each frame otherwise. Either is woken at once when a device finishes a
 transfer, or when the driver fills a list. Consecutive bulk TDs on an OHCI
 endpoint go to the device as one transfer, as a stream of packets would.
 
-Interrupts follow the hardware: the ALi function's goes through the
-bridge's USBIR routing byte to an ISA IRQ, as on the real chip; the EHCI
-card's is PCI INTA. Both controllers reset with the machine and with a PCI
-bus reset.
+The card's two companions are the same OHCI engine as the ALi function
+(`COhci`), two ports each: card ports 1-2 belong to function 0, 3-4 to
+function 1 (HCSPARAMS N_CC = 2, N_PCC = 2). A port belongs to the EHCI or
+to its companion, as EHCI 1.0 section 4.2 has it: while CONFIGFLAG is 0 --
+after any reset, and for good under a guest with no EHCI driver, such as
+Windows 2000 -- every port is the companions', and the guest's OHCI driver
+uses its devices at full speed. An EHCI driver setting CONFIGFLAG takes
+every port; a device that is not high speed then stays disabled after the
+EHCI's port reset, and the driver hands the port back by setting
+PORT_OWNER (clearing it, or CONFIGFLAG going to 0, routes it again). Both
+controllers see a connect change whenever a port moves. The device belongs
+to the port and follows it. `companions = false;` makes the card the EHCI
+function alone (function 0, as before): only a high-speed device keeps its
+port there, a full- or low-speed one being left for a companion that is
+not there.
 
-Isochronous transfers run on the OHCI (OHCI 1.0a 4.3.2): each isochronous
+Interrupts follow the hardware: the ALi function's goes through the
+bridge's USBIR routing byte to an ISA IRQ, as on the real chip; on the card
+the companions are PCI INTA and INTB and the EHCI INTC (INTA without
+companions). All the controllers reset with the machine and with a PCI bus
+reset.
+
+Isochronous transfers run on the OHCI -- the ALi function and the card's
+companions alike (OHCI 1.0a 4.3.2): each isochronous
 TD covers up to eight consecutive frames from its StartingFrame, one packet
 a frame. In each frame the controller moves the packet that frame is due
 for, writes its packet status word (condition code, and for IN the size
@@ -112,12 +132,8 @@ after its last packet. A TD queued too late for all its frames is retired
 with DataOverrun; one whose first frame is still to come waits. If the
 frame thread oversleeps, the frames it missed (up to 32) are run in order
 when it wakes, so a stream does not lose packets to host scheduling. A
-device takes packets through `CUsbDevice::iso_transfer`.
-
-The EHCI card has no companion controllers: only a high-speed device keeps
-its port. A full- or low-speed one is left for a companion that is not
-there, as the specification has it. Its isochronous descriptors (iTD,
-siTD) are not implemented.
+device takes packets through `CUsbDevice::iso_transfer`. The EHCI's own
+isochronous descriptors (iTD, siTD) are not implemented.
 
 Device state -- addresses, configuration -- is not in a saved snapshot:
 after a restore every device is shown to the guest as reconnected, and its
@@ -146,7 +162,11 @@ Everything below is documented in [headless.md](headless.md):
 
 - `ALPHABOX_EHCI_SELFTEST=1` drives the EHCI card from inside the emulator
   at start-up -- port reset, enumeration, a Bulk-Only read of sector 0 --
-  and prints PASS or FAIL. No guest driver needed.
+  and, with companions, the port routing: CONFIGFLAG handing every port
+  over and back, and a full-speed device (the tablet, or a probe on a free
+  port) left disabled by the EHCI's port reset, handed over with
+  PORT_OWNER and enumerated by its companion. Prints PASS or FAIL. No guest
+  driver needed.
 - `usb:detach`, `usb:attach`, `usb:stall`, `usb:phase` and `usb:nak`
   tokens inject faults on a port while a guest runs: surprise removal, a
   halted endpoint, a Bulk-Only phase error, a device that stops answering.

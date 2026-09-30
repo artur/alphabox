@@ -30,16 +30,30 @@
 #include <thread>
 #include <vector>
 
+#include "AliM1543C_usb.hpp" // COhci, the companions' engine
 #include "UsbDevice.hpp"
 
 /**
  * \brief A USB 2.0 host controller on a PCI card: EHCI 1.0.
  *
- * The card presents itself as the EHCI function of a NEC uPD720101 (1033:
- * 00e0, class 0C0320), alone: no companion controllers, so only high-speed
- * devices can be used on it (a full- or low-speed device is left for a
- * companion that is not there, as the specification has it). One 256-byte
- * memory BAR; 32-bit data structures; four root hub ports with power
+ * The card presents itself as a NEC uPD720101: PCI functions 0 and 1 are
+ * OHCI 1.0a companion controllers (1033:0035, class 0C0310, INTA and INTB,
+ * the COhci engine the ALi's USB function runs on), function 2 the EHCI
+ * (1033:00e0, class 0C0320, INTC). Four root hub ports, two per companion
+ * (HCSPARAMS N_CC = 2, N_PCC = 2, routed in order). Each port belongs to
+ * the EHCI or to its companion (EHCI 1.0 4.2): while CONFIGFLAG is 0 --
+ * after a reset, and for good under a guest with no EHCI driver -- every
+ * port is the companions', which serve its device at full speed; setting
+ * CONFIGFLAG gives them all to the EHCI, and a driver hands one back with
+ * PORT_OWNER, as it does for a device that is not high speed (such a device
+ * leaves the port disabled after the EHCI's port reset). The device belongs
+ * to the port (CUsbPort) and follows it.
+ *
+ * `companions = false;` makes it the EHCI function alone (function 0,
+ * INTA): only high-speed devices can then be used on it, a full- or
+ * low-speed one being left for a companion that is not there.
+ *
+ * EHCI: one 256-byte memory BAR; 32-bit data structures; port power
  * switching.
  *
  * The schedule runs on a thread paced in 1 ms frames (eight microframes at
@@ -55,12 +69,13 @@
  * next pass. Interrupts are raised when they occur (the interrupt threshold
  * is a maximum latency, and this is within it).
  *
- * Devices: `port<n> = "host:vvvv:pppp"` (passthrough, high-speed devices)
+ * Devices: `port<n> = "tablet"`, `port<n> = "host:vvvv:pppp"` (passthrough)
  * and `disk<n>.0 = file { ... }` (USB mass storage), n = 1 to 4.
  *
  * Documentation consulted: Enhanced Host Controller Interface Specification
- * for Universal Serial Bus, revision 1.0 (Intel, 2002); Universal Serial Bus
- * Specification 2.0, chapters 8, 9 and 11.
+ * for Universal Serial Bus, revision 1.0 (Intel, 2002), chapter 4.2 for the
+ * companions; Universal Serial Bus Specification 2.0, chapters 8, 9 and 11;
+ * NEC uPD720101 data sheet (function layout).
  **/
 class CEhci : public CPCIDevice,
               public CDiskController,
@@ -83,8 +98,22 @@ public:
   bool inject_fault(const char *op, int port, int ep, int arg) override;
 
   static constexpr int kPorts = 4;
+  static constexpr int kCompanions = 2;
+  static constexpr int kPortsPerCompanion = kPorts / kCompanions;
 
 private:
+  struct CCompanion;      // an OHCI function of the card
+  bool m_with_companions; // companions = true (the default)
+  int m_func;             // the EHCI's PCI function: 2, or 0 when alone
+  std::unique_ptr<CCompanion> m_comp[kCompanions];
+  /// The companion port p is routed to (its port number there in *local),
+  /// or nullptr when the card has none.
+  COhci *companion_of(int p, int *local = nullptr);
+  /// Give port p to the companion or take it for the EHCI (PORT_OWNER),
+  /// with m_mx held: each controller sees the connection change.
+  void route(int p, bool to_companion);
+  u32 hcs_params() const;
+  bool selftest_companions(u32 base);
   u32 reg_read(u32 offset);
   void reg_write(u32 offset, u32 data);
   void reset_controller();
@@ -113,12 +142,11 @@ private:
   void port_refresh(int p);
   void port_write(int p, u32 data);
 
-  std::unique_ptr<CUsbDevice> m_dev[kPorts];
-  CUsbPortFaults m_faults[kPorts]; // injected by tests (usb:... tokens)
+  CUsbPort m_port[kPorts]; // the device on each, faults injected by tests
   CUsbPortFaults *faults_for(const CUsbDevice *d) {
     for (int p = 0; p < kPorts; ++p)
-      if (m_dev[p].get() == d)
-        return &m_faults[p];
+      if (m_port[p].dev.get() == d)
+        return &m_port[p].faults;
     return nullptr;
   }
   std::mutex m_mx;

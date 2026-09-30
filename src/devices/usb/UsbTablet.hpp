@@ -40,10 +40,13 @@
  **/
 class CUsbTablet : public CUsbDevice {
 public:
-  CUsbTablet();
+  /// `high_speed`: the tablet can run at high speed on an EHCI port (USB
+  /// 2.0, polled every 1 ms) -- so it is usable on an EHCI card without
+  /// companion controllers. Without it, it is the full-speed device a real
+  /// tablet is, which an EHCI leaves for its companion.
+  explicit CUsbTablet(bool high_speed = true);
   const char *name() const override { return "tablet"; }
-  /// On an EHCI port it runs at high speed: USB 2.0, polled every 1 ms.
-  bool can_high_speed() const override { return true; }
+  bool can_high_speed() const override { return m_can_hs; }
   void reset() override;
 
   /// The host pointer, as fractions of the guest screen (0..1, clamped),
@@ -63,6 +66,7 @@ protected:
 
 private:
   std::vector<u8> report();
+  const bool m_can_hs;
   std::mutex m_mx; // the pointer state, written by the GUI thread
   int m_x = 16384, m_y = 16384;
   unsigned m_buttons = 0;

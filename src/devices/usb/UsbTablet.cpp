@@ -113,7 +113,7 @@ static const std::vector<u8> kDeviceDescriptorHS =
 static const std::vector<u8> kConfigurationDescriptorHS =
     high_speed_form(kConfigurationDescriptor, true);
 
-CUsbTablet::CUsbTablet() {}
+CUsbTablet::CUsbTablet(bool high_speed) : m_can_hs(high_speed) {}
 
 void CUsbTablet::reset() {
   CUsbDevice::reset();

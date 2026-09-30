@@ -23,6 +23,7 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "UsbAsyncShim.hpp"
+#include "UsbAudio.hpp"
 #include "UsbHostDevice.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
@@ -40,15 +41,18 @@ static double trace_us() {
       .count();
 }
 
-// PCI configuration space: the EHCI function of a NEC uPD720101.
-static void ehci_config_space(u32 *data, u32 *mask) {
+// PCI configuration space: the EHCI function of a NEC uPD720101 -- with
+// its companions function 2 on INTC, alone function 0 on INTA.
+static void ehci_config_space(u32 *data, u32 *mask, bool companions) {
   data[0x00 >> 2] = 0x00e01033; // CFID: NEC, uPD720101 EHCI function
   data[0x04 >> 2] = 0x02100000; // CFCS: DEVSEL medium, capabilities list
   data[0x08 >> 2] = 0x0c032004; // CFRV: serial bus / USB / EHCI, rev. 4
+  if (companions)
+    data[0x0c >> 2] = 0x00800000; // header type: multi-function
   data[0x10 >> 2] = 0x00000000; // BAR0: registers, 256 bytes of memory
   data[0x2c >> 2] = 0x00e01033; // CSID: subsystem = the part itself
   data[0x34 >> 2] = 0x00000040; // CCAP: power management at 0x40
-  data[0x3c >> 2] = 0x000001ff; // CFIT: INTA, no line yet
+  data[0x3c >> 2] = companions ? 0x000003ff : 0x000001ff; // CFIT: no line yet
   data[0x40 >> 2] = 0x7e020001; // PMC: power management 1.1, no PME
   data[0x44 >> 2] = 0x00000000; // PMCSR: D0
   data[0x60 >> 2] = 0x00002020; // SBRN: USB 2.0; FLADJ: 60000-bit frame
@@ -61,29 +65,91 @@ static void ehci_config_space(u32 *data, u32 *mask) {
   mask[0x60 >> 2] = 0x00003f00; // FLADJ
 }
 
+// PCI configuration space: an OHCI companion function of a NEC uPD720101,
+// function f on INTA + f.
+static void ohci_config_space(u32 *data, u32 *mask, int f) {
+  data[0x00 >> 2] = 0x00351033; // CFID: NEC, uPD720101 OHCI function
+  data[0x04 >> 2] = 0x02100000; // CFCS: DEVSEL medium, capabilities list
+  data[0x08 >> 2] = 0x0c031043; // CFRV: serial bus / USB / OHCI, rev. 43
+  data[0x0c >> 2] = 0x00800000; // header type: multi-function
+  data[0x10 >> 2] = 0x00000000; // BAR0: registers, 4 KB of memory
+  data[0x2c >> 2] = 0x00351033; // CSID: subsystem = the part itself
+  data[0x34 >> 2] = 0x00000040; // CCAP: power management at 0x40
+  data[0x3c >> 2] = 0x2a0100ff | ((u32)(f + 1) << 8); // CFIT: no line yet
+  data[0x40 >> 2] = 0x7e020001; // PMC: power management 1.1, no PME
+  data[0x44 >> 2] = 0x00000000; // PMCSR: D0
+
+  mask[0x04 >> 2] = 0x00000157; // CFCS: command
+  mask[0x0c >> 2] = 0x0000ffff; // CFLT: latency timer + cache line size
+  mask[0x10 >> 2] = 0xfffff000; // BAR0
+  mask[0x3c >> 2] = 0x000000ff; // CFIT: interrupt line
+  mask[0x44 >> 2] = 0x00000003; // PMCSR: power state
+}
+
+// An OHCI companion: the card's function f, its memory accesses and its
+// interrupt pin the card's.
+struct CEhci::CCompanion : COhciHost {
+  CEhci &card;
+  const int func;
+  COhci ohci;
+  CCompanion(CEhci &c, int f)
+      : card(c), func(f), ohci(*this, kPortsPerCompanion, false, "ohci") {}
+  void ohci_dma_read(u32 a, void *d, size_t size, size_t count) override {
+    card.dma_read(a, d, size, count);
+  }
+  void ohci_dma_write(u32 a, void *s, size_t size, size_t count) override {
+    card.dma_write(a, s, size, count);
+  }
+  void ohci_irq(bool level) override { card.do_pci_interrupt(func, level); }
+};
+
 // Capability registers.
 static const u32 kCapLength = 0x20;
 static const u32 kHciVersion = 0x0100;
-static const u32 kHcsParams = CEhci::kPorts | (1u << 4); // PPC, no companions
 static const u32 kHccParams = 0x00000012; // programmable list; IST 1 frame
+
+// HCSPARAMS: the ports, port power control, and the companions: N_CC of
+// them with N_PCC ports each, routed in order (PRR 0).
+u32 CEhci::hcs_params() const {
+  u32 v = kPorts | (1u << 4);
+  if (m_with_companions)
+    v |= ((u32)kPortsPerCompanion << 8) | ((u32)kCompanions << 12);
+  return v;
+}
 
 CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1) {
-  static u32 cfg_data[64], cfg_mask[64];
-  ehci_config_space(cfg_data, cfg_mask);
-  add_function(0, cfg_data, cfg_mask);
-  ResetPCI();
+  m_with_companions = myCfg->get_bool_value("companions", true);
+  m_func = m_with_companions ? kCompanions : 0;
+  u32 cfg_data[64] = {}, cfg_mask[64] = {};
+  ehci_config_space(cfg_data, cfg_mask, m_with_companions);
+  add_function(m_func, cfg_data, cfg_mask);
+  if (m_with_companions)
+    for (int f = 0; f < kCompanions; ++f) {
+      u32 od[64] = {}, om[64] = {};
+      ohci_config_space(od, om, f);
+      add_function(f, od, om);
+      m_comp[f] = std::make_unique<CCompanion>(*this, f);
+      for (int i = 0; i < kPortsPerCompanion; ++i)
+        m_comp[f]->ohci.bind_port(i, &m_port[f * kPortsPerCompanion + i]);
+    }
   m_xfer.resize(0x5000);
-  reset_controller();
+  ResetPCI();
   for (int p = 0; p < kPorts; ++p) {
     char key[8];
     snprintf(key, sizeof(key), "port%d", p + 1);
     const char *what = myCfg->get_text_value(key, "");
     if (!strcmp(what, "tablet")) {
-      auto t = std::make_unique<CUsbTablet>();
+      // A full-speed tablet, as a real one is, where a companion can take
+      // it; without companions it runs at high speed so that it works.
+      auto t = std::make_unique<CUsbTablet>(!m_with_companions);
       theUsbTablet.store(t.get());
       attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strcmp(what, "audio") && m_with_companions) {
+      // Full speed: the EHCI leaves it for the port's companion.
+      attach(p, std::make_unique<CUsbAudio>());
+      printf("%s: USB audio speaker on port %d.\n", devid_string, p + 1);
     } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
       attach(p, std::make_unique<CUsbHostDevice>(what + 5));
@@ -95,19 +161,26 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
 #endif
     } else if (*what) {
       FAILURE_2(Configuration,
-                "%s: unknown USB device \"%s\" (EHCI ports "
-                "take tablet or host:vvvv:pppp; disks are disk<port>.0)",
+                "%s: unknown USB device \"%s\" (EHCI ports take tablet, "
+                "audio (with companions) or host:vvvv:pppp; disks are "
+                "disk<port>.0)",
                 key, what);
     }
   }
-  printf("%s: EHCI USB 2.0 controller, %d ports.\n", devid_string, kPorts);
+  if (m_with_companions)
+    printf("%s: EHCI USB 2.0 controller (function %d), %d ports, and %d OHCI "
+           "companions (functions 0-%d).\n",
+           devid_string, m_func, kPorts, kCompanions, kCompanions - 1);
+  else
+    printf("%s: EHCI USB 2.0 controller, %d ports, no companions.\n",
+           devid_string, kPorts);
   theUsbFaultTarget.store(this); // tests address the USB 2.0 card first
 }
 
 CEhci::~CEhci() {
   stop_threads();
-  for (auto &d : m_dev)
-    if (d && theUsbTablet.load() == d.get())
+  for (auto &port : m_port)
+    if (port.dev && theUsbTablet.load() == port.dev.get())
       theUsbTablet.store(nullptr);
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
@@ -116,14 +189,19 @@ CEhci::~CEhci() {
 // Test faults (CUsbPortFaults, docs/headless.md): from the GUI thread.
 bool CEhci::inject_fault(const char *op, int port, int ep, int arg) {
   std::lock_guard<std::mutex> lk(m_mx);
-  if (port < 1 || port > kPorts || !m_dev[port - 1])
+  if (port < 1 || port > kPorts || !m_port[port - 1].dev)
     return false;
   const int p = port - 1;
-  CUsbPortFaults &f = m_faults[p];
+  // A port the companion has: its business.
+  int local;
+  if (COhci *c = companion_of(p, &local))
+    if (m_port[p].ohci_owns)
+      return c->inject_fault(op, local + 1, ep, arg);
+  CUsbPortFaults &f = m_port[p].faults;
   if (!strcmp(op, "detach") || !strcmp(op, "attach")) {
     f.unplugged = !strcmp(op, "detach");
     if (f.unplugged)
-      m_dev[p]->reset(); // what is left of it when it comes back
+      m_port[p].dev->reset(); // what is left of it when it comes back
     port_refresh(p);
   } else if (!strcmp(op, "stall")) {
     f.stall_ep = ep;
@@ -135,7 +213,7 @@ bool CEhci::inject_fault(const char *op, int port, int ep, int arg) {
                          .count() +
                      (u64)arg;
   } else if (!strcmp(op, "phase")) {
-    return m_dev[p]->inject_phase_error();
+    return m_port[p].dev->inject_phase_error();
   } else {
     return false;
   }
@@ -150,16 +228,43 @@ void CEhci::ResetPCI() {
   if (m_selftest)
     return;
   std::lock_guard<std::mutex> lk(m_mx);
-  for (auto &d : m_dev)
-    if (d)
-      d->reset();
+  for (int p = 0; p < kPorts; ++p) {
+    if (!m_port[p].dev)
+      continue;
+    // Not under a transfer the companion may be running.
+    COhci *c = companion_of(p);
+    std::unique_lock<std::mutex> clk;
+    if (c)
+      clk = std::unique_lock<std::mutex>(c->mutex());
+    m_port[p].dev->reset();
+  }
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.reset();
   reset_controller();
+}
+
+COhci *CEhci::companion_of(int p, int *local) {
+  if (!m_comp[p / kPortsPerCompanion])
+    return nullptr;
+  if (local)
+    *local = p % kPortsPerCompanion;
+  return &m_comp[p / kPortsPerCompanion]->ohci;
+}
+
+void CEhci::route(int p, bool to_companion) {
+  u32 &r = state.portsc[p];
+  r = to_companion ? (r | PS_OWNER) : (r & ~PS_OWNER);
+  int local;
+  if (COhci *c = companion_of(p, &local))
+    c->port_routed(local, to_companion);
+  port_refresh(p);
 }
 
 void CEhci::register_disk(class CDisk *dsk, int bus, int dev) {
   if (bus < 1 || bus > kPorts || dev != 0)
     FAILURE(Configuration, "EHCI disks are named disk<port>.0, port 1 to 4");
-  if (m_dev[bus - 1])
+  if (m_port[bus - 1].dev)
     FAILURE_1(Configuration, "EHCI port %d already has a device", bus);
   CDiskController::register_disk(dsk, bus, dev);
   std::unique_ptr<CUsbDevice> d =
@@ -171,8 +276,13 @@ void CEhci::register_disk(class CDisk *dsk, int bus, int dev) {
 }
 
 void CEhci::attach(int p, std::unique_ptr<CUsbDevice> dev) {
-  dev->on_complete = [this]() { kick(); };
-  m_dev[p] = std::move(dev);
+  // Whichever controller has the port: wake both.
+  dev->on_complete = [this, p]() {
+    kick();
+    if (COhci *c = companion_of(p))
+      c->kick();
+  };
+  m_port[p].dev = std::move(dev);
 }
 
 void CEhci::kick() {
@@ -184,6 +294,9 @@ void CEhci::kick() {
 }
 
 void CEhci::start_threads() {
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.start_threads();
   if (!myThread) {
     printf(" ehci");
     StopThread = false;
@@ -228,15 +341,22 @@ void CEhci::stop_threads() {
     myThread->join();
     myThread = nullptr;
   }
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.stop_threads();
 }
 
 void CEhci::check_state() {
   if (myThreadDead.load())
     FAILURE(Thread, "EHCI thread has died");
+  for (auto &c : m_comp)
+    if (c && c->ohci.thread_dead())
+      FAILURE(Thread, "EHCI card's OHCI thread has died");
 }
 
 // Power-on and HCRESET state: halted, schedules off, ports unpowered and
-// owned by the (absent) companion until CONFIGFLAG is set.
+// owned by the companions (absent ones, when the card has none) until
+// CONFIGFLAG is set.
 void CEhci::reset_controller() {
   state.usbcmd = 0x00080000; // interrupt threshold 8 microframes
   state.usbsts = STS_HALTED;
@@ -247,8 +367,8 @@ void CEhci::reset_controller() {
   state.configflag = 0;
   state.doorbell = false;
   for (int p = 0; p < kPorts; ++p) {
-    state.portsc[p] = PS_OWNER;
-    port_refresh(p);
+    state.portsc[p] = 0;
+    route(p, true);
   }
   update_irq();
 }
@@ -260,7 +380,7 @@ void CEhci::update_irq() {
            state.usbsts & 0x3f);
     m_irq_traced = level;
   }
-  do_pci_interrupt(0, level);
+  do_pci_interrupt(m_func, level);
 }
 
 void CEhci::status(u32 bits) {
@@ -273,14 +393,14 @@ void CEhci::status(u32 bits) {
 // a companion). A change sets CSC and Port Change Detect.
 void CEhci::port_refresh(int p) {
   u32 &r = state.portsc[p];
-  const bool present =
-      m_dev[p] && !m_faults[p].unplugged && (r & PS_PP) && !(r & PS_OWNER);
+  const bool present = m_port[p].dev && !m_port[p].faults.unplugged &&
+                       (r & PS_PP) && !(r & PS_OWNER);
   const bool was = (r & PS_CCS) != 0;
   r &= ~(PS_CCS | (3u << 10));
   if (present) {
     r |= PS_CCS;
     if (!(r & PS_PED)) // line state: K for low speed (hand it off), else J
-      r |= m_dev[p]->low_speed() ? (1u << 10) : (2u << 10);
+      r |= m_port[p].dev->low_speed() ? (1u << 10) : (2u << 10);
   } else {
     r &= ~(PS_PED | PS_SUSP);
   }
@@ -296,8 +416,10 @@ void CEhci::port_write(int p, u32 data) {
   r &= ~(data & (PS_CSC | PS_PEDC | PS_OCC)); // write 1 to clear
   if (!(data & PS_PED))                       // only the controller enables
     r &= ~PS_PED;
-  r = (r & ~(PS_PP | PS_OWNER | (7u << 20))) |
-      (data & (PS_PP | PS_OWNER | (7u << 20)));
+  // PORT_OWNER: the port goes to the companion, or comes back (4.2.2).
+  if ((data ^ r) & PS_OWNER)
+    route(p, (data & PS_OWNER) != 0);
+  r = (r & ~(PS_PP | (7u << 20))) | (data & (PS_PP | (7u << 20)));
   if (!(r & PS_PP))
     r &= ~(PS_PED | PS_SUSP | PS_PR);
   // Suspend and resume.
@@ -309,7 +431,8 @@ void CEhci::port_write(int p, u32 data) {
     r &= ~(PS_FPR | PS_SUSP); // resume signalling ended
   // Reset: PR 1 starts it (the port disables), PR 0 ends it. The device
   // resets; a high-speed one enables the port, anything else is left for a
-  // companion controller (there is none: it stays disabled).
+  // companion controller: the port stays disabled, and the driver hands it
+  // over with PORT_OWNER (on a card without companions it goes nowhere).
   if (data & PS_PR) {
     if (!(r & PS_PR)) {
       r |= PS_PR;
@@ -318,10 +441,10 @@ void CEhci::port_write(int p, u32 data) {
   } else if (r & PS_PR) {
     r &= ~PS_PR;
     port_refresh(p);
-    if ((r & PS_CCS) && m_dev[p]) {
-      m_dev[p]->reset();
-      const bool hs = m_dev[p]->can_high_speed();
-      m_dev[p]->set_high_speed(hs);
+    if ((r & PS_CCS) && m_port[p].dev) {
+      m_port[p].dev->reset();
+      const bool hs = m_port[p].dev->can_high_speed();
+      m_port[p].dev->set_high_speed(hs);
       if (hs)
         r |= PS_PED;
     }
@@ -334,7 +457,7 @@ u32 CEhci::reg_read(u32 off) {
   case 0x00:
     return kCapLength | (kHciVersion << 16);
   case 0x04:
-    return kHcsParams;
+    return hcs_params();
   case 0x08:
     return kHccParams;
   case 0x0c:
@@ -407,14 +530,12 @@ void CEhci::reg_write(u32 off, u32 data) {
   case 0x38:
     state.async_addr = data & ~0x1fu;
     break;
-  case 0x60: { // CONFIGFLAG: 1 routes every port to this controller
+  case 0x60: { // CONFIGFLAG: 1 routes every port to this controller, 0
+               // every port to the companions
     const u32 cf = data & 1;
     if (cf != state.configflag)
-      for (int p = 0; p < kPorts; ++p) {
-        state.portsc[p] =
-            cf ? (state.portsc[p] & ~PS_OWNER) : (state.portsc[p] | PS_OWNER);
-        port_refresh(p);
-      }
+      for (int p = 0; p < kPorts; ++p)
+        route(p, !cf);
     state.configflag = cf;
     break;
   }
@@ -428,6 +549,10 @@ void CEhci::reg_write(u32 off, u32 data) {
 u32 CEhci::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   if (bar != 0)
     return 0;
+  if (func != m_func)
+    return func < kCompanions && m_comp[func]
+               ? (u32)m_comp[func]->ohci.usb_hci_read(address, dsize)
+               : 0;
   std::lock_guard<std::mutex> lk(m_mx);
   const u32 v = reg_read(address & 0xfc);
   const int shift = 8 * (address & 3);
@@ -444,6 +569,11 @@ u32 CEhci::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 void CEhci::WriteMem_Bar(int func, int bar, u32 address, int dsize, u32 data) {
   if (bar != 0)
     return;
+  if (func != m_func) {
+    if (func < kCompanions && m_comp[func])
+      m_comp[func]->ohci.usb_hci_write(address, dsize, data);
+    return;
+  }
   std::lock_guard<std::mutex> lk(m_mx);
   if (dsize == 32) {
     reg_write(address & 0xfc, data);
@@ -631,9 +761,9 @@ bool CEhci::async_pass() {
 
 CUsbDevice *CEhci::device_at(int address) {
   for (int p = 0; p < kPorts; ++p)
-    if (m_dev[p] && (state.portsc[p] & PS_PED) && !m_faults[p].unplugged &&
-        m_dev[p]->address() == address)
-      return m_dev[p].get();
+    if (m_port[p].dev && (state.portsc[p] & PS_PED) &&
+        !m_port[p].faults.unplugged && m_port[p].dev->address() == address)
+      return m_port[p].dev.get();
   return nullptr;
 }
 
@@ -784,6 +914,7 @@ int CEhci::service_qh(u32 qh_addr, bool periodic) {
 
 static u32 ehci_magic1 = 0xE4C11001;
 static u32 ehci_magic2 = 0x1001E4C1;
+static u32 ehci_magic_comp = 0xE4C10CC2; // the companions' block
 
 int CEhci::SaveState(FILE *f) {
   long ss = sizeof(state);
@@ -794,6 +925,12 @@ int CEhci::SaveState(FILE *f) {
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
   fwrite(&ehci_magic2, sizeof(u32), 1, f);
+  // The companions' registers follow (a card without them saves as before).
+  if (m_with_companions) {
+    fwrite(&ehci_magic_comp, sizeof(u32), 1, f);
+    for (auto &c : m_comp)
+      fwrite(&c->ohci.state, sizeof(c->ohci.state), 1, f);
+  }
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
 }
@@ -811,14 +948,32 @@ int CEhci::RestoreState(FILE *f) {
     printf("%s: saved state does not match.\n", devid_string);
     return -1;
   }
+  if (m_with_companions) {
+    u32 m3;
+    bool ok = fread(&m3, sizeof(u32), 1, f) == 1 && m3 == ehci_magic_comp;
+    for (auto &c : m_comp)
+      ok = ok && fread(&c->ohci.state, sizeof(c->ohci.state), 1, f) == 1;
+    if (!ok) {
+      printf("%s: saved state has no companions' block (saved with "
+             "companions = false, or before they existed).\n",
+             devid_string);
+      return -1;
+    }
+  }
   // The devices' own state is not saved: reset them and show them to the
   // guest as reconnected.
   for (int p = 0; p < kPorts; ++p) {
-    if (!m_dev[p])
+    // The routing the saved registers say.
+    int local;
+    if (COhci *c = companion_of(p, &local))
+      c->port_routed(local, (state.portsc[p] & PS_OWNER) != 0);
+    if (!m_port[p].dev)
       continue;
-    m_dev[p]->reset();
+    m_port[p].dev->reset();
     state.portsc[p] &= ~(PS_PED | PS_CCS);
     port_refresh(p);
+    if (COhci *c = companion_of(p, &local))
+      c->reconnect(local);
   }
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   return 0;
@@ -972,5 +1127,183 @@ void CEhci::selftest() {
 
   reg(0x20, 0x00080000); // stop, and leave the controller to the guest
   reg(0x20, CMD_HCRESET);
+  if (m_with_companions)
+    pass &= selftest_companions(base);
   printf("%%EHCI-I-SELFTEST: %s\n", pass ? "PASS" : "FAIL");
+}
+
+namespace {
+/// The self-test's full-speed device: a USB 1.1 one with nothing but
+/// endpoint 0, which an EHCI port leaves for its companion.
+class CFullSpeedProbe : public CUsbDevice {
+public:
+  const char *name() const override { return "probe"; }
+
+protected:
+  const std::vector<u8> &device_descriptor() const override {
+    static const std::vector<u8> d = {18,   1,    0x10, 0x01, 0, 0, 0, 64, 0x34,
+                                      0x12, 0x78, 0x56, 0x00, 1, 0, 0, 0,  1};
+    return d;
+  }
+  const std::vector<u8> &configuration_descriptor() const override {
+    static const std::vector<u8> d = {9, 2, 18, 0, 1, 1,    0, 0x80, 50,
+                                      9, 4, 0,  0, 0, 0xff, 0, 0,    0};
+    return d;
+  }
+};
+} // namespace
+
+// The self-test's second part, on a card with companions: port routing
+// (EHCI 1.0 4.2). CONFIGFLAG 0 gives every port to the companions and 1
+// takes them back; a full-speed device on a free port stays disabled after
+// the EHCI's port reset, PORT_OWNER hands it to its companion, which then
+// enumerates it (GET_DESCRIPTOR over its control list), and clearing
+// PORT_OWNER takes it back.
+bool CEhci::selftest_companions(u32 base) {
+  const u32 HCCA = base + 0x3000, ED = base + 0x3100, TD = base + 0x3200;
+  const u32 DATA = base + 0x10000;
+  auto w32 = [&](u32 a, u32 v) { memcpy(cSystem->PtrToMem(a), &v, 4); };
+  auto r32 = [&](u32 a) {
+    u32 v;
+    memcpy(&v, cSystem->PtrToMem(a), 4);
+    return v;
+  };
+  auto reg = [&](u32 off, u32 v) {
+    std::lock_guard<std::mutex> lk(m_mx);
+    reg_write(off, v);
+  };
+  auto rreg = [&](u32 off) {
+    std::lock_guard<std::mutex> lk(m_mx);
+    return reg_read(off);
+  };
+  auto oreg = [&](int c, u32 off, u32 v) {
+    m_comp[c]->ohci.usb_hci_write(off, 32, v);
+  };
+  auto roreg = [&](int c, u32 off) {
+    return (u32)m_comp[c]->ohci.usb_hci_read(off, 32);
+  };
+  auto say = [](const char *what, bool ok) {
+    printf("%%EHCI-I-SELFTEST: %-40s %s\n", what, ok ? "ok" : "FAILED");
+    return ok;
+  };
+  auto sleep_ms = [](int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  };
+  bool pass = true;
+
+  // After the reset CONFIGFLAG is 0: every port is a companion's.
+  bool all = true;
+  for (int p = 0; p < kPorts; ++p)
+    all &= (rreg(0x64 + 4 * p) & (PS_OWNER | PS_CCS)) == PS_OWNER;
+  pass &= say("CONFIGFLAG 0: every port a companion's", all);
+  oreg(0, 0x50, 1u << 16); // companion 0: SetGlobalPower
+  pass &= say("companion 0 port 1: the disk connected", roreg(0, 0x54) & 1);
+  reg(0x60, 1);
+  pass &= say("CONFIGFLAG 1: taken from the companion",
+              (roreg(0, 0x54) & 0x10001) == 0x10000);
+
+  // A full-speed device: the tablet if the card has one, else a probe
+  // plugged into a free port for the test.
+  int q = -1;
+  bool probe = false;
+  for (int p = 0; p < kPorts && q < 0; ++p)
+    if (m_port[p].dev && !m_port[p].dev->can_high_speed() &&
+        !m_port[p].dev->low_speed())
+      q = p;
+  for (int p = kPorts - 1; p >= 0 && q < 0; --p)
+    if (!m_port[p].dev) {
+      q = p;
+      probe = true;
+    }
+  if (q < 0) {
+    printf("%%EHCI-I-SELFTEST: no free port for a full-speed device: "
+           "its routing not checked\n");
+    reg(0x20, CMD_HCRESET);
+    for (auto &c : m_comp)
+      c->ohci.reset();
+    return pass;
+  }
+  const int cq = q / kPortsPerCompanion, lq = q % kPortsPerCompanion;
+  const u32 psc = 0x64 + 4 * q, rhps = 0x54 + 4 * lq;
+  if (probe) {
+    std::lock_guard<std::mutex> lk(m_mx);
+    std::lock_guard<std::mutex> clk(m_comp[cq]->ohci.mutex());
+    m_port[q].dev = std::make_unique<CFullSpeedProbe>();
+  }
+  char what[64];
+  reg(psc, PS_PP);
+  snprintf(what, sizeof(what), "port %d: full-speed %s connected", q + 1,
+           m_port[q].dev->name());
+  pass &= say(what, (rreg(psc) & PS_CCS) != 0);
+  reg(psc, PS_PP | PS_PR | PS_CSC);
+  sleep_ms(10);
+  reg(psc, PS_PP);
+  pass &= say("  left disabled after reset, line J",
+              (rreg(psc) & (PS_CCS | PS_PED | (3u << 10))) ==
+                  (PS_CCS | (2u << 10)));
+  reg(psc, PS_PP | PS_OWNER | PS_CSC);
+  pass &= say("  PORT_OWNER: gone from the EHCI", !(rreg(psc) & PS_CCS));
+  oreg(cq, 0x50, 1u << 16);
+  snprintf(what, sizeof(what), "  companion %d port %d: connected, full speed",
+           cq, lq + 1);
+  pass &= say(what, (roreg(cq, rhps) & 0x201) == 0x001);
+  oreg(cq, rhps, 1u << 4); // SetPortReset
+  pass &= say("  companion: enabled after its reset", roreg(cq, rhps) & 2);
+
+  // GET_DESCRIPTOR(device) over the companion's control list: SETUP, IN,
+  // status OUT, and the empty tail TD.
+  const u32 TAIL = TD + 0x60;
+  static const u8 setup[8] = {0x80, 6, 0, 1, 0, 0, 18, 0};
+  memcpy(cSystem->PtrToMem(DATA), setup, 8);
+  memset(cSystem->PtrToMem(DATA + 0x100), 0, 18);
+  const u32 not_accessed = 0xfu << 28, no_int = 7u << 21;
+  const u32 td[3][4] = {
+      {not_accessed | (2u << 24) | no_int, DATA, TD + 0x20, DATA + 7},
+      {not_accessed | (3u << 24) | no_int | (2u << 19) | (1u << 18),
+       DATA + 0x100, TD + 0x40, DATA + 0x100 + 17},
+      {not_accessed | (3u << 24) | (1u << 19), 0, TAIL, 0}};
+  for (int i = 0; i < 3; ++i)
+    for (int k = 0; k < 4; ++k)
+      w32(TD + 0x20 * i + 4 * k, td[i][k]);
+  for (int k = 0; k < 4; ++k)
+    w32(TAIL + 4 * k, 0);
+  w32(ED + 0, 64u << 16); // address 0, endpoint 0, direction from the TD
+  w32(ED + 4, TAIL);
+  w32(ED + 8, TD);
+  w32(ED + 12, 0);
+  oreg(cq, 0x18, HCCA);
+  oreg(cq, 0x20, ED);
+  oreg(cq, 0x04, 0x90); // UsbOperational, control list enabled
+  oreg(cq, 0x08, 2);    // ControlListFilled
+  for (int t = 0; t < 2000; ++t) {
+    if ((r32(ED + 8) & ~0xfu) == TAIL || (r32(ED + 8) & 1))
+      break;
+    sleep_ms(1);
+  }
+  bool ok = (r32(ED + 8) & ~0xfu) == TAIL;
+  for (int i = 0; i < 3; ++i)
+    ok &= (r32(TD + 0x20 * i) >> 28) == 0;
+  const u8 *dd = (const u8 *)cSystem->PtrToMem(DATA + 0x100);
+  pass &= say("  companion: GET_DESCRIPTOR(device)",
+              ok && dd[0] == 18 && dd[1] == 1 &&
+                  (!probe || (dd[8] == 0x34 && dd[9] == 0x12)));
+  oreg(cq, 0x04, 0); // UsbReset
+
+  // PORT_OWNER cleared: back to the EHCI.
+  reg(psc, PS_PP);
+  pass &= say("  PORT_OWNER 0: back to the EHCI",
+              (rreg(psc) & PS_CCS) && !(roreg(cq, rhps) & 1));
+
+  reg(0x20, CMD_HCRESET);
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    std::lock_guard<std::mutex> clk(m_comp[cq]->ohci.mutex());
+    if (probe)
+      m_port[q].dev.reset();
+    else
+      m_port[q].dev->reset();
+  }
+  for (auto &c : m_comp)
+    c->ohci.reset();
+  return pass;
 }

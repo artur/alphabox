@@ -597,7 +597,8 @@ static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
                                      0};
 static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_ali_usb[] = {"port1", "port2", "port3", 0};
-static const char *const kv_ehci[] = {"port1", "port2", "port3", "port4", 0};
+static const char *const kv_ehci[] = {"port1", "port2",      "port3",
+                                      "port4", "companions", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
