@@ -132,6 +132,14 @@ framebuffer window as it is offered and withdrawn, and
 `ALPHABOX_TRACE_CODEWRITE=1` reports the guest writing to memory some block
 was compiled from, which is what decides whether an `IMB` has work.
 
+`ALPHABOX_TRACE_VIRGE` traces the S3 ViRGE, as a comma-separated list: `1`
+every port, register and window access; `cmd` each engine command, one line
+with its registers (named in `src/devices/video/virge/S3VirgeRegs.hpp`);
+`mode` each change of the extended display mode; `file:<path>` every
+access, but only while `<path>` exists -- it is polled, so a trace can be
+switched on around the one step that matters (`touch trace.on` ...
+`rm trace.on`).
+
 `ALPHABOX_DUMP_MEMORY=1` writes guest memory to `memory_000000000000.dmp`
 when the emulator is asked to stop, which is how to find what a firmware
 left in memory (and what it did not).

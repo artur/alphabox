@@ -47,9 +47,10 @@ cards, so that software written for the real thing runs unmodified.
   Over 99% of guest instructions execute as host code.
 - **Up to four CPUs and 32 GB of memory**, presented to the firmware with
   matching memory arrays and DIMM data.
-- **3D graphics from 1998.** The ATI 3D Rage Pro's triangle setup engine and
-  the 3Dlabs Permedia 2's delta unit are emulated: Windows 2000's own
-  Direct3D drivers draw lit, textured, perspective-correct scenes on them.
+- **3D graphics from 1998.** The ATI 3D Rage Pro's triangle setup engine,
+  the 3Dlabs Permedia 2's delta unit and the S3 ViRGE/DX's S3d engine are
+  emulated: Windows 2000's own Direct3D drivers draw lit, textured,
+  perspective-correct scenes on them.
 - **USB, 1.1 and 2.0.** The ES40's own OHCI controller and a USB 2.0 card,
   with a tablet that makes the guest's pointer follow yours, USB disks from
   any image, and passthrough of real host devices.
@@ -71,7 +72,7 @@ cards, so that software written for the real thing runs unmodified.
 | OpenVMS | Boots, including the CDE desktop ([installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Tru64 UNIX | Boots |
 | NetBSD | Boots ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
-| Windows NT / 2000 | Installs and runs through AlphaBIOS, on the S3, Cirrus, ATI Mach64 or 3Dlabs Permedia 2 card with each card's own driver from the installation media; Windows 2000 on up to two CPUs; USB with its own drivers ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
+| Windows NT / 2000 | Installs and runs through AlphaBIOS, on the S3, Cirrus, ATI Mach64 or 3Dlabs Permedia 2 card with each card's own driver from the installation media (an installed Windows 2000 also takes the S3 ViRGE/DX, installing its driver when it finds the card); Windows 2000 on up to two CPUs; USB with its own drivers ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
 | Windows "Whistler" 64-bit (AXP64, build 2210) | The 64-bit Windows Microsoft developed on Alpha and never released: installs and runs through AlphaBIOS, and runs native 64-bit programs |
 
 | Windows 2000 reading a USB disk | dxdiag: ATI's own Direct3D driver, every test passed | Direct3D through the 3Dlabs Permedia 2's delta unit |
@@ -113,7 +114,7 @@ card. The [documentation](docs/README.md) covers the rest:
 | Memory | 64 MB – 32 GB |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
-| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending) |
+| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE/DX (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay) |
 | USB | the ALi M1543C's OHCI (USB 1.1, 3 ports) and an EHCI card (USB 2.0, 4 ports); a HID tablet, Bulk-Only mass storage, and host passthrough through libusb ([docs/usb.md](docs/usb.md)) |
 | Network | DEC 21040 / 21041 / 21140 / 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) and the two-port DE602-AA / DE602-B boards behind a bridge — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 and ES1371 (AC'97 codec and sample-rate converter) |
@@ -168,6 +169,12 @@ which workload, and the optimizations that turned out not to pay.
   drivers use neither: stretched blits go through the 3D engine). The 3D
   Rage II+ has DirectDraw but no Direct3D, as Windows' own driver gives it
   none.
+- The S3 ViRGE/DX: the Windows driver exposes no mipmaps, and the chip has
+  no alpha test, no texture clamping, no specular colour and only square
+  textures, so Direct3D scenes using those differ from Microsoft's software
+  rasteriser; the driver draws lines as thin triangles whose colour does not
+  follow the line. Only the DX is verified; the other ViRGE parts' rows are
+  untested.
 - The Permedia 2 is no SRM console: SRM V7.3-1 starts a card's BIOS without
   telling it where the card is, and every ELSA and 3Dlabs BIOS checks that
   before doing anything. AlphaBIOS starts it properly, so Windows is

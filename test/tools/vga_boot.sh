@@ -2,7 +2,7 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus|mach64|permedia2] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro] [ROM=<bios>] \
+# usage: [CARD=s3|cirrus|mach64|permedia2|s3virge] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro|dx] [ROM=<bios>] \
 #          vga_boot.sh <alphabox-binary> <label> [seconds]
 #   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP to gd5434 (cirrus) or ct
@@ -14,7 +14,8 @@
 #   to the ELSA GLoria Synergy PCI BIOS 8.07.00 (roms/video/permedia2/).
 #   That BIOS never runs under SRM V7.3-1, which calls option ROMs with
 #   AX = 0 where the BIOS expects its own bus and device (see es40.cfg), so
-#   permedia2 gives no frames here; AlphaBIOS runs it.
+#   permedia2 gives no frames here; AlphaBIOS runs it. s3virge (CHIP dx)
+#   defaults to the S3 reference BIOS 2.01.16, roms/video/s3virge/86c375_4.bin.
 #
 # The screen settles on two frames (text cursor on/off). With SRM V7.3-1 the
 # settled sets are:
@@ -23,6 +24,7 @@
 #   cirrus gd5430  (86Box pci.bin)         c3f64950a2 d1fb4d6f9c
 #   mach64 ct      (Mach64 CT PCI BIOS)    3e98e7f5a5 81a4da0cd7
 #   mach64 vt2     (264VT2 PCI BIOS)       323cbfa3fa d4363d6f19
+#   s3virge dx     (S3 BIOS 2.01.16)       1b6682c7dc e23c1c51f6
 # The set is the last ten frames, one every ~2 s, so the cursor phase can
 # alias: on a loaded host one of the two may be missing. Run it alone.
 # A behaviour-preserving change must reproduce them. last.png in the run
@@ -38,7 +40,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64|permedia2] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
+[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64|permedia2|s3virge] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
 [ -x "$1" ] || { echo "vga_boot: $1 is not executable"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
@@ -68,7 +70,12 @@ mach64)
   EXTRA="chip = \"$CHIP\";"
   ;;
 permedia2) ROM=${ROM:-$R/roms/video/permedia2/SYN80700.PAN} ;;
-*) echo "vga_boot: CARD must be s3, cirrus, mach64 or permedia2"; exit 2 ;;
+s3virge)
+  CHIP=${CHIP:-dx}
+  ROM=${ROM:-$R/roms/video/s3virge/86c375_4.bin}
+  EXTRA="chip = \"$CHIP\";"
+  ;;
+*) echo "vga_boot: CARD must be s3, cirrus, mach64, permedia2 or s3virge"; exit 2 ;;
 esac
 [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }
 WORK=${ALPHABOX_WORK:-$R/lab}
