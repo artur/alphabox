@@ -951,9 +951,8 @@ void CJitEngine::pin_decide() {
   // inconclusive, MIPS 1464 -> 1496). Which path loses the value was not
   // found: each of spill/reload, the helper spills, CALL_PAL's R23 update
   // and the PAL blocks' shadow remap reads correct on its own.
-  std::stable_partition(order, order + 31, [](int8_t r) {
-    return !(r < 24 && (r & 0xc) == 0x4);
-  });
+  std::stable_partition(order, order + 31,
+                        [](int8_t r) { return !(r < 24 && (r & 0xc) == 0x4); });
   uint64_t best = 0;
   for (int k = 0; k < kPinSlots; ++k)
     best += m_pin_use[order[k]];
