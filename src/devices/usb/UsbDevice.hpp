@@ -58,6 +58,21 @@ public:
   /// device passed through) takes over the whole of it, endpoint 0 included.
   virtual Result transfer(int pid, int ep, u8 *buf, int &len);
 
+  /// One isochronous packet (a frame's worth) to or from endpoint `ep`.
+  /// OUT: buf holds len bytes; IN: up to len bytes may be written. There is
+  /// no handshake on an isochronous pipe: the answer is the byte count moved
+  /// (IN: sent, OUT: taken), or -1 when the endpoint does not exist in the
+  /// device's current alternate setting -- nothing answers on the bus, and
+  /// the controller reports the packet as not responding. Called with the
+  /// controller's lock held, once per packet, in frame order.
+  virtual int iso_transfer(int pid, int ep, u8 *buf, int len) {
+    (void)pid;
+    (void)ep;
+    (void)buf;
+    (void)len;
+    return -1;
+  }
+
   /// Bus reset (the port was reset): default address, unconfigured.
   virtual void reset();
 
@@ -126,6 +141,17 @@ protected:
   }
   /// SET_CONFIGURATION or SET_INTERFACE took effect.
   virtual void configured() {}
+  /// SET_INTERFACE: select alternate setting `alt` of interface `iface`.
+  /// False (STALL) for a setting the device does not have; by default an
+  /// interface has only setting 0. GET_INTERFACE reads it back.
+  virtual bool set_interface(int iface, int alt) {
+    (void)iface;
+    return alt == 0;
+  }
+  virtual int get_interface(int iface) const {
+    (void)iface;
+    return 0;
+  }
 
   static std::vector<u8> utf16_string(const char *s);
   /// For a device that serves endpoint 0 itself (and so SET_ADDRESS).

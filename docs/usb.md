@@ -1,6 +1,6 @@
 # USB
 
-Alphabox has two USB host controllers, three kinds of device to put on
+Alphabox has two USB host controllers, four kinds of device to put on
 them, and the test hooks to make a guest's USB driver prove itself.
 
 | | Controller | Speed | Ports | Guest drivers |
@@ -19,6 +19,7 @@ pci0.19 = ali_usb              // the built-in USB 1.1 controller
     file = "usb.img";
   }
   port3 = "host:2109:8888";    // a real host device, passed through
+                               // (or "audio": a USB speaker)
 }
 
 pci0.3 = ehci                  // a USB 2.0 card in a free slot
@@ -29,7 +30,8 @@ pci0.3 = ehci                  // a USB 2.0 card in a free slot
 ```
 
 A port takes one device. Disks are named `disk<port>.0`, with the port
-counted from 1; `port<n>` takes `tablet` or `host:vvvv:pppp`. The sample
+counted from 1; `port<n>` takes `tablet`, `audio` (the OHCI only) or
+`host:vvvv:pppp`. The sample
 [`es40.cfg`](../es40.cfg) documents every value.
 
 ## Devices
@@ -48,6 +50,21 @@ the same engine the IDE ATAPI path and the SCSI adapters use. On an EHCI
 port it is USB 2.0 (512-byte bulk packets, a device qualifier). Each disk
 has its own serial number, so two copies of one image are two devices.
 
+**Speaker** (`audio`, OHCI only: it is a full-speed device, which the
+EHCI card, having no companion controllers, does not keep). A USB Audio
+Class 1.0 speaker: an input terminal fed by the streaming interface, a
+feature unit with master mute and volume (-60 to 0 dB), a speaker output
+terminal. Alternate setting 1 of the streaming interface has an adaptive
+isochronous OUT endpoint taking 16-bit stereo PCM at 48 or 44.1 kHz, chosen
+by the host with SET_CUR on the endpoint's sampling frequency control.
+Windows 2000 installs its own `usbaudio.sys` for it with nothing supplied
+(from its driver cache), and it becomes the preferred playback device,
+"USB Audio Device". What the guest sends plays on the host's default audio
+device through SDL, at the guest's volume and mute;
+`ALPHABOX_USBAUDIO_WAV=<file>` also writes the stream, as sent, to a WAV
+file (a headless run with `SDL_AUDIO_DRIVER=dummy` keeps it off the
+speakers). Windows 2000's mixer resamples everything to 48 kHz.
+
 **Host passthrough** (`host:vvvv:pppp`, builds with libusb; `alphabox
 --version` lists it). A real device of the host, handed to the guest:
 control, bulk and interrupt transfers, submitted asynchronously, so the
@@ -60,7 +77,8 @@ frames); on EHCI they pass unchanged.
 
 Passthrough limits worth knowing:
 
-- Isochronous endpoints (audio, webcams) are refused.
+- Isochronous endpoints (audio, webcams) are refused: the OHCI runs
+  isochronous transfers for emulated devices only.
 - On macOS the host keeps interfaces its own drivers hold -- keyboards,
   mice, mass storage, audio -- so such a device enumerates in the guest
   but cannot be used, unless alphabox runs as root. Some devices also need
@@ -85,10 +103,21 @@ bridge's USBIR routing byte to an ISA IRQ, as on the real chip; the EHCI
 card's is PCI INTA. Both controllers reset with the machine and with a PCI
 bus reset.
 
+Isochronous transfers run on the OHCI (OHCI 1.0a 4.3.2): each isochronous
+TD covers up to eight consecutive frames from its StartingFrame, one packet
+a frame. In each frame the controller moves the packet that frame is due
+for, writes its packet status word (condition code, and for IN the size
+received) over the packet's offset, and retires the TD to the done queue
+after its last packet. A TD queued too late for all its frames is retired
+with DataOverrun; one whose first frame is still to come waits. If the
+frame thread oversleeps, the frames it missed (up to 32) are run in order
+when it wakes, so a stream does not lose packets to host scheduling. A
+device takes packets through `CUsbDevice::iso_transfer`.
+
 The EHCI card has no companion controllers: only a high-speed device keeps
 its port. A full- or low-speed one is left for a companion that is not
-there, as the specification has it. Isochronous transfer descriptors (iTD,
-siTD, and isochronous OHCI TDs) are not implemented.
+there, as the specification has it. Its isochronous descriptors (iTD,
+siTD) are not implemented.
 
 Device state -- addresses, configuration -- is not in a saved snapshot:
 after a restore every device is shown to the guest as reconnected, and its
@@ -127,8 +156,11 @@ Everything below is documented in [headless.md](headless.md):
 - `test/tools/usb_bench.sh` times the 16 MB read and checks the copy
   written back byte for byte, optionally firing faults during it.
 - `ALPHABOX_USBTRACE=1` logs register writes, every control request a
-  device serves, each Bulk-Only command, and the EHCI card's per-transfer
-  timeline (pickup, retirement, interrupt level, the driver's status reads).
+  device serves, each Bulk-Only command, isochronous TDs retired late, and
+  the EHCI card's per-transfer timeline (pickup, retirement, interrupt
+  level, the driver's status reads).
+- `ALPHABOX_USBAUDIO_WAV=<file>` records what the guest plays on the USB
+  speaker, to compare with the file it played.
 
 Windows 2000's own drivers recover from an injected STALL and from surprise
 removal; after a phase error its hub driver resets and restores the device

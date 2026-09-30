@@ -48,8 +48,8 @@
  * whose endpoint is not halted or skipped against the device at its address,
  * and hands finished TDs back through the done queue. The root hub has three
  * ports; a device is attached to one from the configuration
- * (`port1 = "tablet";`). Isochronous TDs are not implemented: they are
- * retired as not accessed.
+ * (`port1 = "tablet";`). Isochronous endpoints move one packet a frame from
+ * their TDs' eight-packet buffers (service_iso_ed).
  *
  * Runtime state beyond the registers (the devices' addresses and
  * configuration, the done queue) is not part of a saved state yet.
@@ -96,7 +96,9 @@ private:
   bool service_list(u32 head);
   void service_async_lists(); // control and bulk, between frames
   int service_ed(u32 ed_addr, bool periodic, bool *found = nullptr);
+  int service_iso_ed(u32 ed_addr, u32 ed[4]);
   void retire_td(u32 td_addr, u32 td[4], int cc);
+  void retire_iso_td(u32 td_addr, u32 td[8], int cc);
   void write_back_done();
   CUsbDevice *device_at(int address);
 
@@ -134,6 +136,8 @@ private:
   std::atomic_bool StopThread{false};
   std::atomic_bool myThreadDead{false};
   u32 m_frame = 0;      // HcFmNumber
+  // Frames the thread overslept that are still run (see run()).
+  static constexpr int kCatchUpFrames = 32;
   u32 m_done_head = 0;  // TDs retired and not yet written back
   int m_done_delay = 7; // frames until the done queue interrupts; 7 = none
   // The ISA IRQ the interrupt line is on, and its level.

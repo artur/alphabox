@@ -197,11 +197,13 @@ bool CUsbDevice::standard_request(const u8 *setup, const std::vector<u8> &data,
     configured();
     return true;
   case 0x0a: // GET_INTERFACE
-    out = {0};
+    out = {(u8)get_interface(setup[4])};
     return true;
-  case 0x0b: // SET_INTERFACE: one alternate setting only
+  case 0x0b: // SET_INTERFACE
+    if (!set_interface(setup[4], value & 0xff))
+      return false;
     configured();
-    return (value & 0xff) == 0;
+    return true;
   default:
     return false;
   }

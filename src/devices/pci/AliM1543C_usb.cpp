@@ -34,6 +34,7 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "UsbAsyncShim.hpp"
+#include "UsbAudio.hpp"
 #include "UsbHostDevice.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
@@ -194,6 +195,9 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
       theUsbTablet.store(t.get());
       attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strcmp(what, "audio")) {
+      attach(p, std::make_unique<CUsbAudio>());
+      printf("%s: USB audio speaker on port %d.\n", devid_string, p + 1);
     } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
       attach(p, std::make_unique<CUsbHostDevice>(what + 5));
@@ -422,11 +426,19 @@ void CAliM1543C_usb::run() {
       std::lock_guard<std::mutex> lk(m_mx);
       if (!ohci_operational())
         continue;
-      const u32 before = m_frame;
-      m_frame = (m_frame + elapsed) & 0xffff;
-      if ((before ^ m_frame) & 0x8000)
-        state.usb_data[0x0c / 4] |= OHCI_INT_FNO;
-      frame();
+      // Frames the thread slept through are run now, one by one, up to a
+      // limit: an isochronous stream moves a packet in each, and a real
+      // controller would not have skipped them. Beyond the limit they are
+      // counted but not run.
+      const int run_now = std::min(elapsed, kCatchUpFrames);
+      for (int i = 0; i < elapsed; ++i) {
+        const u32 before = m_frame;
+        m_frame = (m_frame + 1) & 0xffff;
+        if ((before ^ m_frame) & 0x8000)
+          state.usb_data[0x0c / 4] |= OHCI_INT_FNO;
+        if (i >= elapsed - run_now)
+          frame();
+      }
     }
   } catch (CException &e) {
     printf("Exception in USB thread: %s.\n", e.displayText().c_str());
@@ -451,6 +463,10 @@ void CAliM1543C_usb::frame() {
     for (u32 ed = head & ~0xfu, n = 0; ed && n < 256; ++n) {
       u32 e[4];
       do_pci_read(ed, e, sizeof(u32), 4);
+      // Isochronous endpoints sit at the list's tail: with
+      // IsochronousEnable clear the controller stops at the first one.
+      if ((e[0] & (1u << 15)) && !(control & OHCI_CTL_IE))
+        break;
       service_ed(ed, true);
       ed = e[3] & ~0xfu;
     }
@@ -607,7 +623,11 @@ int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
     first.addr = head;
     do_pci_read(head, first.w, sizeof(u32), 4);
     first.len = td_len(first.w);
-    if (flags & (1u << 15)) {        // isochronous format: not implemented
+    if (flags & (1u << 15)) {
+      if (periodic)
+        return service_iso_ed(ed_addr, ed);
+      // An isochronous endpoint on the control or bulk list is the
+      // driver's mistake: its TDs are retired untouched.
       retire_td(head, first.w, 0xf); // NotAccessed
       ed[2] = (first.w[2] & ~0xfu) | (ed[2] & 3);
       ++done;
@@ -686,6 +706,121 @@ int CAliM1543C_usb::service_ed(u32 ed_addr, bool periodic, bool *found) {
       break;
   }
   return done;
+}
+
+// An isochronous endpoint's TDs (OHCI 1.0a 4.3.2, 6.4.4.3). Each TD covers
+// FrameCount + 1 consecutive frames from StartingFrame, one packet a frame,
+// the packets' buffers given by eight 13-bit offsets into the TD's (at most)
+// two pages. In each frame the controller works out which packet of the head
+// TD is due -- R = frame number - StartingFrame -- moves it, and replaces
+// its offset with the packet status word: condition code and, for IN, the
+// size received. After the last packet the TD is retired to the done queue.
+// A TD whose frames have all gone by without it (the driver queued it late)
+// is retired with DataOverrun; one whose first frame is still to come waits.
+// An isochronous pipe has no handshake and no data toggle, and an error in
+// one packet does not halt the endpoint.
+int CAliM1543C_usb::service_iso_ed(u32 ed_addr, u32 ed[4]) {
+  const u32 flags = ed[0];
+  const int ep = (flags >> 7) & 0xf;
+  const bool in = ((flags >> 11) & 3) == 2;
+  const int mps = (int)((flags >> 16) & 0x7ff);
+  int done = 0;
+  for (int guard = 0; guard < 16; ++guard) {
+    const u32 head = ed[2] & ~0xfu, tail = ed[1] & ~0xfu;
+    if ((ed[2] & 1) || head == tail)
+      break;
+    u32 td[8];
+    do_pci_read(head, td, sizeof(u32), 8);
+    const u32 next_td = td[2] & ~0xfu;
+    const int fc = (td[0] >> 24) & 7;
+    const int r = (int16_t)(u16)(m_frame - (td[0] & 0xffff));
+    if (r < 0) // its first frame is still to come
+      break;
+    if (r > fc) { // all its frames are past: too late
+      if (g_usbtrace)
+        printf("USBT iso TD %08x late: frames %04x+%d, now %04x\n", head,
+               td[0] & 0xffff, fc + 1, m_frame);
+      retire_iso_td(head, td, 8); // DataOverrun
+      ed[2] = next_td | (ed[2] & 2);
+      do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1);
+      ++done;
+      continue;
+    }
+    // Packet r: from its offset to the next one's, or to BufferEnd.
+    const u32 bp0 = td[1] & ~0xfffu, be = td[3];
+    auto offset = [&](int i) {
+      return (td[4 + i / 2] >> (16 * (i & 1))) & 0xffff;
+    };
+    const u32 be13 =
+        (be & 0xfff) | (((be ^ bp0) & ~0xfffu) ? 0x1000u : 0u); // BE's offset
+    const u32 start = offset(r) & 0x1fff;
+    const u32 end = r < fc ? (offset(r + 1) & 0x1fff) : be13 + 1;
+    int len = end > start ? (int)(end - start) : 0;
+    if (len > 1023)
+      len = 1023;
+    // Offset o as an address: page 0 or BufferEnd's page, by bit 12.
+    auto copy = [&](u8 *data, int n, bool to_guest) {
+      for (int at = 0; at < n;) {
+        const u32 o = start + at;
+        const u32 addr = ((o & 0x1000) ? (be & ~0xfffu) : bp0) | (o & 0xfff);
+        const int k = std::min(n - at, (int)(0x1000 - (o & 0xfff)));
+        if (to_guest)
+          do_pci_write(addr, data + at, 1, k);
+        else
+          do_pci_read(addr, data + at, 1, k);
+        at += k;
+      }
+    };
+    u8 *buf = m_xfer.data();
+    int cc = 0, size = 0;
+    CUsbDevice *dev = device_at(flags & 0x7f);
+    if (!dev) {
+      cc = 5; // DeviceNotResponding
+    } else if (in) {
+      const int want = mps ? std::min(len, mps) : len;
+      const int n = dev->iso_transfer(CUsbDevice::PID_IN, ep, buf, want);
+      if (n < 0) {
+        cc = 5;
+      } else {
+        size = std::min(n, len);
+        if (size)
+          copy(buf, size, true);
+        cc = n > len ? 8 : n < len ? 9 : 0; // DataOverrun, DataUnderrun
+      }
+    } else {
+      if (len)
+        copy(buf, len, false);
+      const int n = dev->iso_transfer(CUsbDevice::PID_OUT, ep, buf, len);
+      cc = n < 0 ? 5 : 0;
+    }
+    // The packet status word replaces the offset.
+    const u32 psw = ((u32)cc << 12) | (in ? (u32)size & 0x7ff : 0u);
+    const int w = 4 + r / 2, sh = 16 * (r & 1);
+    td[w] = (td[w] & ~(0xffffu << sh)) | (psw << sh);
+    if (r == fc) {
+      retire_iso_td(head, td, 0);
+      ed[2] = next_td | (ed[2] & 2);
+      do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1);
+    } else {
+      do_pci_write(head + 4 * w, &td[w], sizeof(u32), 1);
+    }
+    ++done;
+    break; // one packet a frame
+  }
+  return done;
+}
+
+// An isochronous TD onto the done queue: the whole TD goes back, with its
+// packet status words; its FrameCount stays where a general TD's error
+// count would be cleared.
+void CAliM1543C_usb::retire_iso_td(u32 td_addr, u32 td[8], int cc) {
+  td[0] = (td[0] & 0x0fffffff) | ((u32)cc << 28);
+  td[2] = m_done_head;
+  do_pci_write(td_addr, td, sizeof(u32), 8);
+  m_done_head = td_addr;
+  const int di = (td[0] >> 21) & 7;
+  if (di < m_done_delay)
+    m_done_delay = di;
 }
 
 // A TD onto the done queue, with its condition code; the queue's interrupt
