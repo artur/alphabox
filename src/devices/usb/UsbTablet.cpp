@@ -123,6 +123,33 @@ void CUsbTablet::reset() {
   m_changed = true;
 }
 
+// The HID state and where the pointer is; a report goes out on the first
+// poll after a restore.
+bool CUsbTablet::save(CUsbSaved &s) const {
+  CUsbDevice::save(s);
+  std::lock_guard<std::mutex> lk(m_mx);
+  s.put((u32)m_idle);
+  s.put((u32)m_protocol);
+  s.put((u32)m_x);
+  s.put((u32)m_y);
+  s.put(m_buttons);
+  return true;
+}
+
+bool CUsbTablet::load(CUsbSaved &s) {
+  if (!CUsbDevice::load(s))
+    return false;
+  std::lock_guard<std::mutex> lk(m_mx);
+  m_idle = (int)s.get();
+  m_protocol = (int)s.get();
+  m_x = (int)s.get();
+  m_y = (int)s.get();
+  m_buttons = s.get();
+  m_wheel = 0;
+  m_changed = true;
+  return s.ok;
+}
+
 const std::vector<u8> &CUsbTablet::device_descriptor() const {
   return m_hs ? kDeviceDescriptorHS : kDeviceDescriptor;
 }

@@ -1037,6 +1037,7 @@ void CEhci::service_itd(u32 itd_addr) {
 static u32 ehci_magic1 = 0xE4C11001;
 static u32 ehci_magic2 = 0x1001E4C1;
 static u32 ehci_magic_comp = 0xE4C10CC2; // the companions' block
+static u32 ehci_magic_run = 0xE4C1D0C5;  // runtime and devices' block
 
 int CEhci::SaveState(FILE *f) {
   long ss = sizeof(state);
@@ -1053,7 +1054,15 @@ int CEhci::SaveState(FILE *f) {
     for (auto &c : m_comp)
       fwrite(&c->ohci.state, sizeof(c->ohci.state), 1, f);
   }
-  printf("%s: %d bytes saved.\n", devid_string, (int)ss);
+  // The companions' runtime state and the devices, in a block of its own
+  // (a state saved before it existed restores as before).
+  CUsbSaved s;
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.save_runtime(s);
+  usb_save_ports(s, m_port, kPorts);
+  usb_save_block(f, ehci_magic_run, s);
+  printf("%s: %d bytes saved.\n", devid_string, (int)(ss + s.b.size()));
   return 0;
 }
 
@@ -1082,22 +1091,43 @@ int CEhci::RestoreState(FILE *f) {
       return -1;
     }
   }
-  // The devices' own state is not saved: reset them and show them to the
-  // guest as reconnected.
+  // The routing the saved registers say.
   for (int p = 0; p < kPorts; ++p) {
-    // The routing the saved registers say.
     int local;
     if (COhci *c = companion_of(p, &local))
       c->port_routed(local, (state.portsc[p] & PS_OWNER) != 0);
-    if (!m_port[p].dev)
+  }
+  // The companions' frame numbers and done queues, and the devices, as the
+  // guest left them. A device whose state was not saved (one behind
+  // libusb, or a state file from before) is reset and shown to the guest as
+  // reconnected, on whichever controller has its port.
+  CUsbSaved s;
+  bool reconnect[kPorts];
+  for (int p = 0; p < kPorts; ++p)
+    reconnect[p] = m_port[p].dev != nullptr;
+  if (usb_load_block(f, ehci_magic_run, s)) {
+    for (auto &c : m_comp)
+      if (c)
+        c->ohci.load_runtime(s);
+    usb_load_ports(s, m_port, kPorts, reconnect);
+  }
+  for (int p = 0; p < kPorts; ++p) {
+    if (!reconnect[p])
       continue;
+    printf("%s: the device on port %d is shown as reconnected.\n", devid_string,
+           p + 1);
     m_port[p].dev->reset();
     state.portsc[p] &= ~(PS_PED | PS_CCS);
     port_refresh(p);
+    int local;
     if (COhci *c = companion_of(p, &local))
       c->reconnect(local);
   }
-  printf("%s: %d bytes restored.\n", devid_string, (int)ss);
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.refresh_irq();
+  update_irq();
+  printf("%s: %d bytes restored.\n", devid_string, (int)(ss + s.b.size()));
   return 0;
 }
 

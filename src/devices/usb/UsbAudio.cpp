@@ -151,6 +151,35 @@ void CUsbAudio::reset() {
   m_alt = 0;
 }
 
+// The stream's settings: alternate setting, rate, mute and volume.
+bool CUsbAudio::save(CUsbSaved &s) const {
+  CUsbDevice::save(s);
+  s.put((u32)m_alt);
+  s.put((u32)m_rate);
+  s.put(m_mute);
+  s.put((u32)(u16)m_volume);
+  return true;
+}
+
+bool CUsbAudio::load(CUsbSaved &s) {
+  if (!CUsbDevice::load(s))
+    return false;
+  const int alt = (int)s.get(), rate = (int)s.get();
+  const bool mute = s.get() != 0;
+  const s16 volume = (s16)(u16)s.get();
+  bool known = false;
+  for (int r : kRates)
+    known |= r == rate;
+  if (!s.ok || alt > 1 || !known)
+    return false;
+  m_alt = alt;
+  m_mute = mute;
+  m_volume = volume;
+  set_rate(rate);
+  apply_volume();
+  return true;
+}
+
 const std::vector<u8> &CUsbAudio::device_descriptor() const {
   return kDeviceDescriptor;
 }

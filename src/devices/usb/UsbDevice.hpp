@@ -25,9 +25,51 @@
 
 #include "datatypes.hpp"
 #include <atomic>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <vector>
+
+/**
+ * \brief A device's state in a saved machine: a flat stream of 32-bit words
+ * and byte strings, written by CUsbDevice::save and read back by load. A
+ * read past the end, or a load that finds something it does not expect,
+ * leaves `ok` false.
+ **/
+struct CUsbSaved {
+  std::vector<u8> b;
+  size_t pos = 0;
+  bool ok = true;
+  void put(u32 v) {
+    for (int i = 0; i < 4; ++i)
+      b.push_back((u8)(v >> (8 * i)));
+  }
+  u32 get() {
+    if (pos + 4 > b.size()) {
+      ok = false;
+      return 0;
+    }
+    u32 v = 0;
+    for (int i = 0; i < 4; ++i)
+      v |= (u32)b[pos++] << (8 * i);
+    return v;
+  }
+  void put_bytes(const u8 *p, size_t n) {
+    put((u32)n);
+    b.insert(b.end(), p, p + n);
+  }
+  void put_bytes(const std::vector<u8> &v) { put_bytes(v.data(), v.size()); }
+  std::vector<u8> get_bytes() {
+    const size_t n = get();
+    if (!ok || pos + n > b.size()) {
+      ok = false;
+      return {};
+    }
+    std::vector<u8> v(b.begin() + pos, b.begin() + pos + n);
+    pos += n;
+    return v;
+  }
+};
 
 /**
  * \brief A device on the emulated USB, as a host controller sees it.
@@ -107,6 +149,18 @@ public:
   /// usb:phase -- the device's next command ends in a phase error, where
   /// that means something (USB mass storage). False: not supported.
   virtual bool inject_phase_error() { return false; }
+
+  /// A saved machine: the device's state -- address, configuration, the
+  /// control transfer under way, and whatever the device adds (a command in
+  /// progress, a stream's settings) -- so that after a restore the guest
+  /// finds it as it left it. Called with the controller's thread stopped.
+  /// False: this device cannot be saved (one behind libusb, whose other
+  /// half is real hardware); after a restore it is reset and shown to the
+  /// guest as reconnected instead.
+  virtual bool save(CUsbSaved &s) const;
+  /// The state `save` wrote; false (the device is then reset and shown as
+  /// reconnected) when it does not fit this device.
+  virtual bool load(CUsbSaved &s);
 
 protected:
   int m_configuration = 0;
@@ -235,6 +289,21 @@ public:
   virtual ~CUsbFaultTarget() = default;
   virtual bool inject_fault(const char *op, int port, int ep, int arg) = 0;
 };
+/// A controller's addition to its saved state: `magic`, a length, and the
+/// bytes of `s`.
+void usb_save_block(FILE *f, u32 magic, const CUsbSaved &s);
+/// Reads such a block into `s` if the next word in the file is `magic`;
+/// otherwise (a state saved before there was one) leaves the file where it
+/// was and returns false.
+bool usb_load_block(FILE *f, u32 magic, CUsbSaved &s);
+/// The devices on a controller's ports, each as a byte string -- empty for
+/// no device, or one that cannot be saved.
+void usb_save_ports(CUsbSaved &s, const CUsbPort *ports, int n);
+/// Loads them back. A device whose state loads is kept as the guest left
+/// it; for any other (`reconnect` true on return) the caller resets it and
+/// shows it reconnected.
+void usb_load_ports(CUsbSaved &s, CUsbPort *ports, int n, bool *reconnect);
+
 /// Where usb:... tokens go (see CUsbFaultTarget).
 extern std::atomic<CUsbFaultTarget *> theUsbFaultTarget;
 

@@ -61,6 +61,9 @@ public:
   }
   Result transfer(int pid, int ep, u8 *buf, int &len) override;
   void reset() override;
+  /// Like the passed-through device it stands in for: transfers in flight
+  /// on its worker are not saved; a restore shows it reconnected.
+  bool save(CUsbSaved &) const override { return false; }
 
 protected:
   const std::vector<u8> &device_descriptor() const override;

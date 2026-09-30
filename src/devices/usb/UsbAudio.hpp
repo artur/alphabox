@@ -53,6 +53,8 @@ public:
   const char *name() const override { return "audio"; }
   void reset() override;
   int iso_transfer(int pid, int ep, u8 *buf, int len) override;
+  bool save(CUsbSaved &s) const override;
+  bool load(CUsbSaved &s) override;
 
 protected:
   const std::vector<u8> &device_descriptor() const override;

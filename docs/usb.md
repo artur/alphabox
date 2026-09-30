@@ -150,9 +150,29 @@ hub, and its full-speed devices go to the companions. No Alpha Windows
 driver uses high-speed isochronous endpoints; the iTDs are verified by the
 self-test below, against a loopback device only it plugs in.
 
-Device state -- addresses, configuration -- is not in a saved snapshot:
-after a restore every device is shown to the guest as reconnected, and its
-driver enumerates it again.
+A saved machine (a snapshot: `ALPHABOX_SNAPSHOT`/`ALPHABOX_RESTORE`, see
+`test/tools/nt_snap.sh`) holds the USB as the guest left it: the
+controllers' registers, the OHCI frame numbers and done queues (TDs retired
+but not yet handed back), and each emulated device's own state -- address,
+configuration, the control transfer under way, the tablet's HID settings,
+the disk's Bulk-Only stage with a command's data (the disk's SCSI side is
+in the disk's saved state), the speaker's stream settings. After a restore
+the guest carries on: a copy to the USB disk that was under way when the
+snapshot was taken finishes, a sound keeps playing. A device behind libusb
+(and the `ALPHABOX_USB_ASYNC_US` test shim) cannot be saved -- its other
+half is hardware, with transfers in flight -- so after a restore it is
+reset and shown to the guest as reconnected, and its driver enumerates it
+again (Windows 2000 then reports an unsafe removal). So is every device of
+a state file saved before the devices were (it restores as before).
+
+`test/tools/usb_snap.sh` checks it in a Windows 2000 guest, on the ALi's
+OHCI or on the EHCI card's companions: tablet, disk and speaker attached,
+the tablet placing the cursor within a pixel before and after, the
+snapshot taken (`BUSY=1`) while the guest copies to the disk and plays a
+sound, then a copy compared with `fc /b` and on the image, and a sound
+played. Before the devices' state was saved, the same run left the guest
+with an "Unsafe Removal of Device" dialog, the copies that were under way
+missing from the disk, and (on the card) the speaker gone.
 
 ## Speed
 

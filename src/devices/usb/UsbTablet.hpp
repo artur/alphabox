@@ -48,6 +48,8 @@ public:
   const char *name() const override { return "tablet"; }
   bool can_high_speed() const override { return m_can_hs; }
   void reset() override;
+  bool save(CUsbSaved &s) const override;
+  bool load(CUsbSaved &s) override;
 
   /// The host pointer, as fractions of the guest screen (0..1, clamped),
   /// and the buttons (bit 0 left, 1 right, 2 middle). Thread-safe.
@@ -67,7 +69,7 @@ protected:
 private:
   std::vector<u8> report();
   const bool m_can_hs;
-  std::mutex m_mx; // the pointer state, written by the GUI thread
+  mutable std::mutex m_mx; // the pointer state, written by the GUI thread
   int m_x = 16384, m_y = 16384;
   unsigned m_buttons = 0;
   int m_wheel = 0;

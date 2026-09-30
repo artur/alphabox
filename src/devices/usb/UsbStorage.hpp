@@ -52,6 +52,8 @@ public:
     m_phase_error = true;
     return true;
   }
+  bool save(CUsbSaved &s) const override;
+  bool load(CUsbSaved &s) override;
 
 protected:
   const std::vector<u8> &device_descriptor() const override;

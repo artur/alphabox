@@ -69,8 +69,8 @@ public:
  * (port_routed()). Isochronous endpoints move one packet a frame from
  * their TDs' eight-packet buffers (service_iso_ed).
  *
- * Runtime state beyond the registers (the devices' addresses and
- * configuration, the done queue) is not part of a saved state yet.
+ * A saved state holds the registers (SUSB_state) and, in the port owner's
+ * addition to it, the frame number and the done queue (save_runtime).
  *
  * Documentation consulted:
  *  - OpenHCI Open Host Controller Interface Specification for USB, 1.0a
@@ -102,6 +102,14 @@ public:
   void port_routed(int p, bool owns);
   /// After a restored state: a device on the port is shown as reconnected.
   void reconnect(int p);
+  /// A saved machine: the schedule's state beyond the registers -- the
+  /// frame number, and TDs retired but not yet written back to the done
+  /// queue. Without them a restored guest would lose those TDs, and see
+  /// its frame counter jump back.
+  void save_runtime(CUsbSaved &s) const;
+  void load_runtime(CUsbSaved &s);
+  /// The interrupt line again, from the restored registers.
+  void refresh_irq();
   std::mutex &mutex() { return m_mx; }
 
   /// The state structure contains all elements that need to be saved to the

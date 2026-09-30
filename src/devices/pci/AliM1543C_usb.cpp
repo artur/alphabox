@@ -409,6 +409,27 @@ void COhci::reconnect(int p) {
   port_change(p, RH_CSC | RH_PESC);
 }
 
+void COhci::save_runtime(CUsbSaved &s) const {
+  s.put(m_frame);
+  s.put(m_done_head);
+  s.put((u32)m_done_delay);
+}
+
+void COhci::load_runtime(CUsbSaved &s) {
+  std::lock_guard<std::mutex> lk(m_mx);
+  const u32 frame = s.get(), head = s.get(), delay = s.get();
+  if (!s.ok || delay > 7)
+    return;
+  m_frame = frame & 0xffff;
+  m_done_head = head;
+  m_done_delay = (int)delay;
+}
+
+void COhci::refresh_irq() {
+  std::lock_guard<std::mutex> lk(m_mx);
+  ohci_update_irq();
+}
+
 void COhci::kick() {
   {
     std::lock_guard<std::mutex> lk(m_kick_mx);
@@ -1176,6 +1197,7 @@ void COhci::usb_hci_write(u64 address, int dsize, u64 data) {
 
 static u32 usb_magic1 = 0x9000432B;
 static u32 usb_magic2 = 0xB2340009;
+static u32 usb_magic_run = 0x9000432C; // the runtime and devices' block
 
 /**
  * Save state to a Virtual Machine State file.
@@ -1192,7 +1214,13 @@ int CAliM1543C_usb::SaveState(FILE *f) {
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
   fwrite(&usb_magic2, sizeof(u32), 1, f);
-  printf("%s: %d bytes saved.\n", devid_string, (int)ss);
+  // The schedule's runtime state and the devices', in a block of its own
+  // (a state saved before it existed restores as before).
+  CUsbSaved s;
+  m_ohci.save_runtime(s);
+  usb_save_ports(s, m_port, kPorts);
+  usb_save_block(f, usb_magic_run, s);
+  printf("%s: %d bytes saved.\n", devid_string, (int)(ss + s.b.size()));
   return 0;
 }
 
@@ -1249,16 +1277,28 @@ int CAliM1543C_usb::RestoreState(FILE *f) {
     return -1;
   }
 
-  // The devices' own state (address, configuration) is not saved: each one
-  // is reset and shown to the guest as reconnected, so its driver enumerates
-  // it again.
+  // The frame number, the done queue and the devices, as the guest left
+  // them. A device whose state was not saved (one behind libusb, or a
+  // state file from before) is reset and shown to the guest as reconnected,
+  // so its driver enumerates it again.
+  CUsbSaved s;
+  bool reconnect[kPorts];
+  for (int p = 0; p < kPorts; ++p)
+    reconnect[p] = m_port[p].dev != nullptr;
+  if (usb_load_block(f, usb_magic_run, s)) {
+    m_ohci.load_runtime(s);
+    usb_load_ports(s, m_port, kPorts, reconnect);
+  }
   for (int p = 0; p < kPorts; ++p) {
-    if (!m_port[p].dev)
+    if (!reconnect[p])
       continue;
+    printf("%s: the device on port %d is shown as reconnected.\n", devid_string,
+           p + 1);
     m_port[p].dev->reset();
     m_ohci.reconnect(p);
   }
+  m_ohci.refresh_irq();
 
-  printf("%s: %d bytes restored.\n", devid_string, (int)ss);
+  printf("%s: %d bytes restored.\n", devid_string, (int)(ss + s.b.size()));
   return 0;
 }

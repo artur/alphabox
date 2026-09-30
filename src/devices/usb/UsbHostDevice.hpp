@@ -62,6 +62,8 @@ public:
   void reset() override;
   bool low_speed() const override { return m_low_speed; }
   bool can_high_speed() const override { return m_high_speed; }
+  /// Real hardware: its state cannot be saved with the machine.
+  bool save(CUsbSaved &) const override { return false; }
 
 protected:
   // Endpoint 0 is served by transfer(); the base class's descriptors are

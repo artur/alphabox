@@ -35,6 +35,47 @@ void CUsbDevice::reset() {
   m_ctl_pos = 0;
 }
 
+// The device's saved form starts with its name, so that a state saved for
+// another kind of device on the port is refused rather than misread.
+bool CUsbDevice::save(CUsbSaved &s) const {
+  s.put_bytes((const u8 *)name(), strlen(name()));
+  s.put(1); // this layout
+  s.put((u32)m_address);
+  s.put((u32)m_pending_address);
+  s.put((u32)m_configuration);
+  s.put(m_hs);
+  s.put((u32)m_stage);
+  s.put_bytes(m_setup, sizeof(m_setup));
+  s.put_bytes(m_ctl);
+  s.put((u32)m_ctl_pos);
+  s.put(m_ctl_stall);
+  return true;
+}
+
+bool CUsbDevice::load(CUsbSaved &s) {
+  const std::vector<u8> nm = s.get_bytes();
+  if (!s.ok || nm != std::vector<u8>(name(), name() + strlen(name())) ||
+      s.get() != 1)
+    return false;
+  m_address = (int)s.get();
+  m_pending_address = (int)s.get();
+  m_configuration = (int)s.get();
+  m_hs = s.get() != 0;
+  const u32 stage = s.get();
+  const std::vector<u8> setup = s.get_bytes();
+  m_ctl = s.get_bytes();
+  m_ctl_pos = s.get();
+  m_ctl_stall = s.get() != 0;
+  if (!s.ok || setup.size() != sizeof(m_setup) || m_ctl_pos > m_ctl.size() ||
+      stage > ST_STATUS) {
+    s.ok = false;
+    return false;
+  }
+  m_stage = (Stage)stage;
+  memcpy(m_setup, setup.data(), sizeof(m_setup));
+  return true;
+}
+
 std::vector<u8> CUsbDevice::utf16_string(const char *s) {
   std::vector<u8> d;
   d.push_back(0);
@@ -240,4 +281,47 @@ bool CUsbPortFaults::intercept(CUsbDevice *dev, int pid, int ep, const u8 *buf,
     return true;
   }
   return false;
+}
+
+void usb_save_block(FILE *f, u32 magic, const CUsbSaved &s) {
+  const u32 n = (u32)s.b.size();
+  fwrite(&magic, sizeof(u32), 1, f);
+  fwrite(&n, sizeof(u32), 1, f);
+  fwrite(s.b.data(), 1, n, f);
+}
+
+bool usb_load_block(FILE *f, u32 magic, CUsbSaved &s) {
+  const long at = ftell(f);
+  u32 m = 0, n = 0;
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != magic ||
+      fread(&n, sizeof(u32), 1, f) != 1) {
+    clearerr(f);
+    fseek(f, at, SEEK_SET);
+    return false;
+  }
+  s.b.resize(n);
+  s.pos = 0;
+  s.ok = fread(s.b.data(), 1, n, f) == n;
+  return s.ok;
+}
+
+void usb_save_ports(CUsbSaved &s, const CUsbPort *ports, int n) {
+  s.put((u32)n);
+  for (int p = 0; p < n; ++p) {
+    CUsbSaved d;
+    if (!ports[p].dev || !ports[p].dev->save(d))
+      d.b.clear();
+    s.put_bytes(d.b);
+  }
+}
+
+void usb_load_ports(CUsbSaved &s, CUsbPort *ports, int n, bool *reconnect) {
+  const bool fits = s.get() == (u32)n;
+  for (int p = 0; p < n; ++p) {
+    CUsbSaved d;
+    if (fits)
+      d.b = s.get_bytes();
+    reconnect[p] = ports[p].dev &&
+                   (!fits || !s.ok || d.b.empty() || !ports[p].dev->load(d));
+  }
 }

@@ -63,6 +63,7 @@ runs: a boot block of known instruction count, two sizes, difference),
 `jit_profile.sh` (host sampling profile of compiled code, mapped to guest blocks and instructions), `vga_boot.sh`
 (SRM on the S3 or Cirrus VGA console, window-less, settled-frame hashes),
 `usb_bench.sh` (USB storage throughput in a Windows 2000 guest, by the guest's clock, with a byte-for-byte check),
+`usb_snap.sh` (the USB tablet, disk and speaker across a snapshot and restore of a busy Windows 2000 guest),
 `d3d_check.sh` (a Direct3D 7 program, built with nada, renders scenes on a
 Windows guest's HAL and on D3D's software rasteriser and compares them --
 e.g. `lab/rpro-win`, the Rage Pro guest), `build_lanes.sh` / `build_revs.sh`. Their output goes to `$ALPHABOX_WORK`

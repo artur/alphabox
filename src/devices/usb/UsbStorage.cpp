@@ -160,6 +160,45 @@ bool CUsbStorage::class_request(const u8 *setup, const std::vector<u8> &data,
   }
 }
 
+// The Bulk-Only state: where the transport is, and the command's data. The
+// disk's side of a command under way -- the SCSI phase, the CDB, what it
+// expects -- is in the disk's and the SCSI bus's own saved state, restored
+// with them.
+bool CUsbStorage::save(CUsbSaved &s) const {
+  CUsbDevice::save(s);
+  s.put((u32)m_stage);
+  s.put(m_tag);
+  s.put(m_expected);
+  s.put(m_moved);
+  s.put_bytes(m_buf);
+  s.put((u32)m_pos);
+  s.put(m_status);
+  s.put(m_phase_error);
+  return true;
+}
+
+bool CUsbStorage::load(CUsbSaved &s) {
+  if (!CUsbDevice::load(s))
+    return false;
+  const u32 stage = s.get();
+  const u32 tag = s.get(), expected = s.get(), moved = s.get();
+  std::vector<u8> buf = s.get_bytes();
+  const u32 pos = s.get();
+  const u8 status = (u8)s.get();
+  const bool phase_error = s.get() != 0;
+  if (!s.ok || stage > BOT_CSW || pos > buf.size())
+    return false;
+  m_stage = (Stage)stage;
+  m_tag = tag;
+  m_expected = expected;
+  m_moved = moved;
+  m_buf = std::move(buf);
+  m_pos = pos;
+  m_status = status;
+  m_phase_error = phase_error;
+  return true;
+}
+
 // A Command Block Wrapper: run the SCSI command up to its data stage. A
 // device-to-host command runs to completion here (the disk's answer is held
 // for the IN transfers that follow); a host-to-device one waits for its data.
@@ -186,6 +225,10 @@ void CUsbStorage::command(const u8 *cbw) {
     return;
   }
 
+  // A bus left busy by a command the device has forgotten (a reset device
+  // whose disk's saved state was mid-command) is freed first.
+  if (scsi_get_phase(0) != SCSI_PHASE_FREE)
+    scsi_bus[0]->reset_bus();
   if (!scsi_arbitrate(0) || !scsi_select(0, 0))
     FAILURE(IllegalState, "USB storage: disk not responding to selection");
   memcpy(scsi_xfer_ptr(0, cblen), cbw + 15, cblen);
