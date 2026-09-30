@@ -940,6 +940,20 @@ void CJitEngine::pin_decide() {
   std::stable_sort(order, order + 31, [&](int8_t x, int8_t y) {
     return m_pin_use[x] > m_pin_use[y];
   });
+  // Never the PALcode shadow bank (R4-R7, R20-R23). With them pinned, a
+  // Windows 2000 warm restart hung every time: after the firmware and the
+  // new kernel's PAL ran, R9 came back with a value it held before a call,
+  // the kernel took a stale PRCB pointer out of it and spun forever in
+  // KiRetireDpcList. The default set never pins them; the adaptive one did
+  // once the boot's workload had warmed it up. Excluded, the restart passes
+  // (3 of 3, the same binary hanging without), at no measurable cost to
+  // makecab, which uses those registers most (ledger: noshadow-cab, +2.5%
+  // inconclusive, MIPS 1464 -> 1496). Which path loses the value was not
+  // found: each of spill/reload, the helper spills, CALL_PAL's R23 update
+  // and the PAL blocks' shadow remap reads correct on its own.
+  std::stable_partition(order, order + 31, [](int8_t r) {
+    return !(r < 24 && (r & 0xc) == 0x4);
+  });
   uint64_t best = 0;
   for (int k = 0; k < kPinSlots; ++k)
     best += m_pin_use[order[k]];
