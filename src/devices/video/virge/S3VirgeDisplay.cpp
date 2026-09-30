@@ -50,10 +50,16 @@ bool CS3Virge::streams_active() const {
   return (cr(CR_EXT_MISC_2) & CR67_STREAMS) == CR67_STREAMS;
 }
 
+/**
+ * CR3A bit 4 alone selects the packed-pixel path in a graphics mode: the
+ * S3 BIOS's 800x600 and larger modes load a planar graphics controller
+ * table (GR5 = 0x00) and set only CR3A, where its 640x480 mode happens to
+ * set GR5 bit 6 as well.
+ **/
 bool CS3Virge::native_crtc_active() const {
   if (streams_active())
     return true;
-  return vga.gc.shift256 && (cr(CR_MISC_1) & CR3A_ENHANCED_256);
+  return vga.gc.alpha_dis && (cr(CR_MISC_1) & CR3A_ENHANCED_256);
 }
 
 unsigned CS3Virge::native_bits_per_pixel() const {
