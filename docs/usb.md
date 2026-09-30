@@ -205,7 +205,9 @@ Everything below is documented in [headless.md](headless.md):
   transactions of different lengths (up to three packets, across buffer
   pages) come back through eight IN transactions with their data and
   lengths, IOC raises USBINT, and an iTD for a missing device ends in a
-  transaction error. Prints PASS or FAIL. No guest driver needed.
+  transaction error. The disk's Bulk-Only recovery is checked too: a
+  phase error, reset recovery, the next command. Prints PASS or FAIL. No
+  guest driver needed.
 - `usb:detach`, `usb:attach`, `usb:stall`, `usb:phase` and `usb:nak`
   tokens inject faults on a port while a guest runs: surprise removal, a
   halted endpoint, a Bulk-Only phase error, a device that stops answering.
@@ -222,6 +224,42 @@ Everything below is documented in [headless.md](headless.md):
   speaker, to compare with the file it played.
 
 Windows 2000's own drivers recover from an injected STALL and from surprise
-removal; after a phase error its hub driver resets and restores the device
-in a loop without retrying the command. `nadaehci.sys` recovers from all of
-them.
+removal. `nadaehci.sys` recovers from all of them.
+
+### A phase error under Windows 2000: Windows, not the device
+
+After an injected `usb:phase` on the OHCI, Windows 2000 (build 2128) resets
+and restores the disk in a loop and never retries the command. The Bulk-Only
+specification (BOT 1.0, 5.3.3 and 6.6) wants something else: on a CSW with
+status 2 the host performs a *reset recovery* -- the class request
+Bulk-Only Mass Storage Reset (21 FF), then CLEAR_FEATURE(ENDPOINT_HALT) on
+the bulk IN and the bulk OUT endpoint -- after which the device takes the
+next CBW. Traced with `ALPHABOX_USBTRACE=1` (usb_bench.sh with
+`FAULTS="1:usb:phase:2"`, which also logs the port status the driver reads
+and every TD retired with an error), what Windows does instead is:
+
+1. it collects the CSW (status 2, residue 0) and reads the port status
+   (0x103: connected, enabled, powered);
+2. it takes the bulk endpoints off the schedule and resets the port --
+   never the class reset, never CLEAR_FEATURE;
+3. usbhub re-enumerates: GET_DESCRIPTOR(device, 64) at address 0, a second
+   port reset, SET_ADDRESS(3), GET_DESCRIPTOR(device), GET_DESCRIPTOR
+   (configuration, 9 bytes), SET_CONFIGURATION(1), and puts two bulk EDs
+   back on the list;
+4. it reads the port status twice (0x103) and goes back to step 2.
+
+Every request in the loop is answered at once and successfully by the
+device, every port status it reads is connected and enabled, and no TD
+ends in an error (none traced) -- nothing on the bus gives it a reason. No
+CBW is sent between the cycles. One run looped 3280 times in 100 s until
+stopped; another stopped after 141 cycles (8.5 s), failing the command,
+and the copy that issued it ended with an error. The injected phase error
+is on one CSW only (one status-2 CSW in each trace): the loop is not the
+fault being raised again.
+
+The device side of the recovery Windows skips is checked by the EHCI
+self-test: a phase-error CSW, the class reset and both CLEAR_FEATUREs, then
+a READ(10) with a new tag answered with its data and a good CSW carrying
+that tag; and a class reset in the middle of a command's data stage,
+followed by a new command that runs normally. Windows 2000's behaviour is
+its own; nothing here is changed for it.

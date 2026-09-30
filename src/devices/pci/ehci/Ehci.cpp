@@ -1277,6 +1277,56 @@ void CEhci::selftest() {
               e == 0 && !memcmp(csw, "USBS", 4) && csw[4] == 1 && csw[12] == 0);
   pass &= say("USBSTS: USBINT raised", (rreg(0x24) & STS_INT) != 0);
 
+  // A phase error and the host's reset recovery (Bulk-Only Transport 1.0,
+  // 5.3.4 and 6.6): the command ends in a CSW with status 2; the host sends
+  // Bulk-Only Mass Storage Reset, then CLEAR_FEATURE(ENDPOINT_HALT) to the
+  // bulk IN and OUT endpoints, and the device must take the next CBW. Then
+  // a reset in the middle of a command's data stage, which must leave the
+  // device ready for a new CBW all the same.
+  auto read10 = [&](u8 tag, bool data, bool status) {
+    cbw[4] = tag;
+    memcpy(cSystem->PtrToMem(DATA), cbw, sizeof(cbw));
+    int r = run_tds(QH1, {{0, DATA, 31, 0}});
+    memset(cSystem->PtrToMem(DATA + 0x1000), 0, 512);
+    if (data)
+      r |= run_tds(QH2, {{1, DATA + 0x1000, 512, 0}});
+    memset(cSystem->PtrToMem(DATA + 0x2000), 0xff, 13);
+    if (status)
+      r |= run_tds(QH2, {{1, DATA + 0x2000, 13, 0}});
+    return r;
+  };
+  auto csw_is = [&](u8 tag, u8 st) {
+    return !memcmp(csw, "USBS", 4) && csw[4] == tag && csw[12] == st;
+  };
+  auto reset_recovery = [&]() {
+    setup(DATA + 0x3000, 0x21, 0xff, 0, 0, 0); // Bulk-Only Mass Storage Reset
+    int r = run_tds(QH0, {{2, DATA + 0x3000, 8, 0}, {1, 0, 0, 1}});
+    setup(DATA + 0x3000, 0x02, 0x01, 0, 0x81, 0); // CLEAR_FEATURE(HALT) IN
+    r |= run_tds(QH0, {{2, DATA + 0x3000, 8, 0}, {1, 0, 0, 1}});
+    setup(DATA + 0x3000, 0x02, 0x01, 0, 0x02, 0); // and OUT
+    r |= run_tds(QH0, {{2, DATA + 0x3000, 8, 0}, {1, 0, 0, 1}});
+    return r;
+  };
+  bool phased = false;
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    phased = m_port[0].dev->inject_phase_error();
+  }
+  if (phased) {
+    e = read10(2, true, true);
+    pass &= say("phase error: CSW status 2", e == 0 && csw_is(2, 2));
+    pass &=
+        say("  reset recovery: reset, clear both halts", reset_recovery() == 0);
+    e = read10(3, true, true);
+    pass &= say("  next CBW: data and a good CSW, its tag",
+                e == 0 && sec[510] == 0x55 && sec[511] == 0xaa && csw_is(3, 0));
+    e = read10(4, false, false); // the CBW, and no more
+    pass &= say("reset in a data stage", e == 0 && reset_recovery() == 0);
+    e = read10(5, true, true);
+    pass &= say("  next CBW: data and a good CSW, its tag",
+                e == 0 && sec[510] == 0x55 && sec[511] == 0xaa && csw_is(5, 0));
+  }
+
   reg(0x20, 0x00080000); // stop, and leave the controller to the guest
   reg(0x20, CMD_HCRESET);
   if (m_with_companions)

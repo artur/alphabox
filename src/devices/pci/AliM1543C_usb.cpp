@@ -675,6 +675,9 @@ int COhci::service_ed(u32 ed_addr, bool periodic, bool *found) {
     else
       t.w[1] = cbp + n;
     const u32 next_td = t.w[2] & ~0xfu;
+    if (g_usbtrace && cc && cc != 9) // an error: the endpoint halts
+      printf("USBT %s td %08x addr %d ep %d %s len %d: cc %d\n", m_name, t.addr,
+             (int)(flags & 0x7f), ep, in ? "in" : "out", t.len, cc);
     retire_td(t.addr, t.w, cc);
     ed[2] = next_td | ((u32)toggle << 1) | (cc ? 1u : 0u);
     do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1);
@@ -1054,6 +1057,14 @@ u64 COhci::usb_hci_read(u64 address, int dsize) {
     printf("%%USB-W-HCIREAD: Reading from unknown address %x.  Ignoring.\n",
            (int)address);
   }
+  // The root hub's port status, as the driver saw it: what a hub driver
+  // decides to reset or give up on.
+  if (g_usbtrace && address >= 0x54 && address < 0x54 + 4 * (u64)m_ports)
+    printf("USBT %10.1f %s port %d status %08x\n",
+           std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - g_usbtrace_t0)
+               .count(),
+           m_name, (int)(address - 0x54) / 4 + 1, (unsigned)data);
   return data;
 }
 
