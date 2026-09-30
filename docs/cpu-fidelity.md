@@ -122,6 +122,52 @@ much larger than hardware would.
 95 s to the desktop with it off, 60 s with it on, and a third fewer
 instructions executed (docs/performance.md).
 
+### Windows 2000 RC2 setup loses a race of its own
+
+GUI setup of Windows 2000 Professional RC2 (build 2128) can stop at
+*Installing Components* with
+
+    Exception c0000005 at address 65ABB3F0 with the following parameters: 00000000 65ABB3F0
+
+in `setuperr.log`, restart its GUI phase through AlphaBIOS, and stop there
+again. It is the guest's own race, not a translation error. COM+ setup
+registers `msdtctm.dll`: `LoadLibrary` runs its `DllMain`, which starts two
+worker threads per processor at 65ABB3F0, then `DllRegisterServer`, then
+`FreeLibrary`, which does not wait for the workers. A worker that has not
+reached its start routine when the image is unmapped takes an instruction
+access violation on its first instruction. Traced from one post-text-mode
+checkpoint, counting instructions from the `DllMain` attach:
+
+| | workers enter 65ABB3F0 | `DllMain` detach | interval ticks, attach to detach |
+| --- | --- | --- | --- |
+| JIT | +10.95 M, +130.7 M | +10.63 M | 3 |
+| interpreter | +8.76 M, +8.78 M | +10.70 M | 15 |
+
+Who wins depends on how many interval ticks (7.8 ms: Windows 2000 programs
+the clock at 128 Hz here) the setup thread's ~10.6 million instructions
+span. `timer.max_instr_per_tick` moves the outcome within one binary: at
+1250000 setup crashed 3 of 3, at 500000 it got past the point 3 of 3
+(250000: 1 of 1). The interpreter usually wins, not always: four runs
+passed, one lost the race on both of its passes. The `JIT_VERIFY` build,
+slower, passed with 0 mismatches over 23 billion compiled-block executions.
+The fix for the
+icache probe (875b499) does not change it: the control build without it and
+current main crash alike, and `ALPHABOX_TRACE_ICPROBE=1` reports no
+`ICPROBE-RECORD` or `ICPROBE-CHAIN` in the crashing run.
+
+To install RC2 with the JIT, put `timer.max_instr_per_tick = 500000;` in the
+`cpu0` section for GUI setup and remove it afterwards: it holds the
+processor to about 64 million instructions a second.
+
+Whether an ES40 loses the race too is not known. An 800 MHz EV68 has 6.2
+million cycles per 7.8 ms tick; unless it averaged under about 0.1
+instructions a cycle here it would sit nearer the JIT (3.5 million
+instructions a tick) than the interpreter (0.7 million), so processor speed
+alone does not explain why the release installed on hardware. Disk
+latency -- microseconds here, milliseconds on a real disk, time in which a
+waiting setup thread would let the workers run -- is one candidate; it was
+not measured.
+
 ### Data translations outlive their TB entry
 
 A real EV6 has 128 data-TB entries. Once one is evicted, the next access to
