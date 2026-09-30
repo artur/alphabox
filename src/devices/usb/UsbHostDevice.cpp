@@ -25,6 +25,7 @@
 #include "UsbHostDevice.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <libusb.h>
 #include <thread>
@@ -40,9 +41,29 @@ static int g_ctx_refs = 0;
 static std::thread g_events;
 static std::atomic_bool g_events_stop{false};
 
+// Stop the event thread. At exit a passthrough device may never have been
+// destroyed (a SIGTERM exit does not tear the machine down), and a joinable
+// g_events would then call std::terminate from its static destructor. The
+// atexit handler, registered after g_events was constructed, runs first.
+static void events_stop() {
+  if (!g_events.joinable())
+    return;
+  g_events_stop = true;
+  libusb_interrupt_event_handler(g_ctx);
+  g_events.join();
+}
+
 static libusb_context *ctx_acquire() {
   std::lock_guard<std::mutex> lk(g_ctx_mx);
   if (g_ctx_refs++ == 0) {
+    static const bool at_exit = [] {
+      std::atexit([] {
+        std::lock_guard<std::mutex> lk(g_ctx_mx);
+        events_stop();
+      });
+      return true;
+    }();
+    (void)at_exit;
     const int r = libusb_init(&g_ctx);
     if (r != 0) {
       g_ctx_refs = 0;
@@ -62,9 +83,7 @@ static libusb_context *ctx_acquire() {
 static void ctx_release() {
   std::lock_guard<std::mutex> lk(g_ctx_mx);
   if (--g_ctx_refs == 0) {
-    g_events_stop = true;
-    libusb_interrupt_event_handler(g_ctx);
-    g_events.join();
+    events_stop();
     libusb_exit(g_ctx);
     g_ctx = nullptr;
   }
