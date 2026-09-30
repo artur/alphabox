@@ -97,9 +97,20 @@ Passthrough limits worth knowing:
   but cannot be used, unless alphabox runs as root. Some devices also need
   an entitlement or an unlocked Mac before a user program may open them at
   all (`ioreg` shows `UsbUserClientEntitlementRequired`).
-- Verified on hardware so far: enumeration and control transfers. Bulk and
-  interrupt pipes are verified through the emulated equivalent below, not
-  yet against a physical device.
+- Verified on hardware so far: enumeration and control transfers. With an
+  ESP32-S3's built-in USB JTAG/serial unit (303a:1001) on `ali_usb`,
+  Windows 2000 read every descriptor through passthrough (all requests
+  answered, the 98-byte configuration included) and offered the device in
+  Found New Hardware, while macOS kept its hold on the device's serial
+  interfaces. On the host, libusb bulk transfers to the same device's free
+  JTAG interface (interface 2) read the chip's IDCODE, 0x120034e5, without
+  root. Bulk and interrupt pipes from a guest are verified through the
+  emulated equivalent below, not yet against a physical device: Windows 2000
+  has no driver for the JTAG interface (one is being written with nada).
+- A composite device whose class is EF/02/01 (interface association, as
+  the ESP32's) is not split into its interfaces by Windows 2000, whose hub
+  driver only splits devices of class 0: the guest sees one device, and
+  its driver selects the configuration itself.
 - Isochronous passthrough is **not verified against any physical device**.
   The host devices it would need are out of reach here: macOS's audio
   driver holds a USB audio device's interfaces, and alphabox does not run
