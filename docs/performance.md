@@ -408,6 +408,37 @@ the old one. Four arms -- unconditional flush (halts), flush skipped
 change the map failed to predict (halts, and reports it). A Windows boot
 under the audit reports nothing.
 
+### An interrupt that waited for the timer
+
+A USB 2.0 disk on the EHCI card read 16 MB in about a second under nada's
+driver, the built-in OHCI stack in under a tenth of that, and the card's
+own trace said the card was not the difference: it picked every transfer
+up within a microframe. Tracing the other side showed where the time went.
+From the card raising its interrupt to the driver's interrupt handler
+reading the card took a median **1489 us** -- and the whole of the guest's
+path after that, handler to next transfer queued, 128 us.
+
+The cause was the idle pacer. Windows NT's idle loop on Alpha begins
+`call_pal ei; call_pal di`: interrupts are enabled for exactly one
+instruction, at the head of the loop, which is where the pacer recognises
+the loop and pauses -- with the previous turn's `di` still in force. A
+device interrupt that fired during a short pause was found masked by the
+dispatcher, which consumed its doorbell and left the request pending; back
+at the head, the pacer saw nothing pending and slept to the next timer
+tick, although the very next instruction would have taken it. Every
+interrupt that reached an idle guest waited up to a tick that way.
+
+The pacer now treats any raised external interrupt as pending, masked or
+not (39f040a). The lines are level-driven and fall when the device drops
+them, so a quiet guest still sleeps -- an idle Windows 2000 desktop costs
+6.6% of a host core against 5.0% before. Interrupt to handler went from a
+median of 1489 us to **6.6 us**; the 16 MB read from about 1000 ms to
+**110 ms** under the EHCI driver and from 94 to 79 ms on the OHCI (the
+guest's clock, two runs each). The OHCI had mostly escaped because its
+driver writes the controller's list-filled bit on every transfer, which
+woke the controller while the CPU was still busy -- a fast path hiding a
+slow one, until a driver arrived that did not take it.
+
 ## Where the time goes on a CPU-bound guest workload
 
 Same windows as above, the `cmd` loop running, per 100M guest instructions:
@@ -674,6 +705,23 @@ benchmark's nine sections, five times during a Windows 2000 boot.
 `ALPHABOX_JIT_PINLOG=1` prints each change with the share of accesses the
 old and new sets cover. Unlike every fixed set above, this one gains on both
 workloads.
+
+**Not the shadow bank.** The adaptive set may not pick R4-R7 and R20-R23,
+the registers PALcode sees shadow copies of (37da929). With them pinned, a
+Windows 2000 warm restart hung every time: the restarted kernel's R9 came
+back holding a value from before a call, the kernel took a stale PRCB
+pointer out of it, and it spun forever in `KiRetireDpcList`. The default
+set never pins those registers; the adaptive one did once a boot had warmed
+it up. Any change of timing hid the hang -- `ALPHABOX_DPC_KEEP=0`,
+`JIT_VERIFY`, a printf every 100 ms -- which for a day made it look like a
+page-cache bug; `ALPHABOX_JIT_ADAPTPIN=0` was the switch that pointed at
+the cause, and excluding the shadow bank alone cured it (3 of 3 restarts,
+the same binary hanging without). It costs `makecab`, the workload that
+uses those registers most, nothing measurable (ledger `noshadow-cab`:
++2.5%, inconclusive; 1464 against 1496 MIPS). Which path loses the value
+was not found -- the spills, the helper-call spills, CALL_PAL's R23 update
+and the PAL blocks' shadow remap each read correct -- so anyone wanting
+those pins back should find it first.
 
 ### Real code misses the page cache: makecab
 

@@ -174,6 +174,10 @@ that part; other guests ignore it.
 
 - **Mouse**: click the window to grab it, Ctrl+F10 to release.
   `mouse.speed`, `mouse.invert_x` and `mouse.invert_y` tune it.
+- **USB tablet**: for guests with a USB HID stack (Windows 2000 and
+  later), `port1 = "tablet";` on `ali_usb` gives an absolute pointer
+  instead: the guest cursor follows the host's, with no grab at all. See
+  [USB](usb.md), which also covers USB disks and host passthrough.
 - **Window scaling**: `video.scale_ratio` and `video.scale_change_enable`.
 - **Hotkeys**: every GUI shortcut can be rebound with `hotkey.*` in the `sdl`
   section, e.g. `hotkey.ctrl_alt_delete = "GUI+Shift+D";` on a Mac keyboard

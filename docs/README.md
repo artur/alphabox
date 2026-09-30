@@ -14,6 +14,8 @@
   [DS20E](platforms/ds20e.md)).
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
+- [USB](usb.md): the built-in OHCI and the EHCI card, the tablet, USB
+  disks, host passthrough, and the hooks for testing a guest's USB driver.
 - [Performance](performance.md): what has been measured, what bounds each
   workload, and which optimizations did not pay off.
 - [Recompiler techniques](jit-techniques.md): what Dolphin, QEMU, PCSX2,

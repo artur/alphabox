@@ -27,7 +27,7 @@ The names below were extracted from the decompressed image with
 | --- | --- | --- |
 | Acer Labs M1543C | `ali` | ISA bridge: PIT, PIC, DMA, RTC/TOY, keyboard/mouse, COM1/COM2, LPT1, floppy |
 | Acer Labs M1543C IDE | `ali_ide` | bootable (IDE disks and CD-ROMs) |
-| Acer Labs M1543C USB | `ali_usb` | OHCI host-controller registers only; no USB devices attach |
+| Acer Labs M1543C USB | `ali_usb` | OHCI 1.0a, three ports: the schedule, the root hub, and USB devices on it -- a tablet, mass storage, passed-through host devices ([usb.md](usb.md)). Windows 2000 and Whistler drive it with their own USB stacks |
 | Acer Labs M1543C PMU | `ali_pmu` | |
 | NCR 53C810 | `sym53c810` | `n810` console driver: bootable |
 | NCR 53C825 (825A) | `sym53c825` | `n810` console driver: bootable; wide, 4 KB SCRIPTS RAM |
@@ -51,6 +51,7 @@ The names below were extracted from the decompressed image with
 | (not named) | `mach64`, `chip = "vt2"` | the 264VT2: the CT's register file plus a video overlay (stored, not drawn), PCI id 1002:5654, for which the console has no table entry -- `show config` prints only its ids |
 | Ensoniq Sound Card | `es1371` | the AudioPCI 97: an AC'97 codec on a serial link, and a sample rate converter where the ES1370 had fixed rates. This is the only audio part the console's table names (1274:1371); Windows 2000 binds `es1371mp.sys` to it, though only after its INF is given an NT install section -- the one on the Alpha media is decorated `.NTX86` and so matches nothing here |
 | (not named) | `es1370` | the part before it, with a mixer of its own. The console has no table entry for 1274:5000, so `show config` prints only its ids |
+| (none: an add-in card) | `ehci` | a USB 2.0 EHCI card presenting itself as NEC uPD720101 (1033:00e0); four high-speed ports, no companion controllers. The console does not know it; no Alpha Windows ships a driver -- nada's `nadaehci.sys` drives it on Windows 2000 ([usb.md](usb.md)) |
 
 ## Candidates, by value
 
@@ -241,7 +242,9 @@ Found by reading rather than by traffic, and corrected in the same pass:
 - **OHCI never wrote the HCCA.** The controller now posts the frame number
   (and a zero done head) into the block the driver gave it, whenever the
   driver touches a register and the number has moved; a driver that checks
-  the HCCA to see the controller alive sees it advance.
+  the HCCA to see the controller alive sees it advance. (Since superseded:
+  the OHCI now runs its whole schedule on a frame thread, with devices on
+  its ports -- [usb.md](usb.md).)
 - **SMBus host** on the PMU function had the PIIX4's status bits, not the
   M7101's. It now runs the M7101 protocol: IDLE, a transaction started by
   the start register completes at once with DONE and a device error, since
