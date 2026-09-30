@@ -2,7 +2,7 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus|mach64|permedia2|s3virge] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro|dx] [ROM=<bios>] \
+# usage: [CARD=s3|cirrus|mach64|permedia2|s3virge] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro|dx|virge|vx|gx2] [ROM=<bios>] \
 #          vga_boot.sh <alphabox-binary> <label> [seconds]
 #   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP to gd5434 (cirrus) or ct
@@ -14,8 +14,12 @@
 #   to the ELSA GLoria Synergy PCI BIOS 8.07.00 (roms/video/permedia2/).
 #   That BIOS never runs under SRM V7.3-1, which calls option ROMs with
 #   AX = 0 where the BIOS expects its own bus and device (see es40.cfg), so
-#   permedia2 gives no frames here; AlphaBIOS runs it. s3virge (CHIP dx)
-#   defaults to the S3 reference BIOS 2.01.16, roms/video/s3virge/86c375_4.bin.
+#   permedia2 gives no frames here; AlphaBIOS runs it. s3virge takes CHIP
+#   dx (the default), virge, vx or gx2, with the part's BIOS from
+#   roms/video/s3virge/: the S3 reference BIOSes 86c375_4.bin (2.01.16, DX),
+#   86c325.bin (1.00-10, ViRGE) and flagpoint.VBI (2.16.13, GX2), and for
+#   the VX, which has no S3 reference image, Diamond's Stealth 3D 3000
+#   diamondstealth3000.vbi.
 #
 # The screen settles on two frames (text cursor on/off). With SRM V7.3-1 the
 # settled sets are:
@@ -25,6 +29,12 @@
 #   mach64 ct      (Mach64 CT PCI BIOS)    3e98e7f5a5 81a4da0cd7
 #   mach64 vt2     (264VT2 PCI BIOS)       323cbfa3fa d4363d6f19
 #   s3virge dx     (S3 BIOS 2.01.16)       1b6682c7dc e23c1c51f6
+#   s3virge virge  (S3 BIOS 1.00-10)       1b6682c7dc e23c1c51f6
+#   s3virge gx2    (S3 BIOS 2.16.13)       1b6682c7dc e23c1c51f6
+#   s3virge vx     (Diamond S3D 3000 1.00) 107a595f1d 7a3a484498
+#   s3virge vx     (STB Velocity 3D 1.10)  52d3ffb772 974d8129d5
+#   s3virge gx2    (Diamond S3D 4000 1.01) 990a4adfa5 cccaa8c08a
+# (the vendor BIOSes carry fonts of their own).
 # The set is the last ten frames, one every ~2 s, so the cursor phase can
 # alias: on a loaded host one of the two may be missing. Run it alone.
 # A behaviour-preserving change must reproduce them. last.png in the run
@@ -72,7 +82,13 @@ mach64)
 permedia2) ROM=${ROM:-$R/roms/video/permedia2/SYN80700.PAN} ;;
 s3virge)
   CHIP=${CHIP:-dx}
-  ROM=${ROM:-$R/roms/video/s3virge/86c375_4.bin}
+  case $CHIP in
+  dx | gx) ROM=${ROM:-$R/roms/video/s3virge/86c375_4.bin} ;;
+  virge) ROM=${ROM:-$R/roms/video/s3virge/86c325.bin} ;;
+  vx) ROM=${ROM:-$R/roms/video/s3virge/diamondstealth3000.vbi} ;;
+  gx2) ROM=${ROM:-$R/roms/video/s3virge/flagpoint.VBI} ;;
+  *) echo "vga_boot: CHIP must be dx, gx, virge, vx or gx2"; exit 2 ;;
+  esac
   EXTRA="chip = \"$CHIP\";"
   ;;
 *) echo "vga_boot: CARD must be s3, cirrus, mach64, permedia2 or s3virge"; exit 2 ;;
