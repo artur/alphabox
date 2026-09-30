@@ -78,9 +78,15 @@ struct virge_chip_config {
   u8 revision;
   u32 vram_bytes; ///< default memory
   const char *default_rom;
-  bool vx;  ///< ViRGE/VX: 8 MB decode, 32 MB BAR, its own memory straps
-  bool dx;  ///< DX/GX or later: 3-bit PLL R, 2 VCLK per 16-bit pixel
-  bool gx2; ///< GX2: streams processor always on, different overlay
+  u32 rom_bytes; ///< the expansion ROM BAR's size
+  bool vx;       ///< ViRGE/VX: VRAM up to 8 MB, its own memory straps
+  bool dx;       ///< DX/GX or later: 3-bit PLL R, CR6C
+  bool gx2;      ///< GX2: PLL R in SR12 and SR29, 16 bpp at one VCLK a pixel
+  /// Fraction bits of perspective U/W and V/W beyond the DX's (the ViRGE
+  /// and VX hold four more).
+  u8 persp_extra_bits;
+  /// Texels are sampled half a texel further on than on the DX.
+  bool half_texel;
 };
 
 const virge_chip_config *virge_chip_by_name(const char *name);

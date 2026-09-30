@@ -26,7 +26,7 @@
  * framebuffer -- answering only while the linear window is enabled (CR58
  * bit 4, or the same bit in advanced function control), the VRAM repeated
  * across the 16 MB -- and the next 16 MB the MMIO window, whose first 64 KB
- * are the registers, while "new MMIO" (CR53 bit 3) is on. On the DX/GX the
+ * are the registers, while "new MMIO" (CR53 bit 3) is on. On every part the
  * upper 32 MB repeat both with the bytes of each dword swapped, for
  * big-endian hosts.
  *
@@ -85,7 +85,7 @@ static u32 swap_address(u32 offset, int bytes) {
 
 u32 CS3Virge::bar0_read(u32 offset, int dsize) {
   const int bytes = dsize / 8;
-  const bool swapped = m_chip.dx && (offset & BIG_ENDIAN_HALF);
+  const bool swapped = (offset & BIG_ENDIAN_HALF) != 0;
   offset &= BIG_ENDIAN_HALF - 1;
   if (swapped)
     offset = swap_address(offset, bytes);
@@ -104,7 +104,7 @@ u32 CS3Virge::bar0_read(u32 offset, int dsize) {
 
 void CS3Virge::bar0_write(u32 offset, int dsize, u32 data) {
   const int bytes = dsize / 8;
-  const bool swapped = m_chip.dx && (offset & BIG_ENDIAN_HALF);
+  const bool swapped = (offset & BIG_ENDIAN_HALF) != 0;
   offset &= BIG_ENDIAN_HALF - 1;
   if (swapped) {
     offset = swap_address(offset, bytes);

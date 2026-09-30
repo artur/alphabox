@@ -102,6 +102,10 @@ unsigned CS3Virge::native_width() const {
   const unsigned bpp = native_bits_per_pixel();
   if ((bpp == 15 || bpp == 16) && !m_chip.vx && !m_chip.gx2)
     w /= 2;
+  // The GX2's 8-bit modes can take two pixels a clock (SR18 bit 7), the
+  // CRTC's horizontal counts then being half the pixels.
+  if (bpp == 8 && m_chip.gx2 && (sr(SR_RAMDAC_CTL) & 0x80))
+    w *= 2;
   return w;
 }
 
@@ -180,12 +184,17 @@ uint64_t CS3Virge::direct_view_hash() const {
 /**
  * The PLL: f = 14.318 MHz * (M + 2) / ((N + 2) * 2^R), with M in SR13
  * bits 6..0, N in SR12 bits 4..0 and R above it (two bits on the ViRGE,
- * three on the DX and VX). Only the refresh rate the status bits and the
- * redraw pace follow depends on it.
+ * three on the DX and VX; on the GX2 SR12 bits 7..6 with SR29 bit 0 as
+ * the third). Only the refresh rate the status bits and the redraw pace
+ * follow depends on it.
  **/
 void CS3Virge::update_clock() {
   const u8 n = sr(SR_DCLK_N) & 0x1f;
-  const u8 rr = (sr(SR_DCLK_N) >> 5) & ((m_chip.dx || m_chip.vx) ? 7 : 3);
+  u8 rr;
+  if (m_chip.gx2)
+    rr = ((sr(SR_DCLK_N) >> 6) & 3) | ((sr(SR_CLKSYN_EXT) & 1) << 2);
+  else
+    rr = (sr(SR_DCLK_N) >> 5) & ((m_chip.dx || m_chip.vx) ? 7 : 3);
   const u8 m = sr(SR_DCLK_M) & 0x7f;
   r.dclk_hz = 14318180.0 * (m + 2) / ((n + 2) * double(1u << rr));
   const unsigned ht =

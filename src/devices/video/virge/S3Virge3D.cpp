@@ -297,6 +297,15 @@ CS3Virge::S3dRgba CS3Virge::s3d_texel(const S3dCtx &c, int lv, s32 iu,
 CS3Virge::S3dRgba CS3Virge::s3d_sample_level(const S3dCtx &c, int lv, s32 u,
                                              s32 v, bool bilinear) const {
   const int shift = 27 - lv;
+  // The ViRGE's and VX's texel grid sits half a texel from the DX's: they
+  // take "the texel nearest to the programmed texture location" (ViRGE
+  // data book, 15.4.8.1), texel centres on whole coordinates, where the
+  // DX truncates. The Windows driver agrees: for the same triangle it
+  // starts U and V half a texel lower on the ViRGE and VX than on the DX.
+  if (m_chip.half_texel) {
+    u += s32(1) << (shift - 1);
+    v += s32(1) << (shift - 1);
+  }
   if (!bilinear)
     return s3d_texel(c, lv, u >> shift, v >> shift);
   // The four texels nearest the sample (data book figure 15-8): weights
@@ -365,12 +374,15 @@ void CS3Virge::s3d_pixel(const S3dCtx &c, u32 dest, const s32 *attr) {
   if (c.textured) {
     s32 u = attr[4], v = attr[5];
     if (c.perspective) {
-      // U/W and V/W over 1/W (S12.19), back to texture fractions.
+      // U/W and V/W over 1/W (S12.19), back to texture fractions. The
+      // ViRGE and ViRGE/VX hold U/W and V/W with four more fraction bits
+      // than the DX and its successors.
       const s64 w = attr[6];
       if (w != 0) {
         const s64 inv = (s64(1) << 46) / w;
-        u = s32((s64(u) * inv) >> (8 + c.max_level));
-        v = s32((s64(v) * inv) >> (8 + c.max_level));
+        const int shift = 8 + m_chip.persp_extra_bits + c.max_level;
+        u = s32((s64(u) * inv) >> shift);
+        v = s32((s64(v) * inv) >> shift);
       }
     }
     S3dRgba t = s3d_sample(c, u, v, attr[7]);

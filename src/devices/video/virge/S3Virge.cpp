@@ -30,25 +30,29 @@
 
 using namespace virge;
 
-/* The family. Only the DX has been run against its BIOS and the Windows
- * 2000 driver; the other rows carry the identity each part reports and
- * the differences the data books and 86Box record, and are not verified. */
+/* The family: the identity each part reports, the ROM it comes with and
+ * the differences the data books (ViRGE, ViRGE/VX, the DX/GX overview)
+ * and 86Box record. The GX shares the DX's device ID and BIOS and has not
+ * been run on its own. */
 static const virge_chip_config virge_chips[] = {
-    // The original ViRGE (86C325). 2-bit PLL R, 2 VCLKs per 16-bit pixel.
-    {"virge", "ViRGE (86C325)", 0x5631, 0x00, 4u << 20, "86c325.bin", false,
-     false, false},
-    // ViRGE/VX (86C988): VRAM, up to 8 MB, a 32 MB BAR, one VCLK a pixel.
+    // The original ViRGE (86C325): EDO DRAM, 2 or 4 MB, 2-bit PLL R. The
+    // S3 reference BIOS 1.00-10.
+    {"virge", "ViRGE (86C325)", 0x5631, 0x00, 4u << 20, "86c325.bin", 32u << 10,
+     false, false, false, 4, true},
+    // ViRGE/VX (86C988): VRAM, 2, 4 or 8 MB, one VCLK a 16-bit pixel. There
+    // is no S3 reference BIOS image: Diamond's Stealth 3D 3000 1.00.
     {"vx", "ViRGE/VX (86C988)", 0x883d, 0x00, 4u << 20,
-     "diamondstealth3000.vbi", true, false, false},
+     "diamondstealth3000.vbi", 32u << 10, true, false, false, 4, true},
     // ViRGE/DX (86C375). The GX (86C385) is the same device ID with
     // revision 1 and SGRAM; the S3 reference BIOS 2.01.16 drives both.
-    {"dx", "ViRGE/DX (86C375)", 0x8a01, 0x00, 4u << 20, "86c375_4.bin", false,
-     true, false},
-    {"gx", "ViRGE/GX (86C385)", 0x8a01, 0x01, 4u << 20, "86c375_4.bin", false,
-     true, false},
-    // ViRGE/GX2 (86C357).
-    {"gx2", "ViRGE/GX2 (86C357)", 0x8a10, 0x00, 4u << 20,
-     "DS3D4K v1.03 Brightness bug fix.bin", false, true, true},
+    {"dx", "ViRGE/DX (86C375)", 0x8a01, 0x00, 4u << 20, "86c375_4.bin",
+     32u << 10, false, true, false, 0, false},
+    {"gx", "ViRGE/GX (86C385)", 0x8a01, 0x01, 4u << 20, "86c375_4.bin",
+     32u << 10, false, true, false, 0, false},
+    // ViRGE/GX2 (86C357): 4 MB SGRAM. The S3 reference BIOS 2.16.13 is
+    // 40 KB, so the ROM BAR is 64 KB.
+    {"gx2", "ViRGE/GX2 (86C357)", 0x8a10, 0x00, 4u << 20, "flagpoint.VBI",
+     64u << 10, false, true, true, 0, false},
 };
 
 const virge_chip_config *virge_chip_by_name(const char *name) {
@@ -76,20 +80,27 @@ CS3Virge::~CS3Virge() {
 
 void CS3Virge::init() {
   const u64 mb = myCfg->get_num_value("memory", false, m_chip.vram_bytes >> 20);
-  const u64 max_mb = m_chip.vx ? 8 : 4;
-  if (mb != 2 && mb != 4 && !(mb == 8 && max_mb == 8))
-    FAILURE_2(Configuration, "virge: memory must be 2 or 4 (MB)%s, not %llu",
-              max_mb == 8 ? " or 8" : "", (unsigned long long)mb);
+  const bool mb_ok = m_chip.gx2  ? mb == 4
+                     : m_chip.vx ? (mb == 2 || mb == 4 || mb == 8)
+                                 : (mb == 2 || mb == 4);
+  if (!mb_ok)
+    FAILURE_2(Configuration, "virge: memory must be %s (MB), not %llu",
+              m_chip.gx2  ? "4"
+              : m_chip.vx ? "2, 4 or 8"
+                          : "2 or 4",
+              (unsigned long long)mb);
   m_vram_bytes = u32(mb) << 20;
 
   // PCI header: a VGA-compatible display controller; BAR0 is the one
-  // memory range, 64 MB (32 MB on the VX), not prefetchable -- its upper
-  // part holds registers. The expansion ROM holds the 32 KB BIOS; the
+  // memory range, 64 MB on every part (the VX data book's BAR0 decodes
+  // bits 31-26 too), not prefetchable -- its upper part holds registers.
+  // The expansion ROM holds the BIOS, 32 KB (64 KB on the GX2); the
   // console finds its copy at 0xc0000 like the other cards'. Interrupt
   // pin INTA: the vertical retrace and the engine's events, once CR32
   // lets them out. The subsystem IDs are S3's own, as on the reference
-  // boards.
-  const u32 bar_bytes = m_chip.vx ? BAR0_BYTES / 2 : BAR0_BYTES;
+  // boards. The GX2 has a capability list with power management (D0 and
+  // D3hot, PCI PM 1.1); its AGP capability is the AGP board's, and this
+  // one is a PCI card.
   u32 cfg_data[64] = {};
   u32 cfg_mask[64] = {};
   cfg_data[0x00 >> 2] = (u32(m_chip.pci_device_id) << 16) | PCI_VENDOR_S3;
@@ -99,9 +110,16 @@ void CS3Virge::init() {
   cfg_data[0x3c >> 2] = 0x040001ff; // INTA, min grant 4
   cfg_mask[0x04 >> 2] = 0x00000027; // I/O, memory, bus master, palette snoop
   cfg_mask[0x0c >> 2] = 0x0000ff00; // latency timer
-  cfg_mask[0x10 >> 2] = ~(bar_bytes - 1);
-  cfg_mask[0x30 >> 2] = ~(u32(sizeof(option_rom)) - 1) | PCI_ROM_ADDRESS_ENABLE;
+  if (m_chip.gx2) {
+    cfg_data[0x04 >> 2] |= 0x00100000; // status: capability list
+    cfg_data[0x34 >> 2] = 0xdc;
+    cfg_data[0xdc >> 2] = 0x00220001; // power management 1.1, last
+  }
+  cfg_mask[0x10 >> 2] = ~(BAR0_BYTES - 1);
+  cfg_mask[0x30 >> 2] = ~(m_chip.rom_bytes - 1) | PCI_ROM_ADDRESS_ENABLE;
   cfg_mask[0x3c >> 2] = 0x000000ff;
+  if (m_chip.gx2)
+    cfg_mask[0xe0 >> 2] = 0x00000003; // power state
   add_function(0, cfg_data, cfg_mask);
   ResetPCI();
 
@@ -130,8 +148,11 @@ void CS3Virge::init() {
 
   // ViRGE power-on state. CR36/CR37 are the configuration straps: PCI
   // bus, the memory type and size (CR36 bits 7..5: 000 4 MB, 100 2 MB on
-  // the DX; 010 4 MB, 011 8 MB, 000 2 MB on the VX) and CR37's monitor
-  // and clock straps as S3's reference boards set them.
+  // the ViRGE and DX; on the VX bits 6..5, 00 2 MB, 01 4 MB, 11 8 MB, with
+  // bits 3..2 00 for 1-cycle EDO VRAM and CR37 bits 6..5 11 for no DRAM
+  // beside it; on the GX2 what 86Box's board reports) and CR37's monitor
+  // and clock straps as S3's reference boards set them. The S3 BIOS sizes
+  // the memory itself and writes the size back.
   memset(&r, 0, sizeof(r));
   u8 *c = vga.crtc.data;
   c[CR_DEVICE_ID_HIGH] = u8(m_chip.pci_device_id >> 8);
@@ -139,7 +160,9 @@ void CS3Virge::init() {
   c[CR_REVISION] = m_chip.revision;
   c[CR_CHIP_ID] = 0xe1;
   if (m_chip.vx)
-    c[CR_CONFIG_1] = mb == 2 ? 0x00 : mb == 4 ? 0x40 : 0x60;
+    c[CR_CONFIG_1] = mb == 2 ? 0x00 : mb == 4 ? 0x20 : 0x60;
+  else if (m_chip.gx2)
+    c[CR_CONFIG_1] = 0x3a;
   else
     c[CR_CONFIG_1] = 0x12 | (mb == 2 ? 0x80 : 0x00) |
                      (m_chip.revision ? 0x04 : 0x00); // GX: SGRAM
@@ -228,7 +251,7 @@ u32 CS3Virge::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
     v = bar0_read(address, dsize);
     break;
   case 6:
-    v = rom_read(address & 0x7fff, dsize);
+    v = rom_read(address & (m_chip.rom_bytes - 1), dsize);
     break;
   default:
     return 0;
@@ -304,7 +327,8 @@ void CS3Virge::io_write_b(u32 address, u8 data) {
     if (i != SR_UNLOCK && sr(SR_UNLOCK) != 0x06)
       return;
     vga.sequencer.data[i] = data;
-    if (i == SR_CLKSYN_2 || i == SR_DCLK_N || i == SR_DCLK_M)
+    if (i == SR_CLKSYN_2 || i == SR_DCLK_N || i == SR_DCLK_M ||
+        i == SR_CLKSYN_EXT)
       update_clock();
     return;
   }

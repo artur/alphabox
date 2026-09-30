@@ -38,8 +38,8 @@ namespace virge {
 
 constexpr u16 PCI_VENDOR_S3 = 0x5333;
 
-// BAR0: 64 MB on the DX/GX (32 MB on the VX, whose CR59 decodes one more
-// bit). The low 16 MB are the linear framebuffer, the next 16 MB the MMIO
+// BAR0: 64 MB on every part (the ViRGE and ViRGE/VX data books, 15.1.2).
+// The low 16 MB are the linear framebuffer, the next 16 MB the MMIO
 // window; the upper half repeats both with the bytes of each dword
 // swapped, for big-endian hosts.
 constexpr u32 BAR0_BYTES = 64u << 20;
@@ -110,6 +110,7 @@ constexpr u8 SR_DCLK_M = 0x13;
 constexpr u8 SR_CLKSYN_1 = 0x14;
 constexpr u8 SR_CLKSYN_2 = 0x15; ///< bit 1 DCLK load, bit 5 load both now
 constexpr u8 SR_RAMDAC_CTL = 0x18;
+constexpr u8 SR_CLKSYN_EXT = 0x29; ///< GX2: bit 0 is the DCLK PLL's R bit 2
 
 // --- MMIO: streams processor (0x8180-0x81ff) ------------------------------
 constexpr u32 PRI_STREAM_CTL = 0x8180;
