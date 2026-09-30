@@ -195,6 +195,15 @@ private:
 
   int get_icache(u64 address, u32 *data);
   u8 icache_exec_modes(u64 address, u64 v_a);
+  // Would get_icache() hit line i for a fetch of `address` right now? The
+  // same test as its fast probe, for the side-effect-free probes outside it.
+  bool icache_line_hits(int i, u64 address) const {
+    const auto &l = state.icache[i];
+    return l.valid && l.gen == state.icache_gen &&
+           (l.asn == state.asn || l.asm_bit) &&
+           ((l.exec_modes >> state.cm) & 1) &&
+           l.address == (address & ICACHE_MATCH_MASK);
+  }
   int FindTBEntry(u64 virt, int flags);
   int initiate_acv_fault(u64 virt, int flags, u32 instruction);
   void add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags, int asn);
@@ -902,6 +911,9 @@ public:
   // pointer and needs no register of its own for them.
   u64 m_jit_epoch = 0;
   void *m_jit_ind_base = nullptr;
+  int m_dbg_dump_seen = 0;
+  void dbg_dump_state();
+  void trace_icprobe(int i, u64 va);
   u64 m_jit_code_seen = 0;     // g_jit_code_flush at this CPU's last JIT flush
   // Idle pacing (JIT dispatcher, see jit_idle_pause): a CPU spinning in the NT
   // idle loop sleeps until irq_h raises an interrupt for it or 1 ms passes.

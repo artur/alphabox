@@ -708,20 +708,51 @@ workloads.
 
 **Not the shadow bank.** The adaptive set may not pick R4-R7 and R20-R23,
 the registers PALcode sees shadow copies of (37da929). With them pinned, a
-Windows 2000 warm restart hung every time: the restarted kernel's R9 came
-back holding a value from before a call, the kernel took a stale PRCB
-pointer out of it, and it spun forever in `KiRetireDpcList`. The default
-set never pins those registers; the adaptive one did once a boot had warmed
-it up. Any change of timing hid the hang -- `ALPHABOX_DPC_KEEP=0`,
-`JIT_VERIFY`, a printf every 100 ms -- which for a day made it look like a
-page-cache bug; `ALPHABOX_JIT_ADAPTPIN=0` was the switch that pointed at
-the cause, and excluding the shadow bank alone cured it (3 of 3 restarts,
-the same binary hanging without). It costs `makecab`, the workload that
-uses those registers most, nothing measurable (ledger `noshadow-cab`:
-+2.5%, inconclusive; 1464 against 1496 MIPS). Which path loses the value
-was not found -- the spills, the helper-call spills, CALL_PAL's R23 update
-and the PAL blocks' shadow remap each read correct -- so anyone wanting
-those pins back should find it first.
+Windows 2000 warm restart hung every time: the restarted kernel spun in
+`KiRetireDpcList` with a PRCB pointer in R9 that was not one. Any change of
+timing hid it -- `ALPHABOX_DPC_KEEP=0`, `JIT_VERIFY`, a printf every 100 ms
+-- and excluding the shadow bank cured it, so the exclusion shipped with
+the path that loses the value unfound.
+
+It was not the shadow bank, nor any register. The dispatcher finds a
+block's physical address with a side-effect-free probe of the instruction
+cache, and that probe never learned about the flush generation (c2acdfb):
+an IMB moves the generation on and leaves the lines valid, the fetch
+refuses a line of an older generation, the probe did not. After the
+restart the probe answered for ACPI.sys with the lines of the previous
+boot, whose ACPI.sys sat one 8 KB page lower in physical memory. The block
+was recorded at that physical, compiled from the old boot's bytes, stamped
+with the current epoch, and entered through `jit_indirect`, which trusts a
+block validated in the current epoch. The instrument
+(`ALPHABOX_TRACE_ICPROBE=1`, with the old probe put back for the run) shows
+the whole chain, the same addresses in every run:
+
+    ICPROBE: pc=fffffffff85633f0 line gen 18632963 of 18634076, line phys 4e53f0, live 4e73f0
+    ICPROBE-RECORD: pc=fffffffff85633f0 recorded phys 4e53f0, fetched from 4e73f0
+    ICPROBE-CHAIN: jump to fffffffff855b500 enters code compiled from 4dd500, live 4df500
+
+Without the tracing the guest spins in `KiRetireDpcList`; with it, it stops
+on `KMODE_EXCEPTION_NOT_HANDLED` at F855B560 in ACPI.sys -- 0x60 bytes into
+that stale block. `DISPATCH STALE` lines for the same addresses, with the
+block's epoch equal to the current one, had been in every hanging log.
+
+Pinning the shadow bank mattered only because it moved a pin-set switch to
+the moment the new kernel starts: the switch's reclaim drops every block
+but keeps its hotness, and a block recorded again at the same (stale)
+physical compiles at once. A fixed set holding shadow registers from
+power-on passed (three sets tried, `ALPHABOX_JIT_ADAPTPIN=0`), and so did
+the adaptive set with them excluded, even with the old probe: the stale
+records happen there too (`ICPROBE-RECORD` for other drivers and a user
+DLL), they just did not land on code that ran.
+
+The probe now asks what the fetch asks (`icache_line_hits`: generation,
+mode, ASN, tag), in all three places the dispatcher reads lines. With
+`ALPHABOX_JIT_PIN_SHADOW=1` the restart passes 3 of 3; the unfixed binary
+hung 5 of 5. The exclusion stays, now for what it is worth rather than as a
+workaround: pinning those registers measured nothing on `makecab`, the
+workload that uses them most (ledger `noshadow-cab`: +2.5% with them left
+out, inconclusive; 1464 against 1496 MIPS), and a PAL block cannot use such
+a pin.
 
 ### Real code misses the page cache: makecab
 

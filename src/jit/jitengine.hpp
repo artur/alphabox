@@ -897,6 +897,7 @@ private:
   static constexpr uint32_t kPinWindow = 4096; // samples between decisions
   bool m_pin_adapt = true;
   bool m_pin_log = false; // ALPHABOX_JIT_PINLOG=1: print every switch
+  bool m_pin_shadow = false; // ALPHABOX_JIT_PIN_SHADOW=1: may pick R4-7/R20-23
   bool m_pin_staged = false;
   int8_t m_pin_next[kPinSlots];
   uint32_t m_pin_countdown = kPinEvery;

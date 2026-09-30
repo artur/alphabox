@@ -850,7 +850,9 @@ static const char *opcode_name(unsigned op);
 //                         leave those two slots empty too.
 //   ALPHABOX_JIT_ADAPTPIN=0 keep the starting set; ALPHABOX_JIT_PINLOG=1
 //                         print every change of set.
-static void pin_defaults(int8_t *g, bool *adapt, bool *log) {
+//   ALPHABOX_JIT_PIN_SHADOW=1 let the adaptive set pick R4-R7/R20-R23 (see
+//                         pin_decide).
+static void pin_defaults(int8_t *g, bool *adapt, bool *log, bool *shadow) {
   static const int8_t kDefault[CJitEngine::kPinSlots] = {
       26, 16, 27, 30, 29, 0, 8, 13, 1, 9, 17, 2, 10, 18, 3, 11};
   static const int8_t kSwap1[][2] = {{17, 13}, {18, 15}, {27, 14}};
@@ -877,6 +879,8 @@ static void pin_defaults(int8_t *g, bool *adapt, bool *log) {
   *adapt = !(e && strcmp(e, "0") == 0);
   e = getenv("ALPHABOX_JIT_PINLOG");
   *log = e && strcmp(e, "1") == 0;
+  e = getenv("ALPHABOX_JIT_PIN_SHADOW");
+  *shadow = e && strcmp(e, "1") == 0;
 }
 
 // Guest registers one instruction names, added to use[] (the integer ones:
@@ -940,19 +944,24 @@ void CJitEngine::pin_decide() {
   std::stable_sort(order, order + 31, [&](int8_t x, int8_t y) {
     return m_pin_use[x] > m_pin_use[y];
   });
-  // Never the PALcode shadow bank (R4-R7, R20-R23). With them pinned, a
-  // Windows 2000 warm restart hung every time: after the firmware and the
-  // new kernel's PAL ran, R9 came back with a value it held before a call,
-  // the kernel took a stale PRCB pointer out of it and spun forever in
-  // KiRetireDpcList. The default set never pins them; the adaptive one did
-  // once the boot's workload had warmed it up. Excluded, the restart passes
-  // (3 of 3, the same binary hanging without), at no measurable cost to
-  // makecab, which uses those registers most (ledger: noshadow-cab, +2.5%
-  // inconclusive, MIPS 1464 -> 1496). Which path loses the value was not
-  // found: each of spill/reload, the helper spills, CALL_PAL's R23 update
-  // and the PAL blocks' shadow remap reads correct on its own.
-  std::stable_partition(order, order + 31,
-                        [](int8_t r) { return !(r < 24 && (r & 0xc) == 0x4); });
+  // Not the PALcode shadow bank (R4-R7, R20-R23), unless
+  // ALPHABOX_JIT_PIN_SHADOW=1. This began (37da929) as the cure for a
+  // Windows 2000 warm-restart hang that was never about these registers:
+  // the dispatcher's icache probe took a line filled before the last IMB --
+  // the previous boot's ACPI.sys, one page away from the new one -- as the
+  // live physical address, so its old bytes were compiled and entered
+  // through computed jumps (docs/performance.md, "Not the shadow bank").
+  // Pinning the shadow bank only moved a pin-set switch to that moment, and
+  // the switch's reclaim, keeping each block's hotness, is what recompiled
+  // those blocks at once. With the probe fixed the restart passes with them
+  // pinned (3 of 3; 5 of 5 hung before). They stay out because pinning them
+  // bought nothing measurable on makecab, which uses them most (ledger
+  // noshadow-cab: +2.5% with them left out, inconclusive), and a PAL block
+  // cannot use such a pin anyway.
+  if (!m_pin_shadow)
+    std::stable_partition(order, order + 31, [](int8_t r) {
+      return !(r < 24 && (r & 0xc) == 0x4);
+    });
   uint64_t best = 0;
   for (int k = 0; k < kPinSlots; ++k)
     best += m_pin_use[order[k]];
@@ -986,7 +995,7 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
       m_epoch(epoch_store ? *epoch_store : m_epoch_own), m_code_bytes(0),
       m_rt(nullptr) {
   m_epoch = 0;
-  pin_defaults(m_pin_guest, &m_pin_adapt, &m_pin_log);
+  pin_defaults(m_pin_guest, &m_pin_adapt, &m_pin_log, &m_pin_shadow);
   memset(m_blocks, 0,
          sizeof(m_blocks)); // flush() is lazy (gen bump) -- zero the slots here
   memset(m_traces, 0,

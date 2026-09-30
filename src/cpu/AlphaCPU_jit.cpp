@@ -215,6 +215,79 @@ void CAlphaCPU::compile_outside(void *b) {
     honour_new_code_pages();
 }
 
+// Post-hang state dump (keypipe token dbg-dump): registers, both banks,
+// the code around the PC and the stack, read side-effect free.
+void CAlphaCPU::dbg_dump_state() {
+  printf("%%DBG-I-DUMP: CPU%d pc=%016llx sde=%d cm=%d asn=%d pal_base=%llx "
+         "icount=%llu\n",
+         (int)state.iProcNum, (unsigned long long)state.pc, (int)state.sde,
+         (int)state.cm, (int)state.asn, (unsigned long long)state.pal_base,
+         (unsigned long long)state.instruction_count);
+  for (int r = 0; r < 64; r += 4)
+    printf("%%DBG-I-DUMP: r%-2d %016llx %016llx %016llx %016llx\n", r,
+           (unsigned long long)state.r[r], (unsigned long long)state.r[r + 1],
+           (unsigned long long)state.r[r + 2],
+           (unsigned long long)state.r[r + 3]);
+  auto peek = [&](u64 va, u64 *out) -> bool {
+    u64 pa;
+    bool asmb;
+    if (virt2phys(va, &pa, ACCESS_READ | FAKE | NO_CHECK, &asmb, 0) != 0)
+      return false;
+    if (pa + 8 > dram_size)
+      return false;
+    memcpy(out, (const u8 *)dram_ptr + pa, 8);
+    return true;
+  };
+  const u64 pc = state.pc & ~U64(3);
+  for (u64 va = pc - 0x100; va < pc + 0x80; va += 8) {
+    u64 v;
+    if (peek(va, &v))
+      printf("%%DBG-I-CODE: %016llx %08x %08x\n", (unsigned long long)va,
+             (unsigned)(v & 0xffffffff), (unsigned)(v >> 32));
+  }
+  const u64 sp = state.r[30];
+  for (u64 va = sp; va < sp + 0x200; va += 8) {
+    u64 v;
+    if (peek(va, &v))
+      printf("%%DBG-I-STACK: %016llx %016llx\n", (unsigned long long)va,
+             (unsigned long long)v);
+  }
+  fflush(stdout);
+}
+
+// ALPHABOX_TRACE_ICPROBE=1 (docs/headless.md): three reports, the first 50
+// of each. ICPROBE: the dispatcher's icache probe met a line the fetch
+// would refuse -- filled before the last flush, or in another mode -- that
+// names a physical page other than the live translation. ICPROBE-RECORD: a
+// block is recorded at a physical other than the one its instructions were
+// just fetched from. ICPROBE-CHAIN: a computed jump chains into code
+// compiled from a physical other than the live one. Before the probe checked
+// the line's generation, the first led to the second and the third: the
+// Windows 2000 warm-restart hang (docs/performance.md, "Not the shadow
+// bank"). Now the probe refuses such lines, and the other two reports
+// should never appear.
+static const bool g_trace_icprobe = getenv("ALPHABOX_TRACE_ICPROBE") != nullptr;
+void CAlphaCPU::trace_icprobe(int i, u64 va) {
+  const auto &l = state.icache[i];
+  if (!(l.valid && (l.asn == state.asn || l.asm_bit) &&
+        l.address == (va & ICACHE_MATCH_MASK)) ||
+      icache_line_hits(i, va))
+    return;
+  u64 live = 0;
+  bool asmb;
+  if (virt2phys(va & ~U64(3), &live, ACCESS_EXEC | FAKE, &asmb, 0) != 0)
+    return; // not in the ITB: the fetch will tell
+  const u64 line_phys = l.p_address + (va & ICACHE_BYTE_MASK);
+  static int n = 0;
+  if (live != line_phys && n++ < 50)
+    printf("[JIT][CPU%d] ICPROBE: pc=%016llx line gen %llu of %llu, line phys "
+           "%016llx, live %016llx, icount=%llu\n",
+           (int)state.iProcNum, (unsigned long long)va,
+           (unsigned long long)l.gen, (unsigned long long)state.icache_gen,
+           (unsigned long long)line_phys, (unsigned long long)live,
+           (unsigned long long)state.instruction_count);
+}
+
 void CAlphaCPU::jit_run(int budget) {
   if (m_jit)
     m_jit->reclaim_if_pending(); // deferred code reclaim, here at a safe point
@@ -222,6 +295,10 @@ void CAlphaCPU::jit_run(int budget) {
   // A link request from the previous batch's last chain is stale: interrupts
   // or the scheduler may have moved the PC since.
   m_link_from = nullptr;
+  if (g_dbg_dump_req.load(std::memory_order_relaxed) != m_dbg_dump_seen) {
+    m_dbg_dump_seen = g_dbg_dump_req.load();
+    dbg_dump_state();
+  }
   // Another CPU flushed its instruction cache (IC_FLUSH / IMB after loading
   // or changing code): drop this CPU's compiled blocks too. Lazy -- unchanged
   // blocks are re-hashed and kept.
@@ -344,9 +421,9 @@ void CAlphaCPU::jit_run(int budget) {
       // side effects. Covers warm code.
       const int ici =
           (int)(((start_virt & ~U64(3)) >> 11) & (ICACHE_ENTRIES - 1));
-      if (icache_enabled && state.icache[ici].valid &&
-          (state.icache[ici].asn == state.asn || state.icache[ici].asm_bit) &&
-          state.icache[ici].address == (start_virt & ICACHE_MATCH_MASK)) {
+      if (g_trace_icprobe && icache_enabled)
+        trace_icprobe(ici, start_virt);
+      if (icache_enabled && icache_line_hits(ici, start_virt)) {
         start_phys =
             state.icache[ici].p_address + (start_virt & ICACHE_BYTE_MASK);
         start_asm = state.icache[ici].asm_bit;
@@ -475,9 +552,7 @@ void CAlphaCPU::jit_run(int budget) {
       v &= ~U64(3); // strip the PALmode tag bit / align -- the physical is
                     // page-determined
       const int li = (int)((v >> 11) & (ICACHE_ENTRIES - 1));
-      if (icache_enabled && state.icache[li].valid &&
-          (state.icache[li].asn == state.asn || state.icache[li].asm_bit) &&
-          state.icache[li].address == (v & ICACHE_MATCH_MASK)) {
+      if (icache_enabled && icache_line_hits(li, v)) {
         *op = state.icache[li].p_address + (v & ICACHE_BYTE_MASK);
         return true;
       }
@@ -563,9 +638,11 @@ void CAlphaCPU::jit_run(int budget) {
       static int n_stale = 0;
       if (n_stale++ < 20)
         printf("[JIT][CPU%d] DISPATCH STALE: pc=%016llx block_phys=%016llx "
-               "live_phys=%016llx\n",
+               "live_phys=%016llx vgen=%llu epoch=%llu icount=%llu\n",
                (int)state.iProcNum, (unsigned long long)start_virt,
-               (unsigned long long)b->phys, (unsigned long long)start_phys);
+               (unsigned long long)b->phys, (unsigned long long)start_phys,
+               (unsigned long long)b->vgen, (unsigned long long)m_jit->vgen(),
+               (unsigned long long)state.instruction_count);
     }
 
 #ifdef JIT_STATS
@@ -1264,8 +1341,7 @@ void CAlphaCPU::jit_run(int budget) {
       for (u64 v = vs & ~U64(0x7ff); v < ve && !src_stale; v += 0x800) {
         const int li = (int)((v >> 11) & (ICACHE_ENTRIES - 1));
         const auto &line = state.icache[li];
-        if (line.valid && (line.asn == state.asn || line.asm_bit) &&
-            line.address == ((v | (start_virt & 1)) & ICACHE_MATCH_MASK)) {
+        if (icache_line_hits(li, v | (start_virt & 1))) {
           const u64 lo = (v > vs) ? v : vs;
           const u64 hi = (v + 0x800 < ve) ? v + 0x800 : ve;
           const u64 poff = line.p_address + (lo - v);
@@ -1275,6 +1351,21 @@ void CAlphaCPU::jit_run(int budget) {
                      (size_t)(hi - lo)) != 0)
             src_stale = true;
         }
+      }
+    }
+    if (g_trace_icprobe && have_phys && !(start_virt & 1)) {
+      const int li =
+          (int)(((start_virt & ~U64(3)) >> 11) & (ICACHE_ENTRIES - 1));
+      if (icache_line_hits(li, start_virt)) {
+        const u64 fetched =
+            state.icache[li].p_address + (start_virt & ICACHE_BYTE_MASK);
+        static int nr = 0;
+        if (fetched != start_phys && nr++ < 50)
+          printf("[JIT][CPU%d] ICPROBE-RECORD: pc=%016llx recorded phys "
+                 "%016llx, fetched from %016llx, icount=%llu\n",
+                 (int)state.iProcNum, (unsigned long long)start_virt,
+                 (unsigned long long)start_phys, (unsigned long long)fetched,
+                 (unsigned long long)state.instruction_count);
       }
     }
     // Record only translatable block starts (a translation miss left have_phys
@@ -2458,6 +2549,21 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   // no re-translation.
   const u64 gen = cpu->m_jit->vgen();
   if (b->vgen == gen) {
+    if (g_trace_icprobe) {
+      u64 live = 0;
+      bool asmb;
+      if (cpu->virt2phys(target & ~U64(3), &live, ACCESS_EXEC | FAKE, &asmb,
+                         0) == 0 &&
+          live != b->phys) {
+        static int nj = 0;
+        if (nj++ < 50)
+          printf("[JIT][CPU%d] ICPROBE-CHAIN: jump to %016llx enters code "
+                 "compiled from %016llx, live %016llx, icount=%llu\n",
+                 (int)cpu->state.iProcNum, (unsigned long long)target,
+                 (unsigned long long)b->phys, (unsigned long long)live,
+                 (unsigned long long)cpu->state.instruction_count);
+      }
+    }
     cpu->m_jit->note_jmp_hit();
     cpu->m_jit->ind_cache_fill(target, b);
     return b->jit_body;

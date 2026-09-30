@@ -1280,7 +1280,10 @@ void bx_sdl_gui_c::handle_events(void) {
           if (fscanf(f, "%63s", tok) == 1) {
             kp_offset = ftell(f);
             kp_last = kp_now;
-            if (sdl_debug_press(tok, true)) {
+            if (strcmp(tok, "dbg-dump") == 0) {
+              g_dbg_dump_req.fetch_add(1);
+              printf("%%SDL-I-KEYPIPE: state dump requested\n");
+            } else if (sdl_debug_press(tok, true)) {
               printf("%%SDL-I-KEYPIPE: injecting \"%s\"\n", tok);
             } else {
               printf("%%SDL-W-KEYPIPE: unknown key \"%s\"\n", tok);

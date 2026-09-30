@@ -20,6 +20,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_DUMP_FB=<prefix>` | Write the emulated screen as a PPM image (`<prefix>-NNN-WxH.ppm`) every ~2 seconds. This is how you "see" the VGA output on a headless run; `test/tools/ppm2png.py` converts a dump to PNG. |
 | `ALPHABOX_KEYSCRIPT="<sec>:<key>,..."` | Press named keys at fixed second offsets from GUI start, e.g. `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` + Enter at the SRM prompt 40 s in. |
 | `ALPHABOX_KEYPIPE=<file>` | Interactive variant: keys appended to `<file>` while the emulator runs are typed into the guest, one token per ~120 ms. Example: `echo "f2 down down enter" >> keys.txt`. Start with an empty file; the emulator remembers how far it has read. |
+| `dbg-dump` (a `KEYPIPE` token) | Every processor prints its state at its next dispatch batch (JIT builds): PC, SDE, mode, ASN, both register banks, the code around the PC and 512 bytes of stack, as `%DBG-I-DUMP`/`CODE`/`STACK` lines. For looking at a guest that has hung without changing how it runs until then. |
 | `tablet:X:Y[:B]` (a `KEYSCRIPT`/`KEYPIPE` token) | Put the USB tablet's pointer (`port1 = "tablet";` on `ali_usb`) at X,Y -- fractions of the screen when at most 1, else guest pixels -- with buttons B (bit 0 left, 1 right, 2 middle). |
 | `usb:<op>:<port>[:<ep>[:<n>]]` (a `KEYSCRIPT`/`KEYPIPE` token) | Inject a fault on a USB root hub port -- the `ehci` card's if there is one, else `ali_usb`'s -- for testing a guest's USB driver. `usb:detach:<p>` / `usb:attach:<p>` unplug and replug the device (connect change and interrupt as on hardware). `usb:stall:<p>:<ep>[:<n>]` halts endpoint `<ep>` (an address: `0x81` = IN 1, `0x02` = OUT 2): it answers STALL until the host sends CLEAR_FEATURE(ENDPOINT_HALT), and halts again on its next transfer, `n` times in all (default 1). `usb:phase:<p>`: the USB disk's next command ends with a phase-error CSW (status 2). `usb:nak:<p>:<ep>:<ms>`: the endpoint NAKs for `<ms>` milliseconds. `test/tools/usb_bench.sh` fires them with `FAULTS=`/`PRE_FAULTS=`. |
 | `ALPHABOX_VIRTIO_SELFTEST=1` | At start-up, drive every `virtio_blk` and `virtio_net` device through its legacy registers with a minimal driver (rings in 1 MB per device, 16-32 MB below the top of guest RAM, addressed physically): reset, features, queues, blk GET_ID, sector 0 (must end in 55 AA), a write of the last sector read back and restored, FLUSH, error statuses; net transmit and receive (needs a backend that returns frames: UDP with `udp_local` = `udp_remote`). Prints `%VIRTIO-I-SELFTEST` lines and PASS or FAIL per device ([virtio.md](virtio.md)). `ALPHABOX_VIRTIO_SELFTEST_DELAY=<s>` runs it `<s>` seconds later, through the DMA window the console set up. |
@@ -61,6 +62,7 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe when it is on the same page (AArch64). |
 | `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms (longword arithmetic, logical immediates, byte manipulation): operands shuttled through x0/x1 as before. For a same-binary A/B. |
 | `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64 emitter). See docs/performance.md, "Sixteen pins, chosen by what runs". |
+| `ALPHABOX_JIT_PIN_SHADOW=1` | Let the adaptive pin set pick R4-R7 and R20-R23, the registers PALcode has shadow copies of; left out by default. See docs/performance.md, "Not the shadow bank". |
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
 | `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |
 | `ALPHABOX_JIT_PINSET=1\|2` | Experiment: start from a different pin set of 14 (AArch64 emitter). `1` gives R17, R18 and R27's slots to R13-R15, the nada benchmark's hot registers; `2` gives R9-R11, R26, R27, R29 and R30's to R8, R4-R6 and R21-R23, those of Microsoft's `makecab`. Combine with `ALPHABOX_JIT_ADAPTPIN=0` to keep it. See docs/performance.md, "What a pinned register is worth". |
@@ -131,6 +133,16 @@ ISA refresh-toggle port; `ALPHABOX_TRACE_LFB=1` reports the S3's linear
 framebuffer window as it is offered and withdrawn, and
 `ALPHABOX_TRACE_CODEWRITE=1` reports the guest writing to memory some block
 was compiled from, which is what decides whether an `IMB` has work.
+
+`ALPHABOX_TRACE_ICPROBE=1` (JIT builds) watches the physical address the
+dispatcher gives a block: `ICPROBE` when its instruction-cache probe meets
+a line the fetch would refuse (filled before the last flush) that names
+another page than the live translation, `ICPROBE-RECORD` when a block is
+recorded at a physical other than the one it was just fetched from, and
+`ICPROBE-CHAIN` when a computed jump enters code compiled from a physical
+other than the live one. The first 50 of each. `ICPROBE` lines are lines
+the probe refuses, as it must; the other two should never appear (see
+docs/performance.md, "Not the shadow bank").
 
 `ALPHABOX_TRACE_VIRGE` traces the S3 ViRGE, as a comma-separated list: `1`
 every port, register and window access; `cmd` each engine command, one line

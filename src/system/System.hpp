@@ -81,6 +81,12 @@ extern bool profile_started;
 extern char *dbg_strptr;
 #endif
 
+// ALPHABOX_KEYPIPE token "dbg-dump" (docs/headless.md): bumped by the GUI,
+// and every CPU prints its state at its next dispatch batch -- registers of
+// both banks, the code around the PC and the stack. For looking at a guest
+// after it hangs; one relaxed load per batch until then.
+inline std::atomic<int> g_dbg_dump_req{0};
+
 /// Structure used for mapping memory ranges to devices.
 struct SMemoryUser {
   CSystemComponent *component; /**< Device that occupies this range. */
