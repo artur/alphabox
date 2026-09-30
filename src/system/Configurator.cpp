@@ -52,6 +52,7 @@
 #include "Permedia2.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
+#include "S3Virge.hpp"
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
@@ -603,6 +604,7 @@ static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
 static const char *const kv_permedia2[] = {"rom", "memory", 0};
+static const char *const kv_s3virge[] = {"rom", "chip", "memory", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
@@ -656,6 +658,7 @@ classinfo classes[] = {
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
     {"mach64", c_mach64, IS_PCI | ON_GUI, kv_mach64},
     {"permedia2", c_permedia2, IS_PCI | ON_GUI, kv_permedia2},
+    {"s3virge", c_s3virge, IS_PCI | ON_GUI, kv_s3virge},
     {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21140", c_tulip, IS_PCI | IS_NIC, kv_tulip},
@@ -954,6 +957,16 @@ void CConfigurator::initialize() {
   case c_permedia2:
     myDevice = new CPermedia2(this, theSystem, pcibus, pcidev);
     break;
+
+  case c_s3virge: {
+    const char *chip = get_text_value("chip", "dx");
+    const virge_chip_config *c = virge_chip_by_name(chip);
+    if (!c)
+      FAILURE_1(Configuration,
+                "s3virge: unknown chip \"%s\" (virge, vx, dx, gx, gx2)", chip);
+    myDevice = new CS3Virge(this, theSystem, pcibus, pcidev, *c);
+    break;
+  }
 
   case c_ehci:
     // A disk controller too (USB mass storage): see c_ali_ide.
