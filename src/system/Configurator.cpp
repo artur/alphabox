@@ -55,6 +55,8 @@
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "VirtioBlk.hpp"
+#include "VirtioNet.hpp"
 #include "gui/plugin.hpp"
 #if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
@@ -607,6 +609,9 @@ static const char *const kv_tulip[] = {
 static const char *const kv_i8255x[] = {
     "adapter", "mac",        "type",      "host_ip",    "bridge",
     "uplink",  "tap_create", "udp_local", "udp_remote", 0};
+static const char *const kv_virtio_net[] = {
+    "mac",     "type",       "host_ip",   "bridge",     "uplink",
+    "adapter", "tap_create", "udp_local", "udp_remote", 0};
 static const char *const kv_disk_file[] = {"file",
                                            "model_number",
                                            "serial_number",
@@ -685,6 +690,8 @@ classinfo classes[] = {
     {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
     {"mpu401", c_mpu401, ON_CS, kv_mpu401},
     {"ehci", c_ehci, IS_PCI | HAS_DISK, kv_ehci},
+    {"virtio_blk", c_virtio_blk, IS_PCI | HAS_DISK, kv_none},
+    {"virtio_net", c_virtio_net, IS_PCI | IS_NIC, kv_virtio_net},
     {"es1370", c_es137x, IS_PCI, kv_none},
     {"es1371", c_es137x, IS_PCI, kv_none},
     {0, c_none, 0, 0}};
@@ -950,6 +957,16 @@ void CConfigurator::initialize() {
   case c_ehci:
     // A disk controller too (USB mass storage): see c_ali_ide.
     myDevice = (CDiskController *)new CEhci(this, theSystem, pcibus, pcidev);
+    break;
+
+  case c_virtio_blk:
+    // A disk controller: see c_ali_ide.
+    myDevice =
+        (CDiskController *)new CVirtioBlk(this, theSystem, pcibus, pcidev);
+    break;
+
+  case c_virtio_net:
+    myDevice = new CVirtioNet(this, theSystem, pcibus, pcidev);
     break;
 
   case c_es137x:

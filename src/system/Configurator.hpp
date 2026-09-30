@@ -67,6 +67,8 @@ typedef enum {
   c_mpu401,
   c_es137x,
   c_ehci,
+  c_virtio_blk,
+  c_virtio_net,
 
   // disk devices
   c_file,

@@ -16,6 +16,9 @@
   is emulated, and what comes next.
 - [USB](usb.md): the built-in OHCI and the EHCI card, the tablet, USB
   disks, host passthrough, and the hooks for testing a guest's USB driver.
+- [Paravirtual devices](virtio.md): virtio-blk and virtio-net (legacy
+  virtio-pci) -- PCI identity, registers, queues, interrupts and the
+  self-test, as a reference for driver writers.
 - [Performance](performance.md): what has been measured, what bounds each
   workload, and which optimizations did not pay off.
 - [Recompiler techniques](jit-techniques.md): what Dolphin, QEMU, PCSX2,
