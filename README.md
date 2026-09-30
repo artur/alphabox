@@ -1,6 +1,6 @@
-# Alphabox
-
-### The Alpha lives.
+<p align="center">
+  <img src="assets/alphabox-banner.svg" alt="Alphabox: the Alpha lives" width="100%">
+</p>
 
 **Alphabox brings DEC's Alpha -- the fastest processor of the 1990s -- back
 to life.** It emulates an HP/DEC AlphaServer ES40 closely enough to boot its
