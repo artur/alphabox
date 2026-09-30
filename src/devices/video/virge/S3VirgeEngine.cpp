@@ -42,8 +42,11 @@
  * the image transfer window (MMIO 0x0000-0x7fff): colour pixels, or one
  * bit a pixel choosing the source foreground or background colour, the
  * background left alone when transparency (bit 9) is set. Host data is a
- * byte stream: each line starts that many bytes into it (bits 13..12)
- * and is padded to a byte, word or doubleword (bits 11..10).
+ * byte stream: the first line starts that many bytes into its first
+ * doubleword (bits 13..12), and every line after it at the next byte,
+ * word or doubleword boundary of the stream (bits 11..10) -- the data
+ * book's "data for a new line begins with the next word after the last
+ * word containing valid data for the previous line".
  *
  * Widths are the register's value plus one, heights the value itself.
  * Lines and polygons run bottom-up, one scanline at a time, their edges
@@ -118,6 +121,8 @@ static virge_draw draw_from(const u32 *mmio, u32 cmd) {
   d.clip_b = R(S2D_CLIP_TB) & 0x7ff;
   d.clip = (cmd & CMD_CLIP) != 0;
   d.rop = u8(cmd >> CMD_ROP_SHIFT);
+  const u32 op = (cmd >> CMD_COMMAND_SHIFT) & 15;
+  d.solid = op == CMD2D_RECT || op == CMD2D_LINE;
   return d;
 }
 
@@ -191,8 +196,11 @@ void CS3Virge::s2d_start(u32 cmd) {
       const u32 align = 1u << ((cmd >> CMD_ALIGN_SHIFT) & 3);
       const u32 data = (cmd & CMD_MONO_SRC) ? (u32(r.e.w) + 7) / 8
                                             : u32(r.e.w) * u32(d.bytes);
-      r.e.line_bytes = (skip + data + align - 1) & ~(align - 1);
+      r.e.line_bytes = data;
       r.e.line_fill = 0;
+      r.e.align = align;
+      r.e.stream_pos = 0;
+      r.e.skip = skip;
       r.e.active = r.e.h > 0 && r.e.line_bytes <= sizeof(r.e.line);
       return; // the rest happens as host data arrives
     }
@@ -222,6 +230,8 @@ void CS3Virge::s2d_start(u32 cmd) {
 /// The pattern's pixel at destination (x, y).
 u32 CS3Virge::s2d_pattern(s32 x, s32 y) const {
   const u32 cmd = m_draw.cmd;
+  if (m_draw.solid)
+    return M(S2D_PAT_FG);
   const u32 px = u32(x) & 7, py = u32(y) & 7;
   if (cmd & CMD_MONO_PAT) {
     const u32 row = py < 4 ? (M(S2D_MONO_PAT0) >> (8 * py))
@@ -317,10 +327,17 @@ void CS3Virge::s2d_host_data(u32 data, int bytes) {
     return;
   }
   for (int i = 0; i < bytes && r.e.active; i++) {
+    r.e.stream_pos++;
+    if (r.e.skip) {
+      r.e.skip--;
+      continue;
+    }
     r.e.line[r.e.line_fill++] = u8(data >> (8 * i));
     if (r.e.line_fill < r.e.line_bytes)
       continue;
     r.e.line_fill = 0;
+    // The next line starts on the alignment boundary of the stream.
+    r.e.skip = (r.e.align - r.e.stream_pos % r.e.align) % r.e.align;
     s2d_host_line(r.e.line);
     const s32 yinc = (r.e.cmd & CMD_Y_POSITIVE) ? 1 : -1;
     r.e.dy += yinc;
@@ -334,7 +351,7 @@ void CS3Virge::s2d_host_line(const u8 *line) {
   const u32 cmd = r.e.cmd;
   m_draw = draw_from(r.mmio, cmd);
   const virge_draw &d = m_draw;
-  const u8 *p = line + ((cmd >> CMD_SKIP_SHIFT) & 3);
+  const u8 *p = line;
   const s32 xinc = (cmd & CMD_X_POSITIVE) ? 1 : -1;
   s32 x = r.e.x0;
   if (cmd & CMD_MONO_SRC) {

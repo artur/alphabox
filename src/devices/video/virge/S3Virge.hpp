@@ -95,6 +95,9 @@ struct virge_draw {
   s32 clip_l, clip_r, clip_t, clip_b;
   bool clip;
   u8 rop;
+  /// Rectangle fills and lines: the pattern is forced to its foreground
+  /// colour, whatever the command says (data book 15.4.4.2-3).
+  bool solid;
 };
 
 class CS3Virge : public CVGACard {
@@ -200,7 +203,22 @@ protected:
   void s2d_pixel(s32 x, s32 y, u32 src, bool have_src);
   u32 s2d_pattern(s32 x, s32 y) const;
   // --- the S3d engine: 3D (S3Virge3D.cpp) ------------------------------------
+public:
+  struct S3dCtx;
+  struct S3dRgba {
+    int r, g, b, a;
+  };
+
+protected:
   void s3d_start(u32 cmd);
+  void s3d_setup(S3dCtx &c) const;
+  S3dRgba s3d_texel(const S3dCtx &c, int lv, s32 iu, s32 iv) const;
+  S3dRgba s3d_sample_level(const S3dCtx &c, int lv, s32 u, s32 v,
+                           bool bilinear) const;
+  S3dRgba s3d_sample(const S3dCtx &c, s32 u, s32 v, s32 d) const;
+  void s3d_pixel(const S3dCtx &c, u32 dest, const s32 *attr);
+  void s3d_span(const S3dCtx &c, s32 y, s32 x, s32 xe, int step, s32 *attr,
+                const s32 *dx);
   void s3d_triangle();
   void s3d_line();
 
@@ -229,8 +247,11 @@ protected:
       s32 dx, dy;     ///< the next destination pixel
       s32 x0;         ///< where each line starts
       s32 w, h;       ///< pixels a line, lines left
-      u32 line_bytes; ///< host bytes one line takes, padding included
+      u32 line_bytes; ///< host bytes of one line's pixels
       u32 line_fill;  ///< host bytes of the current line so far
+      u32 align;      ///< each line starts on this boundary of the stream
+      u32 stream_pos; ///< host bytes taken since the command started
+      u32 skip;       ///< bytes still to drop: first-dword offset, padding
       s32 poly_left, poly_right; ///< a polygon's edges, 12.20
       u8 line[8192 + 8];
     } e;

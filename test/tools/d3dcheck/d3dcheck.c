@@ -104,8 +104,32 @@ static void pf_rgb(DDPIXELFORMAT_T *pf, int bits, DWORD r, DWORD g, DWORD b,
     pf->dwRGBAlphaBitMask = a;
 }
 
+/* The opaque 16-bit texture format the scenes use: RGB 565 when the HAL
+ * offers it, else x555 (the S3 ViRGE's 3D engine has no 565 texels). Both
+ * paths use the same one, so that they sample the same colours. */
+static int have565 = 1;
+
+static HRESULT_T pick_cb(DDPIXELFORMAT_T *pf, void *ctx)
+{
+    int *found = (int *)ctx;
+    if (pf->dwRGBBitCount == 16 && pf->dwRBitMask == 0xf800 &&
+        !pf->dwRGBAlphaBitMask)
+        *found = 1;
+    return 1; /* D3DENUMRET_OK */
+}
+
+static void pf_rgb16(DDPIXELFORMAT_T *pf);
+
+/* A texel function's 565 value in the chosen opaque format. */
+static unsigned from565(unsigned v)
+{
+    if (have565)
+        return v;
+    return (((v >> 11) & 31) << 10) | (((v >> 6) & 31) << 5) | (v & 31);
+}
+
 /* Fill a 16-bit texture through Lock; `texel` gives each one. */
-static int fill_texture(IDirectDrawSurface7 *s, int w, int h,
+static int fill_texture(IDirectDrawSurface7 *s, int w, int h, int opaque,
                         unsigned (*texel)(int, int))
 {
     DDSURFACEDESC2_T sd;
@@ -120,7 +144,8 @@ static int fill_texture(IDirectDrawSurface7 *s, int w, int h,
         unsigned short *row =
             (unsigned short *)((char *)sd.lpSurface + y * sd.lPitch);
         for (x = 0; x < w; x++)
-            row[x] = (unsigned short)texel(x, y);
+            row[x] = (unsigned short)(opaque ? from565(texel(x, y))
+                                             : texel(x, y));
     }
     s->lpVtbl->Unlock(s, 0);
     return 1;
@@ -156,11 +181,19 @@ static IDirectDrawSurface7 *make_texture(int hal, int w, int h, int alpha,
     if (alpha)
         pf_rgb(&pf, 16, 0x7c00, 0x03e0, 0x001f, 0x8000);
     else
-        pf_rgb(&pf, 16, 0xf800, 0x07e0, 0x001f, 0);
+        pf_rgb16(&pf);
     s = make_surface(DDSCAPS_TEXTURE | mem_caps(hal), w, h, &pf);
-    if (s && !fill_texture(s, w, h, texel))
+    if (s && !fill_texture(s, w, h, !alpha, texel))
         return 0;
     return s;
+}
+
+static void pf_rgb16(DDPIXELFORMAT_T *pf)
+{
+    if (have565)
+        pf_rgb(pf, 16, 0xf800, 0x07e0, 0x001f, 0);
+    else
+        pf_rgb(pf, 16, 0x7c00, 0x03e0, 0x001f, 0);
 }
 
 /* ---- any format: texel functions give ARGB 8888, packed per the masks ---- */
@@ -347,13 +380,20 @@ static int open_path(path_t *p)
         SAY("  CreateDevice failed: %08lx\n", (unsigned long)hr);
         return 0;
     }
+    if (p->hal) {
+        int found = 0;
+        p->dev->lpVtbl->EnumTextureFormats(p->dev, pick_cb, &found);
+        have565 = found;
+        if (!found)
+            SAY("  no RGB 565 texture format: opaque textures are x555\n");
+    }
     SAY("%s: textures\n", p->name);
     p->tex_checker = make_texture(p->hal, 64, 64, 0, texel_checker);
     p->tex_small = make_texture(p->hal, 8, 8, 0, texel_small);
     p->tex_alpha = make_texture(p->hal, 64, 64, 1, texel_alpha);
     {
         DDPIXELFORMAT_T pf;
-        pf_rgb(&pf, 16, 0xf800, 0x07e0, 0x001f, 0);
+        pf_rgb16(&pf);
         /* Five levels, 64 down to 4: atidrab gives the Rage Pro levels
          * down to 4x4 only, so a longer chain would differ from D3D's
          * rasteriser by the driver's choice, not the chip's. */
@@ -370,7 +410,8 @@ static int open_path(path_t *p)
         p->tex_grad = make_texture_fmt(p->hal, 64, 1, &pf, texel_grad);
         if (p->tex_key) {
             DDCOLORKEY_T ck;
-            ck.dwColorSpaceLowValue = ck.dwColorSpaceHighValue = 0xf81f;
+            ck.dwColorSpaceLowValue = ck.dwColorSpaceHighValue =
+                have565 ? 0xf81f : 0x7c1f;
             p->tex_key->lpVtbl->SetColorKey(p->tex_key, DDCKEY_SRCBLT, &ck);
         }
         pf_rgb(&pf, 16, 0x0f00, 0x00f0, 0x000f, 0xf000);

@@ -336,7 +336,116 @@ void CS3Virge::draw_hw_cursor(bitmap_rgb32 &bitmap) {
   }
 }
 
-void CS3Virge::draw_overlay(bitmap_rgb32 &bitmap) {}
+/// A clamped 8-bit component from a YUV conversion.
+static inline u32 c8(int v) { return u32(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+/**
+ * The secondary stream: a window of RGB or YUV pixels from its own buffer,
+ * scaled up to its on-screen size (the DDA registers; here the ratio of
+ * the unscaled size, K1 + 1, to the window's), and composed with the
+ * primary stream as the blend control register says -- on top, under it,
+ * blended, or where a colour key matches (data book, section 10).
+ * Horizontal scaling picks the nearest source pixel; the chip's filters
+ * are not modelled.
+ **/
+void CS3Virge::draw_overlay(bitmap_rgb32 &bitmap) {
+  const u32 start = M(SEC_START), size = M(SEC_SIZE);
+  const int x0 = int((start >> 16) & 0x7ff) - 1, y0 = int(start & 0x7ff) - 1;
+  const int w1 = int((size >> 16) & 0x7ff) + 1, h1 = int(size & 0x7ff);
+  if (x0 < 0 || y0 < 0 || x0 >= bitmap.width() || y0 >= bitmap.height() ||
+      h1 <= 0)
+    return;
+  const u32 compose = (M(BLEND_CTL) >> 24) & 7;
+  if (compose == 1 || compose == 4 || compose == 7)
+    return; // the primary stream covers it
+  int w0 = int(M(SEC_STREAM_STRETCH) & 0x7ff) + 1;
+  int h0 = int(M(K1_VSCALE) & 0x7ff) + 1;
+  if (w0 <= 0 || w0 > w1)
+    w0 = w1;
+  if (h0 <= 0 || h0 > h1)
+    h0 = h1;
+  const u32 fmt = (M(SEC_STREAM_CTL) >> 24) & 7;
+  const u32 base =
+      ((M(DOUBLE_BUFFER) & 6) == 2 ? M(SEC_FB_ADDR1) : M(SEC_FB_ADDR0)) &
+      vram_mask();
+  const u32 stride = M(SEC_STRIDE) & 0xfff;
+  const u8 *vram = vga.memory;
+  const u32 mask = vram_mask();
+  const u32 key = M(COLOR_KEY_CTL);
+  const u32 key_mask = (0xff00u >> (((key >> 24) & 7) + 1)) & 0xff;
+  const u32 kp = (M(BLEND_CTL) >> 10) & 7, ks = (M(BLEND_CTL) >> 2) & 7;
+
+  auto sec_pixel = [&](int sx, int sy) -> u32 {
+    const u32 row = base + u32(sy) * stride;
+    switch (fmt) {
+    case 1:   // YCbCr 4:2:2, 16-240
+    case 2: { // YUV 4:2:2, signed chroma
+      const u32 a = row + u32(sx & ~1) * 2;
+      const int yy = vram[(a + (sx & 1) * 2) & mask];
+      int u = vram[(a + 1) & mask], v = vram[(a + 3) & mask];
+      int y = yy;
+      if (fmt == 1) {
+        y = (yy - 16) * 298 / 256;
+        u -= 128, v -= 128;
+      } else {
+        u = s8(u), v = s8(v);
+      }
+      return 0xff000000u | (c8(y + (359 * v) / 256) << 16) |
+             (c8(y - (88 * u + 183 * v) / 256) << 8) | c8(y + (454 * u) / 256);
+    }
+    case 3:
+    case 5:
+      return pixel_rgb(vram, mask, row + u32(sx) * 2, fmt == 3 ? 15 : 16,
+                       m_pen_table);
+    case 6:
+      return pixel_rgb(vram, mask, row + u32(sx) * 3, 24, m_pen_table);
+    case 7:
+      return pixel_rgb(vram, mask, row + u32(sx) * 4, 32, m_pen_table);
+    default: // YUV 2:1:1: not modelled
+      return 0xff000000u;
+    }
+  };
+
+  for (int j = 0; j < h1; j++) {
+    const int y = y0 + j;
+    if (y >= bitmap.height())
+      break;
+    uint32_t *line = &bitmap.pix(y);
+    const int sy = j * h0 / h1;
+    for (int i = 0; i < w1; i++) {
+      const int x = x0 + i;
+      if (x >= bitmap.width())
+        break;
+      const u32 prim = line[x];
+      if (compose == 5) {
+        // Colour key on the primary stream: the overlay shows through
+        // where the primary pixel matches the key.
+        if (!(key & 0x10000000u))
+          continue;
+        bool match = true;
+        for (int sh = 0; sh < 24; sh += 8)
+          if ((((prim >> sh) ^ (key >> sh)) & key_mask) != 0)
+            match = false;
+        if (!match)
+          continue;
+      }
+      const u32 sec = sec_pixel(i * w0 / w1, sy);
+      if (compose == 2 || compose == 3) {
+        const u32 wp = kp, wsec = compose == 2 ? 8 - kp : ks;
+        u32 out = 0xff000000u;
+        for (int sh = 0; sh < 24; sh += 8)
+          out |=
+              ((((prim >> sh) & 0xff) * wp + ((sec >> sh) & 0xff) * wsec) / 8)
+              << sh;
+        line[x] = out;
+      } else if (compose == 6) {
+        continue; // chroma key on the secondary stream: not modelled
+      } else {
+        line[x] = sec;
+      }
+    }
+  }
+}
 
 uint32_t CS3Virge::screen_update(bitmap_rgb32 &bitmap,
                                  const rectangle &cliprect) {
