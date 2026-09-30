@@ -650,13 +650,20 @@ void CEhci::run() {
           next_frame = now + std::chrono::milliseconds(1);
         }
         // FRINDEX counts microframes; the frame list rolls over at its size.
+        // Frames the thread overslept are run one by one, up to a limit: an
+        // isochronous stream moves data in each, and a real controller
+        // would not have skipped them. Beyond the limit they are counted.
         const int fls = (state.usbcmd >> 2) & 3;
         const u32 list_bit = 1u << (13 - fls); // 1024: bit 13; 512: 12; ...
-        const u32 before = state.frindex;
-        state.frindex = (state.frindex + 8 * frames) & 0x3fff;
-        if ((before ^ state.frindex) & list_bit)
-          status(STS_FLR);
-        frame();
+        const int run_now = std::min(frames, kCatchUpFrames);
+        for (int i = 0; i < frames; ++i) {
+          const u32 before = state.frindex;
+          state.frindex = (state.frindex + 8) & 0x3fff;
+          if ((before ^ state.frindex) & list_bit)
+            status(STS_FLR);
+          if (i >= frames - run_now)
+            frame();
+        }
       }
       // Data moved in this pass (an emulated device finishes every qTD in
       // the pass that finds it, so Reclamation alone would miss it).
@@ -679,8 +686,10 @@ void CEhci::frame() {
     periodic_frame();
 }
 
-// The periodic list's entry for this frame: interrupt QHs are serviced
-// (one qTD each); isochronous iTDs/siTDs and FSTNs are passed over.
+// The periodic list's entry for this frame: isochronous iTDs run their
+// frame's transactions, interrupt QHs are serviced (one qTD each); siTDs and
+// FSTNs are passed over (no full-speed device is ever behind a high-speed
+// hub here: the companions serve them).
 void CEhci::periodic_frame() {
   const int fls = (state.usbcmd >> 2) & 3;
   const u32 entries = 1024u >> fls;
@@ -703,6 +712,8 @@ void CEhci::periodic_frame() {
       dma_read(addr + 8, &caps, sizeof(u32), 1);
       if (caps & 0xff) // S-mask: polled in some microframe of this frame
         service_qh(addr, true);
+    } else if (typ == 0) {
+      service_itd(addr);
     }
     link = next;
   }
@@ -910,6 +921,117 @@ int CEhci::service_qh(u32 qh_addr, bool periodic) {
       break;
   }
   return done ? done : (waited ? -1 : 0);
+}
+
+// A high-speed isochronous transfer descriptor (EHCI 1.0 3.3, 4.7). Its
+// eight transaction words are the eight microframes of the frame whose list
+// entry reaches it: each active one moves up to Mult packets of the
+// endpoint's maximum size (buffer page PG, offset, continuing into the next
+// page), and is written back inactive with its status -- for IN with the
+// byte count received. A device that does not answer is a Transaction
+// Error; an IN packet longer than the host allowed, Babble; data the device
+// could not supply or take in time (ISO_OVERRUN: a device behind libusb), a
+// Data Buffer Error, which is what a controller reports for a transaction
+// it could not move. IOC raises USBINT; an error raises USBERRINT. There is
+// no handshake, no toggle and no halt: the next transaction runs whatever
+// became of this one. The whole frame's transactions run at once (the
+// thread's time is a frame), in microframe order.
+void CEhci::service_itd(u32 itd_addr) {
+  u32 d[16];
+  dma_read(itd_addr, d, sizeof(u32), 16);
+  const u32 ACTIVE = 1u << 31, BUFERR = 1u << 30, BABBLE = 1u << 29,
+            XACTERR = 1u << 28, IOC = 1u << 15;
+  const int devaddr = d[9] & 0x7f, ep = (d[9] >> 8) & 0xf;
+  const bool in = (d[10] >> 11) & 1;
+  const int mps = std::max(1, (int)(d[10] & 0x7ff));
+  const int mult = std::max(1, (int)(d[11] & 3));
+  bool ioc = false, err = false;
+  for (int uf = 0; uf < 8; ++uf) {
+    u32 t = d[1 + uf];
+    if (!(t & ACTIVE))
+      continue;
+    const int len = (t >> 16) & 0xfff; // up to 3072
+    const int pg = (t >> 12) & 7;
+    const u32 offset = t & 0xfff;
+    // The transaction's buffer: page PG from the offset, then page PG+1.
+    auto span = [&](u8 *data, int n, bool to_guest) {
+      int at = 0;
+      for (int page = pg, k = (int)offset; at < n && page < 7; ++page, k = 0) {
+        const int chunk = std::min(n - at, 0x1000 - k);
+        const u32 pa = (d[9 + page] & ~0xfffu) + (u32)k;
+        if (to_guest)
+          dma_write(pa, data + at, 1, chunk);
+        else
+          dma_read(pa, data + at, 1, chunk);
+        at += chunk;
+      }
+      return at == n;
+    };
+    u32 errs = 0;
+    int got = len;
+    u8 *buf = m_xfer.data();
+    CUsbDevice *dev = device_at(devaddr);
+    if (!dev) {
+      errs = XACTERR;
+      got = 0;
+    } else if (!in) {
+      if (!span(buf, len, false))
+        errs = BUFERR;
+      // The data as packets of the endpoint's size, Mult at most.
+      for (int at = 0, k = 0; !errs && (at < len || k == 0) && k < mult; ++k) {
+        const int n = std::min(mps, len - at);
+        const int r = dev->iso_transfer(CUsbDevice::PID_OUT, ep, buf + at, n);
+        if (r == CUsbDevice::ISO_NO_ENDPOINT)
+          errs = XACTERR;
+        else if (r < 0)
+          errs = BUFERR; // underrun: the data did not go out in time
+        at += n;
+      }
+    } else {
+      // Up to Mult packets, until a short one ends the transaction.
+      got = 0;
+      for (int k = 0; k < mult; ++k) {
+        const int room = std::max(0, std::min(mps, len - got));
+        const int r =
+            dev->iso_transfer(CUsbDevice::PID_IN, ep, buf + got, room);
+        if (r == CUsbDevice::ISO_NO_ENDPOINT) {
+          errs = XACTERR;
+          break;
+        }
+        if (r < 0) {
+          errs = BUFERR; // overrun: the data was not there in time
+          break;
+        }
+        if (r > room) { // more than the host allowed
+          errs = BABBLE;
+          got += room;
+          break;
+        }
+        got += r;
+        if (r < mps)
+          break;
+      }
+      if (got && !span(buf, got, true))
+        errs |= BUFERR;
+    }
+    if (g_trace)
+      printf("EHCIT %12.1f itd %08x uframe %d %s ep %d len %d -> %d%s\n",
+             trace_us(), itd_addr, uf, in ? "in" : "out", ep, len, got,
+             errs ? " error" : "");
+    // Written back: inactive, the status, and for IN the length received.
+    t &= ~(ACTIVE | BUFERR | BABBLE | XACTERR);
+    t |= errs;
+    if (in)
+      t = (t & ~(0xfffu << 16)) | ((u32)got << 16);
+    d[1 + uf] = t;
+    dma_write(itd_addr + 4 * (1 + uf), &t, sizeof(u32), 1);
+    ioc |= (t & IOC) != 0;
+    err |= errs != 0;
+  }
+  if (err)
+    status(STS_ERR);
+  if (ioc)
+    status(STS_INT);
 }
 
 static u32 ehci_magic1 = 0xE4C11001;
@@ -1129,6 +1251,7 @@ void CEhci::selftest() {
   reg(0x20, CMD_HCRESET);
   if (m_with_companions)
     pass &= selftest_companions(base);
+  pass &= selftest_iso(base);
   printf("%%EHCI-I-SELFTEST: %s\n", pass ? "PASS" : "FAIL");
 }
 
@@ -1151,7 +1274,193 @@ protected:
     return d;
   }
 };
+/// The self-test's isochronous device: high speed, an isochronous OUT
+/// endpoint 2 and IN endpoint 1 of 1024 bytes and three transactions a
+/// microframe, which loop back -- each packet sent OUT comes back IN as a
+/// packet of the same length, in order, and an IN with nothing queued gets
+/// a zero-length packet. Only the self-test plugs it in.
+class CIsoLoopback : public CUsbDevice {
+public:
+  const char *name() const override { return "iso loopback"; }
+  bool can_high_speed() const override { return true; }
+  int iso_transfer(int pid, int ep, u8 *buf, int len) override {
+    if (pid == PID_OUT && ep == 2) {
+      if (m_queue.size() < 64)
+        m_queue.emplace_back(buf, buf + len);
+      return len;
+    }
+    if (pid == PID_IN && ep == 1) {
+      if (m_queue.empty())
+        return 0;
+      const std::vector<u8> p = std::move(m_queue.front());
+      m_queue.erase(m_queue.begin());
+      memcpy(buf, p.data(), std::min((int)p.size(), len));
+      return (int)p.size(); // above len: babble
+    }
+    return ISO_NO_ENDPOINT;
+  }
+
+protected:
+  const std::vector<u8> &device_descriptor() const override {
+    static const std::vector<u8> d = {18,   1,  0x00, 0x02, 0xff, 0,
+                                      0,    64, 0x34, 0x12, 0x79, 0x56,
+                                      0x00, 1,  0,    0,    0,    1};
+    return d;
+  }
+  const std::vector<u8> &configuration_descriptor() const override {
+    // wMaxPacketSize 0x1400: 1024 bytes, two more transactions (Mult 3).
+    static const std::vector<u8> d = {
+        9, 2, 32, 0, 1,    1, 0,    0x80, 50, 9, 4, 0,    0, 2,    0xff, 0,
+        0, 0, 7,  5, 0x81, 1, 0x00, 0x14, 1,  7, 5, 0x02, 1, 0x00, 0x14, 1};
+    return d;
+  }
+
+private:
+  std::vector<std::vector<u8>> m_queue;
+};
 } // namespace
+
+// The self-test's isochronous part (EHCI 1.0 3.3, 4.7): high-speed iTDs
+// in the periodic list, against the loopback device on a free port. An
+// OUT iTD sends eight transactions of different lengths (up to three
+// packets each, across buffer pages); an IN iTD two frames later reads them
+// back into eight 3072-byte transactions, the last with IOC; a third iTD
+// addresses a device that is not there. Checks the data, the lengths
+// written back, the status of every transaction, and USBINT.
+bool CEhci::selftest_iso(u32 base) {
+  const u32 LIST = base + 0x4000, ITD_OUT = base + 0x5000,
+            ITD_IN = base + 0x5100, ITD_NONE = base + 0x5200;
+  const u32 OUTBUF = base + 0x20000, INBUF = base + 0x30000;
+  auto w32 = [&](u32 a, u32 v) { memcpy(cSystem->PtrToMem(a), &v, 4); };
+  auto r32 = [&](u32 a) {
+    u32 v;
+    memcpy(&v, cSystem->PtrToMem(a), 4);
+    return v;
+  };
+  auto reg = [&](u32 off, u32 v) {
+    std::lock_guard<std::mutex> lk(m_mx);
+    reg_write(off, v);
+  };
+  auto rreg = [&](u32 off) {
+    std::lock_guard<std::mutex> lk(m_mx);
+    return reg_read(off);
+  };
+  auto say = [](const char *what, bool ok) {
+    printf("%%EHCI-I-SELFTEST: %-40s %s\n", what, ok ? "ok" : "FAILED");
+    return ok;
+  };
+  int q = -1;
+  for (int p = 0; p < kPorts && q < 0; ++p)
+    if (!m_port[p].dev)
+      q = p;
+  if (q < 0) {
+    printf("%%EHCI-I-SELFTEST: no free port for the isochronous loopback: "
+           "iTDs not checked\n");
+    return true;
+  }
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    COhci *c = companion_of(q);
+    std::unique_lock<std::mutex> clk;
+    if (c)
+      clk = std::unique_lock<std::mutex>(c->mutex());
+    m_port[q].dev = std::make_unique<CIsoLoopback>();
+  }
+  bool pass = true;
+  const u32 psc = 0x64 + 4 * q;
+  reg(0x20, CMD_HCRESET);
+  reg(0x60, 1); // CONFIGFLAG: the ports are the EHCI's
+  reg(psc, PS_PP);
+  reg(psc, PS_PP | PS_PR | PS_CSC);
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  reg(psc, PS_PP);
+  char what[64];
+  snprintf(what, sizeof(what), "port %d: iso loopback, high speed", q + 1);
+  pass &= say(what, (rreg(psc) & PS_PED) != 0);
+
+  // The frame list: empty but for frames 3, 5 and 7.
+  for (u32 i = 0; i < 1024; ++i)
+    w32(LIST + 4 * i, 1);
+  w32(LIST + 4 * 3, ITD_OUT);
+  w32(LIST + 4 * 5, ITD_IN);
+  w32(LIST + 4 * 7, ITD_NONE);
+  // The endpoint words: address 0 (the loopback is not addressed), max
+  // packet 1024, Mult 3.
+  auto make_itd = [&](u32 itd, int ep, bool in, u32 buf, int dev) {
+    for (int i = 0; i < 16; ++i)
+      w32(itd + 4 * i, 0);
+    w32(itd, 1);
+    for (int p = 0; p < 7; ++p)
+      w32(itd + 36 + 4 * p, (buf & ~0xfffu) + 0x1000u * p);
+    w32(itd + 36, (buf & ~0xfffu) | ((u32)ep << 8) | (u32)dev);
+    w32(itd + 40, r32(itd + 40) | (in ? 1u << 11 : 0) | 1024);
+    w32(itd + 44, r32(itd + 44) | 3);
+  };
+  auto tx = [&](u32 itd, int uf, int len, u32 off, bool ioc) {
+    w32(itd + 4 + 4 * uf, (1u << 31) | ((u32)len << 16) | (ioc ? 1u << 15 : 0) |
+                              ((off >> 12) << 12) | (off & 0xfff));
+  };
+  int lens[8];
+  u32 at = 0x123; // start mid-page, so transactions cross pages
+  make_itd(ITD_OUT, 2, false, OUTBUF, 0);
+  u8 *ob = (u8 *)cSystem->PtrToMem(OUTBUF);
+  for (int i = 0; i < 8; ++i) {
+    lens[i] = i == 7 ? 0 : 100 + 400 * i; // up to 2500 (three packets), and
+                                          // a zero-length one
+    for (int k = 0; k < lens[i]; ++k)
+      ob[at + k] = (u8)(i * 37 + k);
+    tx(ITD_OUT, i, lens[i], at, false);
+    at += lens[i];
+  }
+  make_itd(ITD_IN, 1, true, INBUF, 0);
+  memset(cSystem->PtrToMem(INBUF), 0xee, 8 * 3072);
+  for (int i = 0; i < 8; ++i)
+    tx(ITD_IN, i, 3072, 3072u * i, i == 7);
+  make_itd(ITD_NONE, 1, true, INBUF, 9); // address 9: nobody
+  tx(ITD_NONE, 0, 64, 0, false);
+
+  reg(0x24, 0x3f);
+  reg(0x2c, 0); // FRINDEX, while halted
+  reg(0x34, LIST);
+  reg(0x20, CMD_RS | CMD_PSE | 0x00080000);
+  for (int t = 0; t < 200 && (r32(ITD_NONE + 4) & (1u << 31)); ++t)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const u32 sts = rreg(0x24);
+  reg(0x20, 0x00080000);
+
+  bool out_ok = true, in_ok = true, data_ok = true;
+  for (int i = 0; i < 8; ++i) {
+    const u32 to = r32(ITD_OUT + 4 + 4 * i), ti = r32(ITD_IN + 4 + 4 * i);
+    out_ok &= (to & 0xf0000000) == 0 && (int)((to >> 16) & 0xfff) == lens[i];
+    in_ok &= (ti & 0xf0000000) == 0 && (int)((ti >> 16) & 0xfff) == lens[i];
+  }
+  const u8 *ib = (const u8 *)cSystem->PtrToMem(INBUF);
+  for (int i = 0; i < 8; ++i)
+    for (int k = 0; k < lens[i]; ++k)
+      data_ok &= ib[3072 * i + k] == (u8)(i * 37 + k);
+  pass &= say("iTD OUT: 8 transactions done, no error", out_ok);
+  pass &= say("iTD IN: lengths back, no error", in_ok);
+  pass &= say("iTD IN: the data sent, in order", data_ok);
+  pass &= say("iTD IN: IOC raised USBINT", (sts & STS_INT) != 0);
+  const u32 tn = r32(ITD_NONE + 4);
+  pass &= say("iTD to no device: transaction error",
+              !(tn & (1u << 31)) && (tn & (1u << 28)) && !((tn >> 16) & 0xfff));
+  pass &= say("  and USBERRINT", (sts & STS_ERR) != 0);
+
+  reg(0x20, CMD_HCRESET);
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    COhci *c = companion_of(q);
+    std::unique_lock<std::mutex> clk;
+    if (c)
+      clk = std::unique_lock<std::mutex>(c->mutex());
+    m_port[q].dev.reset();
+  }
+  for (auto &c : m_comp)
+    if (c)
+      c->ohci.reset();
+  return pass;
+}
 
 // The self-test's second part, on a card with companions: port routing
 // (EHCI 1.0 4.2). CONFIGFLAG 0 gives every port to the companions and 1

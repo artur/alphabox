@@ -132,8 +132,23 @@ after its last packet. A TD queued too late for all its frames is retired
 with DataOverrun; one whose first frame is still to come waits. If the
 frame thread oversleeps, the frames it missed (up to 32) are run in order
 when it wakes, so a stream does not lose packets to host scheduling. A
-device takes packets through `CUsbDevice::iso_transfer`. The EHCI's own
-isochronous descriptors (iTD, siTD) are not implemented.
+device takes packets through `CUsbDevice::iso_transfer`.
+
+The EHCI runs high-speed isochronous transfers too (EHCI 1.0 3.3, 4.7):
+an iTD in the periodic frame list carries the eight transactions of its
+frame, one a microframe, each up to Mult packets of the endpoint's size
+(up to 3072 bytes) from its buffer page and offset, continuing into the
+next page. Each active transaction is run and written back inactive with
+its status -- for IN with the length received: Transaction Error when no
+device answers, Babble for an IN packet longer than the host allowed, Data
+Buffer Error when the data was not there in time (a device behind libusb).
+IOC raises USBINT, an error USBERRINT. The thread's unit is the frame, so a
+frame's eight transactions run together, in order; frames it oversleeps are
+run one by one, as on the OHCI. siTDs -- split transactions for full-speed
+devices behind a high-speed hub -- are passed over: the card has no such
+hub, and its full-speed devices go to the companions. No Alpha Windows
+driver uses high-speed isochronous endpoints; the iTDs are verified by the
+self-test below, against a loopback device only it plugs in.
 
 Device state -- addresses, configuration -- is not in a saved snapshot:
 after a restore every device is shown to the guest as reconnected, and its
@@ -165,8 +180,12 @@ Everything below is documented in [headless.md](headless.md):
   and, with companions, the port routing: CONFIGFLAG handing every port
   over and back, and a full-speed device (the tablet, or a probe on a free
   port) left disabled by the EHCI's port reset, handed over with
-  PORT_OWNER and enumerated by its companion. Prints PASS or FAIL. No guest
-  driver needed.
+  PORT_OWNER and enumerated by its companion. Then isochronous iTDs,
+  against a high-speed loopback device plugged into a free port: eight OUT
+  transactions of different lengths (up to three packets, across buffer
+  pages) come back through eight IN transactions with their data and
+  lengths, IOC raises USBINT, and an iTD for a missing device ends in a
+  transaction error. Prints PASS or FAIL. No guest driver needed.
 - `usb:detach`, `usb:attach`, `usb:stall`, `usb:phase` and `usb:nak`
   tokens inject faults on a port while a guest runs: surprise removal, a
   halted endpoint, a Bulk-Only phase error, a device that stops answering.

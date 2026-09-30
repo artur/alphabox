@@ -59,13 +59,21 @@ public:
   /// device passed through) takes over the whole of it, endpoint 0 included.
   virtual Result transfer(int pid, int ep, u8 *buf, int &len);
 
-  /// One isochronous packet (a frame's worth) to or from endpoint `ep`.
-  /// OUT: buf holds len bytes; IN: up to len bytes may be written. There is
-  /// no handshake on an isochronous pipe: the answer is the byte count moved
-  /// (IN: sent, OUT: taken), or -1 when the endpoint does not exist in the
-  /// device's current alternate setting -- nothing answers on the bus, and
-  /// the controller reports the packet as not responding. Called with the
-  /// controller's lock held, once per packet, in frame order.
+  /// One isochronous packet (a frame's -- at high speed a microframe's --
+  /// worth) to or from endpoint `ep`. OUT: buf holds len bytes; IN: up to
+  /// len bytes may be written. There is no handshake on an isochronous
+  /// pipe: the answer is the byte count moved (IN: sent, OUT: taken; an IN
+  /// count above len is a packet longer than the host allowed, babble, of
+  /// which only len bytes were written), ISO_NO_ENDPOINT when the endpoint
+  /// does not exist in the device's current alternate setting -- nothing
+  /// answers on the bus, and the controller reports the packet as not
+  /// responding -- or ISO_OVERRUN when the packet's data was not there in
+  /// time (a device behind libusb whose IN data has not arrived, or whose
+  /// OUT queue is full): the controller reports it as its own buffer
+  /// overrun or underrun, the status a real controller gives a packet it
+  /// could not move in its (micro)frame. Called with the controller's lock
+  /// held, once per packet, in frame order.
+  enum { ISO_NO_ENDPOINT = -1, ISO_OVERRUN = -2 };
   virtual int iso_transfer(int pid, int ep, u8 *buf, int len) {
     (void)pid;
     (void)ep;

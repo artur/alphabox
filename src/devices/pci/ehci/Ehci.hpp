@@ -58,9 +58,13 @@
  *
  * The schedule runs on a thread paced in 1 ms frames (eight microframes at
  * a time, FRINDEX counting microframes): each frame the periodic list's
- * entry for the frame (interrupt QHs; isochronous iTDs and siTDs are
- * skipped), then the asynchronous list -- the ring of QHs from
- * ASYNCLISTADDR -- until a pass moves nothing. A device that finishes a
+ * entry for the frame (isochronous iTDs, whose eight transactions are the
+ * frame's eight microframes, and interrupt QHs; siTDs, the split
+ * transactions of full-speed devices behind a high-speed hub, which the card
+ * never has, and FSTNs are passed over), then the asynchronous list -- the
+ * ring of QHs from ASYNCLISTADDR -- until a pass moves nothing. Frames the
+ * thread overslept are run one by one (up to 32), so an isochronous stream
+ * loses nothing to host scheduling. A device that finishes a
  * transfer on another thread (a host device behind libusb) wakes the thread
  * to go round the asynchronous list again at once, as does the driver
  * turning a schedule on. Queue heads execute their qTDs through the
@@ -114,6 +118,7 @@ private:
   void route(int p, bool to_companion);
   u32 hcs_params() const;
   bool selftest_companions(u32 base);
+  bool selftest_iso(u32 base);
   u32 reg_read(u32 offset);
   void reg_write(u32 offset, u32 data);
   void reset_controller();
@@ -126,6 +131,9 @@ private:
   bool async_pass(); // true if the ring had work
   void periodic_frame();
   int service_qh(u32 qh_addr, bool periodic);
+  void service_itd(u32 itd_addr);
+  // Frames the thread overslept that are still run (see run()).
+  static constexpr int kCatchUpFrames = 32;
   CUsbDevice *device_at(int address);
 
   void attach(int p, std::unique_ptr<CUsbDevice> dev);
