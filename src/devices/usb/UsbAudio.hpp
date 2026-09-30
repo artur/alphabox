@@ -53,6 +53,9 @@ public:
   const char *name() const override { return "audio"; }
   void reset() override;
   int iso_transfer(int pid, int ep, u8 *buf, int len) override;
+  bool iso_endpoint(int pid, int ep) const override {
+    return pid == PID_OUT && ep == 1 && m_alt == 1 && m_configuration;
+  }
   bool save(CUsbSaved &s) const override;
   bool load(CUsbSaved &s) override;
 

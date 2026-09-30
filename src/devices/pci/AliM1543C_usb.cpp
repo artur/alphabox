@@ -197,7 +197,8 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
       attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
     } else if (!strcmp(what, "audio")) {
-      attach(p, std::make_unique<CUsbAudio>());
+      attach(p, usb_async_wrap(std::make_unique<CUsbAudio>(), devid_string,
+                               p + 1));
       printf("%s: USB audio speaker on port %d.\n", devid_string, p + 1);
     } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
@@ -241,14 +242,7 @@ void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
   // Each storage device is the initiator on a SCSI bus of its own.
   std::unique_ptr<CUsbDevice> d =
       std::make_unique<CUsbStorage>(new CSCSIBus(myCfg, cSystem), dsk);
-  // ALPHABOX_USB_ASYNC_US=<us>: answer like hardware behind libusb (the
-  // passthrough path's timing, with data that can be checked).
-  if (const char *e = getenv("ALPHABOX_USB_ASYNC_US")) {
-    d = std::make_unique<CUsbAsyncShim>(std::move(d), atoi(e));
-    printf("%s: USB storage on port %d answers after %d us.\n", devid_string,
-           bus, atoi(e));
-  }
-  attach(bus - 1, std::move(d));
+  attach(bus - 1, usb_async_wrap(std::move(d), devid_string, bus));
   printf("%s: USB storage on port %d.\n", devid_string, bus);
 }
 
@@ -852,20 +846,28 @@ int COhci::service_iso_ed(u32 ed_addr, u32 ed[4]) {
     } else if (in) {
       const int want = mps ? std::min(len, mps) : len;
       const int n = dev->iso_transfer(CUsbDevice::PID_IN, ep, buf, want);
-      if (n < 0) {
-        cc = 5;
+      if (n == CUsbDevice::ISO_OVERRUN) {
+        cc = 12; // BufferOverrun: the data was not there in time
+      } else if (n < 0) {
+        cc = 5; // DeviceNotResponding
       } else {
-        size = std::min(n, len);
+        size = std::min(n, want);
         if (size)
           copy(buf, size, true);
-        cc = n > len ? 8 : n < len ? 9 : 0; // DataOverrun, DataUnderrun
+        cc = n > want ? 8 : n < len ? 9 : 0; // DataOverrun, DataUnderrun
       }
     } else {
       if (len)
         copy(buf, len, false);
       const int n = dev->iso_transfer(CUsbDevice::PID_OUT, ep, buf, len);
-      cc = n < 0 ? 5 : 0;
+      if (n == CUsbDevice::ISO_OVERRUN)
+        cc = 13; // BufferUnderrun: the packet could not go out in time
+      else
+        cc = n < 0 ? 5 : 0;
     }
+    if (g_usbtrace && (cc == 12 || cc == 13))
+      printf("USBT iso packet %s: frame %04x, %s\n", in ? "in" : "out", m_frame,
+             cc == 12 ? "BufferOverrun" : "BufferUnderrun");
     // The packet status word replaces the offset.
     const u32 psw = ((u32)cc << 12) | (in ? (u32)size & 0x7ff : 0u);
     const int w = 4 + r / 2, sh = 16 * (r & 1);

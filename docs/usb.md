@@ -71,16 +71,27 @@ speakers). Windows 2000's mixer resamples everything to 48 kHz.
 --version` lists it). A real device of the host, handed to the guest:
 control, bulk and interrupt transfers, submitted asynchronously, so the
 controller's frame never waits on the hardware -- a transfer is NAKed until
-it completes, as a real device does while busy. SET_ADDRESS stays in the
-emulator; SET_CONFIGURATION and SET_INTERFACE go through libusb, which
-claims the interfaces. On the OHCI a high-speed device's descriptors are
+it completes, as a real device does while busy. Isochronous endpoints
+stream through libusb isochronous transfers, on the OHCI and on EHCI iTDs
+alike: each OUT packet the guest sends is submitted at once (with up to 32
+in flight; beyond that it is refused), and an IN endpoint the guest reads
+is kept streaming -- four transfers of eight packets in flight -- into a
+queue its reads take packets from. An isochronous pipe has no NAK, so a
+packet that is not there when the guest's (micro)frame wants it is reported
+as a real controller reports a packet it could not move in time: on the
+OHCI BufferOverrun (IN) or BufferUnderrun (OUT) in the packet's status
+word, on an iTD Data Buffer Error. SET_ADDRESS stays in the emulator;
+SET_CONFIGURATION and SET_INTERFACE go through libusb, which claims the
+interfaces; the device's configuration is only changed when the guest asks
+for a different one, and never to 0 (unconfigured), so interfaces the host's
+own drivers hold on a composite device are left alone. On the OHCI a high-speed device's descriptors are
 rewritten to what a full-speed port allows (64-byte packets, intervals in
 frames); on EHCI they pass unchanged.
 
 Passthrough limits worth knowing:
 
-- Isochronous endpoints (audio, webcams) are refused: the OHCI runs
-  isochronous transfers for emulated devices only.
+- A high-speed isochronous device (a USB 2.0 webcam) needs the EHCI: a
+  full-speed controller cannot carry its bandwidth.
 - On macOS the host keeps interfaces its own drivers hold -- keyboards,
   mice, mass storage, audio -- so such a device enumerates in the guest
   but cannot be used, unless alphabox runs as root. Some devices also need
@@ -89,6 +100,22 @@ Passthrough limits worth knowing:
 - Verified on hardware so far: enumeration and control transfers. Bulk and
   interrupt pipes are verified through the emulated equivalent below, not
   yet against a physical device.
+- Isochronous passthrough is **not verified against any physical device**.
+  The host devices it would need are out of reach here: macOS's audio
+  driver holds a USB audio device's interfaces, and alphabox does not run
+  as root (a C-Media USB audio device, 0d8c:0014, full speed, is the
+  root-only test path for it on this host). What is verified is the
+  controller's side, through the test shim (`ALPHABOX_USB_ASYNC_US`),
+  which moves isochronous packets with libusb's timing: Windows 2000
+  playing chord.wav on the USB speaker behind the shim (500 us), on the
+  ALi's OHCI and on the EHCI card's companion, captures a stream
+  byte-for-byte identical to the one captured without the shim; with a
+  100 ms latency the pipeline fills, 287 packets are reported as
+  BufferUnderrun and the guest carries on; and the EHCI self-test's
+  isochronous loopback behind the shim (250 us to 2 ms) returns every byte
+  sent, in order, with the transactions that found nothing ready ending in
+  Data Buffer Error. The libusb calls themselves (`libusb_fill_iso_transfer`
+  and the stream's resubmission) have not run against hardware.
 
 ## How the controllers work
 
@@ -211,13 +238,20 @@ Everything below is documented in [headless.md](headless.md):
 - `usb:detach`, `usb:attach`, `usb:stall`, `usb:phase` and `usb:nak`
   tokens inject faults on a port while a guest runs: surprise removal, a
   halted endpoint, a Bulk-Only phase error, a device that stops answering.
-- `ALPHABOX_USB_ASYNC_US=<us>` gives the emulated disk the timing of a
-  device behind libusb, to exercise the passthrough path with data that can
-  be checked.
+- `ALPHABOX_USB_ASYNC_US=<us>` gives the emulated disk and speaker (and
+  the self-test's isochronous loopback) the timing of a device behind
+  libusb, isochronous streams included, to exercise the passthrough path
+  with data that can be checked.
 - `test/tools/usb_bench.sh` times the 16 MB read and checks the copy
   written back byte for byte, optionally firing faults during it.
-- `ALPHABOX_USBTRACE=1` logs register writes, every control request a
-  device serves, each Bulk-Only command, isochronous TDs retired late, and
+- `test/tools/usb_audio.sh` plays a sound on the USB speaker and compares
+  the capture with the source (`test/tools/wav_compare.py`: alignment,
+  envelope and waveform correlation); `test/tools/usb_snap.sh` takes the
+  devices through a snapshot.
+- `ALPHABOX_USBTRACE=1` logs register writes, the port status the driver
+  reads, every control request a device serves, each Bulk-Only command,
+  TDs retired with an error, isochronous TDs retired late and packets not
+  moved in time, and
   the EHCI card's per-transfer timeline (pickup, retirement, interrupt
   level, the driver's status reads).
 - `ALPHABOX_USBAUDIO_WAV=<file>` records what the guest plays on the USB

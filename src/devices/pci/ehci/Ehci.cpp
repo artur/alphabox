@@ -148,7 +148,8 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
     } else if (!strcmp(what, "audio") && m_with_companions) {
       // Full speed: the EHCI leaves it for the port's companion.
-      attach(p, std::make_unique<CUsbAudio>());
+      attach(p, usb_async_wrap(std::make_unique<CUsbAudio>(), devid_string,
+                               p + 1));
       printf("%s: USB audio speaker on port %d.\n", devid_string, p + 1);
     } else if (!strncmp(what, "host:", 5)) {
 #if defined(HAVE_LIBUSB)
@@ -269,9 +270,7 @@ void CEhci::register_disk(class CDisk *dsk, int bus, int dev) {
   CDiskController::register_disk(dsk, bus, dev);
   std::unique_ptr<CUsbDevice> d =
       std::make_unique<CUsbStorage>(new CSCSIBus(myCfg, cSystem), dsk);
-  if (const char *e = getenv("ALPHABOX_USB_ASYNC_US"))
-    d = std::make_unique<CUsbAsyncShim>(std::move(d), atoi(e));
-  attach(bus - 1, std::move(d));
+  attach(bus - 1, usb_async_wrap(std::move(d), devid_string, bus));
   printf("%s: USB storage on port %d.\n", devid_string, bus);
 }
 
@@ -977,39 +976,29 @@ void CEhci::service_itd(u32 itd_addr) {
     } else if (!in) {
       if (!span(buf, len, false))
         errs = BUFERR;
-      // The data as packets of the endpoint's size, Mult at most.
-      for (int at = 0, k = 0; !errs && (at < len || k == 0) && k < mult; ++k) {
-        const int n = std::min(mps, len - at);
-        const int r = dev->iso_transfer(CUsbDevice::PID_OUT, ep, buf + at, n);
-        if (r == CUsbDevice::ISO_NO_ENDPOINT)
-          errs = XACTERR;
-        else if (r < 0)
-          errs = BUFERR; // underrun: the data did not go out in time
-        at += n;
-      }
+      // The microframe's data, up to Mult packets of the endpoint's size,
+      // is one isochronous transfer for the device (CUsbDevice::
+      // iso_transfer): what it takes in a microframe.
+      const int n = std::min(len, mult * mps);
+      const int r = dev->iso_transfer(CUsbDevice::PID_OUT, ep, buf, n);
+      if (r == CUsbDevice::ISO_NO_ENDPOINT)
+        errs = XACTERR;
+      else if (r < 0)
+        errs = BUFERR; // underrun: the data did not go out in time
     } else {
-      // Up to Mult packets, until a short one ends the transaction.
+      // Up to Mult packets, as much as the transaction has room for.
+      const int room = std::min(len, mult * mps);
+      const int r = dev->iso_transfer(CUsbDevice::PID_IN, ep, buf, room);
       got = 0;
-      for (int k = 0; k < mult; ++k) {
-        const int room = std::max(0, std::min(mps, len - got));
-        const int r =
-            dev->iso_transfer(CUsbDevice::PID_IN, ep, buf + got, room);
-        if (r == CUsbDevice::ISO_NO_ENDPOINT) {
-          errs = XACTERR;
-          break;
-        }
-        if (r < 0) {
-          errs = BUFERR; // overrun: the data was not there in time
-          break;
-        }
-        if (r > room) { // more than the host allowed
-          errs = BABBLE;
-          got += room;
-          break;
-        }
-        got += r;
-        if (r < mps)
-          break;
+      if (r == CUsbDevice::ISO_NO_ENDPOINT) {
+        errs = XACTERR;
+      } else if (r < 0) { // overrun: the data was not there in time
+        errs = BUFERR;
+      } else if (r > room) { // more than the host allowed
+        errs = BABBLE;
+        got = room;
+      } else {
+        got = r;
       }
       if (got && !span(buf, got, true))
         errs |= BUFERR;
@@ -1379,6 +1368,9 @@ public:
     }
     return ISO_NO_ENDPOINT;
   }
+  bool iso_endpoint(int pid, int ep) const override {
+    return (pid == PID_OUT && ep == 2) || (pid == PID_IN && ep == 1);
+  }
 
 protected:
   const std::vector<u8> &device_descriptor() const override {
@@ -1403,13 +1395,14 @@ private:
 // The self-test's isochronous part (EHCI 1.0 3.3, 4.7): high-speed iTDs
 // in the periodic list, against the loopback device on a free port. An
 // OUT iTD sends eight transactions of different lengths (up to three
-// packets each, across buffer pages); an IN iTD two frames later reads them
-// back into eight 3072-byte transactions, the last with IOC; a third iTD
+// packets each, across buffer pages); IN iTDs from two frames later read
+// them back into 3072-byte transactions, the last with IOC; another iTD
 // addresses a device that is not there. Checks the data, the lengths
-// written back, the status of every transaction, and USBINT.
+// written back, the status of every transaction, and USBINT. With
+// ALPHABOX_USB_ASYNC_US the loopback answers through the async shim, as a
+// device behind libusb would.
 bool CEhci::selftest_iso(u32 base) {
-  const u32 LIST = base + 0x4000, ITD_OUT = base + 0x5000,
-            ITD_IN = base + 0x5100, ITD_NONE = base + 0x5200;
+  const u32 LIST = base + 0x4000;
   const u32 OUTBUF = base + 0x20000, INBUF = base + 0x30000;
   auto w32 = [&](u32 a, u32 v) { memcpy(cSystem->PtrToMem(a), &v, 4); };
   auto r32 = [&](u32 a) {
@@ -1444,7 +1437,8 @@ bool CEhci::selftest_iso(u32 base) {
     std::unique_lock<std::mutex> clk;
     if (c)
       clk = std::unique_lock<std::mutex>(c->mutex());
-    m_port[q].dev = std::make_unique<CIsoLoopback>();
+    m_port[q].dev =
+        usb_async_wrap(std::make_unique<CIsoLoopback>(), devid_string, q + 1);
   }
   bool pass = true;
   const u32 psc = 0x64 + 4 * q;
@@ -1458,12 +1452,18 @@ bool CEhci::selftest_iso(u32 base) {
   snprintf(what, sizeof(what), "port %d: iso loopback, high speed", q + 1);
   pass &= say(what, (rreg(psc) & PS_PED) != 0);
 
-  // The frame list: empty but for frames 3, 5 and 7.
+  // The frame list: empty but for the OUT iTD at frame 3, sixteen IN iTDs
+  // at frames 5 to 20, and one for a missing device at frame 22.
+  constexpr int kIn = 16;
+  const u32 ITD_OUT = base + 0x5000, ITD_NONE = base + 0x5040;
+  auto itd_in = [&](int k) { return base + 0x5100 + 0x40u * (u32)k; };
+  auto inbuf = [&](int k) { return INBUF + 0x8000u * (u32)k; };
   for (u32 i = 0; i < 1024; ++i)
     w32(LIST + 4 * i, 1);
   w32(LIST + 4 * 3, ITD_OUT);
-  w32(LIST + 4 * 5, ITD_IN);
-  w32(LIST + 4 * 7, ITD_NONE);
+  for (int k = 0; k < kIn; ++k)
+    w32(LIST + 4 * (5 + k), itd_in(k));
+  w32(LIST + 4 * 22, ITD_NONE);
   // The endpoint words: address 0 (the loopback is not addressed), max
   // packet 1024, Mult 3.
   auto make_itd = [&](u32 itd, int ep, bool in, u32 buf, int dev) {
@@ -1481,6 +1481,7 @@ bool CEhci::selftest_iso(u32 base) {
                               ((off >> 12) << 12) | (off & 0xfff));
   };
   int lens[8];
+  std::vector<u8> sent;
   u32 at = 0x123; // start mid-page, so transactions cross pages
   make_itd(ITD_OUT, 2, false, OUTBUF, 0);
   u8 *ob = (u8 *)cSystem->PtrToMem(OUTBUF);
@@ -1488,14 +1489,16 @@ bool CEhci::selftest_iso(u32 base) {
     lens[i] = i == 7 ? 0 : 100 + 400 * i; // up to 2500 (three packets), and
                                           // a zero-length one
     for (int k = 0; k < lens[i]; ++k)
-      ob[at + k] = (u8)(i * 37 + k);
+      sent.push_back(ob[at + k] = (u8)(i * 37 + k));
     tx(ITD_OUT, i, lens[i], at, false);
     at += lens[i];
   }
-  make_itd(ITD_IN, 1, true, INBUF, 0);
-  memset(cSystem->PtrToMem(INBUF), 0xee, 8 * 3072);
-  for (int i = 0; i < 8; ++i)
-    tx(ITD_IN, i, 3072, 3072u * i, i == 7);
+  for (int k = 0; k < kIn; ++k) {
+    make_itd(itd_in(k), 1, true, inbuf(k), 0);
+    memset(cSystem->PtrToMem(inbuf(k)), 0xee, 8 * 3072);
+    for (int i = 0; i < 8; ++i)
+      tx(itd_in(k), i, 3072, 3072u * i, k == kIn - 1 && i == 7);
+  }
   make_itd(ITD_NONE, 1, true, INBUF, 9); // address 9: nobody
   tx(ITD_NONE, 0, 64, 0, false);
 
@@ -1503,24 +1506,51 @@ bool CEhci::selftest_iso(u32 base) {
   reg(0x2c, 0); // FRINDEX, while halted
   reg(0x34, LIST);
   reg(0x20, CMD_RS | CMD_PSE | 0x00080000);
-  for (int t = 0; t < 200 && (r32(ITD_NONE + 4) & (1u << 31)); ++t)
+  for (int t = 0; t < 300 && (r32(ITD_NONE + 4) & (1u << 31)); ++t)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   const u32 sts = rreg(0x24);
   reg(0x20, 0x00080000);
 
-  bool out_ok = true, in_ok = true, data_ok = true;
+  bool out_ok = true;
   for (int i = 0; i < 8; ++i) {
-    const u32 to = r32(ITD_OUT + 4 + 4 * i), ti = r32(ITD_IN + 4 + 4 * i);
+    const u32 to = r32(ITD_OUT + 4 + 4 * i);
     out_ok &= (to & 0xf0000000) == 0 && (int)((to >> 16) & 0xfff) == lens[i];
-    in_ok &= (ti & 0xf0000000) == 0 && (int)((ti >> 16) & 0xfff) == lens[i];
   }
-  const u8 *ib = (const u8 *)cSystem->PtrToMem(INBUF);
-  for (int i = 0; i < 8; ++i)
-    for (int k = 0; k < lens[i]; ++k)
-      data_ok &= ib[3072 * i + k] == (u8)(i * 37 + k);
   pass &= say("iTD OUT: 8 transactions done, no error", out_ok);
-  pass &= say("iTD IN: lengths back, no error", in_ok);
-  pass &= say("iTD IN: the data sent, in order", data_ok);
+  // The IN transactions in order: what they received (the length written
+  // back), and how each ended. Straight from the device, the first IN iTD
+  // gets the eight packets back as they were sent, and the rest empty
+  // packets; through the async shim (ALPHABOX_USB_ASYNC_US) a transaction
+  // may find nothing arrived yet -- a Data Buffer Error, never anything
+  // else -- but the bytes received, in order, are still the bytes sent.
+  const bool shim = getenv("ALPHABOX_USB_ASYNC_US") != nullptr;
+  std::vector<u8> got;
+  int errors = 0, buffer_errors = 0;
+  bool first_ok = true;
+  for (int k = 0; k < kIn; ++k)
+    for (int i = 0; i < 8; ++i) {
+      const u32 ti = r32(itd_in(k) + 4 + 4 * i);
+      const int n = (ti >> 16) & 0xfff;
+      if (ti & 0xb0000000)
+        ++errors; // active, babble or transaction error
+      if (ti & (1u << 30))
+        ++buffer_errors;
+      const u8 *d = (const u8 *)cSystem->PtrToMem(inbuf(k) + 3072u * i);
+      got.insert(got.end(), d, d + n);
+      if (k == 0)
+        first_ok &= !(ti & 0xf0000000) && n == lens[i];
+    }
+  if (!shim) {
+    pass &= say("iTD IN: lengths back, no error",
+                first_ok && !errors && !buffer_errors);
+  } else {
+    char line[80];
+    snprintf(line, sizeof(line),
+             "iTD IN via the shim: %d of %d not in time (DBE)", buffer_errors,
+             8 * kIn);
+    pass &= say(line, !errors);
+  }
+  pass &= say("iTD IN: the data sent, in order", got == sent);
   pass &= say("iTD IN: IOC raised USBINT", (sts & STS_INT) != 0);
   const u32 tn = r32(ITD_NONE + 4);
   pass &= say("iTD to no device: transaction error",

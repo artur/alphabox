@@ -135,6 +135,8 @@ CUsbHostDevice::~CUsbHostDevice() {
     for (int s = 0; s <= kControl; ++s)
       if (m_slot[s].xfer)
         libusb_cancel_transfer(m_slot[s].xfer);
+    for (int s = 0; s < 32; ++s)
+      iso_stop(s);
     m_idle.wait(lk, [this]() { return m_in_flight == 0; });
   }
   for (int i : m_claimed)
@@ -180,6 +182,144 @@ void CUsbHostDevice::completed(libusb_transfer *t) {
   d->m_idle.notify_all();
   delete x;
   libusb_free_transfer(t);
+}
+
+/// What an isochronous transfer carries back to its completion.
+struct IsoXfer {
+  CUsbHostDevice *dev;
+  int slot;
+  unsigned gen;
+  std::vector<u8> buf;
+};
+
+// An isochronous transfer ended. IN: its packets go to the stream's ready
+// queue (a packet that failed is left out -- the guest's read then finds
+// nothing, as with a packet that never came), and the transfer goes out
+// again while the stream is on. OUT: nothing to hand back.
+void CUsbHostDevice::iso_completed(libusb_transfer *t) {
+  IsoXfer *x = (IsoXfer *)t->user_data;
+  CUsbHostDevice *d = x->dev;
+  bool again = false;
+  {
+    std::lock_guard<std::mutex> lk(d->m_mx);
+    IsoStream &s = d->m_iso[x->slot];
+    const bool in = (t->endpoint & 0x80) != 0;
+    const bool live = s.gen == x->gen;
+    if (live && in && t->status == LIBUSB_TRANSFER_COMPLETED) {
+      for (int i = 0; i < t->num_iso_packets; ++i) {
+        const libusb_iso_packet_descriptor &p = t->iso_packet_desc[i];
+        if (p.status != LIBUSB_TRANSFER_COMPLETED)
+          continue;
+        const u8 *b = libusb_get_iso_packet_buffer_simple(t, (unsigned)i);
+        s.ready.emplace_back(b, b + p.actual_length);
+        if (s.ready.size() > kIsoReady)
+          s.ready.pop_front(); // the guest fell behind: the oldest goes
+      }
+    }
+    again = live && in && s.on &&
+            std::chrono::steady_clock::now() - s.last_ask <
+                std::chrono::milliseconds(100) &&
+            libusb_submit_transfer(t) == 0;
+    if (!again) {
+      auto &v = s.xfers;
+      v.erase(std::remove(v.begin(), v.end(), t), v.end());
+      if (live && in && v.empty())
+        s.on = false;
+      if (d->on_complete)
+        d->on_complete();
+      --d->m_in_flight;
+    }
+  }
+  if (!again) {
+    d->m_idle.notify_all();
+    delete x;
+    libusb_free_transfer(t);
+  }
+}
+
+// Called with m_mx held: one isochronous transfer of `packets` packets of
+// `len` bytes (IN), or of one packet holding `out` (OUT).
+bool CUsbHostDevice::iso_submit(int slot, u8 ep_addr, const u8 *out, int len,
+                                int packets) {
+  libusb_transfer *t = libusb_alloc_transfer(packets);
+  if (!t)
+    return false;
+  IsoXfer *x = new IsoXfer{this, slot, m_iso[slot].gen, {}};
+  if (ep_addr & 0x80)
+    x->buf.assign((size_t)len * packets, 0);
+  else
+    x->buf.assign(out, out + len);
+  libusb_fill_iso_transfer(t, m_h, ep_addr, x->buf.data(), (int)x->buf.size(),
+                           packets, iso_completed, x, 0);
+  libusb_set_iso_packet_lengths(t, (unsigned)len);
+  const int r = libusb_submit_transfer(t);
+  if (r != 0) {
+    if (g_usbtrace)
+      printf("USBT %s iso slot %d submit failed: %s\n", m_name.c_str(), slot,
+             libusb_error_name(r));
+    delete x;
+    libusb_free_transfer(t);
+    return false;
+  }
+  m_iso[slot].xfers.push_back(t);
+  ++m_in_flight;
+  return true;
+}
+
+// Called with m_mx held: the stream ends; transfers in flight are
+// cancelled, and their completions dropped.
+void CUsbHostDevice::iso_stop(int slot) {
+  IsoStream &s = m_iso[slot];
+  ++s.gen;
+  s.on = false;
+  s.packet = 0;
+  s.ready.clear();
+  for (libusb_transfer *t : s.xfers)
+    libusb_cancel_transfer(t);
+}
+
+bool CUsbHostDevice::iso_endpoint(int pid, int ep) const {
+  if (pid == PID_SETUP || ep < 1 || ep > 15)
+    return false;
+  return m_ep_type[ep | (pid == PID_IN ? 16 : 0)] ==
+         LIBUSB_TRANSFER_TYPE_ISOCHRONOUS;
+}
+
+int CUsbHostDevice::iso_transfer(int pid, int ep, u8 *buf, int len) {
+  if (!iso_endpoint(pid, ep))
+    return ISO_NO_ENDPOINT;
+  const bool in = pid == PID_IN;
+  const int slot = ep | (in ? 16 : 0);
+  const u8 addr = (u8)(ep | (in ? 0x80 : 0));
+  std::lock_guard<std::mutex> lk(m_mx);
+  IsoStream &s = m_iso[slot];
+  if (!in) {
+    if ((int)s.xfers.size() >= kIsoOutMax ||
+        !iso_submit(slot, addr, buf, len, 1))
+      return ISO_OVERRUN; // the packet cannot go out in time
+    return len;
+  }
+  s.last_ask = std::chrono::steady_clock::now();
+  if (!s.on) { // the first read starts the stream
+    if (!s.packet)
+      s.packet = libusb_get_max_iso_packet_size(libusb_get_device(m_h), addr);
+    if (s.packet <= 0) {
+      s.packet = 0;
+      return ISO_NO_ENDPOINT;
+    }
+    s.on = true;
+    for (int i = 0; i < kIsoInXfers; ++i)
+      if (!iso_submit(slot, addr, nullptr, s.packet, kIsoPackets))
+        break;
+    if (s.xfers.empty())
+      s.on = false;
+  }
+  if (s.ready.empty())
+    return ISO_OVERRUN; // nothing arrived in time
+  const std::vector<u8> d = std::move(s.ready.front());
+  s.ready.pop_front();
+  memcpy(buf, d.data(), std::min((int)d.size(), len));
+  return (int)d.size();
 }
 
 // Called with m_mx held. `out` is the OUT data (for control: the 8-byte
@@ -256,6 +396,8 @@ void CUsbHostDevice::reset() {
     std::lock_guard<std::mutex> lk(m_mx);
     for (int s = 0; s <= kControl; ++s)
       cancel(s);
+    for (int s = 0; s < 32; ++s)
+      iso_stop(s);
   }
   CUsbDevice::reset();
   m_stage = C_IDLE;
@@ -287,9 +429,19 @@ bool CUsbHostDevice::set_configuration(int value) {
   for (int i : m_claimed)
     libusb_release_interface(m_h, i);
   m_claimed.clear();
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    for (int s = 0; s < 32; ++s)
+      iso_stop(s);
+  }
+  // The host device's configuration is changed only when the guest asks
+  // for a different one: setting the one it has would reset its endpoints
+  // under host drivers holding other interfaces, and "unconfigured" (0)
+  // would take the device from them -- the guest's unconfigured device is
+  // this one with its interfaces released.
   int cur = -1;
   libusb_get_configuration(m_h, &cur);
-  if (cur != value) {
+  if (value && cur != value) {
     const int r = libusb_set_configuration(m_h, value);
     if (r != 0) {
       printf("%%USB-W-HOSTCONFIG: %s: configuration %d: %s\n", m_name.c_str(),
@@ -318,13 +470,27 @@ bool CUsbHostDevice::set_configuration(int value) {
 }
 
 bool CUsbHostDevice::set_interface(int iface, int alt) {
+  {
+    std::lock_guard<std::mutex> lk(m_mx);
+    for (int s = 0; s < 32; ++s)
+      iso_stop(s);
+  }
   const int r = libusb_set_interface_alt_setting(m_h, iface, alt);
   if (r != 0)
     return false;
-  // The endpoints of the new alternate setting.
+  // The endpoints of the new alternate setting, in place of the old one's
+  // (an isochronous endpoint exists only in the settings that have it).
   libusb_config_descriptor *c = nullptr;
   if (libusb_get_active_config_descriptor(libusb_get_device(m_h), &c) == 0) {
     if (iface < c->bNumInterfaces && alt < c->interface[iface].num_altsetting) {
+      for (int k = 0; k < c->interface[iface].num_altsetting; ++k) {
+        const libusb_interface_descriptor &o =
+            c->interface[iface].altsetting[k];
+        for (int e = 0; e < o.bNumEndpoints; ++e) {
+          const u8 addr = o.endpoint[e].bEndpointAddress;
+          m_ep_type[(addr & 0x0f) | ((addr & 0x80) ? 16 : 0)] = -1;
+        }
+      }
       const libusb_interface_descriptor &a =
           c->interface[iface].altsetting[alt];
       for (int e = 0; e < a.bNumEndpoints; ++e) {
