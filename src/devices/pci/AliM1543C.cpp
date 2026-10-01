@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "Tga.hpp"
 #include "VGA.hpp"
 #ifdef __APPLE__
 #include <mach/mach_time.h>
@@ -293,7 +294,9 @@ void CAliM1543C::init() {
 
   state.toy_stored_data[0x17] = myCfg->get_bool_value("vga_console") ? 1 : 0;
 
-  if (state.toy_stored_data[0x17] && !theVGA) {
+  // A graphics console needs a card the console can draw on: a VGA, or
+  // the TGA, which the console drives with its own driver.
+  if (state.toy_stored_data[0x17] && !theVGA && !theTGA) {
     printf("! CONFIGURATION WARNING ! vga_console set to true, but no VGA card "
            "installed.\n");
     state.toy_stored_data[0x17] = 0;

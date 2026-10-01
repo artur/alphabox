@@ -56,6 +56,7 @@
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "Tga.hpp"
 #include "VirtioBlk.hpp"
 #include "VirtioNet.hpp"
 #include "gui/plugin.hpp"
@@ -605,6 +606,7 @@ static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
 static const char *const kv_permedia2[] = {"rom", "memory", 0};
 static const char *const kv_s3virge[] = {"rom", "chip", "memory", 0};
+static const char *const kv_tga[] = {"rom", "model", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
@@ -680,6 +682,7 @@ classinfo classes[] = {
     {"mach64", c_mach64, IS_PCI | ON_GUI, kv_mach64},
     {"permedia2", c_permedia2, IS_PCI | ON_GUI, kv_permedia2},
     {"s3virge", c_s3virge, IS_PCI | ON_GUI, kv_s3virge},
+    {"tga", c_tga, IS_PCI | ON_GUI, kv_tga},
     {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21140", c_tulip, IS_PCI | IS_NIC, kv_tulip},
@@ -986,6 +989,18 @@ void CConfigurator::initialize() {
       FAILURE_1(Configuration,
                 "s3virge: unknown chip \"%s\" (virge, vx, dx, gx, gx2)", chip);
     myDevice = new CS3Virge(this, theSystem, pcibus, pcidev, *c);
+    break;
+  }
+
+  case c_tga: {
+    const char *model = get_text_value("model", "e1");
+    const tga_model_config *m = tga_model_by_name(model);
+    if (!m)
+      FAILURE_1(Configuration,
+                "tga: unknown model \"%s\" (e1; the 24-plane e2/e3 are not "
+                "modelled yet)",
+                model);
+    myDevice = new CTga(this, theSystem, pcibus, pcidev, *m);
     break;
   }
 
