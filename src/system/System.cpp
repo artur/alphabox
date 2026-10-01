@@ -40,8 +40,10 @@
 
 #include <ctype.h>
 #include <map>
+#include <mutex>
 #include <signal.h>
 #include <stdlib.h>
+#include <unordered_map>
 
 #include <thread>
 #ifdef ALPHABOX_HVF
@@ -548,17 +550,40 @@ void CSystem::trace_unknown(const char *space, u64 address, int dsize,
   if (!trace_unknown_on())
     return;
 
+  // A poll repeats one access millions of times (Marvel's console waits on
+  // an EV7 register for 2^28 reads), and printing each one makes the wait
+  // last ten minutes. The first three are printed, then every power of two
+  // with its count -- a repeated read still shows the firmware is waiting.
+  u64 repeats = 1;
+  {
+    static std::mutex m;
+    static std::unordered_map<u64, u64> seen;
+    const u64 pc = t_running_cpu ? t_running_cpu->get_pc() : 0;
+    const u64 key = (address * U64(0x9e3779b97f4a7c15)) ^ (pc << 8) ^
+                    ((u64)dsize << 1) ^ (write ? 1 : 0);
+    std::lock_guard<std::mutex> lock(m);
+    if (seen.size() > 1000000)
+      seen.clear();
+    repeats = ++seen[key];
+  }
+  if (repeats > 3 && (repeats & (repeats - 1)) != 0)
+    return;
+
   // A processor's own access says which instruction made it; a device's
   // says which device.
   char from[128] = "";
+  if (repeats > 3)
+    snprintf(from, sizeof(from), " [%" PRIu64 " times]", repeats);
   if (t_running_cpu)
     // The return address too: firmware reaches hardware through access
     // helpers, so the instruction is rarely the interesting caller.
-    snprintf(from, sizeof(from), " from cpu%d pc=%016" PRIx64 " ra=%016" PRIx64,
+    snprintf(from + strlen(from), sizeof(from) - strlen(from),
+             " from cpu%d pc=%016" PRIx64 " ra=%016" PRIx64,
              t_running_cpu->get_cpuid(), t_running_cpu->get_pc(),
              t_running_cpu->get_r(26, true));
   else if (source)
-    snprintf(from, sizeof(from), " from %s", source->devid_string);
+    snprintf(from + strlen(from), sizeof(from) - strlen(from), " from %s",
+             source->devid_string);
 
   if (write)
     printf("%%SYS-T-UNKNOWN: write %2d bits to %011" PRIx64
@@ -1162,6 +1187,11 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
     else
       printf("Write to unknown memory %" PRIx64 "   \n", a);
 #endif // defined(DEBUG_UNKMEM)
+    // Outside every space the Tsunami decodes. Traced with the address as
+    // the processor issued it, before the mask above folded it into the
+    // ES40's map: another machine's console (Marvel's EV7 CSRs at
+    // 0xfff'ffc0'0000) is recognisable only from that.
+    trace_unknown("no device", address, dsize, true, data, source);
     return;
   }
 
@@ -1423,6 +1453,8 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
     else
       printf("Read from unknown memory %" PRIx64 "   \n", a);
 #endif // defined(DEBUG_UNKMEM)
+    // As in WriteMem: the unmasked address, for another machine's console.
+    trace_unknown("no device", address, dsize, false, 0, source);
     return 0x00;
 
     //                    return 0x77; // 7f

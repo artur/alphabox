@@ -196,6 +196,15 @@ static const platform_config platforms[] = {
     {"ds20l", "AlphaServer DS20L", "ev68cb", 2, 26, 32, "DS20L_V6_6.EXE",
      FW_RAW_IMAGE, 2, false, 0, nullptr, ds20l_pci_interrupt,
      ds20l_slot_refusal},
+    // EXPERIMENTAL, NOT A MACHINE (docs/platforms/marvel.md): the ES47/ES80/
+    // GS1280 console image, loaded onto the ES40's hardware and an EV68 core
+    // only to see what it does first -- the L1 probe of the Marvel packet.
+    // Nothing here is a Marvel fact except the firmware file and its form
+    // (the same LFU wrapper as the ES40's, "CPQ MARVEL ALPH SRM"); there is
+    // no EV7 core and no IO7, so the console cannot get far.
+    {"marvel-probe", "Marvel console probe (experimental)", "ev68cb", 1, 26, 35,
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 2, false, 0, nullptr, es40_pci_interrupt,
+     ds20l_slot_refusal},
 };
 
 const platform_config *find_platform(const char *name) {
