@@ -114,7 +114,7 @@ void CPermedia2::init() {
 
   // Permedia 2 power-on state (the manual's reset values).
   memset(&r, 0, sizeof(r));
-  r.ctl[IN_FIFO_SPACE >> 2] = 0x20;
+  r.ctl[IN_FIFO_SPACE >> 2] = 256;
   r.ctl[CHIP_CONFIG >> 2] = CHIP_CONFIG_RESET;
   r.ctl[BOOT_ADDRESS >> 2] = 0x31;
   r.ctl[MEM_CONFIG >> 2] = MEM_CONFIG_RESET;

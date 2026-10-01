@@ -106,7 +106,11 @@ u32 CPermedia2::control_read_dword(u32 offset) {
     return r.ctl[INT_FLAGS >> 2];
   }
   case IN_FIFO_SPACE:
-    return 0x20; // the graphics processor takes everything at once
+    // The graphics processor takes everything at once, so the input FIFO is
+    // always empty: all of its 256 words (Hardware Reference 2.2; the
+    // register table's reset value of 0x20 is not what the chip reports).
+    // OpenVMS's DECwindows P2 server waits for at least 50 before it draws.
+    return 256;
   case OUT_FIFO_WORDS:
     return r.g.out_count;
   case COUNT: // MClk, 50 MHz at power-on

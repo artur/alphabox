@@ -461,7 +461,7 @@ bool CPermedia2::raster_next_span() {
     return false;
   const u32 rm = G(T_RASTERIZER_MODE);
   const bool limits =
-      !(rm & (1u << 18)) &&
+      (rm & (1u << 18)) &&
       !(g.render & (RENDER_SYNC_ON_HOST_DATA | RENDER_SYNC_ON_BIT_MASK));
   switch (g.prim) {
   case PRIM_LINE:
@@ -523,13 +523,16 @@ void CPermedia2::raster_run() {
   const bool bm = (g.render & RENDER_SYNC_ON_BIT_MASK) != 0;
   const bool hd = (g.render & RENDER_SYNC_ON_HOST_DATA) != 0;
   const bool reuse = (g.render & RENDER_REUSE_BIT_MASK) != 0;
-  // Bits 9 and 18 are active low: a mask runs on across scanlines, and
-  // the X and Y limits apply, unless they are set (the manual's "0 =
-  // Enabled"; perm2 packs glyph rows into consecutive mask bits).
+  // Bit 9 is active low: a mask runs on across scanlines unless it is set
+  // (perm2 packs glyph rows into consecutive mask bits). Bit 18 enables
+  // the X and Y limits when set, as the register reference (7-113) and
+  // the manual's examples have it -- table 4-7's "0 = Enabled" is wrong:
+  // OpenVMS's DECwindows server leaves it clear and never loads the
+  // limits, and draws nothing otherwise.
   const bool packing = (rm & (1u << 9)) == 0;
   const bool relative = (rm & (1u << 19)) != 0;
   const bool fast = (g.render & RENDER_FAST_FILL) != 0;
-  const bool xlimits = !(rm & (1u << 18)) && !bm && !hd;
+  const bool xlimits = (rm & (1u << 18)) && !bm && !hd;
   const s32 xmin = sext(G(T_X_LIMITS), 16),
             xmax = sext(G(T_X_LIMITS) >> 16, 16);
 
