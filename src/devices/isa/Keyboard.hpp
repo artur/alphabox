@@ -45,6 +45,11 @@
 #define MOUSE_MODE_REMOTE 12
 #define MOUSE_MODE_WRAP 13
 
+/// Scan code set 3 key types (commands F7-FD): a key repeats while held
+/// (typematic) and/or sends a break code when released.
+#define KBD_SET3_REPEAT 0x01
+#define KBD_SET3_BREAK 0x02
+
 /**
  * \brief Emulated keyboard controller, keyboard and mouse.
  **/
@@ -82,6 +87,8 @@ private:
   u8 read_64();
   void write_64(u8 data);
   void resetinternals(bool powerup);
+  void set3_all_keys(u8 type);
+  void set3_default_key_types();
 
   /// Origin of a byte in the controller queue.
   enum : u8 {
@@ -217,7 +224,12 @@ private:
       int head;
       bool expecting_typematic;
       bool expecting_led_write;
-      bool expecting_make_break;
+      /// FB/FC/FD received: the key type (KBD_SET3_*) the scan code set 3
+      /// key codes that follow are given, until the next command; 0 = none
+      u8 expecting_key_type;
+      /// scan code set 3 key type of each key, by its set 3 make code
+      /// (KBD_SET3_* bits): whether the key sends a break code
+      u8 set3_key_type[256];
       u8 delay;
       u8 repeat_rate;
       u8 led_status;

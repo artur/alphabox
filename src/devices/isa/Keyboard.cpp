@@ -280,6 +280,15 @@ void CKeyboard::gen_scancode(u32 key) {
   // for Set 2, key release is indicated by a f0 prefix in
   // those cases where it is indicated. There is nothing
   // special with the Pause key in scancode mode 3.
+  //
+  // In set 3 a key sends a break code only if its key type says so (the
+  // defaults, or commands F7-FD); the table holds one for every key.
+  if ((key & BX_KEY_RELEASED) && state.current_scancodes_set == 2) {
+    const u8 code = (u8)scancodes[(key & 0xFF)][2].make[0];
+    if (!(state.kbd_internal_buffer.set3_key_type[code] & KBD_SET3_BREAK))
+      return;
+  }
+
   if (key & BX_KEY_RELEASED)
     scancode =
         (unsigned char *)scancodes[(key & 0xFF)][state.current_scancodes_set]
@@ -370,7 +379,8 @@ void CKeyboard::resetinternals(bool powerup) {
   state.kbd_internal_buffer.head = 0;
 
   state.kbd_internal_buffer.expecting_typematic = 0;
-  state.kbd_internal_buffer.expecting_make_break = 0;
+  state.kbd_internal_buffer.expecting_key_type = 0;
+  set3_default_key_types();
 
   // Default scancode set is mf2 (translation is controlled by the 8042)
   state.expecting_scancodes_set = 0;
@@ -382,6 +392,32 @@ void CKeyboard::resetinternals(bool powerup) {
     state.kbd_internal_buffer.delay = 1;          // 500 mS
     state.kbd_internal_buffer.repeat_rate = 0x0b; // 10.9 chars/sec
   }
+}
+
+/**
+ * Give every key the scan code set 3 key type <type> (commands F7-FA).
+ **/
+void CKeyboard::set3_all_keys(u8 type) {
+  memset(state.kbd_internal_buffer.set3_key_type, type,
+         sizeof(state.kbd_internal_buffer.set3_key_type));
+}
+
+/**
+ * The scan code set 3 key types a keyboard starts with, and returns to on
+ * a reset or a Set Default (F6) or Default Disable (F5): every key is
+ * typematic without a break code, except the shift keys -- Caps Lock, both
+ * Shifts, left Ctrl and left Alt -- and the keys added after the 101-key
+ * layout (both Windows keys and Menu), which send make and break codes.
+ * The right Ctrl and Alt are not among them: a driver that wants them asks
+ * for it (SRM sends FC 39 and FC 58). Source: A. Brouwer, "Keyboard scancodes"
+ * (scancodes-10), as quoted in gen_scancode().
+ **/
+void CKeyboard::set3_default_key_types() {
+  set3_all_keys(KBD_SET3_REPEAT);
+  static const u8 make_break[] = {0x14, 0x12, 0x59, 0x11,
+                                  0x19, 0x8b, 0x8c, 0x8d};
+  for (u8 code : make_break)
+    state.kbd_internal_buffer.set3_key_type[code] = KBD_SET3_BREAK;
 }
 
 /**
@@ -744,7 +780,7 @@ void CKeyboard::write_64(u8 value) {
     state.expecting_scancodes_set = 0;
     state.kbd_internal_buffer.expecting_typematic = 0;
     state.kbd_internal_buffer.expecting_led_write = 0;
-    state.kbd_internal_buffer.expecting_make_break = 0;
+    state.kbd_internal_buffer.expecting_key_type = 0;
     state.expecting_mouse_parameter = 0;
     state.mouse.im_request = 0;
 
@@ -956,8 +992,7 @@ void CKeyboard::deliver_mouse_byte() {
 bool CKeyboard::kbd_input_held() const {
   return state.expecting_port60h || state.expecting_scancodes_set ||
          state.kbd_internal_buffer.expecting_typematic ||
-         state.kbd_internal_buffer.expecting_led_write ||
-         state.kbd_internal_buffer.expecting_make_break;
+         state.kbd_internal_buffer.expecting_led_write;
 }
 
 /**
@@ -1057,14 +1092,16 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
     state.expecting_scancodes_set = 0;
     state.kbd_internal_buffer.expecting_typematic = 0;
     state.kbd_internal_buffer.expecting_led_write = 0;
-    state.kbd_internal_buffer.expecting_make_break = 0;
+    state.kbd_internal_buffer.expecting_key_type = 0;
   }
 
-  if (state.kbd_internal_buffer.expecting_make_break) {
-    state.kbd_internal_buffer.expecting_make_break = 0;
-#ifdef DEBUG_KBD
-    printf("setting key %x to make/break mode (unused)   \n", value);
-#endif
+  // After FB/FC/FD every byte up to the next command is a set 3 key code
+  // to be given that key type, and is ACKed. Keystrokes are not held back
+  // meanwhile: the list has no end of its own, and a driver that stops after
+  // one key would otherwise lose the keyboard.
+  if (state.kbd_internal_buffer.expecting_key_type) {
+    state.kbd_internal_buffer.set3_key_type[value] =
+        state.kbd_internal_buffer.expecting_key_type & 0x7f;
     kbd_response_enQ(0xFA); // send ACK
     return;
   }
@@ -1231,12 +1268,44 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
 #endif
     break;
 
-  case 0xfc: // PS/2 Set Key Type to Make/Break
-    state.kbd_internal_buffer.expecting_make_break = 1;
-#ifdef DEBUG_KBD
-    printf("kbd: Expecting make/break info.   \n");
-#endif
-    kbd_response_enQ(0xFA); /* send ACK */
+  // Scan code set 3 key types. F7-FA set every key; FB-FD set the keys
+  // whose codes follow. The keyboard keeps them in any scan code set, and
+  // they only change what it sends in set 3. Key repeat is the host's, so
+  // the typematic bit is recorded but not acted on.
+  case 0xf7: // Set All Keys Typematic
+    set3_all_keys(KBD_SET3_REPEAT);
+    kbd_response_enQ(0xFA);
+    break;
+
+  case 0xf8: // Set All Keys Make/Break
+    set3_all_keys(KBD_SET3_BREAK);
+    kbd_response_enQ(0xFA);
+    break;
+
+  case 0xf9: // Set All Keys Make
+    set3_all_keys(0);
+    kbd_response_enQ(0xFA);
+    break;
+
+  case 0xfa: // Set All Keys Typematic/Make/Break
+    set3_all_keys(KBD_SET3_REPEAT | KBD_SET3_BREAK);
+    kbd_response_enQ(0xFA);
+    break;
+
+  // The 0x80 bit keeps "make only" (0) distinguishable from "no command".
+  case 0xfb: // Set Key Type Typematic
+    state.kbd_internal_buffer.expecting_key_type = 0x80 | KBD_SET3_REPEAT;
+    kbd_response_enQ(0xFA);
+    break;
+
+  case 0xfc: // Set Key Type Make/Break
+    state.kbd_internal_buffer.expecting_key_type = 0x80 | KBD_SET3_BREAK;
+    kbd_response_enQ(0xFA);
+    break;
+
+  case 0xfd: // Set Key Type Make
+    state.kbd_internal_buffer.expecting_key_type = 0x80;
+    kbd_response_enQ(0xFA);
     break;
 
   case 0xfe: // resend: repeat the last byte sent (no ACK)
@@ -1252,21 +1321,13 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
     kbd_response_enQ(0xAA); // BAT test passed
     break;
 
-    // case 0xd3:
-    //   kbd_response_enQ(0xfa);
-    //   break;
-  case 0xf7: // PS/2 Set All Keys To Typematic
-  case 0xf8: // PS/2 Set All Keys to Make/Break
-  case 0xf9: // PS/2 PS/2 Set All Keys to Make
-  case 0xfa: // PS/2 Set All Keys to Typematic Make/Break
-  case 0xfb: // PS/2 Set Key Type to Typematic
-  case 0xfd: // PS/2 Set Key Type to Make
-    printf("kbd: unhandled command: %02x, ACKing     \n", value);
-    kbd_response_enQ(0xFA);
-    break;
-
   default:
-    printf("kbd: command %02x: not recognized!   \n", value);
+    // Not a keyboard command: the keyboard asks for it again (Resend), as a
+    // real one does. OpenVMS's keyboard driver sends AB and AF after every
+    // reset and carries on after the Resend, so this is only reported under
+    // ALPHABOX_TRACE_KBC.
+    if (s_trace_kbc)
+      printf("kbd: command %02x: not recognized, Resend\n", value);
     kbd_response_enQ(0xFE); /* send NACK */
     break;
   }
