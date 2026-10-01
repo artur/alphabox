@@ -516,6 +516,7 @@ void CAlphaCPU::init() {
   tick_seen_seq = 0;
   // Decided for all CPUs at construction (see the constructor).
   vmspal_lle_enabled = cSystem->native_pal_requested();
+  parse_vmspal_off();
 
   state.iProcNum = cSystem->RegisterCPU(this);
 
@@ -1360,7 +1361,7 @@ _next_instruction:
       // means we hava an interrupt to service, but we might have. This needs to
       // be checked.
 
-      if (state.pal_vms) {
+      if (state.pal_vms && !(vmspal_off_ent & VMSPAL_OFF_INT)) {
         // PALcode base is set to 0x8000; meaning OpenVMS PALcode is currently
         // active. In this case, our VMS PALcode replacement routines are valid,
         // and should be used as it is faster than using the original PALcode.

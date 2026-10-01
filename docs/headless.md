@@ -38,6 +38,7 @@ To run the whole GUI stack without a window or a display server, set
 | Variable | Effect |
 |---|---|
 | `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
+| `ALPHABOX_VMSPAL_OFF=<list>` | Interpreter builds, OpenVMS PALcode: hand single vmspal replacement routines (`src/cpu/AlphaCPU_vmspal.cpp`) back to the real PALcode while the rest stay native. Comma-separated `CALL_PAL` function numbers in hex (`92` = REI) and `int` (the interrupt entries). Bisecting with it is how a routine that diverges from the PALcode is found. |
 | `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates: CPU interrupt entries by source, Cchip interval-timer ticks, 8259 edges and acknowledges per ISA IRQ, and Cchip DRIR rises. Spots interrupt storms. |
 | `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
 | `ALPHABOX_IDETRACE=1` | Timestamped IDE timeline: commands, ATAPI packet opcodes, bus-master starts and interrupts, and every ATAPI check condition with its sense key. |

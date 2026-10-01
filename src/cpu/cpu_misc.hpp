@@ -64,7 +64,7 @@
   } else {                                                                     \
     if ((function == 0x00) && cSystem->exit_on_pal_halt())                     \
       cSystem->RequestPalHaltExit(); /* main loop exits gracefully */          \
-    if (state.pal_vms) {                                                       \
+    if (state.pal_vms && !vmspal_call_off(function)) {                         \
       switch (function) {                                                      \
       case 0x01: /* CFLUSH */                                                  \
         vmspal_call_cflush();                                                  \

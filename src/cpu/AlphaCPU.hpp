@@ -329,6 +329,15 @@ private:
   // guest's real PALcode instead of recursing on the host stack.
   int vmspal_exc_depth = 0;
   bool vmspal_lle_enabled;
+  // ALPHABOX_VMSPAL_OFF: vmspal replacement routines that hand over to the
+  // real PALcode instead (CALL_PAL functions by number, "int").
+  u64 vmspal_off_call[4] = {0, 0, 0, 0};
+  u32 vmspal_off_ent = 0;
+  enum { VMSPAL_OFF_INT = 1 }; // the ext/sw/ast interrupt entries
+  bool vmspal_call_off(int fn) const {
+    return (vmspal_off_call[(fn >> 6) & 3] >> (fn & 63)) & 1;
+  }
+  void parse_vmspal_off();
 
   // ... ... ...
   u64 cc_large;

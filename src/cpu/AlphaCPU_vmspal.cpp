@@ -156,6 +156,38 @@ static int ipl_ier_mask[32][6] = {
 /***************************************************************************/
 
 /**
+ * ALPHABOX_VMSPAL_OFF=<list>: turn single replacement routines off, so that
+ * the real PALcode runs that entry while the others stay native. The list is
+ * comma separated: CALL_PAL function numbers in hex ("92" = REI), or "int"
+ * for the interrupt entries. For finding which routine diverges from the
+ * real PALcode. The TB-miss and fault entries have no switch: handing just
+ * those to the PALcode made OpenVMS 8.4 bugcheck at boot.
+ **/
+void CAlphaCPU::parse_vmspal_off() {
+  const char *e = getenv("ALPHABOX_VMSPAL_OFF");
+  if (!e || !*e)
+    return;
+  std::string s(e);
+  size_t pos = 0;
+  while (pos <= s.size()) {
+    size_t c = s.find(',', pos);
+    std::string t =
+        s.substr(pos, c == std::string::npos ? std::string::npos : c - pos);
+    if (t == "int")
+      vmspal_off_ent |= VMSPAL_OFF_INT;
+    else if (!t.empty()) {
+      unsigned long fn = strtoul(t.c_str(), nullptr, 16);
+      if (fn < 256)
+        vmspal_off_call[fn >> 6] |= U64(1) << (fn & 63);
+    }
+    if (c == std::string::npos)
+      break;
+    pos = c + 1;
+  }
+  printf("%%CPU-I-VMSPALOFF: vmspal routines off: %s\n", e);
+}
+
+/**
  * \name VMS_pal_call
  * VMS PALcode CALL replacement routines.
  ******************************************************************************/
