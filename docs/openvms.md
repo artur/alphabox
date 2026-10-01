@@ -8,7 +8,7 @@ What was verified, on 2026-10-01, with HP OpenVMS Alpha V8.4 (the
 |---|---|
 | Installation from the CD | Completes on the JIT build in about 15 minutes, onto an IDE disk, with the CD on either IDE channel (see below) |
 | Boot from the installed disk | To the login prompt; SYSTEM logs in on the serial console |
-| Interpreter build | Boots to login with `palcode.vms.nohle = true`; with the default (the OpenVMS PALcode routines replaced natively) it stops after `%STDRV-I-STARTUP` |
+| Interpreter build | Boots to login with the default settings (the OpenVMS PALcode routines replaced natively) and with `palcode.vms.nohle = true` (the real PALcode) |
 | Two and four CPUs (JIT) | OpenVMS starts every secondary (`%SMP-I-CPUTRN, CPU #n has joined the active set`); `SHOW CPU` lists 0-3 active |
 | DECwindows on the 3Dlabs Permedia 2 | The display server starts and the CDE login box (dtlogin) is drawn at 1024x768. Without licences nothing further: see Licences |
 
@@ -78,6 +78,7 @@ benchmarks. Seconds from `boot dqa0` to the end of startup / to `Username:`.
 | JIT | 2 | 26 | 28 |
 | JIT | 4 | 28 | 30 |
 | Interpreter, `palcode.vms.nohle = true` | 1 | 45 | 47 |
+| Interpreter, default (native PALcode routines) | 1 | 38 | 40 |
 
 A DCL loop of 20000 iterations took 1.0-1.1 s of guest time on the JIT
 build and 12.3 s on the interpreter. MACRO-32 (`MACRO.EXE`, part of the base
@@ -168,7 +169,12 @@ No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
 
 ## Known problems
 
-- Interpreter build: with the native OpenVMS PALcode routines (the default
-  there), startup stops after `%STDRV-I-STARTUP` (twice, at 400 s and 10
-  minutes). `palcode.vms.nohle = true` avoids it. JIT builds always run the
-  real PALcode.
+- Fixed: on the interpreter build with the native OpenVMS PALcode routines
+  (the default there), startup used to stop after `%STDRV-I-STARTUP`. The
+  native `REI` lost the old processor mode when reading the exception frame
+  took a DTB miss, saved the stack pointer of the mode being left into the
+  PCB's kernel-stack slot and loaded a stale one for the mode being entered
+  (see `docs/cpu-fidelity.md`). JIT builds were never affected: they always
+  run the real PALcode, and `palcode.vms.nohle = true` does the same on the
+  interpreter. `ALPHABOX_VMSPAL_OFF` (docs/headless.md) hands single native
+  routines back to the PALcode; bisecting with it found this one.

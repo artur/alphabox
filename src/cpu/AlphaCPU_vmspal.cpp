@@ -151,7 +151,7 @@ static int ipl_ier_mask[32][6] = {
     {0x31, 0, 1, 3, 0, 0},      {0x31, 0, 1, 3, 0, 0},
     {0x31, 0, 1, 3, 0, 0},      {0x31, 0, 1, 3, 0, 0},
     {0x31, 0, 1, 3, 0, 0},      {0x31, 0, 1, 0, 0, 0},
-    {0x31, 0, 1, 3, 0, 0},      {0x10, 0, 1, 3, 0, 0}};
+    {0x31, 0, 1, 0, 0, 0},      {0x10, 0, 0, 0, 0, 0}};
 
 /***************************************************************************/
 
@@ -685,6 +685,12 @@ int CAlphaCPU::vmspal_call_rei() {
     ldq(r30 + 0x38, p20);
     state.bIntrFlag = false;
     ldq(r30 + 0x30, p23);
+    // Those loads can take a DTB miss, and the fill (vmspal_ent_dtbm_single,
+    // like the PALcode's own handler) uses p4-p7 as scratch. The PALcode
+    // takes the old mode from PS only after them; so must we, or the old
+    // mode's stack pointer is saved to PCB+0 (the kernel stack slot) and the
+    // new one read from a slot that was never updated.
+    p7 = p22 & 0x18; // old cm
     p4 = p20 & 0x18; // new cm
     if ((p4 < p7) || (p20 & ~U64(0x3f0000000000001b))) {
       p4 = 0x430;
@@ -713,6 +719,11 @@ int CAlphaCPU::vmspal_call_rei() {
     p20 |= p5;
     hw_stq(p7, p20);
     hw_ldq(p6, r30);
+    // The PALcode writes the new mode to the CM register here, and that
+    // write re-evaluates interrupts: an AST for the mode being entered (exec
+    // to user, say) is delivered at once, not at the next interrupt.
+    if (int_deliverable())
+      state.check_int = true;
     set_pc(p23);
     return 0;
   }

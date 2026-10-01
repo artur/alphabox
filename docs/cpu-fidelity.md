@@ -232,7 +232,6 @@ drop an evicted entry's page again. The shadow has no switch.
 | --- | --- | --- |
 | `VA_FORM` is derived from the VPTE address on a double TB miss, where the HRM says the faulting address | `AlphaCPU.cpp`, `virt2phys` VPTE branch | Latent: shipping PALcode uses VA+PTBR, so nothing observed. New firmware reading `VA_FORM` there would compute the wrong page-table address |
 | `lock_flag` is not cleared by `CALL_PAL REI` | `AlphaCPU_vmspal.cpp`, `cpu_pal.hpp` | Every real preemption reaches REI through an exception, which does clear it, so only a deliberate `LDx_L; REI; STx_C` sees it |
-| One `REI` branch does not set `check_int` | `vmspal_call_rei` | An AST that became deliverable by that REI waits for an unrelated event. Interpreter lanes only — JIT builds use native PALcode |
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
 | Reserved barrier code point `18.4C00` is OPCDEC, where ARM App. C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18 | Only hand-written barrier tests |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
@@ -286,6 +285,27 @@ against the manuals, and most of it by running code:
   boot, not a reading of the handbook: the handbook is not wrong, and
   neither is the code, and only running one of them tells you which layer
   you are looking at.
+- **The native OpenVMS `REI`** (`vmspal_call_rei`, interpreter builds
+  only; JIT builds always run the real PALcode). Checked against the
+  console's OpenVMS PALcode V1.98-104 by running both on every `REI` of an
+  OpenVMS 8.4 boot and login: the native routine first, its result kept and
+  undone, then the PALcode, compared at the PALcode's `HW_RET` (registers,
+  PS, PC, mode, IER fields, AST state). That found, and these are now
+  fixed: (1) from a non-kernel mode, a DTB miss on the first frame load ran
+  the fill routine, which uses p4-p7 as scratch, after the old mode had
+  been put in p7 -- the outgoing stack pointer was then saved to PCB+0 (the
+  kernel stack slot) and the incoming one loaded from a slot never updated;
+  OpenVMS 8.4 startup hung after `%STDRV-I-STARTUP`. The PALcode reads the
+  old mode only after its loads. (2) That same branch (non-kernel to
+  non-kernel, e.g. exec to user) did not re-evaluate interrupts, where the
+  PALcode's `HW_MTPR CM` does: an AST for the mode entered waited for the
+  next interrupt. (3) The IER table's rows for IPL 30 and 31 enabled
+  performance-counter and corrected-read interrupts that the PALcode's
+  table at 0xD00 does not (unobservable, neither is ever raised). After the
+  fixes ~480000 compared `REI`s differed only where an external interrupt
+  arrived while the PALcode ran. The other native routines have
+  not been compared this way; `ALPHABOX_VMSPAL_OFF` hands any `CALL_PAL`
+  routine back to the PALcode for such a check.
 - **The JIT's bail protocol**: every fault-capable helper probes without
   side effects and returns before touching memory, a register or the lock
   flag, so a fault is taken once, by the interpreter, with the instruction
