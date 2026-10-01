@@ -116,7 +116,7 @@ card. The [documentation](docs/README.md) covers the rest:
 | Memory | 64 MB – 32 GB |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
-| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE / ViRGE/VX / ViRGE/DX / ViRGE/GX2 (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay); DEC ZLXp-E1 (DECchip 21030 "TGA", 8 planes, Bt485: AlphaBIOS and the Windows 2000 desktop to 1280x1024) |
+| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE / ViRGE/VX / ViRGE/DX / ViRGE/GX2 (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay); DEC ZLXp-E1 (DECchip 21030 "TGA", 8 planes, Bt485: AlphaBIOS and the Windows 2000 desktop to 1280x1024); PowerStorm 3D30 and 4D20 (TGA2: 8 planes with a Bt485, and 32-bit true colour with an IBM RGB561; the Windows 2000 desktop to 1280x1024 and 1600x1200, beside a VGA card) |
 | USB | the ALi M1543C's OHCI (USB 1.1, 3 ports) and an EHCI card (USB 2.0, 4 ports); a HID tablet, Bulk-Only mass storage, and host passthrough through libusb ([docs/usb.md](docs/usb.md)) |
 | Network | DEC 21040 / 21041 / 21140 / 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) and the two-port DE602-AA / DE602-B boards behind a bridge — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 and ES1371 (AC'97 codec and sample-rate converter) |
@@ -181,7 +181,9 @@ which workload, and the optimizations that turned out not to pay.
 - The TGA (ZLXp-E1) is no SRM console: SRM V7.3-1 lists it but has no
   driver for it. Windows 2000's driver draws only in simple mode, so the
   21030's other drawing modes are unverified by any guest; the 24-plane
-  E2/E3 and the TGA2 (PowerStorm 3D30/4D20) are not modelled.
+  E2/E3 are not modelled. The TGA2 (PowerStorm 3D30/4D20) runs only beside
+  a VGA card, which stands in for the board's own Cirrus VGA: neither
+  AlphaBIOS nor SRM drives a TGA2 itself.
 - The Permedia 2 is no SRM console: SRM V7.3-1 starts a card's BIOS without
   telling it where the card is, and every ELSA and 3Dlabs BIOS checks that
   before doing anything. AlphaBIOS starts it properly, so Windows is
