@@ -2283,6 +2283,22 @@ static bool srm_decomp_chunk(CAlphaCPU *cpu) {
  * timing the processor, an unexpected exception through vector 440, and
  * restarts.)
  **/
+/**
+ * Hand every processor to the console at `entry`, the PALcode reset entry
+ * the decompressor jumps to (PALmode bit set). PAL_BASE is that entry's
+ * page: CPU 0's still names the decompressor's own PALcode, which the
+ * console reuses as memory, and a secondary is released at PAL_BASE + 1 --
+ * copied from CPU 0, it ran the decompressor's leftovers (OPCDEC at 0x6022xx
+ * with two processors). Earlier builds stopped past the console's first
+ * instructions, which had already moved PAL_BASE, so it never showed.
+ **/
+static void hand_to_console(CAlphaCPU **cpus, int n, u64 entry) {
+  for (int i = 0; i < n; i++) {
+    cpus[i]->set_pc(entry);
+    cpus[i]->set_PAL_BASE(entry & ~U64(1));
+  }
+}
+
 static const char kDecompTag[8] = {'A', 'L', 'P', 'H', 'D', 'C', '0', '1'};
 static const long kDecompSize = 2 * sizeof(u64) + 0x200000;
 
@@ -2355,10 +2371,7 @@ int CSystem::LoadROM() {
     acCPUs[0]->restore_icache();
 
     if (decomp_ok) {
-      for (i = 0; i < iNumCPUs; i++)
-        acCPUs[i]->set_pc(acCPUs[0]->get_pc());
-      for (i = 0; i < iNumCPUs; i++)
-        acCPUs[i]->set_PAL_BASE(acCPUs[0]->get_pal_base());
+      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
       start_secondaries();
 
       loadedFromFlash = true;
@@ -2399,10 +2412,7 @@ int CSystem::LoadROM() {
     acCPUs[0]->restore_icache();
 
     if (decomp_ok) {
-      for (i = 0; i < iNumCPUs; i++) {
-        acCPUs[i]->set_pc(acCPUs[0]->get_pc());
-        acCPUs[i]->set_PAL_BASE(acCPUs[0]->get_pal_base());
-      }
+      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
       start_secondaries();
       loadedFromFlash = true;
     }
@@ -2504,6 +2514,7 @@ int CSystem::LoadROM() {
 
       printf("100%%\n");
       acCPUs[0]->restore_icache();
+      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
       start_secondaries();
 
       // Written beside the final name and renamed into place, so an image
@@ -2537,11 +2548,10 @@ int CSystem::LoadROM() {
       printf("%%SYS-I-READROM: Reading decompressed ROM image from %s.\n",
              myCfg->get_text_value("rom.decompressed", "decompressed.rom"));
       (void)!fread(&temp, 1, sizeof(u64), f);
-      for (int i = 0; i < iNumCPUs; i++)
-        acCPUs[i]->set_pc(endian_64(temp));
+      const u64 entry = endian_64(temp);
+      // The saved PAL_BASE is not used: see hand_to_console().
       (void)!fread(&temp, 1, sizeof(u64), f);
-      for (int i = 0; i < iNumCPUs; i++)
-        acCPUs[i]->set_PAL_BASE(endian_64(temp));
+      hand_to_console(acCPUs, iNumCPUs, entry);
       buffer = PtrToMem(0);
       (void)!fread(buffer, 1, 0x200000, f);
       fclose(f);
