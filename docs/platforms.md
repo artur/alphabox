@@ -49,6 +49,7 @@ Three layers, each added in a different way:
 | AlphaServer DS20E | under construction: its console runs, finds both processors, drives disks and network-boots ([packet](platforms/ds20e.md)) |
 | AlphaServer DS10 | under construction: its console runs and names the machine, once the board's I2C bus controller was modelled ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | under construction: its own update utility installs its console, which then runs to the prompt and names itself correctly ([packet](platforms/ds20l.md)) |
+| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | planned, phase 0 done: the console's PALcode runs its reset path on an EV68 core and the console proper starts (L1, experimental `marvel-probe` row); it then waits on the EV7's management port. The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Where the firmware comes from
 
@@ -170,9 +171,27 @@ device or an absent CPU.
 4. **Titan** (ES45, DS25) with EV67/EV68 rows.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7
-   with the GS1280.
+   with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)). The EV7 plan,
+   in packets:
+   - **M0**: separate the chipset from `CSystem`, with no behaviour change.
+     This is shared with Titan, and everything below depends on it.
+   - **M1**: an EV7 processor model, kept apart from the EV6 code wherever
+     the PALcode interface differs.
+   - **M2**: each EV7's on-chip registers: router, interrupts, interval
+     timer, memory controllers and the GIO management port.
+   - **M3**: the state the SROM/XSROM leave behind, in place of running
+     them.
+   - **M4**: the management processors' side of the GIO protocol,
+     reverse-engineered from the console. This carries the console
+     terminal, the configuration and the TOY, and is the most uncertain
+     packet.
+   - **M5**: the IO7 I/O bridge (PCI-X/AGP hoses, DMA windows, interrupt
+     routing).
+   - **M6**: board rows for the ES47 first, then the ES80 and GS1280.
+   - **M7**: OpenVMS 8.4.
 
 The EV7 machines are the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its
-console depends on the system's management hardware. The layering above is
-what would make it a packet rather than a rewrite.
+console depends on the system's management hardware. The first contact
+confirmed both: the console's first access is to the processor's own
+management port (GIO), and it reaches nothing else until that answers.

@@ -1,0 +1,63 @@
+                           hp AlphaServer ES47 7/1300
+
+SRM Console	V7.3-11, built on Jun  4 2007 at 13:31:34
+PALcode		OpenVMS PALcode V2.11-25, Tru64 UNIX PALcode V2.08-19
+
+PID 0		CPU 0		Cabinet 0  Drawer 0
+ NS,EW (0,0)	Hard ID 0	1.75 MB Cache		EV7 rev 3.0, 1300 MHz
+ Memory 0			4 GB
+ IO7 0  			Embedded I/O		IO7 pass 3
+  I/O Drawer 0			Cabinet 0  Riser 0	Backplane rev 2
+   PCI Bus 0	Hose 0  	64 Bit, 66 MHz		PCI 2.2 mode
+   PCI Bus 1	Hose 1  	64 Bit, 33 MHz		PCI 2.2 mode
+   PCI Bus 2	Hose 2  	64 Bit, 33 MHz		PCI 2.2 mode
+   AGP Bus 3	Hose 3  	AGP rev 2.0		AGP 1x/4x mode
+
+PID 1		CPU 1		Cabinet 0  Drawer 0
+ NS,EW (1,0)	Hard ID 1	1.75 MB Cache		EV7 rev 3.0, 1300 MHz
+ Memory 1			4 GB
+ No Local I/O
+
+System Memory 8 GB
+
+                       RIMMs
+  PID   Cab Drw CPU  0123456789     Size     Address
+   0     0   0   0   PPPPP.....     4 GB            0   Non-Striped
+   1     0   0   1   PPPPP.....     4 GB    400000000   Non-Striped
+
+ Cab Dwr IOR Port Slot Option                  Hose  Bus  Slot  Function  Name
+  0   0   0    0    1  DEGX2-TA Gigabit Eth      0    0     1       0     ega
+                       + DEGX2-TA Gigabit Eth    0    0     1       1     egb
+  0   0   0    1    3  950A1415/2031131F         1    0     3       0
+                       + 95101415/0000131F       1    0     3       1
+  0   0   0    2    1  Adaptec AIC-7892          2    0     1             pka
+  0   0   0    2    2  CMD 649 PCI-IDE           2    0     2             dqa
+  0   0   0    2    3  USB                       2    0     3       0     usba
+                       + USB                     2    0     3       1     usbb
+                       + USB                     2    0     3       2     usbc
+                       + USB                     2    0     3       3     usbd
+  0   0   0    3    1  Radeon 7500 AGP           3    0     5             vga
+
+ Hose Cab  Dwr  IOR Port  Slots
+
+ Slot	Option			Hose 0, Bus 0, PCI
+   1/0	DEGX2-TA Gigabit Eth	ega0.0.0.1.0        	00-10-18-0D-87-1A
+   1/1	DEGX2-TA Gigabit Eth	egb0.0.0.101.0      	00-10-18-0D-87-1B
+
+ Slot	Option			Hose 1, Bus 0, PCI
+   3/0	950A1415/2031131F
+   3/1	95101415/0000131F
+
+ Slot	Option			Hose 2, Bus 0, PCI
+   1	Adaptec AIC-7892    	pka0.7.0.1.2        	SCSI Bus ID 7
+				dka0.0.0.1.2        	COMPAQ BF3008B26C
+				dka100.1.0.1.2      	COMPAQ BD07285A25
+   2	CMD 649 PCI-IDE     	dqa.0.0.2.2
+				dqa0.0.0.2.2        	CD-W216E
+   3/0	USB                 	usba0.0.0.3.2       	hub
+   3/1	USB                 	usbb0.0.0.103.2     	hub
+   3/2	USB                 	usbc0.0.0.203.2     	hub
+   3/3	USB                 	usbd0.0.0.303.2
+
+ Slot	Option			Hose 3, Bus 0, PCI
+   5	Radeon 7500 AGP     	vga0.0.0.5.3
