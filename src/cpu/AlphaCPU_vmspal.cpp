@@ -1083,8 +1083,15 @@ int CAlphaCPU::vmspal_ent_ext_int(int ei) {
       // pic_read_vector
       hw_ldl(p5, p5);
       p4 = p5 & 0xff;
-      if (p4 == 0x07)
-        FAILURE(NotImplemented, "Can't handle PIC interrupt 7");
+      if (p4 == 0x07) {
+        // The master 8259 answers 7 for an interrupt that went away before
+        // the acknowledge as well (pic_read_vector). Like the PALcode, read
+        // its in-service register (OCW3 0x0b, then port 0x20): if IRQ 7 is
+        // not in service the interrupt was spurious, and it is dismissed.
+        sys_write(U64(0x00000801fc000020), 8, 0x0b);
+        if (!(sys_read(U64(0x00000801fc000020), 8) & 0x80))
+          return 0;
+      }
 
       if (p4 >= 0x10)
         return 0;

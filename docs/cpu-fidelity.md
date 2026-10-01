@@ -303,7 +303,10 @@ against the manuals, and most of it by running code:
   performance-counter and corrected-read interrupts that the PALcode's
   table at 0xD00 does not (unobservable, neither is ever raised). After the
   fixes ~480000 compared `REI`s differed only where an external interrupt
-  arrived while the PALcode ran. The other native routines have
+  arrived while the PALcode ran. A spurious master-PIC interrupt (vector
+  7) stopped the emulator in the native interrupt entry; it is now
+  dismissed after reading the in-service register, as the PALcode does.
+  The other native routines have
   not been compared this way; `ALPHABOX_VMSPAL_OFF` hands any `CALL_PAL`
   routine back to the PALcode for such a check.
 - **The JIT's bail protocol**: every fault-capable helper probes without
