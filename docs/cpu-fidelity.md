@@ -155,18 +155,57 @@ icache probe (875b499) does not change it: the control build without it and
 current main crash alike, and `ALPHABOX_TRACE_ICPROBE=1` reports no
 `ICPROBE-RECORD` or `ICPROBE-CHAIN` in the crashing run.
 
-To install RC2 with the JIT, put `timer.max_instr_per_tick = 500000;` in the
-`cpu0` section for GUI setup and remove it afterwards: it holds the
-processor to about 64 million instructions a second.
+An 800 MHz EV68 has 6.2 million cycles per 7.8 ms tick; unless it averaged
+under about 0.1 instructions a cycle here it would sit nearer the JIT (3.5
+million instructions a tick) than the interpreter (0.7 million), so
+processor speed alone does not explain why the release installed on
+hardware. **Disk latency does.** `DllMain` creates the workers and then
+touches a page of `msdtctm.dll` that is not yet in memory: the setup thread
+takes a page fault, and the paging read (an IDE `READ MULTIPLE` of 5
+sectors) is the first thing it waits for. On a real disk that wait is
+milliseconds, the thread blocks, and the ready workers run. Here the image
+file answers in about 0.1 ms, and the workers do not get the processor
+until the setup thread is past `FreeLibrary`. With `ALPHABOX_IDETRACE=1`
+and a diagnostic address trace (not in the tree), same checkpoint, JIT:
 
-Whether an ES40 loses the race too is not known. An 800 MHz EV68 has 6.2
-million cycles per 7.8 ms tick; unless it averaged under about 0.1
-instructions a cycle here it would sit nearer the JIT (3.5 million
-instructions a tick) than the interpreter (0.7 million), so processor speed
-alone does not explain why the release installed on hardware. Disk
-latency -- microseconds here, milliseconds on a real disk, time in which a
-waiting setup thread would let the workers run -- is one candidate; it was
-not measured.
+| | that read takes | workers enter 65ABB3F0 | `DllMain` detach |
+| --- | --- | --- | --- |
+| no latency model | 0.1 ms | +12.24 M, +124.3 M (after: crash) | +10.98 M |
+| 8 ms access time | 10 ms | +0.28 M, +0.29 M | +10.81 M |
+
+The disks can be given mechanical latency (es40.cfg, `latency.*` keys of a
+disk; `ALPHABOX_DISK_LATENCY_US` for every IDE hard disk, see
+docs/headless.md), off by default. GUI setup from the checkpoint, JIT at the
+default `timer.max_instr_per_tick`, outcome read from `setuperr.log` and
+the GUI-setup restarts in `setupact.log`; "finished" means setup completed,
+rebooted and showed the Network Identification Wizard; the last column is
+launch to the evaluation-copy notice at the end of GUI setup (one "off" and
+one 8 ms run were the diagnostic build that produced the trace above, not
+timed):
+
+| access time (+0.3 ms per command, 20 MB/s) | runs | crash at 65ABB3F0 | finished | clone to end of setup |
+| --- | --- | --- | --- | --- |
+| off | 4 | 4 (each restarted GUI setup, 1-5 times before it was stopped) | 0 | -- |
+| 0.5 ms | 2 | 0 | 2 | 556 s, 586 s |
+| 2 ms | 2 | 0 | 2 | 658 s, 673 s |
+| 8 ms | 3 | 0 | 2 (the third was stopped once past COM+) | 971 s, 974 s |
+| 15 ms | 2 | 0 | 2 | 1325 s, 1364 s |
+
+What it costs: the time from launch to the desktop of the installed RC2
+guest (2 CPUs, JIT, frame-dump resolution about 2 s, three interleaved
+boots each) went from 82-85 s with the model off to 95-98 s at 0.5 ms and
+128-130 s at 8 ms.
+
+It stays an option, off by default. It is the better way to install RC2
+with the JIT: `ALPHABOX_DISK_LATENCY_US=500` (or, on the system disk,
+`latency.access_us = 500; latency.command_us = 300; latency.mb_per_s = 20;`,
+the same model) for GUI setup costs about 15% more wall time at boot,
+where `timer.max_instr_per_tick = 500000;` holds
+the processor to about 64 million instructions a second throughout (and
+also gets past this point). A realistic default would make every boot of
+every guest a sixth to a half slower for a race that only this release is
+known to lose. The model covers ALi IDE hard disks only: the SCSI adapters,
+virtio-blk, USB storage and ATAPI CD-ROMs still complete at host speed.
 
 ### Data translations outlive their TB entry
 
