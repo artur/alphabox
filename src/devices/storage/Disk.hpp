@@ -34,6 +34,7 @@
 #define __DISK_H__
 
 #include "DiskController.hpp"
+#include "DiskLatency.hpp"
 #include "SCSIBus.hpp"
 #include "SCSIDevice.hpp"
 #include <atomic>
@@ -119,6 +120,10 @@ public:
   char *get_model() { return model_number; };
   char *get_rev() { return revision_number; };
 
+  /// Mechanical service time model (off unless configured); used by the
+  /// controller's own thread only.
+  CDiskLatency &latency() { return latency_model; };
+
   bool ro() { return read_only; };
   bool rw() { return !read_only; };
   bool cdrom() { return is_cdrom; };
@@ -177,6 +182,7 @@ protected:
   bool is_cdrom;
   bool is_removable; ///< CD-ROM or floppy: may be empty, reports media state.
   std::atomic<bool> lock_mirror{false};
+  CDiskLatency latency_model;
 
   off_t_large byte_size;
   off_t_large cylinders;

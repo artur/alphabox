@@ -76,6 +76,18 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
   is_removable = is_cdrom;
   byte_size = 0;
 
+  latency_model.configure(myCfg->get_num_value("latency.access_us", false, 0),
+                          myCfg->get_num_value("latency.command_us", false, 0),
+                          myCfg->get_num_value("latency.mb_per_s", false, 0));
+  if (!is_cdrom)
+    latency_model.configure_from_env();
+  if (latency_model.enabled())
+    printf("%s: latency model: %llu us access, %llu us per command, %llu "
+           "MB/s.\n",
+           devid_string, (unsigned long long)latency_model.access_us(),
+           (unsigned long long)latency_model.command_us(),
+           (unsigned long long)latency_model.mb_per_s());
+
   state.block_size = is_cdrom ? 2048 : 512;
   state.scsi.sense.available = false;
   state.scsi.media_changed = 0;

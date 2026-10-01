@@ -2598,6 +2598,55 @@ int CAliM1543C_ide::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
 }
 
 /**
+ * The time the drive spends on the media in the cycle execute() is about to
+ * run, from the disk's latency model (zero unless one is configured). Charged
+ * where execute() touches the media: the whole command on the first cycle of
+ * a read (the drive reads ahead into its buffer), each block as it arrives
+ * for a PIO write, the whole command for DMA. ATAPI packets are not charged.
+ **/
+u64 CAliM1543C_ide::media_time_us(int index) {
+  CDisk *d = SEL_DISK(index);
+  if (!d || d->cdrom() || !d->latency().enabled())
+    return 0;
+  const int cycle = SEL_COMMAND(index).command_cycle;
+  u64 blocks = 0;
+  bool first = cycle == 0;
+  switch (SEL_COMMAND(index).current_command) {
+  case 0x20: // read sectors
+  case 0x21:
+  case 0xc4: // read multiple
+  case 0xc8: // read dma
+  case 0xc9:
+    if (cycle != 0)
+      return 0;
+    blocks = SEL_REGISTERS(index).sector_count
+                 ? SEL_REGISTERS(index).sector_count
+                 : 256;
+    break;
+  case 0xca: // write dma
+  case 0xcb:
+    if (cycle != 0 || d->ro())
+      return 0; // a write to a read-only disk is aborted at once
+    blocks = SEL_REGISTERS(index).sector_count
+                 ? SEL_REGISTERS(index).sector_count
+                 : 256;
+    break;
+  case 0x30: // write sectors: one block per cycle after the first
+  case 0x31:
+  case 0xc5: // write multiple: a multiple-block per cycle
+    if (cycle == 0 || SEL_STATUS(index).drq)
+      return 0;
+    blocks = CONTROLLER(index).data_size / 256;
+    first = cycle == 1;
+    break;
+  default:
+    return 0;
+  }
+  return d->latency().service_us(get_disk_lba(index), blocks,
+                                 d->get_block_size(), first);
+}
+
+/**
  * Thread entry point.
  **/
 void CAliM1543C_ide::wake_controller(int index) {
@@ -2636,8 +2685,19 @@ void CAliM1543C_ide::run(int index) {
         printf("Thread %d: \n", index);
         ide_status(index);
 #endif
-        if (SEL_COMMAND(index).command_in_progress)
-          execute(index);
+        if (SEL_COMMAND(index).command_in_progress) {
+          const u64 us = media_time_us(index);
+          if (us) {
+            // The drive is on the media: BSY stays set, and a status read
+            // must not spin waiting for it (sync_controller), so the work
+            // is reported done before the controller sleeps.
+            work_done[index].store(queued);
+            std::this_thread::sleep_for(std::chrono::microseconds(us));
+          }
+          // A reset during the wait ends the command.
+          if (SEL_COMMAND(index).command_in_progress && !StopThread)
+            execute(index);
+        }
         UPDATE_ALT_STATUS(index);
         work_done[index].store(queued);
 

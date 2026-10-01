@@ -625,14 +625,35 @@ static const char *const kv_disk_file[] = {"file",
                                            "cdrom",
                                            "autocreate_size",
                                            "allow_guest_eject",
+                                           "latency.access_us",
+                                           "latency.command_us",
+                                           "latency.mb_per_s",
                                            0};
-static const char *const kv_disk_device[] = {
-    "device",     "model_number", "serial_number",
-    "serial_num", "rev_number",   "rev_num",
-    "read_only",  "cdrom",        0};
-static const char *const kv_disk_ram[] = {
-    "size",       "file",    "model_number", "serial_number", "serial_num",
-    "rev_number", "rev_num", "read_only",    "cdrom",         0};
+static const char *const kv_disk_device[] = {"device",
+                                             "model_number",
+                                             "serial_number",
+                                             "serial_num",
+                                             "rev_number",
+                                             "rev_num",
+                                             "read_only",
+                                             "cdrom",
+                                             "latency.access_us",
+                                             "latency.command_us",
+                                             "latency.mb_per_s",
+                                             0};
+static const char *const kv_disk_ram[] = {"size",
+                                          "file",
+                                          "model_number",
+                                          "serial_number",
+                                          "serial_num",
+                                          "rev_number",
+                                          "rev_num",
+                                          "read_only",
+                                          "cdrom",
+                                          "latency.access_us",
+                                          "latency.command_us",
+                                          "latency.mb_per_s",
+                                          0};
 static const char *const kv_gui_sdl[] = {
     "keyboard.use_mapping", "keyboard.map",
     "mouse.speed",          "mouse.invert_x",

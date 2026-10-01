@@ -129,6 +129,7 @@ private:
   void execute(int index);
   void wake_controller(int index); // queue work for the controller thread
   void sync_controller(int index); // let queued work land before a status read
+  u64 media_time_us(int index);    // modelled drive time for this cycle
 
   std::unique_ptr<std::thread>
       thrController[2]; // one thread per controller chip
