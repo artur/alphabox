@@ -321,7 +321,8 @@ void CTga::op_fill(u32 a, u32 data, int kind) {
  *   0x200-0x2fc  rectangle ports, starting at GADR when GADR is new
  *   0x300        the rectangle address (a frame buffer byte address)
  *   0x304-0x358  rectangle ports, starting at the rectangle address
- *   0x35c        the row pitch, in pixels
+ *   0x35c        the row pitch, in bytes (pixels at 8 bpp; the 4D20's
+ *                32-bpp rows are four times the pixel count)
  *
  * A write to a port fills (data <31:16> + 1) rows of (data <15:0> + 1)
  * pixels in the fill mode in force -- block, opaque or transparent fill,
@@ -379,7 +380,7 @@ void CTga::tga2_rect(u32 size) {
     first_use("TGA2 rectangle, mode %02x", mode);
   const unsigned rows = (size >> 16) + 1;
   const unsigned cols = (size & 0xffff) + 1;
-  const u32 pitch = e.rect_pitch * dst_step();
+  const u32 pitch = e.rect_pitch;
   for (unsigned y = 0; y < rows; y++) {
     for (unsigned x = 0; x < cols; x += 2048) {
       const unsigned n = std::min(2048u, cols - x);

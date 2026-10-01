@@ -250,10 +250,10 @@ private:
     u8 sub; ///< byte of a multi-byte table entry next
     u8 latch[3];
     u8 regs[0x100]; ///< configuration, sync, cursor, crosshair, DAC
-    u16 fb_wat[16]; ///< frame buffer window types, 10 bits
-    u16 ol_wat[16]; ///< overlay window types, 10 bits
-    u8 auxfb_wat[16];
-    u8 auxol_wat[16];
+    u16 fb_wat[256]; ///< frame buffer window types, 10 bits
+    u16 ol_wat[256]; ///< overlay window types, 10 bits
+    u8 auxfb_wat[256];
+    u8 auxol_wat[256];
     u8 cmap[1024][3];
     u16 gamma[3][256];
     u8 cursor_lut[16][3];

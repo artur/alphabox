@@ -73,9 +73,9 @@ static u8 *rgb561_byte(u16 a, u8 *regs, u8 *auxfb, u8 *auxol, u8 *cursor,
                        u8 *lut) {
   if (a < 0x100)
     return &regs[a];
-  if (a >= R561_AUXFB_WAT && a < R561_AUXFB_WAT + 16)
+  if (a >= R561_AUXFB_WAT && a < R561_AUXFB_WAT + 256)
     return &auxfb[a - R561_AUXFB_WAT];
-  if (a >= R561_AUXOL_WAT && a < R561_AUXOL_WAT + 16)
+  if (a >= R561_AUXOL_WAT && a < R561_AUXOL_WAT + 256)
     return &auxol[a - R561_AUXOL_WAT];
   if (a >= R561_CURSOR_BITMAP && a < R561_CURSOR_BITMAP + 1024)
     return &cursor[a - R561_CURSOR_BITMAP];
@@ -86,9 +86,9 @@ static u8 *rgb561_byte(u16 a, u8 *regs, u8 *auxfb, u8 *auxol, u8 *cursor,
 
 /// The 10-bit table entry at an address, if it is one.
 static u16 *rgb561_wide(u16 a, u16 *fb_wat, u16 *ol_wat, u16 (*gamma)[256]) {
-  if (a >= R561_FB_WAT && a < R561_FB_WAT + 16)
+  if (a >= R561_FB_WAT && a < R561_FB_WAT + 256)
     return &fb_wat[a - R561_FB_WAT];
-  if (a >= R561_OL_WAT && a < R561_OL_WAT + 16)
+  if (a >= R561_OL_WAT && a < R561_OL_WAT + 256)
     return &ol_wat[a - R561_OL_WAT];
   if (a >= R561_GAMMA_R && a < R561_GAMMA_R + 0xc00 && (a & 0x3ff) < 256)
     return &gamma[(a - R561_GAMMA_R) >> 10][a & 0xff];
@@ -190,7 +190,7 @@ u8 CTga::rgb561_read(unsigned port) {
 u32 CTga::rgb561_pixel(u32 p) const {
   static const unsigned wid_bits[8] = {0, 2, 4, 6, 8, 8, 8, 8};
   const unsigned nwid = wid_bits[ibm.regs[R561_CONFIG1] & 7];
-  const unsigned wid = nwid ? (p >> (32 - nwid)) & 0xf : 0;
+  const unsigned wid = nwid ? (p >> (32 - nwid)) & 0xff : 0;
   const u16 wat = ibm.fb_wat[wid];
   const unsigned block = (wat >> 6) & 0xf;
   const bool buf_b = (wat & 0x08) != 0;
