@@ -2271,6 +2271,21 @@ static bool srm_decomp_chunk(CAlphaCPU *cpu) {
   return false;
 }
 
+/**
+ * decompressed.rom is the entry PC and PAL_BASE (8 bytes each), the low 2 MB
+ * of memory, and this tag. The image is where it always was, 16 bytes in;
+ * the tag marks a file saved at the decompressor's jump into the console.
+ * Earlier builds saved the PC some way past that jump -- inside the
+ * console's PALcode reset code, without the registers and IPRs that code
+ * had set, the cycle counter enable among them -- so a file without the
+ * tag is decompressed again rather than trusted. (From the JIT lane such a
+ * file does not boot; from the interpreter the console divides by zero
+ * timing the processor, an unexpected exception through vector 440, and
+ * restarts.)
+ **/
+static const char kDecompTag[8] = {'A', 'L', 'P', 'H', 'D', 'C', '0', '1'};
+static const long kDecompSize = 2 * sizeof(u64) + 0x200000;
+
 int CSystem::LoadROM() {
   // The firmware image lands in guest memory behind every processor's back
   // (a reset reloads it while compiled code exists).
@@ -2396,18 +2411,33 @@ int CSystem::LoadROM() {
   if (!loadedFromFlash) {
     f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
               "rb");
-    // A decompressed image is the entry PC, PAL_BASE and 2 MB of memory. One
-    // of any other size is a write that never finished (the emulator stopped
-    // during it): decompress again rather than boot from half an image.
+    // A decompressed image is the entry PC, PAL_BASE, 2 MB of memory and the
+    // tag (kDecompTag). One of any other size is a write that never finished
+    // (the emulator stopped during it): decompress again rather than boot
+    // from half an image. One without the tag was saved past the console's
+    // entry by an older Alphabox: decompress that again too.
     if (f) {
+      const char *dec =
+          myCfg->get_text_value("rom.decompressed", "decompressed.rom");
       fseek(f, 0, SEEK_END);
       const long have = ftell(f);
+      char tag[sizeof(kDecompTag)] = {};
+      if (have == kDecompSize + (long)sizeof(kDecompTag)) {
+        fseek(f, kDecompSize, SEEK_SET);
+        (void)!fread(tag, 1, sizeof(tag), f);
+      }
       fseek(f, 0, SEEK_SET);
-      if (have != (long)(2 * sizeof(u64) + 0x200000)) {
-        printf("%%SYS-W-ROMSIZE: %s is %ld bytes, not a whole image; "
+      if (have == kDecompSize) {
+        printf("%%SYS-I-ROMOLD: %s was saved by an older version, past the "
+               "console's entry; decompressing again.\n",
+               dec);
+        fclose(f);
+        f = nullptr;
+      } else if (have != kDecompSize + (long)sizeof(kDecompTag) ||
+                 memcmp(tag, kDecompTag, sizeof(tag)) != 0) {
+        printf("%%SYS-W-ROMSIZE: %s (%ld bytes) is not a whole image; "
                "decompressing again.\n",
-               myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
-               have);
+               dec, have);
         fclose(f);
         f = nullptr;
       }
@@ -2494,6 +2524,8 @@ int CSystem::LoadROM() {
         ok = ok && fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
         buffer = PtrToMem(0);
         ok = ok && fwrite(buffer, 1, 0x200000, f) == 0x200000;
+        ok = ok &&
+             fwrite(kDecompTag, 1, sizeof(kDecompTag), f) == sizeof(kDecompTag);
         ok = (fclose(f) == 0) && ok;
         if (!ok || rename(tmp.c_str(), dec.c_str()) != 0) {
           printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",

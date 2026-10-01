@@ -164,7 +164,3 @@ No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
   there), startup stops after `%STDRV-I-STARTUP` (twice, at 400 s and 10
   minutes). `palcode.vms.nohle = true` avoids it. JIT builds always run the
   real PALcode.
-- With any cached `decompressed.rom`, both builds, SRM reports
-  `CPU0: unexpected exception/interrupt through vector 440` during its
-  initialisation and then carries on; a run that decompresses the ROM
-  itself does not.
