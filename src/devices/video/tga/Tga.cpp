@@ -55,9 +55,6 @@ const tga_model_config *tga_model_by_name(const char *name) {
 CTga::CTga(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
            const tga_model_config &model)
     : CPCIDevice(cfg, c, pcibus, pcidev), m_model(model) {
-  // Both kinds of card own the one GUI: its window, its event pump.
-  if (theVGA)
-    FAILURE(Configuration, "a TGA and a VGA card cannot share the display");
   if (!theTGA)
     theTGA = this;
   memset(r, 0, sizeof(r));
@@ -112,8 +109,14 @@ void CTga::init() {
     printf("%s: option ROM %s, %zu bytes\n", devid_string, rom, n);
   }
 
-  if (const char *t = getenv("ALPHABOX_TRACE_TGA"))
-    m_trace = t[0] && t[0] != '0';
+  if (const char *t = getenv("ALPHABOX_TRACE_TGA")) {
+    if (strncmp(t, "file:", 5) == 0)
+      m_trace_file = t + 5;
+    else if (strcmp(t, "first") == 0)
+      m_trace_first = true;
+    else
+      m_trace = t[0] && t[0] != '0';
+  }
 
   ramdac_reset();
   m_frame.clear();
@@ -152,6 +155,16 @@ void CTga::trace(const char *fmt, ...) {
   vprintf(fmt, ap);
   printf("\n");
   va_end(ap);
+}
+
+void CTga::first_use(const char *fmt, ...) {
+  char buf[128];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  if (m_unimplemented_seen.insert(std::string("first:") + buf).second)
+    printf("%s: first use: %s\n", devid_string, buf);
 }
 
 void CTga::unimplemented(const std::string &what) {
@@ -266,6 +279,8 @@ void CTga::space_write(u32 address, u32 data, u32 bytemask) {
   } else if (off < CORE_REGS + REGS_BYTES) {
     const unsigned reg = (off >> 2) & (NUM_REGS - 1);
     trace("reg write %03x = %08x", reg * 4, data);
+    if (m_trace_first)
+      first_use("register %03x written", reg * 4);
     reg_write(reg, data);
   } else {
     // Frame buffer space: its upper half, the smaller cores' reserved

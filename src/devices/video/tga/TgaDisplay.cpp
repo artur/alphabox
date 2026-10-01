@@ -30,6 +30,7 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "Tga.hpp"
+#include "VGA.hpp"
 #include "gui/gui.hpp"
 #include "gui/vga.hpp"
 
@@ -80,7 +81,14 @@ void CTga::check_state() {
 
 void CTga::run() {
   try {
-    if (!gui_initialized) {
+    m_owns_gui = theTGA == this && !theVGA;
+    m_dump_prefix = getenv("ALPHABOX_TGA_DUMP");
+    if (!m_owns_gui)
+      printf("%s: the display belongs to another card; this one is drawn "
+             "%s\n",
+             devid_string,
+             m_dump_prefix ? "into ALPHABOX_TGA_DUMP files" : "nowhere");
+    if (m_owns_gui && !gui_initialized) {
       bx_gui->init(X_TILESIZE, Y_TILESIZE);
       gui_initialized = true;
     }
@@ -89,13 +97,15 @@ void CTga::run() {
     for (;;) {
       if (StopThread)
         return;
-      bx_gui->lock();
-      bx_gui->handle_events();
-      bx_gui->unlock();
+      if (m_owns_gui) {
+        bx_gui->lock();
+        bx_gui->handle_events();
+        bx_gui->unlock();
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
       if (PauseThread.load(std::memory_order_acquire)) {
-        if (!was_paused) {
+        if (!was_paused && m_owns_gui) {
           bx_gui->lock();
           bx_gui->clear_screen();
           bx_gui->unlock();
@@ -113,7 +123,17 @@ void CTga::run() {
               .count() < kFrameMs)
         continue;
       m_last_frame = now;
+      if (!m_trace_file.empty()) {
+        FILE *t = fopen(m_trace_file.c_str(), "r");
+        m_trace = t != nullptr;
+        if (t)
+          fclose(t);
+      }
       frame_tick();
+      if (!m_owns_gui) {
+        update_screen();
+        continue;
+      }
       bx_gui->lock();
       update_screen();
       bx_gui->flush();
@@ -222,6 +242,12 @@ void CTga::render(unsigned w, unsigned h, unsigned stride, u32 start) {
   if (r[VVVR] & VVVR_CURSOR)
     draw_tga_cursor(w, h);
 
+  if (!m_owns_gui) {
+    m_last_w = w;
+    m_last_h = h;
+    dump_frame(w, h);
+    return;
+  }
   if (w != m_last_w || h != m_last_h) {
     bx_gui->dimension_update(w, h, 0, 0, 32);
     m_last_w = w;
@@ -332,4 +358,30 @@ void CTga::draw_tga_cursor(unsigned w, unsigned h) {
         m_frame[size_t(y) * w + unsigned(x)] = coc_color(dac.coc[v], eight);
     }
   }
+}
+
+/// ALPHABOX_TGA_DUMP=<prefix>: a card without the GUI writes its screen
+/// as <prefix>-NNN-WxH.ppm every two seconds, like ALPHABOX_DUMP_FB.
+void CTga::dump_frame(unsigned w, unsigned h) {
+  if (!m_dump_prefix)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (m_dump_seq &&
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - m_last_dump)
+              .count() < 2000)
+    return;
+  m_last_dump = now;
+  char path[512];
+  snprintf(path, sizeof(path), "%s-%03u-%ux%u.ppm", m_dump_prefix, m_dump_seq++,
+           w, h);
+  FILE *f = fopen(path, "wb");
+  if (!f)
+    return;
+  fprintf(f, "P6\n%u %u\n255\n", w, h);
+  for (size_t i = 0; i < size_t(w) * h; i++) {
+    const u8 rgb[3] = {u8(m_frame[i] >> 16), u8(m_frame[i] >> 8),
+                       u8(m_frame[i])};
+    fwrite(rgb, 1, 3, f);
+  }
+  fclose(f);
 }

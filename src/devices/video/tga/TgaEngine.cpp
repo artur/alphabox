@@ -113,6 +113,9 @@ void CTga::op_done() {
 
 void CTga::fb_write(u32 fbaddr, u32 data, u32 bytemask, bool via_gctr) {
   const u32 mode = r[GMOR] & GMOR_MODE;
+  if (m_trace_first)
+    first_use("mode %02x rop %x gopr %03x%s", mode, r[GOPR] & 0xf,
+              r[GOPR] & 0xff0, via_gctr ? " via GCTR" : "");
   if (mode_is_line(mode)) {
     // A line segment: the write's address (with its two LSBs in data
     // <17:16> for packed 8-bpp) starts it; through GCTR, GADR does if it

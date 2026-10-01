@@ -32,7 +32,6 @@
  **/
 #include "VGA.hpp"
 #include "StdAfx.hpp"
-#include "Tga.hpp"
 
 #include "emu/emu.hpp"
 
@@ -47,8 +46,6 @@ CVGA::CVGA(class CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev)
     : CPCIDevice(cfg, c, pcibus, pcidev) {
   if (theVGA != 0)
     FAILURE(Configuration, "More than one VGA");
-  if (theTGA)
-    FAILURE(Configuration, "a TGA and a VGA card cannot share the display");
   theVGA = this;
 }
 

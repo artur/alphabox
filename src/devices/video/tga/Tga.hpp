@@ -214,11 +214,26 @@ private:
   std::atomic<bool> PauseThread{false};
   std::atomic<bool> PauseAck{false};
   bool gui_initialized = false;
+  /// The GUI has one window. A TGA in a machine with a VGA card, or a
+  /// second TGA, leaves it to that card: it draws its screen only into
+  /// ALPHABOX_TGA_DUMP files, if asked.
+  bool m_owns_gui = false;
+  const char *m_dump_prefix = nullptr;
+  unsigned m_dump_seq = 0;
+  std::chrono::steady_clock::time_point m_last_dump;
+  void dump_frame(unsigned w, unsigned h);
 
   std::mutex m_irq_lock;
   bool m_irq_asserted = false;
 
-  bool m_trace = false;
+  /// ALPHABOX_TRACE_TGA: 1 traces every access; file:<path> only while
+  /// <path> exists (polled by the render thread).
+  std::atomic<bool> m_trace{false};
+  std::string m_trace_file;
+  /// ALPHABOX_TRACE_TGA=first: each graphics mode, raster op and register
+  /// the first time it is used.
+  bool m_trace_first = false;
+  void first_use(const char *fmt, ...);
   std::set<std::string> m_unimplemented_seen;
 };
 
