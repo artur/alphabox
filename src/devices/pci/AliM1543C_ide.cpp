@@ -372,6 +372,8 @@ int CAliM1543C_ide::RestoreState(FILE *f) {
     return -1;
   }
 
+  for (int i = 0; i < 2; i++)
+    cmd_drive[i] = CONTROLLER(i).selected;
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   return 0;
 }
@@ -722,6 +724,7 @@ void CAliM1543C_ide::ide_command_write(int index, u32 address, int dsize,
 
   case REG_COMMAND_COMMAND:
     deassert_interrupt(index); // interrupt is cleared on write.
+    cmd_drive[index] = CONTROLLER(index).selected;
     if (!SEL_DISK(index)) {
 #ifdef DEBUG_IDE
       printf("%%IDE-I-NODEV: Command to non-existing device %d.%d. cmd=%x\n",
@@ -1091,7 +1094,25 @@ bool CAliM1543C_ide::channel_is_native(int index) {
   return (prog_if >> (index ? 2 : 0)) & 1;
 }
 
+// While the controller thread runs a command cycle (execute()), the interrupt
+// that cycle raises is held back and delivered by run() once the cycle is
+// over. The interrupt tells the guest the command is done, and its driver may
+// issue the next one at once -- to this drive, or to the other drive of the
+// channel -- while execute() still had the disk to write (DMA), the status,
+// the in-progress flag and the cycle count to update. Those late updates then
+// cleared the new command's in-progress flag: BSY forever. Raised from
+// do_dma_transfer() before the disk write, the DMA completion interrupt also
+// showed the guest BSY still set; OpenVMS interleaving a disk and a CD on one
+// channel failed its writes with CTRLERR.
+thread_local int CAliM1543C_ide::exec_drive = -1;
+static thread_local bool tl_hold_irq = false;
+static thread_local bool tl_held_irq = false;
+
 void CAliM1543C_ide::raise_interrupt(int index) {
+  if (tl_hold_irq) {
+    tl_held_irq = true;
+    return;
+  }
   if (!CONTROLLER(index).disable_irq) {
 #ifdef DEBUG_IDE_INTERRUPT
     printf("%%IDE-I-INTERRUPT: Interrupt raised on controller %d.\n", index);
@@ -1143,7 +1164,7 @@ u8 CAliM1543C_ide::get_status(int index) {
   if (!SEL_DISK(index)) {
 #ifdef DEBUG_IDE_REG_COMMAND
     printf("%%IDE-I-STATUS: Read status for nonexiting device %d.%d\n", index,
-           CONTROLLER(index).selected);
+           SEL_DRIVE(index));
 #endif
     // Absent drive: real hardware pulls all data lines high, so the
     // host reads 0xff.
@@ -1421,8 +1442,8 @@ void CAliM1543C_ide::advance_disk_address(int index, int sectors) {
 }
 
 void CAliM1543C_ide::command_aborted(int index, u8 command) {
-  printf("ide%d.%d aborting on command 0x%02x \n", index,
-         CONTROLLER(index).selected, command);
+  printf("ide%d.%d aborting on command 0x%02x \n", index, SEL_DRIVE(index),
+         command);
   SEL_STATUS(index).busy = false;
   SEL_STATUS(index).drive_ready = true;
   SEL_STATUS(index).err = true;
@@ -1442,7 +1463,7 @@ void CAliM1543C_ide::ide_status(int index) {
          "         [ptr: %d, size: %d, error: %d, cmd: %x, in progress: %d]\n"
          "         [cycle: %d, pkt phase: %d, pkt cmd: %x, dma: %d]\n"
          "         [bm-cmd: %x  bm-stat: %x]\n",
-         index, CONTROLLER(index).selected, SEL_STATUS(index).busy,
+         index, SEL_DRIVE(index), SEL_STATUS(index).busy,
          SEL_STATUS(index).drive_ready, SEL_STATUS(index).fault,
          SEL_STATUS(index).drq, SEL_STATUS(index).err,
          SEL_REGISTERS(index).cylinder_no, SEL_REGISTERS(index).head_no,
@@ -1490,7 +1511,7 @@ void CAliM1543C_ide::execute(int index) {
       SEL_STATUS(index).err = true;
       SEL_COMMAND(index).command_in_progress = false;
       raise_interrupt(index);
-      printf("got nop on %d.%d\n", index, CONTROLLER(index).selected);
+      printf("got nop on %d.%d\n", index, SEL_DRIVE(index));
 
       // FAILURE("This isn't possible, but you're seeing it.");
       break;
@@ -1502,14 +1523,14 @@ void CAliM1543C_ide::execute(int index) {
         // to device reset.  However, by allowing it, Tru64
         // recognizes the device properly.
         SEL_COMMAND(index).command_in_progress = false;
-        if (CONTROLLER(index).selected == 0) {
+        if (SEL_DRIVE(index) == 0) {
           REGISTERS(index, 0).error = 0x01; // device passed.
           REGISTERS(index, 1).error = 0x01; // slave not present or passed
         } else {
           REGISTERS(index, 1).error = 0x01; // slave passed
         }
 
-        set_signature(index, CONTROLLER(index).selected);
+        set_signature(index, SEL_DRIVE(index));
 
         // step "k", page 216 (232)
         SEL_STATUS(index).drq = false;   // bit 3
@@ -1578,7 +1599,7 @@ void CAliM1543C_ide::execute(int index) {
           if (SEL_REGISTERS(index).sector_count == 0) {
             SEL_COMMAND(index).command_in_progress = false;
             if (SEL_DISK(index)->cdrom())
-              set_signature(index, CONTROLLER(index).selected); // per 9.1
+              set_signature(index, SEL_DRIVE(index)); // per 9.1
           } else {
 
             // set the next block to read.
@@ -1597,7 +1618,7 @@ void CAliM1543C_ide::execute(int index) {
         // this is our first time through
         if (SEL_DISK(index)->cdrom() || SEL_DISK(index)->ro()) {
           printf("%%IDE-W-RO: Write attempt to read-only disk %d.%d.\n", index,
-                 CONTROLLER(index).selected);
+                 SEL_DRIVE(index));
           command_aborted(index, SEL_COMMAND(index).current_command);
         } else {
           SEL_STATUS(index).drq = true;
@@ -1733,7 +1754,7 @@ void CAliM1543C_ide::execute(int index) {
         } else {
           printf("%%IDE-W-GEOMETRY: Controller %d drive %d asked for %d "
                  "heads, %d sectors/track; this drive is %ld/%ld. Refused.\n",
-                 index, CONTROLLER(index).selected, req_heads, req_sectors,
+                 index, SEL_DRIVE(index), req_heads, req_sectors,
                  SEL_DISK(index)->get_heads(), SEL_DISK(index)->get_sectors());
           SEL_STATUS(index).busy = false;
           SEL_STATUS(index).drive_ready = true;
@@ -1766,7 +1787,7 @@ void CAliM1543C_ide::execute(int index) {
             // this must be the first time through.
             if (!scsi_arbitrate(index))
               FAILURE(IllegalState, "ATAPI SCSI bus busy");
-            if (!scsi_select(index, CONTROLLER(index).selected))
+            if (!scsi_select(index, SEL_DRIVE(index)))
               FAILURE(IllegalState, "ATAPI device not responding to selection");
             SEL_REGISTERS(index).REASON = IR_CD;
             SEL_STATUS(index).busy = false;
@@ -2055,7 +2076,7 @@ void CAliM1543C_ide::execute(int index) {
                 if (ide_trace || (sense_key != 5 && sense_key != 6)) {
                   printf(
                       "%%IDE-W-ATAPI: controller %d device %d packet command",
-                      index, CONTROLLER(index).selected);
+                      index, SEL_DRIVE(index));
                   for (int i = 0; i < 12; i++)
                     printf(" %02x", SEL_COMMAND(index).packet_command[i]);
                   printf(" returned SCSI status %02x, sense key %x\n",
@@ -2136,8 +2157,7 @@ void CAliM1543C_ide::execute(int index) {
 
 #ifdef DEBUG_IDE_MULTIPLE
             printf("IDE %d.%d: Reading %d sectors, %d sectors left.\n", index,
-                   CONTROLLER(index).selected,
-                   CONTROLLER(index).data_size / 256,
+                   SEL_DRIVE(index), CONTROLLER(index).data_size / 256,
                    SEL_REGISTERS(index).sector_count);
 #endif
             SEL_DISK(index)->seek_block(lba);
@@ -2160,7 +2180,7 @@ void CAliM1543C_ide::execute(int index) {
             if (SEL_REGISTERS(index).sector_count == 0) {
               SEL_COMMAND(index).command_in_progress = false;
               if (SEL_DISK(index)->cdrom())
-                set_signature(index, CONTROLLER(index).selected); // per 9.1
+                set_signature(index, SEL_DRIVE(index)); // per 9.1
             } else {
 
               // set the next block to read.
@@ -2182,7 +2202,7 @@ void CAliM1543C_ide::execute(int index) {
           // this is our first time through
           if (SEL_DISK(index)->ro()) {
             printf("%%IDE-W-RO: Write attempt to read-only disk %d.%d.\n",
-                   index, CONTROLLER(index).selected);
+                   index, SEL_DRIVE(index));
             command_aborted(index, SEL_COMMAND(index).current_command);
           } else {
             SEL_STATUS(index).drq = true;
@@ -2324,7 +2344,7 @@ void CAliM1543C_ide::execute(int index) {
       } else {
         if (SEL_DISK(index)->ro()) {
           printf("%%IDE-W-RO: DMA Write attempt to read-only disk %d.%d.\n",
-                 index, CONTROLLER(index).selected);
+                 index, SEL_DRIVE(index));
           command_aborted(index, SEL_COMMAND(index).current_command);
         } else {
           if (SEL_REGISTERS(index).sector_count == 0)
@@ -2378,7 +2398,7 @@ void CAliM1543C_ide::execute(int index) {
         SEL_COMMAND(index).command_in_progress = false;
         raise_interrupt(index);
       } else {
-        set_signature(index, CONTROLLER(index).selected); // per
+        set_signature(index, SEL_DRIVE(index)); // per
 
         //
         // 9.1
@@ -2417,8 +2437,8 @@ void CAliM1543C_ide::execute(int index) {
         if (mode != CONTROLLER(index).dma_mode && mode >= 0x20)
           printf("%%IDE-I-XFERMODE: Controller %d drive %d selects %s DMA "
                  "mode %d.\n",
-                 index, CONTROLLER(index).selected,
-                 (mode & 0x20) ? "multiword" : "ultra", mode & 0x07);
+                 index, SEL_DRIVE(index), (mode & 0x20) ? "multiword" : "ultra",
+                 mode & 0x07);
         CONTROLLER(index).dma_mode = mode;
         SEL_STATUS(index).busy = false;
         SEL_STATUS(index).drive_ready = true;
@@ -2680,6 +2700,7 @@ void CAliM1543C_ide::run(int index) {
       if (StopThread)
         return;
       const u64 queued = work_queued[index].load();
+      exec_drive = cmd_drive[index]; // see SEL_DRIVE
       {
 #ifdef DEBUG_IDE_THREADS
         printf("Thread %d: \n", index);
@@ -2695,11 +2716,20 @@ void CAliM1543C_ide::run(int index) {
             std::this_thread::sleep_for(std::chrono::microseconds(us));
           }
           // A reset during the wait ends the command.
-          if (SEL_COMMAND(index).command_in_progress && !StopThread)
+          if (SEL_COMMAND(index).command_in_progress && !StopThread) {
+            tl_hold_irq = true;
+            tl_held_irq = false;
             execute(index);
+            tl_hold_irq = false;
+          }
         }
         UPDATE_ALT_STATUS(index);
+        if (tl_held_irq) {
+          tl_held_irq = false;
+          raise_interrupt(index); // the cycle is over: deliver its interrupt
+        }
         work_done[index].store(queued);
+        exec_drive = -1;
 
 #ifdef IDE_YIELD_INTERRUPTS
         if (CONTROLLER(index).interrupt_pending) {

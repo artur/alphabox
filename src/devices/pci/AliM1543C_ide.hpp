@@ -145,6 +145,12 @@ private:
   std::shared_mutex mtBusMaster[2]; // busmaster registers
   bool StopThread;
 
+  // The drive each channel's last command was issued to (not saved state:
+  // RestoreState takes the selected drive), and, on a controller thread, the
+  // drive it is running a command for (-1 elsewhere); see SEL_DRIVE.
+  std::atomic<int> cmd_drive[2]{};
+  static thread_local int exec_drive;
+
   bool usedma;
 
   // The state structure contains all elements that need to be saved to the
@@ -225,23 +231,27 @@ private:
   } state;
 };
 
+/// The drive the SEL_* macros act on: on a controller thread the drive whose
+/// command it is running, everywhere else the drive the Device register
+/// selects. A command belongs to the drive it was issued to; the guest
+/// selecting the other drive of the channel must not move it.
+#define SEL_DRIVE(a)                                                           \
+  (exec_drive >= 0 ? exec_drive : state.controller[a].selected)
+
 /// Status for selected drive on controller a
-#define SEL_STATUS(a)                                                          \
-  state.controller[a].drive[state.controller[a].selected].status
+#define SEL_STATUS(a) state.controller[a].drive[SEL_DRIVE(a)].status
 
 /// Command for selected drive on controller a
-#define SEL_COMMAND(a)                                                         \
-  state.controller[a].drive[state.controller[a].selected].command
+#define SEL_COMMAND(a) state.controller[a].drive[SEL_DRIVE(a)].command
 
 /// Registers for selected drive on controller a
-#define SEL_REGISTERS(a)                                                       \
-  state.controller[a].drive[state.controller[a].selected].registers
+#define SEL_REGISTERS(a) state.controller[a].drive[SEL_DRIVE(a)].registers
 
 /// Selected drive on controller a
-#define SEL_DISK(a) get_disk(a, state.controller[a].selected)
+#define SEL_DISK(a) get_disk(a, SEL_DRIVE(a))
 
 /// Per-drive data for selected drive on controller a
-#define SEL_PER_DRIVE(a) state.controller[a].drive[state.controller[a].selected]
+#define SEL_PER_DRIVE(a) state.controller[a].drive[SEL_DRIVE(a)]
 
 // Status for drive b on controller a
 #define STATUS(a, b) state.controller[a].drive[b].status
