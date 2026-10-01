@@ -6,7 +6,7 @@ What was verified, on 2026-10-01, with HP OpenVMS Alpha V8.4 (the
 
 | | Result |
 |---|---|
-| Installation from the CD | Completes on the JIT build in about 15 minutes, onto an IDE disk, with the CD on the other IDE channel (see below) |
+| Installation from the CD | Completes on the JIT build in about 15 minutes, onto an IDE disk, with the CD on either IDE channel (see below) |
 | Boot from the installed disk | To the login prompt; SYSTEM logs in on the serial console |
 | Interpreter build | Boots to login with `palcode.vms.nohle = true`; with the default (the OpenVMS PALcode routines replaced natively) it stops after `%STDRV-I-STARTUP` |
 | Two and four CPUs (JIT) | OpenVMS starts every secondary (`%SMP-I-CPUTRN, CPU #n has joined the active set`); `SHOW CPU` lists 0-3 active |
@@ -40,11 +40,19 @@ The console is the serial port (telnet to it). The system disk is `dqa0`
 (a 4 GB sparse file is plenty: the installed system uses about 2 GB), the CD
 `dqb0`.
 
-**Put the CD on the second IDE channel** (`disk1.0`, `dqb0`), not beside the
-disk on the first (`disk0.1`, `dqa1`). With both on one channel the
-installation stopped at 10% with `%PCSI-E-WRITEERR ... -SYSTEM-F-CTRLERR,
-fatal controller error` writing `[SYS$LDR]PROCESS_MANAGEMENT.EXE`; on two
-channels it completed. (The CD itself boots from either.)
+The CD can also sit beside the disk on the first channel (`disk0.1`,
+`dqa1`; then `boot dqa1`). Until 2026-10-01 that failed: the installation
+stopped at 10% with `%PCSI-E-WRITEERR ... -SYSTEM-F-CTRLERR, fatal
+controller error` writing `[SYS$LDR]PROCESS_MANAGEMENT.EXE`, and a DCL
+`COPY` from the CD to the disk failed the same way in 3 of 5 runs. The
+controller raised a DMA write's completion interrupt before it had written
+the disk and cleared BSY; OpenVMS's driver moved on to the CD on the same
+channel, and the end of the disk command then landed on the CD, leaving the
+disk busy for good. Fixed in `AliM1543C_ide.cpp`: a command's interrupt is
+delivered only once the command is complete, and the controller finishes a
+command on the drive it was issued to, whichever drive the guest selects
+meanwhile. Since then the installation completes with the CD on `dqa1`, and
+the copy passed 3 of 3 runs.
 
 ## Installing
 

@@ -164,10 +164,7 @@ which workload, and the optimizations that turned out not to pay.
   only sends inter-processor interrupts to CPUs 0–1. OpenVMS 8.4 starts
   two and four (JIT build); Tru64 is untested with more than one CPU.
 - Big-endian hosts.
-- Some SCSI and IDE commands; copying large files from an IDE CD-ROM to an
-  IDE disk can fail: an OpenVMS 8.4 installation with the CD and the disk
-  on one IDE channel stopped with a controller error, and completed with
-  them on separate channels ([docs/openvms.md](docs/openvms.md)).
+- Some SCSI and IDE commands.
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
   and the Mach64's front-end scaler and bus-master DMA (Windows 2000's
   drivers use neither: stretched blits go through the 3D engine). The 3D
