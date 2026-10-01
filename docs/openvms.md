@@ -101,6 +101,46 @@ console stays on the serial port while DECwindows takes the card. With a
 graphics card present the startup sets `WINDOW_SYSTEM` to 1
 (`%DECW-I-BADVALUE`) on the first boot.
 
+### Keyboard and mouse
+
+The display server reads the PS/2 keyboard and mouse through `IKA0` and
+`IMA0`, OpenVMS's drivers for the 8042 (`src/devices/isa/Keyboard.cpp`).
+Keys typed through `ALPHABOX_KEYPIPE` reach the CDE login box -- the user
+name appears in the field, Backspace and Shift work, Return moves on to the
+password prompt -- and `ALPHABOX_AUTOMOUSE` moves the pointer. Frames:
+`lab/vms84/kbd-*.png`.
+
+What the drivers send (`ALPHABOX_TRACE_KBC=1`):
+
+- The command byte is left as SRM set it, 0x03: translation off, both
+  interrupts on. The keyboard therefore runs untranslated.
+- Keyboard, three times within 30 s: `FF` (reset), `F5`
+  (disable), `AB` and `AF`, `F0 03` (scan code set 3), `F8` (all keys make
+  and break), `F4` (enable); then `ED 00` (LEDs) now and then. `AB` and `AF`
+  are not keyboard commands; the keyboard answers Resend (`FE`) as a real
+  one does, and the driver carries on.
+- Mouse: `FF`; sample rates 200, 200, 80 and `F2` (the five-button probe:
+  ID 0); 200, 100, 80 and `F2` (the wheel probe: ID 3); rate 100; `F4`.
+
+Scan code set 3 gives each key a type (commands `F7`-`FD`): whether it
+sends a break code on release. The keyboard now keeps these types, with the
+power-on defaults -- only Caps Lock, both Shifts, left Ctrl, left Alt and
+the Windows and Menu keys send break codes -- restored by `FF`, `F5` and
+`F6`. OpenVMS's `F8` gives every key make and break, which is what the
+emulated keyboard sent before for every key anyway. SRM selects set 3 too
+but sends only `FC 39` and `FC 58` (right Alt and right Ctrl make/break), so
+it now receives letters as make codes only, as from a real keyboard.
+AlphaBIOS and Windows 2000 select set 2 (`F0 02`) and are not affected.
+Key repeat comes from the host, so the typematic type is recorded and not
+acted on.
+
+An earlier run (`lab/vms84/gfx/run8-limits`) recorded keys typed with
+`ALPHABOX_KEYPIPE` as not reaching the login box. That did not happen again:
+three boots on the same commit, with and without the trace, typing 15 s
+after `DECW$STARTUP` and minutes later, all showed the text in the box. The
+driver traffic of that run (the `kbd:` lines in its log) is the same as in
+the working ones. Why its frame showed an empty field is not known.
+
 ## Licences
 
 No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
@@ -114,7 +154,8 @@ No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
   server and dtlogin.
 - Motif clients refuse to run: `%LICENSE-F-NOAUTH, DEC DW-MOTIF use is not
   authorized on this node` (DECW$CLOCK, a DECterm). So no CDE session was
-  reached, and keyboard input to the login box was not verified.
+  reached; the login box itself takes keyboard and mouse input (see
+  Keyboard and mouse).
 - TCP/IP Services was installed but not configured or started.
 
 ## Known problems
