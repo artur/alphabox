@@ -1130,7 +1130,7 @@ void CAlphaCPU::execute() {
 
 #ifndef ES40_JIT
   // ---- Batch loop: execute up to 512 instructions before returning ----
-  int _batch_budget = 512;
+  int _batch_budget = m_exec_batch;
   u64 _cc_accum = 0;     // accumulated cycle counts (flushed every 32 insns)
   int _icount_accum = 0; // accumulated instruction count
   const u64 _cc_per_ins = cc_per_instruction; // cache in register
@@ -3407,6 +3407,23 @@ void CAlphaCPU::enable_icache() { icache_enabled = true; }
  * \brief Restore i-cache after temporary ROM decompression setup.
  **/
 void CAlphaCPU::restore_icache() { icache_enabled = true; }
+
+bool CAlphaCPU::run_until_below(u64 floor, int budget) {
+#ifdef ES40_JIT
+  // The dispatcher stops at the floor (jit_run); compiled code runs between.
+  m_stop_below = floor;
+  jit_run(budget);
+  m_stop_below = 0;
+#else
+  // The interpreter checks nothing between the instructions of a batch, so
+  // take the batch down to one instruction for the while.
+  m_exec_batch = 2;
+  while (budget-- > 0 && get_clean_pc() >= floor)
+    execute();
+  m_exec_batch = 512;
+#endif
+  return get_clean_pc() < floor;
+}
 
 #if defined(IDB)
 const char *PAL_NAME[] = {

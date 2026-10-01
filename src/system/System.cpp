@@ -2258,24 +2258,16 @@ void CSystem::tig_write(u32 a, u8 data) {
  * is available, otherwise create it first.
  **/
 /**
- * Run one progress chunk of the SRM self-decompressor on CPU 0. Returns true
- * once the decompressor has jumped below 0x200000 (into the inflated console).
+ * Run one progress chunk of the SRM self-decompressor on CPU 0 (up to 180
+ * million instructions). Returns true once the decompressor has jumped below
+ * 0x200000 (into the inflated console), stopped at the first instruction
+ * there: the PC and memory it leaves are what LoadROM saves as the
+ * decompressed image.
  **/
-static bool srm_decomp_chunk(CSystem *sys, CAlphaCPU *cpu) {
-#ifdef ES40_JIT
-  (void)sys;
-  for (int i = 0; i < 90000; i++) {
-    cpu->jit_step(2000);
-    if (cpu->get_clean_pc() < U64(0x200000))
+static bool srm_decomp_chunk(CAlphaCPU *cpu) {
+  for (int i = 0; i < 90000; i++)
+    if (cpu->run_until_below(U64(0x200000), 2000))
       return true;
-  }
-#else
-  for (int i = 0; i < 1800000; i++) {
-    sys->SingleStep();
-    if (cpu->get_clean_pc() < U64(0x200000))
-      return true;
-  }
-#endif
   return false;
 }
 
@@ -2327,7 +2319,7 @@ int CSystem::LoadROM() {
     bool decomp_ok = true;
     j = 0;
     while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
-      srm_decomp_chunk(this, acCPUs[0]);
+      srm_decomp_chunk(acCPUs[0]);
       j++;
       if (j < 50) {
         printf("%d%%", j * 2);
@@ -2378,7 +2370,7 @@ int CSystem::LoadROM() {
     bool decomp_ok = true;
     j = 0;
     while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
-      srm_decomp_chunk(this, acCPUs[0]);
+      srm_decomp_chunk(acCPUs[0]);
       if (++j > 500) {
         printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
                "memory.\n");
@@ -2471,7 +2463,7 @@ int CSystem::LoadROM() {
 
       j = 0;
       while (acCPUs[0]->get_clean_pc() > 0x200000) {
-        srm_decomp_chunk(this, acCPUs[0]);
+        srm_decomp_chunk(acCPUs[0]);
         j++;
         if (((j % 5) == 0) && (j < 50))
           printf("%d%%", j * 2);
@@ -2545,9 +2537,9 @@ int CSystem::LoadROM() {
   // WriteMem(U64(0xb1158),32,0xe7e00000,0);   // CPU sync?
 #endif
 #ifdef ES40_JIT
-  // The chunked jit_step drive can overshoot the decompressor's exit by a
-  // dispatch batch and may have compiled blocks over the patch sites above:
-  // drop them so the patched bytes take effect.
+  // Blocks compiled over the patch sites above -- by the console run before
+  // a reset -- must not outlive the patch: drop them so the patched bytes
+  // take effect.
   acCPUs[0]->flush_icache();
 #endif
   printf("%%SYS-I-ROMLOADED: ROM Image loaded successfully!\n");

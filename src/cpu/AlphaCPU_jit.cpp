@@ -386,7 +386,7 @@ void CAlphaCPU::jit_run(int budget) {
   // per-batch housekeeping's cost rather than below it.
   if (m_interp_only) {
     while (budget-- > 0) {
-      if (StopThread)
+      if (StopThread || state.pc < m_stop_below)
         return;
       execute();
     }
@@ -396,6 +396,17 @@ void CAlphaCPU::jit_run(int budget) {
   while (budget > 0) {
     const u64 start_virt = state.pc;
     const u32 start_asn = (u32)state.asn;
+
+    // run_until_below(): an interpreted span ends at the first
+    // non-sequential PC and a compiled block leaves at its jump, so the
+    // first PC below the floor comes back here before anything there runs.
+    // Compiled code could only go on without coming back by a chain into a
+    // block below the floor, and the decompressor's jump never forms one:
+    // a chain is linked here, by a later turn of this loop, which this
+    // return never reaches. (The PALmode bit cannot carry a PC across the
+    // 4-aligned floor.)
+    if (start_virt < m_stop_below)
+      return;
 
     // PAL reset-vector entry (firmware updater rewrote the image in place, or a
     // restart): drop stale icache lines and compiled blocks first.

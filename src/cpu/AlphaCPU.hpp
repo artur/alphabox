@@ -142,11 +142,15 @@ public:
   u64 get_pal_base();
 
   void enable_icache();
-#ifdef ES40_JIT
-  // One jit_run dispatch batch for main-thread callers (LoadROM's SRM
-  // decompression runs before the CPU threads exist).
-  void jit_step(int budget) { jit_run(budget); }
-#endif
+  /// LoadROM's SRM decompression, on the main thread before the CPU threads
+  /// exist: run at most `budget` instructions, stopping before the first one
+  /// whose address is below `floor`. Exactly there, not at the end of a
+  /// dispatch batch: LoadROM saves the PC and memory it stops at as
+  /// decompressed.rom, and a batch's worth of the console's own start-up run
+  /// past the jump into it is state that a start from that file would not
+  /// have (the registers those instructions set are not saved). Returns
+  /// true once the PC is below `floor`.
+  bool run_until_below(u64 floor, int budget);
   void restore_icache();
 
   bool get_waiting() { return state.wait_for_start; };
@@ -1246,6 +1250,19 @@ public:
   /// control arm that measures what running inside costs.
   bool m_interp_only = false;
 
+private:
+#ifdef ES40_JIT
+  /// run_until_below()'s floor: the dispatcher returns before running any
+  /// block that starts below it. 0, which nothing is below, at all other
+  /// times.
+  u64 m_stop_below = 0;
+#else
+  /// The interpreter's execute() batch: it runs one instruction fewer than
+  /// this before returning. run_until_below() takes it down to one.
+  int m_exec_batch = 512;
+#endif
+
+public:
   /// An IMB that has nothing to flush.
   ///
   /// The firmware issues IMB from a polling loop, and Windows from its
