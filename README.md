@@ -71,7 +71,7 @@ virtio devices.
 
 | Guest | Status |
 |---|---|
-| OpenVMS | Boots, including the CDE desktop ([installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
+| OpenVMS | 8.4 installs from its CD and boots to login on one, two or four CPUs; DECwindows draws the CDE login box on the 3Dlabs Permedia 2 (a session needs a DW-MOTIF licence) ([OpenVMS notes](docs/openvms.md), [installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Tru64 UNIX | Boots |
 | NetBSD | Boots ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
 | Windows NT / 2000 | Installs and runs through AlphaBIOS, on the S3, Cirrus, ATI Mach64, 3Dlabs Permedia 2 or S3 ViRGE/DX card with each card's own driver from the installation media (an installed Windows 2000 also takes the original ViRGE, the ViRGE/VX and the ViRGE/GX2, installing their driver when it finds the card, and the DEC TGA, ZLXp-E1, with its own tga driver); Windows 2000 on up to two CPUs; USB with its own drivers ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
@@ -161,11 +161,13 @@ which workload, and the optimizations that turned out not to pay.
 
 - More than two CPUs in a guest: SRM runs with four, but Windows 2000
   Professional is licensed for two, and the Windows 2000 Server beta HAL
-  only sends inter-processor interrupts to CPUs 0–1. OpenVMS and Tru64 are
-  untested with more than one CPU.
+  only sends inter-processor interrupts to CPUs 0–1. OpenVMS 8.4 starts
+  two and four (JIT build); Tru64 is untested with more than one CPU.
 - Big-endian hosts.
 - Some SCSI and IDE commands; copying large files from an IDE CD-ROM to an
-  IDE disk can fail (this rarely affects an OpenVMS installation).
+  IDE disk can fail: an OpenVMS 8.4 installation with the CD and the disk
+  on one IDE channel stopped with a controller error, and completed with
+  them on separate channels ([docs/openvms.md](docs/openvms.md)).
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
   and the Mach64's front-end scaler and bus-master DMA (Windows 2000's
   drivers use neither: stretched blits go through the 3D engine). The 3D

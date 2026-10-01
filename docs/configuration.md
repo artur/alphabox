@@ -243,6 +243,8 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
 
 ## Guest installation guides
 
+- [OpenVMS 8.4 on Alphabox](openvms.md): configuration, install answers,
+  what was verified, licences
 - [OpenVMS](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)
   (upstream wiki)
 - [OpenVMS CDE desktop](https://github.com/lenticularis39/axpbox/wiki/GUI-Desktop-Environment-(CDE))
