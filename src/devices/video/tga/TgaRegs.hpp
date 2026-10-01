@@ -36,6 +36,8 @@ namespace tga {
 /// PCI identity (Table 4-1, 4.2.3, 4.2.4).
 constexpr u16 PCI_VENDOR_DEC = 0x1011;
 constexpr u16 PCI_DEVICE_21030 = 0x0004;
+/// The TGA2 of the PowerStorm 3D30 and 4D20 (DEC's "PBXGB").
+constexpr u16 PCI_DEVICE_TGA2 = 0x000d;
 
 /// The memory space (2.1): 128 MB, 4 to 32 copies of core space.
 constexpr u32 SPACE_BYTES = 128u << 20;
@@ -47,6 +49,14 @@ constexpr u32 ROM_BYTES = 256u << 10;
 constexpr u32 CORE_ALTROM = 0x000000;
 constexpr u32 CORE_REGS = 0x100000;
 constexpr u32 REGS_BYTES = 0x100000;
+
+/// TGA2: the first megabyte of core space is the external-device window
+/// instead of an alternate ROM (NetBSD's tgareg.h; tga2.sys addresses the
+/// same): the ICS9110 clock synthesiser's serial port at 0x60000 and the
+/// RAMDAC at 0x80000, a register a 256-byte step from 0x8e000.
+constexpr u32 TGA2_EXT_CLOCK = 0x60000;
+constexpr u32 TGA2_EXT_RAMDAC = 0x80000;
+constexpr u32 TGA2_EXT_WINDOW = 0x20000;
 
 /// Core register numbers: Dword index into a 512-byte register-space core
 /// (Table 2-2). Every 512 bytes of the 1 MB register space alias them.

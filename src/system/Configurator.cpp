@@ -997,8 +997,8 @@ void CConfigurator::initialize() {
     const tga_model_config *m = tga_model_by_name(model);
     if (!m)
       FAILURE_1(Configuration,
-                "tga: unknown model \"%s\" (e1; the 24-plane e2/e3 are not "
-                "modelled yet)",
+                "tga: unknown model \"%s\" (e1, 3d30, 4d20; the 24-plane "
+                "e2/e3 are not modelled yet)",
                 model);
     myDevice = new CTga(this, theSystem, pcibus, pcidev, *m);
     break;

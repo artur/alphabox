@@ -19,7 +19,9 @@
  */
 
 /* CTga -- the DECchip 21030 "TGA" PCI graphics accelerator, as on the
- * Digital ZLXp-E1 (8 planes, 2 MB of VRAM, a Bt485 RAMDAC).
+ * Digital ZLXp-E1 (8 planes, 2 MB of VRAM, a Bt485 RAMDAC), and its
+ * successor the TGA2, as on the PowerStorm 3D30 (8 planes, 2 MB, a Bt485)
+ * and 4D20 (32-bit pixels, 16 MB, an IBM RGB561).
  *
  * The TGA is not a VGA: it has no VGA registers, no legacy windows and no
  * option ROM the console runs. Digital's consoles (SRM, AlphaBIOS) and
@@ -39,7 +41,18 @@
  *   TgaEngine.cpp  the graphics modes (simple, stipple, fill, copy, DMA,
  *                  lines) and the pixel write path
  *   TgaDisplay.cpp the screen: timing decode, rendering, the cursors
- *   TgaRamdac.cpp  the Bt485 behind the palette and DAC registers
+ *   TgaRamdac.cpp  the Bt485 behind the palette and DAC registers (or,
+ *                  on a TGA2, the external-device window)
+ *   TgaRgb561.cpp  the 4D20's IBM RGB561: window types, colour map, cursor
+ *
+ * The TGA2 keeps the 21030's core registers and graphics modes; what
+ * differs is the board around them: the RAMDAC and an ICS9110 clock sit in
+ * an external-device window where the 21030 has its alternate ROM, the
+ * revision register also reports the frame buffer size and monitor straps,
+ * and the deep bit is a strap. Its drivers (tga2.sys, NetBSD's tga(4)) are
+ * the references for those; no TGA2 manual was found. The boards also
+ * carry a Cirrus CL-GD5424 for VGA (not modelled: a VGA card beside the
+ * TGA2 stands in for it).
  *
  * References: the DECchip 21030 PCI Graphics Accelerator Reference Manual
  * (Digital EC-N0683-72, 1994) is the specification this follows; where it
@@ -64,14 +77,22 @@
 #include <thread>
 #include <vector>
 
-/// A ZLXp-E model: what the alternate ROM space's option ID reports and how
-/// the frame buffer is built.
+/// The RAMDAC a board is built with.
+enum class TgaRamdac { Bt485, Rgb561 };
+
+/// A board: which chip it carries, what the alternate ROM space's option
+/// ID (or the TGA2's revision register) reports, how the frame buffer is
+/// built and which RAMDAC drives the screen.
 struct tga_model_config {
-  const char *name; ///< config value: "e1"
+  const char *name; ///< config value: "e1", "3d30", "4d20"
   const char *part; ///< for messages
-  u32 option_type;  ///< alternate-ROM Dword <15:12>: 0 8-plane, 1 24-plane
+  u16 device_id;    ///< PCI device: 0x0004 the 21030, 0x000d the TGA2
+  u8 revision;      ///< PCI revision (and GREV<7:0>)
+  u32 option_type;  ///< 21030 alternate-ROM Dword <15:12>: 0 8-plane
   bool deep;        ///< 32-bpp frame buffer
   u32 vram_bytes;
+  TgaRamdac ramdac;
+  bool tga2() const { return device_id != 0x0004; }
 };
 const tga_model_config *tga_model_by_name(const char *name);
 
@@ -121,18 +142,28 @@ private:
   void op_dma_write(u32 a, u32 data);
   void line_setup(unsigned octant, u32 slope);
   void line_draw(u32 mask, bool from_gctr_or_slope);
-  void copy64_load(u32 a);
-  void copy64_store(u32 a);
+  int copy_dir(unsigned quads) const;
+  void copy64_load(u32 a, unsigned quads = 8);
+  void copy64_store(u32 a, unsigned quads = 8);
   u64 byte_shift(u64 in, int quad_bytes);
   void pixel_write(u32 byteaddr, unsigned width, u32 src, bool rop_on);
   void op_done();
+  void tga2_rect(u32 size);
+  void tga2_port_write(u32 offset, u32 data);
+  /// The TGA2's register file is 1 KB, not 512 bytes: its upper half, the
+  /// rectangle engine, is not a copy of the 21030 registers.
+  bool tga2_upper(u32 off) const {
+    return m_model.tga2() && (off & 0x200) != 0;
+  }
 
   /// The destination step: bytes from one pixel to the next, and the
   /// width of the memory a pixel occupies (1 or 4 bytes).
   unsigned dst_step() const;
   unsigned dst_width() const;
   u32 dst_byte_offset() const;
-  bool deep() const { return (r[tga::GDER] & tga::GDER_DEEP) != 0; }
+  bool deep() const {
+    return m_model.tga2() ? m_model.deep : (r[tga::GDER] & tga::GDER_DEEP) != 0;
+  }
 
   u8 vram8(u32 a) const { return m_vram[a & m_vram_mask]; }
   u32 vram32(u32 a) const;
@@ -157,6 +188,17 @@ private:
   void epdr_write(u32 data);
   u32 epdr_read();
 
+  // --- the IBM RGB561 of the PowerStorm 4D20 (TgaRgb561.cpp) ----------------
+  void rgb561_reset();
+  void rgb561_write(unsigned port, u8 v);
+  u8 rgb561_read(unsigned port);
+  u32 rgb561_pixel(u32 p) const;
+  void draw_rgb561_cursor(unsigned w, unsigned h);
+
+  // --- the TGA2's external-device window (Tga.cpp) ----------------------
+  u32 extdev_read(u32 offset);
+  void extdev_write(u32 offset, u32 data);
+
   // --- tracing -----------------------------------------------------------
   void trace(const char *fmt, ...);
   void unimplemented(const std::string &what);
@@ -172,7 +214,7 @@ private:
   /// Everything the state file carries.
   u32 r[tga::NUM_REGS];
   struct engine_state {
-    u64 copybuf[8];  ///< the copy buffer, 8 quadwords
+    u64 copybuf[16]; ///< the copy buffer: 8 quadwords, 16 on a TGA2
     u64 residue;     ///< the byte shifter's residue register
     u32 cbr_low;     ///< latched even copy-buffer register write
     u32 cbr_fill;    ///< next copy-buffer entry a PIO write fills
@@ -184,6 +226,8 @@ private:
     int32_t cur_err; ///< working error term
     u32 cur_len;     ///< working length (0 = 16)
     u32 gpxr;        ///< the pixel mask now in force
+    u32 rect_addr;   ///< TGA2: the rectangle engine's next address
+    u32 rect_pitch;  ///< TGA2: its row pitch, in pixels
     u32 icsbits;     ///< ICS1562 shift register, as shifted in
     u32 icscount;
   } e;
@@ -199,6 +243,22 @@ private:
     u8 latch[3];
     u16 cur_x, cur_y;
   } dac;
+  /// The IBM RGB561: a 16-bit address register and the register file
+  /// behind it, the window type tables, the colour map, the cursor.
+  struct rgb561_state {
+    u16 addr;
+    u8 sub; ///< byte of a multi-byte table entry next
+    u8 latch[3];
+    u8 regs[0x100]; ///< configuration, sync, cursor, crosshair, DAC
+    u16 fb_wat[16]; ///< frame buffer window types, 10 bits
+    u16 ol_wat[16]; ///< overlay window types, 10 bits
+    u8 auxfb_wat[16];
+    u8 auxol_wat[16];
+    u8 cmap[1024][3];
+    u16 gamma[3][256];
+    u8 cursor_lut[16][3];
+    u8 cursor[1024]; ///< 64x64, 2 bits a pixel, MSB first
+  } ibm;
 
   // --- display / thread --------------------------------------------------
   std::vector<u32> m_frame;

@@ -36,13 +36,26 @@ using namespace tga;
 
 CTga *theTGA = nullptr;
 
-/* The ZLXp-E family (Linux tgafb names them by the alternate-ROM option
- * type; NetBSD's tga_conf.c lists the frame buffer options of chapter 8).
- * The E1 is the 8-plane board, frame buffer option T8-02: 2 MB of 256K x n
- * VRAM, a Bt485. The E2 and E3 (24 planes, a Bt463, T32-08 and T32-88)
- * are not modelled yet. */
+/* The boards. The ZLXp-E family carries the 21030 (Linux tgafb names them
+ * by the alternate-ROM option type; NetBSD's tga_conf.c lists the frame
+ * buffer options of chapter 8). The E1 is the 8-plane board, frame buffer
+ * option T8-02: 2 MB of 256K x n VRAM, a Bt485. The E2 and E3 (24 planes,
+ * a Bt463, T32-08 and T32-88) are not modelled yet.
+ *
+ * The PowerStorm 3D30 and 4D20 carry the TGA2 (PCI 1011:000d), the 21030's
+ * successor: the same core registers and graphics modes, with the RAMDAC
+ * and an ICS9110 clock synthesiser in an external-device window where the
+ * 21030 has its alternate ROM. tga2.sys names the RAMDACs: a Bt485 on the
+ * 3D30, an IBM RGB561 on the 4D20; the 3D30 has 2 MB of VRAM (8 planes),
+ * the 4D20 16 MB (32-bpp pixels). Revision 0x22 is the third pass, the
+ * last NetBSD's tga(4) knows. */
 static const tga_model_config tga_models[] = {
-    {"e1", "ZLXp-E1 (8-plane, Bt485)", 0, false, 2u << 20},
+    {"e1", "ZLXp-E1 (8-plane, Bt485)", 0x0004, 0x02, 0, false, 2u << 20,
+     TgaRamdac::Bt485},
+    {"3d30", "PowerStorm 3D30 (TGA2, 8-plane, Bt485)", 0x000d, 0x22, 0, false,
+     2u << 20, TgaRamdac::Bt485},
+    {"4d20", "PowerStorm 4D20 (TGA2, 32-plane, IBM RGB561)", 0x000d, 0x22, 0,
+     true, 16u << 20, TgaRamdac::Rgb561},
 };
 
 const tga_model_config *tga_model_by_name(const char *name) {
@@ -78,9 +91,9 @@ void CTga::init() {
   // Device-specific: the VGA redirect register PVRR, 81000002 at reset.
   u32 cfg_data[64] = {};
   u32 cfg_mask[64] = {};
-  cfg_data[0x00 >> 2] = (u32(PCI_DEVICE_21030) << 16) | PCI_VENDOR_DEC;
+  cfg_data[0x00 >> 2] = (u32(m_model.device_id) << 16) | PCI_VENDOR_DEC;
   cfg_data[0x04 >> 2] = 0x028000a0;
-  cfg_data[0x08 >> 2] = 0x03800002;
+  cfg_data[0x08 >> 2] = 0x03800000 | m_model.revision;
   cfg_data[0x10 >> 2] = 0x00000008;
   cfg_data[0x3c >> 2] = 0x00000100;
   cfg_data[0x40 >> 2] = 0x81000002;
@@ -119,6 +132,7 @@ void CTga::init() {
   }
 
   ramdac_reset();
+  rgb561_reset();
   m_frame.clear();
   m_last_frame = std::chrono::steady_clock::now();
   printf("%s: Digital %s, %u KB\n", devid_string, m_model.part,
@@ -189,6 +203,11 @@ void CTga::config_write_custom(int func, u32 address, int dsize, u32 old_data,
  * space holds 32, 16, 8 or 4 copies of it.
  **/
 u32 CTga::core_bytes() const {
+  // The TGA2's frame buffer is the upper half of a core twice its size:
+  // tga2.sys maps it at the memory size from the start of the BAR (4 MB
+  // cores on the 3D30, 32 MB on the 4D20, as NetBSD's tga_conf.c has it).
+  if (m_model.tga2())
+    return std::max<u32>(4u << 20, 2 * m_model.vram_bytes);
   switch ((r[GDER] & GDER_ADDR_MASK) >> 2) {
   case 0:
     return 4u << 20;
@@ -252,13 +271,18 @@ u32 CTga::space_read(u32 address) {
   const u32 core = core_bytes();
   const u32 off = address & (core - 1);
   u32 v;
-  if (off < CORE_REGS) {
+  if (off < CORE_REGS && m_model.tga2()) {
+    v = extdev_read(off);
+  } else if (off < CORE_REGS) {
     v = altrom_read(off);
     trace("altrom read %06x = %08x", off, v);
+  } else if (off < CORE_REGS + REGS_BYTES && tga2_upper(off)) {
+    v = 0; // the rectangle ports: write-only
+    trace("reg read  %03x = %08x (rectangle port)", off & 0x3ff, v);
   } else if (off < CORE_REGS + REGS_BYTES) {
     const unsigned reg = (off >> 2) & (NUM_REGS - 1);
     v = reg_read(reg);
-    if (reg != SCSR && reg != SISR)
+    if (reg != SCSR && reg != SISR && !(m_model.tga2() && reg == EPDR))
       trace("reg read  %03x = %08x", reg * 4, v);
   } else {
     v = vram32(off & (core / 2 - 1));
@@ -269,13 +293,22 @@ u32 CTga::space_read(u32 address) {
 void CTga::space_write(u32 address, u32 data, u32 bytemask) {
   const u32 core = core_bytes();
   const u32 off = address & (core - 1);
-  if (off < CORE_REGS) {
+  if (off < CORE_REGS && m_model.tga2()) {
+    extdev_write(off, data);
+  } else if (off < CORE_REGS) {
     // Writes to alternate ROM space reach the address and continue
     // registers (2.2.3.2): in its first 512 KB, even Dwords are GADR and
     // odd ones GCTR; every other write is GCTR.
     const bool gadr = off < (512u << 10) && (off & 4) == 0;
     trace("altrom write %06x = %08x (%s)", off, data, gadr ? "GADR" : "GCTR");
     reg_write(gadr ? GADR : GCTR, data);
+  } else if (off < CORE_REGS + REGS_BYTES && tga2_upper(off)) {
+    trace("reg write %03x = %08x (rectangle port)", off & 0x3ff, data);
+    if (m_trace_first)
+      first_use("register %03x written", (off & 0x300) == 0x200
+                                             ? 0x200 // one line for the ports
+                                             : off & 0x3ff);
+    tga2_port_write(off & 0x3ff, data);
   } else if (off < CORE_REGS + REGS_BYTES) {
     const unsigned reg = (off >> 2) & (NUM_REGS - 1);
     trace("reg write %03x = %08x", reg * 4, data);
@@ -298,6 +331,56 @@ void CTga::space_write(u32 address, u32 data, u32 bytemask) {
 u32 CTga::altrom_read(u32 offset) {
   const u32 byte = m_rom[(offset >> 2) & (ROM_BYTES - 1)];
   return (m_model.option_type << 12) | byte;
+}
+
+/**
+ * The TGA2's external-device window (first megabyte of core space): the
+ * RAMDAC from 0x80000, its register select in address bits <11:8> and its
+ * data in the low byte (tga2.sys and NetBSD put the window at 0x8e000);
+ * the ICS9110 clock synthesiser's serial port from 0x60000, a data bit in
+ * <0> and the load strobe in <1> as NetBSD's tga2_ics9110_wr shifts its 24
+ * bits. Anything else in the window reads as zero.
+ **/
+u32 CTga::extdev_read(u32 offset) {
+  u32 v = 0;
+  if ((offset & ~(TGA2_EXT_WINDOW - 1)) == TGA2_EXT_RAMDAC) {
+    const unsigned rs = (offset >> 8) & 0xf;
+    if (m_model.ramdac == TgaRamdac::Rgb561)
+      v = rgb561_read(rs & 3);
+    else
+      v = ramdac_read(rs);
+  } else if (m_trace_first) {
+    first_use("external-device read %06x", offset);
+  }
+  trace("extdev read  %06x = %08x", offset, v);
+  return v;
+}
+
+void CTga::extdev_write(u32 offset, u32 data) {
+  trace("extdev write %06x = %08x", offset, data);
+  switch (offset & ~(TGA2_EXT_WINDOW - 1)) {
+  case TGA2_EXT_RAMDAC: {
+    const unsigned rs = (offset >> 8) & 0xf;
+    if (m_model.ramdac == TgaRamdac::Rgb561)
+      rgb561_write(rs & 3, u8(data));
+    else
+      ramdac_write(rs, u8(data));
+    return;
+  }
+  case TGA2_EXT_CLOCK:
+    // Kept for the trace; the screen is drawn at a fixed rate.
+    e.icsbits = (e.icsbits >> 1) | ((data & 1) << 31);
+    e.icscount++;
+    if (data & 2) {
+      trace("ICS9110 loaded (%u bits: %06x)", e.icscount, e.icsbits >> 8);
+      e.icscount = 0;
+    }
+    return;
+  default:
+    if (m_trace_first)
+      first_use("external-device write %06x", offset);
+    return;
+  }
 }
 
 u32 CTga::reg_read(unsigned reg) {
@@ -336,13 +419,35 @@ u32 CTga::reg_read(unsigned reg) {
   case GREV:
     // Reserved in the 21030 manual; NetBSD's tga(4) reads the chip
     // revision in its low byte here (1-4 on a TGA, 0x2x on a TGA2) and
-    // panics on anything else, so a real TGA answers with it.
+    // panics on anything else, so a real TGA answers with it. A TGA2
+    // also reports its board: the monitor-ID straps in <19:16>, inverted
+    // (NetBSD indexes its monitor table with ~GREV<19:16>; 0xf picks the
+    // first, 1280x1024 at 72 Hz) and the frame buffer size in <22:21>
+    // (tga2.sys: 0 16 MB, 1 8 MB, 2 4 MB, 3 2 MB).
+    if (m_model.tga2()) {
+      u32 size = 0;
+      for (u32 mb = 16u << 20; mb > m_model.vram_bytes && size < 3; mb >>= 1)
+        size++;
+      return (pci_state.config_data[0][2] & 0xff) | (0xfu << 16) | (size << 21);
+    }
     return pci_state.config_data[0][2] & 0xff;
+  case GDER:
+    // The TGA2's deep bit is a strap: the board's, whatever is written.
+    if (m_model.tga2())
+      return (r[GDER] & ~GDER_DEEP) | (m_model.deep ? GDER_DEEP : 0);
+    return r[GDER];
   case GCTR:
     return 0; // Z address increments: no Z-buffered lines yet
   case SCSR:
     return 0; // never busy: every operation completes on its write
   case EPDR:
+    // The TGA2 has no RAMDAC port here: tga2.sys's interrupt handler
+    // reads the interrupt status from this address (and writes it back
+    // to SISR to clear it).
+    if (m_model.tga2()) {
+      std::lock_guard<std::mutex> lock(m_irq_lock);
+      return r[SISR];
+    }
     return epdr_read();
   case SISR: {
     std::lock_guard<std::mutex> lock(m_irq_lock);
@@ -425,7 +530,9 @@ void CTga::reg_write(unsigned reg, u32 v) {
     m_generation++;
     return;
   case VVVR:
-    r[VVVR] = v & 0x7;
+    // The TGA2 adds the monitor's power state in <5:4> (tga2.sys writes
+    // 01, 11, 21, 31 for D0 to D3): anything but on blanks the screen.
+    r[VVVR] = v & (m_model.tga2() ? 0x3f : 0x7);
     m_generation++;
     return;
   case SISR: {
@@ -484,6 +591,28 @@ void CTga::reg_write(unsigned reg, u32 v) {
   case GCDR + 6:
     copy64_store(v & 0xffffff);
     return;
+  case 0x68:
+  case 0x6a:
+  case 0x6c:
+  case 0x6e:
+  case 0x69:
+  case 0x6b:
+  case 0x6d:
+  case 0x6f:
+    // Reserved on the 21030. The TGA2 copies 128 bytes through them, in
+    // source and destination pairs as GCSR and GCDR copy 64: tga2.dll
+    // moves the interior of a screen-to-screen copy with them, 128 bytes a
+    // pair, the edges in copy mode, through the byte shifter and in the
+    // direction the pixel shift gives (copy_dir).
+    if (!m_model.tga2()) {
+      r[reg] = v;
+      return;
+    }
+    if (reg & 1)
+      copy64_store(v & 0xffffff, 16);
+    else
+      copy64_load(v & 0xffffff, 16);
+    return;
   case ERWR:
     // The EEPROM takes writes only with GDER's ROM write enable.
     if (r[GDER] & 0x1000)
@@ -501,7 +630,8 @@ void CTga::reg_write(unsigned reg, u32 v) {
     }
     return;
   case EPDR:
-    epdr_write(v);
+    if (!m_model.tga2())
+      epdr_write(v);
     return;
   case SCSR:
     return; // a barrier: nothing is ever outstanding
@@ -523,11 +653,12 @@ int CTga::SaveState(FILE *f) {
   if ((res = CPCIDevice::SaveState(f)))
     return res;
   fwrite(&kTgaMagic1, sizeof(u32), 1, f);
-  long sz = sizeof(r) + sizeof(e) + sizeof(dac);
+  long sz = sizeof(r) + sizeof(e) + sizeof(dac) + sizeof(ibm);
   fwrite(&sz, sizeof(long), 1, f);
   fwrite(r, sizeof(r), 1, f);
   fwrite(&e, sizeof(e), 1, f);
   fwrite(&dac, sizeof(dac), 1, f);
+  fwrite(&ibm, sizeof(ibm), 1, f);
   const u64 vram = m_vram.size();
   fwrite(&vram, sizeof(u64), 1, f);
   fwrite(m_vram.data(), 1, m_vram.size(), f);
@@ -550,12 +681,13 @@ int CTga::RestoreState(FILE *f) {
     return -1;
   }
   if (fread(&sz, sizeof(long), 1, f) != 1 ||
-      sz != long(sizeof(r) + sizeof(e) + sizeof(dac))) {
+      sz != long(sizeof(r) + sizeof(e) + sizeof(dac) + sizeof(ibm))) {
     printf("%s: STRUCT SIZE does not match!\n", devid_string);
     return -1;
   }
   if (fread(r, sizeof(r), 1, f) != 1 || fread(&e, sizeof(e), 1, f) != 1 ||
       fread(&dac, sizeof(dac), 1, f) != 1 ||
+      fread(&ibm, sizeof(ibm), 1, f) != 1 ||
       fread(&vram, sizeof(u64), 1, f) != 1 || vram != m_vram.size() ||
       fread(m_vram.data(), 1, m_vram.size(), f) != m_vram.size() ||
       fread(m_rom.data(), 1, m_rom.size(), f) != m_rom.size()) {

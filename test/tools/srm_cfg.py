@@ -33,6 +33,8 @@ change it for the SRM probes:
   --ide-cfg FILE        body of the pci0.15 ali_ide block (drives)
   --floppy IMAGE        fdc0 with disk0.0 = IMAGE
   --exit-on-halt        sys0 exit_on_pal_halt = true
+  --gui                 a gui = sdl block, for devices that need one (the
+                        graphics cards); run it with SDL_VIDEO_DRIVER=dummy
 """
 import argparse
 import os
@@ -67,6 +69,7 @@ def main():
     ap.add_argument("--ide-cfg")
     ap.add_argument("--floppy")
     ap.add_argument("--exit-on-halt", action="store_true")
+    ap.add_argument("--gui", action="store_true")
     args = ap.parse_args()
     out_dir = args.dir or os.path.dirname(os.path.abspath(args.out))
 
@@ -96,6 +99,9 @@ def main():
         opts = args.cpu_opt + (args.cpu1_opt if i == 1 else [])
         blocks.append(with_opts(b, opts))
     t = t[:m.start(1)] + "\n\n".join(blocks) + t[m.end(1):]
+
+    if args.gui:
+        t = "gui = sdl\n{\n  keyboard.use_mapping = false;\n}\n\n" + t
 
     if args.exit_on_halt:
         t, n = re.subn(r"(sys0\s*=\s*tsunami\s*\{)", r"\1\n  exit_on_pal_halt = true;", t)

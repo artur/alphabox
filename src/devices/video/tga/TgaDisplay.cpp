@@ -185,6 +185,8 @@ bool CTga::screen_geometry(unsigned &w, unsigned &h, unsigned &stride_px,
                            u32 &start) const {
   if ((r[VVVR] & (VVVR_VIDEO_VALID | VVVR_BLANK)) != VVVR_VIDEO_VALID)
     return false;
+  if (m_model.tga2() && (r[VVVR] & 0x30))
+    return false; // the monitor powered down
   const u32 active = (((r[VHCR] >> 28) & 3) << 9) | (r[VHCR] & 0x1ff);
   if (active < 2)
     return false;
@@ -228,6 +230,14 @@ void CTga::render(unsigned w, unsigned h, unsigned stride, u32 start) {
       for (unsigned x = 0; x < w; x++)
         out[x] = pal[vram8(row + x)];
     }
+  } else if (m_model.ramdac == TgaRamdac::Rgb561) {
+    // A 32-bpp frame buffer through the RGB561's window types.
+    for (unsigned y = 0; y < h; y++) {
+      const u32 row = start + y * stride * 4;
+      u32 *out = &m_frame[size_t(y) * w];
+      for (unsigned x = 0; x < w; x++)
+        out[x] = rgb561_pixel(vram32(row + 4 * x));
+    }
   } else {
     // A 32-bpp frame buffer as true colour (no Bt463 window types yet).
     for (unsigned y = 0; y < h; y++) {
@@ -237,11 +247,16 @@ void CTga::render(unsigned w, unsigned h, unsigned stride, u32 start) {
         out[x] = 0xff000000u | (vram32(row + 4 * x) & 0x00ffffff);
     }
   }
-  if (dac.cmd[2] & 3)
+  if (m_model.ramdac == TgaRamdac::Rgb561)
+    draw_rgb561_cursor(w, h);
+  else if (dac.cmd[2] & 3)
     draw_bt485_cursor(w, h);
   if (r[VVVR] & VVVR_CURSOR)
     draw_tga_cursor(w, h);
 
+  if (w != m_last_w || h != m_last_h)
+    printf("%s: display %ux%u, %u bpp (VHCR %08x VVCR %08x)\n", devid_string, w,
+           h, deep() ? 32 : 8, r[VHCR], r[VVCR]);
   if (!m_owns_gui) {
     m_last_w = w;
     m_last_h = h;

@@ -100,7 +100,10 @@ s3virge)
   esac
   EXTRA="chip = \"$CHIP\";"
   ;;
-tga) ROM=${ROM:-} ;;
+tga)
+  ROM=${ROM:-}
+  [ -n "${MODEL:-}" ] && EXTRA="model = \"$MODEL\";"
+  ;;
 *) echo "vga_boot: CARD must be s3, cirrus, mach64, permedia2, s3virge or tga"; exit 2 ;;
 esac
 [ -z "$ROM" ] || [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }

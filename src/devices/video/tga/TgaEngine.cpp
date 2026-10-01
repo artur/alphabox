@@ -313,6 +313,84 @@ void CTga::op_fill(u32 a, u32 data, int kind) {
 }
 
 /**
+ * The TGA2's rectangle engine, as tga2.dll drives it (no TGA2 manual was
+ * found; this is read off the driver's code and register traffic). The
+ * TGA2's register file is 1 KB, twice the 21030's: its lower half holds
+ * the 21030 registers, its upper half the rectangle engine.
+ *
+ *   0x200-0x2fc  rectangle ports, starting at GADR when GADR is new
+ *   0x300        the rectangle address (a frame buffer byte address)
+ *   0x304-0x358  rectangle ports, starting at the rectangle address
+ *   0x35c        the row pitch, in pixels
+ *
+ * A write to a port fills (data <31:16> + 1) rows of (data <15:0> + 1)
+ * pixels in the fill mode in force -- block, opaque or transparent fill,
+ * GDAR the fill mask of each span as for a 21030 fill -- one span a row,
+ * and leaves the address below the last row: the driver clears a 640x480
+ * screen as bands of 167, 167 and 146 rows after one address write, and
+ * draws a 1-pixel-wide line down 144 rows as 144 one-pixel writes. The
+ * ports are many so that consecutive writes do not merge in the CPU's
+ * write buffer; the driver steps through them.
+ **/
+void CTga::tga2_port_write(u32 offset, u32 data) {
+  if (offset == 0x35c) {
+    e.rect_pitch = data & 0xffff;
+    return;
+  }
+  if (offset == 0x300) {
+    e.rect_addr = data;
+    e.addr_new = false;
+    return;
+  }
+  if (offset < 0x300 && e.addr_new) {
+    e.rect_addr = r[GADR];
+    e.addr_new = false;
+  }
+  if (offset < 0x35c) {
+    tga2_rect(data);
+    return;
+  }
+  char buf[64];
+  snprintf(buf, sizeof(buf), "TGA2 register %03x", offset);
+  unimplemented(buf);
+}
+
+void CTga::tga2_rect(u32 size) {
+  const u32 mode = r[GMOR] & GMOR_MODE;
+  int kind;
+  switch (mode) {
+  case MODE_BLOCK_FILL:
+    kind = 0;
+    break;
+  case MODE_OPAQUE_FILL:
+    kind = 1;
+    break;
+  case MODE_TRANSPARENT_FILL:
+    kind = 2;
+    break;
+  default: {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "TGA2 rectangle in mode %02x", mode);
+    unimplemented(buf);
+    return;
+  }
+  }
+  if (m_trace_first)
+    first_use("TGA2 rectangle, mode %02x", mode);
+  const unsigned rows = (size >> 16) + 1;
+  const unsigned cols = (size & 0xffff) + 1;
+  const u32 pitch = e.rect_pitch * dst_step();
+  for (unsigned y = 0; y < rows; y++) {
+    for (unsigned x = 0; x < cols; x += 2048) {
+      const unsigned n = std::min(2048u, cols - x);
+      op_fill(e.rect_addr + x * dst_step(), u32(n - 1), kind);
+    }
+    e.rect_addr += pitch;
+  }
+  op_done();
+}
+
+/**
  * The byte shifter (6.2.9.1): each quadword read joins the residue
  * register, the previous one read, and is rotated by the signed pixel
  * shift. A forward copy (shift 0..7) moves bytes up by the shift, the
@@ -390,29 +468,45 @@ void CTga::op_copy(u32 a, u32 mask) {
 }
 
 /**
+ * Which way a register copy steps: the 21030's copy 64 always forward
+ * (4.3.4); the TGA2's copy 128 by the pixel shift's sign, as copy mode
+ * does -- tga2.dll moves an overlapping span right to left with a pixel
+ * shift of -8, its 128-byte pairs stepping down from the copy-mode edge.
+ **/
+int CTga::copy_dir(unsigned quads) const {
+  if (quads <= 8)
+    return 1;
+  return (r[GPSR] & 8) ? -1 : 1;
+}
+
+/**
  * The copy-64 registers (4.3.4): GCSR fills all eight entries of the copy
  * buffer from an 8-byte-aligned frame buffer address, through the byte
  * shifter; GCDR empties them, unmasked, through the raster op and plane
  * mask. Always forward.
  **/
-void CTga::copy64_load(u32 a) {
+void CTga::copy64_load(u32 a, unsigned quads) {
   const u32 qa = a & ~7u;
-  for (int i = 0; i < 8; i++)
-    e.copybuf[i] = byte_shift(vram64(m_vram, m_vram_mask, qa + 8 * i), 8);
+  const int dir = copy_dir(quads);
+  for (unsigned i = 0; i < quads; i++)
+    e.copybuf[i] =
+        byte_shift(vram64(m_vram, m_vram_mask, qa + u32(8 * dir * int(i))), 8);
   e.cbr_fill = 0;
   m_generation++;
 }
 
-void CTga::copy64_store(u32 a) {
-  const u32 qa = a & ~7u;
-  for (int i = 0; i < 8; i++) {
+void CTga::copy64_store(u32 a, unsigned quads) {
+  const u32 qa0 = a & ~7u;
+  const int dir = copy_dir(quads);
+  for (unsigned i = 0; i < quads; i++) {
     const u64 v = e.copybuf[i];
+    const u32 qa = qa0 + u32(8 * dir * int(i));
     if (!deep()) {
       for (unsigned b = 0; b < 8; b++)
-        pixel_write(qa + 8 * i + b, 1, u32(v >> (8 * b)) & 0xff, true);
+        pixel_write(qa + b, 1, u32(v >> (8 * b)) & 0xff, true);
     } else {
-      pixel_write(qa + 8 * i, 4, u32(v), true);
-      pixel_write(qa + 8 * i + 4, 4, u32(v >> 32), true);
+      pixel_write(qa, 4, u32(v), true);
+      pixel_write(qa + 4, 4, u32(v >> 32), true);
     }
   }
   e.cbr_fill = 0;

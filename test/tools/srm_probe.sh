@@ -20,6 +20,8 @@
 #   FLOPPY=<image>|halt  fdc0 with this image; "halt" generates the CALL_PAL
 #                        HALT boot-block floppy (make_halt_floppy.py)
 #   EXIT_ON_HALT=1       sys0 exit_on_pal_halt = true
+#   GUI=1                a gui = sdl block (window-less: SDL's dummy driver),
+#                        which graphics cards in EXTRA_CFG need
 #   CPU_OPT="k=v ..."    settings for every CPU; CPU1_OPT="k=v ..." for cpu1
 #   CMDS="a|b|c"         console commands, '|'-separated (default: none)
 #   CMD_TIMEOUT=<s>      per command (default 60)
@@ -68,6 +70,7 @@ fi
 [ -n "${EXTRA_CFG:-}" ] && cfg+=(--extra-cfg "$(cd "$(dirname "$EXTRA_CFG")" && pwd)/$(basename "$EXTRA_CFG")")
 [ -n "${IDE_CFG:-}" ] && cfg+=(--ide-cfg "$IDE_CFG")
 [ "${EXIT_ON_HALT:-0}" = 1 ] && cfg+=(--exit-on-halt)
+[ "${GUI:-0}" = 1 ] && cfg+=(--gui) && export SDL_VIDEO_DRIVER=dummy
 for o in ${CPU_OPT:-}; do cfg+=(--cpu-opt "$o"); done
 for o in ${CPU1_OPT:-}; do cfg+=(--cpu1-opt "$o"); done
 if [ "${FLOPPY:-}" = halt ]; then
