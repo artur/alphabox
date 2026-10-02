@@ -19,6 +19,7 @@
  */
 #include "Ds25Dpr.hpp"
 #include "StdAfx.hpp"
+#include "System.hpp"
 
 void CDs25Dpr::board_init() {
   // The SROM's version, which the SROM leaves here: the DS25's is V1.4-G
@@ -37,6 +38,15 @@ void CDs25Dpr::board_init() {
   state.ram[0x300c] = 'V';
   state.ram[0x300d] = '1';
   state.ram[0x300e] = '3';
+
+  // Which FRU EEPROMs the RMC could not read. The ES40's encoding (bits 1-3
+  // for processors 1-3, set by CDPR::init) is not the DS25's: its console
+  // reads processor 1's FRU image (0x2200) and builds a configuration-tree
+  // node for it unless bit 7 is set, and OpenVMS then finds a processor 1
+  // of no type ("%SMP-F-CPUBAD"). Bit 7 is processor 1 [found by trying
+  // each bit with one processor; bits 1-3 made no difference the console
+  // showed].
+  state.ram[0xaf] = (cSystem->get_cpu_num() < 2) ? 0x80 : 0x00;
 }
 
 bool CDs25Dpr::board_command(u8 command) {
