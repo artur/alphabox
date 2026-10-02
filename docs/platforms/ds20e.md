@@ -336,6 +336,18 @@ device 7 lists `dka0` and `dka500`; a DE500 at device 8 boots over BOOTP
 and TFTP from `net_peer.py` to the image's HALT. `srm_probe.sh` places the
 devices for `PLATFORM=ds20e` itself now (`SLOTS` in `srm_cfg.py`).
 
+**The interpreter must run this console's real PALcode** (2026-10-02). The
+runs above are on the JIT lane, which always runs the real PALcode. On the
+interpreter, whose native vmspal routines replace the OpenVMS PALcode
+wherever PAL_BASE is 0x8000, OpenVMS hung after its banner on one
+processor (`tsu-ds20e-1cpu-int`) and bugchecked on CPU 1 with two
+(`tsu-ds20e-2cpu-int`); with `palcode.vms.nohle = true` it logged in
+(`tsu-ds20e-1cpu-int-nohle`). Those routines were written against the ES40
+console's PALcode (V1.98-104); this one is V1.98-79. The board row now
+carries `native_vmspal`, false for every board but the ES40, and the
+interpreter boots to login on two processors with no options
+(`tsu-ds20e-2cpu-int-fix`). The ES40 interpreter still uses the routines.
+
 **Still open:**
 
 - *Two processors, intermittent*: in 2 of 11 two-processor OpenVMS boots,

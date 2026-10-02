@@ -76,6 +76,9 @@ CSystem::CSystem(CConfigurator *cfg) try {
   if (!m_platform)
     FAILURE_1(Configuration, "Unknown platform %s",
               myCfg->get_text_value("platform", DEFAULT_PLATFORM));
+  // Decided before the processors are built, which read it (Platform.hpp).
+  if (!m_platform->native_vmspal)
+    request_native_pal("this board's console PALcode is not the ES40's");
 
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
   // How much memory the board holds, from its descriptor: the ES40 takes

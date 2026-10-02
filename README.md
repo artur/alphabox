@@ -110,7 +110,7 @@ card. The [documentation](docs/README.md) covers the rest:
 
 | Area | Devices |
 |---|---|
-| Machine | AlphaServer ES40; the DS20E boots OpenVMS 8.4 (one and two processors); the DS10 and DS20L consoles run to their prompt ([docs/platforms.md](docs/platforms.md)) |
+| Machine | AlphaServer ES40; the DS20E and DS20L boot OpenVMS 8.4 (one and two processors); the DS10 console runs to its prompt ([docs/platforms.md](docs/platforms.md)) |
 | CPU | 1–4 × Alpha EV68CB (21264) |
 | Chipset | Tsunami/Typhoon: Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC |
 | Memory | 64 MB – 32 GB |

@@ -5,17 +5,18 @@ running its own firmware update utility, which installs the console into
 the flash, and then booting what it installed.
 
 **Branch**: `platform/ds20l` · **Config**: `platform = "ds20l";`
-· **Status**: L2 (console prompt reached)
+· **Status**: L5 (OpenVMS 8.4 boots an installed disk to login, on one and
+two processors); L3 not claimable without a reference listing
 
 ## The machine
 
 | | |
 | --- | --- |
 | Family, code name | Tsunami family; Linux calls this board "Shark" and drives it with the ES40's interrupt table ("Sharks strongly resemble Clipper") |
-| CPU | up to two (assumed); the EV68CB row is used, and the console reports 800 MHz |
+| CPU | up to two; the EV68CB row is used, and the console names it "Alpha 21264C-6 833 MHz (EV68CB pass 4.0)". Both processors are found and run OpenVMS |
 | Chipset | Tsunami/Typhoon 21272, two PCI buses |
 | Memory | up to 4 GB (assumed) |
-| PCI | slots not yet established; the ES40's wiring is used, marked assumed |
+| PCI | the console gives interrupt lines to hose 0 devices 3 to 6 and hose 1 devices 3 to 5 (see Findings); it scans from device 3 and finds the ALi functions at the ES40's 7, 15 and 19 |
 | Board hardware | not investigated: the console runs without it |
 
 ## Firmware
@@ -65,16 +66,75 @@ either does not need it or reads something we do provide.
   boot only, which is what a machine with an empty flash says.
 - `system serial number not set`, as on the DS20E.
 
-## Plan
+### Interrupt lines and OpenVMS 8.4 (2026-10-02, L5)
+
+Transcripts in `lab/platforms/ds20l/`. The console comes from the flash
+the update utility wrote (`lab/ds20l-lfu/flash.rom`, V6.6-10); runs copy
+it (`FLASH=` in `lab/platforms/tsu/tsu_srm.sh`).
+
+**This console has no interrupt table** like the DS20E's and the DS10's
+(none was found in its memory image). What it does is visible in the line
+it writes into each card's configuration space: DE500s at every device
+number of both hoses got
+
+| | 3 | 4 | 5 | 6 | others found |
+| --- | --- | --- | --- | --- | --- |
+| hose 0 | 0x10 | 0x14 | 0x18 | **0x1f** | 8-12: none |
+| hose 1 | 0x20 | 0x24 | **0x2b** | none | 7-10: none |
+
+Devices 0 to 2 were not found on either hose. Most of this is the ES40's
+formula, (device + 1) * 4 + 16 * hose, as Linux says; the two marked
+entries are the fourth input of the device's group rather than the first,
+so those two places are wired differently on this board. The row follows
+the console for pin A. **Pins B to D of those two devices are a guess**
+(the group's remaining inputs in turn), and the slots are those the console
+gives lines to; which of them are on-board devices and which are slots is
+not known.
+
+**OpenVMS with NICs at the four kinds of position** (hose 0 devices 3 and
+6, hose 1 devices 3 and 5), the same receive check as the DS20E's: every
+NIC counted 98-100 frames in 50 s (`tsu-ds20l-nic-1cpu`). With the ES40's
+wiring the two odd positions would have been raised on an input OpenVMS
+was not told about.
+
+**OpenVMS 8.4** boots the disk installed on the ES40 (`boot dqa0`; the
+ALi IDE at device 15 as on the ES40) to the SYSTEM login: startup done at
+17 s, `F$GETSYI("HW_NAME")` = `hp AlphaServer DS20L 833 MHz`. With two
+processors `CPU #1 has joined the active set` and `SHOW CPU` lists 0 and 1
+active (`tsu-ds20l-2cpu`).
+
+OpenVMS warns: `%SYSBOOT-W-FIRMREV, Firmware rev. 6.6 is below the
+recommended minimum of 6.8`. V6.6 is the newest DS20L console on the
+firmware CD V7.3, so this is a limit of the media we have, not something to
+work around; nothing failed because of it so far.
+
+The second processor is released when processor 0 clears the Cchip
+arbitration (this console does it at PALcode 0x136f5), as on the DS20E.
+Four repeated two-processor boots on the JIT lane all logged in
+(`tsu-rep-ds20l.txt`).
+
+**The interpreter must run this console's real PALcode.** On the
+interpreter lane, two-processor boots bugchecked (`INVEXCEPTN` on CPU 1 in
+SYSINIT, 3 of 3, with and without NICs) until the vmspal routines were
+switched off: with `palcode.vms.nohle = true` the same boot logged in. The
+native routines replace the ES40 console's PALcode and were applied to any
+PALcode at 0x8000; this console's is a different build (V1.98-74). The
+board row now says so (`native_vmspal = false`), and the boot logs in on
+the interpreter with no options (`tsu-ds20l-2cpu-int-fix`). The DS20E had
+the same problem (its packet).
+
+Not done here: console network boot and a CD boot (the CD is the same
+media the DS20E and DS10 boot from).
+
 
 | # | Item | Level | Status |
 | --- | --- | --- | --- |
 | 1 | Raw (headerless) image form, and finding a console installed in flash | L1 | done |
 | 2 | Board row | L1 | done, slots and interrupts assumed |
-| 3 | The machine's real slots and interrupt wiring, from its own assignments | L3 | open |
+| 3 | The machine's real slots and interrupt wiring, from its own assignments | L3 | done for pin A, checked with OpenVMS; pins B-D of two devices guessed |
 | 4 | Its device set: what belongs on the board rather than the ES40's | L3 | open |
 | 5 | Console listings against a reference | L3 | blocked: no reference |
-| 6 | Console tests, guest boot | L4-L5 | open |
+| 6 | Console tests, guest boot | L4-L5 | L5: OpenVMS 8.4 to login, 1 and 2 CPUs; console network boot not tried |
 
 ## Rules
 

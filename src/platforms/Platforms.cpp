@@ -173,40 +173,60 @@ static const char *ds10_slot_refusal(int hose, int slot) {
 }
 
 /**
- * DS20L interrupts: the ES40's wiring. Linux drives this board with the
- * same table it uses for the ES40 ("Sharks strongly resemble Clipper, at
- * least as far as interrupt routing"), so until this machine's own console
- * says otherwise, that is what it gets.
+ * DS20L interrupts. Linux drives this board with the ES40's table ("Sharks
+ * strongly resemble Clipper, at least as far as interrupt routing"), and
+ * the console (V6.6-10) agrees for most of it: the interrupt lines it gives
+ * a single-function card are the ES40's, (device + 1) * 4 + 16 * hose, on
+ * hose 0 devices 3 to 5 and hose 1 devices 3 and 4. Two places differ: pin
+ * A of hose 0 device 6 gets 0x1f and of hose 1 device 5 gets 0x2b -- the
+ * fourth input of the device's group, not the first. Devices anywhere else
+ * it finds (hose 0 8-12, hose 1 6-10) get no line at all
+ * (docs/platforms/ds20l.md).
+ *
+ * Pins B to D of those two devices are not known: they are given the rest
+ * of the group in turn (B the first input, C the second, D the third),
+ * which is a guess.
  */
 static int ds20l_pci_interrupt(int hose, int slot, int intx) {
-  return es40_pci_interrupt(hose, slot, intx);
+  const int h = hose & 1;
+  if (slot < 3 || slot > (h == 0 ? 6 : 5))
+    return -1;
+  if (slot == (h == 0 ? 6 : 5))
+    intx = (intx + 3) & 3; // pin A on the group's fourth input
+  return es40_pci_interrupt(h, slot, intx);
 }
 
-/// DS20L slots: not yet known; nothing is refused.
-static const char *ds20l_slot_refusal(int hose, int slot) { return nullptr; }
+/// DS20L slots: the places its console gives an interrupt line.
+static const char *ds20l_slot_refusal(int hose, int slot) {
+  if (ds20l_pci_interrupt(hose, slot, 0) < 0)
+    return "this machine wires add-in devices to hose 0 devices 3 to 6 and "
+           "hose 1 devices 3 to 5 only";
+  return nullptr;
+}
 
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
-     FW_LFU_BUNDLE, 2, true, 0, nullptr, es40_pci_interrupt, es40_slot_refusal},
+     FW_LFU_BUNDLE, 2, true, 0, nullptr, es40_pci_interrupt, es40_slot_refusal,
+     true},
     // Under construction (docs/platforms/ds20e.md). The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
     // until its row exists.
     {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
      FW_ROM_HEADER, 2, false, U64(0x00000800fff80000), ds20e_i2c_devices,
-     ds20e_pci_interrupt, ds20e_slot_refusal},
+     ds20e_pci_interrupt, ds20e_slot_refusal, false},
     // Under construction (docs/platforms/ds10.md): one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E. The
     // I2C controller is at PCI 0 memory 0xffff0000, which is where the
     // console's own iic_read_csr/iic_write_csr address it.
     {"ds10", "AlphaServer DS10", "ev68cb", 1, 26, 31, "DS10SRM.ROM",
      FW_ROM_HEADER, 1, false, U64(0x00000800ffff0000), ds10_i2c_devices,
-     ds10_pci_interrupt, ds10_slot_refusal},
+     ds10_pci_interrupt, ds10_slot_refusal, false},
     // Under construction (docs/platforms/ds20l.md): its console image comes
     // as an update file, with no header in front of it.
     {"ds20l", "AlphaServer DS20L", "ev68cb", 2, 26, 32, "DS20L_V6_6.EXE",
      FW_RAW_IMAGE, 2, false, 0, nullptr, ds20l_pci_interrupt,
-     ds20l_slot_refusal},
+     ds20l_slot_refusal, false},
     // EXPERIMENTAL, NOT A MACHINE (docs/platforms/marvel.md): the ES47/ES80/
     // GS1280 console image, loaded onto the ES40's hardware and an EV68 core
     // only to see what it does first -- the L1 probe of the Marvel packet.
@@ -215,7 +235,7 @@ static const platform_config platforms[] = {
     // no EV7 core and no IO7, so the console cannot get far.
     {"marvel-probe", "Marvel console probe (experimental)", "ev68cb", 1, 26, 35,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 2, false, 0, nullptr, es40_pci_interrupt,
-     ds20l_slot_refusal},
+     ds20l_slot_refusal, false},
 };
 
 const platform_config *find_platform(const char *name) {
