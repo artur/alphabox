@@ -43,6 +43,9 @@
 
 #include "Chipset.hpp"
 
+class CConfigurator;
+class CSystem;
+
 /// How a console firmware image is packaged.
 enum firmware_format {
   /// An update bundle ("LFU APU") holding several images, as the ES40's
@@ -55,6 +58,27 @@ enum firmware_format {
   /// update files (DS20L_V6_6.EXE and the other *_V7_3.EXE) are: they
   /// start directly with the console's self-decompressor.
   FW_RAW_IMAGE,
+};
+
+/// When the processors other than the first start running.
+enum secondary_start {
+  /// The console starts them itself: the ES40's does, through the
+  /// management processor, so they wait until it says so.
+  SECONDARIES_BY_CONSOLE,
+  /// Every processor must already be running PALcode when the console
+  /// looks: the DS20E has no management processor, and its console asserts
+  /// a processor's halt line and expects an answer. The others are released
+  /// at their PALcode reset entry once processor 0 has cleared the
+  /// chipset's arbitration and so become the console's primary
+  /// (CSystem::start_secondaries).
+  SECONDARIES_AFTER_ARBITRATION,
+};
+
+/// A word the loader patches into the decompressed console (a table ends
+/// with address 0).
+struct rom_patch {
+  u64 address;
+  u32 insn;
 };
 
 struct platform_config {
@@ -75,30 +99,16 @@ struct platform_config {
 
   int pci_hoses; ///< PCI buses out of the chipset
 
-  /**
-   * Whether the console starts the other processors itself.
-   *
-   * The ES40's does, through the management processor, so they wait until
-   * it says so. The DS20E has no such processor: its console asserts a
-   * processor's halt line and expects an answer, so every processor must
-   * already be running PALcode when the console looks.
-   */
-  bool console_starts_secondaries;
+  /// How the processors other than the first start.
+  secondary_start secondaries;
 
   /**
-   * Where the board's I2C bus controller answers, or 0 when the board has
-   * none that the console reaches this way.
-   *
-   * The DS10 has a PCF8584 at PCI 0 memory 0xffff0000 and the DS20E one at
-   * 0xfff80000 -- each console initialises it and then waits for the bus
-   * to go free before it reads the machine's serial ROMs. The ES40 instead
-   * drives its I2C bus from the Cchip's own pins, which the chipset model
-   * already provides (docs/platforms/ds10.md, ds20e.md).
+   * The board's own hardware -- what is neither the chipset nor a device
+   * the configuration names: the ES40's DPR and flash, the DS10's I2C
+   * controller and what hangs on its bus. Built right after the system,
+   * from platforms/<board>/.
    */
-  u64 i2c_controller;
-
-  /// The parts the board hangs on that bus, or nullptr when it hangs none.
-  void (*i2c_devices)(class I2CBus &bus);
+  void (*board_devices)(CConfigurator *cfg, CSystem *sys);
 
   /**
    * The interrupt input a device's pin reaches, or -1 when the slot has no
@@ -117,16 +127,19 @@ struct platform_config {
   const char *(*slot_refusal)(int hose, int slot);
 
   /**
-   * Whether the interpreter may replace this board's OpenVMS PALcode with
-   * its native routines (cpu/AlphaCPU_vmspal.cpp). They were written
-   * against the ES40 console's PALcode and work wherever PAL_BASE is
+   * Where the PALcode lives that the interpreter may replace with its
+   * native routines (cpu/AlphaCPU_vmspal.cpp), or 0 when it may not. They
+   * were written against the ES40 console's OpenVMS PALcode, at PAL_BASE
    * 0x8000; the DS20E's and DS20L's consoles put their own PALcode builds
    * there too, and with the native routines OpenVMS 8.4 hangs after its
    * banner (DS20E, one processor) or bugchecks on the second processor
-   * (DS20E, DS20L). Boards where it is false run the real PALcode, as JIT
-   * builds always do (docs/platforms/ds20e.md).
+   * (DS20E, DS20L). Boards with 0 run the real PALcode, as JIT builds
+   * always do (docs/platforms/ds20e.md).
    */
-  bool native_vmspal;
+  u64 vmspal_pal_base;
+
+  /// Words patched into the decompressed console for speed, or nullptr.
+  const rom_patch *console_patches;
 };
 
 /// The board named `name`, or nullptr.

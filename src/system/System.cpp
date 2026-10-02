@@ -76,7 +76,7 @@ CSystem::CSystem(CConfigurator *cfg) try {
     FAILURE_1(Configuration, "Unknown platform %s",
               myCfg->get_text_value("platform", DEFAULT_PLATFORM));
   // Decided before the processors are built, which read it (Platform.hpp).
-  if (!m_platform->native_vmspal)
+  if (!m_platform->vmspal_pal_base)
     request_native_pal("this board's console PALcode is not the ES40's");
 
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
@@ -493,7 +493,7 @@ void CSystem::reset_pci_devices() {
  * modelling choice: what a real DS20E's reset logic does is not known.
  */
 void CSystem::start_secondaries() {
-  if (m_platform->console_starts_secondaries || iNumCPUs < 2)
+  if (m_platform->secondaries == SECONDARIES_BY_CONSOLE || iNumCPUs < 2)
     return;
   m_secondaries_pending = true;
 }
@@ -519,7 +519,8 @@ void CSystem::release_secondaries() {
 void CSystem::arbitration_cleared(int cpu) {
   // On a board whose processors all run from reset, the others start now
   // that processor 0 is the one that cleared it.
-  if (cpu == 0 && m_secondaries_pending)
+  if (m_platform->secondaries == SECONDARIES_AFTER_ARBITRATION && cpu == 0 &&
+      m_secondaries_pending)
     release_secondaries();
 }
 
@@ -1378,15 +1379,10 @@ int CSystem::LoadROM() {
   printf("%%SYM-I-PATCHROM: Patching ROM for speed.\n");
 #endif
 #if !defined(SRM_NO_SPEEDUPS)
-  WriteMem(U64(0x14248), 32, 0xe7e00000, 0); // e7e00000 = BEQ r31, +0
-  WriteMem(U64(0x14288), 32, 0xe7e00000, 0);
-  WriteMem(U64(0x142c8), 32, 0xe7e00000, 0);
-  WriteMem(U64(0x68320), 32, 0xe7e00000, 0);
-  WriteMem(U64(0x8bb78), 32, 0xe7e00000, 0); // memory test (aa)
-  WriteMem(U64(0x8bc0c), 32, 0xe7e00000, 0); // memory test (bb)
-  WriteMem(U64(0x8bc94), 32, 0xe7e00000, 0); // memory test (00)
-
-  // WriteMem(U64(0xb1158),32,0xe7e00000,0);   // CPU sync?
+  // The board's patches (Platform.hpp console_patches).
+  if (const rom_patch *pt = m_platform->console_patches)
+    for (; pt->address; pt++)
+      WriteMem(pt->address, 32, pt->insn, 0);
 #endif
 #ifdef ES40_JIT
   // Blocks compiled over the patch sites above -- by the console run before

@@ -329,6 +329,8 @@ private:
   // guest's real PALcode instead of recursing on the host stack.
   int vmspal_exc_depth = 0;
   bool vmspal_lle_enabled;
+  /// Where the PALcode the native routines replace lives (board row).
+  u64 vmspal_pal_base = U64(0x8000);
   // ALPHABOX_VMSPAL_OFF: vmspal replacement routines that hand over to the
   // real PALcode instead (CALL_PAL functions by number, "int").
   u64 vmspal_off_call[4] = {0, 0, 0, 0};
@@ -1405,8 +1407,10 @@ inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
   state.pal_base = pb;
   bool was_vms = state.pal_vms;
 
-  // VMS PALcode uses base 0x8000
-  state.pal_vms = (pb == U64(0x8000)) && !vmspal_lle_enabled;
+  // The board's console OpenVMS PALcode, which the native routines replace
+  // (Platform.hpp vmspal_pal_base: 0x8000 on the ES40).
+  state.pal_vms =
+      vmspal_pal_base && (pb == vmspal_pal_base) && !vmspal_lle_enabled;
   // state.pal_vms = false;
 
 #ifdef DEBUG_PAL

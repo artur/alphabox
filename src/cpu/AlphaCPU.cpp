@@ -516,6 +516,7 @@ void CAlphaCPU::init() {
   tick_seen_seq = 0;
   // Decided for all CPUs at construction (see the constructor).
   vmspal_lle_enabled = cSystem->native_pal_requested();
+  vmspal_pal_base = cSystem->platform().vmspal_pal_base;
   parse_vmspal_off();
 
   state.iProcNum = cSystem->RegisterCPU(this);

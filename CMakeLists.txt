@@ -43,6 +43,10 @@ file(GLOB srcs
     src/devices/pci/ehci/*.cpp
     src/devices/pci/virtio/*.cpp
     src/platforms/*.cpp
+    src/platforms/es40/*.cpp
+    src/platforms/ds10/*.cpp
+    src/platforms/ds20e/*.cpp
+    src/platforms/ds20l/*.cpp
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
     src/devices/video/s3/*.cpp
@@ -70,7 +74,8 @@ target_include_directories(alphabox PRIVATE
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge
     src/devices/pci/isp1040 src/devices/pci/tulip src/devices/pci/es137x
     src/devices/pci/ehci src/devices/pci/virtio
-    src/platforms
+    src/platforms src/platforms/es40 src/platforms/ds10 src/platforms/ds20e
+    src/platforms/ds20l
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
     src/devices/video/mach64 src/devices/video/permedia2

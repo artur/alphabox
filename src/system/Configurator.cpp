@@ -39,16 +39,13 @@
 #include "CirrusGD5430.hpp"
 #include "CirrusGD5434.hpp"
 #include "DMA.hpp"
-#include "DPR.hpp"
 #include "DiskDevice.hpp"
 #include "DiskFile.hpp"
 #include "DiskRam.hpp"
 #include "Ehci.hpp"
-#include "Flash.hpp"
 #include "FloppyController.hpp"
 #include "Keyboard.hpp"
 #include "Mach64.hpp"
-#include "PCF8584.hpp"
 #include "Permedia2.hpp"
 #include "Port80.hpp"
 #include "S3Trio64.hpp"
@@ -892,17 +889,11 @@ void CConfigurator::initialize() {
   switch (myClassId) {
   case c_tsunami:
     myDevice = new CSystem(this);
-    new CDPR(this, (CSystem *)myDevice);
-    new CFlash(this, (CSystem *)myDevice);
-    // The board's own I2C bus controller, where it has one the console
-    // reaches directly (Platform.hpp).
-    if (((CSystem *)myDevice)->platform().i2c_controller) {
-      CPCF8584 *i2c =
-          new CPCF8584(this, (CSystem *)myDevice,
-                       ((CSystem *)myDevice)->platform().i2c_controller);
-      if (((CSystem *)myDevice)->platform().i2c_devices)
-        ((CSystem *)myDevice)->platform().i2c_devices(i2c->bus());
-    }
+    // The board's own hardware: DPR, flash, I2C (platforms/<board>/).
+    if (((CSystem *)myDevice)->platform().board_devices)
+      ((CSystem *)myDevice)
+          ->platform()
+          .board_devices(this, (CSystem *)myDevice);
     break;
 
   case c_ev68cb:
