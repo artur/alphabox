@@ -198,8 +198,11 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
   }
   if (!scsi_select(bus, target)) {
     scsi_free(bus);
-    post_response(entry, ISP_STATUS_SELECTION_TIMEOUT, 0, ISP_STATE_GOT_BUS,
-                  wanted, nullptr, 0);
+    // No target: INCOMPLETE, having got only the bus. This was 0x0010,
+    // which is NOP MESSAGE FAILED; OpenVMS counted every empty ID it probed
+    // as a port error (631 after one boot).
+    post_response(entry, ISP_STATUS_INCOMPLETE, 0, ISP_STATE_GOT_BUS, wanted,
+                  nullptr, 0);
     return true;
   }
 

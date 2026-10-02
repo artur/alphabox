@@ -260,13 +260,15 @@
 
 // Completion status.
 #define ISP_STATUS_COMPLETE 0x0000
+/// Incomplete: with only GOT BUS in the state flags, a selection timeout --
+/// no target answered (NetBSD's isp_parse_status, Linux qla1280).
+#define ISP_STATUS_INCOMPLETE 0x0001
 #define ISP_STATUS_DMA_ERROR 0x0002
 #define ISP_STATUS_RESET 0x0004
 #define ISP_STATUS_ABORTED 0x0005
 #define ISP_STATUS_TIMEOUT 0x0006
 #define ISP_STATUS_DATA_OVERRUN 0x0007
 #define ISP_STATUS_DATA_UNDERRUN 0x0015
-#define ISP_STATUS_SELECTION_TIMEOUT 0x0010
 #define ISP_STATUS_BUS_RESET 0x0017
 
 // State flags, which drivers check to see how far a command got.
