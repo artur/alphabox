@@ -45,6 +45,8 @@
 #include "MonitorEdid.hpp"
 #include "Radeon.hpp"
 
+#include <unistd.h>
+
 using namespace radeon;
 
 void CRadeon::trace_access(bool write, u32 reg, int bytes, u32 data) {
@@ -216,6 +218,9 @@ u32 CRadeon::reg_read32(u32 reg) {
   }
   if (reg >= PCI_CONFIG_MIRROR && reg < PCI_CONFIG_MIRROR + 0x100)
     return config_read(0, reg - PCI_CONFIG_MIRROR, 32);
+  u32 cpv;
+  if (cp_reg_read(reg, &cpv))
+    return cpv;
   if (is_engine_reg(reg))
     return engine_read(reg);
   return R(reg);
@@ -320,6 +325,8 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
   }
   if (reg >= PCI_CONFIG_MIRROR && reg < PCI_CONFIG_MIRROR + 0x100)
     return; // a read-only copy of configuration space
+  if (cp_reg_write(reg, data))
+    return;
   if (is_engine_reg(reg)) {
     R(reg) = data;
     engine_write(reg, data);
@@ -436,6 +443,15 @@ u32 CRadeon::gpio_read(u32 reg) const {
  * frame (GEN_INT_STATUS <0>) and drive INTA if it is enabled.
  **/
 void CRadeon::card_tick() {
+  if (!m_trace_file.empty()) {
+    const bool on = access(m_trace_file.c_str(), F_OK) == 0;
+    if (on != m_trace) {
+      m_trace = on;
+      printf("%s: trace %s\n", devid_string, on ? "on" : "off");
+    }
+    if (on)
+      fflush(stdout);
+  }
   const long long frame = radeon_clock_us() / (1000000 / 60);
   std::lock_guard<std::mutex> l(m_int_lock);
   if (frame != m_last_vblank_frame) {

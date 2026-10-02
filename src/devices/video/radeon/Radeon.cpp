@@ -157,7 +157,10 @@ void CRadeon::init() {
 
   if (const char *t = getenv("ALPHABOX_TRACE_RADEON")) {
     m_trace_new = strcmp(t, "new") == 0;
-    m_trace = !m_trace_new;
+    if (strncmp(t, "file:", 5) == 0)
+      m_trace_file = t + 5; // traced while the file exists (card_tick)
+    else
+      m_trace = !m_trace_new;
     // A per-access trace is capped: a driver polling a status register
     // writes millions of lines. ALPHABOX_TRACE_RADEON_MAX raises the cap.
     m_trace_budget = 200000;

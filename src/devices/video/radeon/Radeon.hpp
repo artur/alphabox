@@ -33,6 +33,8 @@
  *   RadeonMemory.cpp   the framebuffer aperture and the 0xa0000 window
  *   RadeonEngine.cpp   the 2D engine (GUI master control, fills, blits,
  *                      host data, lines) and its FIFO and idle status
+ *   RadeonCP.cpp       the command processor: the ring buffer, indirect
+ *                      buffers and the packets they carry
  *   RadeonDisplay.cpp  the primary CRTC's extended modes, the hardware
  *                      cursor, the 8-bit palette
  *
@@ -55,6 +57,8 @@
 
 #include <chrono>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "RadeonRegs.hpp"
 #include "VGACard.hpp"
@@ -158,6 +162,17 @@ protected:
   /// The engine finishes a command inside the write that starts it.
   bool engine_busy() const { return false; }
 
+  // --- the command processor (RadeonCP.cpp) --------------------------------
+  bool cp_reg_write(u32 reg, u32 data);
+  bool cp_reg_read(u32 reg, u32 *v);
+  bool cp_translate(u32 mc, bool *is_vram, u32 *addr) const;
+  u32 cp_read32(u32 mc);
+  void cp_write32(u32 mc, u32 data);
+  void cp_run_ring();
+  void cp_run_buffer(u32 mc, u32 dwords);
+  void cp_feed(u32 d);
+  void cp_packet3(u8 op, const std::vector<u32> &payload);
+
   // --- display (RadeonDisplay.cpp) -------------------------------------------
   bool native_crtc_active() const override;
   void determine_screen_dimensions(unsigned *height, unsigned *width) override;
@@ -186,6 +201,7 @@ public:
     bool host_active;
     int hx, hy; ///< the next pixel, relative to the rectangle
     bool host_mono;
+    int line_pat; ///< a line's pattern position, -1 outside a line
   };
 
 protected:
@@ -194,6 +210,18 @@ protected:
   u32 m_regs[radeon::REG_APERTURE_BYTES / 4];
   u32 m_pll[radeon::PLL_REGS];
   engine_t eng;
+
+  /// The packet in progress, across the dwords the CP is fed.
+  struct cp_parser {
+    u32 header = 0, remaining = 0, reg = 0, reg1 = 0;
+    std::vector<u32> payload;
+  };
+  cp_parser m_cp;
+  int m_cp_depth = 0, m_cp_ib_depth = 0;
+  u32 m_me_ram[256][2] = {}; ///< the CP microcode, kept for read-back
+  u32 m_me_index = 0;
+  bool m_cp_unknown_seen[256] = {};
+  int m_cp_bad_reads = 0;
 
   /// The INTA line as this card last drove it, and the lock deciding it.
   bool m_int_asserted = false;
@@ -209,8 +237,10 @@ protected:
 
   /// ALPHABOX_TRACE_RADEON: register accesses (bring-up aid). "1" prints
   /// each, capped at m_trace_budget lines; "new" only the first read and
-  /// the first write of each register.
+  /// the first write of each register; "file:<path>" as "1", but only
+  /// while <path> exists (polled every tick).
   bool m_trace = false;
+  std::string m_trace_file;
   bool m_trace_new = false;
   long m_trace_budget = 0;
   u8 m_seen[2][radeon::REG_APERTURE_BYTES / 4] = {};

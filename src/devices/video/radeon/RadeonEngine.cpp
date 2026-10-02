@@ -20,8 +20,8 @@
 
 /**
  * \file
- * The Radeon's 2D engine, driven through its registers (programmed I/O;
- * the command processor's ring is not modelled).
+ * The Radeon's 2D engine, driven through its registers -- written by the
+ * processor or by the command processor's packets (RadeonCP.cpp).
  *
  * A command is set up by DP_GUI_MASTER_CNTL -- which pitch/offsets and
  * clip rectangle apply, the brush, destination and source types, the
@@ -88,6 +88,7 @@ constexpr u32 DP_SRC_FRGD_CLR = 0x15d8;
 constexpr u32 DP_SRC_BKGD_CLR = 0x15dc;
 constexpr u32 DST_LINE_START = 0x1600;
 constexpr u32 DST_LINE_END = 0x1604;
+constexpr u32 DST_LINE_PATCOUNT = 0x1608;
 constexpr u32 SC_LEFT = 0x1640;
 constexpr u32 SC_RIGHT = 0x1644;
 constexpr u32 SC_TOP = 0x1648;
@@ -184,6 +185,7 @@ inline int sext14(u32 v) { return int(v << 18) >> 18; }
 bool CRadeon::is_engine_reg(u32 reg) { return reg >= 0x1400 && reg < 0x1800; }
 
 void CRadeon::engine_reset() {
+  eng.line_pat = -1;
   eng.host_active = false;
   eng.hx = eng.hy = 0;
 }
@@ -378,9 +380,15 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
       mc_to_vram(eng.dst_offset + u32(y) * eng.dst_pitch + u32(x) * u32(bpp));
   const u32 d = vram_read(addr, bpp);
 
-  // The brush.
+  // The brush. Its mono patterns are read in the byte pixel order the
+  // master control gives, as the RV200 does: X.org's radeon driver hands
+  // it 8x8 patterns most significant bit first on a little-endian host
+  // (BIT_ORDER_IN_BYTE_MSBFIRST from the RV200 on, LSB first before) and
+  // sets BYTE_MSB_TO_LSB, and dash patterns least significant bit first
+  // with BYTE_LSB_TO_MSB.
   const u32 dt = R(DP_DATATYPE);
   const u32 btype = (dt >> 8) & 0xf;
+  const bool lsb_first = (dt & DT_BYTE_PIX_ORDER) != 0;
   u32 p = R(DP_BRUSH_FRGD_CLR);
   switch (btype) {
   case BRUSH_SOLID:
@@ -390,13 +398,16 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
   case BRUSH_8X8_MONO_FG_LA:
   case BRUSH_1X8_MONO_FG_BG:
   case BRUSH_1X8_MONO_FG_LA: {
+    // BRUSH_Y_X (y <12:8>, x <4:0>) is the pattern position at the screen
+    // origin, as X.org programs it (HARDWARE_PATTERN_SCREEN_ORIGIN)
+    // [inference: the direction of the offset is not documented here].
     const u32 org = R(BRUSH_Y_X);
-    const int bx = (x - int(org & 0x1f)) & 7;
+    const int bx = (x + int(org & 0x1f)) & 7;
     const int by = (btype >= BRUSH_1X8_MONO_FG_BG)
                        ? 0
-                       : ((y - int((org >> 8) & 0x1f)) & 7);
+                       : ((y + int((org >> 8) & 0x1f)) & 7);
     const u8 row = u8(R(BRUSH_DATA0 + (by >> 2) * 4) >> (8 * (by & 3)));
-    if ((row >> bx) & 1)
+    if ((row >> (lsb_first ? bx : 7 - bx)) & 1)
       p = R(DP_BRUSH_FRGD_CLR);
     else if (btype == BRUSH_8X8_MONO_FG_LA || btype == BRUSH_1X8_MONO_FG_LA)
       return;
@@ -408,9 +419,12 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
   case BRUSH_32X1_MONO_FG_LA:
   case BRUSH_32X32_MONO_FG_BG:
   case BRUSH_32X32_MONO_FG_LA: {
-    const int bx = x & 31;
+    // Along a line the 32x1 pattern is indexed by the line's own pattern
+    // counter (DST_LINE_PATCOUNT, a dashed line), elsewhere by x.
+    const int bx = (eng.line_pat >= 0 ? eng.line_pat : x) & 31;
     const int by = btype >= BRUSH_32X32_MONO_FG_BG ? (y & 31) : 0;
-    if ((R(BRUSH_DATA0 + by * 4) >> bx) & 1)
+    const int bit = lsb_first ? bx : (bx & ~7) | (7 - (bx & 7));
+    if ((R(BRUSH_DATA0 + by * 4) >> bit) & 1)
       p = R(DP_BRUSH_FRGD_CLR);
     else if (btype & 1)
       return;
@@ -565,10 +579,12 @@ void CRadeon::engine_line(u32 reg) {
   const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
   const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
   int err = dx + dy;
+  eng.line_pat = int(R(DST_LINE_PATCOUNT) & 0x1f);
   for (;;) {
     if (x0 == x1 && y0 == y1)
       break;
     engine_pixel(x0, y0, R(DP_SRC_FRGD_CLR), true);
+    eng.line_pat = (eng.line_pat + 1) & 31;
     const int e2 = 2 * err;
     if (e2 >= dy) {
       err += dy;
@@ -579,5 +595,6 @@ void CRadeon::engine_line(u32 reg) {
       y0 += sy;
     }
   }
+  eng.line_pat = -1;
   R(DST_LINE_START) = b;
 }
