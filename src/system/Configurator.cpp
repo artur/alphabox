@@ -373,6 +373,9 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
             }
           }
 
+          if (iNumChildren >= CFG_MAX_CHILDREN)
+            FAILURE_2(Configuration, "%s: more than %d sections",
+                      myName ? myName : "configuration", CFG_MAX_CHILDREN);
           pChildren[iNumChildren++] = new CConfigurator(
               this, cur_name, cur_value, &text[child_start], child_len);
         }

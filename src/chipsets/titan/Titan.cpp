@@ -45,11 +45,13 @@ void CTitan::power_on_state() {
   // CSC: the Typhoon's value [assumed]. Bit 14 (P1P) says PA-chip 1 is
   // there, which is how Linux decides whether hoses 1 and 3 exist.
   state.cchip.csc = U64(0x3142444014157803);
-  // MISC<39:32> REV: the Typhoon's 8 [assumed].
-  state.cchip.misc = U64(0x0000000800000000);
+  // The chip revisions: the console's show config prints MISC<39:32>, the
+  // Dchips' DREV and each PA-chip's SCTL<7:0> (ES45 V7.3-2 console, 0x96fc0);
+  // a real ES45's listing (its owner's guide) says 17 for all three.
+  state.cchip.misc = U64(0x0000001100000000);
+  state.dchip.drev = TITAN_REV;
 
-  // Dchip registers: the Typhoon's values [assumed].
-  state.dchip.drev = 0x01;
+  // The other Dchip registers: the Typhoon's values [assumed].
   state.dchip.dsc = 0x43;
   state.dchip.dsc2 = 0x03;
   state.dchip.str = 0x25;
@@ -60,6 +62,9 @@ void CTitan::power_on_state() {
     // until a second Titan board needs otherwise].
     state.port[h].csr[0x300 >> 6] = (h == 0) ? 0 : U64(0x20000);
   }
+  // SCTL is the G-port's; its low byte is the PA-chip's revision.
+  state.port[0].csr[0x700 >> 6] = TITAN_REV;
+  state.port[1].csr[0x700 >> 6] = TITAN_REV;
 }
 
 void CTitan::reset() {

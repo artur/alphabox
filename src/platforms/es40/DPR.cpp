@@ -357,6 +357,7 @@ void CDPR::init() {
   //    3600:36FF 3600 SRM Reserved
   //    3700:37FF SRM Reserved
   //    3800:3AFF RMC RMC scratch space
+  board_init();
   printf("%s: $Id$\n", devid_string);
 }
 
@@ -585,7 +586,7 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
       printf("%%DPR-I-RMC: f9:%02x fb-fa:%02x%02x\r\n", state.ram[0xf9],
              state.ram[0xfb], state.ram[0xfa]);
 #endif
-      state.ram[0xfc] = 0x81;
+      state.ram[0xfc] = board_command((u8)state.ram[0xfe]) ? 0 : 0x81;
     }
     break;
 

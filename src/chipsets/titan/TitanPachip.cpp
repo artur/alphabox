@@ -122,8 +122,10 @@ void CTitan::port_write(int hose, u32 a, u64 data) {
   case 0x440:
   case 0x4c0:
   case 0x540:
-  case 0x700:
     p.csr[i] = data;
+    return;
+  case 0x700: // SCTL: <7:0> is the revision [read-only: assumed]
+    p.csr[i] = (data & ~U64(0xff)) | (p.csr[i] & 0xff);
     return;
   case 0x400: // error registers: write 1 to clear; none are ever set
   case 0x480:

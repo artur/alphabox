@@ -49,13 +49,16 @@ void CTitan::update_halt_lines() {
 u8 CTitan::tig_read(u32 a) {
   switch (a) {
   case 0x30000000: // trr
-    return 0;
+    return TIG_REV;
   case 0x30000040: // smir
     return state.tig.smir;
   case 0x30000100: // mod_info
     return state.tig.mod_info;
   case 0x300003c0: // ttcr
     return state.tig.ttcr;
+  case 0x30000440: // clr_irq4, clr_pwr_flt_det: read as 0, as on the ES40
+  case 0x30000480:
+    return 0;
   case 0x300005c0: // ev6_halt
     return state.tig.ev6_halt;
   case 0x30000a00: // ipcr0-4: the PALcode's MP restart handshake
@@ -82,6 +85,8 @@ void CTitan::tig_write(u32 a, u8 data) {
     m_sys->trace_mp("TIG write", a, data);
   switch (a) {
   case 0x30000000: // trr
+  case 0x30000440: // clr_irq4 (the PALcode writes it): the halt lines are
+  case 0x30000480: // level-driven here; clr_pwr_flt_det: no power faults
     return;
   case 0x30000040:
     state.tig.smir = data;

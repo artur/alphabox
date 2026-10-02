@@ -57,6 +57,16 @@ public:
   void FlushIfDirty();
 
 protected:
+  /// Another board's DPR contents on top of the ES40's (the ES45's
+  /// subclass in platforms/es45/): called at the end of init().
+  virtual void board_init() {}
+  /// An RMC command the ES40's RMC does not know (command code in 0xfe):
+  /// true when the board's RMC carries it out, which completes it with 0.
+  virtual bool board_command(u8 command) {
+    (void)command;
+    return false;
+  }
+
   // Guest writes since the last save to the DPR file (set on CPU threads,
   // flushed from the main thread).
   std::atomic<bool> dirty{false};

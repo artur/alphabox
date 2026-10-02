@@ -88,6 +88,12 @@ public:
   bool restore_state(FILE *f) override;
 
   static const int HOSES = 4;
+  /// The revision the Cchip (MISC<39:32>), the Dchips (DREV) and the PA-chips
+  /// (SCTL<7:0>) report: 17, as a real ES45 lists them.
+  static const u8 TITAN_REV = 17;
+  /// The TIG's revision register (offset 0): the console prints
+  /// "TIG Rev (<7:4> + 2).<3:0>"; 0x06 is the TIG V2.6 of firmware CD V7.3.
+  static const u8 TIG_REV = 0x06;
 
 private:
   u64 cchip_read(u32 a, CSystemComponent *source);
