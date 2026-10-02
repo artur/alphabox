@@ -20,11 +20,11 @@
 
 /**
  * \file
- * The two TIG-bus registers the DS15 answers differently from the ES45's TIG
- * (chipsets/titan/TitanTig.cpp): psir, whose bit 7 the DS15 console reads
- * as "the RMC is ready", and the halt register at 0x5c0, which on the DS15
- * does not halt the processor (docs/platforms/ds15.md, Findings). The rest of
- * the TIG bus stays the chipset's.
+ * The TIG-bus registers the DS15 answers differently from the ES45's TIG
+ * (chipsets/titan/TitanTig.cpp): the revision (trr), psir, whose bit 7 the
+ * DS15 console reads as "the RMC is ready", and the halt register at 0x5c0,
+ * which on the DS15 does not halt the processor (docs/platforms/ds15.md,
+ * Findings). The rest of the TIG bus stays the chipset's.
  **/
 #if !defined(INCLUDED_DS15_TIG_H_)
 #define INCLUDED_DS15_TIG_H_

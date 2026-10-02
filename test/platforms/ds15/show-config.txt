@@ -1,0 +1,49 @@
+>>>show config
+                           hp AlphaServer DS15
+Firmware
+SRM Console: X6.6-2092
+PALcode: OpenVMS PALcode V1.98-6, Tru64 UNIX PALcode V1.92-7
+SROM Extended:  V1.0-1
+SROM Fail Safe: V1.0-0
+RMC Runtime:  V0.6-3
+RMC Booter:  V0.5-6
+Processors
+CPU 0  Alpha EV68CB pass 4.0 1000 MHz  2MB Bcache
+Core Logic
+Cchip  Rev 18
+Dchip  Rev 17
+PPchip 0 Rev 17
+TIG  Rev 1.9
+Acer Chip Revision A1-E
+Memory
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0       1024Mb     0000000000000000    2-Way
+    2       1024Mb     0000000040000000    2-Way
+
+     2048 MB of System Memory
+ Slot Option   Hose 0, Bus 0, PCI - 33 MHz
+   7 Acer Labs M1543C                          Bridge to Bus 1, ISA
+   8/0 Adaptec AIC-7899     pka0.7.0.8.0         SCSI Bus ID 7
+    dka0.0.0.8.0         COMPAQ BF03665A32
+    dka100.1.0.8.0       COMPAQ BF03665A32
+   8/1 Adaptec AIC-7899     pkb0.7.0.108.0       SCSI Bus ID 7
+   9 Intel 82559ER Ethern eia0.0.0.9.0         00-02-A5-20-C0-39
+  10 Intel 82559ER Ethern eib0.0.0.10.0        00-02-A5-20-C0-3A
+  13 Acer Labs M1543C IDE dqa.0.0.13.0
+    dqb.0.1.13.0
+    dqa0.0.0.13.0        DW-224E
+
+  Option   Hose 0, Bus 1, ISA
+ Floppy               dva0.0.0.1000.0
+Slot Option   Hose 2, Bus 0, PCI - 66 MHz
+   7 Radeon 7500 PCI      vga0.0.0.7.2
+
+SROM loads from Flash
+Console loads from SRM
+Flash updates are Enabled for RMC
+Flash updates are Enabled for SRM
+Flash updates are Enabled for FailSafe
+Flash updates are Disabled for RMC Booter
+Halt/Reset is set to HALT
+>>>
