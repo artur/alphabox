@@ -64,6 +64,7 @@ file(GLOB srcs
     src/devices/video/permedia2/*.cpp
     src/devices/video/virge/*.cpp
     src/devices/video/tga/*.cpp
+    src/devices/video/radeon/*.cpp
     src/devices/net/*.cpp
     src/devices/usb/*.cpp
     src/base/*.cpp
@@ -90,7 +91,7 @@ target_include_directories(alphabox PRIVATE
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
     src/devices/video/mach64 src/devices/video/permedia2
-    src/devices/video/virge src/devices/video/tga
+    src/devices/video/virge src/devices/video/tga src/devices/video/radeon
     src/devices/net src/devices/usb
     src/base src/gui ${CMAKE_BINARY_DIR}/src)
 

@@ -2,7 +2,7 @@
 # VGA render check: boot SRM with its console on a VGA card (vga_console),
 # window-less (SDL dummy driver), dumping frames; report the settled screen.
 #
-# usage: [CARD=s3|cirrus|mach64|permedia2|s3virge|tga] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro|dx|virge|vx|gx2] [ROM=<bios>] \
+# usage: [CARD=s3|cirrus|mach64|permedia2|s3virge|radeon|tga] [CHIP=gd5430|gd5434|ct|vt2|rage2p|ragepro|dx|virge|vx|gx2] [ROM=<bios>] \
 #          vga_boot.sh <alphabox-binary> <label> [seconds]
 #   Runs in $ALPHABOX_WORK/runs/vga-<label> (ALPHABOX_WORK defaults to <repo>/lab).
 #   Needs an SDL lane. CARD defaults to s3, CHIP to gd5434 (cirrus) or ct
@@ -10,7 +10,8 @@
 #   ROM defaults to test/arc/86c764x1.bin (s3), or for cirrus to the 86Box
 #   ROM set (not in git): roms/video/cirruslogic/gd5434.BIN (gd5434) or
 #   pci.bin (gd5430); for mach64 to the 86Box set in roms/video/mach64/:
-#   the Mach64 CT PCI BIOS (ct) or the 264VT2 PCI BIOS (vt2); for permedia2
+#   the Mach64 CT PCI BIOS (ct) or the 264VT2 PCI BIOS (vt2); for radeon to
+#   the Radeon 7500 AGP BIOS (RV200, 64 MB) in roms/video/radeon7500/; for permedia2
 #   to the ELSA GLoria Synergy PCI BIOS 8.07.00 (roms/video/permedia2/).
 #   That BIOS never runs under SRM V7.3-1, which calls option ROMs with
 #   AX = 0 where the BIOS expects its own bus and device (see es40.cfg), so
@@ -40,6 +41,7 @@
 #   s3virge vx     (Diamond S3D 3000 1.00) 107a595f1d 7a3a484498
 #   s3virge vx     (STB Velocity 3D 1.10)  52d3ffb772 974d8129d5
 #   s3virge gx2    (Diamond S3D 4000 1.01) 990a4adfa5 cccaa8c08a
+#   radeon         (RV200 BIOS 2002/04/16) 7010dde2ad 79d0463f19
 # and with FLASH=test/arc/flash.rom, AlphaBIOS V5.71's "No Operating System
 # Selections Found" screen (one frame, no cursor blink; give it 90 s):
 #   tga            (no ROM)                1082cc8409
@@ -59,7 +61,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64|permedia2|s3virge|tga] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
+[ $# -ge 2 ] || { echo "usage: [CARD=s3|cirrus|mach64|permedia2|s3virge|radeon|tga] [ROM=<bios>] $0 <alphabox-binary> <label> [seconds]"; exit 2; }
 [ -x "$1" ] || { echo "vga_boot: $1 is not executable"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
@@ -89,6 +91,7 @@ mach64)
   EXTRA="chip = \"$CHIP\";"
   ;;
 permedia2) ROM=${ROM:-$R/roms/video/permedia2/SYN80700.PAN} ;;
+radeon) ROM=${ROM:-$R/roms/video/radeon7500/ATI.7500.64.Hynix50_020416.rom} ;;
 s3virge)
   CHIP=${CHIP:-dx}
   case $CHIP in
@@ -104,7 +107,7 @@ tga)
   ROM=${ROM:-}
   [ -n "${MODEL:-}" ] && EXTRA="model = \"$MODEL\";"
   ;;
-*) echo "vga_boot: CARD must be s3, cirrus, mach64, permedia2, s3virge or tga"; exit 2 ;;
+*) echo "vga_boot: CARD must be s3, cirrus, mach64, permedia2, s3virge, radeon or tga"; exit 2 ;;
 esac
 [ -z "$ROM" ] || [ -f "$ROM" ] || { echo "vga_boot: VGA BIOS $ROM not found"; exit 2; }
 WORK=${ALPHABOX_WORK:-$R/lab}

@@ -48,6 +48,7 @@
 #include "Mach64.hpp"
 #include "Permedia2.hpp"
 #include "Port80.hpp"
+#include "Radeon.hpp"
 #include "S3Trio64.hpp"
 #include "S3Virge.hpp"
 #include "Serial.hpp"
@@ -607,6 +608,7 @@ static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
 static const char *const kv_permedia2[] = {"rom", "memory", 0};
 static const char *const kv_s3virge[] = {"rom", "chip", "memory", 0};
 static const char *const kv_tga[] = {"rom", "model", 0};
+static const char *const kv_radeon[] = {"rom", "memory", "model", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",
@@ -686,6 +688,7 @@ classinfo classes[] = {
     {"mach64", c_mach64, IS_PCI | ON_GUI, kv_mach64},
     {"permedia2", c_permedia2, IS_PCI | ON_GUI, kv_permedia2},
     {"s3virge", c_s3virge, IS_PCI | ON_GUI, kv_s3virge},
+    {"radeon", c_radeon, IS_PCI | ON_GUI, kv_radeon},
     {"tga", c_tga, IS_PCI | ON_GUI, kv_tga},
     {"dec21040", c_tulip, IS_PCI | IS_NIC, kv_tulip},
     {"dec21041", c_tulip, IS_PCI | IS_NIC, kv_tulip},
@@ -978,6 +981,10 @@ void CConfigurator::initialize() {
 
   case c_permedia2:
     myDevice = new CPermedia2(this, theSystem, pcibus, pcidev);
+    break;
+
+  case c_radeon:
+    myDevice = new CRadeon(this, theSystem, pcibus, pcidev);
     break;
 
   case c_s3virge: {
