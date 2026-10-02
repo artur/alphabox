@@ -39,6 +39,7 @@
 #include "Ev7Csr.hpp"
 #include "Gio.hpp"
 #include "Io7.hpp"
+#include "Topology.hpp"
 
 #include <memory>
 
@@ -67,6 +68,7 @@ public:
   u64 pci_phys(int hose, u32 address) override;
 
   void console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) override;
+  u32 cpu_pid(int index) const override;
 
   void reset() override;
   void save_state(FILE *f) override;
@@ -82,6 +84,11 @@ public:
   /// The processor block of PE `pid`, or nullptr when there is none.
   CEv7Csr *csr(u32 pid) const;
 
+  /// Where the processors sit, from the board row (Topology.hpp).
+  const CMarvelTopology &topology() const { return m_topology; }
+  /// How many processors are configured (the topology's first ones).
+  int present() const;
+
   /// The board puts an IO7 on PE `pid`'s I/O port.
   void attach_io7(u32 pid);
   /// The IO7 on PE `pid`, or nullptr.
@@ -89,7 +96,9 @@ public:
 
 private:
   void start_secondaries_as_console(CAlphaCPU **cpus, int ncpus);
-  static constexpr int kMaxPids = 4; ///< CSystem's processor limit
+  /// PIDs are 8 bits wide in the console's coordinates (Topology.hpp).
+  static constexpr int kMaxPids = 256;
+  CMarvelTopology m_topology;
   u64 m_memory_per_pid = 0;
   std::unique_ptr<GioManagement> m_gio;
   std::unique_ptr<CEv7Csr> m_csr[kMaxPids];

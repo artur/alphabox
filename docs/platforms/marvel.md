@@ -466,6 +466,64 @@ code.
 
 ## Findings
 
+### M6a: the routes OpenVMS reads (2026-10-02)
+
+**Result**: OpenVMS 8.4 no longer prints `mvcpu_get_numa_distances: bad
+route IPR for self, cpu N, rt 0x0` on the ES47; both processors still join
+and the CD boots to the date prompt (`lab/platforms/marvel/es80/task1-*.log`,
+before and after).
+
+**Which register.** Not a CSR read by OpenVMS: with `ALPHABOX_TRACE_CSR=1
+ALPHABOX_TRACE_UNKNOWN=1` the only EV7 register OpenVMS itself read was
+RBOX_WHOAMI. The routine, found in a memory dump of the booted CD (the
+format string's address, then the procedure whose linkage section addresses
+it: `lab/platforms/marvel/es80/tools/findref2.py`, `vmsva.py`), is
+`mvcpu_get_numa_distances` at ffffffff800178f0 (disassembly in
+`es80/numa-dis.txt`). For each PID 0-63 it calls **cserve 0x4f** (a1 = the
+PID, a2 = the processor asked about) and keeps <27:4> of the answer; then
+it requires the processor's route to itself to have bits 0x510 set, else
+the message, with the entry as `rt`.
+
+The PALcode's cserve 0x4f (0x3d2b0) reads a longword from a table in
+memory: the console's route table (address at PAL area + 0x1b8, 0x94
+longwords per PID; entries 0-0x7f for indices 0-0x7f, 0x80-0x93 for
+0x100-0x113). Who fills it:
+
+- the console for the primary (`start_secondaries`, 0x2dd0f0): from the
+  CMM's memory, area + **0xe10** u16 a count, + **0xe12** u16 a second count,
+  + **0xe14** that many longwords, each stored **shifted left by four** --
+  what M4 had guessed was bad-memory data;
+- the PALcode for each secondary from its own CMM area (0x3f108-0x3f368).
+
+The table mirrors the EV7's **RBOX_ROUTE** registers: the console's
+register table has an array entry the M1 extraction missed (`RBOX_ROUTE`,
+offset 0x2000, 0x114 entries 0x10 apart). The XSROM sets the routes up
+("Configure RBOX Routes", "Inverse Route Setup" in real power-up logs) and
+leaves the copy in the CMM.
+
+**The fields**, from how OpenVMS walks an entry (it counts hops from the
+processor's own coordinates to the destination's, one direction at a time,
+wrapping between the lowest and highest coordinate present and skipping
+empty ones):
+
+| Bits | Meaning |
+| --- | --- |
+| <4> | valid: a processor at that PID |
+| <8> | set in the route to itself, with <4> and <10> **[guess: delivered to the local Cbox]** |
+| <10> | the route is enabled (else unreachable) |
+| <13>, <12> | E/W hops; <12> 1 = towards the higher coordinate |
+| <15>, <14> | N/S hops; <14> 1 = towards the lower coordinate |
+| <19:16>, <23:20> | the destination's E/W and N/S coordinates **[guess which is which; the walk is symmetric]** |
+| <26>, <25:24> | a first hop in a fixed direction, not used |
+
+**The model** (`chipsets/marvel/Topology.*`): `CMarvelTopology` knows each
+processor's coordinates and PID (from the board row's `marvel_layout`) and
+computes the route between any two: the shortest way round each ring,
+N/S then E/W. The CMM writes each processor's 0x80 routes into its area;
+`CEv7Csr` answers RBOX_ROUTE with the same values **[guess: the register's
+own layout is not known, only the copy's]**. The IO routes (the second
+count) are 0.
+
 ### M5: the IO7, devices behind it, and OpenVMS 8.4 (2026-10-02)
 
 **Result: L5.** With the IO7 on PID 0 (`chipsets/marvel/Io7.*`), a
@@ -621,9 +679,8 @@ lanes build.
 - `get_pbm_configuration` (0x0322) is never asked on the embedded I/O, and
   "Backplane rev" reads 0;
 - SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1;
-- OpenVMS prints "mvcpu_get_numa_distances: bad route IPR for self" per
-  CPU: it wants a routing register (the Rbox route tables read 0)
-  **[open: which register]**;
+- OpenVMS printed "mvcpu_get_numa_distances: bad route IPR for self" per
+  CPU: fixed by M6a (the route table in the CMM);
 - DKA400 shows 4 errors in OpenVMS's `SHOW DEVICE` **[not investigated]**;
 - the AIC-7892, CMD 649 and USB of the real embedded I/O, network boot
   through the NIC (`net_peer.py`), an installation to disk, Linux.
@@ -760,7 +817,7 @@ the processor's place on the module), from area(n) = 0x40000 + n * 0x6000
 | Address | Size | Contents | Read by |
 | --- | --- | --- | --- |
 | 0x40004 | 4 | the system type: byte 0x11 = ES47/ES80, <19:16> 0 = ES47 (1 = GS1280; anything else the development system "TS212c") | PALcode, `smlan_init`, `build_dsrdb` |
-| area + 0xe12, + 0xe14 | 2, 4n | a count and a list of longwords `start_secondaries` copies into the console's tables, which the PALcode also reads (block + 0xe0a, 0x3f354) **[guess: bad-memory/bitmap data]**; 0 | `start_secondaries`, PALcode |
+| area + 0xe10, + 0xe12, + 0xe14 | 2, 2, 4n | the route table: two counts and the routes (M6a: the RBOX_ROUTE copy the XSROM leaves) | `start_secondaries`, PALcode |
 | area + 0x12a0 | 1 | the start state: 0 for the partition's primary, which builds its PAL area and HWRPB pointers from scratch (0x3ea0c); non-zero for a secondary, whose PALcode keeps what the console copied into its PAL area | PALcode 0x3e9fc |
 | area + 0x12a6 | 2 | the processor's clock in MHz, returned by cserve 0x4a (`get_cpu_speed`; 800 if 0) | PALcode 0x3ef98 |
 | area + 0x1aac | 12 | the TOY: MC146818 registers 0-11 (time, A, B) | `rtc_read`/`rtc_write` |

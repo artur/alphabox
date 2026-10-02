@@ -46,6 +46,7 @@
 #include <mutex>
 
 class CAlphaCPU;
+class CMarvelTopology;
 class CSystem;
 
 namespace ev7csr {
@@ -65,6 +66,12 @@ constexpr u32 RBOX_SCRATCH1 = 0x0b0;
 constexpr u32 RBOX_SCRATCH2 = 0x0c0; // Linux core_marvel.h; not in the table
 constexpr u32 RBOX_L_ERR = 0x0d0;
 constexpr u32 RBOX_IO_CFG = 0xc000;
+/// The route table: 0x114 registers 0x10 apart (the console's table of
+/// arrays, "RBOX_ROUTE" at 0x3ac688: offset 0x2000, 0x114 entries, stride
+/// 0x10). Entry n < 0x100 is the route to PID n; what the last 0x14 route
+/// is not known.
+constexpr u32 RBOX_ROUTE = 0x2000;
+constexpr u32 RBOX_ROUTE_ENTRIES = 0x114;
 // GIO
 constexpr u32 GIO_CFG = 0x100;
 constexpr u32 GIO_DAT = 0x110;
@@ -98,6 +105,9 @@ public:
   void post_iid(u64 iid);
   /// Whether an IO7 hangs on this processor's I/O port (RBOX_IO_CFG).
   void set_io7_attached(bool on);
+  /// The route table as the XSROM leaves it: a route to each of the first
+  /// `present` processors of `topology`.
+  void load_routes(const CMarvelTopology &topology, int present);
 
   void reset();
   void save_state(FILE *f);

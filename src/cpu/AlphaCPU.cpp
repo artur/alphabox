@@ -532,7 +532,9 @@ void CAlphaCPU::init() {
   parse_vmspal_off();
 
   state.iProcNum = cSystem->RegisterCPU(this);
-  m_pid = (u32)state.iProcNum; // the ES47's PIDs are its processor numbers
+  // The processor's ID: its number, except where the chipset places it in
+  // a mesh (an EV7's PID follows from its coordinates).
+  m_pid = cSystem->chipset()->cpu_pid(state.iProcNum);
 
   // An IMB with nothing to flush costs nothing: the machine's code-page map
   // says whether anything has been written to a page code was compiled from.

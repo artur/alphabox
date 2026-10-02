@@ -49,6 +49,7 @@
 #include "Ev7.hpp"
 #include "Ev7Csr.hpp"
 #include "System.hpp"
+#include "Topology.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -218,7 +219,14 @@ const named_reg kMoreRegs[] = {
     {0x28040, "(unnamed 28040)"},
 };
 
+bool is_route(u32 off) {
+  return off >= RBOX_ROUTE && off < RBOX_ROUTE + RBOX_ROUTE_ENTRIES * 0x10 &&
+         !(off & 0xf);
+}
+
 const char *reg_name(u32 off) {
+  if (is_route(off))
+    return "RBOX_ROUTE";
   for (const named_reg &r : kRegs)
     if (r.off == off)
       return r.name;
@@ -316,6 +324,8 @@ void CEv7Csr::reset() {
     m_regs[r.off] = 0;
   for (const named_reg &r : kMoreRegs)
     m_regs[r.off] = 0;
+  for (u32 n = 0; n < RBOX_ROUTE_ENTRIES; n++)
+    m_regs[RBOX_ROUTE + n * 0x10] = 0; // load_routes fills them
   // RBOX_WHOAMI: the PID [guess: the field's position is not known; the
   // console takes its PID from r28 and has not been seen to read this].
   m_regs[RBOX_WHOAMI] = m_pid;
@@ -469,6 +479,20 @@ void CEv7Csr::set_io7_attached(bool on) {
   std::lock_guard<std::mutex> g(m_lock);
   m_io7 = on;
   m_regs[RBOX_IO_CFG] = on ? 5 : 0;
+}
+
+/**
+ * Each entry n < 0x100 routes to PID n. The XSROM sets them up ("Configure
+ * RBOX Routes", "Inverse Route Setup" in a real power-up log) and leaves a
+ * copy in the CMM's memory, which the console hands to the operating system
+ * (Cmm.cpp); the register holds the same fields here [guess: the
+ * register's own layout is not known, only the copy's (Topology.cpp)].
+ */
+void CEv7Csr::load_routes(const CMarvelTopology &topology, int present) {
+  std::lock_guard<std::mutex> g(m_lock);
+  for (u32 n = 0; n < RBOX_ROUTE_ENTRIES; n++)
+    m_regs[RBOX_ROUTE + n * 0x10] =
+        n < 0x100 ? topology.route(m_pid, n, present) : 0;
 }
 
 void CEv7Csr::request(u64 bits) {

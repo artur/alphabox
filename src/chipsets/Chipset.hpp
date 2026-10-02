@@ -168,6 +168,10 @@ public:
     (void)ncpus;
     (void)image_base;
   }
+  /// The processor ID of the configuration's processor `index`: its number
+  /// everywhere but on Marvel, where a PID follows from where the processor
+  /// sits in the mesh (chipsets/marvel/Topology.hpp).
+  virtual u32 cpu_pid(int index) const { return (u32)index; }
   // --- Memory ---------------------------------------------------------------
   /// The DIMMs the chipset's memory controller reports (DimmModel.hpp), for
   /// a management processor that keeps its own copy (the ES40's and ES45's

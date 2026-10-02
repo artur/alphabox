@@ -84,6 +84,19 @@ constexpr u32 area(u32 n) { return 0x40000 + n * 0x6000; }
 constexpr u32 A_STATE = 0x12a0;
 constexpr u32 A_SPEED =
     0x12a6; ///< PALcode: u16 MHz (block + 0x129e), cserve 0x4a
+/**
+ * The route table the XSROM leaves for the console (start_secondaries,
+ * 0x2dd0f0, for the primary; the PALcode's own copy loop at 0x3f108 for a
+ * secondary): u16 the number of routes to processors, u16 the number of
+ * further routes, then that many longwords. The console stores each one
+ * shifted left by four in its route table, entry n for PID n (and 0x80 on
+ * for the others), which the PALcode's cserve 0x4f returns to OpenVMS
+ * (Topology.cpp has the fields).
+ */
+constexpr u32 A_ROUTES = 0xe10;
+constexpr u32 A_IO_ROUTES = 0xe12;
+constexpr u32 A_ROUTE = 0xe14;
+constexpr u32 kRoutes = 0x80;
 constexpr u32 A_TOY = 0x1aac;    ///< rtc_read: MC146818 registers 0-11
 constexpr u32 A_REQ = 0x1ac8;    ///< smlan_write: 3 request slots
 constexpr u32 A_RSP = 0x3310;    ///< smlan_read: 3 response slots
@@ -159,12 +172,25 @@ CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram)
 /// a real module the CMM set itself (ev7_clocks).
 void CEs47Cmm::late_init() {
   m_ready = true;
+  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
   for (int i = 0; i < m_sys->get_cpu_num(); i++) {
     CAlphaCPU *c = m_sys->get_cpu(i);
     const u32 n = c->get_pid() & 1;
     const u32 mhz = (u32)(c->get_speed() / 1000000);
     mem_write(area(n) + A_SPEED, (u8)mhz);
     mem_write(area(n) + A_SPEED + 1, (u8)(mhz >> 8));
+    // The routes from this processor to every PID, in the copy's form: the
+    // fields Topology.cpp names, less their low four bits.
+    mem_write(area(n) + A_ROUTES, (u8)kRoutes);
+    mem_write(area(n) + A_ROUTES + 1, 0);
+    mem_write(area(n) + A_IO_ROUTES, 0);
+    mem_write(area(n) + A_IO_ROUTES + 1, 0);
+    for (u32 to = 0; to < kRoutes && marvel; to++) {
+      const u32 r =
+          marvel->topology().route(c->get_pid(), to, marvel->present()) >> 4;
+      for (u32 b = 0; b < 4; b++)
+        mem_write(area(n) + A_ROUTE + to * 4 + b, (u8)(r >> (8 * b)));
+    }
   }
 }
 

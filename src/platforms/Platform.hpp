@@ -45,6 +45,7 @@
 
 class CConfigurator;
 class CSystem;
+struct marvel_layout;
 
 /// How a console firmware image is packaged.
 enum firmware_format {
@@ -146,6 +147,10 @@ struct platform_config {
   /// 2 MB every Tsunami console fits in. Marvel's console runs up to
   /// 0x440000.
   u32 console_bytes;
+
+  /// A Marvel board's processor layout: their coordinates, PIDs and IO7s
+  /// (chipsets/marvel/Topology.hpp); nullptr on every other board.
+  const marvel_layout *marvel = nullptr;
 };
 
 /// The board named `name`, or nullptr.

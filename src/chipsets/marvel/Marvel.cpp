@@ -29,16 +29,35 @@
 #include "Marvel.hpp"
 #include "System.hpp"
 
+/**
+ * The processors the board row can hold, where its layout puts them: a
+ * register block for each of their PIDs. Which of them are there is
+ * decided later, by the processors the configuration names (present()).
+ */
 CMarvel::CMarvel(CSystem *sys) : CChipset(sys), m_gio(new GioRecorder()) {
-  for (u32 pid = 0; pid < kMaxPids; pid++)
+  const platform_config &row = sys->platform();
+  m_topology.build(row.marvel, row.max_cpus);
+  for (int i = 0; i < m_topology.count(); i++) {
+    const u32 pid = m_topology.node(i).pid;
+    if (pid >= (u32)kMaxPids)
+      FAILURE(Configuration, "a processor's PID beyond the console's range");
     m_csr[pid].reset(new CEv7Csr(sys, pid, m_gio.get()));
+  }
+}
+
+int CMarvel::present() const { return m_sys->get_cpu_num(); }
+
+/// Processor `index` of the configuration is the topology's: its PID.
+u32 CMarvel::cpu_pid(int index) const {
+  return index < m_topology.count() ? m_topology.node(index).pid : (u32)index;
 }
 
 CMarvel::~CMarvel() = default;
 
 void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
   for (auto &c : m_csr)
-    c->set_gio_management(far.get());
+    if (c)
+      c->set_gio_management(far.get());
   m_gio = std::move(far);
 }
 
@@ -59,12 +78,16 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
     FAILURE(Configuration,
             "an EV7 holds at most 16 GB of its own memory (memory.bits 34)");
   m_memory_per_pid = U64(1) << membits;
-  const u32 last = (u32)(max_cpus > 0 ? max_cpus - 1 : 0);
-  const u64 end = ev7::memory_base(last) + m_memory_per_pid;
+  u64 end = m_memory_per_pid;
+  for (int i = 0; i < max_cpus && i < m_topology.count(); i++) {
+    const u64 e = ev7::memory_base(m_topology.node(i).pid) + m_memory_per_pid;
+    if (e > end)
+      end = e;
+  }
   unsigned bits = membits;
   while ((U64(1) << bits) < end)
     bits++;
-  printf("%%MVL-I-MEMORY: %u MB per processor, PID n at n * 16 GB "
+  printf("%%MVL-I-MEMORY: %u MB per processor, each at its PID's base "
          "(%d processor%s, the array spans %u bits).\n",
          (unsigned)(m_memory_per_pid >> 20), max_cpus, max_cpus == 1 ? "" : "s",
          bits);
@@ -72,14 +95,14 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
 }
 
 void CMarvel::attach_io7(u32 pid) {
-  if (pid >= kMaxPids)
+  if (pid >= (u32)kMaxPids || !m_csr[pid])
     FAILURE(Configuration, "an IO7 on a processor that cannot exist");
   m_io7[pid].reset(new CIo7(m_sys, this, pid));
   m_csr[pid]->set_io7_attached(true);
 }
 
 CIo7 *CMarvel::io7(u32 pid) const {
-  return pid < kMaxPids ? m_io7[pid].get() : nullptr;
+  return pid < (u32)kMaxPids ? m_io7[pid].get() : nullptr;
 }
 
 /// An IO7's space: PA<43> set, the PE inverted in PA<42:35>, the port
@@ -93,8 +116,10 @@ static bool io7_decode(u64 a, u32 *pe, u32 *port, u32 *off) {
   return true;
 }
 
+/// Only the processors the configuration has: another PID's block is
+/// space nobody answers.
 CEv7Csr *CMarvel::csr(u32 pid) const {
-  if (pid >= kMaxPids || (int)pid >= m_sys->get_cpu_num())
+  if (pid >= (u32)kMaxPids || !m_csr[pid] || !m_topology.by_pid(pid, present()))
     return nullptr;
   return m_csr[pid].get();
 }
@@ -146,8 +171,8 @@ void CMarvel::interrupt(int number, bool assert) {
 }
 
 void CMarvel::interval_tick() {
-  for (u32 pid = 0; pid < kMaxPids; pid++)
-    if (CEv7Csr *c = csr(pid))
+  for (int i = 0; i < present() && i < m_topology.count(); i++)
+    if (CEv7Csr *c = csr(m_topology.node(i).pid))
       c->interval_tick();
   m_gio->tick();
   m_sys->note_interval_tick();
@@ -195,8 +220,10 @@ u64 CMarvel::pci_phys(int hose, u32 address) {
 void CMarvel::console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) {
   // The register blocks again, now that each knows its processor's part.
   for (int i = 0; i < ncpus; i++)
-    if (CEv7Csr *c = csr(cpus[i]->get_pid()))
+    if (CEv7Csr *c = csr(cpus[i]->get_pid())) {
       c->reset();
+      c->load_routes(m_topology, present());
+    }
   for (int i = 0; i < ncpus; i++) {
     if (i == 0)
       ev7::xsrom_handoff(cpus[i], cpus[i]->get_pid(), image_base);
@@ -243,7 +270,10 @@ void CMarvel::start_secondaries_as_console(CAlphaCPU **cpus, int ncpus) {
 
 void CMarvel::reset() {
   for (auto &c : m_csr)
-    c->reset();
+    if (c) {
+      c->reset();
+      c->load_routes(m_topology, present());
+    }
   for (auto &io : m_io7)
     if (io)
       io->reset();
@@ -251,7 +281,8 @@ void CMarvel::reset() {
 
 void CMarvel::save_state(FILE *f) {
   for (auto &c : m_csr)
-    c->save_state(f);
+    if (c)
+      c->save_state(f);
   for (auto &io : m_io7)
     if (io)
       io->save_state(f);
@@ -259,7 +290,7 @@ void CMarvel::save_state(FILE *f) {
 
 bool CMarvel::restore_state(FILE *f) {
   for (auto &c : m_csr)
-    if (!c->restore_state(f))
+    if (c && !c->restore_state(f))
       return false;
   for (auto &io : m_io7)
     if (io && !io->restore_state(f))
