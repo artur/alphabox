@@ -323,7 +323,8 @@ void CAlphaCPU::jit_run(int budget) {
   // once per instruction the way the in-execute() poll did.
   if (state.iProcNum == 0) {
     if (now >= next_timer_fire) {
-      const u64 period_ns = theAli ? theAli->get_interval_period_ns() : 0;
+      const u64 period_ns = theAli ? theAli->get_interval_period_ns()
+                                   : cSystem->chipset()->interval_period_ns();
       if (period_ns) {
         // Count-preserving, paced catch-up: the schedule advances one period
         // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
@@ -344,7 +345,12 @@ void CAlphaCPU::jit_run(int budget) {
       } else {
         cSystem->interval_tick();
         tick_last_fire = now;
-        next_timer_fire = now + std::chrono::seconds(1);
+        // No period yet. With the ALi, once a second until its timer is
+        // programmed; a chipset that sets the period itself (Marvel's
+        // RBOX_IT) is looked at again within a millisecond, so its first
+        // tick is not a second late.
+        next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
+                                        : std::chrono::nanoseconds(1000000));
       }
     }
   }

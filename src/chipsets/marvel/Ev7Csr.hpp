@@ -39,6 +39,7 @@
 
 #include "Gio.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -81,6 +82,9 @@ public:
 
   /// One interval-timer period has elapsed.
   void interval_tick();
+  /// The period RBOX_IT sets on a processor clocked at `cpu_hz`, or 0 when
+  /// the timer is off.
+  u64 interval_period_ns(u64 cpu_hz) const;
   /// Another processor (or this one) sets request bits through this
   /// processor's RBOX_IREQ: they appear in its RBOX_INT.
   void request(u64 bits);
@@ -110,6 +114,8 @@ private:
   std::map<u32, u64> m_regs;
   CGioPort m_gio;
   int m_lines = 0; ///< the EI lines this block asserts now
+  /// RBOX_IT, for the dispatch loop's schedule without taking m_lock.
+  std::atomic<u64> m_it{0};
   u64 m_start_hi = 0;
   bool m_start_hi_valid = false;
 };

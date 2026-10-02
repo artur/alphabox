@@ -62,6 +62,7 @@
 #include <pthread/qos.h>
 #endif
 #include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 #if defined(_M_X64) || defined(__x86_64__)
@@ -97,7 +98,7 @@ bool CAlphaCPU::dpc2_requested() {
 
 /**
  * Report a subroutine call, the first time each call site reaches each
- * routine (ALPHABOX_TRACE_CALLS).
+ * routine on each processor (ALPHABOX_TRACE_CALLS).
  *
  * Bringing up a console is largely the question "which of its routines ran,
  * and which did not": a firmware image carries a name for every routine
@@ -107,10 +108,12 @@ bool CAlphaCPU::dpc2_requested() {
  **/
 void CAlphaCPU::trace_call(u64 from, u64 to) {
   static std::mutex lock;
-  static std::set<std::pair<u64, u64>> seen;
+  // Per processor: a secondary running the console's code shows its own
+  // path, not only the calls the primary has not made yet.
+  static std::set<std::tuple<int, u64, u64>> seen;
 
   std::lock_guard<std::mutex> guard(lock);
-  if (!seen.insert(std::make_pair(from, to)).second)
+  if (!seen.insert(std::make_tuple(get_cpuid(), from, to)).second)
     return;
   printf("%%CPU-T-CALL: cpu%d %011" PRIx64 " -> %011" PRIx64 "\n", get_cpuid(),
          from, to);
@@ -1165,7 +1168,8 @@ void CAlphaCPU::execute() {
     // (~512 instructions) rather than every 32;
     if (state.iProcNum == 0) {
       if (now >= next_timer_fire) {
-        const u64 period_ns = theAli ? theAli->get_interval_period_ns() : 0;
+        const u64 period_ns = theAli ? theAli->get_interval_period_ns()
+                                     : cSystem->chipset()->interval_period_ns();
         if (period_ns) {
           // Count-preserving, paced catch-up: the schedule advances one period
           // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
@@ -1186,7 +1190,12 @@ void CAlphaCPU::execute() {
         } else {
           cSystem->interval_tick();
           tick_last_fire = now;
-          next_timer_fire = now + std::chrono::seconds(1);
+          // No period yet. With the ALi, once a second until its timer is
+          // programmed; a chipset that sets the period itself (Marvel's
+          // RBOX_IT) is looked at again within a millisecond, so its first
+          // tick is not a second late.
+          next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
+                                          : std::chrono::nanoseconds(1000000));
         }
       }
     }

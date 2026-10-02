@@ -135,6 +135,11 @@ public:
   /// every processor; Marvel: each EV7's own RBOX_IT).
   virtual void interval_tick() = 0;
 
+  /// The interval timer's period when the chipset's own registers set it,
+  /// or 0: on boards with the ALi its PIT sets it (CAliM1543C), and with
+  /// neither the schedule ticks once a second (Marvel: RBOX_IT).
+  virtual u64 interval_period_ns() const { return 0; }
+
   /// The native PALcode's acknowledgements (cpu/AlphaCPU_vmspal.cpp): what
   /// the real PALcode does by writing the chipset's registers when it takes
   /// an interval-timer or interprocessor interrupt on processor `cpu`.

@@ -58,7 +58,13 @@ constexpr u64 ST_RXREADY = 0x100; ///< read: a character waits in R_RX
 // --- The CMM's memory, per processor (n = place on the module) -------------
 // Offsets from area(n) = 0x40000 + n * 0x6000, as the console computes them.
 constexpr u32 area(u32 n) { return 0x40000 + n * 0x6000; }
-constexpr u32 A_STATE = 0x12a0;  ///< PALcode: 0 = cold start (block + 0x1298)
+/// PALcode, block + 0x1298: 0 for the partition's primary, which builds its
+/// PAL area and HWRPB pointers from scratch (0x3ea0c); anything else for a
+/// secondary, whose PALcode then keeps the pointers the console copied into
+/// its PAL area before starting it (start_secondary: PAL area 0x128 and
+/// 0x190-0x1a7). Without that a secondary maps the console's addresses onto
+/// its own memory and halts on the zeros there.
+constexpr u32 A_STATE = 0x12a0;
 constexpr u32 A_SPEED =
     0x12a6; ///< PALcode: u16 MHz (block + 0x129e), cserve 0x4a
 constexpr u32 A_TOY = 0x1aac;    ///< rtc_read: MC146818 registers 0-11
@@ -125,6 +131,10 @@ CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram)
     refresh_toy(n);
   }
   mem_write(A_SYSTYPE, SYSTYPE_ES47);
+  // PID 0 is the primary; the module's other processor is a secondary
+  // [inference: what the CMM writes there is not known beyond zero and
+  // non-zero].
+  mem_write(area(1) + A_STATE, 1);
 }
 
 /// What the CMM knows once the processors exist: each one's clock, which on
@@ -431,7 +441,8 @@ void CEs47Cmm::nvram_save() {
  *
  *   hard partitions, 0x1c each: <0> number, <4> u32 0xff, <8> name
  *   sub partitions, 0x20 each:  <0> hard partition, <2> 4, <6> name
- *   processors, 12 each:        <0> 0x80 (assigned), <1> N/S, <2> E/W,
+ *   processors, 12 each:        <0> 0x80 the sub partition's primary,
+ *                               0 another member, <1> N/S, <2> E/W,
  *                               <3> PID, <4> hard partition,
  *                               <6> sub partition
  *   I/O, 8 each:                <3> E/W, <4> N/S of the IO7's EV7,
@@ -462,7 +473,10 @@ void CEs47Cmm::partition_database(u8 *db) {
   *p = (u8)cpus; // processors
   p += 4;
   for (int i = 0; i < cpus; i++, p += 12) {
-    p[0] = 0x80;
+    // The primary: memconfig makes the last 0x80 processor of the sub
+    // partition the one that builds the GCT (0x282948), which only the
+    // primary's powerup does.
+    p[0] = i == 0 ? 0x80 : 0;
     p[1] = (u8)i; // N/S
     p[2] = 0;     // E/W
     p[3] = (u8)i;

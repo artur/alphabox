@@ -116,6 +116,13 @@ void CMarvel::interval_tick() {
   m_sys->note_interval_tick();
 }
 
+/// The schedule follows PID 0's RBOX_IT (CEv7Csr::interval_period_ns).
+u64 CMarvel::interval_period_ns() const {
+  CEv7Csr *c = csr(0);
+  CAlphaCPU *cpu0 = m_sys->get_cpu_num() ? m_sys->get_cpu(0) : nullptr;
+  return (c && cpu0) ? c->interval_period_ns(cpu0->get_speed()) : 0;
+}
+
 /// The native PALcode's acknowledgements: never used on an EV7, whose board
 /// row keeps the native PALcode routines off (vmspal_pal_base 0).
 void CMarvel::ack_interval_timer(int cpu) { (void)cpu; }

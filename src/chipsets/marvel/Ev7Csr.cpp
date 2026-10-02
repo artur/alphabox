@@ -319,6 +319,7 @@ void CEv7Csr::reset() {
   // RBOX_WHOAMI: the PID [guess: the field's position is not known; the
   // console takes its PID from r28 and has not been seen to read this].
   m_regs[RBOX_WHOAMI] = m_pid;
+  m_it.store(0, std::memory_order_relaxed);
   // BBOX_CTL<6:0>: the L2's enabled ways, 256 KB each, which the XSROM set
   // (the CMM's "cache_enable_mask") and get_bcache_size_pid counts.
   const cpu_model *model =
@@ -416,6 +417,10 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     m_regs[RBOX_SCRATCH1] = data;
     scratch_written(data);
     return;
+  case RBOX_IT:
+    m_regs[RBOX_IT] = data;
+    m_it.store(data, std::memory_order_relaxed);
+    return;
   default:
     break;
   }
@@ -441,10 +446,21 @@ void CEv7Csr::request(u64 bits) {
  * The interval timer. The console's PALcode clears RBOX_IT early, takes
  * RBOX_INT<15> as the clock interrupt, and on each one reads RBOX_IT<31:22>
  * as a count of further ticks it missed (0x39344-0x393cc: none when 0 or
- * 0x3ff). How RBOX_IT sets the rate is not known, so the tick is the
- * machine's (CPU 0's wall-clock schedule, cpu/AlphaCPU.hpp) whenever RBOX_IT
- * is not zero [guess], with the missed-tick count left as written.
+ * 0x3ff). The console's C code writes 7, and tells the operating system
+ * (HWRPB intr_freq, get_iclk_freq at 0x2e2270) that the timer runs at
+ * cpu_hz / ((n + 1) * 2^17), times another 1/4 on a revision 1.0 part: so
+ * RBOX_IT<21:0> is taken as n, a period of n + 1 times 2^17 processor
+ * cycles [inference]. The machine's schedule (CPU 0's, cpu/AlphaCPU.hpp)
+ * runs at PID 0's period (CMarvel::interval_period_ns); a processor whose
+ * RBOX_IT is zero takes no tick, with the missed-tick count left as written.
  */
+u64 CEv7Csr::interval_period_ns(u64 cpu_hz) const {
+  const u64 n = m_it.load(std::memory_order_relaxed) & 0x3fffff;
+  if (!n || !cpu_hz)
+    return 0;
+  return (n + 1) * (U64(1) << 17) * 1000000000 / cpu_hz;
+}
+
 void CEv7Csr::interval_tick() {
   std::lock_guard<std::mutex> g(m_lock);
   if (!reg(RBOX_IT))
