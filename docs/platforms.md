@@ -36,9 +36,13 @@ Three layers, each added in a different way:
   console patches, and a function that builds the board's own hardware. The
   functions and hardware live in `platforms/<board>/`.
 - **Chipset**: `chipsets/Chipset.hpp` (`CChipset`), with the Tsunami in
-  `chipsets/tsunami/` and Marvel -- the EV7's on-chip registers and its GIO
-  port, memory per PID -- in `chipsets/marvel/`; the board row picks it
-  (`CHIPSET_TSUNAMI`, `CHIPSET_MARVEL`).
+  `chipsets/tsunami/`, the Titan (four hoses on two PA-chips) in
+  `chipsets/titan/` ([notes](platforms/titan.md)), and Marvel -- the EV7's
+  on-chip registers and its GIO port, memory per PID -- in
+  `chipsets/marvel/`; the board row picks it (`CHIPSET_TSUNAMI`,
+  `CHIPSET_TITAN`, `CHIPSET_MARVEL`). What the Tsunami and the Titan share
+  is in `chipsets/PciWindows.hpp` (DMA windows) and `chipsets/DimmModel.*`
+  (the DIMM model and its SPD parts).
 - **The traces**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
   claimed, with the instruction that made it, and `ALPHABOX_TRACE_CALLS=1`
   reports the firmware's own subroutine calls, each site-to-routine pair
@@ -55,6 +59,7 @@ Three layers, each added in a different way:
 | AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS ([packet](platforms/ds20e.md)) |
 | AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
+| AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L1 on emulated EV7s (`es47` row, packets M0-M3): the console's PALcode runs its reset path, the console proper starts and reaches its conversation with the management processor (GIO) with every register it read modelled; it waits there for the CMM's answers (packet M4). The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
@@ -180,6 +185,10 @@ Facts that cost time to find and apply to the next machine:
   board; without it, it falls back to the first entry and calls itself
   something else. The name a console prints is a machine fact, not proof
   that the emulation is right.
+- **Speed patches are addresses in one console.** The ES40's console
+  patches, applied to the ES45's console, replaced words in its scheduler
+  and it hung silently in its idle loop. A board row has its own patch
+  table or none.
 - **Consoles are tolerant.** All three machines run with hardware they
   cannot find, printing a complaint and continuing. A trace of unclaimed
   accesses (below) shows what they wanted; most of it does not matter.
@@ -243,7 +252,8 @@ device or an absent CPU.
    and a real machine's listing to check against.
 3. **The rest of the Tsunami family**: DS10 and DS20L (their consoles run),
    DS20, and the UP2000 and XP1000 boards.
-4. **Titan** (ES45, DS25) with EV67/EV68 rows.
+4. **Titan**: the ES45 is at L5 ([packet](platforms/es45.md)); the DS25
+   and DS15 are next, on the same chipset.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7
    with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)). The EV7 plan,
