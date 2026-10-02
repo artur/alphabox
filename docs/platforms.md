@@ -51,6 +51,51 @@ Three layers, each added in a different way:
 | AlphaServer DS20L | under construction: its own update utility installs its console, which then runs to the prompt and names itself correctly ([packet](platforms/ds20l.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | planned, phase 0 done: the console's PALcode runs its reset path on an EV68 core and the console proper starts (L1, experimental `marvel-probe` row); it then waits on the EV7's management port. The staged plan is in the [packet](platforms/marvel.md) |
 
+## Source layout (agreed 2026-10-02, reached by the chipset split)
+
+Today `CSystem` is the Tsunami chipset, with ES40 board hardware (DPR,
+flash) and board hooks mixed in. The chipset split (packet M0 in
+[marvel.md](platforms/marvel.md)) moves the code to this layout:
+
+```
+src/
+  cpu/                 the Alpha core, common to every family
+    CpuModels.cpp      rows: EV6, EV67, EV68AL/CB/DC, EV7, EV7z
+    ev7/               only what EV7 changes: 44-bit physical addresses,
+                       PID, interrupts from the on-chip router
+  chipsets/
+    Chipset.hpp        the interface: non-memory decode, interrupt delivery,
+                       interval timer, PCI hose access, DMA translation
+    tsunami/           Cchip, Dchip, Pchip, TIG (out of System.cpp)
+    titan/             ES45, DS25, DS15
+    marvel/            IO7, the EV7's on-chip CSR window (Rbox, Zbox), GIO
+  platforms/
+    Platforms.cpp      board rows: chipset, CPU row and count, slots,
+                       interrupt wiring, firmware
+    es40/ ds10/ ...    board-only hardware: the ES40's DPR/RMC, flash
+                       layouts, I2C/SPD; the Marvel CMM/MBM stand-in
+  system/              CSystem, generic only: memory, components, CPU
+                       threads, ROM loading, configuration
+  devices/             unchanged: devices never know which board they're on
+```
+
+The rules:
+
+- **One binary runs every machine,** selected at run time by `platform =`
+  and table rows, never by `#ifdef`.
+- **The processor family decides the PALcode interface and the address
+  width,** and only where it truly differs. The EV7 core is EV68-derived (the
+  Marvel PALcode runs unchanged on it), so EV7 is a small delta in
+  `cpu/ev7/`, not a second CPU class. Its router and memory-controller
+  registers belong to `chipsets/marvel/`.
+- **The chipset owns decode, interrupts, timer and DMA translation.** A PCI
+  device works the same on a Tsunami Pchip and on a Marvel IO7 hose.
+- **Board facts live in board rows and `platforms/<board>/`,** never in
+  chipset or device code.
+- **Moving code changes no behaviour:** the ES40 console-log check, the JIT
+  cross-check (0 mismatches) and a `perf_ab` run on the moved hot paths
+  (decode and interrupts) prove it.
+
 ## Where the firmware comes from
 
 The Alpha firmware update CD V7.3 carries the console images for DS10, DS15,
