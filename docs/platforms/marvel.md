@@ -679,7 +679,7 @@ a 7/1300 on V7.3-11), structurally:
 | cache, revision | 1.75 MB, EV7 rev 3.0 | 1.50 MB, EV7 rev 2.1 | the `ev7` row is a revision-2 part (the console derives the revision from the chip ID and CSR 0x28020); `ev7z` is the 1.75 MB row |
 | memory | 4 GB each | 1 GB each (memory.bits 30) | configuration |
 | RIMMs | PPPPP..... | PPPPP..... | MBM configuration |
-| IO7 0 ... PCI Bus 0-3 | present | "No Local I/O" | no IO7 (M5): the console skips it because RBOX_IO_CFG reads 0 |
+| IO7 0 ... PCI Bus 0-3 | present | present since M5 (see the M5 section) | at M4 the console said "No Local I/O": RBOX_IO_CFG read 0 |
 | device table, slots | DEGXA, AIC-7892, CMD 649, USB, Radeon | empty | M5 |
 
 **The CMM firmware.** `CMM3_V2_7_5.BIN` is x86 code for an **Intel 386EX**:
