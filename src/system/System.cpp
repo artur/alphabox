@@ -40,10 +40,12 @@
 #endif
 
 #include <ctype.h>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <signal.h>
 #include <stdlib.h>
+#include <string>
 #include <unordered_map>
 
 #include <thread>
@@ -748,13 +750,9 @@ int CSystem::SingleStep() {
 #if defined(DEBUG_PORTACCESS)
 u64 lastport;
 #endif // defined(DEBUG_PORTACCESS)
-// EV6/EV68 Dcache blocks are 64 bytes; LDx_L/STx_C monitor that cache line.
-#define CPU_LOCK_MATCH_MASK U64(0x00000807ffffffc0)
+// EV6/EV68 Dcache blocks are 64 bytes; LDx_L/STx_C monitor that cache line
+// (cpu_lock_matches, with the chipset's physical address mask).
 #define CPU_LOCK_IO_MASK U64(0x0000080000000000)
-
-static inline bool cpu_lock_matches(u64 locked_address, u64 address) {
-  return !((locked_address ^ address) & CPU_LOCK_MATCH_MASK);
-}
 
 static constexpr u32 CPU_LLSC_DMA_WRITER = 0x80000000U;
 static constexpr u32 CPU_LLSC_DMA_READERS = 0x7fffffffU;
@@ -935,15 +933,14 @@ void CSystem::cpu_clear_external_locks(u64 address, size_t bytes) {
   if (!bytes)
     return;
 
-  const u64 first_line = (address & U64(0x00000807ffffffff)) & ~U64(63);
-  const u64 last_line =
-      ((address & U64(0x00000807ffffffff)) + bytes - 1) & ~U64(63);
+  const u64 first_line = (address & m_phys_mask) & ~U64(63);
+  const u64 last_line = ((address & m_phys_mask) + bytes - 1) & ~U64(63);
   int clear_mask = 0;
   const int flags = state.cpu_lock_flags.load(std::memory_order_relaxed);
   for (int i = 0; i < iNumCPUs; i++) {
     if (!(flags & (1 << i)))
       continue;
-    const u64 locked_line = state.cpu_lock_address[i] & CPU_LOCK_MATCH_MASK;
+    const u64 locked_line = state.cpu_lock_address[i] & m_phys_mask & ~U64(63);
     if (locked_line >= first_line && locked_line <= last_line)
       clear_mask |= 1 << i;
   }
@@ -1065,10 +1062,6 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
 }
 
 /**
- * Load ROM contents from file. Try if the decompressed ROM image
- * is available, otherwise create it first.
- **/
-/**
  * Run one progress chunk of the SRM self-decompressor on CPU 0 (up to 180
  * million instructions). Returns true once the decompressor has jumped below
  * 0x200000 (into the inflated console), stopped at the first instruction
@@ -1113,267 +1106,287 @@ static void hand_to_console(CAlphaCPU **cpus, int n, u64 entry) {
 static const char kDecompTag[8] = {'A', 'L', 'P', 'H', 'D', 'C', '0', '1'};
 static const long kDecompSize = 2 * sizeof(u64) + 0x200000;
 
-int CSystem::LoadROM() {
-  // The firmware image lands in guest memory behind every processor's back
-  // (a reset reloads it while compiled code exists).
-  m_code_pages.note_write_all();
-  FILE *f;
-  char *buffer;
-  int i;
-  int j;
-  u64 temp;
-  u32 scratch;
-  bool loadedFromFlash = false;
+/**
+ * Run a console's self-decompressor on CPU 0: the image is in memory at
+ * `base`, entered in PALmode at its first instruction, and done when it
+ * jumps below 2 MB into the inflated console. `progress(n)` is called after
+ * the n-th chunk; it prints, and returns false to give up. Returns whether
+ * the decompressor finished.
+ **/
+bool CSystem::run_decompressor(u64 base,
+                               const std::function<bool(int)> &progress) {
+  acCPUs[0]->set_pc(base | 1);
+  acCPUs[0]->set_PAL_BASE(base);
+  acCPUs[0]->enable_icache();
 
-  // If flash.rom contains a partitioned ES40 image (CPQ header at the SRM
-  // partition), execute its embedded self-decompressor to inflate the console
-  // into low RAM just like the cl67srmrom.exe path would.
+  bool ok = true;
+  int j = 0;
+  while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
+    srm_decomp_chunk(acCPUs[0]);
+    if (!progress(++j)) {
+      ok = false;
+      break;
+    }
+  }
+  printf("100%%\n");
+  acCPUs[0]->restore_icache();
+  return ok;
+}
+
+/// The decompressor has left the console at CPU 0's PC: start it there.
+void CSystem::start_console() {
+  hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
+  start_secondaries();
+}
+
+/**
+ * The ES40's own flash layout: a partitioned image whose SRM partition, at
+ * 0x10000, holds the console's self-decompressor behind a 0x40-byte CPQ
+ * header. It runs exactly like the cl67srmrom.exe path.
+ **/
+bool CSystem::load_console_from_es40_flash() {
+  if (!(theSROM && theSROM->HasBootFirmware()))
+    return false;
+  printf("%%SYS-I-READFLASH: Reading boot ROM image from %s.\n",
+         myCfg->get_text_value("rom.flash", "flash.rom"));
+
+  const u8 *flash = theSROM->GetFlashBytes();
+  const u32 srm_off = 0x00010000;
+  const u32 srm_len = 0x000E0000;
+
+  printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
+  fflush(stdout);
+
+  // The SRM partition is wrapped in a 0x40-byte CPQ header. The
+  // self-decompressing payload is not position independent and expects
+  // to be loaded exactly like the cl67srmrom.exe path: payload at
+  // 0x900000, PC=0x900001, PAL_BASE=0x900000.
+  const u64 load_base = U64(0x0000000000900000);
+  const u32 cpq_hdr_len = 0x40;
+
+  memcpy(PtrToMem(load_base), flash + srm_off + cpq_hdr_len,
+         srm_len - cpq_hdr_len);
+
+  const bool ok = run_decompressor(load_base, [](int j) {
+    if (j < 50) {
+      printf("%d%%", j * 2);
+      fflush(stdout);
+    } else {
+      printf(".");
+      fflush(stdout);
+    }
+    if (j > 500) {
+      printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
+             "memory.\n");
+      return false;
+    }
+    return true;
+  });
+  if (ok)
+    start_console();
+  return ok;
+}
+
+/**
+ * A console a machine's own update utility installed in the flash: it sits
+ * behind a standard ROM header wherever that machine keeps it, and the
+ * flash is searched for one (CFlash::FindConsoleImage).
+ **/
+bool CSystem::load_console_from_flash_image() {
   u32 fl_off = 0;
   u32 fl_hdr = 0;
   u32 fl_size = 0;
   u64 fl_base = 0;
+  if (!(theSROM &&
+        theSROM->FindConsoleImage(&fl_off, &fl_hdr, &fl_size, &fl_base) &&
+        PtrToMem(fl_base)))
+    return false;
+  printf("%%SYS-I-READFLASH: Console image in flash at %x, %u bytes, "
+         "loaded at %" PRIx64 ".\n",
+         fl_off, fl_size, fl_base);
+  printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
+  fflush(stdout);
 
-  if (theSROM && theSROM->HasBootFirmware()) {
-    printf("%%SYS-I-READFLASH: Reading boot ROM image from %s.\n",
-           myCfg->get_text_value("rom.flash", "flash.rom"));
-
-    const u8 *flash = theSROM->GetFlashBytes();
-    const u32 srm_off = 0x00010000;
-    const u32 srm_len = 0x000E0000;
-
-    printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
+  memcpy(PtrToMem(fl_base), theSROM->GetFlashBytes() + fl_off + fl_hdr,
+         fl_size);
+  const bool ok = run_decompressor(fl_base, [](int j) {
+    if (j > 500) {
+      printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
+             "memory.\n");
+      return false;
+    }
+    printf(".");
     fflush(stdout);
+    return true;
+  });
+  if (ok)
+    start_console();
+  return ok;
+}
 
-    // The SRM partition is wrapped in a 0x40-byte CPQ header. The
-    // self-decompressing payload is not position independent and expects
-    // to be loaded exactly like the cl67srmrom.exe path: payload at
-    // 0x900000, PC=0x900001, PAL_BASE=0x900000.
-    const u64 load_base = U64(0x0000000000900000);
-    const u32 cpq_hdr_len = 0x40;
-
-    memcpy(PtrToMem(load_base), flash + srm_off + cpq_hdr_len,
-           srm_len - cpq_hdr_len);
-
-    acCPUs[0]->set_pc(load_base | 1);
-    acCPUs[0]->set_PAL_BASE(load_base);
-    acCPUs[0]->enable_icache();
-
-    bool decomp_ok = true;
-    j = 0;
-    while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
-      srm_decomp_chunk(acCPUs[0]);
-      j++;
-      if (j < 50) {
-        printf("%d%%", j * 2);
-        fflush(stdout);
-      } else {
-        printf(".");
-        fflush(stdout);
-      }
-      if (j > 500) {
-        printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
-               "memory.\n");
-        decomp_ok = false;
-        break;
-      }
-    }
-    printf("100%%\n");
-
-    acCPUs[0]->restore_icache();
-
-    if (decomp_ok) {
-      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
-      start_secondaries();
-
-      loadedFromFlash = true;
-    }
+/**
+ * The decompressed console saved by an earlier run (rom.decompressed), if
+ * there is a whole one: the entry PC, PAL_BASE, 2 MB of memory and the tag
+ * (kDecompTag). One of any other size is a write that never finished (the
+ * emulator stopped during it): decompress again rather than boot from half
+ * an image. One without the tag was saved past the console's entry by an
+ * older Alphabox: decompress that again too.
+ **/
+bool CSystem::load_decompressed_console() {
+  const char *dec =
+      myCfg->get_text_value("rom.decompressed", "decompressed.rom");
+  FILE *f = fopen(dec, "rb");
+  if (!f)
+    return false;
+  fseek(f, 0, SEEK_END);
+  const long have = ftell(f);
+  char tag[sizeof(kDecompTag)] = {};
+  if (have == kDecompSize + (long)sizeof(kDecompTag)) {
+    fseek(f, kDecompSize, SEEK_SET);
+    (void)!fread(tag, 1, sizeof(tag), f);
+  }
+  fseek(f, 0, SEEK_SET);
+  if (have == kDecompSize) {
+    printf("%%SYS-I-ROMOLD: %s was saved by an older version, past the "
+           "console's entry; decompressing again.\n",
+           dec);
+    fclose(f);
+    return false;
+  }
+  if (have != kDecompSize + (long)sizeof(kDecompTag) ||
+      memcmp(tag, kDecompTag, sizeof(tag)) != 0) {
+    printf("%%SYS-W-ROMSIZE: %s (%ld bytes) is not a whole image; "
+           "decompressing again.\n",
+           dec, have);
+    fclose(f);
+    return false;
   }
 
-  // A machine whose own update utility installed its console leaves it in
-  // the flash behind a standard ROM header, wherever that machine keeps it.
-  if (!loadedFromFlash && theSROM &&
-      theSROM->FindConsoleImage(&fl_off, &fl_hdr, &fl_size, &fl_base) &&
-      PtrToMem(fl_base)) {
-    printf("%%SYS-I-READFLASH: Console image in flash at %x, %u bytes, "
-           "loaded at %" PRIx64 ".\n",
-           fl_off, fl_size, fl_base);
-    printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
-    fflush(stdout);
+  printf("%%SYS-I-READROM: Reading decompressed ROM image from %s.\n",
+         myCfg->get_text_value("rom.decompressed", "decompressed.rom"));
+  u64 temp;
+  (void)!fread(&temp, 1, sizeof(u64), f);
+  const u64 entry = endian_64(temp);
+  // The saved PAL_BASE is not used: see hand_to_console().
+  (void)!fread(&temp, 1, sizeof(u64), f);
+  hand_to_console(acCPUs, iNumCPUs, entry);
+  char *buffer = PtrToMem(0);
+  (void)!fread(buffer, 1, 0x200000, f);
+  fclose(f);
+  // The three paths that decompress the firmware release the processors
+  // a console does not start itself; this one, which reads the same
+  // image back from cache, did not -- so on such a board the first boot
+  // of a firmware worked and every later one left every secondary
+  // parked. (The ES40's console starts its own, so it never showed.)
+  start_secondaries();
+  return true;
+}
 
-    memcpy(PtrToMem(fl_base), theSROM->GetFlashBytes() + fl_off + fl_hdr,
-           fl_size);
-    acCPUs[0]->set_pc(fl_base | 1);
-    acCPUs[0]->set_PAL_BASE(fl_base);
-    acCPUs[0]->enable_icache();
+/**
+ * The console image file (rom.srm, by default the board's firmware file),
+ * in the form the board's row names: where its code starts in the file and
+ * where it runs. An update bundle carries the console behind a fixed
+ * wrapper; a raw image behind the standard Alpha ROM header, which says
+ * where the machine loads it; an update utility has nothing in front of its
+ * decompressor (docs/platforms.md). Decompressed, started, and saved for the
+ * next boot (save_decompressed_console).
+ **/
+void CSystem::load_console_from_file() {
+  const char *srm = myCfg->get_text_value("rom.srm", m_platform->firmware_file);
+  FILE *f = fopen(srm, "rb");
+  if (!f)
+    FAILURE(Runtime, "No original or decompressed SRM ROM image found");
+  printf("%%SYS-I-READROM: Reading original ROM image from %s.\n", srm);
 
-    bool decomp_ok = true;
-    j = 0;
-    while (acCPUs[0]->get_clean_pc() > U64(0x200000)) {
-      srm_decomp_chunk(acCPUs[0]);
-      if (++j > 500) {
-        printf("\n%%SYS-F-DECOMPFAIL: SRM decompressor did not return to low "
-               "memory.\n");
-        decomp_ok = false;
-        break;
-      }
+  size_t skip = 0x240;
+  u64 rom_base = U64(0x900000);
+  if (m_platform->firmware == FW_RAW_IMAGE) {
+    skip = 0; // the console's own first instruction
+  } else if (m_platform->firmware == FW_ROM_HEADER) {
+    u32 header[14];
+    if (fread(header, sizeof(u32), 14, f) != 14)
+      FAILURE(Runtime, "File is too short to be a SRM ROM image");
+    for (int i = 0; i < 14; i++)
+      header[i] = endian_32(header[i]);
+    if (header[0] != 0x5a5ac3c3 || header[1] != 0xa5a53c3c)
+      FAILURE_1(Runtime, "%s does not carry an Alpha ROM header", srm);
+    skip = header[2];
+    rom_base = header[6];
+    printf("%%SYS-I-ROMHEADER: %s: %u bytes, loaded at %" PRIx64 ".\n", srm,
+           header[4], rom_base);
+    if (!PtrToMem(rom_base))
+      FAILURE_1(Runtime, "ROM load address %" PRIx64 " is outside memory",
+                rom_base);
+  }
+
+  fseek(f, 0, SEEK_END);
+  const long file_size = ftell(f);
+  if (file_size <= (long)skip)
+    FAILURE(Runtime, "File is too short to be a SRM ROM image");
+  fseek(f, (long)skip, SEEK_SET);
+  char *buffer = PtrToMem(rom_base);
+  while (!feof(f))
+    (void)!fread(buffer++, 1, 1, f);
+  fclose(f);
+
+  printf("%%SYS-I-DECOMP: Decompressing ROM image.\n0%%");
+  // PALmode entry at the image's first instruction.
+  run_decompressor(rom_base, [](int j) {
+    if (((j % 5) == 0) && (j < 50))
+      printf("%d%%", j * 2);
+    else
       printf(".");
-      fflush(stdout);
-    }
-    printf("100%%\n");
-    acCPUs[0]->restore_icache();
+    fflush(stdout);
+    return true;
+  });
+  start_console();
+  save_decompressed_console();
+}
 
-    if (decomp_ok) {
-      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
-      start_secondaries();
-      loadedFromFlash = true;
-    }
+/**
+ * Save the console the decompressor left in the low 2 MB, with its entry,
+ * for the next boot (load_decompressed_console). Written beside the final
+ * name and renamed into place, so an image under that name is always whole.
+ **/
+void CSystem::save_decompressed_console() {
+  const std::string dec =
+      myCfg->get_text_value("rom.decompressed", "decompressed.rom");
+  const std::string tmp = dec + ".tmp";
+  FILE *f = fopen(tmp.c_str(), "wb");
+  if (!f) {
+    printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
+           dec.c_str());
+    return;
   }
+  printf("%%SYS-I-ROMWRT: Writing decompressed rom to %s.\n", dec.c_str());
+  u64 temp = endian_64(acCPUs[0]->get_pc());
+  bool ok = fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
+  temp = endian_64(acCPUs[0]->get_pal_base());
+  ok = ok && fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
+  const char *buffer = PtrToMem(0);
+  ok = ok && fwrite(buffer, 1, 0x200000, f) == 0x200000;
+  ok = ok && fwrite(kDecompTag, 1, sizeof(kDecompTag), f) == sizeof(kDecompTag);
+  ok = (fclose(f) == 0) && ok;
+  if (!ok || rename(tmp.c_str(), dec.c_str()) != 0) {
+    printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
+           dec.c_str());
+    remove(tmp.c_str());
+  }
+}
 
-  if (!loadedFromFlash) {
-    f = fopen(myCfg->get_text_value("rom.decompressed", "decompressed.rom"),
-              "rb");
-    // A decompressed image is the entry PC, PAL_BASE, 2 MB of memory and the
-    // tag (kDecompTag). One of any other size is a write that never finished
-    // (the emulator stopped during it): decompress again rather than boot
-    // from half an image. One without the tag was saved past the console's
-    // entry by an older Alphabox: decompress that again too.
-    if (f) {
-      const char *dec =
-          myCfg->get_text_value("rom.decompressed", "decompressed.rom");
-      fseek(f, 0, SEEK_END);
-      const long have = ftell(f);
-      char tag[sizeof(kDecompTag)] = {};
-      if (have == kDecompSize + (long)sizeof(kDecompTag)) {
-        fseek(f, kDecompSize, SEEK_SET);
-        (void)!fread(tag, 1, sizeof(tag), f);
-      }
-      fseek(f, 0, SEEK_SET);
-      if (have == kDecompSize) {
-        printf("%%SYS-I-ROMOLD: %s was saved by an older version, past the "
-               "console's entry; decompressing again.\n",
-               dec);
-        fclose(f);
-        f = nullptr;
-      } else if (have != kDecompSize + (long)sizeof(kDecompTag) ||
-                 memcmp(tag, kDecompTag, sizeof(tag)) != 0) {
-        printf("%%SYS-W-ROMSIZE: %s (%ld bytes) is not a whole image; "
-               "decompressing again.\n",
-               dec, have);
-        fclose(f);
-        f = nullptr;
-      }
-    }
-    if (!f) {
-      const char *srm =
-          myCfg->get_text_value("rom.srm", m_platform->firmware_file);
-      f = fopen(srm, "rb");
-      if (!f)
-        FAILURE(Runtime, "No original or decompressed SRM ROM image found");
-      printf("%%SYS-I-READROM: Reading original ROM image from %s.\n", srm);
+/**
+ * Load the console and hand every processor to it. In order: the ES40's
+ * partitioned flash, a console an update utility installed in the flash,
+ * the decompressed console saved by an earlier run, the console image file.
+ **/
+int CSystem::LoadROM() {
+  // The firmware image lands in guest memory behind every processor's back
+  // (a reset reloads it while compiled code exists).
+  m_code_pages.note_write_all();
 
-      // Where the console's own code starts in the file, and where it runs.
-      // An update bundle carries the console behind a fixed wrapper; a raw
-      // image carries the standard Alpha ROM header, which says where the
-      // machine loads it (docs/platforms.md).
-      size_t skip = 0x240;
-      u64 rom_base = U64(0x900000);
-      if (m_platform->firmware == FW_RAW_IMAGE) {
-        skip = 0; // the console's own first instruction
-      } else if (m_platform->firmware == FW_ROM_HEADER) {
-        u32 header[14];
-        if (fread(header, sizeof(u32), 14, f) != 14)
-          FAILURE(Runtime, "File is too short to be a SRM ROM image");
-        for (i = 0; i < 14; i++)
-          header[i] = endian_32(header[i]);
-        if (header[0] != 0x5a5ac3c3 || header[1] != 0xa5a53c3c)
-          FAILURE_1(Runtime, "%s does not carry an Alpha ROM header", srm);
-        skip = header[2];
-        rom_base = header[6];
-        printf("%%SYS-I-ROMHEADER: %s: %u bytes, loaded at %" PRIx64 ".\n", srm,
-               header[4], rom_base);
-        if (!PtrToMem(rom_base))
-          FAILURE_1(Runtime, "ROM load address %" PRIx64 " is outside memory",
-                    rom_base);
-      }
-
-      fseek(f, 0, SEEK_END);
-      const long file_size = ftell(f);
-      if (file_size <= (long)skip)
-        FAILURE(Runtime, "File is too short to be a SRM ROM image");
-      fseek(f, (long)skip, SEEK_SET);
-      buffer = PtrToMem(rom_base);
-      while (!feof(f))
-        (void)!fread(buffer++, 1, 1, f);
-      fclose(f);
-
-      printf("%%SYS-I-DECOMP: Decompressing ROM image.\n0%%");
-      // PALmode entry at the image's first instruction.
-      acCPUs[0]->set_pc(rom_base + 1);
-      acCPUs[0]->set_PAL_BASE(rom_base);
-      acCPUs[0]->enable_icache();
-
-      j = 0;
-      while (acCPUs[0]->get_clean_pc() > 0x200000) {
-        srm_decomp_chunk(acCPUs[0]);
-        j++;
-        if (((j % 5) == 0) && (j < 50))
-          printf("%d%%", j * 2);
-        else
-          printf(".");
-        fflush(stdout);
-      }
-
-      printf("100%%\n");
-      acCPUs[0]->restore_icache();
-      hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
-      start_secondaries();
-
-      // Written beside the final name and renamed into place, so an image
-      // under that name is always whole.
-      const std::string dec =
-          myCfg->get_text_value("rom.decompressed", "decompressed.rom");
-      const std::string tmp = dec + ".tmp";
-      f = fopen(tmp.c_str(), "wb");
-      if (!f) {
-        printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
-               dec.c_str());
-      } else {
-        printf("%%SYS-I-ROMWRT: Writing decompressed rom to %s.\n",
-               dec.c_str());
-        temp = endian_64(acCPUs[0]->get_pc());
-        bool ok = fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
-        temp = endian_64(acCPUs[0]->get_pal_base());
-        ok = ok && fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
-        buffer = PtrToMem(0);
-        ok = ok && fwrite(buffer, 1, 0x200000, f) == 0x200000;
-        ok = ok &&
-             fwrite(kDecompTag, 1, sizeof(kDecompTag), f) == sizeof(kDecompTag);
-        ok = (fclose(f) == 0) && ok;
-        if (!ok || rename(tmp.c_str(), dec.c_str()) != 0) {
-          printf("%%SYS-W-NOWRITE: Couldn't write decompressed rom to %s.\n",
-                 dec.c_str());
-          remove(tmp.c_str());
-        }
-      }
-    } else {
-      printf("%%SYS-I-READROM: Reading decompressed ROM image from %s.\n",
-             myCfg->get_text_value("rom.decompressed", "decompressed.rom"));
-      (void)!fread(&temp, 1, sizeof(u64), f);
-      const u64 entry = endian_64(temp);
-      // The saved PAL_BASE is not used: see hand_to_console().
-      (void)!fread(&temp, 1, sizeof(u64), f);
-      hand_to_console(acCPUs, iNumCPUs, entry);
-      buffer = PtrToMem(0);
-      (void)!fread(buffer, 1, 0x200000, f);
-      fclose(f);
-      // The three paths that decompress the firmware release the processors
-      // a console does not start itself; this one, which reads the same
-      // image back from cache, did not -- so on such a board the first boot
-      // of a firmware worked and every later one left every secondary
-      // parked. (The ES40's console starts its own, so it never showed.)
-      start_secondaries();
-    }
-  } // !loadedFromFlash
+  if (!load_console_from_es40_flash() && !load_console_from_flash_image() &&
+      !load_decompressed_console())
+    load_console_from_file();
 
 #if !defined(SRM_NO_SPEEDUPS) || !defined(SRM_NO_IDE)
   printf("%%SYM-I-PATCHROM: Patching ROM for speed.\n");

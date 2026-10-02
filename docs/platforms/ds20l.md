@@ -119,7 +119,8 @@ SYSINIT, 3 of 3, with and without NICs) until the vmspal routines were
 switched off: with `palcode.vms.nohle = true` the same boot logged in. The
 native routines replace the ES40 console's PALcode and were applied to any
 PALcode at 0x8000; this console's is a different build (V1.98-74). The
-board row now says so (`native_vmspal = false`), and the boot logs in on
+board row now says so (`native_vmspal = false`; since the chipset split
+`vmspal_pal_base = 0`), and the boot logs in on
 the interpreter with no options (`tsu-ds20l-2cpu-int-fix`). The DS20E had
 the same problem (its packet).
 

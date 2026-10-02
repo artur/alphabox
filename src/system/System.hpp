@@ -32,6 +32,7 @@
 #include "SystemComponent.hpp"
 #include "TraceEngine.hpp"
 #include <atomic>
+#include <functional>
 #include <mutex>
 
 #if !defined(INCLUDED_SYSTEM_H)
@@ -414,6 +415,21 @@ public:
   void cpu_clear_lock(int cpuid);
 
 private:
+  // Console loading (LoadROM), one form per function.
+  bool run_decompressor(u64 base, const std::function<bool(int)> &progress);
+  void start_console();
+  bool load_console_from_es40_flash();
+  bool load_console_from_flash_image();
+  bool load_decompressed_console();
+  void load_console_from_file();
+  void save_decompressed_console();
+
+  /// LDx_L/STx_C watch a 64-byte line of physical memory as the chipset
+  /// decodes it.
+  bool cpu_lock_matches(u64 locked_address, u64 address) const {
+    return !((locked_address ^ address) & m_phys_mask & ~U64(63));
+  }
+
   CChipset *m_chipset = nullptr; ///< the board's chipset (Chipset.hpp)
   /// The chipset's physical address mask (CChipset::phys_mask), kept here
   /// so the memory path masks with a member rather than a virtual call.

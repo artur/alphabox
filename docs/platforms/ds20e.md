@@ -151,7 +151,8 @@ processor, and they wait until it does. This board has none: every
 processor must already be running PALcode when the console asks. Releasing
 the secondary at the PALcode reset entry -- where the ES40's management
 processor puts one too -- makes it answer, and `show config` lists both
-processors. That is now a board property (`console_starts_secondaries`),
+processors. That is now a board property (`console_starts_secondaries`;
+since the chipset split `secondaries = SECONDARIES_AFTER_ARBITRATION`),
 not a guess: the console's own attempt is the evidence.
 
 Three things were ruled out along the way:
@@ -344,7 +345,8 @@ processor (`tsu-ds20e-1cpu-int`) and bugchecked on CPU 1 with two
 (`tsu-ds20e-2cpu-int`); with `palcode.vms.nohle = true` it logged in
 (`tsu-ds20e-1cpu-int-nohle`). Those routines were written against the ES40
 console's PALcode (V1.98-104); this one is V1.98-79. The board row now
-carries `native_vmspal`, false for every board but the ES40, and the
+carries `native_vmspal` (since the chipset split `vmspal_pal_base`, 0
+for every board but the ES40), and the
 interpreter boots to login on two processors with no options
 (`tsu-ds20e-2cpu-int-fix`). The ES40 interpreter still uses the routines.
 

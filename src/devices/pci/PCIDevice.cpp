@@ -117,13 +117,13 @@ void CPCIDevice::map_config_space() {
       continue;
     // A zero-length range never decodes: the device is unreachable until
     // its bus has a number.
-    cSystem->RegisterMemory(this, PCI_RANGE_BASE + (i * 8) + 7,
-                            U64(0x00000801fe000000) +
-                                (U64(0x0000000200000000) * myPCIBus) +
-                                (U64(0x0000000000010000) * bus) +
-                                (U64(0x0000000000000800) * myPCIDev) +
-                                (U64(0x0000000000000100) * i),
-                            mapped ? 0x100 : 0);
+    cSystem->RegisterMemory(
+        this, PCI_RANGE_BASE + (i * 8) + 7,
+        cSystem->chipset()->pci_space_base(myPCIBus, PCI_SPACE_CONFIG) +
+            (U64(0x0000000000010000) * bus) +
+            (U64(0x0000000000000800) * myPCIDev) +
+            (U64(0x0000000000000100) * i),
+        mapped ? 0x100 : 0);
   }
 }
 
@@ -143,8 +143,9 @@ void CPCIDevice::add_function(int func, u32 data[64], u32 mask[64]) {
 }
 
 u64 CPCIDevice::bus_address(bool is_io, u32 base) const {
-  return (is_io ? U64(0x00000801fc000000) : U64(0x0000080000000000)) +
-         (U64(0x0000000200000000) * myPCIBus) + base;
+  return cSystem->chipset()->pci_space_base(myPCIBus, is_io ? PCI_SPACE_IO
+                                                            : PCI_SPACE_MEM) +
+         base;
 }
 
 u64 CPCIDevice::map_range(int id, bool is_io, u32 base, u64 length) {

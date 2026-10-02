@@ -66,9 +66,11 @@ Upstream keeps every source in a flat `src/`; alphabox does not (reorganized
   MPU401), `storage/` (Disk, DiskController, DiskDevice, DiskFile,
   DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the MAME shims),
   `net/` (Ethernet, NetworkBackend/Pcap/Tap).
-- CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). Chipset,
-  config and firmware NVRAM → `src/system/` (System, SystemComponent,
-  Configurator, DPR, Flash, Port80, i2c_spd, TraceEngine). Shared
+- CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). System and
+  config → `src/system/` (System, SystemComponent, Configurator, Port80,
+  TraceEngine). The Tsunami chipset (upstream's System.cpp CSR code) →
+  `src/chipsets/tsunami/`; firmware NVRAM (DPR, Flash) →
+  `src/platforms/es40/`; i2c_spd → `src/devices/common/`. Shared
   headers → `src/common/` (StdAfx, datatypes, es40_debug, es40_endian,
   config_debug, banner, telnet, lockstep).
 - `src/es40.cfg` → repo-root `es40.cfg` (plus per-test copies in

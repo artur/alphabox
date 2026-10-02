@@ -449,7 +449,7 @@ moved lines of code, **[guess]**.
 | # | Packet | Contents | Size | Level | Status |
 | --- | --- | --- | --- | --- | --- |
 | P | L1 probe | experimental `marvel-probe` board row (EV68, ES40 devices); the trace reports unclaimed accesses with the full address and folds repeated accesses | <50 | L1 | **done** |
-| M0 | **Separate the chipset from CSystem** | Today `CSystem` *is* the Tsunami: its `ReadMem`/`WriteMem` mask to 0x807_ffff_ffff and decode Cchip/Dchip/Pchip/TIG, `interrupt()` is the Cchip's DIR/DIM, and the PCI hoses are the Pchips. Split a `Chipset` interface out (non-memory decode, interrupt delivery, timer, PCI hose access, DMA translation), keep Tsunami as the first implementation with no behaviour change, and let the board row pick it. Titan (ES45) needs the same split, so it is shared work with the Tsunami-family effort | 1.5-3 k moved, ~500 new | L6 | open, **the dependency for everything below** |
+| M0 | **Separate the chipset from CSystem** | Today `CSystem` *is* the Tsunami: its `ReadMem`/`WriteMem` mask to 0x807_ffff_ffff and decode Cchip/Dchip/Pchip/TIG, `interrupt()` is the Cchip's DIR/DIM, and the PCI hoses are the Pchips. Split a `Chipset` interface out (non-memory decode, interrupt delivery, timer, PCI hose access, DMA translation), keep Tsunami as the first implementation with no behaviour change, and let the board row pick it. Titan (ES45) needs the same split, so it is shared work with the Tsunami-family effort | 1.5-3 k moved, ~500 new | L6 | **done** 2026-10-02 (see "M0: the chipset split") |
 | M1 | **EV7 CPU model** | `cpu_model` grows a family field (EV6 / EV7). An EV7 row: chip ID, type 15, minor per revision, EV7z row (type 16 if the console agrees). Physical addresses masked to 44 bits. Per-CPU PID (WHAMI). Interrupt delivery from the Rbox instead of the EIR pins. vmspal fast paths and JIT PAL shortcuts off for EV7 until verified. Kept apart from the EV6 code wherever the PALcode interface differs | 500-1000 | L1 | open |
 | M2 | **EV7 on-chip CSR block** | per EV7 a device answering its 4 MB CSR window: Rbox (WHOAMI, INT/IMASK/IREQ/INTQ/INTA, the IT interval timer, SCRATCH, routing CFG reading as configured), Cbox, Zbox (memory configuration consistent with the board row, errors clean), GIO registers and the 0x80000 lock | 1-2 k | L1+ | open |
 | M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | open; needs the XSROM handoff disassembled |
@@ -465,6 +465,39 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M0: the chipset split (2026-10-02)
+
+`src/chipsets/Chipset.hpp` is the interface, `src/chipsets/tsunami/` the
+Tsunami behind it, `src/platforms/<board>/` the boards' own parts; no
+behaviour changed (the ES40 console-log check on every lane, the JIT
+cross-check with 0 mismatches, the DS20E/DS10/DS20L and 4-CPU ES40 probes,
+OpenVMS 8.4 and Windows 2000 boots, the VGA frame hashes, and `perf_ab`
+against the previous main; the rows are in `lab/results/ledger.md`).
+
+What the interface gives a Marvel: `phys_mask()` (44 bits, so PA<63:44> is
+dropped before decode instead of the Tsunami's 0x807'ffff'ffff),
+`read_io`/`write_io` for the EV7 CSR windows and the IO7 ports,
+`interrupt()`/`interval_tick()`/`ack_*` for the Rbox, `pci_space_base()`
+and `pci_phys()` per IO7 hose.
+
+What it does not give yet, and M1/M5/M6 must add:
+
+- **Memory is one contiguous array from 0** in `CSystem` (`a >>
+  memory.bits` decides memory vs I/O). Marvel memory is per PID at
+  non-contiguous bases; that needs a memory map in `CSystem`, not the
+  chipset, to keep RAM off the virtual-call path.
+- **ISA devices and a few others hard-code Tsunami hose-0 addresses**
+  (`0x801fc000xxx` in Serial, Keyboard, DMA, the floppy, MPU401, the ALi
+  bridge; the S3's legacy window; the vmspal's PIC reads). `CPCIDevice`
+  asks the chipset (`pci_space_base`); those do not yet.
+- **The LL/SC I/O bit** (`CPU_LOCK_IO_MASK`, PA<43>) is the Tsunami's and
+  the EV7's alike; the line mask now follows `phys_mask()`.
+- **`interval_tick()` is one call from CPU 0** for the whole machine; a
+  per-CPU RBOX_IT can be driven from it but CPU 0's schedule stays the
+  clock.
+- The JIT's device-access statistics (`AlphaCPU_jit.cpp`, JIT_STATS only)
+  classify Tsunami CSR addresses by constant.
 
 ### The L1 probe (2026-10-01)
 

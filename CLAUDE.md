@@ -120,9 +120,10 @@ Source layout under `src/`:
 | --- | --- |
 | `cpu/` | `AlphaCPU*`, the `cpu_*.hpp` opcode headers, vmspal, IEEE/VAX FP, `CpuModel`/`CpuModels` (the processor's identity, a row per part) |
 | `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
-| `system/` | `System`, `SystemComponent`, `Configurator`, `DPR`, `Flash`, `Port80`, `i2c_spd`, `TraceEngine` |
-| `platforms/` | which machine is emulated: `Platform.hpp` + the board rows in `Platforms.cpp` (slots, interrupt wiring, firmware form, processors, memory), chosen with `platform = "<name>";` |
-| `devices/common/` | device parts more than one family uses: `Eeprom93cx6` (the Microwire serial EEPROM the Intel NICs and the QLogic adapters keep their settings in) |
+| `system/` | generic machine plumbing: `System` (memory, device ranges, CPU threads, LL/SC, console loading, state files), `SystemComponent`, `Configurator`, `Port80`, `TraceEngine` |
+| `chipsets/` | the system logic behind `Chipset.hpp` (`CChipset`: non-memory decode, interrupts, interval timer, PCI hose spaces, DMA translation, reset/state), built by `Chipsets.cpp`; `tsunami/` (`CTsunami`, the 21272 of the ES40/DS20E/DS10/DS20L, split by chip: `Tsunami.cpp` decode + interrupts, `TsunamiCchip`, `TsunamiPchip`, `TsunamiTig`, `TsunamiMemory` (AARn arrays, SPD on the MPD pins)) |
+| `platforms/` | which machine is emulated: `Platform.hpp` + the board rows in `Platforms.cpp` (chipset, processors, memory, slots, interrupt wiring, firmware form, secondary start, board hardware), chosen with `platform = "<name>";`; one directory per board for what only it has (`Boards.hpp` declares them): `es40/` (`DPR`, `Flash`, interrupt map, the console speed patches), `ds20e/`, `ds10/` (`PCF8584`, the I2C controller the DS20E shares), `ds20l/` |
+| `devices/common/` | device parts more than one family uses: `Eeprom93cx6` (the Microwire serial EEPROM the Intel NICs and the QLogic adapters keep their settings in), `i2c_spd` (an I2C bus and the 24C02 serial EEPROM: the Tsunami's SPD parts, the boards' I2C ROMs) |
 | `devices/isa/` | the legacy devices behind the bridge: `DMA`, `FloppyController`, `Keyboard`, `Serial`, `MPU401` |
 | `devices/pci/` | `PCIDevice`, `AliM1543C` + its `_ide`/`_usb`/`_pmu` functions (`_usb` also holds `COhci`, the OHCI engine the EHCI card's companions share), `SCSIBus`, `SCSIDevice`; `sym53c8xx/` (the Symbios 53C8xx family, split by concern, parts in `Sym53C8xxChips.cpp`); `isp1040/` (the QLogic ISP SCSI adapters: mailboxes and request/response queues rather than SCRIPTS); `i8255x/` (the Intel 8255x NIC family, same layout, parts in `I8255xChips.cpp`); `bridge/` (`PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp`); `tulip/` (`CTulip`: the DECchip 21040/21041/21140/21143 NICs, whose parts differ in how they name themselves and pick a medium -- `TulipMedia.cpp`); `ehci/` (`CEhci`: a USB 2.0 card, a NEC uPD720101 -- the EHCI and two OHCI companions (`COhci`, the ALi's engine), four ports routed between them by CONFIGFLAG/PORT_OWNER; high-speed isochronous iTDs; `companions = false` for the EHCI alone; `ALPHABOX_EHCI_SELFTEST=1` checks it without a guest driver); `virtio/` (paravirtual devices, legacy virtio-pci: `CVirtioPci` -- registers, split virtqueues, device thread, INTA -- and `CVirtioBlk` (`virtio_blk`, a `disk0.0`), `CVirtioNet` (`virtio_net`, on the NIC backends); `ALPHABOX_VIRTIO_SELFTEST=1` checks them without a guest driver; the driver writer's reference is `docs/virtio.md`); `es137x/` (`CES137x`: the Ensoniq AudioPCI sound cards, sharing one DMA engine; the ES1371's AC'97 codec and sample rate converter are in `ES137xCodec.cpp`) |
 | `devices/storage/` | `Disk`, `DiskController`, `DiskDevice`, `DiskFile`, `DiskRam` |
@@ -142,8 +143,14 @@ every one `IS_PCI`), so they live in `devices/pci/` even though the M1543C
 is the ISA bridge; `devices/isa/` holds only the devices behind it.
 
 Everything hangs off `CSystem` (`system/System.cpp`), which owns physical
-memory and the Tsunami chipset model (Cchip/Dchip/Pchip: memory routing, PCI
-windows, interrupts via `cSystem->interrupt()`). Devices derive from
+memory, the registered device ranges, the CPUs and the console loading, and
+forwards the rest to the board's chipset (`cSystem->chipset()`, a
+`CChipset` from `chipsets/`): an address that is neither memory nor a
+device range goes to `read_io`/`write_io` (the Tsunami's Cchip/Dchip/Pchip/
+TIG registers and unclaimed PCI space), `cSystem->interrupt()` and
+`PCI_Phys()` to the chipset's interrupt controller and DMA windows. RAM
+accesses never reach the chipset. The board row (`platforms/`) names the
+chipset and builds the board's own hardware. Devices derive from
 `CSystemComponent` (base class in `system/SystemComponent.cpp`), register
 memory ranges with the system, and implement `ReadMem`/`WriteMem`, optional
 `init()`/`start_threads()`/`stop_threads()`/`check_state()`, and
@@ -176,7 +183,8 @@ into it); `cpu/AlphaCPU_vmspal.cpp` is a native fast-path reimplementation
 of OpenVMS PALcode entry points; `cpu/AlphaCPU_ieeefloat/vaxfloat` implement
 FP. `state` struct = the whole architectural state (savefile format). Guest
 timing is wall-clock based: `state.cc` (RPCC) advances by real elapsed time,
-CPU 0 fires the Cchip interval timer at dispatch-batch boundaries, and the
+CPU 0 fires the chipset's interval timer (`interval_tick()`, the Cchip's on
+the Tsunami) at dispatch-batch boundaries, and the
 8254 PIT/TOY in AliM1543C are wall-clock paced (see `cpu/AlphaCPU.hpp`
 comments).
 

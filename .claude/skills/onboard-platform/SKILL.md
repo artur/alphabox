@@ -38,8 +38,8 @@ belongs in the packet's **Findings**.
 | Layer | Files | Add by |
 | --- | --- | --- |
 | Processor | `src/cpu/CpuModel.hpp`, `src/cpu/CpuModels.cpp` | a table row (identity, extensions) for a part of the EV6 family; a different family needs a core, which is a separate project |
-| Chipset | `src/system/System.cpp` (Tsunami today) | a module; only needed for a machine whose chipset is not Tsunami |
-| Board | `src/platforms/Platform.hpp`, `src/platforms/Platforms.cpp` | a table row: processors, memory limits, slots, interrupt wiring, firmware image and format |
+| Chipset | `src/chipsets/Chipset.hpp` (`CChipset`), `src/chipsets/tsunami/` | a `CChipset` implementation in `src/chipsets/<name>/` and a `chipset_kind`; only needed for a machine whose chipset is not Tsunami |
+| Board | `src/platforms/Platform.hpp`, `src/platforms/Platforms.cpp`, `src/platforms/<board>/` | a table row (chipset, processors, memory limits, slots, interrupt wiring, firmware image and format, secondary start, board hardware) and the board's own functions and parts in its directory, declared in `Boards.hpp` |
 
 The board is selected with `platform = "<name>";` in the machine block.
 

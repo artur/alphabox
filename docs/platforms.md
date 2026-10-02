@@ -26,13 +26,15 @@ Three layers, each added in a different way:
   established; the JIT emits them per processor.
 - **Board**: a row per machine in `platforms/Platform.hpp` and
   `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
-  `es40`). It carries the processor and CPU count, the memory limits, the
-  slot-to-interrupt wiring that the PCI code asks for, the slots that refuse
-  add-in devices, and the firmware image and its format.
-- **Chipset**: still `CSystem` itself. Separating it earns nothing until a
-  machine needs a different one (Titan, for the ES45 and DS25), and it is
-  the riskiest of the three, so it waits for that machine rather than being
-  done on speculation.
+  `es40`). It carries the chipset, the processor and CPU count, the memory
+  limits, the slot-to-interrupt wiring that the PCI code asks for, the slots
+  that refuse add-in devices, the firmware image and its format, how the
+  secondary processors start, where the native PALcode routines apply, the
+  console patches, and a function that builds the board's own hardware. The
+  functions and hardware live in `platforms/<board>/`.
+- **Chipset**: `chipsets/Chipset.hpp` (`CChipset`), with the Tsunami in
+  `chipsets/tsunami/` as its first implementation; the board row picks it
+  (`CHIPSET_TSUNAMI` for every row today).
 - **The traces**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
   claimed, with the instruction that made it, and `ALPHABOX_TRACE_CALLS=1`
   reports the firmware's own subroutine calls, each site-to-routine pair
@@ -53,9 +55,11 @@ Three layers, each added in a different way:
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
-Today `CSystem` is the Tsunami chipset, with ES40 board hardware (DPR,
+`CSystem` used to be the Tsunami chipset, with ES40 board hardware (DPR,
 flash) and board hooks mixed in. The chipset split (packet M0 in
-[marvel.md](platforms/marvel.md)) moves the code to this layout:
+[marvel.md](platforms/marvel.md)) moved the code to this layout; the
+`cpu/ev7/`, `titan/` and `marvel/` directories come with their packets.
+What M0 left where it was, and why, is in that packet's notes.
 
 ```
 src/
@@ -150,7 +154,7 @@ Facts that cost time to find and apply to the next machine:
   OpenVMS PALcode routines were written against the ES40 console's PALcode;
   the DS20E's and DS20L's consoles put their own builds at the same address,
   and OpenVMS hung or bugchecked until those boards were given the real
-  PALcode (`native_vmspal` in the board row).
+  PALcode (`vmspal_pal_base` in the board row, 0 for them).
 - **Who becomes primary is a race unless the board decides.** Where every
   processor runs from reset, the first through the PALcode reset wins the
   console's election; the emulator lets processor 0 go first.
