@@ -2,7 +2,14 @@
 
 The system logic of the AlphaServer ES45, DS25 and DS15, in
 `src/chipsets/titan/` behind `CChipset`. Board packets:
-[es45.md](es45.md) (L5); the DS25 and DS15 are not started.
+[es45.md](es45.md), [ds25.md](ds25.md) and [ds15.md](ds15.md) (all L5).
+
+The boards differ around the chipset, not in it: the DS15 has one PA-chip
+(hoses 0 and 2), reaches its RMC through a different mailbox, and its
+console's TIG halt register must not halt the processor; the DS25 marks an
+absent processor in the RMC's FRU byte with a different bit. These are
+board parts (`platforms/ds25/`, `platforms/ds15/`), registered over the TIG
+bus addresses they answer, so the chipset model is unchanged.
 
 ## What it is, next to the Typhoon
 

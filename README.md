@@ -110,7 +110,7 @@ card. The [documentation](docs/README.md) covers the rest:
 
 | Area | Devices |
 |---|---|
-| Machine | AlphaServer ES40; the DS20E, DS20L (one and two processors) and DS10 boot OpenVMS 8.4; the ES47 (two EV7s) boots OpenVMS 8.4 from its CD to the installation menu ([docs/platforms.md](docs/platforms.md)) |
+| Machine | AlphaServer ES40; the DS20E, DS20L (one and two processors) and DS10, and on the Titan chipset the ES45 (one, two and four processors), DS25 (one and two) and DS15 boot OpenVMS 8.4; the ES47 (two EV7s) boots OpenVMS 8.4 from its CD to the installation menu ([docs/platforms.md](docs/platforms.md)) |
 | CPU | 1–4 × Alpha EV68CB (21264) |
 | Chipset | Tsunami/Typhoon: Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC |
 | Memory | 64 MB – 32 GB |

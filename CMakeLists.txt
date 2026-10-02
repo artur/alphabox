@@ -53,6 +53,7 @@ file(GLOB srcs
     src/platforms/es47/*.cpp
     src/platforms/es45/*.cpp
     src/platforms/ds25/*.cpp
+    src/platforms/ds15/*.cpp
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
     src/devices/video/s3/*.cpp
@@ -82,7 +83,7 @@ target_include_directories(alphabox PRIVATE
     src/devices/pci/ehci src/devices/pci/virtio
     src/platforms src/platforms/es40 src/platforms/ds10 src/platforms/ds20e
     src/platforms/ds20l src/platforms/es47 src/platforms/es45
-    src/platforms/ds25
+    src/platforms/ds25 src/platforms/ds15
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
     src/devices/video/mach64 src/devices/video/permedia2

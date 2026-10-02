@@ -80,6 +80,14 @@ static const platform_config platforms[] = {
      "DS25_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds25_board_devices, ds25_pci_interrupt, ds25_slot_refusal, 0, nullptr,
      0x680000},
+    // Under construction (docs/platforms/ds15.md): the one-processor Titan
+    // board, its console from an update utility like the DS25's, which runs
+    // up to 0x702000 (console_bytes). One PA-chip: the slot table uses
+    // hoses 0 and 2 only.
+    {"ds15", "AlphaServer DS15", CHIPSET_TITAN, "ev68cb", 1, 26, 32,
+     "DS15_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
+     ds15_board_devices, ds15_pci_interrupt, ds15_slot_refusal, 0, nullptr,
+     0x710000},
 };
 
 const platform_config *find_platform(const char *name) {
