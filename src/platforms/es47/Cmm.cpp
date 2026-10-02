@@ -31,6 +31,7 @@
 #include "Marvel.hpp"
 #include "Serial.hpp"
 #include "System.hpp"
+#include "Topology.hpp"
 
 #include <chrono>
 #include <cstdarg>
@@ -104,12 +105,12 @@ constexpr u32 A_TOY_NV = 0x4b98; ///< rtc_read: TOY NVRAM, index 12 and up
 constexpr u32 kSlots = 3;
 constexpr u32 kSlotSize = 0x818;
 constexpr u32 kMsgMax = kSlotSize - 4;
-/// The system type, a byte the PALcode reads first and smlan_init keeps
-/// (0x3ac160): 1 is a GS1280, 0x11 an ES47 or ES80 -- told apart by
-/// <19:16> of the longword, 0 for an ES47 -- and anything else the
-/// console's development system, "TS212c" (build_dsrdb, 0x2dd8f0).
+/// The system type, a longword whose low byte the PALcode reads first and
+/// smlan_init keeps (0x3ac160): 1 is a GS1280, 0x11 an ES47 or ES80 -- told
+/// apart by <19:16>, 0 for an ES47 and 1 for an ES80 -- and anything else
+/// the console's development system, "TS212c" (build_dsrdb, 0x2dd8f0). The
+/// board row's layout holds it (Topology.hpp).
 constexpr u32 A_SYSTYPE = 0x40004;
-constexpr u8 SYSTYPE_ES47 = 0x11;
 
 // Request slot: +0 u8 state (3 = free, 0 = posted by the console), +2 u16
 // length, +4 the message. Response slot: +0 u8 state (<0> full, set by the
@@ -147,49 +148,81 @@ void put32(u8 *p, u32 v) {
 
 } // namespace
 
+/**
+ * A CMM for every module the board row's layout can hold, set up as it is
+ * when the console starts: free mailboxes, the TOY, the system type, and
+ * each processor's start state -- 0 for the partition's primary (the
+ * first processor), non-zero for every other [inference: what the CMM
+ * writes there is not known beyond zero and non-zero].
+ */
 CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram)
-    : m_sys(sys), m_mem(kMemSize, 0), m_read_seen(kMemSize, false),
-      m_nvram_file(nvram), m_nvram(kNvramSize, 0) {
+    : m_sys(sys), m_nvram_file(nvram), m_nvram(kNvramSize, 0) {
   nvram_load();
   if (const char *fn = getenv("ALPHABOX_GIO_LOG"))
     m_log = fopen(fn, "w");
   m_trace = getenv("ALPHABOX_TRACE_CMM") != nullptr;
-  for (u32 n = 0; n < 2; n++) {
-    for (u32 s = 0; s < kSlots; s++) {
-      mem_write(area(n) + A_REQ + s * kSlotSize, REQ_FREE);
-      mem_write(area(n) + A_RSP + s * kSlotSize, RSP_TAKEN);
+  CMarvel *mv = marvel();
+  if (!mv)
+    FAILURE(Configuration, "the CMM needs the Marvel chipset");
+  const CMarvelTopology &t = mv->topology();
+  for (int i = 0; i < t.count(); i++) {
+    const u32 pid = t.node(i).pid;
+    Module &m = m_modules[CMarvelTopology::module_key(pid)];
+    if (m.mem.empty()) {
+      m.mem.assign(kMemSize, 0);
+      m.read_seen.assign(kMemSize, false);
+      const u32 sys_type = t.cmm_systype();
+      for (u32 b = 0; b < 4; b++)
+        mem_write(pid, A_SYSTYPE + b, (u8)(sys_type >> (8 * b)));
     }
-    refresh_toy(n);
+    m_port[pid] = Port();
+    const u32 n = CMarvelTopology::place(pid);
+    for (u32 s = 0; s < kSlots; s++) {
+      mem_write(pid, area(n) + A_REQ + s * kSlotSize, REQ_FREE);
+      mem_write(pid, area(n) + A_RSP + s * kSlotSize, RSP_TAKEN);
+    }
+    refresh_toy(pid);
+    mem_write(pid, area(n) + A_STATE, i == 0 ? 0 : 1);
   }
-  mem_write(A_SYSTYPE, SYSTYPE_ES47);
-  // PID 0 is the primary; the module's other processor is a secondary
-  // [inference: what the CMM writes there is not known beyond zero and
-  // non-zero].
-  mem_write(area(1) + A_STATE, 1);
+}
+
+CMarvel *CEs47Cmm::marvel() const {
+  return dynamic_cast<CMarvel *>(m_sys->chipset());
+}
+
+int CEs47Cmm::present() const { return m_sys->get_cpu_num(); }
+
+u32 CEs47Cmm::primary() const {
+  CMarvel *mv = marvel();
+  return mv && mv->topology().count() ? mv->topology().node(0).pid : 0;
+}
+
+CEs47Cmm::Module &CEs47Cmm::module_of(u32 pid) {
+  return m_modules[CMarvelTopology::module_key(pid)];
 }
 
 /// What the CMM knows once the processors exist: each one's clock, which on
 /// a real module the CMM set itself (ev7_clocks).
 void CEs47Cmm::late_init() {
   m_ready = true;
-  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
+  CMarvel *mv = marvel();
   for (int i = 0; i < m_sys->get_cpu_num(); i++) {
     CAlphaCPU *c = m_sys->get_cpu(i);
-    const u32 n = c->get_pid() & 1;
+    const u32 pid = c->get_pid();
+    const u32 n = CMarvelTopology::place(pid);
     const u32 mhz = (u32)(c->get_speed() / 1000000);
-    mem_write(area(n) + A_SPEED, (u8)mhz);
-    mem_write(area(n) + A_SPEED + 1, (u8)(mhz >> 8));
+    mem_write(pid, area(n) + A_SPEED, (u8)mhz);
+    mem_write(pid, area(n) + A_SPEED + 1, (u8)(mhz >> 8));
     // The routes from this processor to every PID, in the copy's form: the
     // fields Topology.cpp names, less their low four bits.
-    mem_write(area(n) + A_ROUTES, (u8)kRoutes);
-    mem_write(area(n) + A_ROUTES + 1, 0);
-    mem_write(area(n) + A_IO_ROUTES, 0);
-    mem_write(area(n) + A_IO_ROUTES + 1, 0);
-    for (u32 to = 0; to < kRoutes && marvel; to++) {
-      const u32 r =
-          marvel->topology().route(c->get_pid(), to, marvel->present()) >> 4;
+    mem_write(pid, area(n) + A_ROUTES, (u8)kRoutes);
+    mem_write(pid, area(n) + A_ROUTES + 1, 0);
+    mem_write(pid, area(n) + A_IO_ROUTES, 0);
+    mem_write(pid, area(n) + A_IO_ROUTES + 1, 0);
+    for (u32 to = 0; to < kRoutes && mv; to++) {
+      const u32 r = mv->topology().route(pid, to, present()) >> 4;
       for (u32 b = 0; b < 4; b++)
-        mem_write(area(n) + A_ROUTE + to * 4 + b, (u8)(r >> (8 * b)));
+        mem_write(pid, area(n) + A_ROUTE + to * 4 + b, (u8)(r >> (8 * b)));
     }
   }
 }
@@ -215,26 +248,31 @@ void CEs47Cmm::note(const char *fmt, ...) {
 
 // --- Memory ------------------------------------------------------------------
 
-u8 CEs47Cmm::mem_read(u32 a) {
+u8 CEs47Cmm::mem_read(u32 pid, u32 a) {
   if (a < kMemBase || a >= kMemBase + kMemSize) {
     note("read of CMM address %05x outside the modelled memory", a);
     return 0;
   }
-  const u8 v = m_mem[a - kMemBase];
-  if (!m_read_seen[a - kMemBase]) {
-    m_read_seen[a - kMemBase] = true;
+  Module &m = module_of(pid);
+  const u8 v = m.mem[a - kMemBase];
+  if (!m.read_seen[a - kMemBase]) {
+    m.read_seen[a - kMemBase] = true;
     if (m_log)
-      fprintf(m_log, "first read %05x = %02x\n", a, v);
+      fprintf(m_log, "first read %05x = %02x (module of PID %u)\n", a, v, pid);
   }
   return v;
 }
 
-void CEs47Cmm::mem_write(u32 a, u8 v) {
+void CEs47Cmm::mem_write(u32 pid, u32 a, u8 v) {
   if (a < kMemBase || a >= kMemBase + kMemSize) {
     note("write of CMM address %05x = %02x outside the modelled memory", a, v);
     return;
   }
-  m_mem[a - kMemBase] = v;
+  module_of(pid).mem[a - kMemBase] = v;
+}
+
+u8 *CEs47Cmm::mem_at(u32 pid, u32 a) {
+  return &module_of(pid).mem[a - kMemBase];
 }
 
 // --- The registers -----------------------------------------------------------
@@ -243,13 +281,13 @@ bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
   std::lock_guard<std::mutex> g(m_lock);
   if (!m_ready)
     late_init();
-  const u32 n = pid & 1;
-  Port &p = m_port[n];
+  const u32 n = CMarvelTopology::place(pid);
+  Port &p = m_port[pid];
   switch (reg) {
   case R_STATUS:
     p.status = value & ST_FLAG;
     if (value & ST_GO)
-      window_op(n, p, value);
+      window_op(pid, p, value);
     // ST_ATTN: the console rings after changing a mailbox when the CMM asked
     // for it (reg 0xa); the model acts on the mailbox write itself.
     break;
@@ -299,8 +337,8 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
   std::lock_guard<std::mutex> g(m_lock);
   if (!m_ready)
     late_init();
-  const u32 n = pid & 1;
-  Port &p = m_port[n];
+  const u32 n = CMarvelTopology::place(pid);
+  Port &p = m_port[pid];
   switch (reg) {
   case R_STATUS: {
     u64 v = p.status | (n ? ST_CPU1 : 0) | (p.reason ? ST_INTR : 0);
@@ -347,61 +385,67 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
  * interrupt is raised here, outside both locks.
  */
 void CEs47Cmm::tick() {
-  bool raise[2] = {false, false};
+  std::vector<u32> raise;
   {
     std::lock_guard<std::mutex> g(m_lock);
     if (!m_ready)
       return;
-    for (u32 n = 0; n < 2; n++) {
-      Port &p = m_port[n];
+    const u32 console = primary();
+    for (auto &kv : m_port) {
+      const u32 pid = kv.first, n = CMarvelTopology::place(pid);
+      Port &p = kv.second;
       const u64 en = p.regs[R_STATE];
       u64 add = 0;
       if (p.tx_kick && (en & tx_bit(n)))
         add |= tx_bit(n);
       p.tx_kick = false;
       // The terminal is the partition's console, on the primary [the
-      // second processor's virtual UART carries nothing here].
-      if (n == 0 && (en & rx_bit(n)) && !(p.reason & rx_bit(n)))
+      // other processors' virtual UARTs carry nothing here].
+      if (pid == console && (en & rx_bit(n)) && !(p.reason & rx_bit(n)))
         if (CSerial *t = terminal())
           if (t->ReadMem(0, 5, 8) & 1)
             add |= rx_bit(n);
       if (add & ~p.reason) {
         p.reason |= add;
-        raise[n] = true;
+        raise.push_back(pid);
       }
     }
   }
-  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
-  for (u32 n = 0; n < 2; n++)
-    if (raise[n] && marvel)
-      if (CEv7Csr *c = marvel->csr(n))
-        c->request(RBOX_INT_GIO);
+  CMarvel *mv = marvel();
+  for (u32 pid : raise)
+    if (CEv7Csr *c = mv ? mv->csr(pid) : nullptr)
+      c->request(RBOX_INT_GIO);
 }
 
 /// A byte-window access (read_dma/write_dma): R_ADDRESS names a CMM byte,
 /// R_DATA carries the 16-bit word holding it, the byte at an odd address in
 /// <15:8>; a write stores the lanes ST_LOW/ST_HIGH select.
-void CEs47Cmm::window_op(u32 n, Port &p, u64 control) {
+void CEs47Cmm::window_op(u32 pid, Port &p, u64 control) {
   const u32 a = (u32)p.address & ~1u;
   if (!(control & (ST_LOW | ST_HIGH))) {
-    const u32 toy = area(n) + A_TOY;
-    if (a + 1 >= toy && a < toy + 12)
-      refresh_toy(n);
-    p.data = mem_read(a) | (u16)mem_read(a + 1) << 8;
+    for (u32 m = 0; m < 2; m++) {
+      const u32 toy = area(m) + A_TOY;
+      if (a + 1 >= toy && a < toy + 12)
+        refresh_toy((pid & ~1u) | m);
+    }
+    p.data = mem_read(pid, a) | (u16)mem_read(pid, a + 1) << 8;
     return;
   }
   if (control & ST_LOW)
-    mem_write(a, (u8)p.data);
+    mem_write(pid, a, (u8)p.data);
   if (control & ST_HIGH)
-    mem_write(a + 1, (u8)(p.data >> 8));
+    mem_write(pid, a + 1, (u8)(p.data >> 8));
+  // Either processor of the module may write into the other's area; what
+  // is written is the area's processor's (PID<0> is the place).
   for (u32 m = 0; m < 2; m++) {
+    const u32 owner = (pid & ~1u) | m;
     const u32 toy = area(m) + A_TOY;
     if (a + 1 >= toy && a < toy + 12)
-      toy_written(m, a < toy ? 0 : a - toy);
+      toy_written(owner, a < toy ? 0 : a - toy);
     for (u32 s = 0; s < kSlots; s++)
       if (a == area(m) + A_REQ + s * kSlotSize && (control & ST_LOW) &&
-          m_mem[a - kMemBase] == 0)
-        request_posted(m, s);
+          a >= kMemBase && a < kMemBase + kMemSize && *mem_at(pid, a) == 0)
+        request_posted(owner, s);
   }
 }
 
@@ -409,8 +453,8 @@ void CEs47Cmm::window_op(u32 n, Port &p, u64 control) {
 
 /// The MC146818 registers 0-9 in the CMM's memory, from the host clock and
 /// what the console set: binary, 24-hour (register B = 0x06).
-void CEs47Cmm::refresh_toy(u32 n) {
-  u8 *t = &m_mem[area(n) + A_TOY - kMemBase];
+void CEs47Cmm::refresh_toy(u32 pid) {
+  u8 *t = mem_at(pid, area(CMarvelTopology::place(pid)) + A_TOY);
   if (t[11] & 0x80)
     return; // SET: the console is writing the time
   const auto host = std::chrono::system_clock::now().time_since_epoch();
@@ -442,10 +486,10 @@ void CEs47Cmm::refresh_toy(u32 n) {
 
 /// The console wrote TOY register `idx`; when it releases SET, what it wrote
 /// becomes the time, kept as an offset from the host's.
-void CEs47Cmm::toy_written(u32 n, u32 idx) {
+void CEs47Cmm::toy_written(u32 pid, u32 idx) {
   if (idx != 11)
     return;
-  u8 *t = &m_mem[area(n) + A_TOY - kMemBase];
+  u8 *t = mem_at(pid, area(CMarvelTopology::place(pid)) + A_TOY);
   if (t[11] & 0x80)
     return;
   struct tm tm = {};
@@ -484,26 +528,28 @@ CSerial *CEs47Cmm::terminal() {
 /// smlan_write filled request slot `s` of processor `n` and cleared its state
 /// byte: answer it now and free the slot (state 3, which wait_for_cmm
 /// waits for).
-void CEs47Cmm::request_posted(u32 n, u32 s) {
-  const u32 slot = area(n) + A_REQ + s * kSlotSize - kMemBase;
-  u32 len = get16(&m_mem[slot + 2]);
+void CEs47Cmm::request_posted(u32 pid, u32 s) {
+  u8 *slot =
+      mem_at(pid, area(CMarvelTopology::place(pid)) + A_REQ + s * kSlotSize);
+  u32 len = get16(slot + 2);
   if (len > kMsgMax)
     len = kMsgMax;
-  std::vector<u8> req(&m_mem[slot + 4], &m_mem[slot + 4] + kMsgMax);
-  answer(n, req.data(), len);
-  m_mem[slot] = REQ_FREE;
+  std::vector<u8> req(slot + 4, slot + 4 + kMsgMax);
+  answer(pid, req.data(), len);
+  *slot = REQ_FREE;
 }
 
 /// Put an answer to `req` into a free response slot of processor `n`.
-void CEs47Cmm::respond(u32 n, const u8 *req, u16 status, const u8 *data,
+void CEs47Cmm::respond(u32 pid, const u8 *req, u16 status, const u8 *data,
                        u32 len) {
   if (len > kMsgMax - M_DATA)
     len = kMsgMax - M_DATA;
   for (u32 s = 0; s < kSlots; s++) {
-    const u32 slot = area(n) + A_RSP + s * kSlotSize - kMemBase;
-    if (m_mem[slot] & RSP_FULL)
+    u8 *slot =
+        mem_at(pid, area(CMarvelTopology::place(pid)) + A_RSP + s * kSlotSize);
+    if (*slot & RSP_FULL)
       continue;
-    u8 *msg = &m_mem[slot + 4];
+    u8 *msg = slot + 4;
     memset(msg, 0, kMsgMax);
     put32(msg + M_DEST, get32(req + M_ORIG));
     put32(msg + M_ORIG, get32(req + M_DEST));
@@ -512,12 +558,13 @@ void CEs47Cmm::respond(u32 n, const u8 *req, u16 status, const u8 *data,
     put16(msg + M_STATUS, status);
     if (len)
       memcpy(msg + M_DATA, data, len);
-    put16(&m_mem[slot + 2], (u16)(M_DATA + len));
-    m_mem[slot + 1] = 0;
-    m_mem[slot] = RSP_FULL;
+    put16(slot + 2, (u16)(M_DATA + len));
+    slot[1] = 0;
+    slot[0] = RSP_FULL;
     return;
   }
-  note("PID %u: no free response slot for command %04x", n, get16(req + M_CMD));
+  note("PID %u: no free response slot for command %04x", pid,
+       get16(req + M_CMD));
 }
 
 // --- What the MBM would answer ----------------------------------------------
@@ -555,17 +602,22 @@ void CEs47Cmm::nvram_save() {
  *                               0 another member, <1> N/S, <2> E/W,
  *                               <3> PID, <4> hard partition,
  *                               <6> sub partition
- *   I/O, 8 each:                <3> E/W, <4> N/S of the IO7's EV7,
- *                               <5> present
+ *   I/O, 8 each:                <3> N/S, <4> E/W of the IO7's EV7
+ *                               (coord2pid, 0x2e1240, matches them with
+ *                               the processors' <1> and <2>), <5> present
  *
- * One hard and one sub partition holding every processor; the IO7 on PID 0
- * (at 0,0). The ES47's two processors sit at N/S 0 and 1, E/W 0, as a
- * real one's `show config` has them (coord2id makes them Hard ID 0 and
- * 1, CPU 0 and 1). [guess] the meaning of 0xff and 4, copied from the console's
- * built-in database.
+ * One hard and one sub partition holding every processor and every IO7,
+ * at the coordinates the topology gives them (Topology.hpp); coord2id
+ * turns those into the Hard ID and CPU number `show config` prints (a real
+ * ES47: NS,EW (0,0) and (1,0), Hard ID 0 and 1). [guess] the meaning of
+ * 0xff and 4, copied from the console's built-in database; the console
+ * also takes the hard partition's 0xff as the number of PIDs to size its
+ * route table for (start_secondaries).
  */
 void CEs47Cmm::partition_database(u8 *db) {
   memset(db, 0, kNvramSize);
+  CMarvel *mv = marvel();
+  const CMarvelTopology &t = mv->topology();
   u8 *p = db;
   *p = 1; // hard partitions
   p += 4;
@@ -579,60 +631,73 @@ void CEs47Cmm::partition_database(u8 *db) {
   p[2] = 4;
   strcpy((char *)p + 6, "sub_partition0");
   p += 0x20;
-  const int cpus = m_sys->get_cpu_num();
+  const int cpus = present();
   *p = (u8)cpus; // processors
   p += 4;
   for (int i = 0; i < cpus; i++, p += 12) {
+    const ev7_node &n = t.node(i);
     // The primary: memconfig makes the last 0x80 processor of the sub
     // partition the one that builds the GCT (0x282948), which only the
     // primary's powerup does.
     p[0] = i == 0 ? 0x80 : 0;
-    p[1] = (u8)i; // N/S
-    p[2] = 0;     // E/W
-    p[3] = (u8)i;
+    p[1] = n.ns;
+    p[2] = n.ew;
+    p[3] = (u8)n.pid;
     p[4] = 0;
     p[6] = 0;
   }
-  *p = 1; // I/O: the IO7 on PID 0
+  u8 *io_count = p; // I/O: an IO7 on each processor the board cables one to
   p += 4;
-  p[3] = 0;
-  p[4] = 0;
-  p[5] = 1;
+  for (int i = 0; i < cpus; i++) {
+    const ev7_node &n = t.node(i);
+    if (!mv->io7(n.pid))
+      continue;
+    p[3] = n.ns;
+    p[4] = n.ew;
+    p[5] = 1;
+    p += 8;
+    (*io_count)++;
+  }
 }
 
 /**
- * The MBM's configuration (SMLAN 0x0321, 0xd8 bytes): four CPU modules,
- * 0x34 bytes apart, as the console's built-in answer for its simulator
- * fills it (get_mbm_configuration at 0x30a210): <4> u16 0xffff for a
- * module that is not there and 0 for one that is; then the module's two
- * processors at <8> and <0x20>, 0x18 bytes each (the second one's last
- * words overlap the next module's first longword, which nothing reads):
- * <0> u16 1 for a processor that is there, and from <4> ten RIMM words,
- * Zbox 0's RIMMs 0-4 then Zbox 1's 5-9, as memconfig copies them into the
- * table `show memory` prints a P (non-zero) or a dot from. The console
+ * The MBM's configuration (SMLAN 0x0321, 0xd8 bytes) -- of the drawer the
+ * request goes to, since every drawer has its own MBM (pid2ip: the MBM of
+ * the drawer holding a PID is 10.<cabinet * 16 + drawer>.0.1; memconfig
+ * asks once per drawer, for the drawer's PIDs, cabinet <7:5> and drawer
+ * <4:3>). Four CPU modules, 0x34 bytes apart, as the console's built-in
+ * answer for its simulator fills it (get_mbm_configuration at 0x30a210):
+ * <4> u16 0xffff for a module that is not there and 0 for one that is;
+ * then the module's two processors at <8> and <0x20>, 0x18 bytes each (the
+ * second one's last words overlap the next module's first longword, which
+ * nothing reads): <0> u16 1 for a processor that is there, and from <4> ten
+ * RIMM words, Zbox 0's RIMMs 0-4 then Zbox 1's 5-9, as memconfig copies
+ * them into the table `show memory` prints a P (non-zero) or a dot from.
+ * Module m holds PIDs drawer base + 2m and + 2m + 1 (PID<2:1>). The console
  * takes the memory sizes from the partition's memory assignment (0x0418);
- * the RIMM words here are each RIMM's size in MB [guess at the unit]:
- * four RIMMs and the fifth (RAID) on Zbox 0, as the real ES47's
- * `show config` lists PPPPP.....
+ * the RIMM words here are each RIMM's size in MB [guess at the unit]: four
+ * RIMMs and the fifth (RAID) on Zbox 0, as the real ES47's `show config`
+ * lists PPPPP.....
  */
-void CEs47Cmm::mbm_configuration(u8 *c) {
+void CEs47Cmm::mbm_configuration(u32 mbm_ip, u8 *c) {
   memset(c, 0, kMbmConfigSize);
-  const int cpus = m_sys->get_cpu_num();
-  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
-  const u16 rimm_mb =
-      (u16)((marvel ? marvel->memory_per_pid() : 0) / 4 / (1024 * 1024));
-  for (int m = 0; m < 4; m++) {
+  CMarvel *mv = marvel();
+  const u32 x = (mbm_ip >> 8) & 0xff; // cabinet * 16 + drawer
+  const u32 base = ((x >> 4) & 7) << 5 | (x & 3) << 3;
+  const u16 rimm_mb = (u16)(mv->memory_per_pid() / 4 / (1024 * 1024));
+  for (u32 m = 0; m < 4; m++) {
     u8 *mod = c + m * 0x34;
-    const bool here = m * 2 < cpus;
-    put16(mod + 4, here ? 0 : 0xffff);
-    for (int k = 0; k < 2; k++) {
-      if (m * 2 + k >= cpus)
+    bool here = false;
+    for (u32 k = 0; k < 2; k++) {
+      if (!mv->topology().by_pid(base + 2 * m + k, present()))
         continue;
+      here = true;
       u8 *cpu = mod + 8 + k * 0x18;
       put16(cpu, 1);
       for (int r = 0; r < 5; r++)
         put16(cpu + 4 + 2 * r, rimm_mb);
     }
+    put16(mod + 4, here ? 0 : 0xffff);
   }
 }
 
@@ -642,13 +707,13 @@ void CEs47Cmm::mbm_configuration(u8 *c) {
  * (0x309f38) fills it: <0> u64 [guess] the partition's total, <8> u32 the
  * number of groups; then each group: <0> u8 sub partition, <1> u8 its
  * chunks, two bytes, and the chunks, 16 bytes each: u64 base, u64 size.
- * Each processor's own memory is one chunk.
+ * Each processor's own memory is one chunk, at its PID's base.
  */
 void CEs47Cmm::memory_assignment(u8 *a) {
   memset(a, 0, kNvramSize);
-  const int cpus = m_sys->get_cpu_num();
-  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
-  const u64 each = marvel ? marvel->memory_per_pid() : 0;
+  CMarvel *mv = marvel();
+  const int cpus = present();
+  const u64 each = mv->memory_per_pid();
   const u64 total = each * (u64)cpus;
   put32(a, (u32)total);
   put32(a + 4, (u32)(total >> 32));
@@ -658,7 +723,7 @@ void CEs47Cmm::memory_assignment(u8 *a) {
   g[1] = (u8)cpus;
   u8 *chunk = g + 4;
   for (int i = 0; i < cpus; i++, chunk += 16) {
-    const u64 base = ev7::memory_base((u32)i);
+    const u64 base = ev7::memory_base(mv->topology().node(i).pid);
     put32(chunk, (u32)base);
     put32(chunk + 4, (u32)(base >> 32));
     put32(chunk + 8, (u32)each);
@@ -666,8 +731,9 @@ void CEs47Cmm::memory_assignment(u8 *a) {
   }
 }
 
-/// The micro an IP address names (pid2ip): the MBM is 10.0.0.1, a CMM
-/// 10.0.<module + 1>.0 (stored least significant byte first).
+/// The micro an IP address names (pid2ip): a drawer's MBM is
+/// 10.<cabinet * 16 + drawer>.0.1, a module's CMM 10.<..>.<module + 1>.0
+/// (stored least significant byte first).
 bool CEs47Cmm::is_mbm(u32 ip) { return (ip >> 16) == 0x0100; }
 
 /**
@@ -677,11 +743,12 @@ bool CEs47Cmm::is_mbm(u32 ip) { return (ip >> 16) == 0x0100; }
  * sensor's subpacket data the console copies into the GCT, 0x18 bytes
  * for a voltage and 0xc for a temperature (build_cmm_hw, build_mbm_hw;
  * locate_voltage_data, locate_temp_data). The console expects a CMM to
- * have 8 sensors and an ES47's MBM 17, voltages and temperatures
- * together; what each one is, and the reading's unit, are [guess]: six
- * voltages and the two EV7s' temperatures on the CMM, thirteen and four
- * on the MBM, readings in mV and degrees C, the subpacket data zero.
- * Returns the count.
+ * have 8 sensors and an MBM 17 on an ES47 or ES80 (system type 0x11), 5 on
+ * a GS1280, voltages and temperatures together (build_mbm_hw, 0x2f8db0);
+ * what each one is, and the reading's unit, are [guess]: six voltages and
+ * the two EV7s' temperatures on the CMM, thirteen and four on a 2P
+ * drawer's MBM, three and two on an 8P drawer's, readings in mV and
+ * degrees C, the subpacket data zero. Returns the count.
  */
 int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
   static const s16 cmm_mv[] = {1500, 1500, 1800, 2500, 1500, 1200};
@@ -690,8 +757,11 @@ int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
                                1500, 2500, 2500, 1800, 1800,  3300};
   static const s16 mbm_c[] = {25, 27, 30, 30};
   const bool mbm = is_mbm(ip);
+  const bool gs = (marvel()->topology().cmm_systype() & 0xff) == 1;
   const s16 *v = volts ? (mbm ? mbm_mv : cmm_mv) : (mbm ? mbm_c : cmm_c);
-  const int n = volts ? (mbm ? 13 : 6) : (mbm ? 4 : 2);
+  int n = volts ? (mbm ? 13 : 6) : (mbm ? 4 : 2);
+  if (mbm && gs)
+    n = volts ? 3 : 2;
   memset(r, 0, 0x1e0);
   put32(r, (u32)n);
   for (int i = 0; i < n; i++) {
@@ -704,6 +774,7 @@ int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
 
 /// The SMLAN commands the console sends (docs/platforms/marvel.md, M4).
 void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
+  // `n` is the asking processor's PID.
   const u16 cmd = get16(req + M_CMD);
   const u32 id = get32(req + M_ID);
   switch (cmd) {
@@ -718,8 +789,9 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
   case 0x0321: {
     // get_mbm_configuration
     u8 c[kMbmConfigSize];
-    mbm_configuration(c);
-    note("PID %u: SMLAN %04x (MBM configuration) id %u", n, cmd, id);
+    mbm_configuration(get32(req + M_DEST), c);
+    note("PID %u: SMLAN %04x (MBM configuration of drawer %u) id %u", n, cmd,
+         (get32(req + M_DEST) >> 8) & 0xff, id);
     respond(n, req, 0, c, sizeof(c));
     return;
   }

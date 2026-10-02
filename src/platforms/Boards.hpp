@@ -51,10 +51,23 @@ void ds10_board_devices(CConfigurator *cfg, CSystem *sys);
 int ds20l_pci_interrupt(int hose, int slot, int intx);
 const char *ds20l_slot_refusal(int hose, int slot);
 
-// AlphaServer ES47 (platforms/es47/Es47.cpp)
+// AlphaServer ES47 (platforms/es47/Es47.cpp), and what every Marvel board
+// shares: the CMMs, the IO7s the layout cables, the hoses' interrupts
 int es47_pci_interrupt(int hose, int slot, int intx);
 const char *es47_slot_refusal(int hose, int slot);
 void es47_board_devices(CConfigurator *cfg, CSystem *sys);
+extern const marvel_layout es47_layout;
+void marvel_board_devices(CConfigurator *cfg, CSystem *sys);
+int marvel_pci_interrupt(int hose, int slot, int intx);
+const char *marvel_slot_refusal(int hose, int slot);
+
+// AlphaServer ES80 (platforms/es80/Es80.cpp)
+void es80_board_devices(CConfigurator *cfg, CSystem *sys);
+extern const marvel_layout es80_layout;
+
+// AlphaServer GS1280 (platforms/gs1280/Gs1280.cpp)
+void gs1280_board_devices(CConfigurator *cfg, CSystem *sys);
+extern const marvel_layout gs1280_layout;
 
 // AlphaServer ES45 (platforms/es45/Es45.cpp)
 int es45_pci_interrupt(int hose, int slot, int intx);

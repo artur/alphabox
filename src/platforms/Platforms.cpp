@@ -64,7 +64,22 @@ static const platform_config platforms[] = {
     {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      es47_board_devices, es47_pci_interrupt, es47_slot_refusal, 0, nullptr,
-     0x480000},
+     0x480000, &es47_layout},
+    // Under construction (docs/platforms/marvel.md, M6c): up to four ES47
+    // drawers in one N/S ring, eight EV7s, an IO7 on each drawer's first
+    // processor (PIDs 0, 8, 16, 24: hoses 0-3, 32-35, 64-67, 96-99). The
+    // same console image; memory.bits is per processor.
+    {"es80", "AlphaServer ES80", CHIPSET_MARVEL, "ev7", 8, 29, 33,
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 100, SECONDARIES_BY_CONSOLE,
+     es80_board_devices, marvel_pci_interrupt, marvel_slot_refusal, 0, nullptr,
+     0x480000, &es80_layout},
+    // Under construction (docs/platforms/marvel.md, M6c): 8P drawers in a
+    // torus, here up to two (sixteen EV7s, PIDs 0-15), one I/O drawer on
+    // PID 0.
+    {"gs1280", "AlphaServer GS1280", CHIPSET_MARVEL, "ev7", 16, 29, 34,
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
+     gs1280_board_devices, marvel_pci_interrupt, marvel_slot_refusal, 0,
+     nullptr, 0x480000, &gs1280_layout},
     // Under construction (docs/platforms/es45.md): the first Titan board.
     // Its console comes as an update utility, which installs it into the
     // flash, and the utility runs up to 0x648000 (console_bytes). No

@@ -7,9 +7,12 @@ and there is no chipset in the Tsunami sense. Each EV7 carries its own
 memory controllers, interrupt logic and a router, and reaches the I/O
 through an IO7 bridge.
 
-**Config**: `platform = "es47";` with `ev7` (or `ev7z`) processors and a
-`serial0` for the console terminal, PCI devices as `pci<hose>.<slot>` on
-hoses 0-3 · **Status**: packets M0-M5 done (2026-10-02): L5. On emulated
+**Config**: `platform = "es47";` (two processors), `"es80"` (up to eight)
+or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`) processors and a
+`serial0` for the console terminal, PCI devices as `pci<hose>.<slot>`,
+hose = PID * 4 + IO7 port · **Status**: packets M0-M6 done (2026-10-02):
+L5 on all three (M6c: the ES80 with eight processors and four IO7s, the
+GS1280 with sixteen, OpenVMS 8.4 to DCL on every processor). On emulated
 EV7s, with the management processor (CMM) on the other side of each
 processor's GIO port emulated and the IO7 on PID 0, the console reaches
 `P00>>>`, `show config` lists IO7 0 with its four buses and the devices
@@ -459,7 +462,7 @@ moved lines of code, **[guess]**.
 | M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | **done** 2026-10-02, with the `es47` board row |
 | M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | **done** 2026-10-02 (see "M4"): ~800 lines |
 | M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | **done** 2026-10-02 (see "M5"): ~900 lines, and L5 with two CMM fixes |
-| M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | open |
+| M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | **done** 2026-10-02 for one partition: routes (M6a), EV7z (M6b), ES80 and GS1280 rows (M6c) |
 | M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | the CD boot to DCL came with M5; an installation to disk and Linux are open |
 
 The order is M0, then M1+M2+M3 together (the console reaches the GIO
@@ -469,6 +472,104 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M6c: the ES80 and the GS1280 (2026-10-02)
+
+**Result**: two more board rows on the same console image, both at L5.
+
+- `platform = "es80";` with eight `ev7` processors: the console reaches
+  `P00>>>` with all eight in `show cpu` (PIDs 0, 1, 8, 9, 16, 17, 24, 25),
+  `show memory` lists each processor's memory at its PID's base, `show
+  config` lists four IO7s (PIDs 0, 8, 16, 24; hoses 0-3, 32-35, 64-67,
+  96-99) and the devices placed behind them, and OpenVMS 8.4 boots from the
+  CD to DCL with all eight active (NICs on three IO7s configure).
+- `platform = "gs1280";` with sixteen: the same, a 4x4 torus, PIDs 0-15,
+  one IO7 on PID 0, OpenVMS `SHOW CPU` "Active 0-15". With eight the console
+  places the memory exactly as the real 8-processor GS1280 power-up in the
+  Installation Information does (PID 4 at 0x20_0000_0000 and so on).
+
+Transcripts in `lab/platforms/marvel/es80/`: `es80-console-show.log`,
+`es80-8cpu-vms-dcl-console.log`, `gs1280-8cpu-console-show.log`,
+`gs1280-16cpu-vms-dcl-console.log`. 512 MB per processor
+(`memory.bits = 29`). From the ES80's:
+
+```
+hpcount = 1, spcount = 1, ev7_count = 8, io7_count = 4
+IO7-100 (Pass 3) at PID 0 ... at PID 8 ... at PID 16 ... at PID 24
+PID 8 memory: 4000000000, 512 MB
+...
+                           hp AlphaServer ES80 7/1000
+PID 8		CPU 0		Cabinet 0  Drawer 1
+ NS,EW (2,0)	Hard ID 8	1.50 MB Cache		EV7 rev 2.1, 1000 MHz
+ Memory 8			512 MB
+ IO7 8  			Embedded I/O		IO7 pass 3
+   PCI Bus 0	Hose 32 	64 Bit, 66 MHz		PCI 2.2 mode
+...
+$$$ SHOW CPU
+System: hp AlphaServer ES80 7/1000
+   Active               0,1,8,9,16,17,24,25
+$$$ SHOW MEMORY/PHYSICAL
+  Main Memory (4.00GB)            524288      510903       13272         113
+```
+
+**The topology** (`chipsets/marvel/Topology.*`, the rows' `marvel_layout`
+in `platforms/es47/`, `es80/`, `gs1280/`):
+
+| | ES47 | ES80 | GS1280 |
+| --- | --- | --- | --- |
+| Source | User Information, a real `show config` | Technical Summary: up to four 2P drawers, N/S ports only, "a ring of processors" | Technical Summary: 8P drawers of four modules, all four ports, a torus |
+| Processor n at | NS n, EW 0 | NS n, EW 0 (n < 8) | NS (n & 1) \| (n >> 3 & 1) << 1, EW (n >> 1) & 3 |
+| PID (the console's coord2id) | n | (n & 1) \| (n >> 1) << 3 | n |
+| CMM system type (0x40004) | 0x11 | 0x10011 ("ES80": <19:16> 1) | 0x1 |
+| IO7s | PID 0 | each drawer's first processor: 0, 8, 16, 24 | PID 0 **[a choice]** |
+| Max processors here | 2 | 8 | 16 (the console's layout goes to 64) |
+
+What the console makes of a PID (its own `coord2*`/`pid2*` routines):
+<0> the place on the module, <2:1> the module in its drawer, <4:3> the
+drawer, <7:5> the cabinet. The ES47/ES80 rule ignores E/W and puts N/S
+bits 1-2 in the drawer field, so an ES80's second drawer starts at PID 8.
+
+**What changed for more than one module:**
+
+- **The CMM** (`platforms/es47/Cmm.*`) keeps a memory per module (PID >>
+  1) and a port per PID; each processor's area is its place on the module.
+  Every processor but the partition's primary gets a non-zero start state.
+  The **MBM configuration** (0x0321) goes to each drawer's MBM
+  (10.<cabinet * 16 + drawer>.0.1; memconfig asks once per drawer) and
+  lists that drawer's modules; module m holds PIDs base + 2m, + 2m + 1.
+  The **partition database** lists every processor at its coordinates and
+  every IO7. **Its I/O entries are <3> N/S, <4> E/W** -- the reverse of what
+  M4 wrote down, invisible while the one IO7 sat at (0,0): `coord2pid`
+  (0x2e1240) matches them with the processors' <1> N/S and <2> E/W, and
+  with them swapped the console found no IO7 beyond PID 0's. The
+  **memory assignment** has a chunk per processor at its PID's base. An
+  8P drawer's MBM reports 5 sensors, a 2P drawer's 17 (build_mbm_hw,
+  0x2f8db0).
+- **PIDs** come from the board row: `CChipset::cpu_pid` gives each
+  configured processor its PID (the index everywhere but Marvel). CMarvel
+  has a register block for every PID the row's layout can hold, of which
+  the configured ones answer.
+- **Memory**: the host array spans to the last PID's memory (an ES80's PID
+  25 ends past 0xC4_0000_0000, so 2^40 bytes); untouched pages cost
+  nothing (macOS calloc of even 16 TB succeeds lazily). The holes read as
+  zero, as before.
+- **More than four processors**: `CSystem` holds up to `kMaxCPUs` (32);
+  the load-lock state moved out of the state-file structure, which keeps
+  the first four processors' locks as it always had (the file format is
+  unchanged).
+- **Hoses** are global: PID * 4 + port; `marvel_slot_refusal` accepts the
+  hoses of the processors that have an IO7.
+
+**Open:**
+
+- `show config` prints "I/O Drawer 0 ... Riser 0" for every IO7 [where
+  the console takes the drawer number from is not found];
+- each ES80 drawer's second processor can be cabled to an I/O expansion
+  drawer, a GS1280's processors to several I/O drawers: one layout choice
+  each here;
+- partitions (more than one hard or soft partition), and the GS1280's
+  64-processor limit (16 here: host threads);
+- the route table's IO entries (0x100-0x113), RBOX_ROUTE's own layout.
 
 ### M6b: the EV7z row (2026-10-02)
 
@@ -910,7 +1011,7 @@ longword followed by its entries.
 | hard partitions | 0x1c | <0> number, <4> u32 (0xff in the simulator's), <8> name |
 | sub partitions | 0x20 | <0> hard partition, <2> 4 **[unknown, copied]**, <6> name |
 | processors | 12 | <0> 0x80 = the sub partition's primary, 0 = another member (others refused); <1> N/S, <2> E/W; <3> PID; <4> hard partition; <6> sub partition |
-| I/O | 8 | <3> E/W, <4> N/S of the EV7 the IO7 hangs on, <5> present |
+| I/O | 8 | <3> N/S, <4> E/W of the EV7 the IO7 hangs on (corrected by M6c), <5> present |
 
 `memconfig` makes the last primary of the sub partition the GCT builder
 (0x282948), and only the primary's `powerup` builds the GCT: with both
@@ -1341,9 +1442,9 @@ no character written to any UART.
    document; the console's tables of "EV7 rev x.y" strings have to be
    matched to the code that indexes them.
 6. **No ES47 reference for our exact configuration**: L3 is structural.
-7. **Scale**: the GS1280's 64 processors and multiple IO7s are not a
-   goal. The ES47 with 2 CPUs is. The design should not preclude more,
-   but nothing is built for them before the ES47 runs.
+7. **Scale**: the ES80's eight processors and four IO7s and a sixteen-
+   processor GS1280 run (M6c); 64 processors would need 64 host threads
+   and is not attempted.
 
 ## Rules
 

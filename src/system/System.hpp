@@ -475,9 +475,20 @@ private:
   static const u32 kLLBuckets = 65536; // 64-byte line hash, power of two
   std::atomic<u32> m_ll_seq[kLLBuckets];
   std::atomic<u8> m_ll_lock[kLLBuckets]; // seq check + CAS + bump, per bucket
-  u32 m_ll_seq_snap[4];                  // per-CPU sequence at LDx_L time
+public:
+  /// The most processors any board takes (a GS1280's 16 here; the arrays
+  /// below are indexed by the processor's number).
+  static constexpr int kMaxCPUs = 32;
 
-  u64 cpu_lock_value[4]; // per-CPU LDx_L value, for same-address STx_C
+private:
+  u32 m_ll_seq_snap[kMaxCPUs]; // per-CPU sequence at LDx_L time
+
+  u64 cpu_lock_value[kMaxCPUs]; // per-CPU LDx_L value, for same-address STx_C
+  /// Per-CPU lock: a bit per processor holding a load lock, and the address
+  /// it locked. The state file keeps the first four processors' (state
+  /// below), as it always has.
+  std::atomic<u32> m_cpu_lock_flags{0};
+  u64 m_cpu_lock_address[kMaxCPUs];
 
   // writer bit + active LL/SC operation count
   std::atomic<u32> cpu_llsc_dma_gate{0};
@@ -495,7 +506,10 @@ private:
   /// The state structure contains all elements that need to be saved to the
   /// statefile. The chipset's state follows it in the file
   /// (CChipset::save_state); together they are byte for byte the state
-  /// structure CSystem held when it was the Tsunami.
+  /// structure CSystem held when it was the Tsunami. The lock state of the
+  /// first four processors is copied in and out of it (SaveState,
+  /// RestoreState); a lock of a fifth or later is not kept, which costs
+  /// that processor a failed STx_C after a restore.
   struct SSys_state {
     std::atomic<int> cpu_lock_flags;
     u64 cpu_lock_address[4];
@@ -525,7 +539,8 @@ private:
   /// costs a miss: the bounds are checked before it is used.
   int iLastMemory = -1;
 
-  class CAlphaCPU *acCPUs[4];
+  class CAlphaCPU *acCPUs[kMaxCPUs];
+
 public:
   u64 m_direct_base = 0;
   std::atomic<u64> m_direct_end{0};

@@ -33,7 +33,11 @@
  * memory each processor has a block of (TOY, mailboxes), and the SMLAN
  * messages the console sends through the mailboxes, which on a real
  * machine the CMM answers or passes on to the MBM. The model answers them
- * itself, for one ES47: one module, two EV7s, one IO7, one partition.
+ * itself, for the whole machine: a CMM per dual-processor module (its own
+ * memory, its two processors' areas), an MBM per drawer (the configuration
+ * of the drawer's modules), and one partition holding every processor and
+ * IO7 the topology has (chipsets/marvel/Topology.hpp). The ES80 and the
+ * GS1280 use it as the ES47 does.
  **/
 #if !defined(INCLUDED_ES47_CMM_H_)
 #define INCLUDED_ES47_CMM_H_
@@ -43,10 +47,12 @@
 #include "Gio.hpp"
 
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
+class CMarvel;
 class CSystem;
 class CSerial;
 
@@ -78,35 +84,47 @@ private:
     bool tx_kick = false; ///< the transmitter became ready while enabled
   };
 
+  /// One dual-processor module's CMM: its memory, as both of its
+  /// processors see it through their byte windows.
+  struct Module {
+    std::vector<u8> mem;
+    std::vector<bool> read_seen;
+  };
+
   void late_init();
-  u8 mem_read(u32 a);
-  void mem_write(u32 a, u8 v);
-  void window_op(u32 n, Port &p, u64 control);
-  void request_posted(u32 n, u32 slot);
-  void answer(u32 n, const u8 *req, u32 req_len);
-  void respond(u32 n, const u8 *req, u16 status, const u8 *data, u32 len);
+  Module &module_of(u32 pid);
+  u8 mem_read(u32 pid, u32 a);
+  void mem_write(u32 pid, u32 a, u8 v);
+  u8 *mem_at(u32 pid, u32 a); ///< a byte of the module's memory, unchecked
+  void window_op(u32 pid, Port &p, u64 control);
+  void request_posted(u32 pid, u32 slot);
+  void answer(u32 pid, const u8 *req, u32 req_len);
+  void respond(u32 pid, const u8 *req, u16 status, const u8 *data, u32 len);
   void partition_database(u8 *db);
-  void mbm_configuration(u8 *c);
+  void mbm_configuration(u32 mbm_ip, u8 *c);
   void memory_assignment(u8 *a);
   static bool is_mbm(u32 ip);
   int sensor_readings(u32 ip, bool volts, u8 *r);
   void nvram_load();
   void nvram_save();
-  void refresh_toy(u32 n);
-  void toy_written(u32 n, u32 idx);
+  void refresh_toy(u32 pid);
+  void toy_written(u32 pid, u32 idx);
   CSerial *terminal();
   void note(const char *fmt, ...);
+  CMarvel *marvel() const;
+  /// The processors configured, and the partition's primary (the first).
+  int present() const;
+  u32 primary() const;
 
   CSystem *m_sys;
   std::mutex m_lock;
-  std::vector<u8> m_mem;
-  Port m_port[2];
+  std::map<u32, Module> m_modules; ///< by module (PID >> 1)
+  std::map<u32, Port> m_port;      ///< by PID
   CSerial *m_terminal = nullptr;
   bool m_terminal_looked = false;
   FILE *m_log = nullptr;
   bool m_trace = false;
   bool m_ready = false; ///< late_init has run
-  std::vector<bool> m_read_seen;
   s64 m_toy_offset = 0; ///< seconds the console set the TOY away from host
   std::string m_nvram_file;
   std::vector<u8> m_nvram; ///< the console's NVRAM image, 2 KB

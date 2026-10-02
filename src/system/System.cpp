@@ -110,6 +110,8 @@ CSystem::CSystem(CConfigurator *cfg) try {
   iSSCycles = 0;
 #endif
   state.cpu_lock_flags = 0;
+  m_cpu_lock_flags = 0;
+  memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
 
   // A host whose size_t can't hold the memory size (32-bit) must refuse it
   // rather than allocate less.
@@ -854,13 +856,13 @@ void CSystem::pci_dma_write_leave() {
 // must not compare against the value loaded from the LDx_L address.
 
 void CSystem::cpu_lock(int cpuid, u64 address, u64 value) {
-  state.cpu_lock_address[cpuid] = address;
+  m_cpu_lock_address[cpuid] = address;
   cpu_lock_value[cpuid] = value;
   // ABA guard: remember the line's STx_C sequence as of this LDx_L.
   m_ll_seq_snap[cpuid] =
       m_ll_seq[(u32)((address >> 6) & (kLLBuckets - 1))].load(
           std::memory_order_acquire);
-  state.cpu_lock_flags |= (1 << cpuid); // atomic fetch_or
+  m_cpu_lock_flags |= (1u << cpuid); // atomic fetch_or
 }
 
 /**
@@ -913,14 +915,14 @@ bool CSystem::cpu_take_lock(int cpuid, u64 address, u64 *expected,
                             bool *same_address) {
   // I/O-space conditional stores have no cache line to watch; treat as held.
   bool held = (address & CPU_LOCK_IO_MASK) ||
-              ((state.cpu_lock_flags.load() & (1 << cpuid)) &&
-               cpu_lock_matches(state.cpu_lock_address[cpuid], address));
+              ((m_cpu_lock_flags.load() & (1u << cpuid)) &&
+               cpu_lock_matches(m_cpu_lock_address[cpuid], address));
 
   // STx_C always consumes this CPU's lock, success or fail.
-  state.cpu_lock_flags &= ~(1 << cpuid); // atomic fetch_and
+  m_cpu_lock_flags &= ~(1u << cpuid); // atomic fetch_and
   if (held) {
     *expected = cpu_lock_value[cpuid];
-    *same_address = (state.cpu_lock_address[cpuid] == address);
+    *same_address = (m_cpu_lock_address[cpuid] == address);
   }
   return held;
 }
@@ -931,7 +933,7 @@ bool CSystem::cpu_take_lock(int cpuid, u64 address, u64 *expected,
  * intervened).
  **/
 void CSystem::cpu_clear_lock(int cpuid) {
-  state.cpu_lock_flags &= ~(1 << cpuid); // atomic fetch_and
+  m_cpu_lock_flags &= ~(1u << cpuid); // atomic fetch_and
 }
 
 /** Model the EV68 invalidating probe for every reservation line touched by
@@ -942,17 +944,17 @@ void CSystem::cpu_clear_external_locks(u64 address, size_t bytes) {
 
   const u64 first_line = (address & m_phys_mask) & ~U64(63);
   const u64 last_line = ((address & m_phys_mask) + bytes - 1) & ~U64(63);
-  int clear_mask = 0;
-  const int flags = state.cpu_lock_flags.load(std::memory_order_relaxed);
+  u32 clear_mask = 0;
+  const u32 flags = m_cpu_lock_flags.load(std::memory_order_relaxed);
   for (int i = 0; i < iNumCPUs; i++) {
-    if (!(flags & (1 << i)))
+    if (!(flags & (1u << i)))
       continue;
-    const u64 locked_line = state.cpu_lock_address[i] & m_phys_mask & ~U64(63);
+    const u64 locked_line = m_cpu_lock_address[i] & m_phys_mask & ~U64(63);
     if (locked_line >= first_line && locked_line <= last_line)
-      clear_mask |= 1 << i;
+      clear_mask |= 1u << i;
   }
   if (clear_mask)
-    state.cpu_lock_flags.fetch_and(~clear_mask, std::memory_order_relaxed);
+    m_cpu_lock_flags.fetch_and(~clear_mask, std::memory_order_relaxed);
 }
 
 /**
@@ -1524,6 +1526,8 @@ void CSystem::ResetChipsetState() {
   // Re-establish the same power-on defaults used in the constructor.
   state.cpu_lock_flags = 0;
   memset(state.cpu_lock_address, 0, sizeof(state.cpu_lock_address));
+  m_cpu_lock_flags = 0;
+  memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
   memset(cpu_lock_value, 0, sizeof(cpu_lock_value));
 
   m_chipset->reset();
@@ -1579,6 +1583,10 @@ void CSystem::SaveState(const char *fn) {
     fwrite(&j, 1, sizeof(int), f);
   }
 
+  // The file keeps the first four processors' locks (SSys_state).
+  state.cpu_lock_flags = (int)(m_cpu_lock_flags.load() & 0xf);
+  memcpy(state.cpu_lock_address, m_cpu_lock_address,
+         sizeof(state.cpu_lock_address));
   fwrite(&state, sizeof(state), 1, f);
   m_chipset->save_state(f);
 
@@ -1660,6 +1668,10 @@ void CSystem::RestoreState(const char *fn) {
 
   if (fread(&state, sizeof(state), 1, f) != 1 || !m_chipset->restore_state(f))
     FAILURE(Runtime, "State file is truncated in the system state");
+  m_cpu_lock_flags = (u32)state.cpu_lock_flags.load() & 0xf;
+  memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
+  memcpy(m_cpu_lock_address, state.cpu_lock_address,
+         sizeof(state.cpu_lock_address));
 
   // components
   //
