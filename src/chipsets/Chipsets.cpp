@@ -26,6 +26,7 @@
 
 #include "Chipset.hpp"
 #include "Marvel.hpp"
+#include "Titan.hpp"
 #include "Tsunami.hpp"
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
@@ -37,6 +38,8 @@ CChipset *create_chipset(chipset_kind kind, CSystem *sys) {
     return new CTsunami(sys);
   case CHIPSET_MARVEL:
     return new CMarvel(sys);
+  case CHIPSET_TITAN:
+    return new CTitan(sys);
   }
   FAILURE(Configuration, "unknown chipset");
 }

@@ -59,11 +59,13 @@
 class CAlphaCPU;
 class CSystem;
 class CSystemComponent;
+struct dimm_population;
 
 /// Which chipset a board has (platform_config::chipset).
 enum chipset_kind {
   CHIPSET_TSUNAMI, ///< 21272 Tsunami/Typhoon: Cchip, Dchips, Pchips, TIG bus
   CHIPSET_MARVEL,  ///< EV7 machines: each processor's Rbox/Zbox/GIO, IO7s
+  CHIPSET_TITAN,   ///< 21274 Titan: Cchip, Dchips, two PA-chips (4 hoses), TIG
 };
 
 /// The spaces a PCI hose opens into the processor's physical address space.
@@ -161,6 +163,11 @@ public:
     (void)ncpus;
     (void)image_base;
   }
+  // --- Memory ---------------------------------------------------------------
+  /// The DIMMs the chipset's memory controller reports (DimmModel.hpp), for
+  /// a management processor that keeps its own copy (the ES40's and ES45's
+  /// DPR); nullptr when the chipset models none.
+  virtual const dimm_population *dimms() const { return nullptr; }
 
   // --- Reset and state ------------------------------------------------------
 

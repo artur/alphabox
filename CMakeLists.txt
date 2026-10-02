@@ -32,6 +32,7 @@ file(GLOB srcs
     src/chipsets/*.cpp
     src/chipsets/tsunami/*.cpp
     src/chipsets/marvel/*.cpp
+    src/chipsets/titan/*.cpp
     src/common/*.cpp
     src/devices/isa/*.cpp
     src/devices/pci/*.cpp
@@ -50,6 +51,7 @@ file(GLOB srcs
     src/platforms/ds20e/*.cpp
     src/platforms/ds20l/*.cpp
     src/platforms/es47/*.cpp
+    src/platforms/es45/*.cpp
     src/devices/storage/*.cpp
     src/devices/video/*.cpp
     src/devices/video/s3/*.cpp
@@ -72,13 +74,13 @@ add_executable(alphabox ${srcs} src/Main.cpp)
 # is on the include path and a moved file needs no include changes.
 target_include_directories(alphabox PRIVATE
     src src/cpu src/cpu/ev7 src/hv src/system src/common
-    src/chipsets src/chipsets/tsunami src/chipsets/marvel
+    src/chipsets src/chipsets/tsunami src/chipsets/marvel src/chipsets/titan
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge
     src/devices/pci/isp1040 src/devices/pci/tulip src/devices/pci/es137x
     src/devices/pci/ehci src/devices/pci/virtio
     src/platforms src/platforms/es40 src/platforms/ds10 src/platforms/ds20e
-    src/platforms/ds20l src/platforms/es47
+    src/platforms/ds20l src/platforms/es47 src/platforms/es45
     src/devices/storage
     src/devices/video src/devices/video/s3 src/devices/video/cirrus
     src/devices/video/mach64 src/devices/video/permedia2

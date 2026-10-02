@@ -34,6 +34,7 @@
 #define INCLUDED_FLASH_H
 
 #include "SystemComponent.hpp"
+#include <vector>
 
 /**
  * \brief Emulated flash memory.
@@ -56,9 +57,19 @@ public:
    */
   bool FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
                         u64 *load_address) const;
+  /**
+   * Find a partition the firmware update utilities write behind a 0x40-byte
+   * CPQ header: "CPQ" at +0x14, the payload size at +0x2c, the partition
+   * name at +0x30 and 0x11223344 at +0x3c (as the ES45's update utility
+   * leaves its SRM partition). Searched on 64 KB boundaries. `size` is the
+   * payload's, which follows the header.
+   */
+  bool FindCpqPartition(const char *name, u32 *offset, u32 *size) const;
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
-  CFlash(CConfigurator *cfg, class CSystem *c);
+  /// `chips` 2 MB AM29F016 parts, one after the other on the TIG bus:
+  /// the ES40 has one, the ES45 two.
+  CFlash(CConfigurator *cfg, class CSystem *c, int chips = 1);
   virtual ~CFlash();
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
@@ -70,17 +81,19 @@ public:
 
   // Boot-firmware helpers (persistent flash-backed firmware)
   bool HasBootFirmware() const;
-  const u8 *GetFlashBytes() const; // 2MB dense image
+  const u8 *GetFlashBytes() const; // dense image, 2 MB per part
+  size_t GetFlashSize() const { return m_flash.size(); }
   void FlushIfDirty();
 
 protected:
   bool dirty = false;
   time_t last_dirty = 0; // wall-clock when dirty was last (re)set
 
-  struct SFlash_state {
-    u8 Flash[2 * 1024 * 1024];
-    int mode;
-  } state;
+  static const int CHIP_SIZE = 2 * 1024 * 1024;
+  static const int MAX_CHIPS = 2;
+  const int m_chips;
+  std::vector<u8> m_flash; ///< every part's bytes, dense
+  int m_mode[MAX_CHIPS];   ///< each part's command state
 };
 
 extern CFlash *theSROM;

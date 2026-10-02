@@ -34,10 +34,11 @@
  **/
 #include "DPR.hpp"
 #include "AlphaCPU.hpp"
+#include "Chipset.hpp"
+#include "DimmModel.hpp"
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
-#include "Tsunami.hpp"
 #include <time.h>
 
 #define ToBCD(x) (((x) / 10 << 4) | ((x) % 10))
@@ -133,10 +134,16 @@ void CDPR::init() {
   state.ram[0xda] = 0xaa; // TIG load
 
   // DIMM config, from the modelled population
-  // (CTsunami::init_spd): array a = MMB a, DIMMs in slots J1-J4
+  // (the chipset's DimmModel): array a = MMB a, DIMMs in slots J1-J4
   // (and J5-J8 when twice-split).
-  const CTsunami::SDimmLayout &lay = cSystem->tsunami()->dimm_layout();
-  const std::vector<uint8_t> &spd = cSystem->tsunami()->dimm_spd();
+  const dimm_population *dimms = cSystem->chipset()->dimms();
+  if (!dimms)
+    FAILURE_1(Configuration,
+              "the DPR needs a chipset that models DIMMs; the "
+              "%s does not",
+              cSystem->chipset()->name());
+  const dimm_population &lay = *dimms;
+  const std::vector<uint8_t> &spd = lay.spd;
   for (int a = 0; a < lay.n_arrays; a++) {
     // 0x80+2a <7:4>: F = twice-split (8 DIMMs), 4 = lower set only;
     // <3:0> = array position. 0x81+2a: DIMM size in 64 MB units (the 16 and

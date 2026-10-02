@@ -419,6 +419,8 @@ private:
   bool run_decompressor(u64 base, const std::function<bool(int)> &progress);
   void start_console();
   bool load_console_from_es40_flash();
+  bool load_console_from_cpq_flash();
+  bool load_console_from_cpq_partition(u32 srm_off, u32 srm_len);
   bool load_console_from_flash_image();
   bool load_decompressed_console();
   void load_console_from_file();

@@ -60,17 +60,23 @@ extern CAlphaCPU *cpu[4];
 /**
  * Constructor.
  **/
-CFlash::CFlash(CConfigurator *cfg, CSystem *c) : CSystemComponent(cfg, c) {
+CFlash::CFlash(CConfigurator *cfg, CSystem *c, int chips)
+    : CSystemComponent(cfg, c), m_chips(chips) {
   if (theSROM)
     FAILURE(Configuration, "More than one Flash");
   theSROM = this;
-  c->RegisterMemory(this, 0, U64(0x0000080100000000), 0x8000000); // 2MB
-  memset(&state, 0, sizeof(state));
-  memset(state.Flash, 0xff, sizeof(state.Flash));
-  state.mode = MODE_READ;
+  if (chips < 1 || chips > MAX_CHIPS)
+    FAILURE(Configuration, "unsupported number of flash parts");
+  // Each byte of the flash sits on its own 64-byte TIG bus slot.
+  c->RegisterMemory(this, 0, U64(0x0000080100000000),
+                    (u64)chips * CHIP_SIZE << 6);
+  m_flash.assign((size_t)chips * CHIP_SIZE, 0xff);
+  for (int &m : m_mode)
+    m = MODE_READ;
   RestoreStateF();
   dirty = false;
-  state.mode = MODE_READ; // always start in read mode after load
+  for (int &m : m_mode) // always start in read mode after load
+    m = MODE_READ;
 
   printf("%s: $Id$\n", devid_string);
 }
@@ -84,19 +90,19 @@ bool CFlash::HasBootFirmware() const {
   // A real ES40 flash carries a partitioned layout (TIG/SRM/ABIOS/SROM) with
   // a CPQ header at the start of the SRM partition. Treat that signature as
   // the sole marker for "this flash holds bootable firmware".
-  const u8 *const p = state.Flash + srm_partition_offset + cpq_sig_offset;
+  const u8 *const p = m_flash.data() + srm_partition_offset + cpq_sig_offset;
   return p[0] == 'C' && p[1] == 'P' && p[2] == 'Q' && p[3] == 0;
 }
 
-const u8 *CFlash::GetFlashBytes() const { return state.Flash; }
+const u8 *CFlash::GetFlashBytes() const { return m_flash.data(); }
 
 bool CFlash::FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
                               u64 *load_address) const {
-  const u32 size = (u32)sizeof(state.Flash);
+  const u32 size = (u32)m_flash.size();
 
   for (u32 off = 0; off + 0x38 <= size; off += 0x40) {
     u32 w[7];
-    memcpy(w, state.Flash + off, sizeof(w));
+    memcpy(w, m_flash.data() + off, sizeof(w));
     for (u32 &x : w)
       x = endian_32(x);
     if (w[0] != 0x5a5ac3c3 || w[1] != 0xa5a53c3c)
@@ -109,6 +115,26 @@ bool CFlash::FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
     *header_size = w[2];
     *image_size = w[4];
     *load_address = w[6];
+    return true;
+  }
+  return false;
+}
+
+bool CFlash::FindCpqPartition(const char *name, u32 *offset, u32 *size) const {
+  const size_t n = strlen(name);
+  for (u32 off = 0; off + 0x40 <= m_flash.size(); off += 0x10000) {
+    const u8 *h = m_flash.data() + off;
+    u32 len, magic;
+    memcpy(&len, h + 0x2c, 4);
+    memcpy(&magic, h + 0x3c, 4);
+    len = endian_32(len);
+    magic = endian_32(magic);
+    if (memcmp(h + 0x14, "CPQ", 4) || magic != 0x11223344 || n >= 12 ||
+        memcmp(h + 0x30, name, n + 1) || !len ||
+        off + 0x40 + (size_t)len > m_flash.size())
+      continue;
+    *offset = off;
+    *size = len;
     return true;
   }
   return false;
@@ -147,8 +173,11 @@ bool CFlash::trace_on() {
 u64 CFlash::ReadMem(int index, u64 address, int dsize) {
   u64 data = 0;
   int a = (int)(address >> 6);
-  if (trace_on() && state.mode != MODE_READ)
-    printf("%%FLS-T-TRACE: read  %08x (state %d)\n", a, state.mode);
+  if ((unsigned)a >= (unsigned)m_flash.size())
+    return 0xFF; // out of range: open bus / erased flash
+  int &mode = m_mode[a / CHIP_SIZE];
+  if (trace_on() && mode != MODE_READ)
+    printf("%%FLS-T-TRACE: read  %08x (state %d)\n", a, mode);
 
   // TIGbus flash is an 8-bit device on a wider bus. Only the low 32-bit lane is
   // wired. Ignore reads from the upper lane (addr & 0x4) to match real ES40
@@ -157,10 +186,10 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
     return 0;
 
   // Out-of-range reads behave like open bus / erased flash.
-  if ((unsigned)a >= (unsigned)sizeof(state.Flash))
+  if ((unsigned)a >= (unsigned)m_flash.size())
     return 0xFF;
 
-  switch (state.mode) {
+  switch (mode) {
   case MODE_AUTOSEL:
     // AM29F016 autoselect IDs alias within each 64 KiB sector.
     // ARC probes sector-local offsets, not only absolute 0/1.
@@ -184,16 +213,16 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
 
   case MODE_CONFIRM_0:
     data = 0x80;
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     break;
 
   case MODE_CONFIRM_1:
     data = 0x80;
-    state.mode = MODE_CONFIRM_0;
+    mode = MODE_CONFIRM_0;
     break;
 
   default:
-    data = state.Flash[a];
+    data = m_flash[a];
     break;
   }
 
@@ -244,14 +273,16 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
  * \endcode
  **/
 void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
-  // Firmware drives flash as a state machine; seeing the commands is how
-  // to tell "it never found the part" from "it read what it wanted".
-  if (trace_on())
-    printf("%%FLS-T-TRACE: write %08x = %02x (state %d)\n", (int)(address >> 6),
-           (u8)data, state.mode);
   // Flash is mapped with 64-byte spacing, so byte index is address >> 6.
   const int a = (int)(address >> 6);
   const int ad = a & 0xffff;
+  if ((unsigned)a >= (unsigned)m_flash.size())
+    return;
+  int &mode = m_mode[a / CHIP_SIZE];
+  // Firmware drives flash as a state machine; seeing the commands is how
+  // to tell "it never found the part" from "it read what it wanted".
+  if (trace_on())
+    printf("%%FLS-T-TRACE: write %08x = %02x (state %d)\n", a, (u8)data, mode);
   const u8 byte = (u8)data;
 
   // Upper 32-bit TIGbus lane is not connected to the flash.
@@ -259,27 +290,27 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
     return;
 
   // sanity check... are we supposed to be here?
-  if ((unsigned)a >= (unsigned)sizeof(state.Flash)) {
-    state.mode = MODE_READ;
+  if ((unsigned)a >= (unsigned)m_flash.size()) {
+    mode = MODE_READ;
     return;
   }
 
-  switch (state.mode) {
+  switch (mode) {
   case MODE_PROGRAM: {
     // More realistic flash behavior: programming can only change 1 -> 0.
     // Any attempt to set bits back to 1 requires an erase.
-    const u8 oldv = state.Flash[a];
+    const u8 oldv = m_flash[a];
     const u8 newv = (u8)(oldv & byte);
 
     if (newv != oldv) {
-      state.Flash[a] = newv;
+      m_flash[a] = newv;
       dirty = true;
       last_dirty = time(nullptr);
       printf("%%SRM-I-FLASH: Wrote data: 0x%02X to sector address: 0x%04X\n",
              byte, a);
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
   }
 
@@ -292,102 +323,102 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
     // AMD-style flashes support "reset/read-array" with 0xF0 or 0xFF.
     // For firmware/software to abort a command sequence.
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     if ((ad == 0x5555) && (byte == 0xaa)) {
-      state.mode = MODE_STEP1;
+      mode = MODE_STEP1;
       return;
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
 
   case MODE_STEP1:
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     if ((ad == 0x2aaa) && (byte == 0x55)) {
-      state.mode = MODE_STEP2;
+      mode = MODE_STEP2;
       return;
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
 
   case MODE_STEP2:
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     if (ad != 0x5555) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     switch (byte) {
     case 0x90:
-      state.mode = MODE_AUTOSEL;
+      mode = MODE_AUTOSEL;
       return;
 
     case 0xa0:
-      state.mode = MODE_PROGRAM;
+      mode = MODE_PROGRAM;
       return;
 
     case 0x80:
-      state.mode = MODE_ERASE_STEP3;
+      mode = MODE_ERASE_STEP3;
       return;
 
     default:
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
   case MODE_ERASE_STEP3:
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     if ((ad == 0x5555) && (byte == 0xaa)) {
-      state.mode = MODE_ERASE_STEP4;
+      mode = MODE_ERASE_STEP4;
       return;
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
 
   case MODE_ERASE_STEP4:
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     if ((ad == 0x2aaa) && (byte == 0x55)) {
-      state.mode = MODE_ERASE_STEP5;
+      mode = MODE_ERASE_STEP5;
       return;
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
 
   case MODE_ERASE_STEP5:
     if (byte == 0xF0 || byte == 0xFF) {
-      state.mode = MODE_READ;
+      mode = MODE_READ;
       return;
     }
 
     // Chip erase: AA/55/80/AA/55/10 at 5555
     if ((ad == 0x5555) && (byte == 0x10)) {
       printf("%%SRM-I-FLASH: Erasing flash chip\n");
-      memset(state.Flash, 0xff, sizeof(state.Flash));
+      memset(&m_flash[(size_t)(a / CHIP_SIZE) * CHIP_SIZE], 0xff, CHIP_SIZE);
       dirty = true;
       last_dirty = time(nullptr);
-      state.mode = MODE_CONFIRM_1;
+      mode = MODE_CONFIRM_1;
       return;
     }
 
@@ -395,19 +426,19 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
     if (byte == 0x30) {
       printf("%%SRM-I-FLASH: Erasing flash sector\n");
       const int sector_start = a & ~0xFFFF;
-      memset(&state.Flash[sector_start], 0xFF, 0x10000);
+      memset(&m_flash[sector_start], 0xFF, 0x10000);
       dirty = true;
       last_dirty = time(nullptr);
-      state.mode = MODE_CONFIRM_1;
+      mode = MODE_CONFIRM_1;
       return;
     }
 
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
 
   default:
     // unknown mode, reset to read
-    state.mode = MODE_READ;
+    mode = MODE_READ;
     return;
   }
 }
@@ -422,12 +453,12 @@ void CFlash::SaveStateF(char *fn) {
     return;
   }
 
-  const size_t n = fwrite(state.Flash, 1, sizeof(state.Flash), ff);
+  const size_t n = fwrite(m_flash.data(), 1, m_flash.size(), ff);
   fclose(ff);
 
-  if (n != sizeof(state.Flash))
+  if (n != m_flash.size())
     printf("%%FLS-F-NOSAVE: Short write (%zu of %zu bytes) to %s\n", n,
-           sizeof(state.Flash), fn);
+           m_flash.size(), fn);
   else
     printf("%%FLS-I-SAVEST: Flash saved to %s\n", fn);
 }
@@ -455,13 +486,14 @@ void CFlash::RestoreStateF(char *fn) {
       printf("%%FLS-F-NOCREATE: Flash could not be created at %s\n", fn);
       return;
     }
-    const size_t n = fwrite(state.Flash, 1, sizeof(state.Flash), wf);
+    const size_t n = fwrite(m_flash.data(), 1, m_flash.size(), wf);
     fclose(wf);
-    if (n != sizeof(state.Flash))
+    if (n != m_flash.size())
       printf("%%FLS-F-NOCREATE: Short write (%zu of %zu bytes) creating %s\n",
-             n, sizeof(state.Flash), fn);
+             n, m_flash.size(), fn);
     else
-      printf("%%FLS-I-CREATE: Blank 2 MiB flash image created at %s\n", fn);
+      printf("%%FLS-I-CREATE: Blank %d MiB flash image created at %s\n",
+             (int)(m_flash.size() >> 20), fn);
     return;
   }
 
@@ -469,12 +501,12 @@ void CFlash::RestoreStateF(char *fn) {
   const long file_size = ftell(ff);
   fseek(ff, 0, SEEK_SET);
 
-  if (file_size == (long)sizeof(state.Flash)) {
-    const size_t n = fread(state.Flash, 1, sizeof(state.Flash), ff);
+  if (file_size == (long)m_flash.size()) {
+    const size_t n = fread(m_flash.data(), 1, m_flash.size(), ff);
     fclose(ff);
-    if (n != sizeof(state.Flash)) {
+    if (n != m_flash.size()) {
       printf("%%FLS-F-SHORTRD: Short read (%zu of %zu bytes) from %s\n", n,
-             sizeof(state.Flash), fn);
+             m_flash.size(), fn);
       FAILURE(Runtime, "Short read loading flash image");
     }
     printf("%%FLS-I-RESTST: Flash restored from %s\n", fn);
@@ -494,7 +526,7 @@ void CFlash::RestoreStateF(char *fn) {
 
   printf("%%FLS-F-BADSIZE: %s is %ld bytes, expected %zu; "
          "rename or delete it, then restart.\n",
-         fn, file_size, sizeof(state.Flash));
+         fn, file_size, m_flash.size());
   FAILURE(Runtime, "Flash file has invalid size");
 }
 
@@ -506,7 +538,7 @@ void CFlash::RestoreStateF() {
  * Save state to a Virtual Machine State file.
  **/
 int CFlash::SaveState(FILE *f) {
-  fwrite(state.Flash, 1, sizeof(state.Flash), f);
+  fwrite(m_flash.data(), 1, m_flash.size(), f);
   return 0;
 }
 
@@ -514,8 +546,8 @@ int CFlash::SaveState(FILE *f) {
  * Restore state from a Virtual Machine State file.
  **/
 int CFlash::RestoreState(FILE *f) {
-  const size_t r = fread(state.Flash, 1, sizeof(state.Flash), f);
-  if (r != sizeof(state.Flash)) {
+  const size_t r = fread(m_flash.data(), 1, m_flash.size(), f);
+  if (r != m_flash.size()) {
     printf("flash: unexpected end of file!\n");
     return -1;
   }

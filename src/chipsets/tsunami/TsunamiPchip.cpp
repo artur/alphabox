@@ -29,6 +29,7 @@
  */
 
 #include "AlphaCPU.hpp"
+#include "PciWindows.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "Tsunami.hpp"
@@ -695,13 +696,7 @@ u64 CTsunami::pci_phys(int pcibus, u32 address) {
  * \endcode
  **/
 u64 CTsunami::pci_phys_direct_mapped(u32 address, u64 wsm, u64 tba) {
-  u64 a;
-
-  wsm &= PCI_WSM_MASK;
-
-  a = (address & (wsm | PCI_ADD_MASK)) | (tba & ~wsm & PCI_TBA_MASK);
-
-  return a;
+  return pci_window::direct(address, wsm, tba);
 }
 
 /**
@@ -776,26 +771,9 @@ u64 CTsunami::pci_phys_direct_mapped(u32 address, u64 wsm, u64 tba) {
  * \endcode
  **/
 u64 CTsunami::pci_phys_scatter_gather(u32 address, u64 wsm, u64 tba) {
-  u64 pte_a;
-
-  u64 pte;
-
-  u64 a;
-
-  wsm &= PCI_WSM_MASK;
-
-  pte_a = ((address & (wsm | PCI_PTE_ADD_MASK)) >>
-           PCI_PTE_ADD_SHIFT) // ad part of pte address
-          | (tba & PCI_PTE_TBA_MASK &
-             ~(wsm >> PCI_PTE_ADD_SHIFT)); // tba part of pte address
-  pte = m_sys->ReadMem(pte_a, 64, 0);
-  if (pte & 1) {
-    a = ((pte << PCI_PTE_SHIFT) & PCI_PTE_MASK) | (address & PCI_PTE_ADD2_MASK);
-
-    if (pte & PCI_PTE_PEER_BIT) // peer-to-peer
-      a |= (PHYS_PIO_ACCESS);   // PIO access.
-    return a;
-  } else {
+  const u64 pte =
+      m_sys->ReadMem(pci_window::pte_address(address, wsm, tba), 64, 0);
+  if (!(pte & 1))
     throw((char)'0');
-  }
+  return pci_window::from_pte(pte, address);
 }

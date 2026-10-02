@@ -54,5 +54,9 @@ const char *ds20l_slot_refusal(int hose, int slot);
 // AlphaServer ES47 (platforms/es47/Es47.cpp)
 int es47_pci_interrupt(int hose, int slot, int intx);
 const char *es47_slot_refusal(int hose, int slot);
+// AlphaServer ES45 (platforms/es45/Es45.cpp)
+int es45_pci_interrupt(int hose, int slot, int intx);
+const char *es45_slot_refusal(int hose, int slot);
+void es45_board_devices(CConfigurator *cfg, CSystem *sys);
 
 #endif // !defined(INCLUDED_BOARDS_H_)

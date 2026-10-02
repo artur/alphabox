@@ -63,6 +63,15 @@ static const platform_config platforms[] = {
     {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 0, SECONDARIES_BY_CONSOLE, nullptr,
      es47_pci_interrupt, es47_slot_refusal, 0, nullptr, 0x480000},
+    // Under construction (docs/platforms/es45.md): the first Titan board.
+    // Its console comes as an update utility, which installs it into the
+    // flash, and the utility runs up to 0x648000 (console_bytes). No
+    // console patches: the ES40's are addresses in the ES40's
+    // console.
+    {"es45", "AlphaServer ES45", CHIPSET_TITAN, "ev68cb", 4, 26, 35,
+     "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
+     es45_board_devices, es45_pci_interrupt, es45_slot_refusal, 0, nullptr,
+     0x680000},
 };
 
 const platform_config *find_platform(const char *name) {

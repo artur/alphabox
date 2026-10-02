@@ -64,6 +64,7 @@
 #define INCLUDED_TSUNAMI_H_
 
 #include "Chipset.hpp"
+#include "DimmModel.hpp"
 #include "i2c_spd.hpp"
 #include <mutex>
 #include <vector>
@@ -107,15 +108,7 @@ public:
   void set_dim(int cpu, u64 value);
 
   // --- The memory the Cchip reports (TsunamiMemory.cpp) -------------------
-
-  /// Modelled DIMM population (see init_spd).
-  struct SDimmLayout {
-    int n_arrays = 1;        ///< populated arrays = populated MMBs (1, 2 or 4)
-    int dimms_per_array = 4; ///< 8 (twice-split) or 4 (lower slot set only)
-    uint32_t dimm_mb = 0;    ///< capacity of each (identical) DIMM
-  };
-  const SDimmLayout &dimm_layout() const { return m_dimm_layout; }
-  const std::vector<uint8_t> &dimm_spd() const { return m_dimm_spd; }
+  const dimm_population *dimms() const override { return &m_dimms; }
 
 private:
   u64 cchip_csr_read(u32 address, CSystemComponent *source);
@@ -133,10 +126,7 @@ private:
 
   /// Build SPD images that match the configured memory.
   void init_spd(uint32_t total_mb);
-  static std::vector<uint8_t> build_sdram_spd(uint32_t dimm_mb,
-                                              bool registered_ecc = true);
-  SDimmLayout m_dimm_layout;
-  std::vector<uint8_t> m_dimm_spd; ///< SPD image shared by all modelled DIMMs
+  dimm_population m_dimms;
 
   /// Host-side open-drain drivers for the Cchip's MPD I2C pins.
   struct MPDState {

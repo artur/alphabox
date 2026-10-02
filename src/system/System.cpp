@@ -1164,10 +1164,28 @@ bool CSystem::load_console_from_es40_flash() {
     return false;
   printf("%%SYS-I-READFLASH: Reading boot ROM image from %s.\n",
          myCfg->get_text_value("rom.flash", "flash.rom"));
+  return load_console_from_cpq_partition(0x00010000, 0x000E0000);
+}
 
+/**
+ * Another machine's flash with the same kind of SRM partition -- a 0x40-byte
+ * CPQ header naming "SRM", then the self-decompressor -- somewhere other
+ * than the ES40's 0x10000: the ES45's update utility puts it at 0x20000
+ * (CFlash::FindCpqPartition).
+ **/
+bool CSystem::load_console_from_cpq_flash() {
+  u32 off = 0, len = 0;
+  if (!(theSROM && theSROM->FindCpqPartition("SRM", &off, &len)))
+    return false;
+  printf("%%SYS-I-READFLASH: SRM partition in flash at %x, %u bytes.\n", off,
+         len);
+  return load_console_from_cpq_partition(off, len + 0x40);
+}
+
+/// Decompress and start the console in the CPQ partition at `srm_off`,
+/// `srm_len` bytes including its header.
+bool CSystem::load_console_from_cpq_partition(u32 srm_off, u32 srm_len) {
   const u8 *flash = theSROM->GetFlashBytes();
-  const u32 srm_off = 0x00010000;
-  const u32 srm_len = 0x000E0000;
 
   printf("%%SYS-I-DECOMP: Decompressing SRM image from flash.\n0%%");
   fflush(stdout);
@@ -1402,8 +1420,8 @@ int CSystem::LoadROM() {
   // (a reset reloads it while compiled code exists).
   m_code_pages.note_write_all();
 
-  if (!load_console_from_es40_flash() && !load_console_from_flash_image() &&
-      !load_decompressed_console())
+  if (!load_console_from_es40_flash() && !load_console_from_cpq_flash() &&
+      !load_console_from_flash_image() && !load_decompressed_console())
     load_console_from_file();
 
 #if !defined(SRM_NO_SPEEDUPS) || !defined(SRM_NO_IDE)
