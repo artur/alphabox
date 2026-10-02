@@ -101,6 +101,8 @@ CSystem::CSystem(CConfigurator *cfg) try {
   // the array spans them all and memory.bits is each processor's share.
   iNumMemoryBits =
       m_chipset->memory_span_bits(iNumMemoryBits, m_platform->max_cpus);
+  m_console_bytes =
+      m_platform->console_bytes ? m_platform->console_bytes : 0x200000;
 
   //  iNumConfig = 0;
 #if defined(IDB)
@@ -1082,7 +1084,9 @@ static bool srm_decomp_chunk(CAlphaCPU *cpu) {
 
 /**
  * decompressed.rom is the entry PC and PAL_BASE (8 bytes each), the low 2 MB
- * of memory, and this tag. The image is where it always was, 16 bytes in;
+ * of memory (more where the board's console is larger: console_bytes in its
+ * row, so a cache saved for another board has the wrong size and is not
+ * used), and this tag. The image is where it always was, 16 bytes in;
  * the tag marks a file saved at the decompressor's jump into the console.
  * Earlier builds saved the PC some way past that jump -- inside the
  * console's PALcode reset code, without the registers and IPRs that code
@@ -1109,7 +1113,6 @@ static void hand_to_console(CAlphaCPU **cpus, int n, u64 entry) {
 }
 
 static const char kDecompTag[8] = {'A', 'L', 'P', 'H', 'D', 'C', '0', '1'};
-static const long kDecompSize = 2 * sizeof(u64) + 0x200000;
 
 /**
  * Run a console's self-decompressor on CPU 0: the image is in memory at
@@ -1142,6 +1145,13 @@ bool CSystem::run_decompressor(u64 base,
 void CSystem::start_console() {
   hand_to_console(acCPUs, iNumCPUs, acCPUs[0]->get_pc());
   start_secondaries();
+  m_chipset->console_started(acCPUs, iNumCPUs, console_image_base());
+}
+
+/// Where the console's self-decompressor ran: an update bundle's always
+/// loads at 0x900000; for the other forms it is not recorded.
+u64 CSystem::console_image_base() const {
+  return m_platform->firmware == FW_LFU_BUNDLE ? U64(0x900000) : 0;
 }
 
 /**
@@ -1245,6 +1255,7 @@ bool CSystem::load_decompressed_console() {
     return false;
   fseek(f, 0, SEEK_END);
   const long have = ftell(f);
+  const long kDecompSize = 2 * sizeof(u64) + (long)m_console_bytes;
   char tag[sizeof(kDecompTag)] = {};
   if (have == kDecompSize + (long)sizeof(kDecompTag)) {
     fseek(f, kDecompSize, SEEK_SET);
@@ -1276,7 +1287,7 @@ bool CSystem::load_decompressed_console() {
   (void)!fread(&temp, 1, sizeof(u64), f);
   hand_to_console(acCPUs, iNumCPUs, entry);
   char *buffer = PtrToMem(0);
-  (void)!fread(buffer, 1, 0x200000, f);
+  (void)!fread(buffer, 1, m_console_bytes, f);
   fclose(f);
   // The three paths that decompress the firmware release the processors
   // a console does not start itself; this one, which reads the same
@@ -1284,6 +1295,7 @@ bool CSystem::load_decompressed_console() {
   // of a firmware worked and every later one left every secondary
   // parked. (The ES40's console starts its own, so it never showed.)
   start_secondaries();
+  m_chipset->console_started(acCPUs, iNumCPUs, console_image_base());
   return true;
 }
 
@@ -1349,7 +1361,8 @@ void CSystem::load_console_from_file() {
 }
 
 /**
- * Save the console the decompressor left in the low 2 MB, with its entry,
+ * Save the console the decompressor left in low memory (2 MB, or the
+ * board's console_bytes), with its entry,
  * for the next boot (load_decompressed_console). Written beside the final
  * name and renamed into place, so an image under that name is always whole.
  **/
@@ -1369,7 +1382,7 @@ void CSystem::save_decompressed_console() {
   temp = endian_64(acCPUs[0]->get_pal_base());
   ok = ok && fwrite(&temp, 1, sizeof(u64), f) == sizeof(u64);
   const char *buffer = PtrToMem(0);
-  ok = ok && fwrite(buffer, 1, 0x200000, f) == 0x200000;
+  ok = ok && fwrite(buffer, 1, m_console_bytes, f) == m_console_bytes;
   ok = ok && fwrite(kDecompTag, 1, sizeof(kDecompTag), f) == sizeof(kDecompTag);
   ok = (fclose(f) == 0) && ok;
   if (!ok || rename(tmp.c_str(), dec.c_str()) != 0) {

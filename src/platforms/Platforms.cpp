@@ -56,16 +56,13 @@ static const platform_config platforms[] = {
      "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, SECONDARIES_AFTER_ARBITRATION,
      es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, 0,
      es40_console_patches},
-    // EXPERIMENTAL, NOT A MACHINE (docs/platforms/marvel.md): the ES47/ES80/
-    // GS1280 console image, loaded onto the ES40's hardware and an EV68 core
-    // only to see what it does first -- the L1 probe of the Marvel packet.
-    // Nothing here is a Marvel fact except the firmware file and its form
-    // (the same LFU wrapper as the ES40's, "CPQ MARVEL ALPH SRM"); there is
-    // no EV7 core and no IO7, so the console cannot get far.
-    {"marvel-probe", "Marvel console probe (experimental)", CHIPSET_TSUNAMI,
-     "ev68cb", 1, 26, 35, "SRM_V7_3.EXE", FW_LFU_BUNDLE, 2,
-     SECONDARIES_AFTER_ARBITRATION, es40_board_devices, es40_pci_interrupt,
-     ds20l_slot_refusal, 0, es40_console_patches},
+    // Under construction (docs/platforms/marvel.md): two EV7s, each with its
+    // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
+    // 8 GB, GS1280 Technical Summary), the console in an update bundle like
+    // the ES40's that decompresses to 0x440000. No IO7 yet, so no PCI.
+    {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 0, SECONDARIES_BY_CONSOLE, nullptr,
+     es47_pci_interrupt, es47_slot_refusal, 0, nullptr, 0x480000},
 };
 
 const platform_config *find_platform(const char *name) {

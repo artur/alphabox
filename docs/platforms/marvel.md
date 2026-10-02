@@ -7,13 +7,15 @@ and there is no chipset in the Tsunami sense. Each EV7 carries its own
 memory controllers, interrupt logic and a router, and reaches the I/O
 through an IO7 bridge.
 
-**Branch**: `platform/marvel` (own worktree) · **Config**:
-`platform = "marvel-probe";` (experimental, see below) · **Status**: L1,
-reached on an EV68 core with the ES40's devices. The console's PALcode runs
-its reset path to completion, and the console proper starts executing C
-code. It then waits, without a timeout, for an answer from the management
-port (GIO). Nothing is printed: the console terminal is reached through a
-management interface that does not exist yet.
+**Config**: `platform = "es47";` with `ev7` (or `ev7z`) processors · **Status**:
+packets M0-M3 done (2026-10-02). On an emulated EV7 -- the EV7 processor
+rows, each processor's on-chip registers and its GIO port, memory per PID
+and the XSROM's handoff -- the console's PALcode runs its reset path, the
+console proper starts, and it reaches its GIO conversation with every
+register it read on the way answered by a modelled register. It then waits,
+without a timeout, for its management processor (CMM) to answer on GIO:
+packet M4. Nothing is printed yet: the console terminal is reached through
+that management interface.
 
 The ES47 is the target: the smallest Marvel, with two EV7s on one board
 and one IO7. The ES80 and GS1280 are the same platform with more
@@ -256,10 +258,8 @@ Alphabox's existing loader handles it unchanged.
   - a small stub at 0x70000;
   - the **console proper at 0x280000-0x440000**: about 1.8 MB, C code
     with strings, *above* the 2 MB that Alphabox's `decompressed.rom`
-    cache saves. **Consequence: a second boot from the cache would lose
-    the console.** The cache needs to grow (or be keyed on the image)
-    before Marvel uses it. This is not fixed here; the probe always runs
-    in a fresh directory.
+    cache saved. Fixed by M3: the board row's `console_bytes` (0x480000
+    on the ES47) sets how much the cache holds.
 - The real secondaries start "at address 400030000" (PID 1's memory +
   0x30000): each processor runs its PALcode from its own memory.
 
@@ -375,12 +375,11 @@ relying on them.
   XSROM's end is the best source for the handoff registers.
 - MBM, CMM, PF, FPGA and CPLD images: firmware of the management
   processors, not Alpha code.
-- What the firmware requires that the emulator does not have yet:
-  - a 44-bit EV7 physical address decode;
-  - the EV7 CSR block;
-  - a GIO/CMM endpoint;
-  - IO7s;
-  - a decompressed-image cache larger than 2 MB.
+- What the firmware requires that the emulator does not have yet (the
+  44-bit decode, the EV7 CSR block, the GIO transport and the larger cache
+  came with M1-M3):
+  - the CMM's answers on GIO (M4);
+  - IO7s (M5).
 
 ## Sources
 
@@ -434,7 +433,7 @@ type and revision), not whole listings.
 | Level | For Marvel | Notes |
 | --- | --- | --- |
 | L0 | every lane builds with the EV7 core and the Marvel module | |
-| L1 | the console image loads, its PALcode runs the reset path, the console proper starts | **reached on the probe row** (EV68 core, no Marvel hardware) |
+| L1 | the console image loads, its PALcode runs the reset path, the console proper starts | **reached on the `es47` row** (EV7 rows, Marvel registers; first on the retired probe row) |
 | L2 | `P00>>>` on the telnet port, through the emulated CMM's GIO terminal | needs packets M1-M4 |
 | L3 | `show config` matches the real ES47 listing in structure: "PID 0 ... EV7 rev x, NNN MHz", "Memory 0 ...", "IO7 0 ...", "PCI Bus 0 Hose 0 ...", PID 1 "No Local I/O", the RIMM table; `show cpu` "Type Major 15"; `show mem` with PID 1 at 400000000 | Real listings exist only for other configurations and console versions (V7.3-11 against our V7.3-1), so L3 is a structural match. Device lines depend on which I/O we emulate behind the IO7 |
 | L4 | `test` and console network boot through a NIC on an IO7 hose; disk boot of a CD | the console's interrupt numbers in INTERRUPT_LINE are the answer key for the LSI wiring |
@@ -448,11 +447,11 @@ moved lines of code, **[guess]**.
 
 | # | Packet | Contents | Size | Level | Status |
 | --- | --- | --- | --- | --- | --- |
-| P | L1 probe | experimental `marvel-probe` board row (EV68, ES40 devices); the trace reports unclaimed accesses with the full address and folds repeated accesses | <50 | L1 | **done** |
+| P | L1 probe | experimental `marvel-probe` board row (EV68, ES40 devices); the trace reports unclaimed accesses with the full address and folds repeated accesses | <50 | L1 | **done**; the row was retired by M3 (the `es47` row replaces it) |
 | M0 | **Separate the chipset from CSystem** | Today `CSystem` *is* the Tsunami: its `ReadMem`/`WriteMem` mask to 0x807_ffff_ffff and decode Cchip/Dchip/Pchip/TIG, `interrupt()` is the Cchip's DIR/DIM, and the PCI hoses are the Pchips. Split a `Chipset` interface out (non-memory decode, interrupt delivery, timer, PCI hose access, DMA translation), keep Tsunami as the first implementation with no behaviour change, and let the board row pick it. Titan (ES45) needs the same split, so it is shared work with the Tsunami-family effort | 1.5-3 k moved, ~500 new | L6 | **done** 2026-10-02 (see "M0: the chipset split") |
-| M1 | **EV7 CPU model** | `cpu_model` grows a family field (EV6 / EV7). An EV7 row: chip ID, type 15, minor per revision, EV7z row (type 16 if the console agrees). Physical addresses masked to 44 bits. Per-CPU PID (WHAMI). Interrupt delivery from the Rbox instead of the EIR pins. vmspal fast paths and JIT PAL shortcuts off for EV7 until verified. Kept apart from the EV6 code wherever the PALcode interface differs | 500-1000 | L1 | open |
-| M2 | **EV7 on-chip CSR block** | per EV7 a device answering its 4 MB CSR window: Rbox (WHOAMI, INT/IMASK/IREQ/INTQ/INTA, the IT interval timer, SCRATCH, routing CFG reading as configured), Cbox, Zbox (memory configuration consistent with the board row, errors clean), GIO registers and the 0x80000 lock | 1-2 k | L1+ | open |
-| M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | open; needs the XSROM handoff disassembled |
+| M1 | **EV7 CPU model** | `cpu_model` grows a family field (EV6 / EV7). An EV7 row: chip ID, type 15, minor per revision, EV7z row (type 16 if the console agrees). Physical addresses masked to 44 bits. Per-CPU PID (WHAMI). Interrupt delivery from the Rbox instead of the EIR pins. vmspal fast paths and JIT PAL shortcuts off for EV7 until verified. Kept apart from the EV6 code wherever the PALcode interface differs | 500-1000 | L1 | **done** 2026-10-02 (see "M1-M3") |
+| M2 | **EV7 on-chip CSR block** | per EV7 a device answering its 4 MB CSR window: Rbox (WHOAMI, INT/IMASK/IREQ/INTQ/INTA, the IT interval timer, SCRATCH, routing CFG reading as configured), Cbox, Zbox (memory configuration consistent with the board row, errors clean), GIO registers and the 0x80000 lock | 1-2 k | L1+ | **done** 2026-10-02: the transport and a recording management side; the answers are M4 |
+| M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | **done** 2026-10-02, with the `es47` board row |
 | M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | open |
 | M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | open |
 | M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | open |
@@ -465,6 +464,201 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M1-M3: the EV7, its registers and the XSROM's handoff (2026-10-02)
+
+**What runs.** `platform = "es47";` with two `ev7` processors (the
+configuration class names the row; `ev7z` is the other) and no devices.
+The loader decompresses `SRM_V7_3.EXE` as before, saves the 4.5 MB the
+console occupies to the decompressed-image cache, leaves processor 0 as the
+XSROM would leave it, and parks processor 1 on its RBOX_SCRATCH1. The
+console's PALcode then runs its reset path on PID 0, the console proper
+starts at 0x2b65f0, and it reaches its first GIO receive in C code
+(0x2e3a9c), where it waits for the CMM. With
+`ALPHABOX_TRACE_UNKNOWN=1 ALPHABOX_TRACE_CSR=1` (run `lab/runs/ev7m-j1`,
+JIT lane, about 3 minutes; the same on the interpreter, `ev7m-h2`, 4
+minutes, and on the JIT_VERIFY lane, `ev7m-v2`) the unknown-access trace has **no line at all**:
+every register the console touched on the way was a modelled one. They are,
+in order:
+
+| Register | Access | Where | What it is |
+| --- | --- | --- | --- |
+| GIO lock (CSR + 0x80000) | write 0, then read-to-take / write-0-to-free around every transaction | 0x3e829, then every GIO routine | the port's semaphore |
+| GIO_CTL, GIO_DAT | 25 transactions (below) | PALcode 0x3e1f4-0x3f649, C 0x2e3a50 | the GIO transport |
+| CSR + 0x28040, + 0x28020 | read, write all ones, read, write back | 0x3ead1-0x3eb05 | a revision probe on EV7 parts (bit 19 of 0x28020); not in the console's table |
+| RBOX_IT | write 0 | 0x3f0a1 | interval timer off |
+| RBOX_NSVC | read, write 0, read | 0x3e1ad-0x3e1c9 | router virtual-channel configuration |
+| RBOX_IMASK | read, write 0, read | 0x3e1dd-0x3e1f1 | all interrupts masked |
+
+Nothing else: no Cbox, Zbox, router port, IO7 or PCI access happens before
+the console needs its CMM. With `ALPHABOX_EV7_START_SECONDARIES=1` (a test
+hook doing what the console does once it can: copy its PALcode to PID 1's
+memory and start PID 1 through its RBOX_SCRATCH1), PID 1 echoes `f2000400`,
+starts at 0x4_0003_0000, runs the same reset path from its own memory with
+its own register block and its own GIO port (`ev7m-j2-smp`), and the trace
+again has no unknown access.
+
+**M1, the processor** (`cpu/CpuModel.hpp`, `cpu/CpuModels.cpp`,
+`cpu/ev7/`):
+
+- `cpu_model` has a `family` (`CPU_FAMILY_EV6`, `CPU_FAMILY_EV7`) and the
+  L1/L2 sizes. Rows `ev7` (21364: chip ID 2, HWRPB type 15) and `ev7z`
+  (EV79: chip ID 2, type 16), AMASK and IMPLVER as the EV68 **[guess]**,
+  64 KB L1s, 1.75 MB L2. A board's row names its processor and a processor
+  of the other family is refused.
+- **The chip ID**: the PALcode takes I_CTL<29:24> (`srl 24; and 63`) and
+  only enters its EV7 code when it is 2 (0x3eaa0). There it adds bit 19 of
+  CSR 0x28020 (after writing all ones to it) and indexes a table of
+  `(n, 15)` quadwords at 0x3eb08 with the sum: the console derives the
+  processor type it reports, 15 throughout, itself. What bit 19 is on an
+  EV7z is **[guess]**: the model sets it for the type-16 row.
+- **Addresses** (`cpu/ev7/Ev7.hpp`): 44 bits (`CChipset::phys_mask`), PA<43:35>
+  the inverted PE, memory per PID at `memory_base(pid)`, the CSR block at
+  `csr_base(pid)`, IO7 ports at `io7_base(pid, port)`. Nothing in the core
+  changed: the CPU passes the raw address and the system masks it.
+- **The PID** is per processor (`CAlphaCPU::get_pid()`, its number on the
+  ES47) and decides which register block and which memory are its own.
+- **vmspal and the JIT**: the `es47` row has `vmspal_pal_base` 0, so the
+  native PALcode routines are off; the JIT has no PALcode shortcuts beyond
+  them. The JIT runs the EV7 rows; the JIT_VERIFY lane's count is in
+  "Checks" below.
+
+**M2, the register block** (`chipsets/marvel/`):
+
+- `CMarvel` (the `CChipset`) decodes each present processor's 4 MB window
+  into a `CEv7Csr`; everything else -- IO7 space, absent PIDs, memory
+  nobody owns -- is traced as unknown.
+- `CEv7Csr` holds every register of the console's 141-entry table (plus
+  RBOX_SCRATCH2 from Linux and the 0x28020/0x28040 pair) with what was
+  written; WHOAMI reads the PID **[guess at the field]**; errors read clean.
+  Modelled behaviour:
+  - **interrupts**, from the PALcode's own decode (its interrupt entry,
+    0x38ec0): the Rbox drives the core's EI<5:0> lines as a Tsunami does;
+    RBOX_INT & RBOX_IMASK bits 0-10 and 24-63 are EI0, 12 and 14 EI1 (the
+    IO7 queue in RBOX_INTQ), 15-17 EI2 (15 is the interval timer), 18-19
+    EI3, 21-23 EI4 (interprocessor). A bit is cleared by writing it to
+    RBOX_INT; writing bits to a processor's RBOX_IREQ sets them in its
+    RBOX_INT (the PALcode sends 1 << 23 and 1 << 22 to other PIDs that way,
+    0x396b8, 0x3f3f4). Bits 11, 13 and 20 drive nothing **[guess]**.
+  - **the interval timer**: each tick of the machine's schedule sets
+    RBOX_INT<15> on every processor whose RBOX_IT is not zero. How RBOX_IT
+    sets the rate is **not known**; its <31:22> is read by the PALcode as a
+    count of missed ticks (0x39344-0x393cc). Without the ES40's ALi there is
+    no programmed period, so the schedule is CPU 0's default of one tick a
+    second. Fine for the console's first steps; M4/M5 have to settle it.
+  - **RBOX_SCRATCH1 start protocol** for a parked processor (below, M3).
+  - **GIO** (`Gio.hpp`), from the console's code:
+    - GIO_CTL<n:1> names a register on the CMM side, <0> is go;
+    - a **write** is GIO_CTL = n << 1, then GIO_DAT = value;
+    - a **read** is GIO_CTL = n << 1, then GIO_CTL = n << 1 | 1;
+    - both poll GIO_DAT<63> for done; a read's answer is in GIO_DAT;
+    - the PALcode polls 2^28 times and gives up (reading 0), the C code
+      polls for ever (0x2e3aac);
+    - the lock at + 0x80000 reads 0 when free and is then taken; writing 0
+      frees it.
+  - The far side is a `GioManagement`. The one installed, `GioRecorder`,
+    takes every write, answers no read and logs each transaction
+    (`%MVL-I-GIO`, and the file `ALPHABOX_GIO_LOG` names).
+
+**The GIO conversation**, PID 0, in order (`lab/runs/ev7m-j1/gio.log`). What
+the PALcode does with it is read off its code; the meaning of the CMM's
+registers beyond that is M4's to find.
+
+| # | Op | Reg | Data | PC | Part of |
+| --- | --- | --- | --- | --- | --- |
+| 0 | write | 2 | 0x40004 | 0x3f491 | read the CMM byte at 0x40004 (routine 0x3f42c) |
+| 1 | read | 0 | -- | 0x3f4ed | status |
+| 2 | write | 0 | 0x1 | 0x3f55d | request: (status & 0x20) \| 1 |
+| 3 | read | 0 | -- | 0x3f5b9 | poll until bit 0 clears |
+| 4 | read | 1 | -- | 0x3f621 | the 16-bit word; the byte is <7:0>, or <15:8> for an odd address |
+| 5 | read | 0 | -- | 0x3e9b1 | status: bit 6 selects the processor's block, 0x40008 or 0x46008 |
+| 6-10 | as 0-4 | | 0x412a0 | | CMM byte at block + 0x1298 (zero: cold start) |
+| 11 | read | 0 | -- | 0x3ef51 | status |
+| 12-16 | as 0-4 | | 0x412a6 | | CMM byte at block + 0x129e |
+| 17 | read | 0 | -- | 0x3eff5 | status |
+| 18-22 | as 0-4 | | 0x412a7 | | CMM byte at block + 0x129f |
+| 23 | write | 8 | 0x4 | 0x3e259 | the PALcode's last word before it enters the console (its state flags at scratch + 0x1b8, bit 4 cleared) |
+| 24 | read | 0 | -- | 0x2e3a9c | the console's own GIO routine (0x2e3a50): no timeout |
+
+Every read went unanswered, so every PALcode poll timed out (2^28 reads,
+about 6 s each on the JIT lane) and the bytes it read were 0. The CMM's
+memory map behind registers 0-2 -- a byte-addressed window, 16-bit data,
+processor blocks 0x6000 apart -- is the first thing M4 has to fill.
+
+**M3, the XSROM's handoff** (`cpu/ev7/Ev7Reset.cpp`, from
+`MVXSROM_V1_0_31.BIN` disassembled less its 0x40-byte header):
+
+- the XSROM is a command loop driven by the CMM (dispatcher at 0xfa30-0xfc58,
+  commands 0x10-0xdd); command **0x50** (0x6650) makes it wait on
+  RBOX_SCRATCH1: `0xf1` in <31:24> with the address's upper 24 bits, which
+  it echoes as `0xf2`, then `0xf3` with the lower 24; it cleans up its Cbox
+  counters and OCLA (0x21e0) and enters the address in PALmode (`hw_ret`
+  with bit 0). The console's C code starts secondaries with exactly this
+  (0x2dd600: write f1, poll for f2 up to 50 times, write f3), and its
+  PALcode parks a processor the same way (0x390d4);
+- **r28 = the PID**: the XSROM never writes it, it only reads it
+  (`sll at, 35, t8` is its CSR mask), so the SROM set it;
+- **r19** = this processor's block in the CMM's memory, 0x40008 or 0x46008
+  by bit 6 of a GIO status word (0x498-0x4d8), the same two the console's
+  PALcode uses;
+- **r1, r2** = whatever the XSROM's last CSR access left there;
+- **r18** = the XSROM's own (written at 0x5718, 0x8b38 and elsewhere).
+
+The console's side: its decompressor saves r1, r2, r16-r21, sp and r28 and
+restores them before entering the inflated console, except that **r19
+comes back as the decompressor's own address + 0x10** (it stores t1 in r19's
+slot, 0x9007c4/0x9007f8). The PALcode's reset entry then stores r28 as the
+PID (0x3e804) and takes the cold path when **r19 != 0 or r18 < 0**
+(0x3e790); with r19 = 0 and r18 >= 0 it takes a restart path that indexes a
+table by r18 and dereferences r21, which is what zeroed registers -- the
+probe's -- sent into. r1 and r2 are dead: overwritten at 0x3e540 and
+0x3e6b0 before being read. So the loader sets, on the primary, r28 = PID,
+r19 = 0x900010 (the decompressor at 0x900000), r18 = r1 = r2 = 0; on a
+secondary started through RBOX_SCRATCH1, r28 = PID and r19 = 0x40008 or
+0x46008 (PID<0> **[inference]**).
+
+The rest of what M3 asked for:
+
+- **Memory per PID**: `memory.bits` is each processor's memory on the
+  ES47 (29-33: 512 MB to 8 GB per EV7, GS1280 Technical Summary); PID n's is
+  at `memory_base(n)` (PID 1 at 0x4_0000_0000). `CChipset::memory_span_bits`
+  sizes the one host array to span them all (35 bits for two processors),
+  and the host backs only the pages touched (`calloc` of untouched memory
+  costs nothing on macOS or Linux). **The memory path is unchanged**: the
+  CPU's and `CSystem::ReadMem`'s test is still `a < dram_size`; the cost is
+  that the holes between processors' memory read as zero instead of as
+  nonexistent memory **[a known divergence; nothing has been seen to touch
+  them]**.
+- **Secondaries** wait parked (`SECONDARIES_BY_CONSOLE`) and are released
+  by the RBOX_SCRATCH1 protocol above, served by the Rbox while the
+  processor is parked (`CEv7Csr::scratch_written`).
+- **The cache**: the board row's `console_bytes` (0x480000 for the ES47)
+  sets what `decompressed.rom` holds; a cache saved for a board with another
+  size is not used. A second boot from the cache reaches the same GIO
+  conversation (`ev7m-cache`).
+- **Retired**: the `marvel-probe` row.
+
+**Checks** (no Tsunami behaviour change): srm_run diff clean on the
+interpreter, JIT and JIT_VERIFY lanes with 0 mismatches; a two-processor
+DS20E probe at `P00>>>` (`show cpu`, `show memory`); the ES40 OpenVMS 8.4
+CD boot (`lab/vms84/repro.sh`): PASS (asks for the date after 52 s); every lane builds. JIT_VERIFY on the
+`es47` row to the C code's GIO conversation: 0 mismatches in 21.5 million compiled-block executions (`ev7m-v2`).
+
+**What M4 needs**:
+
+- the CMM's side of registers 0, 1, 2 and 8: the byte window (address in
+  register 2, request/acknowledge through register 0 with the 0x20 toggle
+  and the busy bit 0, data in register 1), the status bits (6: which
+  processor block), and the contents of the processor blocks at 0x40008 and
+  0x46008 -- at least the bytes the PALcode reads (0x40004, just below the
+  first block, and block + 0x1298, + 0x129e, + 0x129f) and whatever the C
+  code asks next;
+- what the C code's receive at 0x2e3a50 expects in register 0, which
+  decides everything after it;
+- the interval timer's rate in RBOX_IT, once the console programs it;
+- disassembly of `CMM3_V2_7_5.BIN` / `MBM_V2_7_6.BIN` for the meaning,
+  their architecture first.
+
 
 ### M0: the chipset split (2026-10-02)
 
@@ -501,8 +695,7 @@ What it does not give yet, and M1/M5/M6 must add:
 
 ### The L1 probe (2026-10-01)
 
-**Setup.** The board row `marvel-probe` (`src/platforms/Platforms.cpp`,
-marked experimental) is the ES40 with the Marvel console image: one EV68CB
+**Setup.** The board row `marvel-probe` (since retired) was the ES40 with the Marvel console image: one EV68CB
 and 256 MB. The commands were:
 
 ```
@@ -627,8 +820,7 @@ no character written to any UART.
 
 As in [TEMPLATE.md](TEMPLATE.md). Also:
 
-- The `marvel-probe` row is experimental and says so. It is not the ES47
-  board row, and nothing about Marvel may be added to it except what the
-  probe needs.
+- The `marvel-probe` row is retired: the `es47` row runs the console on
+  emulated EV7s. Nothing about Marvel goes into a Tsunami row.
 - vmspal fast paths stay off for EV7 until compared against the EV7
   PALcode.

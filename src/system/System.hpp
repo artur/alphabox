@@ -423,6 +423,10 @@ private:
   bool load_decompressed_console();
   void load_console_from_file();
   void save_decompressed_console();
+  u64 console_image_base() const;
+  /// How much low memory the decompressed-image cache holds (Platform.hpp
+  /// console_bytes).
+  size_t m_console_bytes = 0x200000;
 
   /// LDx_L/STx_C watch a 64-byte line of physical memory as the chipset
   /// decodes it.

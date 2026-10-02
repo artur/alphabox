@@ -191,7 +191,8 @@ int main_sim(int argc, char *argv[]) {
     trc = new CTraceEngine(theSystem);
 #endif
     theSystem->LoadROM();
-    theDPR->init();
+    if (theDPR) // the ES40's management-processor RAM; not every board has one
+      theDPR->init();
 
 #if defined(PROFILE)
     {

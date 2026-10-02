@@ -22,8 +22,11 @@ Three layers, each added in a different way:
 ### What exists today
 
 - **Processor**: a row per part in `cpu/CpuModel.hpp` and `cpu/CpuModels.cpp`,
-  chosen by the configuration class. Only the EV68CB, whose values are
-  established; the JIT emits them per processor.
+  chosen by the configuration class, with its core family (EV6 or EV7). The
+  EV68CB, whose values are established, and the EV7 and EV7z
+  (`cpu/ev7/` holds what that family changes: the physical address map and
+  the state the XSROM hands the console); the JIT emits them per processor.
+  A board takes processors of one family and refuses the other.
 - **Board**: a row per machine in `platforms/Platform.hpp` and
   `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
   `es40`). It carries the chipset, the processor and CPU count, the memory
@@ -33,8 +36,9 @@ Three layers, each added in a different way:
   console patches, and a function that builds the board's own hardware. The
   functions and hardware live in `platforms/<board>/`.
 - **Chipset**: `chipsets/Chipset.hpp` (`CChipset`), with the Tsunami in
-  `chipsets/tsunami/` as its first implementation; the board row picks it
-  (`CHIPSET_TSUNAMI` for every row today).
+  `chipsets/tsunami/` and Marvel -- the EV7's on-chip registers and its GIO
+  port, memory per PID -- in `chipsets/marvel/`; the board row picks it
+  (`CHIPSET_TSUNAMI`, `CHIPSET_MARVEL`).
 - **The traces**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
   claimed, with the instruction that made it, and `ALPHABOX_TRACE_CALLS=1`
   reports the firmware's own subroutine calls, each site-to-routine pair
@@ -51,14 +55,14 @@ Three layers, each added in a different way:
 | AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS ([packet](platforms/ds20e.md)) |
 | AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
-| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | planned, phase 0 done: the console's PALcode runs its reset path on an EV68 core and the console proper starts (L1, experimental `marvel-probe` row); it then waits on the EV7's management port. The staged plan is in the [packet](platforms/marvel.md) |
+| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L1 on emulated EV7s (`es47` row, packets M0-M3): the console's PALcode runs its reset path, the console proper starts and reaches its conversation with the management processor (GIO) with every register it read modelled; it waits there for the CMM's answers (packet M4). The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
 `CSystem` used to be the Tsunami chipset, with ES40 board hardware (DPR,
 flash) and board hooks mixed in. The chipset split (packet M0 in
-[marvel.md](platforms/marvel.md)) moved the code to this layout; the
-`cpu/ev7/`, `titan/` and `marvel/` directories come with their packets.
+[marvel.md](platforms/marvel.md)) moved the code to this layout; `cpu/ev7/`
+and `chipsets/marvel/` came with packets M1-M3, `titan/` comes with its own.
 What M0 left where it was, and why, is in that packet's notes.
 
 ```
@@ -140,7 +144,16 @@ Facts that cost time to find and apply to the next machine:
   console starts them itself through the management processor, so they wait
   for it; the DS20E has none and expects every processor to be running
   already, asserting a halt line and waiting for an answer. Getting this
-  wrong looks exactly like "the console only sees one processor".
+  wrong looks exactly like "the console only sees one processor". The EV7
+  machines do it a third way: each parked processor polls a register of its
+  own (RBOX_SCRATCH1) for an address the console writes there in two
+  halves, with an echo between them.
+- **The registers at entry can be part of the interface.** The Marvel
+  console's PALcode takes its processor ID from r28 and picks a cold start
+  or a restart by r19 and r18; starting it with zeroed registers sent it
+  down the restart path, reading a pointer from r21 (docs/platforms/
+  marvel.md, M3). Read what the firmware does with its registers before
+  deciding they do not matter.
 - **Machines differ in which PCI device numbers they look at.** The DS20E's
   console scans devices 0 to 10 and no further, so devices at 15 and 19 --
   where the ES40 keeps its own -- are invisible on it. A device the console
@@ -235,14 +248,14 @@ device or an absent CPU.
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7
    with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)). The EV7 plan,
    in packets:
-   - **M0**: separate the chipset from `CSystem`, with no behaviour change.
-     This is shared with Titan, and everything below depends on it.
-   - **M1**: an EV7 processor model, kept apart from the EV6 code wherever
-     the PALcode interface differs.
-   - **M2**: each EV7's on-chip registers: router, interrupts, interval
-     timer, memory controllers and the GIO management port.
-   - **M3**: the state the SROM/XSROM leave behind, in place of running
-     them.
+   - **M0** (done): separate the chipset from `CSystem`, with no behaviour
+     change. This is shared with Titan, and everything below depends on it.
+   - **M1** (done): an EV7 processor model, kept apart from the EV6 code
+     wherever the PALcode interface differs.
+   - **M2** (done): each EV7's on-chip registers: router, interrupts,
+     interval timer, memory controllers and the GIO management port.
+   - **M3** (done): the state the SROM/XSROM leave behind, in place of
+     running them.
    - **M4**: the management processors' side of the GIO protocol,
      reverse-engineered from the console. This carries the console
      terminal, the configuration and the TOY, and is the most uncertain
@@ -256,4 +269,5 @@ The EV7 machines are the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its
 console depends on the system's management hardware. The first contact
 confirmed both: the console's first access is to the processor's own
-management port (GIO), and it reaches nothing else until that answers.
+management port (GIO), and with the EV7 and its registers emulated (M1-M3)
+the console reaches nothing else until that answers.

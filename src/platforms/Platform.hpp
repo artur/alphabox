@@ -140,6 +140,12 @@ struct platform_config {
 
   /// Words patched into the decompressed console for speed, or nullptr.
   const rom_patch *console_patches;
+
+  /// How much of low memory the decompressed console occupies, which is
+  /// what the decompressed-image cache (rom.decompressed) saves; 0 for the
+  /// 2 MB every Tsunami console fits in. Marvel's console runs up to
+  /// 0x440000.
+  u32 console_bytes;
 };
 
 /// The board named `name`, or nullptr.
