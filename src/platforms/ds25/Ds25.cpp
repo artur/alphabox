@@ -27,26 +27,60 @@
 #include "StdAfx.hpp"
 
 #include "Boards.hpp"
-#include "DPR.hpp"
+#include "Ds25Aic7899.hpp"
+#include "Ds25Dpr.hpp"
 #include "Flash.hpp"
 
-/// The DRIR input of a slot's pin. [Not yet read from the console: every
-/// slot is refused until it is.]
+namespace {
+/// A slot's interrupt inputs: the DRIR bit of INTA, and how many pins are
+/// wired (INTB.. follow INTA).
+struct ds25_slot {
+  int hose, slot, inta, pins;
+};
+
+/**
+ * The console's own table (DS25 update utility V7.3, at 0x179f10 in its
+ * memory: one word per slot, a byte per pin, 0xff for none; hose 0 from
+ * slot 7, hoses 1-3 from slot 1, six slots each -- the layout of the
+ * ES45's table, platforms/es45/Es45.cpp). The interrupt line a console
+ * writes is the Titan's DRIR bit. The one-pin places (hose 0 slot 12,
+ * hoses 1 and 3 slot 6) are where the ES45 has its hot-plug controllers.
+ **/
+const ds25_slot ds25_slots[] = {
+    {0, 8, 0x14, 4},  {0, 9, 0x18, 4}, {0, 10, 0x0c, 4}, {0, 11, 0x10, 4},
+    {0, 12, 0x0b, 1}, {1, 1, 0x1c, 4}, {1, 2, 0x20, 4},  {1, 6, 0x0a, 1},
+    {2, 1, 0x00, 4},  {2, 5, 0x04, 4}, {3, 1, 0x24, 4},  {3, 2, 0x28, 4},
+    {3, 6, 0x09, 1},
+};
+
+const ds25_slot *find_slot(int hose, int slot) {
+  for (const ds25_slot &s : ds25_slots)
+    if (s.hose == hose && s.slot == slot)
+      return &s;
+  return nullptr;
+}
+} // namespace
+
+/// The input of the Titan's DRIR a device's pin reaches, or -1.
 int ds25_pci_interrupt(int hose, int slot, int intx) {
-  (void)hose;
-  (void)slot;
-  (void)intx;
-  return -1;
+  const ds25_slot *s = find_slot(hose, slot);
+  if (!s || (intx & 3) >= s->pins)
+    return -1;
+  return s->inta + (intx & 3);
 }
 
 const char *ds25_slot_refusal(int hose, int slot) {
-  (void)hose;
-  (void)slot;
-  return "the DS25's slots are not established yet (docs/platforms/ds25.md)";
+  const ds25_slot *s = find_slot(hose, slot);
+  if (!s || s->pins == 1 || (hose == 2 && slot == 1))
+    return "the DS25's slots are hose 0 devices 8 to 11, hoses 1 and 3 "
+           "devices 1 and 2, and hose 2 device 5 (hose 2 device 1 is the "
+           "on-board SCSI)";
+  return nullptr;
 }
 
 /// The RMC's dual-port RAM and the flash, as on the ES45 [assumed].
 void ds25_board_devices(CConfigurator *cfg, CSystem *sys) {
-  new CDPR(cfg, sys);
+  new CDs25Dpr(cfg, sys);
   new CFlash(cfg, sys, 2);
+  new CDs25Aic7899(cfg, sys, 2, 1);
 }
