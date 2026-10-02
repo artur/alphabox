@@ -49,7 +49,8 @@
  **/
 void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                               u32 data) {
-  if (func < m_chip.channels)
+  // Writes to the expansion ROM would program the flash: not emulated.
+  if (func < m_chip.channels && bar != 6)
     channels[func]->bar_write(bar, address, dsize, data);
 }
 
@@ -59,6 +60,14 @@ void CSym53C8xx::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 u32 CSym53C8xx::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   if (func >= m_chip.channels)
     return 0;
+  if (bar == 6) {
+    // The expansion ROM, shared by the functions of a two-channel part.
+    u32 v = 0;
+    if (!m_rom.empty())
+      for (int i = 0; i < dsize / 8; i++)
+        v |= u32(m_rom[(address + i) & (m_rom.size() - 1)]) << (8 * i);
+    return v;
+  }
   return channels[func]->bar_read(bar, address, dsize);
 }
 
@@ -672,9 +681,11 @@ void CSym53C8xx::CChannel::write_b_istat(u8 value) {
       state.wait_reselect = false;
       start_scripts();
       resumed = true;
-    }
+    } else if (state.executing)
+      // SCRIPTS that poll ISTAT for SIGP may be paused (SYM_SPIN_INSNS).
+      scriptsWake.notify_one();
 #if defined(DEBUG_SYM_START)
-    else if (!old_sigp)
+    if (!resumed && !old_sigp)
       printf("SYM: SIGP set while not in WAIT RESELECT (executing %d, #%lu)\n",
              state.executing, ++dbg_sigp_not_waiting);
 #endif

@@ -1268,13 +1268,12 @@ void CSym53C8xx::CChannel::execute() {
   int opcode;
   bool is_load_store;
 
-  if (++state.insn_processed > SYM_MAX_INSN_PER_BURST) {
-    printf("SYM: SCRIPTS runaway (> %d instructions without halt); aborting.\n",
-           SYM_MAX_INSN_PER_BURST);
-    state.executing = false;
-    RAISE(DSTAT, ABRT);
-    return;
-  }
+  // No limit on how long SCRIPTS may run: a program that polls never
+  // halts on the real chip either. This used to abort after 100000
+  // instructions with DSTAT ABRT, which OpenVMS's PKWDRIVER answered with a
+  // chip reset and a SCSI bus reset in the middle of an INITIALIZE (MEDOFL).
+  // The device thread paces long runs instead (see SYM_SPIN_INSNS).
+  ++state.insn_processed;
 
 #if defined(DEBUG_SYM_SCRIPTS)
   printf("SYM: INS @ %x   \n", R32(DSP));

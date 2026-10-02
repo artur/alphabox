@@ -62,6 +62,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 /**
  * \brief What distinguishes one 53C8xx part from another.
@@ -101,6 +102,13 @@ struct sym_chip_config {
   u8 stest2_mask;
   u8 stest3_mask;
   u8 stest4; ///< STEST4 read value (Ultra2 parts; 0 where absent)
+
+  /// External flash behind the expansion ROM BAR (0: none). The parts from
+  /// the 825 on have the memory interface for it, and the adapters built on
+  /// them carry the flash: OpenVMS's driver (SYS$PKWDRIVER) sizes the BAR
+  /// and reads the end of the flash unconditionally, through a mapping that
+  /// is never made when the BAR reads back 0.
+  u32 rom_bytes;
 };
 
 /// The largest SCRIPTS RAM any part in the family has (the 896's 8 KB).
@@ -155,6 +163,10 @@ public:
 
 private:
   const sym_chip_config m_chip;
+
+  /// The expansion ROM's contents (see build_rom).
+  std::vector<u8> m_rom;
+  void build_rom();
 
   /**
    * \brief One SCSI core: register file, SCRIPTS processor, SCSI bus.

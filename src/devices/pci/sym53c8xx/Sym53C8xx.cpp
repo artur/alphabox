@@ -41,6 +41,8 @@
 
 #include "Sym53C8xxRegs.hpp"
 
+#include <chrono>
+
 CSym53C8xx::CChannel::CChannel(CSym53C8xx &dev, int index)
     : dev(dev), m_chip(dev.m_chip), index(index) {}
 
@@ -61,9 +63,17 @@ void CSym53C8xx::CChannel::run() {
         return;
       step_scripts();
       if (state.executing) {
-        // Let register accesses interleave between instructions.
-        lock.unlock();
-        lock.lock();
+        if (state.insn_processed >= SYM_SPIN_INSNS) {
+          // Polling (see SYM_SPIN_INSNS): give the host core back for a
+          // moment, or until a register write wakes us.
+          state.insn_processed = 0;
+          scriptsWake.wait_for(lock,
+                               std::chrono::microseconds(SYM_SPIN_PAUSE_US));
+        } else {
+          // Let register accesses interleave between instructions.
+          lock.unlock();
+          lock.lock();
+        }
       }
     }
   } catch (std::exception &e) {
@@ -97,6 +107,50 @@ CSym53C8xx::CSym53C8xx(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
 }
 
 /**
+ * The expansion ROM: an erased flash with the identification block that
+ * the 53C8xx adapters sold for Alpha systems keep in its last 4 KB, as
+ * OpenVMS's driver (SYS$PKWDRIVER, IntraServer) checks it before it brings
+ * the port online:
+ *
+ *  - the block starts with the seven dwords below, the maker's name;
+ *  - the dwords from the start of the block up to 0x34 bytes before the end
+ *    of the flash add up (modulo 2^32) to 0x012435c5;
+ *  - the dword 0x24 bytes before the end is the firmware version, four
+ *    characters the driver prints.
+ *
+ * Without the block the driver takes the port offline ("ROM Checksum read
+ * error"); without a ROM at all it read the flash through a mapping it had
+ * never made and crashed the system (INVEXCEPTN in SYSMAN). The driver also
+ * accepts a whole IntraServer firmware image instead, which is not
+ * reproduced here. The rest of the flash reads as erased; it starts with
+ * no PCI option ROM header (0x55 0xaa).
+ **/
+void CSym53C8xx::build_rom() {
+  m_rom.assign(m_chip.rom_bytes, 0xff);
+  if (m_chip.rom_bytes < 0x1000)
+    return;
+  static const u32 maker[] = {0x72746e49, 0x72655361, 0x20726576, 0x68636554,
+                              0x6f6c6f6e, 0x2c207967, 0x636e4920};
+  const u32 base = m_chip.rom_bytes - 0x1000;
+  const u32 last = m_chip.rom_bytes - 0x34; // the last dword summed
+  auto put = [this](u32 a, u32 v) {
+    for (int i = 0; i < 4; i++)
+      m_rom[a + i] = u8(v >> (8 * i));
+  };
+  auto get = [this](u32 a) {
+    return u32(m_rom[a]) | u32(m_rom[a + 1]) << 8 | u32(m_rom[a + 2]) << 16 |
+           u32(m_rom[a + 3]) << 24;
+  };
+  for (u32 i = 0; i < 7; i++)
+    put(base + 4 * i, maker[i]);
+  put(m_chip.rom_bytes - 0x24, 0x302e3156); // "V1.0"
+  u32 sum = 0;
+  for (u32 a = base; a < last; a += 4)
+    sum += get(a);
+  put(last, 0x012435c5u - sum);
+}
+
+/**
  * Initialize the Symbios device.
  *
  * Reset PCI structures, reset the chipset, and set up locks.
@@ -126,9 +180,13 @@ void CSym53C8xx::init() {
     cfg_mask[0x14 >> 2] = 0xffffff00;
     if (m_chip.ram_bytes)
       cfg_mask[0x18 >> 2] = ~(m_chip.ram_bytes - 1);
+    if (m_chip.rom_bytes)
+      cfg_mask[0x30 >> 2] = ~(m_chip.rom_bytes - 1) | PCI_ROM_ADDRESS_ENABLE;
     cfg_mask[0x3c >> 2] = 0x000000ff;
     add_function(f, cfg_data, cfg_mask);
   }
+
+  build_rom();
 
   ResetPCI();
 

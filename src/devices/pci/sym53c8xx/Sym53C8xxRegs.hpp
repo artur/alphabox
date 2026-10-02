@@ -35,9 +35,14 @@
 #if !defined(INCLUDED_SYM53C8XX_REGS_H)
 #define INCLUDED_SYM53C8XX_REGS_H
 
-// SCRIPTS runaway guard — maximum instructions per guest-initiated start
-// (DSP write, DCNTL.STD, SIGP resume). Real drivers never approach this.
-#define SYM_MAX_INSN_PER_BURST 100000
+// SCRIPTS that run this many instructions without halting are polling --
+// OpenVMS's SYS$PKWDRIVER parks its SCRIPTS in a loop reading ISTAT until
+// the driver sets SIGP -- and the device thread then pauses for
+// SYM_SPIN_PAUSE_US at a time (a register write that matters wakes it at
+// once) instead of spinning a host core. Counted from the last start by the
+// guest (DSP write, DCNTL.STD, SIGP resume).
+#define SYM_SPIN_INSNS 4096
+#define SYM_SPIN_PAUSE_US 50
 
 // Maximum instructions run inline on the register-writing (CPU) thread
 // before handing SCRIPTS to the device thread; see run_scripts_inline().
