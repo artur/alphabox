@@ -111,9 +111,9 @@ card. The [documentation](docs/README.md) covers the rest:
 | Area | Devices |
 |---|---|
 | Machine | AlphaServer ES40; the DS20E, DS20L (one and two processors) and DS10, and on the Titan chipset the ES45 (one, two and four processors), DS25 (one and two) and DS15 boot OpenVMS 8.4; and on the EV7 (Marvel) the ES47 (two EV7s or EV7zs), ES80 (eight EV7s) and GS1280 (sixteen) boot OpenVMS 8.4 from its CD to DCL ([docs/platforms.md](docs/platforms.md)) |
-| CPU | 1–4 × Alpha EV68CB (21264) |
-| Chipset | Tsunami/Typhoon: Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC |
-| Memory | 64 MB – 32 GB |
+| CPU | Alpha EV68CB (21264): 1–4 on the Tsunami and Titan machines; EV7 and EV7z (21364): 2 on the ES47, up to 8 on the ES80 and 16 on the GS1280 |
+| Chipset | Tsunami/Typhoon (Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC); Titan (Cchip, Dchip, PA-chips with G and A ports, TIG); Marvel (each EV7's on-chip router and memory controllers, IO7 I/O bridges, the CMM/MBM management processors over GIO) |
+| Memory | 64 MB – 32 GB; on the EV7 machines, per processor at its own physical base |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
 | Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE / ViRGE/VX / ViRGE/DX / ViRGE/GX2 (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay); DEC ZLXp-E1 (DECchip 21030 "TGA", 8 planes, Bt485: AlphaBIOS and the Windows 2000 desktop to 1280x1024); PowerStorm 3D30 and 4D20 (TGA2: 8 planes with a Bt485, and 32-bit true colour with an IBM RGB561; the Windows 2000 desktop to 1280x1024 and 1600x1200, beside a VGA card) |
