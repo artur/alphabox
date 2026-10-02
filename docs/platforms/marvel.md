@@ -729,7 +729,7 @@ M4 table holds):
 | IO7 line | IO7 0, Embedded I/O, IO7 pass 3 | the same | IO_SYS_REV type 1, IO_ASIC_REV 0x12 |
 | drawer line | I/O Drawer 0, Cabinet 0, Riser 0, Backplane rev 2 | Backplane rev 0 | where the console takes the backplane revision from is not found **[open]** |
 | hoses | Bus 0 66 MHz, 1-2 33 MHz, PCI 2.2 mode; AGP Bus 3, AGP rev 2.0, 1x/4x | the same | HP_DEV_CAP gives hose 0's slots 66 MHz (with no card there it reads 33 MHz) |
-| devices | DEGX2-TA (0/1), a SIIG serial card (1/3), AIC-7892 (2/1), CMD 649 (2/2), USB (2/3), Radeon (3/5) | DE500-BA (0/1), 53C895 (2/1) | Alphabox has no AIC-7892, CMD 649, BCM5703 or Radeon: the 53C895 stands in for the AIC-7892 in its slot, the DE500-BA for the gigabit card; the console has drivers for both |
+| devices | DEGX2-TA (0/1), a SIIG serial card (1/3), AIC-7892 (2/1), CMD 649 (2/2), USB (2/3), Radeon (3/5) | DE500-BA (0/1), 53C895 (2/1) | Alphabox has no AIC-7892, CMD 649 or BCM5703: the 53C895 stands in. The Radeon 7500 AGP exists since 2026-10-02 (`radeon` class; `pci3.5` gives the real listing's "Radeon 7500 AGP ... vga0.0.0.5.3", see docs/peripherals.md) for the AIC-7892 in its slot, the DE500-BA for the gigabit card; the console has drivers for both |
 
 **The IO7 model.** Its space and registers are Linux's (`core_marvel.h`)
 and the console's tables; what the registers *do* was read off the
