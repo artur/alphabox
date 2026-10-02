@@ -296,12 +296,95 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
 
   scsi_free(bus);
 
-  if (wanted > moved && completion == ISP_STATUS_COMPLETE)
+  // Automatic request sense: the drivers enable it for every target (the
+  // ARQ bit of SET TARGET PARAMETERS), so a CHECK CONDITION comes back
+  // with the target's sense data in the status entry.
+  if ((scsi_status & 0xff) == 0x02)
+    sense_length = request_sense(bus, target, lun, sense, sizeof(sense));
+
+  // A short transfer is a DATA UNDERRUN only for a command that ended well.
+  // One that ended in CHECK CONDITION (a MODE SENSE of a page the disk does
+  // not have, say) completes with its SCSI status, the residual saying how
+  // little moved: OpenVMS's PKQDRIVER takes DATA UNDERRUN together with a
+  // CHECK CONDITION for a controller fault, resets the adapter three times
+  // and shuts the port down, and INITIALIZE then fails with MEDOFL.
+  if (wanted > moved && completion == ISP_STATUS_COMPLETE &&
+      (scsi_status & 0xff) == 0x00)
     completion = ISP_STATUS_DATA_UNDERRUN;
 
   post_response(entry, completion, scsi_status, state_flags, wanted - moved,
                 sense_length ? sense : nullptr, sense_length);
   return true;
+}
+
+/**
+ * Fetch the sense data a target holds after a CHECK CONDITION: a REQUEST
+ * SENSE of up to `max` bytes, run on the bus the way a command entry is.
+ * Returns how many bytes the target sent (0 if it could not be asked).
+ **/
+int CIsp1040::request_sense(int bus, int target, int lun, u8 *sense, int max) {
+  if (!scsi_arbitrate(bus))
+    return 0;
+  if (!scsi_select(bus, target)) {
+    scsi_free(bus);
+    return 0;
+  }
+
+  int got = 0;
+  for (bool done = false; !done;) {
+    switch (scsi_get_phase(bus)) {
+    case SCSI_PHASE_MSG_OUT: {
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, 1);
+      p[0] = u8(0x80 | (lun & 7)); // Identify
+      scsi_xfer_done(bus);
+      break;
+    }
+
+    case SCSI_PHASE_COMMAND: {
+      u8 *p = (u8 *)scsi_xfer_ptr(bus, 6);
+      const u8 cdb[6] = {0x03, u8((lun & 7) << 5), 0, 0, u8(max), 0};
+      memcpy(p, cdb, sizeof(cdb));
+      scsi_xfer_done(bus);
+      break;
+    }
+
+    case SCSI_PHASE_DATA_IN: {
+      const size_t n = scsi_expected_xfer(bus);
+      const u8 *p = (const u8 *)scsi_xfer_ptr(bus, n);
+      const int keep = int(std::min<size_t>(n, size_t(max - got)));
+      memcpy(sense + got, p, keep);
+      got += keep;
+      scsi_xfer_done(bus);
+      break;
+    }
+
+    case SCSI_PHASE_DATA_OUT: {
+      // Nothing to send: a target asking for data here is confused.
+      const size_t n = scsi_expected_xfer(bus);
+      memset(scsi_xfer_ptr(bus, n), 0, n);
+      scsi_xfer_done(bus);
+      break;
+    }
+
+    case SCSI_PHASE_STATUS:
+    case SCSI_PHASE_MSG_IN: {
+      const bool msg = scsi_get_phase(bus) == SCSI_PHASE_MSG_IN;
+      const size_t n = scsi_expected_xfer(bus);
+      const u8 *p = (const u8 *)scsi_xfer_ptr(bus, n);
+      const bool complete = msg && n && p[0] == 0x00;
+      scsi_xfer_done(bus);
+      if (complete)
+        done = true;
+      break;
+    }
+
+    default:
+      done = true;
+      break;
+    }
+  }
+  scsi_free(bus);
+  return got;
 }
 
 /**
@@ -333,7 +416,9 @@ void CIsp1040::post_response(const u8 *request, u16 completion, u16 scsi_status,
     entry[ISP_RSP_STATUS_FLAGS + 1] = u8(ISP_STATUS_FLAG_SENSE_VALID >> 8);
     entry[ISP_RSP_SENSE_LEN] = u8(n);
     memcpy(entry + ISP_RSP_SENSE, sense, n);
-    state_flags |= ISP_STATE_GOT_SENSE;
+    // (This flag used to be added after the state flags were stored, so it
+    // never reached the entry.)
+    entry[ISP_RSP_STATE_FLAGS + 1] |= u8(ISP_STATE_GOT_SENSE >> 8);
   }
   entry[ISP_RSP_RESID] = u8(residual);
   entry[ISP_RSP_RESID + 1] = u8(residual >> 8);

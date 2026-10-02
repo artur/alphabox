@@ -32,8 +32,8 @@
  *
  * So the emulation does not run QLogic's firmware: it answers the mailbox
  * commands the drivers use, and executes queue entries against the SCSI
- * bus. A driver that uploads firmware gets it accepted and ignored, which
- * is what it expects -- it never reads it back.
+ * bus. A driver that uploads firmware gets it stored in the RISC's memory
+ * and otherwise ignored; OpenVMS reads that memory back.
  *
  * Two generations live here. The ISP1020 and ISP1040 are the first: one
  * SCSI bus, a 128-byte NVRAM, and the register map the file below
@@ -75,6 +75,7 @@
 
 #include <condition_variable>
 #include <mutex>
+#include <vector>
 
 /**
  * \brief What distinguishes one QLogic ISP part from another.
@@ -140,10 +141,20 @@ private:
   // Isp1040Mailbox.cpp
   void mailbox_command();
   void mailbox_done(u16 status);
+  void build_resident_firmware();
+
+  /// The RISC's memory, 64K words. The emulation runs none of it, but it
+  /// keeps what a driver writes there and answers reads from it: OpenVMS's
+  /// driver reads the header of the firmware already in the chip to decide
+  /// whether to load its own (see build_resident_firmware). Not in the
+  /// state file -- drivers look at it only while they set the adapter up,
+  /// which a restored machine has done already.
+  std::vector<u16> m_risc_ram;
 
   // Isp1040Queues.cpp
   void run_request_queue();
   bool execute_entry(u32 entry_address, u8 *entry);
+  int request_sense(int bus, int target, int lun, u8 *sense, int max);
   int gather_segments(u32 entry_address, const u8 *entry, u32 *address,
                       u32 *count, int max_segments);
   void post_response(const u8 *request, u16 completion, u16 scsi_status,

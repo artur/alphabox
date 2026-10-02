@@ -77,6 +77,7 @@ void CIsp1040::init() {
   state.nvram_eeprom.init(m_chip.gen1080 ? ISP1080_NVRAM_ADDRESS_BITS
                                          : ISP_NVRAM_ADDRESS_BITS);
   build_nvram();
+  build_resident_firmware();
 
   ResetPCI();
 

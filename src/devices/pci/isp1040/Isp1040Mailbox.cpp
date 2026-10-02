@@ -27,9 +27,9 @@
  * an interrupt raised. Mailbox 0 carries the command going in and the
  * result coming out.
  *
- * Firmware loading is accepted and discarded: the emulation implements
- * what the firmware would have done, so there is nothing to load it into,
- * and no driver reads it back.
+ * Firmware loading is accepted into the RISC's memory and not run: the
+ * emulation implements what the firmware would have done. The memory is
+ * kept because OpenVMS reads it back (see build_resident_firmware).
  *
  * On the parts with two SCSI buses the command set did not grow; the
  * commands that concern one bus say which in a bit they had to spare. A
@@ -61,6 +61,45 @@ void CIsp1040::mailbox_done(u16 status) {
   update_irq();
 }
 
+/**
+ * What the RISC's memory holds at power-on: the header of a firmware image
+ * at 0x1000, where QLogic's images load, naming the version ABOUT FIRMWARE
+ * reports.
+ *
+ * OpenVMS's driver (SYS$PKQDRIVER) reads it with READ RAM WORD before it
+ * loads anything: word 3 is the image's length, which it then reads and
+ * checksums, and word 1 is where the copyright text that follows the
+ * five-word header ends; it finds "version " in that text and compares the
+ * number after it with the image it carries, to decide whether to load its
+ * own. It trusts both words, so memory that reads as zeros makes it copy
+ * 0xeffb words of text into a 128-byte buffer on its stack, and the system
+ * crashes (INVEXCEPTN in SYSMAN, an access violation in SYS$PKQDRIVER).
+ * The words of the image sum to zero, the checksum VERIFY CHECKSUM checks.
+ **/
+void CIsp1040::build_resident_firmware() {
+  m_risc_ram.assign(0x10000, 0);
+  char text[96];
+  snprintf(text, sizeof(text),
+           " Alphabox emulated %s firmware  Version %02u.%02u ", m_chip.part,
+           m_chip.firmware_major, m_chip.firmware_minor);
+  const size_t chars = strlen(text);
+  const u16 base = 0x1000;
+  const u16 text_words = u16((chars + 1) / 2);
+  const u16 length = u16(5 + text_words + 1); // header, text, checksum word
+  m_risc_ram[base + 1] = u16(base + 5 + text_words);
+  m_risc_ram[base + 3] = length;
+  for (u16 i = 0; i < text_words; i++) {
+    // Two characters to a word, the first in the high byte.
+    const u8 hi = u8(text[2 * i]);
+    const u8 lo = 2 * i + 1 < chars ? u8(text[2 * i + 1]) : u8(' ');
+    m_risc_ram[base + 5 + i] = u16(hi << 8 | lo);
+  }
+  u16 sum = 0;
+  for (u16 i = 0; i < length - 1; i++)
+    sum = u16(sum + m_risc_ram[base + i]);
+  m_risc_ram[base + length - 1] = u16(0x10000 - sum);
+}
+
 void CIsp1040::mailbox_command() {
   const u16 command = state.mailbox[0];
   // Which bus a command that names one is for. On a single-bus part the
@@ -79,13 +118,21 @@ void CIsp1040::mailbox_command() {
   case ISP_MBOX_NO_OP:
     break;
 
-  case ISP_MBOX_LOAD_RAM:
+  case ISP_MBOX_LOAD_RAM: {
+    // Mailbox 1: where in RISC memory, 2 and 3: the host address, 4: how
+    // many words.
+    const u32 address = u32(state.mailbox[2]) << 16 | state.mailbox[3];
+    for (u32 i = 0; i < state.mailbox[4]; i++)
+      m_risc_ram[u16(state.mailbox[1] + i)] = dma_read16(address + 2 * i);
+    break;
+  }
+
   case ISP_MBOX_WRITE_RAM_WORD:
-    // Firmware, accepted and discarded (see the file comment).
+    m_risc_ram[state.mailbox[1]] = state.mailbox[2];
     break;
 
   case ISP_MBOX_READ_RAM_WORD:
-    state.mailbox_out[2] = 0;
+    state.mailbox_out[2] = m_risc_ram[state.mailbox[1]];
     break;
 
   case ISP_MBOX_MAILBOX_REG_TEST:
