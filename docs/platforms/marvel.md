@@ -7,15 +7,13 @@ and there is no chipset in the Tsunami sense. Each EV7 carries its own
 memory controllers, interrupt logic and a router, and reaches the I/O
 through an IO7 bridge.
 
-**Config**: `platform = "es47";` with `ev7` (or `ev7z`) processors · **Status**:
-packets M0-M3 done (2026-10-02). On an emulated EV7 -- the EV7 processor
-rows, each processor's on-chip registers and its GIO port, memory per PID
-and the XSROM's handoff -- the console's PALcode runs its reset path, the
-console proper starts, and it reaches its GIO conversation with every
-register it read on the way answered by a modelled register. It then waits,
-without a timeout, for its management processor (CMM) to answer on GIO:
-packet M4. Nothing is printed yet: the console terminal is reached through
-that management interface.
+**Config**: `platform = "es47";` with `ev7` (or `ev7z`) processors and a
+`serial0` for the console terminal · **Status**: packets M0-M4 done
+(2026-10-02): L2. On emulated EV7s, with the management processor (CMM) on
+the other side of each processor's GIO port emulated, the console starts
+both processors, builds its configuration tree and reaches `P00>>>` on the
+telnet port; `show config`, `show memory`, `show cpu` and `show fru`
+answer. There is no IO7 yet (packet M5), so no PCI devices.
 
 The ES47 is the target: the smallest Marvel, with two EV7s on one board
 and one IO7. The ES80 and GS1280 are the same platform with more
@@ -317,8 +315,10 @@ conversation with the outside world, and the probe watched it in order:
   Timeout".
 - So **the console terminal, the TOY, the configuration, the FRU data and
   the console's own NVRAM all reach the CMM/MBM through GIO**. The
-  framing above the GIO register level is **not known**: it is the main
-  reverse-engineering task of this project.
+  framing above the GIO register level was the main reverse-engineering
+  task of this project; M4 worked it out (far-side registers, a byte
+  window into the CMM's memory, mailboxes carrying SMLAN messages, the
+  terminal as two registers): see "M4" under Findings.
 
 **What an emulator must provide instead of SROM/XSROM/CMM/MBM:**
 
@@ -374,12 +374,10 @@ relying on them.
   it: "SROMFW", 0x1640 bytes, and "XSROMFW", 0xfd60 bytes. Disassembling the
   XSROM's end is the best source for the handoff registers.
 - MBM, CMM, PF, FPGA and CPLD images: firmware of the management
-  processors, not Alpha code.
+  processors, not Alpha code. The CMM's is Intel 386EX code (M4).
 - What the firmware requires that the emulator does not have yet (the
   44-bit decode, the EV7 CSR block, the GIO transport and the larger cache
-  came with M1-M3):
-  - the CMM's answers on GIO (M4);
-  - IO7s (M5).
+  came with M1-M3, the CMM's answers on GIO with M4): IO7s (M5).
 
 ## Sources
 
@@ -434,7 +432,7 @@ type and revision), not whole listings.
 | --- | --- | --- |
 | L0 | every lane builds with the EV7 core and the Marvel module | |
 | L1 | the console image loads, its PALcode runs the reset path, the console proper starts | **reached on the `es47` row** (EV7 rows, Marvel registers; first on the retired probe row) |
-| L2 | `P00>>>` on the telnet port, through the emulated CMM's GIO terminal | needs packets M1-M4 |
+| L2 | `P00>>>` on the telnet port, through the emulated CMM's GIO terminal | **reached** with M4 (2026-10-02) |
 | L3 | `show config` matches the real ES47 listing in structure: "PID 0 ... EV7 rev x, NNN MHz", "Memory 0 ...", "IO7 0 ...", "PCI Bus 0 Hose 0 ...", PID 1 "No Local I/O", the RIMM table; `show cpu` "Type Major 15"; `show mem` with PID 1 at 400000000 | Real listings exist only for other configurations and console versions (V7.3-11 against our V7.3-1), so L3 is a structural match. Device lines depend on which I/O we emulate behind the IO7 |
 | L4 | `test` and console network boot through a NIC on an IO7 hose; disk boot of a CD | the console's interrupt numbers in INTERRUPT_LINE are the answer key for the LSI wiring |
 | L5 | OpenVMS 8.4 boots from `lab/ALPHA084.ISO` | |
@@ -452,7 +450,7 @@ moved lines of code, **[guess]**.
 | M1 | **EV7 CPU model** | `cpu_model` grows a family field (EV6 / EV7). An EV7 row: chip ID, type 15, minor per revision, EV7z row (type 16 if the console agrees). Physical addresses masked to 44 bits. Per-CPU PID (WHAMI). Interrupt delivery from the Rbox instead of the EIR pins. vmspal fast paths and JIT PAL shortcuts off for EV7 until verified. Kept apart from the EV6 code wherever the PALcode interface differs | 500-1000 | L1 | **done** 2026-10-02 (see "M1-M3") |
 | M2 | **EV7 on-chip CSR block** | per EV7 a device answering its 4 MB CSR window: Rbox (WHOAMI, INT/IMASK/IREQ/INTQ/INTA, the IT interval timer, SCRATCH, routing CFG reading as configured), Cbox, Zbox (memory configuration consistent with the board row, errors clean), GIO registers and the 0x80000 lock | 1-2 k | L1+ | **done** 2026-10-02: the transport and a recording management side; the answers are M4 |
 | M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | **done** 2026-10-02, with the `es47` board row |
-| M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | open |
+| M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | **done** 2026-10-02 (see "M4"): ~800 lines |
 | M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | open |
 | M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | open |
 | M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | open |
@@ -464,6 +462,284 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M4: the CMM, the console's management side (2026-10-02)
+
+**Result: L2.** `platform = "es47";`, two `ev7` processors, a `serial0`
+in the system block: the console prints its power-up log on the telnet
+port, starts PID 1, builds its GCT and reaches `P00>>>`, within about a
+minute on either lane (an estimate from the run times, not a measurement). `show config`,
+`show memory`, `show cpu`, `show fru`, `show version`, `show pal` answer,
+`set`/`show` of environment variables work and the variables survive a
+restart (`rom.nvram`). The transcripts are in `lab/platforms/marvel/m4/`
+(`es47-console-*.log`, `es47-cmds-*.log`, the SMLAN log
+`es47-gio-int.log`). The model is `src/platforms/es47/Cmm.{hpp,cpp}`, a
+`GioManagement` that `es47_board_devices` installs in place of M2's
+recorder (`CMarvel::set_management`).
+
+```
+starting console on CPU 0
+...
+CPU 0 speed is 1000 MHz
+...
+entering idle loop
+access NVRAM
+Get Partition DB
+hpcount = 1, spcount = 1, ev7_count = 2, io7_count = 1
+hard_partition = 0
+0 sub-partition 0:   start:00000000 00000000   size:00000000 40000000
+PID 0 console memory base: 0, 1 GB
+1 sub-partition 0:   start:00000004 00000000   size:00000000 40000000
+PID 1 memory: 400000000, 1 GB
+total memory, 2 GB
+probe I/O subsystem
+starting drivers
+Starting secondary CPU 1 at address 400030000
+initializing GCT/FRU*** system serial number not set. use set sys_serial_num command.
+. at 556000
+Initializing
+AlphaServer Console V7.3-1, built on Feb 27 2007 at 12:48:34
+P00>>>show cpu
+CPU 0   CurOwner 0  Owner 0   Type Major 15, Minor  3
+CPU 1   CurOwner 0  Owner 0   Type Major 15, Minor  3
+```
+
+**Against the real ES47's `show config`** (`test/platforms/es47/show-config.txt`,
+a 7/1300 on V7.3-11), structurally:
+
+| | real | emulated | why |
+| --- | --- | --- | --- |
+| banner | hp AlphaServer ES47 7/1300 | hp AlphaServer ES47 7/1000 | the clock is the configuration's (`speed`) |
+| PID 0 / PID 1 lines | CPU 0 / CPU 1, NS,EW (0,0) / (1,0), Hard ID 0 / 1 | the same | partition database coordinates |
+| cache, revision | 1.75 MB, EV7 rev 3.0 | 1.50 MB, EV7 rev 2.1 | the `ev7` row is a revision-2 part (the console derives the revision from the chip ID and CSR 0x28020); `ev7z` is the 1.75 MB row |
+| memory | 4 GB each | 1 GB each (memory.bits 30) | configuration |
+| RIMMs | PPPPP..... | PPPPP..... | MBM configuration |
+| IO7 0 ... PCI Bus 0-3 | present | "No Local I/O" | no IO7 (M5): the console skips it because RBOX_IO_CFG reads 0 |
+| device table, slots | DEGXA, AIC-7892, CMD 649, USB, Radeon | empty | M5 |
+
+**The CMM firmware.** `CMM3_V2_7_5.BIN` is x86 code for an **Intel 386EX**:
+a 0x40-byte APU header ("V2.7-5", "CPQ CMM3", "X86", "CMMFW"), then
+32-bit protected-mode code whose first instructions program the 386EX's
+chip-select unit (I/O ports 0xF400-0xF43E) and its 8259A (0xF020/0xF021);
+the strings name "386EX Emulator (12.5Mhz)", "CMM Hardware (25Mhz)" and,
+from the same code base, "AM186ES Eval Hardware (40Mhz)". The image is
+linked at linear 0x03FA0000 (file offset = linear - 0x03FA0000: the data
+initialisers hold pointers in that range, and the start-up far jump goes to
+0x0100:0x03FC19DD). It runs a small multitasking executive ("Creating
+process %s": env_poll, ppp_proc, smlan_rx/tx, smlan_ev7, srom_poll,
+eu_uart, cmm_cli, sm_link), speaks PPP/IP/UDP/TFTP to the MBM over the
+system management LAN ("SMLAN"), loads the SROM, XSROM and console images
+into the EV7s (srom.c, "SROM Communication Area at %Fp"), and passes SMLAN
+commands between the EV7s and the MBM (smlan_ev7_dispatch). Its terminal
+side, eu_uart, is a pair of **virtual UARTs per processor** (COM1, COM2)
+in an FPGA, with a status register (COM1/COM2 TX and RX full at
+0x800-0x4000, an interrupt-pending bit), a mask register (RXF/TXE enables
+0x1/0x2/0x40/0x80) and a reason register; "Console session is connected
+via the CMM". Its dump routine (dumppkt.c) names the SMLAN header fields
+and the command groups (DISCOVERY, PARTITION, ENVIRONMENTAL, ERRLOG,
+DATETIME, WATCHDOG, VIRT_CNSL, EV7_SETUP, FW_UPGRADE, ...) and commands
+("Get MBM Config", "Get PBM Config", "Get DB", "GetEnvVar"/"StoreEnvVar",
+"GetBaseTime"/"SetBaseTime", "PutChar", "GetTemp", "GetFanRpm",
+"GetEEROM", ...). The code-to-name table is built at run time and was not
+extracted **[open]**, nor were the FPGA's I/O addresses on the CMM side:
+the register map below is the EV7's side, read off the console.
+
+**The XSROM** (`MVXSROM_V1_0_31.BIN`) is the third witness: it reads the
+same status register through GIO and picks the processor block 0x40008 or
+0x46008 by its bit 6 (0x498-0x4d8), as the console's PALcode does.
+
+**How the console was read.** The console carries its own symbol table at
+0x3bf728: pairs {procedure descriptor, name}, the entry point at
+descriptor + 8. `lab/platforms/marvel/m4/tools/mksyms.py` turns it into
+`syms.txt` (2826 routines: `cmm_*`, `smlan_*`, `read_gport_csr`,
+`get_mbm_configuration`, `memconfig`, ...), and `cdis.py` disassembles a
+routine with its calls, linkage and strings resolved (the routines address
+their constants off the procedure value, VMS calling standard). The best
+single source was the console's **simulator mode**: `platform()` (0x2df8a0)
+is true when the longword at 0xfc holds 0xcafebeef, and then each SMLAN
+request routine builds the answer itself instead of asking -- a reference
+layout for every reply.
+
+**GIO, the far side's registers** (`read_gport_csr`/`write_gport_csr`,
+0x2e3c50/0x2e3cb0, on GIO_CTL/GIO_DAT as M2 found):
+
+| Reg | Access | Meaning | Where |
+| --- | --- | --- | --- |
+| 0 | read | status: <0> window access busy, <3> attention pending, <5> the console's flag as written, <6> this processor is the module's second (block 0x46008), <7> terminal TX full, <8> terminal RX ready | `con$putchar`, `con$getchar`, `cpu_id`, `dma_start_wait` |
+| 0 | write | control: <0> go (start a window access), <1> store the low byte, <2> store the high byte, <3> attention (a mailbox changed), <5> kept | `read_dma`/`write_dma`, `smlan_write` |
+| 1 | r/w | the window's 16-bit data; a byte at an odd address in <15:8> | `read_dma`, `write_dma` |
+| 2 | write | the window's CMM address | idem |
+| 4 | write | the console terminal: one character out | `con$putchar` (waits on status <7>) |
+| 5 | read | the console terminal: one character in | `con$getchar`, `con$checkchar` (status <8>) |
+| 8 | write | the PALcode's state word (PAL scratch + 0x1b8), sent whenever it changes; 4 when it enters the console | PALcode 0x3e259, cserve 0x45-0x51 |
+| 9 | read | read and discarded by `platform_init2` before it sets RBOX_IMASK **[guess: an interrupt reason, read to clear]** | 0x2dc6f0 |
+| 0xa | read | the CMM's options: <0> ring attention after starting SMLAN, <5> ring attention after each mailbox change | `smlan_init_comm`, `smlan_write`, `smlan_read` |
+| 0xb | r/w | <0>: the console sets it to start the SMLAN link and waits for the CMM to clear it | `smlan_init_comm` |
+
+The model answers every transaction at once (no busy), so GIO_DAT<63> is
+set by the time the processor polls it; reads of 0xa return 0 (no
+attention needed: the model acts on the mailbox write itself).
+
+**The byte window.** A read: write reg 2 = address; read reg 0; write reg 0
+= (status & 0x20) | 1; poll reg 0 <0> until clear (the console gives up
+after 1 s: "CMM DMA Timeout offset=%x"); read reg 1. A write: reg 2 =
+address, reg 1 = data (shifted to <15:8> for an odd address), reg 0 =
+(status & 0x20) | lanes | 1, with lanes 2 (even byte), 4 (odd byte) or 6
+(an aligned word). `read_cmm_mem`/`write_cmm_mem` (0x307fe0/0x307f20) go
+through the "cmm" device, byte by byte or word by word.
+
+**The CMM memory the processors see**, per processor n (n = status <6>,
+the processor's place on the module), from area(n) = 0x40000 + n * 0x6000
+(the console's own arithmetic; the PALcode's "block" is area + 8):
+
+| Address | Size | Contents | Read by |
+| --- | --- | --- | --- |
+| 0x40004 | 4 | the system type: byte 0x11 = ES47/ES80, <19:16> 0 = ES47 (1 = GS1280; anything else the development system "TS212c") | PALcode, `smlan_init`, `build_dsrdb` |
+| area + 0xe12, + 0xe14 | 2, 4n | a count and a list of longwords `start_secondaries` copies into the console's tables, which the PALcode also reads (block + 0xe0a, 0x3f354) **[guess: bad-memory/bitmap data]**; 0 | `start_secondaries`, PALcode |
+| area + 0x12a0 | 1 | the start state: 0 for the partition's primary, which builds its PAL area and HWRPB pointers from scratch (0x3ea0c); non-zero for a secondary, whose PALcode keeps what the console copied into its PAL area | PALcode 0x3e9fc |
+| area + 0x12a6 | 2 | the processor's clock in MHz, returned by cserve 0x4a (`get_cpu_speed`; 800 if 0) | PALcode 0x3ef98 |
+| area + 0x1aac | 12 | the TOY: MC146818 registers 0-11 (time, A, B) | `rtc_read`/`rtc_write` |
+| area + 0x1ac8 | 3 x 0x818 | request mailboxes | `smlan_write` |
+| area + 0x3310 | 3 x 0x818 | response mailboxes | `smlan_read` |
+| area + 0x4b98 + i | | TOY NVRAM bytes, index 12 and up | `rtc_read`/`rtc_write` |
+
+**Mailboxes.** A request slot: <0> u8 state (3 free and done, 0 posted),
+<2> u16 length, <4> the message. `smlan_write` (0x308af0) takes a slot
+whose state has <0> set, writes the message, the length and an id, then
+the state 0, rings attention if reg 0xa <5> asks for it, and waits up to
+3 s for the state to read 3. A response slot: <0> state (<0> full, set by
+the CMM; the console writes (state | 2) & ~1 once it has the message and
+rings attention if <2> was set), <4> the message. `smlan_read` (0x308860)
+polls the three response slots for up to 10 s for one that is full and
+carries its request's id.
+
+**An SMLAN message** (the console's builders; field names from the CMM's
+dumppkt.c): <0> u32 originator (0 from the console), <4> u32 destination
+-- the micro asked, an IP address (`pid2ip`: the MBM is 10.0.0.1, the
+module's CMM 10.0.<module + 1>.0, stored least significant byte first) --,
+<8> u32 id, <0xc> u16 command, <0xe> u16 status (0 = success), <0x10>
+data. Status 3 from `get_eerom_data` means "not there" and is taken
+quietly; any other non-zero status prints "*** CPU n: Server Management
+Interface responded to command %04x with status %04x".
+
+**The commands the console sends** (every one, found by scanning for the
+`zapnot r, 0xfc, r; lda r, cmd(r)` that builds them):
+
+| Cmd | Routine | Request data | Answer | Model |
+| --- | --- | --- | --- | --- |
+| 0x0333 | `get_own_partition_number` | -- | hard, soft partition (2 bytes) | 0, 0 |
+| 0x041c | `fetch_sm_nvram` | hard, soft partition | the console's NVRAM image, 0x800 | from `rom.nvram` |
+| 0x041b | `save_sm_nvram` | hard, soft partition, 0x800 image | -- | to `rom.nvram` |
+| 0x0323 | `get_partition_database` | 1 | the partition database, 0x800 (below) | one hard and one sub partition, both EV7s, the IO7 on PID 0 |
+| 0x0321 | `get_mbm_configuration` | -- (to the MBM) | MBM configuration, 0xd8 (below) | one module, two EV7s, five RIMMs each |
+| 0x0418 | `get_hard_partition_mem_assignm` | hard partition | memory groups and chunks, 0x800 (below) | each EV7's memory one chunk |
+| 0x0100 | `get_hard_partition_mem_assignm` (another path) | | | not seen |
+| 0x0322 | `get_pbm_configuration` | | PCI backplane | not seen (M5) |
+| 0x0330 | `get_system_topology` | | | not seen |
+| 0x0901 | `get_voltage_readings` | -- (to a micro) | count, 0x1c-byte records | CMM 6, MBM 13 |
+| 0x0902 | `get_temperature_readings` | | idem | CMM 2, MBM 4 |
+| 0x0903, 0x0908, 0x090e, 0x090f | fans, power supplies, PS tray, VRM status | | | success, nothing **[stub]** |
+| 0x0a01 | `get_eerom_data` | offset, length (to a micro) | u16 length, the FRU EEPROM bytes | status 3, not there **[stub]** |
+| 0x0801 | `get_fw_rev` | | | not seen |
+| 0x0407, 0x0409, 0x0415 | reset/power off partition, power on/off | | | not seen |
+| 0x0b01, 0x0b05, 0x0b06 | IPMI SEL log, CDL error get/clear | | | not seen |
+
+An unknown command is logged and answered with status 1.
+
+**The partition database** (0x800; `memconfig` 0x2f0e30 walks it, the
+simulator's version is at 0x3095e0): four lists, each a count byte in a
+longword followed by its entries.
+
+| List | Entry | Fields |
+| --- | --- | --- |
+| hard partitions | 0x1c | <0> number, <4> u32 (0xff in the simulator's), <8> name |
+| sub partitions | 0x20 | <0> hard partition, <2> 4 **[unknown, copied]**, <6> name |
+| processors | 12 | <0> 0x80 = the sub partition's primary, 0 = another member (others refused); <1> N/S, <2> E/W; <3> PID; <4> hard partition; <6> sub partition |
+| I/O | 8 | <3> E/W, <4> N/S of the EV7 the IO7 hangs on, <5> present |
+
+`memconfig` makes the last primary of the sub partition the GCT builder
+(0x282948), and only the primary's `powerup` builds the GCT: with both
+processors marked 0x80 the primary waited for PID 1 to build it, which it
+never does ("waiting for GCT/FRU to be built...", no CPU nodes, empty
+`show cpu`). `coord2id` turns the coordinates into the Hard ID and CPU
+number `show config` prints.
+
+**The MBM configuration** (0xd8; simulator version 0x30a210, consumers
+`memconfig`, `mem_config_get_rimm_size`, `build_mem_ctrl_hw`): four CPU
+modules 0x34 bytes apart; <4> u16 0 for a module that is there, 0xffff for
+one that is not; its processors at <8> and <0x20>, 0x18 bytes each (the
+second's last words overlap the next module's first longword, which
+nothing reads): <0> u16 1 for a processor that is there, <4> ten u16 RIMM
+words, Zbox 0's RIMMs 0-4 then Zbox 1's 5-9. `show memory` prints P for a
+non-zero word. The model writes each RIMM's size in MB **[guess at the
+unit]**.
+
+**The memory assignment** (0x0418, 0x800; `build_memory_chunks`
+0x2f1d20): <0> u64 **[guess: the partition's total]**, <8> u32 the
+number of groups; a group: <0> sub partition, <1> chunk count, two bytes,
+then chunks {u64 base, u64 size}. The console's memory sizes come from
+here.
+
+**Sensor readings** (0x0901/0x0902): <0> u32 count, records of 0x1c
+bytes: <0> u16 index, <2> s16 reading (<15> set: none), <4> the subpacket
+data the console copies into the GCT (0x18 bytes for a voltage, 0xc for a
+temperature). `build_cmm_hw` wants 8 sensors from the CMM and
+`build_mbm_hw` 17 from an ES47's MBM (5 on a GS1280, 24 on a type-0x15
+system), voltages and temperatures together, and prints "Sensor subpacket
+count error" otherwise. Which sensors and in what units is **[guess]**.
+
+**The console terminal** is the configuration's first serial port: the
+CMM model drives `CSerial` through its 16550 registers (THR, LSR, RBR), so
+telnet, `raw_mode` and the rest work unchanged. A CSerial on a board
+without the ALi no longer touches the ALi's PIC.
+
+**The TOY** is the MC146818 image in the CMM memory: the model refreshes
+it from the host clock (binary, 24-hour, register B 0x06) on every read
+of a time byte, and when the console clears SET after writing it keeps
+the difference as an offset. The console's own TOY test and OpenVMS's
+cserve GET_TOY/PUT_TOY were not exercised **[open]**.
+
+**Things M4 had to fix outside the CMM:**
+
+- **The interval timer.** The console writes RBOX_IT = 7 and tells the
+  operating system (HWRPB intr_freq, `get_iclk_freq` 0x2e2270) that the
+  tick runs at cpu_hz / ((n + 1) * 2^17), a quarter of that on a
+  revision-1.0 part. M2's tick was the machine's 1 Hz fallback, and the
+  console printed "*** no timer interrupts on CPU 0 ***" and ran its
+  sleeps on a software timer. The schedule now runs at PID 0's RBOX_IT
+  period (`CChipset::interval_period_ns`, used only on a board without the
+  ALi), and such a board looks for a newly programmed period within a
+  millisecond instead of a second.
+- **The second processor.** The CMM's start-state byte (area + 0x12a0)
+  must be non-zero for PID 1: with 0 its PALcode rebuilt its PAL-area
+  pointers, mapped the console's addresses onto its own (empty) memory and
+  looped through HALT. With 1 it runs the console from PID 0's memory and
+  reports "EV7 rev 2.1" like the primary.
+- **The L2 size.** `get_bcache_size_pid` counts the enabled ways in
+  BBOX_CTL<6:0>, 256 KB each; the register now holds the row's ways, and
+  the `ev7` row (which the console names rev 2.1) has 1.5 MB, as real
+  revision-2 listings print.
+- **The call trace** (`ALPHABOX_TRACE_CALLS`) dedupes per processor, so a
+  secondary running the primary's code shows its own path.
+
+**Checks** (no Tsunami behaviour change): `srm_run.sh` diff clean with 0
+mismatches on the JIT and the interpreter (headless) lanes; a two-processor
+DS20E probe at `P00>>>` (`show cpu`: 00 01, `show memory`: 64 MB); both
+lanes build. Evidence in `lab/platforms/marvel/m4/` (`srm-*.txt`,
+`ds20e-probe.txt`). The changes on shared paths are a branch on `theAli`
+where it was already tested, so the ALi boards take the same paths as
+before.
+
+**What remains** (for M5 and beyond):
+
+- the IO7 (M5): with RBOX_IO_CFG reading 0 the console skips the IO7 the
+  partition database lists; `get_pbm_configuration` (0x0322) will follow;
+- FRU EEPROM contents (0x0a01): `show fru` lists the FRUs with no part or
+  serial numbers; `set sys_serial_num` is asked for at every start;
+- fans, power supplies and VRMs (0x0903/0x0908/0x090e/0x090f) report
+  nothing, so `show power` is empty;
+- the TOY's interplay with the operating system (M7), the CMM-side
+  register addresses, and the meaning of the unknown fields marked above.
 
 ### M1-M3: the EV7, its registers and the XSROM's handoff (2026-10-02)
 
@@ -791,14 +1067,11 @@ no character written to any UART.
 
 ## Risks and unknowns
 
-1. **The GIO/CMM/MBM protocol** is the critical path to a prompt. No
-   public documentation is known. It has to be reverse-engineered from
-   the console (`cmm_*`, `giott`, `wait_for_gio`) and, for the meaning of
-   the answers, from the CMM and MBM firmware images, which run on other
-   processors with an unknown architecture **[guess: the MBM is x86 or
-   PowerPC, which matters for disassembly]**. If the console insists on
-   data we cannot reconstruct (partition database, FRU checksums), L2
-   stalls.
+1. **The GIO/CMM/MBM protocol** was the critical path to a prompt, and
+   M4 has it (see "M4"): reverse-engineered from the console, whose
+   simulator mode builds every answer itself, with the CMM firmware (Intel
+   386EX) and the XSROM as witnesses. What is left unknown is marked
+   there; FRU EEPROM contents and the fan/power answers are stubs.
 2. **The XSROM handoff state**: which registers and CSRs the console
    relies on being set. Disassembling the XSROM's final jump is
    tractable: it is 64 KB of Alpha code.

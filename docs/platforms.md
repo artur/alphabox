@@ -61,7 +61,7 @@ Three layers, each added in a different way:
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
 | AlphaServer DS25 (Titan) | L1: its update utility's console runs to its drivers and then faults probing an on-board device at hose 2 device 1 that is not modelled ([packet](platforms/ds25.md)) |
-| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L1 on emulated EV7s (`es47` row, packets M0-M3): the console's PALcode runs its reset path, the console proper starts and reaches its conversation with the management processor (GIO) with every register it read modelled; it waits there for the CMM's answers (packet M4). The staged plan is in the [packet](platforms/marvel.md) |
+| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L2 on emulated EV7s (`es47` row, packets M0-M4): the console runs on both processors and reaches `P00>>>` on the telnet console that the emulated CMM carries (GIO); `show config`, `show memory`, `show cpu` and `show fru` answer. No IO7 yet (packet M5), so no PCI. The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
@@ -190,6 +190,19 @@ Facts that cost time to find and apply to the next machine:
   patches, applied to the ES45's console, replaced words in its scheduler
   and it hung silently in its idle loop. A board row has its own patch
   table or none.
+- **A console can carry its own answers.** The Marvel console checks a
+  magic word in low memory (0xcafebeef at 0xfc: its developers'
+  simulator) and then builds every reply its management processors would
+  send -- partition database, MBM configuration, memory assignment --
+  itself. Those built-in replies are the best documentation of each
+  message's layout; the console's symbol table (procedure descriptor and
+  name pairs) names every routine that builds or reads them
+  (docs/platforms/marvel.md, M4).
+- **A management processor's state bytes steer the processors.** Each EV7
+  reads a byte the CMM keeps for it: zero makes its PALcode build its PAL
+  area from scratch (right for the primary), non-zero keeps what the
+  console copied there (a secondary). With zero for both, the secondary
+  mapped the console's addresses onto its own empty memory and halted.
 - **Consoles are tolerant.** All three machines run with hardware they
   cannot find, printing a complaint and continuing. A trace of unclaimed
   accesses (below) shows what they wanted; most of it does not matter.
@@ -267,10 +280,11 @@ device or an absent CPU.
      interval timer, memory controllers and the GIO management port.
    - **M3** (done): the state the SROM/XSROM leave behind, in place of
      running them.
-   - **M4**: the management processors' side of the GIO protocol,
-     reverse-engineered from the console. This carries the console
-     terminal, the configuration and the TOY, and is the most uncertain
-     packet.
+   - **M4** (done): the management processors' side of the GIO protocol,
+     reverse-engineered from the console, with the CMM firmware (an Intel
+     386EX) and the XSROM as witnesses. It carries the console terminal,
+     the configuration, the partition database, NVRAM, FRU, environment
+     and the TOY: `platforms/es47/Cmm.*`.
    - **M5**: the IO7 I/O bridge (PCI-X/AGP hoses, DMA windows, interrupt
      routing).
    - **M6**: board rows for the ES47 first, then the ES80 and GS1280.
@@ -281,4 +295,5 @@ memory controller and talks to I/O bridges instead of a chipset, and its
 console depends on the system's management hardware. The first contact
 confirmed both: the console's first access is to the processor's own
 management port (GIO), and with the EV7 and its registers emulated (M1-M3)
-the console reaches nothing else until that answers.
+the console reaches nothing else until that answers. With the CMM's side
+of it emulated (M4) the console comes up to its prompt.
