@@ -31,6 +31,7 @@ file(GLOB srcs
     src/system/*.cpp
     src/chipsets/*.cpp
     src/chipsets/tsunami/*.cpp
+    src/chipsets/marvel/*.cpp
     src/common/*.cpp
     src/devices/isa/*.cpp
     src/devices/pci/*.cpp
@@ -70,7 +71,7 @@ add_executable(alphabox ${srcs} src/Main.cpp)
 # is on the include path and a moved file needs no include changes.
 target_include_directories(alphabox PRIVATE
     src src/cpu src/cpu/ev7 src/hv src/system src/common
-    src/chipsets src/chipsets/tsunami
+    src/chipsets src/chipsets/tsunami src/chipsets/marvel
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge
     src/devices/pci/isp1040 src/devices/pci/tulip src/devices/pci/es137x

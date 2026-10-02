@@ -25,6 +25,7 @@
 #include "StdAfx.hpp"
 
 #include "Chipset.hpp"
+#include "Marvel.hpp"
 #include "Tsunami.hpp"
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
@@ -34,6 +35,8 @@ CChipset *create_chipset(chipset_kind kind, CSystem *sys) {
   switch (kind) {
   case CHIPSET_TSUNAMI:
     return new CTsunami(sys);
+  case CHIPSET_MARVEL:
+    return new CMarvel(sys);
   }
   FAILURE(Configuration, "unknown chipset");
 }

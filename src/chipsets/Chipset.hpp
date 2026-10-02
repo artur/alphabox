@@ -56,12 +56,14 @@
 #include <atomic>
 #include <cstdio>
 
+class CAlphaCPU;
 class CSystem;
 class CSystemComponent;
 
 /// Which chipset a board has (platform_config::chipset).
 enum chipset_kind {
   CHIPSET_TSUNAMI, ///< 21272 Tsunami/Typhoon: Cchip, Dchips, Pchips, TIG bus
+  CHIPSET_MARVEL,  ///< EV7 machines: each processor's Rbox/Zbox/GIO, IO7s
 };
 
 /// The spaces a PCI hose opens into the processor's physical address space.
@@ -97,6 +99,18 @@ public:
   /// bits. Read once, when the system is built, so the memory path keeps a
   /// plain AND with a member.
   virtual u64 phys_mask() const = 0;
+
+  /// How many address bits the memory array must span for `membits` of
+  /// memory as the configuration gives it (memory.bits) on a board of
+  /// `max_cpus` processors. Read once, when the system is built. A Tsunami
+  /// puts its memory at 0 and the two are the same; an EV7 machine gives
+  /// every processor its own memory at a PID-dependent base, so the array
+  /// spans to the last processor's (the holes between are never touched,
+  /// and the host never backs them).
+  virtual unsigned memory_span_bits(unsigned membits, int max_cpus) {
+    (void)max_cpus;
+    return membits;
+  }
 
   /// A read or write of non-memory space that no registered device range
   /// claimed: the chipset's own registers, and the PCI and I/O space
@@ -135,6 +149,18 @@ public:
   /// scatter-gather. An address no window takes stays on the hose (peer to
   /// peer, as the Tsunami does).
   virtual u64 pci_phys(int hose, u32 address) = 0;
+
+  // --- Console start ---------------------------------------------------------
+
+  /// The console is in memory and every processor has been handed to it
+  /// (CSystem::LoadROM), from an image whose self-decompressor ran at
+  /// `image_base` (0 when not known). The place for the state a machine's own
+  /// reset firmware leaves that the console reads: the EV7's XSROM handoff.
+  virtual void console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) {
+    (void)cpus;
+    (void)ncpus;
+    (void)image_base;
+  }
 
   // --- Reset and state ------------------------------------------------------
 

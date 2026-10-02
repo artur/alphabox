@@ -96,6 +96,11 @@ CSystem::CSystem(CConfigurator *cfg) try {
   // range goes to it (Chipset.hpp).
   m_chipset = create_chipset(m_platform->chipset, this);
   m_phys_mask = m_chipset->phys_mask();
+  // Where the memory goes is the chipset's to say: from 0 on a Tsunami,
+  // per processor at PID-dependent bases on an EV7 machine, in which case
+  // the array spans them all and memory.bits is each processor's share.
+  iNumMemoryBits =
+      m_chipset->memory_span_bits(iNumMemoryBits, m_platform->max_cpus);
 
   //  iNumConfig = 0;
 #if defined(IDB)
