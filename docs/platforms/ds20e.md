@@ -357,15 +357,17 @@ interpreter boots to login on two processors with no options
   PC = 0`; `tsu-ds20e-nic3b-2cpu`, `tsu-rep-ds20e-2cpu-8`). Not seen on one
   processor. The ES40 is not clean either: 1 of 6 two-processor boots hung
   after the password (`tsu-rep-es40.txt`). Not investigated further.
-- *OpenVMS with a SCSI controller bugchecks on every machine*, the ES40
-  included: `INVEXCEPTN` in `SYSMAN` during startup with a 53C875
-  (`SYS$PKWDRIVER`) or an ISP1040, interpreter or JIT, native or real
-  PALcode (`tsu-ds20e-scsi-1cpu`, `tsu-es40-scsi`). SDA shows an access
-  violation at `SYS$CPU_ROUTINES_2208+050A0` (a PCI configuration read
-  routine, length 4) on a null pointer, called from the driver's unit
-  initialisation. Not a board problem; left for the SCSI models.
-- *The DE600 receives nothing under OpenVMS*, on the ES40 too
-  (`tsu-es40-nic`): the i8255x model, not the board.
+- Resolved 2026-10-02 in the models, not the board: *OpenVMS with a SCSI
+  controller bugchecked on every machine* (`INVEXCEPTN` in `SYSMAN`). The
+  routine at `SYS$CPU_ROUTINES_2208+050A0` is `IOC$READ_IO`'s worker, and
+  the null pointer an I/O handle PKWDRIVER maps only when the 53C875 has an
+  expansion ROM; the ISP1040 crashed in PKQDRIVER on firmware memory that
+  read as zeros. The DS20E now initialises, mounts and writes a disk on
+  each (`docs/openvms.md`, SCSI controllers).
+- Not a fault: *the DE600 received nothing under OpenVMS* because the test
+  sent only broadcasts, and OpenVMS sets the 8255x's Broadcast Disable
+  while no protocol wants them; unicast and multicast frames are received
+  (`docs/openvms.md`, Network).
 - The SROM records, the I2C parts and the reference listing, as above.
 
 ## Rules

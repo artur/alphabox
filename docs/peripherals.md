@@ -31,17 +31,17 @@ The names below were extracted from the decompressed image with
 | Acer Labs M1543C PMU | `ali_pmu` | |
 | NCR 53C810 | `sym53c810` | `n810` console driver: bootable |
 | NCR 53C825 (825A) | `sym53c825` | `n810` console driver: bootable; wide, 4 KB SCRIPTS RAM |
-| NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM |
+| NCR 53C875 | `sym53c875` | `n810` console driver: bootable; Ultra-Wide, 4 KB SCRIPTS RAM. OpenVMS 8.4 drives it with `SYS$PKWDRIVER` ([openvms.md](openvms.md#scsi-controllers)) |
 | NCR 53C895 | `sym53c895` | `n810` console driver: bootable; Ultra2-Wide, 4 KB SCRIPTS RAM |
 | NCR 53C896 | `sym53c896` | `n810` console driver: bootable on both channels; two Ultra2-Wide cores as PCI functions 0 and 1, 8 KB SCRIPTS RAM each, 256-byte register file with the phase-mismatch jump block. Windows 2000 drives it with `sym_hi`, not the `symc8xx` of the single-channel parts |
-| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver (`ql10wnt`) |
+| QLogic ISP1020, ISP1040 (KZPBA) | `isp1020`, `isp1040` | `isp1020` console driver: bootable; Windows 2000 drives it with its own QLogic driver (`ql10wnt`), OpenVMS 8.4 with `SYS$PKQDRIVER` ([openvms.md](openvms.md#scsi-controllers)) |
 | QLogic ISP1080 | `isp1080` | Ultra2 Wide, low-voltage differential. The console does not know PCI device 0x1080 -- its table carries QLogic 0x1020 and the Fibre Channel parts and nothing else -- so `show config` prints the raw id and it is not bootable. Windows 2000 drives it with `ql1080` |
 | QLogic ISP1240 | `isp1240` | two Ultra Wide buses on one PCI function (not two functions, the way the 53C896 is built): one set of queues and mailboxes, and a command entry names its bus in the top bit of the target byte. Disks are `disk0.<id>` and `disk1.<id>`. Unknown to the console for the same reason as the 1080; Windows 2000 drives it with `ql1240` |
 | DECchip 21143-AA / DE500-BA | `dec21143` | Tulip console driver: network boot |
 | DECchip 21140-AA | `dec21140` | same driver; no SIA, media through the general purpose port. The board described has nothing wired to those pins and no MII PHY |
 | DECchip 21041-AA | `dec21041` | same driver; 10 Mb SIA, the older serial ROM format. The console drives it at 10BaseT from its own table and reads only the station address out of the ROM |
 | DECchip 21040-AA | `dec21040` | same driver; 10 Mb SIA, and no serial ROM at all: the station address comes out of a parallel ROM read a byte at a time through CSR9 |
-| DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test |
+| DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | `ei` console driver: network boot, loopback self-test. OpenVMS 8.4 (`EIA0`) receives unicast and multicast; it configures the chip to refuse broadcasts until something asks for them ([openvms.md](openvms.md#network)) |
 | DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | `ei` console driver: network boot on either port |
 | DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | PCI-PCI bridges; the console numbers and probes the buses behind them, nested too, and what the forwarding windows cover is what is reachable; Windows 2000 drives a 53C810 behind one |
 | S3 Trio64/Trio32 | `s3` | `vga_bios`: console, ARC/AlphaBIOS, Windows NT |

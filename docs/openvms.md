@@ -11,6 +11,8 @@ What was verified, on 2026-10-01, with HP OpenVMS Alpha V8.4 (the
 | Interpreter build | Boots to login with the default settings (the OpenVMS PALcode routines replaced natively) and with `palcode.vms.nohle = true` (the real PALcode) |
 | Two and four CPUs (JIT) | OpenVMS starts every secondary (`%SMP-I-CPUTRN, CPU #n has joined the active set`); `SHOW CPU` lists 0-3 active |
 | DECwindows on the 3Dlabs Permedia 2 | The display server starts and the CDE login box (dtlogin) is drawn at 1024x768. Without licences nothing further: see Licences |
+| SCSI: NCR 53C875 (`sym53c875`), QLogic ISP1040 (`isp1040`) | Since 2026-10-02 (until then the system crashed in startup): `PKA0`/`PKB0` online, disks `DKA100`/`DKB100` initialised, mounted, written and read back (COPY, DIFFERENCES, BACKUP), on the ES40 (JIT and interpreter) and the DS20E (JIT). See SCSI controllers |
+| Network: DE500 (`dec21143`, `EWA0`), DE600 (`de600`, `EIA0`) | Both receive. The DE600 refuses broadcasts while no protocol has asked for them, as OpenVMS configures it: see Network |
 
 ## Configuration
 
@@ -53,6 +55,87 @@ delivered only once the command is complete, and the controller finishes a
 command on the drive it was issued to, whichever drive the guest selects
 meanwhile. Since then the installation completes with the CD on `dqa1`, and
 the copy passed 3 of 3 runs.
+
+## SCSI controllers
+
+Two of the SCSI adapters OpenVMS 8.4 has drivers for are emulated: the NCR
+53C875 (`SYS$PKWDRIVER`, an IntraServer driver) and the QLogic ISP1040, the
+KZPBA (`SYS$PKQDRIVER`). Disks on them are `DKA<id>00`, `DKB<id>00`, ...,
+in the order the console lists the controllers. An example, beside the
+system disk on IDE:
+
+```
+  pci0.2 = isp1040
+  {
+    disk0.1 = file { file = "s0.img"; read_only = false; }
+  }
+  pci1.1 = sym53c875
+  {
+    disk0.1 = file { file = "s1.img"; read_only = false; }
+  }
+```
+
+Until 2026-10-02 either controller crashed the system during startup
+(`INVEXCEPTN`, current image `SYSMAN`), on the ES40 and the DS20E, under the
+interpreter and the JIT, with the native PALcode routines and the real
+PALcode. Both were faults in the models, not in the platform code. What
+the drivers needed (evidence in `lab/vscsi-evidence/`):
+
+- *53C875, the expansion ROM.* The SDA crash points at
+  `SYS$CPU_ROUTINES_2208+050A0`, an `LDL` through a null pointer. That is
+  the worker of `IOC$READ_IO`, not a configuration-space read: PKWDRIVER's
+  unit initialisation reads the last 4 KB of the adapter's flash through an
+  I/O handle it maps only when the expansion ROM BAR sizes to something.
+  The model had no ROM BAR, the handle stayed 0. The 825, 875, 895 and 896
+  now have a 64 KB ROM, erased except for the identification block the
+  driver checks in its last 4 KB (the maker's name, a checksum to
+  0x012435c5, a version: `%PKA0, ... PKW V2.1.22 ROM V1.0`). Without the
+  block the port stays offline ("ROM Checksum read error").
+- *53C875, SCRIPTS that poll.* PKWDRIVER leaves its SCRIPTS in a loop that
+  reads ISTAT until the driver sets SIGP. The model aborted any SCRIPTS
+  program after 100000 instructions; the driver answered the abort with a
+  chip and bus reset, and an `INITIALIZE` running at that moment failed
+  with `MEDOFL`. Long runs are now paced instead (50 us every 4096
+  instructions, and a SIGP write wakes the thread at once).
+- *ISP1040, the RISC's memory.* Before it loads firmware, PKQDRIVER reads
+  the header of the image already in the chip with READ RAM WORD -- its
+  length, and where its copyright text ends -- and trusts both. The model
+  answered 0, and the driver copied 0xeffb words into a 128-byte buffer on
+  the kernel stack. The RISC's memory is now kept, and holds at power-on
+  the header of an image naming the firmware version ABOUT FIRMWARE
+  reports (4.65); PKQDRIVER finds its own 5.57 newer and loads it.
+- *ISP1040, CHECK CONDITION.* A command that ended in CHECK CONDITION was
+  reported as DATA UNDERRUN. Once the disk offered tagged queuing,
+  PKQDRIVER took that for a controller fault, reset the adapter three times
+  and shut the port down ("Port shutdown due to numerous or serious ctrlr
+  errors"); `INITIALIZE` then failed with `MEDOFL` on the MODE SENSE of a
+  page the disk lacks. It now completes with the SCSI status, and carries
+  the sense data (automatic request sense, which every driver enables).
+- *ISP1040, selection timeouts* completed with the code of NOP MESSAGE
+  FAILED; each empty ID the driver probed counted as a port error (631 on
+  `PKB0` after a boot, now 1).
+
+Windows 2000 still copies a file on both (`test/tools/win_storage.sh`), and
+the console still lists them and their disks (`show config`, `show dev`).
+
+## Network
+
+The DE500 (`EWA0`) and the DE600 (`EIA0`) both receive. With only MOP
+enabled (`MC LANCP SET DEVICE EIA0/MOPDLL=ENABLE`), OpenVMS configures the
+DE600's 8255x with Broadcast Disable set (configure byte 15 = 0xea) and
+loads one multicast address, AB-00-00-01-00-00; the console's driver sets
+the same bit. So the chip refuses broadcast frames, as the emulation does,
+and the counters stay at 0 for a test that sends only broadcasts. Frames to
+the station address and to that multicast address are counted ("Packets
+received", "Unrecognized unicast/multicast destination" while no protocol
+claims them). The DE500 has no such bit in use: its driver counts the
+broadcasts as unrecognised multicast. `lab/vscsi-evidence/frame_tx3.py`
+sends all three kinds.
+
+"Unavailable station buffers" on `EIA0` counts the frames that arrived
+while the receive unit was idle -- between the driver's initialisation at
+boot and LANCP starting the device -- which the model counts as resource
+errors.
 
 ## Installing
 
@@ -168,6 +251,9 @@ No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
 - TCP/IP Services was installed but not configured or started.
 
 ## Known problems
+
+- Fixed 2026-10-02: a 53C875 or an ISP1040 in the configuration crashed
+  the system in startup (`INVEXCEPTN` in `SYSMAN`). See SCSI controllers.
 
 - Fixed: on the interpreter build with the native OpenVMS PALcode routines
   (the default there), startup used to stop after `%STDRV-I-STARTUP`. The
