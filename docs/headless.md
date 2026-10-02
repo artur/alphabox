@@ -156,6 +156,16 @@ switched on around the one step that matters (`touch trace.on` ...
 
 `ALPHABOX_TRACE_TGA` traces the DEC TGA (`tga`): `1` every register, alternate-ROM and RAMDAC access (frame buffer writes are not listed, they are too many); `first` each register and each graphics mode the first time it is used, which is how to see what a driver uses; `file:<path>` as `1`, but only while `<path>` exists (polled every frame). `ALPHABOX_TGA_DUMP=<prefix>` makes a TGA that does not own the window -- one beside a VGA card -- write its screen as `<prefix>-NNN-WxH.ppm` every two seconds, like `ALPHABOX_DUMP_FB`.
 
+`ALPHABOX_TRACE_RADEON` traces the ATI Radeon 7500 (`radeon`): `1` every
+register access (by the path it came: `io`, `mmio`, or `cp` for a register
+written by a command-processor packet), every PLL access and every type-3
+packet with its first dwords, capped at 200000 lines
+(`ALPHABOX_TRACE_RADEON_MAX` sets the cap; frame buffer accesses are not
+listed); `new` only the first read and the first write of each register,
+which is how to see what a BIOS or driver touches; `file:<path>` as `1`,
+but only while `<path>` exists (polled every 10 ms). Command-processor
+operations the model does not have are reported once each, trace or not.
+
 `ALPHABOX_DUMP_MEMORY=1` writes guest memory to `memory_000000000000.dmp`
 when the emulator is asked to stop, which is how to find what a firmware
 left in memory (and what it did not).

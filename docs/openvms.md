@@ -11,6 +11,7 @@ What was verified, on 2026-10-01, with HP OpenVMS Alpha V8.4 (the
 | Interpreter build | Boots to login with the default settings (the OpenVMS PALcode routines replaced natively) and with `palcode.vms.nohle = true` (the real PALcode) |
 | Two and four CPUs (JIT) | OpenVMS starts every secondary (`%SMP-I-CPUTRN, CPU #n has joined the active set`); `SHOW CPU` lists 0-3 active |
 | DECwindows on the 3Dlabs Permedia 2 | The display server starts and the CDE login box (dtlogin) is drawn at 1024x768. Without licences nothing further: see Licences |
+| DECwindows on the ATI Radeon 7500 | The same, at 1024x768 in 24-bit colour: the Radeon server (`GHA0`) draws through the command processor's ring, and the login box matches the Permedia 2's frame except for the pointer and the text cursor. Typed keys reach it. See Graphics |
 | SCSI: NCR 53C875 (`sym53c875`), QLogic ISP1040 (`isp1040`) | Since 2026-10-02 (until then the system crashed in startup): `PKA0`/`PKB0` online, disks `DKA100`/`DKB100` initialised, mounted, written and read back (COPY, DIFFERENCES, BACKUP), on the ES40 (JIT and interpreter) and the DS20E (JIT). See SCSI controllers |
 | Network: DE500 (`dec21143`, `EWA0`), DE600 (`de600`, `EIA0`) | Both receive. The DE600 refuses broadcasts while no protocol has asked for them, as OpenVMS configures it: see Network |
 
@@ -35,6 +36,7 @@ sys0 = tsunami
   }
   pci0.19 = ali_usb { }
   // pci0.2 = permedia2 { rom = "SYN80700.PAN"; }   // for DECwindows (needs a gui section)
+  // pci0.2 = radeon { rom = "ATI.7500.64.Hynix50_020416.rom"; }   // or this
 }
 ```
 
@@ -180,13 +182,32 @@ for DECwindows, as `G` devices:
 | ZLX2-E / PowerStorm 3D30, 4D20 (TGA2) | 1011:000D | GY | no |
 | PowerStorm 300/350 | 10BA:0304 | GB | no |
 | Oxygen VX1 (Permedia 3, 4) | 3D3D:000A, 000C | GF | no |
-| ATI Radeon 7500 / 7000, ES1000 | 1002:5157, 5159, 515E | GH | no |
+| ATI Radeon 7500 / 7000, ES1000 | 1002:5157, 5159, 515E | GH, server `DECW$SERVER_DDX_GH` | `radeon` (7500) -- the login box draws |
 | ATI Mach64 GX / CX / CT | 1002:4758, 4358, 4354 | GQ | `mach64` (CT) -- not tried |
 | S3 Trio32/64, DEC864 (Vision864) | 5333:8811, 88C0 | GQ | `s3` (Trio64) -- not tried |
 
 The Permedia 2 needed two fixes to draw: `InFIFOSpace` now reads 256 (the
 server waits for at least 50), and RasterizerMode's LimitsEnable is active
 high (the server leaves it clear and never loads the limits).
+
+The Radeon 7500 (`radeon`, its AGP board; the ES40's SRM names it
+"Radeon 7500 AGP" and runs its BIOS) is driven by the "Radeon Server DDX
+for OpenVMS" (HP, 2002-2008), which logs "Found AGP device" and
+"Recognized Radeon 7500 AGP", sets 1024x768 at depth 24 and reports XAA-style acceleration: screen to
+screen blits, solid and 8x8 mono pattern fills, CPU-to-screen colour
+expansion, solid and dashed lines, its own bitmap writes and glyph
+renderer. It does all of this through the command processor: it loads the
+CP microcode, puts a ring buffer and indirect buffers in host memory behind
+the card's AGP window (`MC_AGP_LOCATION`, `AGP_BASE`; the ES40 has no AGP,
+so this is bus mastering through the Pchip's scatter-gather window), and
+fills them with register writes (type-0 packets) and `CNTL_HOSTDATA_BLT`
+packets carrying runs of glyphs. It sets the hardware cursor (mono, 64x64)
+for its pointer. The login box, typing into it and its Help dialog draw
+correctly; the trace of one session is in
+`lab/platforms/radeon/p3-decw-trace.out`. On the ES47 (the card in the
+AGP slot, `pci3.5`), booted from the CD, `SYSMAN IO AUTOCONFIGURE` finds
+the card and tries to configure `GHA0`, but the CD's minimal system has no
+`SYS$GHDRIVER.EXE`; DECwindows there needs an installed system.
 
 SRM does not use the Permedia 2 as its console (README, known limitations), so the
 console stays on the serial port while DECwindows takes the card. With a

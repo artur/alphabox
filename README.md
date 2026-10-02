@@ -71,7 +71,7 @@ virtio devices.
 
 | Guest | Status |
 |---|---|
-| OpenVMS | 8.4 installs from its CD and boots to login on one, two or four CPUs; DECwindows draws the CDE login box on the 3Dlabs Permedia 2 (a session needs a DW-MOTIF licence) ([OpenVMS notes](docs/openvms.md), [installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
+| OpenVMS | 8.4 installs from its CD and boots to login on one, two or four CPUs; DECwindows draws the CDE login box on the 3Dlabs Permedia 2 and the ATI Radeon 7500 (a session needs a DW-MOTIF licence) ([OpenVMS notes](docs/openvms.md), [installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Tru64 UNIX | Boots |
 | NetBSD | Boots ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
 | Windows NT / 2000 | Installs and runs through AlphaBIOS, on the S3, Cirrus, ATI Mach64, 3Dlabs Permedia 2 or S3 ViRGE/DX card with each card's own driver from the installation media (an installed Windows 2000 also takes the original ViRGE, the ViRGE/VX and the ViRGE/GX2, installing their driver when it finds the card, and the DEC TGA, ZLXp-E1, with its own tga driver); Windows 2000 on up to two CPUs; USB with its own drivers ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
@@ -116,7 +116,7 @@ card. The [documentation](docs/README.md) covers the rest:
 | Memory | 64 MB – 32 GB; on the EV7 machines, per processor at its own physical base |
 | Storage | Symbios 53C810 / 53C825 / 53C875 / 53C895 / 53C896 (two channels) and QLogic ISP1020 / ISP1040 (KZPBA) / ISP1080 / ISP1240 (two buses on one function) SCSI, ALi M1543C IDE (disks and ATAPI CD-ROM), 82077AA floppy, RAM disk |
 | ISA bridge | ALi M1543C: 8259 PIC, 8254 PIT, MC146818 RTC, 8237 DMA, SuperIO, PMU |
-| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE / ViRGE/VX / ViRGE/DX / ViRGE/GX2 (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay); DEC ZLXp-E1 (DECchip 21030 "TGA", 8 planes, Bt485: AlphaBIOS and the Windows 2000 desktop to 1280x1024); PowerStorm 3D30 and 4D20 (TGA2: 8 planes with a Bt485, and 32-bit true colour with an IBM RGB561; the Windows 2000 desktop to 1280x1024 and 1600x1200, beside a VGA card) |
+| Graphics | S3 Trio64 (with IBM 8514/A acceleration); Cirrus Logic CL-GD5430 / CL-GD5434 (with BitBLT); ATI Mach64 CT / 264VT2 / 264VT3 / 3D Rage II+ / 3D Rage Pro (drawing engine, hardware cursor, a monitor on the DDC lines, modes to 32 bpp; on the Rage Pro the triangle setup engine, for Direct3D); 3Dlabs Permedia 2 (its graphics processor and delta unit: 2D, and Direct3D with depth, texturing, fog and blending); S3 ViRGE / ViRGE/VX / ViRGE/DX / ViRGE/GX2 (the S3d engine: 2D, and Direct3D with depth, texturing, fog and blending; the streams processor's 24-bit modes and video overlay); DEC ZLXp-E1 (DECchip 21030 "TGA", 8 planes, Bt485: AlphaBIOS and the Windows 2000 desktop to 1280x1024); PowerStorm 3D30 and 4D20 (TGA2: 8 planes with a Bt485, and 32-bit true colour with an IBM RGB561; the Windows 2000 desktop to 1280x1024 and 1600x1200, beside a VGA card); ATI Radeon 7500 (RV200: its BIOS, the extended modes, the hardware cursor, the 2D engine and the command processor's ring; the SRM console on the ES40 and in the ES47's AGP slot, DECwindows on OpenVMS 8.4) |
 | USB | the ALi M1543C's OHCI (USB 1.1, 3 ports) and an EHCI card (USB 2.0, 4 ports); a HID tablet, Bulk-Only mass storage, and host passthrough through libusb ([docs/usb.md](docs/usb.md)) |
 | Network | DEC 21040 / 21041 / 21140 / 21143 (Tulip); Intel 82557/82558/82559 (DE600-AA) and the two-port DE602-AA / DE602-B boards behind a bridge — host access through pcap, TUN/TAP (Linux), a UDP link or a null back end |
 | Sound | Ensoniq AudioPCI ES1370 and ES1371 (AC'97 codec and sample-rate converter) |
@@ -187,6 +187,9 @@ which workload, and the optimizations that turned out not to pay.
   telling it where the card is, and every ELSA and 3Dlabs BIOS checks that
   before doing anything. AlphaBIOS starts it properly, so Windows is
   unaffected. Its video streams unit is not modelled.
+- The Radeon 7500: no Windows for Alpha has a driver for it, so Windows 2000
+  and Whistler run it as a standard VGA (640x480, 16 colours); its 3D
+  engine (TCL) is not modelled.
 - USB: no isochronous transfers (audio, webcams); the EHCI card has no
   companion controllers, so only high-speed devices use it; on macOS, host
   devices a system driver holds cannot be passed through.
@@ -216,7 +219,8 @@ configurable hotkeys, the headless test tooling, USB -- and most of the
 device families above: the Symbios 53C8xx and QLogic ISP SCSI adapters, the
 Tulip and Intel 8255x network cards, the PCI-PCI bridges and the multi-port
 boards built on them, the Ensoniq sound cards, and the Cirrus Logic, ATI
-Mach64 and 3Dlabs Permedia 2 graphics cards with their drawing engines.
+Mach64, 3Dlabs Permedia 2 and ATI Radeon graphics cards with their drawing
+engines.
 Machines other than the ES40 are being brought up the same way.
 
 Alphabox builds on the work of others:
@@ -226,7 +230,8 @@ Alphabox builds on the work of others:
 - **Bochs** — the GUI layer (MandrakeSoft) and parts of the disk and CD-ROM
   command handling.
 - **QEMU** — the ES1370 sound device (Vassili Karpov); its Cirrus model was
-  the behavioural reference and the test oracle for the Cirrus blitter.
+  the behavioural reference and the test oracle for the Cirrus blitter, and
+  its ati-vga model (BALATON Zoltan) a register reference for the Radeon.
 - **POCO** — the original threading wrappers (Applied Informatics).
 - **86Box** — the ATI Mach64 drawing engine is ported from it (Sarah Walker,
   Miran Grca, Connor Hyde; GPL-2); its ROM set supplies the VGA BIOS images,
