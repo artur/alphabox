@@ -60,7 +60,7 @@ Three layers, each added in a different way:
 | AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
-| AlphaServer DS25 (Titan) | L5: its update utility installs its console (V7.3-2) in the flash, with the on-board AIC-7899 present as far as the console needs it (configuration space and expansion ROM, no SCSI); network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one and two processors, with NIC interrupts checked on all four hoses; no reference listing, so no L3 ([packet](platforms/ds25.md)) |
+| AlphaServer DS25 (Titan) | L5: its update utility installs its console (V7.3-2) in the flash, with the on-board AIC-7899 present as far as the console needs it (configuration space and expansion ROM, no SCSI); network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one and two processors, with NIC interrupts checked on all four hoses; `show config` matches a real DS25's (owner's guide) in name, core logic but the Cchip pass, on-board places and slot numbering ([packet](platforms/ds25.md)) |
 | AlphaServer DS15 (Titan) | L5: its update utility installs its console (V7.3-2); its RMC is reached through a different mailbox and its halt register does not halt the processor (both found in the console's code); one PA-chip, so hoses 0 and 2; network boot; OpenVMS 8.4 boots its CD and an installed disk to login, with NIC interrupts checked on both hoses; no reference listing, so no L3 ([packet](platforms/ds15.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L5 on emulated EV7s (`es47` row, packets M0-M5): the console runs on both processors and reaches `P00>>>` on the telnet console that the emulated CMM carries (GIO); `show config` lists the IO7 with its four buses and the devices behind it (a 53C895 and a DE500-BA standing in for the embedded AIC-7892 and the gigabit card); OpenVMS 8.4 boots from its CD on both processors to the installation menu and DCL. The staged plan is in the [packet](platforms/marvel.md) |
 
@@ -279,7 +279,7 @@ device or an absent CPU.
    DS20, and the UP2000 and XP1000 boards.
 4. **Titan**: the ES45 ([packet](platforms/es45.md)), the DS25
    ([packet](platforms/ds25.md)) and the DS15 ([packet](platforms/ds15.md))
-   are at L5; none of the DS25 and DS15 has a reference listing yet.
+   are at L5; the DS15 has no reference listing yet.
 5. **Separate projects**, each large enough to be its own plan: the EV5 core
    with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7
    with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)). The EV7 plan,

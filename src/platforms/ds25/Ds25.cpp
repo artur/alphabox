@@ -69,12 +69,22 @@ int ds25_pci_interrupt(int hose, int slot, int intx) {
   return s->inta + (intx & 3);
 }
 
+/**
+ * The six physical slots (owner's guide EK-DS250-UG, table 1-1: slots 1-6
+ * are hose 1 devices 1 and 2, hose 3 devices 2 and 1, hose 0 devices 9 and
+ * 10), and the places of the two on-board network controllers, which no
+ * model here is (hose 0 device 8, an Intel 82559ER; hose 2 device 5, a
+ * Broadcom 5703c: the guide's show config), so that a NIC may stand in
+ * there. Hose 0 device 11 has a line in the console's table but no slot;
+ * the hot-plug controllers' places and the AIC-7899's are the board's.
+ **/
 const char *ds25_slot_refusal(int hose, int slot) {
   const ds25_slot *s = find_slot(hose, slot);
-  if (!s || s->pins == 1 || (hose == 2 && slot == 1))
-    return "the DS25's slots are hose 0 devices 8 to 11, hoses 1 and 3 "
-           "devices 1 and 2, and hose 2 device 5 (hose 2 device 1 is the "
-           "on-board SCSI)";
+  if (!s || s->pins == 1 || (hose == 2 && slot == 1) ||
+      (hose == 0 && slot == 11))
+    return "the DS25's slots are hose 0 devices 9 and 10 and hoses 1 and 3 "
+           "devices 1 and 2; hose 0 device 8 and hose 2 device 5 are the "
+           "on-board network controllers' places";
   return nullptr;
 }
 
