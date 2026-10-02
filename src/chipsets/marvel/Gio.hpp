@@ -73,6 +73,10 @@ public:
     (void)value;
     return false;
   }
+  /// One interval-timer period has elapsed (CMarvel::interval_tick, on
+  /// processor 0's thread with no register block locked): the far side may
+  /// raise the interrupts its own events call for.
+  virtual void tick() {}
 };
 
 /**

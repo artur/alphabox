@@ -32,6 +32,7 @@
 #include "Serial.hpp"
 #include "System.hpp"
 
+#include <chrono>
 #include <cstdarg>
 #include <ctime>
 
@@ -43,6 +44,8 @@ constexpr u32 R_DATA = 0x1;    ///< byte window: 16-bit data
 constexpr u32 R_ADDRESS = 0x2; ///< byte window: CMM address
 constexpr u32 R_TX = 0x4;      ///< console terminal: a character out
 constexpr u32 R_RX = 0x5;      ///< console terminal: a character in
+constexpr u32 R_STATE = 0x8;   ///< the PALcode's state and interrupt enables
+constexpr u32 R_REASON = 0x9;  ///< read: the terminal interrupts pending
 constexpr u32 R_COMM = 0xb;    ///< <0>: the console asks the CMM to start
 
 // R_STATUS bits.
@@ -50,10 +53,24 @@ constexpr u64 ST_GO = 0x001;      ///< write: start a window access; read: busy
 constexpr u64 ST_LOW = 0x002;     ///< write: store the low byte (even address)
 constexpr u64 ST_HIGH = 0x004;    ///< write: store the high byte (odd address)
 constexpr u64 ST_ATTN = 0x008;    ///< write: attention, a mailbox changed
+constexpr u64 ST_INTR = 0x010;    ///< read: a terminal interrupt is pending
 constexpr u64 ST_FLAG = 0x020;    ///< the console's own flag, kept as written
 constexpr u64 ST_CPU1 = 0x040;    ///< read: this processor is the module's 2nd
 constexpr u64 ST_TXFULL = 0x080;  ///< read: the terminal cannot take a char
 constexpr u64 ST_RXREADY = 0x100; ///< read: a character waits in R_RX
+
+// R_STATE: the PALcode keeps its state in <5:2> and the console terminal's
+// interrupt enables in <1:0> and <7:6> (cserve 0x46 merges a mask of 0xc3
+// into the word, 0x3d3fc): RX ready and TX empty, <0>/<1> for the module's
+// first processor and <6>/<7> for its second (txon, 0x31aca0, sets 0x2 or
+// 0x80 by cpu_id). R_REASON reports the same bits for the interrupts that
+// happened, which the PALcode's handler (0x39bd0, for RBOX_INT<9>) turns
+// into SCB vectors 0x6c0, 0x6d0, 0x700 and 0x710.
+constexpr u64 rx_bit(u32 n) { return n ? 0x40 : 0x01; }
+constexpr u64 tx_bit(u32 n) { return n ? 0x80 : 0x02; }
+/// RBOX_INT<9>: the CMM's interrupt (EI0; the PALcode's handler tests it
+/// at 0x392b0 and clears it when done).
+constexpr u64 RBOX_INT_GIO = U64(1) << 9;
 
 // --- The CMM's memory, per processor (n = place on the module) -------------
 // Offsets from area(n) = 0x40000 + n * 0x6000, as the console computes them.
@@ -224,6 +241,9 @@ bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
       putchar(c);
       fflush(stdout);
     }
+    // The model's transmitter is never busy: ready again at once.
+    if (p.regs[R_STATE] & tx_bit(n))
+      p.tx_kick = true;
     break;
   }
   case R_COMM:
@@ -234,10 +254,15 @@ bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
     break;
   default:
     // Register 8: the PALcode's state word (PAL scratch + 0x1b8), sent
-    // whenever it changes [inference: the CMM shows it as the processor's
-    // state]; the others are not known to be written.
-    if (p.regs[reg & 15] != value || reg != 8)
-      note("PID %u: GIO register %u = %" PRIx64 " (stored)", pid, reg, value);
+    // whenever it changes: the processor's state [inference: the CMM shows
+    // it] and the terminal's interrupt enables (R_STATE above); the others
+    // are not known to be written. A booted OpenVMS changes it many times a
+    // second, so it is only noted under ALPHABOX_TRACE_CMM.
+    if (p.regs[reg & 15] != value || reg != R_STATE)
+      if (reg != R_STATE || m_trace)
+        note("PID %u: GIO register %u = %" PRIx64 " (stored)", pid, reg, value);
+    if (reg == R_STATE && (value & tx_bit(n)) && !(p.regs[R_STATE] & tx_bit(n)))
+      p.tx_kick = true; // transmit interrupts enabled with the line idle
     p.regs[reg & 15] = value;
     break;
   }
@@ -252,7 +277,7 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
   Port &p = m_port[n];
   switch (reg) {
   case R_STATUS: {
-    u64 v = p.status | (n ? ST_CPU1 : 0);
+    u64 v = p.status | (n ? ST_CPU1 : 0) | (p.reason ? ST_INTR : 0);
     if (CSerial *t = terminal())
       if (t->ReadMem(0, 5, 8) & 1)
         v |= ST_RXREADY;
@@ -264,6 +289,12 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
     break;
   case R_ADDRESS:
     *value = p.address;
+    break;
+  case R_REASON:
+    // Read to clear [inference: platform_init2 reads it once and discards
+    // it before it unmasks the CMM's interrupt].
+    *value = p.reason;
+    p.reason = 0;
     break;
   case R_RX:
     *value = 0;
@@ -278,6 +309,47 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
     break;
   }
   return true;
+}
+
+/**
+ * The console terminal's interrupts, for an operating system that asks for
+ * them (the console's cb_set_term_int; OpenVMS does): a transmitter that is
+ * ready while enabled, and a received character while enabled, are posted
+ * in R_REASON and signalled through RBOX_INT<9> of the processor they
+ * belong to. Checked once per interval-timer period: the CMM's own register
+ * accesses arrive with that processor's register block locked, so the
+ * interrupt is raised here, outside both locks.
+ */
+void CEs47Cmm::tick() {
+  bool raise[2] = {false, false};
+  {
+    std::lock_guard<std::mutex> g(m_lock);
+    if (!m_ready)
+      return;
+    for (u32 n = 0; n < 2; n++) {
+      Port &p = m_port[n];
+      const u64 en = p.regs[R_STATE];
+      u64 add = 0;
+      if (p.tx_kick && (en & tx_bit(n)))
+        add |= tx_bit(n);
+      p.tx_kick = false;
+      // The terminal is the partition's console, on the primary [the
+      // second processor's virtual UART carries nothing here].
+      if (n == 0 && (en & rx_bit(n)) && !(p.reason & rx_bit(n)))
+        if (CSerial *t = terminal())
+          if (t->ReadMem(0, 5, 8) & 1)
+            add |= rx_bit(n);
+      if (add & ~p.reason) {
+        p.reason |= add;
+        raise[n] = true;
+      }
+    }
+  }
+  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
+  for (u32 n = 0; n < 2; n++)
+    if (raise[n] && marvel)
+      if (CEv7Csr *c = marvel->csr(n))
+        c->request(RBOX_INT_GIO);
 }
 
 /// A byte-window access (read_dma/write_dma): R_ADDRESS names a CMM byte,
@@ -315,7 +387,10 @@ void CEs47Cmm::refresh_toy(u32 n) {
   u8 *t = &m_mem[area(n) + A_TOY - kMemBase];
   if (t[11] & 0x80)
     return; // SET: the console is writing the time
-  const time_t now = time(nullptr) + (time_t)m_toy_offset;
+  const auto host = std::chrono::system_clock::now().time_since_epoch();
+  const s64 host_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(host).count();
+  const time_t now = (time_t)(host_us / 1000000) + (time_t)m_toy_offset;
   struct tm tm;
   gmtime_r(&now, &tm);
   t[0] = (u8)tm.tm_sec;
@@ -325,7 +400,15 @@ void CEs47Cmm::refresh_toy(u32 n) {
   t[7] = (u8)tm.tm_mday;
   t[8] = (u8)(tm.tm_mon + 1);
   t[9] = (u8)(tm.tm_year % 100);
-  t[10] = 0x26;
+  // Byte 10, an MC146818's register A, is the CMM's update flag: zero
+  // unless the time is being updated. OpenVMS 8.4 (its TOY read at
+  // ffffffff8001daf0 in the CD's boot) calls GET_TOY for byte 10 and waits,
+  // with a delay between reads, until the whole byte is zero; the console's
+  // PALcode tests only <7> (GET_TOY of byte 0 answers -2 while it is set).
+  // So <7>, UIP, for the last 2 ms of each second as an MC146818 holds it,
+  // and nothing else [inference: the divider bits an MC146818 has there
+  // (0x26) made OpenVMS wait for ever].
+  t[10] = (host_us % 1000000) >= 998000 ? 0x80 : 0;
   t[11] = (t[11] & 0x70) | 0x06;
   t[12] = 0;
   t[13] = 0x80; // register D: the battery is good

@@ -59,6 +59,7 @@ public:
 
   bool gio_write(u32 pid, u32 reg, u64 value) override;
   bool gio_read(u32 pid, u32 reg, u64 *value) override;
+  void tick() override;
 
   // The CMM's memory as the processors see it through the byte window.
   static constexpr u32 kMemBase = 0x40000;
@@ -73,6 +74,8 @@ private:
     u64 data = 0;    ///< reg 1: the byte window's 16-bit data
     u64 address = 0; ///< reg 2: the byte window's address
     u64 regs[16] = {};
+    u64 reason = 0;       ///< reg 9: the terminal interrupts not yet taken
+    bool tx_kick = false; ///< the transmitter became ready while enabled
   };
 
   void late_init();

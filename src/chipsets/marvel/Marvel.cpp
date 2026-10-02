@@ -149,6 +149,7 @@ void CMarvel::interval_tick() {
   for (u32 pid = 0; pid < kMaxPids; pid++)
     if (CEv7Csr *c = csr(pid))
       c->interval_tick();
+  m_gio->tick();
   m_sys->note_interval_tick();
 }
 
