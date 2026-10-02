@@ -319,6 +319,10 @@ public:
     return nullptr;
   }
   void RegisterComponent(CSystemComponent *component);
+  /// The components registered so far, for board hardware that talks to a
+  /// configured device (the ES47's CMM finds its serial port).
+  int component_count() const { return iNumComponents; }
+  CSystemComponent *component(int i) const { return acComponents[i]; }
   void UnregisterComponent(CSystemComponent *component);
   int RegisterCPU(class CAlphaCPU *cpu);
 

@@ -90,6 +90,8 @@ public:
   bool restore_state(FILE *f);
 
   u32 pid() const { return m_pid; }
+  /// The far side of this processor's GIO port (CMarvel::set_management).
+  void set_gio_management(GioManagement *far) { m_gio.set_far(far); }
 
 private:
   /// This processor, once the CPUs exist (nullptr before).

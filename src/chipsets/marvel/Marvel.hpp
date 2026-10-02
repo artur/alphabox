@@ -70,6 +70,13 @@ public:
   void save_state(FILE *f) override;
   bool restore_state(FILE *f) override;
 
+  /// The board's management side for every processor's GIO port, in place
+  /// of the recorder: the ES47's CMM (platforms/es47/Cmm.hpp).
+  void set_management(std::unique_ptr<GioManagement> far);
+
+  /// Each processor's own memory, in bytes (memory.bits).
+  u64 memory_per_pid() const { return m_memory_per_pid; }
+
   /// The processor block of PE `pid`, or nullptr when there is none.
   CEv7Csr *csr(u32 pid) const;
 

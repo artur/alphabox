@@ -61,8 +61,9 @@ static const platform_config platforms[] = {
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
     // the ES40's that decompresses to 0x440000. No IO7 yet, so no PCI.
     {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
-     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 0, SECONDARIES_BY_CONSOLE, nullptr,
-     es47_pci_interrupt, es47_slot_refusal, 0, nullptr, 0x480000},
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 0, SECONDARIES_BY_CONSOLE,
+     es47_board_devices, es47_pci_interrupt, es47_slot_refusal, 0, nullptr,
+     0x480000},
     // Under construction (docs/platforms/es45.md): the first Titan board.
     // Its console comes as an update utility, which installs it into the
     // flash, and the utility runs up to 0x648000 (console_bytes). No

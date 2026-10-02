@@ -483,7 +483,10 @@ void CSerial::eval_interrupts() {
 
   // Drive IRQ4 (serial0) / IRQ3 (serial1) as a level following the cause;
   // pic_set_line() makes one edge per rising transition, retracting on fall.
-  theAli->pic_set_line(0, 4 - state.iNumber, pending);
+  // A board without the ALi (the ES47, whose CMM reads the port by polling)
+  // has no line to drive.
+  if (theAli)
+    theAli->pic_set_line(0, 4 - state.iNumber, pending);
 }
 
 void CSerial::write(const char *s, int dsize) {

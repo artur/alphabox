@@ -23,12 +23,26 @@
  * The AlphaServer ES47 board (docs/platforms/marvel.md): two EV7s on one
  * module, and one IO7 on PID 0's I/O port.
  *
- * The IO7 is packet M5, and until it exists nothing can sit on a PCI bus
+ * The module's management processor, the CMM, is Cmm.hpp. The IO7 is
+ * packet M5, and until it exists nothing can sit on a PCI bus
  * here: the interrupt map and the slots are placeholders that refuse.
  **/
 #include "StdAfx.hpp"
 
 #include "Boards.hpp"
+#include "Cmm.hpp"
+#include "Configurator.hpp"
+#include "Marvel.hpp"
+#include "System.hpp"
+
+/// The module's CMM answers both processors' GIO ports (Cmm.hpp).
+void es47_board_devices(CConfigurator *cfg, CSystem *sys) {
+  CMarvel *marvel = dynamic_cast<CMarvel *>(sys->chipset());
+  if (!marvel)
+    FAILURE(Configuration, "the ES47 board needs the Marvel chipset");
+  marvel->set_management(std::unique_ptr<GioManagement>(
+      new CEs47Cmm(sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"))));
+}
 
 /// No IO7 yet, so no interrupt routing (the IO7's LSI_CTL registers, M5).
 int es47_pci_interrupt(int hose, int slot, int intx) {

@@ -99,6 +99,8 @@ private:
 class CGioPort {
 public:
   CGioPort(u32 pid, GioManagement *far) : m_pid(pid), m_far(far) {}
+  /// The board's management side replaces the recorder (CMarvel).
+  void set_far(GioManagement *far) { m_far = far; }
   u64 read_cfg() const { return m_cfg; }
   void write_cfg(u64 v) { m_cfg = v; }
   u64 read_ctl() const { return m_ctl; }

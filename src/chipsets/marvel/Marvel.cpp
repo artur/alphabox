@@ -36,6 +36,12 @@ CMarvel::CMarvel(CSystem *sys) : CChipset(sys), m_gio(new GioRecorder()) {
 
 CMarvel::~CMarvel() = default;
 
+void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
+  for (auto &c : m_csr)
+    c->set_gio_management(far.get());
+  m_gio = std::move(far);
+}
+
 u64 CMarvel::phys_mask() const { return ev7::kPhysMask; }
 
 /**
