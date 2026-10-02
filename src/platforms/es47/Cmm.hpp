@@ -85,6 +85,8 @@ private:
   void partition_database(u8 *db);
   void mbm_configuration(u8 *c);
   void memory_assignment(u8 *a);
+  static bool is_mbm(u32 ip);
+  int sensor_readings(u32 ip, bool volts, u8 *r);
   void nvram_load();
   void nvram_save();
   void refresh_toy(u32 n);

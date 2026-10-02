@@ -92,8 +92,9 @@ constexpr u8 RSP_TAKEN = 2;
 // An SMLAN message: the header the console builds (get_own_partition_number
 // and its siblings) and the CMM's own dump routine names (dumppkt.c:
 // destination, originator, identifier, command, status).
-constexpr u32 M_DEST = 0x0;
-constexpr u32 M_ORIG = 0x4;
+constexpr u32 M_ORIG = 0x0; ///< 0 from the console
+constexpr u32 M_DEST = 0x4; ///< the micro asked: pid2ip, e.g. 10.0.1.0
+
 constexpr u32 M_ID = 0x8;
 constexpr u32 M_CMD = 0xc;
 constexpr u32 M_STATUS = 0xe;
@@ -556,6 +557,42 @@ void CEs47Cmm::memory_assignment(u8 *a) {
   }
 }
 
+/// The micro an IP address names (pid2ip): the MBM is 10.0.0.1, a CMM
+/// 10.0.<module + 1>.0 (stored least significant byte first).
+bool CEs47Cmm::is_mbm(u32 ip) { return (ip >> 16) == 0x0100; }
+
+/**
+ * Environmental readings (SMLAN 0x0901 voltages, 0x0902 temperatures):
+ * <0> u32 the count, then records of 0x1c bytes: <0> u16 the sensor's
+ * index (0, 1, ...), <2> s16 the reading (<15> set: none), <4> the
+ * sensor's subpacket data the console copies into the GCT, 0x18 bytes
+ * for a voltage and 0xc for a temperature (build_cmm_hw, build_mbm_hw;
+ * locate_voltage_data, locate_temp_data). The console expects a CMM to
+ * have 8 sensors and an ES47's MBM 17, voltages and temperatures
+ * together; what each one is, and the reading's unit, are [guess]: six
+ * voltages and the two EV7s' temperatures on the CMM, thirteen and four
+ * on the MBM, readings in mV and degrees C, the subpacket data zero.
+ * Returns the count.
+ */
+int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
+  static const s16 cmm_mv[] = {1500, 1500, 1800, 2500, 1500, 1200};
+  static const s16 cmm_c[] = {35, 35};
+  static const s16 mbm_mv[] = {3300, 3300, 5000, 5000, 12000, 12000, 1500,
+                               1500, 2500, 2500, 1800, 1800,  3300};
+  static const s16 mbm_c[] = {25, 27, 30, 30};
+  const bool mbm = is_mbm(ip);
+  const s16 *v = volts ? (mbm ? mbm_mv : cmm_mv) : (mbm ? mbm_c : cmm_c);
+  const int n = volts ? (mbm ? 13 : 6) : (mbm ? 4 : 2);
+  memset(r, 0, 0x1e0);
+  put32(r, (u32)n);
+  for (int i = 0; i < n; i++) {
+    u8 *rec = r + 4 + i * 0x1c;
+    put16(rec, (u16)i);
+    put16(rec + 2, (u16)v[i]);
+  }
+  return n;
+}
+
 /// The SMLAN commands the console sends (docs/platforms/marvel.md, M4).
 void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
   const u16 cmd = get16(req + M_CMD);
@@ -591,8 +628,31 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
     // holds it (request <4>). Status 3, which the console takes quietly as
     // "not there": [stub] no FRU contents are modelled.
     note("PID %u: SMLAN %04x (EEPROM of micro %08x) id %u: none [stub]", n, cmd,
-         get32(req + M_ORIG), id);
+         get32(req + M_DEST), id);
     respond(n, req, 3, nullptr, 0);
+    return;
+  case 0x0901:
+  case 0x0902: {
+    // get_voltage_readings / get_temperature_readings, of the micro the
+    // request names: a count, then 0x1c-byte records.
+    std::vector<u8> r(0x1e0);
+    const int count =
+        sensor_readings(get32(req + M_DEST), cmd == 0x0901, r.data());
+    note("PID %u: SMLAN %04x (%s of %s) id %u: %d sensors", n, cmd,
+         cmd == 0x0901 ? "voltages" : "temperatures",
+         is_mbm(get32(req + M_DEST)) ? "the MBM" : "the CMM", id, count);
+    respond(n, req, 0, r.data(), (u32)r.size());
+    return;
+  }
+  case 0x0903: // get_fan_rpm_readings
+  case 0x0908: // get_power_supply_state
+  case 0x090e: // get_ps_tray
+  case 0x090f: // get_vrm_status
+    // [stub] none reported: the answer the console builds itself on its
+    // simulator (a zeroed buffer and success).
+    note("PID %u: SMLAN %04x (environment) id %u: nothing to report [stub]", n,
+         cmd, id);
+    respond(n, req, 0, nullptr, 0);
     return;
   case 0x041c:
     // fetch_sm_nvram: hard and soft partition in the request's data bytes
