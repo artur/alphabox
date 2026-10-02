@@ -59,6 +59,8 @@ constexpr u64 ST_RXREADY = 0x100; ///< read: a character waits in R_RX
 // Offsets from area(n) = 0x40000 + n * 0x6000, as the console computes them.
 constexpr u32 area(u32 n) { return 0x40000 + n * 0x6000; }
 constexpr u32 A_STATE = 0x12a0;  ///< PALcode: 0 = cold start (block + 0x1298)
+constexpr u32 A_SPEED =
+    0x12a6; ///< PALcode: u16 MHz (block + 0x129e), cserve 0x4a
 constexpr u32 A_TOY = 0x1aac;    ///< rtc_read: MC146818 registers 0-11
 constexpr u32 A_REQ = 0x1ac8;    ///< smlan_write: 3 request slots
 constexpr u32 A_RSP = 0x3310;    ///< smlan_read: 3 response slots
@@ -66,9 +68,12 @@ constexpr u32 A_TOY_NV = 0x4b98; ///< rtc_read: TOY NVRAM, index 12 and up
 constexpr u32 kSlots = 3;
 constexpr u32 kSlotSize = 0x818;
 constexpr u32 kMsgMax = kSlotSize - 4;
-/// The system byte the PALcode reads first and smlan_init keeps
-/// (0x3ac160): [guess] the system type; read as 0 on the first runs.
+/// The system type, a byte the PALcode reads first and smlan_init keeps
+/// (0x3ac160): 1 is a GS1280, 0x11 an ES47 or ES80 -- told apart by
+/// <19:16> of the longword, 0 for an ES47 -- and anything else the
+/// console's development system, "TS212c" (build_dsrdb, 0x2dd8f0).
 constexpr u32 A_SYSTYPE = 0x40004;
+constexpr u8 SYSTYPE_ES47 = 0x11;
 
 // Request slot: +0 u8 state (3 = free, 0 = posted by the console), +2 u16
 // length, +4 the message. Response slot: +0 u8 state (<0> full, set by the
@@ -119,6 +124,20 @@ CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram)
     }
     refresh_toy(n);
   }
+  mem_write(A_SYSTYPE, SYSTYPE_ES47);
+}
+
+/// What the CMM knows once the processors exist: each one's clock, which on
+/// a real module the CMM set itself (ev7_clocks).
+void CEs47Cmm::late_init() {
+  m_ready = true;
+  for (int i = 0; i < m_sys->get_cpu_num(); i++) {
+    CAlphaCPU *c = m_sys->get_cpu(i);
+    const u32 n = c->get_pid() & 1;
+    const u32 mhz = (u32)(c->get_speed() / 1000000);
+    mem_write(area(n) + A_SPEED, (u8)mhz);
+    mem_write(area(n) + A_SPEED + 1, (u8)(mhz >> 8));
+  }
 }
 
 CEs47Cmm::~CEs47Cmm() {
@@ -168,6 +187,8 @@ void CEs47Cmm::mem_write(u32 a, u8 v) {
 
 bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
   std::lock_guard<std::mutex> g(m_lock);
+  if (!m_ready)
+    late_init();
   const u32 n = pid & 1;
   Port &p = m_port[n];
   switch (reg) {
@@ -214,6 +235,8 @@ bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
 
 bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
   std::lock_guard<std::mutex> g(m_lock);
+  if (!m_ready)
+    late_init();
   const u32 n = pid & 1;
   Port &p = m_port[n];
   switch (reg) {
@@ -408,13 +431,16 @@ void CEs47Cmm::nvram_save() {
  *
  *   hard partitions, 0x1c each: <0> number, <4> u32 0xff, <8> name
  *   sub partitions, 0x20 each:  <0> hard partition, <2> 4, <6> name
- *   processors, 12 each:        <0> 0x80 (assigned), <3> PID,
- *                               <4> hard partition, <6> sub partition
+ *   processors, 12 each:        <0> 0x80 (assigned), <1> N/S, <2> E/W,
+ *                               <3> PID, <4> hard partition,
+ *                               <6> sub partition
  *   I/O, 8 each:                <3> E/W, <4> N/S of the IO7's EV7,
  *                               <5> present
  *
  * One hard and one sub partition holding every processor; the IO7 on PID 0
- * (at 0,0). [guess] the meaning of 0xff and 4, copied from the console's
+ * (at 0,0). The ES47's two processors sit at N/S 0 and 1, E/W 0, as a
+ * real one's `show config` has them (coord2id makes them Hard ID 0 and
+ * 1, CPU 0 and 1). [guess] the meaning of 0xff and 4, copied from the console's
  * built-in database.
  */
 void CEs47Cmm::partition_database(u8 *db) {
@@ -437,6 +463,8 @@ void CEs47Cmm::partition_database(u8 *db) {
   p += 4;
   for (int i = 0; i < cpus; i++, p += 12) {
     p[0] = 0x80;
+    p[1] = (u8)i; // N/S
+    p[2] = 0;     // E/W
     p[3] = (u8)i;
     p[4] = 0;
     p[6] = 0;
@@ -449,26 +477,38 @@ void CEs47Cmm::partition_database(u8 *db) {
 }
 
 /**
- * The MBM's configuration (SMLAN 0x0321, 0xd8 bytes): four CPU modules of
- * 0x34 bytes, as the console's built-in answer for its simulator fills it
- * (get_mbm_configuration at 0x30a210): <4> u16 0xffff for a module that
- * is not there and 0 for one that is; then the module's two processors at
- * <8> and <0x20>, 0x18 bytes each, <0> u16 1 for one that is there and
- * the rest -- per Zbox, RIMM words that memconfig copies and
- * mem_config_get_rimm_size adds up -- zero, as the simulator leaves them.
- * [guess] what the RIMM words mean: the console takes the memory sizes
- * from the partition's memory assignment (0x0418) instead.
+ * The MBM's configuration (SMLAN 0x0321, 0xd8 bytes): four CPU modules,
+ * 0x34 bytes apart, as the console's built-in answer for its simulator
+ * fills it (get_mbm_configuration at 0x30a210): <4> u16 0xffff for a
+ * module that is not there and 0 for one that is; then the module's two
+ * processors at <8> and <0x20>, 0x18 bytes each (the second one's last
+ * words overlap the next module's first longword, which nothing reads):
+ * <0> u16 1 for a processor that is there, and from <4> ten RIMM words,
+ * Zbox 0's RIMMs 0-4 then Zbox 1's 5-9, as memconfig copies them into the
+ * table `show memory` prints a P (non-zero) or a dot from. The console
+ * takes the memory sizes from the partition's memory assignment (0x0418);
+ * the RIMM words here are each RIMM's size in MB [guess at the unit]:
+ * four RIMMs and the fifth (RAID) on Zbox 0, as the real ES47's
+ * `show config` lists PPPPP.....
  */
 void CEs47Cmm::mbm_configuration(u8 *c) {
   memset(c, 0, kMbmConfigSize);
   const int cpus = m_sys->get_cpu_num();
+  CMarvel *marvel = dynamic_cast<CMarvel *>(m_sys->chipset());
+  const u16 rimm_mb =
+      (u16)((marvel ? marvel->memory_per_pid() : 0) / 4 / (1024 * 1024));
   for (int m = 0; m < 4; m++) {
     u8 *mod = c + m * 0x34;
     const bool here = m * 2 < cpus;
     put16(mod + 4, here ? 0 : 0xffff);
-    for (int k = 0; k < 2; k++)
-      if (m * 2 + k < cpus)
-        put16(mod + 8 + k * 0x18, 1);
+    for (int k = 0; k < 2; k++) {
+      if (m * 2 + k >= cpus)
+        continue;
+      u8 *cpu = mod + 8 + k * 0x18;
+      put16(cpu, 1);
+      for (int r = 0; r < 5; r++)
+        put16(cpu + 4 + 2 * r, rimm_mb);
+    }
   }
 }
 

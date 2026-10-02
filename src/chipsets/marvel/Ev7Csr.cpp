@@ -45,6 +45,7 @@
 #include "StdAfx.hpp"
 
 #include "AlphaCPU.hpp"
+#include "CpuModel.hpp"
 #include "Ev7.hpp"
 #include "Ev7Csr.hpp"
 #include "System.hpp"
@@ -318,6 +319,12 @@ void CEv7Csr::reset() {
   // RBOX_WHOAMI: the PID [guess: the field's position is not known; the
   // console takes its PID from r28 and has not been seen to read this].
   m_regs[RBOX_WHOAMI] = m_pid;
+  // BBOX_CTL<6:0>: the L2's enabled ways, 256 KB each, which the XSROM set
+  // (the CMM's "cache_enable_mask") and get_bcache_size_pid counts.
+  const cpu_model *model =
+      cpu() ? &cpu()->model() : find_cpu_model(m_sys->platform().cpu_model);
+  const u32 ways = model ? model->l2_kb / 256 : 7;
+  m_regs[0x1c000] = (U64(1) << (ways > 7 ? 7 : ways)) - 1;
   m_gio.reset();
   m_lines = 0;
   m_start_hi = 0;

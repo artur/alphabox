@@ -75,6 +75,7 @@ private:
     u64 regs[16] = {};
   };
 
+  void late_init();
   u8 mem_read(u32 a);
   void mem_write(u32 a, u8 v);
   void window_op(u32 n, Port &p, u64 control);
@@ -99,6 +100,7 @@ private:
   bool m_terminal_looked = false;
   FILE *m_log = nullptr;
   bool m_trace = false;
+  bool m_ready = false; ///< late_init has run
   std::vector<bool> m_read_seen;
   s64 m_toy_offset = 0; ///< seconds the console set the TOY away from host
   std::string m_nvram_file;

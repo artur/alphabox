@@ -148,6 +148,10 @@ u64 CMarvel::pci_phys(int hose, u32 address) {
  * RBOX_SCRATCH1 (CEv7Csr::scratch_written).
  */
 void CMarvel::console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) {
+  // The register blocks again, now that each knows its processor's part.
+  for (int i = 0; i < ncpus; i++)
+    if (CEv7Csr *c = csr(cpus[i]->get_pid()))
+      c->reset();
   for (int i = 0; i < ncpus; i++) {
     if (i == 0)
       ev7::xsrom_handoff(cpus[i], cpus[i]->get_pid(), image_base);

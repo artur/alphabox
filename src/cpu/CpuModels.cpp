@@ -51,12 +51,13 @@ static const cpu_model models[] = {
     // (Linux hwrpb.h EV7_CPU); the console derives the type and revision it
     // reports itself, from the chip ID and an on-chip register, so the type
     // and minor here are for messages. The L2 is 1.75 MB, 7-way (Linux
-    // setup.c); console listings print 1.50 MB for revision 2 parts
-    // (docs/platforms/marvel.md).
+    // setup.c), but console listings print 1.50 MB for revision 2 parts
+    // (docs/platforms/marvel.md), and the console calls this row "EV7 rev
+    // 2.1": six ways enabled, which the console reads back from BBOX_CTL.
     {"ev7", "21364 (EV7)", 2, 15, 2, 2,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV7, 64, 64, 1792},
+     CPU_FAMILY_EV7, 64, 64, 1536},
     // EV7z (Linux: EV79), the same core at 1.15-1.3 GHz: HWRPB type 16
     // (hwrpb.h EV79_CPU). Real listings call it "EV7 rev 3.0" with 1.75 MB
     // of cache. Its chip ID is not known to differ [guess: the same 2; the
