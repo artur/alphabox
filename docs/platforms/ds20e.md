@@ -76,7 +76,7 @@ such) the structure of the ES40 listing with DS20E slot names.
 | 10 | Console listings compared with the reference | L3 | blocked: no reference yet |
 | 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | done: network boot, SCSI listing, disk boot of OpenVMS |
 | 12 | Guest boot | L5 | done: OpenVMS 8.4 CD to its menu, installed disk to login, 1 and 2 CPUs |
-| 13 | ES40 regression sweep and JIT cross-check | L6 | done for these changes (srm_run.sh diff clean on both lanes, 0 mismatches) |
+| 13 | ES40 regression sweep and JIT cross-check | L6 | done (2026-10-02, at the DS10 commit): srm_run.sh diff clean on the interpreter and JIT lanes; a JIT_VERIFY lane diff clean with 0 mismatches in 116.5 M compiled-block executions, and 0 in 214.5 M on a two-processor DS20E console; the ES40 Windows 2000 guest (`win2k-installed`, `es40-window.cfg`, win_bench.sh 300 s) reaches its desktop, idle at 1.7 % host CPU, no warnings |
 
 ## Open questions
 

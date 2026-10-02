@@ -123,8 +123,18 @@ board row now says so (`native_vmspal = false`), and the boot logs in on
 the interpreter with no options (`tsu-ds20l-2cpu-int-fix`). The DS20E had
 the same problem (its packet).
 
-Not done here: console network boot and a CD boot (the CD is the same
-media the DS20E and DS10 boot from).
+**Network boot (L4)** works with a DE600 at hose 0 device 3: the power-up
+`Testing ei* devices.` passes, and `boot eia0 -protocols bootp` gets its
+address from `net_peer.py`, transfers the image over TFTP and runs it to
+its HALT (`tsu-ds20l-net-ei`). A DE500 does not work with this console:
+`show config` lists `ewa0.0.0.3.0` with no station address (all eight
+DE500s of the slot probe too) and `boot ewa0` answers `device ewa0 is
+invalid` (`tsu-ds20l-net`), although OpenVMS drives DE500s on this board.
+The V6.6 console's DE500 driver stops somewhere in its initialisation;
+not investigated.
+
+Not done here: a CD boot (the CD is the same media the DS20E and DS10 boot
+from).
 
 
 | # | Item | Level | Status |
@@ -134,7 +144,7 @@ media the DS20E and DS10 boot from).
 | 3 | The machine's real slots and interrupt wiring, from its own assignments | L3 | done for pin A, checked with OpenVMS; pins B-D of two devices guessed |
 | 4 | Its device set: what belongs on the board rather than the ES40's | L3 | open |
 | 5 | Console listings against a reference | L3 | blocked: no reference |
-| 6 | Console tests, guest boot | L4-L5 | L5: OpenVMS 8.4 to login, 1 and 2 CPUs; console network boot not tried |
+| 6 | Console tests, guest boot | L4-L5 | L4: network boot with a DE600 (not a DE500); L5: OpenVMS 8.4 to login, 1 and 2 CPUs |
 
 ## Rules
 
