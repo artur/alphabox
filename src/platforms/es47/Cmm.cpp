@@ -354,12 +354,25 @@ bool CEs47Cmm::gio_read(u32 pid, u32 reg, u64 *value) {
   case R_ADDRESS:
     *value = p.address;
     break;
-  case R_REASON:
+  case R_REASON: {
     // Read to clear [inference: platform_init2 reads it once and discards
-    // it before it unmasks the CMM's interrupt].
-    *value = p.reason;
-    p.reason = 0;
+    // it before it unmasks the CMM's interrupt] -- one reason at a time:
+    // the PALcode's handler (0x39d14) dispatches only the first bit it
+    // finds, in the order below, so a second reason read with it would be
+    // lost. Losing a transmit-ready that way left OpenVMS waiting for it
+    // with its output stopped, whenever a character arrived while it
+    // printed. What stays pending is signalled again (tick).
+    static const u64 kOrder[] = {0x01, 0x02, 0x40, 0x80,
+                                 0x04, 0x08, 0x10, 0x20};
+    *value = 0;
+    for (u64 bit : kOrder)
+      if (p.reason & bit) {
+        *value = bit;
+        p.reason &= ~bit;
+        break;
+      }
     break;
+  }
   case R_RX:
     *value = 0;
     if (CSerial *t = terminal())
@@ -405,10 +418,11 @@ void CEs47Cmm::tick() {
         if (CSerial *t = terminal())
           if (t->ReadMem(0, 5, 8) & 1)
             add |= rx_bit(n);
-      if (add & ~p.reason) {
-        p.reason |= add;
+      // Anything not taken yet is signalled again: the PALcode takes one
+      // reason per interrupt (R_REASON).
+      p.reason |= add;
+      if (p.reason)
         raise.push_back(pid);
-      }
     }
   }
   CMarvel *mv = marvel();

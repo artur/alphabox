@@ -571,6 +571,19 @@ bits 1-2 in the drawer field, so an ES80's second drawer starts at PID 8.
   64-processor limit (16 here: host threads);
 - the route table's IO entries (0x100-0x113), RBOX_ROUTE's own layout.
 
+**The console terminal under OpenVMS stopped when typed at while it
+printed** (found driving these boots: a menu choice sent while the menu
+was still being printed left the output cut off mid-word, two runs out of
+two, on every board). The PALcode's CMM interrupt handler (0x39bd0) reads
+the reason register (GIO register 9) and dispatches only the first bit it
+finds -- RX, TX, then the second processor's --, while the model cleared
+every bit on the read: a transmit-ready read together with a received
+character was lost, and OpenVMS waited for it for ever. Register 9 now
+hands out one reason per read in the PALcode's order and the rest is
+signalled again; the same race runs to DCL twice
+(`es80/terminal-race-fixed-run*.log`). The real CMM's register is not
+documented **[inference from the handler]**.
+
 ### M6b: the EV7z row (2026-10-02)
 
 **Result**: with `ev7z` processors at `speed = 1300M` the console prints
