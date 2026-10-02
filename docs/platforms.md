@@ -61,7 +61,7 @@ Three layers, each added in a different way:
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
 | AlphaServer DS25 (Titan) | L1: its update utility's console runs to its drivers and then faults probing an on-board device at hose 2 device 1 that is not modelled ([packet](platforms/ds25.md)) |
-| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L2 on emulated EV7s (`es47` row, packets M0-M4): the console runs on both processors and reaches `P00>>>` on the telnet console that the emulated CMM carries (GIO); `show config`, `show memory`, `show cpu` and `show fru` answer. No IO7 yet (packet M5), so no PCI. The staged plan is in the [packet](platforms/marvel.md) |
+| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L5 on emulated EV7s (`es47` row, packets M0-M5): the console runs on both processors and reaches `P00>>>` on the telnet console that the emulated CMM carries (GIO); `show config` lists the IO7 with its four buses and the devices behind it (a 53C895 and a DE500-BA standing in for the embedded AIC-7892 and the gigabit card); OpenVMS 8.4 boots from its CD on both processors to the installation menu and DCL. The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
@@ -198,6 +198,16 @@ Facts that cost time to find and apply to the next machine:
   message's layout; the console's symbol table (procedure descriptor and
   name pairs) names every routine that builds or reads them
   (docs/platforms/marvel.md, M4).
+- **A clock's register may not be the chip's.** The Marvel TOY lives in the
+  CMM's memory laid out like an MC146818, but OpenVMS waits for byte 10 to
+  read zero, where an MC146818 keeps its divider bits (0x26); the console
+  only ever tested <7>. A guest that hangs after its banner with no device
+  access left is worth a PC sample and a memory dump: the loop it is in
+  names what it waits for (docs/platforms/marvel.md, M5).
+- **A console can gate its own probe on hot plug.** The Marvel console
+  configures only the PCI slots it has powered and connected through the
+  IO7's hot-plug registers, so with none modelled it probed nothing and
+  reported no error at all.
 - **A management processor's state bytes steer the processors.** Each EV7
   reads a byte the CMM keeps for it: zero makes its PALcode build its PAL
   area from scratch (right for the primary), non-zero keeps what the
@@ -285,10 +295,12 @@ device or an absent CPU.
      386EX) and the XSROM as witnesses. It carries the console terminal,
      the configuration, the partition database, NVRAM, FRU, environment
      and the TOY: `platforms/es47/Cmm.*`.
-   - **M5**: the IO7 I/O bridge (PCI-X/AGP hoses, DMA windows, interrupt
-     routing).
-   - **M6**: board rows for the ES47 first, then the ES80 and GS1280.
-   - **M7**: OpenVMS 8.4.
+   - **M5** (done): the IO7 I/O bridge (PCI-X/AGP hoses, hot-plug slots,
+     DMA windows, interrupt routing into the Rbox): `chipsets/marvel/Io7.*`.
+     OpenVMS 8.4 boots its CD with it, after two CMM fixes (the TOY's update
+     flag, the console terminal's interrupts).
+   - **M6**: board rows for the ES80 and GS1280 (the ES47's is there).
+   - **M7**: OpenVMS 8.4 to an installed disk, and Linux.
 
 The EV7 machines are the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its
@@ -296,4 +308,5 @@ console depends on the system's management hardware. The first contact
 confirmed both: the console's first access is to the processor's own
 management port (GIO), and with the EV7 and its registers emulated (M1-M3)
 the console reaches nothing else until that answers. With the CMM's side
-of it emulated (M4) the console comes up to its prompt.
+of it emulated (M4) the console comes up to its prompt, and with the IO7
+(M5) it finds its devices and boots OpenVMS.

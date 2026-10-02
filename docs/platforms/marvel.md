@@ -8,12 +8,13 @@ memory controllers, interrupt logic and a router, and reaches the I/O
 through an IO7 bridge.
 
 **Config**: `platform = "es47";` with `ev7` (or `ev7z`) processors and a
-`serial0` for the console terminal · **Status**: packets M0-M4 done
-(2026-10-02): L2. On emulated EV7s, with the management processor (CMM) on
-the other side of each processor's GIO port emulated, the console starts
-both processors, builds its configuration tree and reaches `P00>>>` on the
-telnet port; `show config`, `show memory`, `show cpu` and `show fru`
-answer. There is no IO7 yet (packet M5), so no PCI devices.
+`serial0` for the console terminal, PCI devices as `pci<hose>.<slot>` on
+hoses 0-3 · **Status**: packets M0-M5 done (2026-10-02): L5. On emulated
+EV7s, with the management processor (CMM) on the other side of each
+processor's GIO port emulated and the IO7 on PID 0, the console reaches
+`P00>>>`, `show config` lists IO7 0 with its four buses and the devices
+placed behind it, and `boot dka400` boots OpenVMS 8.4 from its CD on both
+processors to the date prompt, the installation menu and DCL (see "M5").
 
 The ES47 is the target: the smallest Marvel, with two EV7s on one board
 and one IO7. The ES80 and GS1280 are the same platform with more
@@ -34,7 +35,7 @@ register tables) are in `lab/docs-ev7/`, which git does not track. Section
 | Chipset | none. Each EV7 has two Zbox memory controllers (RDRAM RIMMs), a Cbox with a 1.75 MB L2 cache, and an Rbox router with N/S/E/W inter-processor ports and one I/O port. **known** (Technical Summary; the console's register tables) |
 | Memory | per EV7, up to 32 GB (Technical Summary). Each processor's memory is placed by its PID: PID 1 at 0x4_0000_0000, PID 2 at 0x8_0000_0000, PID 4 at 0x20_0000_0000. **known** (console listings) |
 | PCI | one IO7 per EV7 I/O port. An IO7 has 4 ports: S0 to S2 are PCI/PCI-X, S3 is AGP. A hose is numbered PID*4 + port. **known** (`core_marvel.h`, `marvel_find_console_vga_hose`, console logs) |
-| South bridge | the ES47's embedded I/O has a CMD 649 IDE controller, USB, an AIC-7892 SCSI controller and DEGXA gigabit Ethernet (real `show config`). The console also carries an "Acer Labs M1543C" driver (with IDE, PMU, USB), but which Marvel I/O drawer has one is **not established** |
+| South bridge | none: the ES47's "Embedded I/O" is an I/O expander module on hose 2 with an AIC-7892 SCSI controller (slot 1), a CMD 649 IDE controller for the CD (slot 2) and a four-function USB controller (slot 3); a real ES47 adds option cards (DEGX2-TA gigabit Ethernet in hose 0 slot 1, a Radeon 7500 in the AGP slot). Sources: the real `show config`, User Information (2P backplane: "a 1-slot high performance PCI-X bus, two 2-slot PCI-X buses, and an AGP bus"; 2P I/O expander module). Linux's Marvel code says there is no legacy (ISA) hose. The console also carries an "Acer Labs M1543C" driver, which no Marvel drawer is known to use |
 | Console devices | the console terminal is reached through the management hardware, not a UART on the I/O drawer **[inference]**: the console has a `giott` (a terminal over the GIO port), and the manuals reach the console through the MBM's serial port or the management LAN |
 | Board hardware | per CPU module a **CMM** (CPU Module Manager). Per drawer an **MBM** (Marvel Backplane Manager) and **PBM** (PCI Backplane Manager). The SROM and XSROM run on the EV7 itself and are loaded through the CMM. **known** (User Information v3.0 pp. 68-71) |
 
@@ -375,9 +376,11 @@ relying on them.
   XSROM's end is the best source for the handoff registers.
 - MBM, CMM, PF, FPGA and CPLD images: firmware of the management
   processors, not Alpha code. The CMM's is Intel 386EX code (M4).
-- What the firmware requires that the emulator does not have yet (the
-  44-bit decode, the EV7 CSR block, the GIO transport and the larger cache
-  came with M1-M3, the CMM's answers on GIO with M4): IO7s (M5).
+- What the firmware requires that the emulator does not have yet: nothing
+  for the ES47's console and OpenVMS 8.4's CD boot (the 44-bit decode, the
+  EV7 CSR block, the GIO transport and the larger cache came with M1-M3,
+  the CMM's answers with M4, the IO7 with M5). Open items are listed under
+  "M5".
 
 ## Sources
 
@@ -433,9 +436,9 @@ type and revision), not whole listings.
 | L0 | every lane builds with the EV7 core and the Marvel module | |
 | L1 | the console image loads, its PALcode runs the reset path, the console proper starts | **reached on the `es47` row** (EV7 rows, Marvel registers; first on the retired probe row) |
 | L2 | `P00>>>` on the telnet port, through the emulated CMM's GIO terminal | **reached** with M4 (2026-10-02) |
-| L3 | `show config` matches the real ES47 listing in structure: "PID 0 ... EV7 rev x, NNN MHz", "Memory 0 ...", "IO7 0 ...", "PCI Bus 0 Hose 0 ...", PID 1 "No Local I/O", the RIMM table; `show cpu` "Type Major 15"; `show mem` with PID 1 at 400000000 | Real listings exist only for other configurations and console versions (V7.3-11 against our V7.3-1), so L3 is a structural match. Device lines depend on which I/O we emulate behind the IO7 |
-| L4 | `test` and console network boot through a NIC on an IO7 hose; disk boot of a CD | the console's interrupt numbers in INTERRUPT_LINE are the answer key for the LSI wiring |
-| L5 | OpenVMS 8.4 boots from `lab/ALPHA084.ISO` | |
+| L3 | `show config` matches the real ES47 listing in structure: "PID 0 ... EV7 rev x, NNN MHz", "Memory 0 ...", "IO7 0 ...", "PCI Bus 0 Hose 0 ...", PID 1 "No Local I/O", the RIMM table; `show cpu` "Type Major 15"; `show mem` with PID 1 at 400000000 | **reached** with M5 (2026-10-02). Real listings exist only for other configurations and console versions (V7.3-11 against our V7.3-1), so L3 is a structural match. Device lines depend on which I/O we emulate behind the IO7 |
+| L4 | `test` and console network boot through a NIC on an IO7 hose; disk boot of a CD | **reached** for the CD: `boot dka400` loads OpenVMS's APB from a SCSI CD on hose 2 (M5); network boot not tried |
+| L5 | OpenVMS 8.4 boots from `lab/ALPHA084.ISO` | **reached** with M5: date prompt, installation menu and DCL on both EV7s (2026-10-02) |
 | L6 | the ES40 console-log check is clean, the JIT cross-check is 0 | after every packet that touches shared code (M0, M1) |
 
 ## Plan
@@ -451,9 +454,9 @@ moved lines of code, **[guess]**.
 | M2 | **EV7 on-chip CSR block** | per EV7 a device answering its 4 MB CSR window: Rbox (WHOAMI, INT/IMASK/IREQ/INTQ/INTA, the IT interval timer, SCRATCH, routing CFG reading as configured), Cbox, Zbox (memory configuration consistent with the board row, errors clean), GIO registers and the 0x80000 lock | 1-2 k | L1+ | **done** 2026-10-02: the transport and a recording management side; the answers are M4 |
 | M3 | **SROM/XSROM replacement** | a loader that leaves each EV7 as the XSROM leaves it: registers, CSR state, memory per PID, secondaries waiting on RBOX_SCRATCH for a jump address, and the console placed by the existing LFU loader (plus the >2 MB cache) | 300-600 | L1+ | **done** 2026-10-02, with the `es47` board row |
 | M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | **done** 2026-10-02 (see "M4"): ~800 lines |
-| M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | open |
+| M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | **done** 2026-10-02 (see "M5"): ~900 lines, and L5 with two CMM fixes |
 | M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | open |
-| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | open |
+| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | the CD boot to DCL came with M5; an installation to disk and Linux are open |
 
 The order is M0, then M1+M2+M3 together (the console reaches the GIO
 conversation with real answers to its CSR reads), then M4 (the prompt),
@@ -462,6 +465,168 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M5: the IO7, devices behind it, and OpenVMS 8.4 (2026-10-02)
+
+**Result: L5.** With the IO7 on PID 0 (`chipsets/marvel/Io7.*`), a
+53C895 with a RAM disk and the OpenVMS 8.4 CD at hose 2 slot 1 and a
+DE500-BA (`dec21143`, null backend) at hose 0 slot 1, the console reaches
+`P00>>>` and `boot dka400` brings OpenVMS 8.4 up on both EV7s to its date
+prompt, the installation menu and DCL, on the JIT and the interpreter
+(headless) lanes. This is the first operating system on an emulated EV7.
+The transcripts are in `lab/platforms/marvel/m5/` (`l5-*.log`,
+`es47-l3-*.log`). The devices, in the machine block:
+
+```
+  pci2.1 = sym53c895
+  {
+    disk0.0 = ramdisk { size = 64M; }
+    disk0.4 = file { file = "ALPHA084.ISO"; read_only = true; cdrom = true; }
+  }
+  pci0.1 = dec21143 { type = "null"; }
+```
+
+```
+P00>>>show device
+dka0.0.0.1.2               DKA0                           RZ58  2000
+dka400.4.0.1.2             DKA400                        RRD42  4.5d
+ewa0.0.0.1.0               EWA0              08-00-2B-E5-40-00
+pka0.7.0.1.2               PKA0                  SCSI Bus ID 7
+P00>>>boot dka400
+(boot dka400.4.0.1.2 -flags 0)
+...
+    OpenVMS (TM) Alpha Operating System, Version V8.4
+mvcpu_get_numa_distances: bad route IPR for self, cpu 0, rt 0x0
+%PKA0, Copyright (c) 1998 IntraServer Technology Inc. PKW V2.1.22 ROM V1.0
+%PKA0, SCSI Chip is SYM53C895, Operating mode is LVD Ultra2 SCSI
+%SMP-I-SECMSG, CPU #1 message:   P01>>>START
+%SMP-I-CPUTRN, CPU #1 has joined the active set.
+Please enter date and time (DD-MMM-YYYY  HH:MM)  02-OCT-2026 12:00
+    Installing required known files...
+    Configuring devices...
+%EWA0, Autosense mode set by console
+...
+Enter CHOICE or ? for help: (1/2/3/4/5/6/7/8/9/?) 8
+(DCL) SHOW CPU
+System: hp AlphaServer ES47 7/1000
+   Active               0,1
+(DCL) SHOW MEMORY/PHYSICAL
+  Main Memory (2.00GB)            262144      254038        7946         160
+```
+
+`SHOW DEVICE` in DCL lists DKA0, DKA400 (mounted, ALPHA084), PKA0, EWA0
+and OPA0.
+
+**Against the real ES47's `show config`**, structurally (the rest of the
+M4 table holds):
+
+| | real | emulated | why |
+| --- | --- | --- | --- |
+| IO7 line | IO7 0, Embedded I/O, IO7 pass 3 | the same | IO_SYS_REV type 1, IO_ASIC_REV 0x12 |
+| drawer line | I/O Drawer 0, Cabinet 0, Riser 0, Backplane rev 2 | Backplane rev 0 | where the console takes the backplane revision from is not found **[open]** |
+| hoses | Bus 0 66 MHz, 1-2 33 MHz, PCI 2.2 mode; AGP Bus 3, AGP rev 2.0, 1x/4x | the same | HP_DEV_CAP gives hose 0's slots 66 MHz (with no card there it reads 33 MHz) |
+| devices | DEGX2-TA (0/1), a SIIG serial card (1/3), AIC-7892 (2/1), CMD 649 (2/2), USB (2/3), Radeon (3/5) | DE500-BA (0/1), 53C895 (2/1) | Alphabox has no AIC-7892, CMD 649, BCM5703 or Radeon: the 53C895 stands in for the AIC-7892 in its slot, the DE500-BA for the gigabit card; the console has drivers for both |
+
+**The IO7 model.** Its space and registers are Linux's (`core_marvel.h`)
+and the console's tables; what the registers *do* was read off the
+console and its PALcode:
+
+- **Identity.** `io7_init_np` (0x2e89e0) only builds its IO7 structure when
+  IO_ASIC_REV<7:4> is 1 ("IO7-100"); <3:0> + 1 is the pass `show config`
+  prints, so 0x12 is pass 3. IO_SYS_REV<16> says the type is valid and
+  <7:4> is the I/O type, read by `get_io_type` (0x2ea0f0) and named from a
+  table at 0x3ac378: 0 "3.3V PCI-X I/O", 1 "Embedded I/O", 2 "X-Shelf
+  I/O", 3 "Std PCI-X I/O". The ES47's is 1.
+- **Presence.** RBOX_IO_CFG <0> and <2> (the PALcode's test at 0x3941c):
+  without them the console says "No Local I/O". The console writes
+  POx_CACHE_CTL 0/8 to disable/enable a port and keeps the result in its
+  own structure (`write_io_csr` 0x2e3fe0 sets bit 3 of a per-port flag on a
+  non-zero write); configuration reads go nowhere on a port whose flag is
+  clear. Linux tests CACHE_CTL == 8.
+- **Hot plug.** The console drives a hot-plug controller on every port
+  (`php_disconnect_all`, `php_pwr_on_all`, `php_connect_all` and the slot
+  routines at 0x2e5490-0x2e65a0) and only probes slots it has powered and
+  connected: HP_PWR and HP_CNTL take on/off masks in <13:8>/<5:0>, HP_MISC
+  reports completions (<5:0> power, <21:16> connect; written with ones to
+  clear), HP_INTR_IN gives the slot inputs (<s> interlock open, <8+s> power
+  fault, <16+s> and <24+s> both set for an empty slot), HP_DEV_CAP the
+  slots' speeds (<s> 66 MHz, <8+s> PCI-X, <16+s> 133). Hose 2's embedded
+  slots are read but never powered by the console, so the model starts with
+  every slot powered **[inference]**. Without the controller the console
+  printed "is powered off" for every slot and found nothing.
+- **Configuration space** at port + 0xFE000000, `bus << 16 | devfn << 8`,
+  the layout `CPCIDevice` already uses; nothing there reads as all ones.
+- **DMA**: four windows per port, the Pchip's scheme (`PciWindows.hpp`):
+  the console opens window 1 (direct, 1 GB at 2 GB); OpenVMS adds window 2
+  (scatter-gather, 1 GB at 3 GB).
+- **Interrupts** (the PALcode's EI1 handler 0x398b4 and its end of
+  interrupt at 0x38bc4): an LSI is port<7:5> slot<4:2> INTx<1:0>; when its
+  line is asserted and LSI_CTL<24> is set, the IO7 sends the IID
+  (PE <23:14>, LSI <8:0>) to the PID in LSI_CTL<22:14>. The EV7 queues it in
+  RBOX_INTQ (<24> valid; the PALcode writes each one back to take it) and
+  raises RBOX_INT<12>; the PALcode reads the IO7's PO7_SCRATCH<7:0> as the
+  vector block and hands the OS 0x800 + LSI * 16. When the IPL drops it
+  writes the IID to EOI_DAT of the port in IID<6:5>; the IO7 sends it again
+  if the line is still asserted. The console enables LSI_CTL for the
+  devices it uses and disables them when it stops its drivers; OpenVMS
+  re-enables them itself (at ffffffff800159a4). MSIs are not modelled.
+
+**What OpenVMS needed from the CMM** (`platforms/es47/Cmm.cpp`), found by
+PC sampling and a memory dump of the stuck guest:
+
+- **TOY byte 10 is an update flag, not register A.** OpenVMS's TOY read
+  (ffffffff8001daf0) calls GET_TOY (cserve 0x49) for byte 10 and waits, in
+  a delay loop, until the whole byte is zero; M4's model kept an
+  MC146818's 0x26 there and OpenVMS waited for ever after its banner. The
+  console's PALcode (GET_TOY of byte 0 answers -2 while <7> is set) tests
+  only UIP. Byte 10 now reads 0, with <7> for the last 2 ms of each second.
+- **The console terminal is interrupt-driven under OpenVMS.** The console's
+  `cb_set_term_int` (`txon` 0x31aca0, `rxon`) sets the terminal's interrupt
+  enables through cserve 0x46, which merges them into GIO register 8 (the
+  PALcode's state word): <0>/<1> RX/TX for the module's first processor,
+  <6>/<7> for its second. The CMM then raises RBOX_INT<9> (EI0); the
+  PALcode's handler (0x39bd0) checks status <4>, reads register 9 for the
+  reason and dispatches SCB vector 0x6c0 (RX) or 0x6d0 (TX) (0x700/0x710
+  for the second processor). Without it OpenVMS printed nothing after its
+  first messages and read no input. The model posts the reason and raises
+  the interrupt from a per-tick hook (`GioManagement::tick`), outside the
+  register-block and CMM locks, since the CMM is called with a register
+  block locked.
+
+**How it was found.** Each step was the next access the console made
+(`ALPHABOX_TRACE_IO7=1` names every IO7 register access with pc and ra,
+and shows every LSI_CTL/MSI_CTL write; `ALPHABOX_TRACE_UNKNOWN` the rest),
+the call trace (`ALPHABOX_TRACE_CALLS`) for which routine stopped short,
+and the console's routines read with `cdis.py`. Two console habits made
+the static reading harder: format strings are addressed as 0x400f00 +
+offset, and many routines are static (named after the symbol before
+them). The tools are in `lab/platforms/marvel/m5/tools/` (`m5_run.sh`,
+`m5_drive.sh` + `drive.py` for an OS session, `dis_dump.py` for code in a
+memory dump).
+
+**Checks** (no Tsunami or Titan behaviour change: the IO7 exists only on a
+board that attaches one; the shared change is `CSystem::device_at`, a const
+lookup): `srm_run.sh` diff clean on the JIT and interpreter (headless)
+lanes and on the JIT_VERIFY lane with 0 mismatches in 110 million
+compiled-block executions; the es47 row with the devices to `P00>>>`,
+`show config` and `show device` on the JIT_VERIFY lane with 0 mismatches in
+265 million; the es47 row without devices to `P00>>>` on the interpreter;
+a two-processor DS20E probe at `P00>>>` (`show cpu`: 00 01); all three
+lanes build.
+
+**Open:**
+
+- the IO7's MSIs, the data mover, error reporting (the registers read
+  clean and nothing sets them), INT_PND/INT_CLR/MISC_PND;
+- `get_pbm_configuration` (0x0322) is never asked on the embedded I/O, and
+  "Backplane rev" reads 0;
+- SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1;
+- OpenVMS prints "mvcpu_get_numa_distances: bad route IPR for self" per
+  CPU: it wants a routing register (the Rbox route tables read 0)
+  **[open: which register]**;
+- DKA400 shows 4 errors in OpenVMS's `SHOW DEVICE` **[not investigated]**;
+- the AIC-7892, CMD 649 and USB of the real embedded I/O, network boot
+  through the NIC (`net_peer.py`), an installation to disk, Linux.
 
 ### M4: the CMM, the console's management side (2026-10-02)
 
@@ -634,7 +799,7 @@ Interface responded to command %04x with status %04x".
 | 0x0321 | `get_mbm_configuration` | -- (to the MBM) | MBM configuration, 0xd8 (below) | one module, two EV7s, five RIMMs each |
 | 0x0418 | `get_hard_partition_mem_assignm` | hard partition | memory groups and chunks, 0x800 (below) | each EV7's memory one chunk |
 | 0x0100 | `get_hard_partition_mem_assignm` (another path) | | | not seen |
-| 0x0322 | `get_pbm_configuration` | | PCI backplane | not seen (M5) |
+| 0x0322 | `get_pbm_configuration` | | PCI backplane: 6 bytes of answer (0x30a5b0 reads 0x16 = header + 6) | not seen, even with the IO7 (M5): no routine calls it on the ES47's embedded I/O |
 | 0x0330 | `get_system_topology` | | | not seen |
 | 0x0901 | `get_voltage_readings` | -- (to a micro) | count, 0x1c-byte records | CMM 6, MBM 13 |
 | 0x0902 | `get_temperature_readings` | | idem | CMM 2, MBM 4 |
@@ -642,7 +807,8 @@ Interface responded to command %04x with status %04x".
 | 0x0a01 | `get_eerom_data` | offset, length (to a micro) | u16 length, the FRU EEPROM bytes | status 3, not there **[stub]** |
 | 0x0801 | `get_fw_rev` | | | not seen |
 | 0x0407, 0x0409, 0x0415 | reset/power off partition, power on/off | | | not seen |
-| 0x0b01, 0x0b05, 0x0b06 | IPMI SEL log, CDL error get/clear | | | not seen |
+| 0x0b01, 0x0b06 | IPMI SEL log, CDL error clear | | | not seen |
+| 0x0b05 | `get_cdl_error` (0x30c000), at `boot` | 8 bytes, to 10.253.0.1 [guess: the MBM] | a reply in parts | not modelled: status 1, and the console prints "Server Management Interface responded to command 0b05 with status 0001"; harmless **[open]** |
 
 An unknown command is logged and answered with status 1.
 
@@ -733,7 +899,8 @@ before.
 **What remains** (for M5 and beyond):
 
 - the IO7 (M5): with RBOX_IO_CFG reading 0 the console skips the IO7 the
-  partition database lists; `get_pbm_configuration` (0x0322) will follow;
+  partition database lists (done with M5; `get_pbm_configuration`, 0x0322,
+  was not asked after all);
 - FRU EEPROM contents (0x0a01): `show fru` lists the FRUs with no part or
   serial numbers; `set sys_serial_num` is asked for at every start;
 - fans, power supplies and VRMs (0x0903/0x0908/0x090e/0x090f) report
