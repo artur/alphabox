@@ -374,15 +374,12 @@ u64 CEv7Csr::read(u32 off, int dsize) {
     // The oldest IID an IO7 sent, valid in <24>; 0 when none waits.
     v = m_intq.empty() ? 0 : (m_intq.front() | INTQ_VALID);
     break;
-  case 0x28020: {
-    // The revision probe (see kMoreRegs): bit 19 reads 1 on an EV7z
-    // [guess: the console's type table has an entry per value, and the
-    // EV7z is the later part].
-    CAlphaCPU *c = cpu();
-    const bool ev79 = c && c->model().type_major == 16;
-    v = (reg(off) & ~(U64(1) << 19)) | (ev79 ? U64(1) << 19 : 0);
+  case 0x28020:
+    // The revision probe (see kMoreRegs): with chip ID 2, bit 19 tells
+    // "EV7 rev 2.2" (set) from "2.1" (clear); no row is a 2.2 part, and the
+    // EV7z has its own chip ID (CpuModels.cpp). Reads 0.
+    v = reg(off) & ~(U64(1) << 19);
     break;
-  }
   default: {
     auto it = m_regs.find(off);
     if (it == m_regs.end()) {

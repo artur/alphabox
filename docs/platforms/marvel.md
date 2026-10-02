@@ -110,8 +110,11 @@ or add.
   - The PALcode reads **I_CTL<29:24>** (`and #63`) and compares it with 2,
     at 0x3eaa4. The console has strings "EV7 chip ID %d", "EV79 chip ID
     %d" and "EV7 rev 1.0/2.0/2.1/2.2/3.0".
-  - **Open**: the chip-ID values per revision. **[guess]** They are small
-    integers, not the EV68CB's 0x21.
+  - The chip ID per revision (M6b): the console's type table gives minor
+    = index + 1, the index being the chip ID (plus CSR 0x28020<19> when it
+    is 2), and names minors 1-5 "EV7 rev 1.0", "2.0", "2.1", "2.2", "3.0".
+    So chip ID 2 is rev 2.1 (2.2 with bit 19), and "EV7 rev 3.0" -- the
+    EV7z of a real 7/1300 -- needs chip ID 4 **[inference]**.
 - **Interrupt delivery**: the EV6 receives six external IRQ pins into
   ISUM<38:33>. The EV7 receives interrupts as packets into its Rbox:
   - I/O interrupts arrive from IO7s as "IIDs";
@@ -149,9 +152,10 @@ or add.
 **What EV7z changes**: clock (1.15-1.3 GHz) and revision. Linux calls it
 EV79 and gives it CPU type 16. Real ES47 7/1300 listings print "EV7 rev
 3.0, 1300 MHz" with 1.75 MB cache, against the 7/800's "EV7 rev 2.0, 800
-MHz" with 1.50 MB. **[inference]** EV7z is a CPU row: a chip ID, a type
-minor and a cache size. Whether the console calls a part "EV7 rev 3.0" or
-"EV79" by chip ID is open.
+MHz" with 1.50 MB. EV7z is a CPU row: chip ID 4, which the console calls
+"EV7 rev 3.0", type 15 minor 5 (M6b). This console never reports type 16:
+its type table holds 15 throughout, and its "EV79 rev" strings are not
+referenced by the revision table it uses.
 
 ### Marvel's address map
 
@@ -466,6 +470,34 @@ code.
 
 ## Findings
 
+### M6b: the EV7z row (2026-10-02)
+
+**Result**: with `ev7z` processors at `speed = 1300M` the console prints
+what the real ES47 7/1300 prints (`test/platforms/es47/show-config.txt`),
+and OpenVMS 8.4 boots from the CD to DCL on both
+(`lab/platforms/marvel/es80/task2-ev7z-1300-dcl-console.log`):
+
+```
+                           hp AlphaServer ES47 7/1300
+ NS,EW (0,0)	Hard ID 0	1.75 MB Cache		EV7 rev 3.0, 1300 MHz
+ NS,EW (1,0)	Hard ID 1	1.75 MB Cache		EV7 rev 3.0, 1300 MHz
+CPU 0   CurOwner 0  Owner 0   Type Major 15, Minor  5
+...
+$$$ SHOW CPU
+System: hp AlphaServer ES47 7/1300
+   Active               0,1
+```
+
+Before, the row (chip ID 2 with CSR 0x28020<19> set for "type 16")
+printed "EV7 rev 2.2", type 15 minor 4. How the console names a part: the
+PALcode (0x3ea94) indexes its table of (minor, 15) pairs at 0x3eb08 with
+I_CTL<29:24> -- plus 0x28020<19> only when that is 2 --, minor = index +
+1; the console's revision strings are a table at 0x3ac278 indexed by the
+minor: "Unknown", "1.0", "2.0", "2.1", "2.2", "3.0". Minor 5 is reachable
+only with chip ID 4. Other PALcode tests of the chip ID only single out 0
+(rev 1.0: a quarter-rate interval timer). The `ev7` row's message minor
+is now 3, what the console reports for it.
+
 ### M6a: the routes OpenVMS reads (2026-10-02)
 
 **Result**: OpenVMS 8.4 no longer prints `mvcpu_get_numa_distances: bad
@@ -733,7 +765,7 @@ a 7/1300 on V7.3-11), structurally:
 | --- | --- | --- | --- |
 | banner | hp AlphaServer ES47 7/1300 | hp AlphaServer ES47 7/1000 | the clock is the configuration's (`speed`) |
 | PID 0 / PID 1 lines | CPU 0 / CPU 1, NS,EW (0,0) / (1,0), Hard ID 0 / 1 | the same | partition database coordinates |
-| cache, revision | 1.75 MB, EV7 rev 3.0 | 1.50 MB, EV7 rev 2.1 | the `ev7` row is a revision-2 part (the console derives the revision from the chip ID and CSR 0x28020); `ev7z` is the 1.75 MB row |
+| cache, revision | 1.75 MB, EV7 rev 3.0 | 1.50 MB, EV7 rev 2.1 | the `ev7` row is a revision-2 part (the console derives the revision from the chip ID and CSR 0x28020); `ev7z` at 1300 MHz prints what the real 7/1300 prints (M6b) |
 | memory | 4 GB each | 1 GB each (memory.bits 30) | configuration |
 | RIMMs | PPPPP..... | PPPPP..... | MBM configuration |
 | IO7 0 ... PCI Bus 0-3 | present | present since M5 (see the M5 section) | at M4 the console said "No Local I/O": RBOX_IO_CFG read 0 |
@@ -1003,15 +1035,15 @@ again has no unknown access.
 
 - `cpu_model` has a `family` (`CPU_FAMILY_EV6`, `CPU_FAMILY_EV7`) and the
   L1/L2 sizes. Rows `ev7` (21364: chip ID 2, HWRPB type 15) and `ev7z`
-  (EV79: chip ID 2, type 16), AMASK and IMPLVER as the EV68 **[guess]**,
+  (chip ID 4 since M6b), AMASK and IMPLVER as the EV68 **[guess]**,
   64 KB L1s, 1.75 MB L2. A board's row names its processor and a processor
   of the other family is refused.
 - **The chip ID**: the PALcode takes I_CTL<29:24> (`srl 24; and 63`) and
   only enters its EV7 code when it is 2 (0x3eaa0). There it adds bit 19 of
   CSR 0x28020 (after writing all ones to it) and indexes a table of
   `(n, 15)` quadwords at 0x3eb08 with the sum: the console derives the
-  processor type it reports, 15 throughout, itself. What bit 19 is on an
-  EV7z is **[guess]**: the model sets it for the type-16 row.
+  processor type it reports, 15 throughout, itself. Bit 19 tells rev 2.2
+  from 2.1 among chip-ID-2 parts; it reads 0 (M6b).
 - **Addresses** (`cpu/ev7/Ev7.hpp`): 44 bits (`CChipset::phys_mask`), PA<43:35>
   the inverted PE, memory per PID at `memory_base(pid)`, the CSR block at
   `csr_base(pid)`, IO7 ports at `io7_base(pid, port)`. Nothing in the core

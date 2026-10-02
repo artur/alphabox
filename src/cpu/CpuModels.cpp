@@ -45,26 +45,27 @@ static const cpu_model models[] = {
      CPU_FAMILY_EV6, 64, 64, 0},
     // 21364 (EV7): the EV68 core, so the same IMPLVER and extensions
     // [guess: no document lists the 21364's AMASK; Linux has no EV7 case]
-    // and 64 KB L1 caches. The chip ID is what the console's PALcode tests:
-    // it reads I_CTL<29:24> and takes the EV7 path when it is 2 (0x3eaa0 in
-    // the decompressed SRM V7.3-1). The HWRPB processor type is 15
-    // (Linux hwrpb.h EV7_CPU); the console derives the type and revision it
-    // reports itself, from the chip ID and an on-chip register, so the type
-    // and minor here are for messages. The L2 is 1.75 MB, 7-way (Linux
-    // setup.c), but console listings print 1.50 MB for revision 2 parts
-    // (docs/platforms/marvel.md), and the console calls this row "EV7 rev
-    // 2.1": six ways enabled, which the console reads back from BBOX_CTL.
-    {"ev7", "21364 (EV7)", 2, 15, 2, 2,
+    // and 64 KB L1 caches. The chip ID is what the console's PALcode turns
+    // into the processor type and revision it reports (0x3ea94 in the
+    // decompressed SRM V7.3-1): I_CTL<29:24>, plus bit 19 of CSR 0x28020 when
+    // the chip ID is 2, indexes a table of (minor, 15) pairs, minor = index
+    // + 1, and the console names minor 1-5 "EV7 rev 1.0", "2.0", "2.1",
+    // "2.2" and "3.0". Chip ID 2 is "EV7 rev 2.1", type 15 minor 3 (Linux
+    // hwrpb.h EV7_CPU is 15). The L2 is 1.75 MB, 7-way (Linux setup.c), but
+    // console listings print 1.50 MB for revision 2 parts
+    // (docs/platforms/marvel.md): six ways enabled, which the console reads
+    // back from BBOX_CTL.
+    {"ev7", "21364 (EV7)", 2, 15, 3, 2,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
      CPU_FAMILY_EV7, 64, 64, 1536},
-    // EV7z (Linux: EV79), the same core at 1.15-1.3 GHz: HWRPB type 16
-    // (hwrpb.h EV79_CPU). Real listings call it "EV7 rev 3.0" with 1.75 MB
-    // of cache. Its chip ID is not known to differ [guess: the same 2; the
-    // console's PALcode adds bit 19 of an on-chip register at CSR 0x28020 to
-    // it before indexing its type table, which is where a revision would
-    // show].
-    {"ev7z", "21364 (EV7z)", 2, 16, 3, 2,
+    // EV7z, the same core at 1.15-1.3 GHz. A real ES47 7/1300's show
+    // config calls it "EV7 rev 3.0" with 1.75 MB of cache: minor 5, which
+    // only chip ID 4 reaches in the console's table [inference: no document
+    // gives the chip ID]. The console reports it as type 15 (show cpu:
+    // "Type Major 15, Minor 5"): Linux's EV79_CPU, 16, is not what this
+    // console hands on, and the rows's type is for messages.
+    {"ev7z", "21364 (EV7z)", 4, 15, 5, 2,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
      CPU_FAMILY_EV7, 64, 64, 1792},
