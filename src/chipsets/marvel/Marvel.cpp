@@ -71,6 +71,28 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
   return bits;
 }
 
+void CMarvel::attach_io7(u32 pid) {
+  if (pid >= kMaxPids)
+    FAILURE(Configuration, "an IO7 on a processor that cannot exist");
+  m_io7[pid].reset(new CIo7(m_sys, this, pid));
+  m_csr[pid]->set_io7_attached(true);
+}
+
+CIo7 *CMarvel::io7(u32 pid) const {
+  return pid < kMaxPids ? m_io7[pid].get() : nullptr;
+}
+
+/// An IO7's space: PA<43> set, the PE inverted in PA<42:35>, the port
+/// inverted in PA<34:32> (Io7.hpp).
+static bool io7_decode(u64 a, u32 *pe, u32 *port, u32 *off) {
+  if (!ev7::is_io(a))
+    return false;
+  *pe = (u32)(~(a >> 35) & 0xff);
+  *port = (u32)(~(a >> 32) & 7);
+  *off = (u32)a;
+  return true;
+}
+
 CEv7Csr *CMarvel::csr(u32 pid) const {
   if (pid >= kMaxPids || (int)pid >= m_sys->get_cpu_num())
     return nullptr;
@@ -83,8 +105,11 @@ u64 CMarvel::read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) {
   if (ev7::csr_decode(a, &pe, &off))
     if (CEv7Csr *c = csr(pe))
       return c->read(off, dsize);
-  // An IO7's space (packet M5), another processor's that is not there, or
-  // memory nobody owns.
+  u32 port;
+  if (io7_decode(a, &pe, &port, &off))
+    if (CIo7 *io = io7(pe))
+      return io->read(port, off, dsize, source);
+  // Another processor's space that is not there, or memory nobody owns.
   m_sys->trace_unknown(ev7::is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize,
                        false, 0, source);
   return 0;
@@ -99,14 +124,25 @@ void CMarvel::write_io(u64 a, u64 raw, int dsize, u64 data,
       c->write(off, dsize, data);
       return;
     }
+  u32 port;
+  if (io7_decode(a, &pe, &port, &off))
+    if (CIo7 *io = io7(pe)) {
+      io->write(port, off, dsize, data, source);
+      return;
+    }
   m_sys->trace_unknown(ev7::is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize, true,
                        data, source);
 }
 
-/// Device interrupts reach an EV7 through an IO7 (M5); there is none yet.
+/**
+ * A device's interrupt line: `number` is the IO7's PE << 8 | the LSI
+ * (io7::lsi; the board's pci_interrupt makes it from the hose and slot).
+ */
 void CMarvel::interrupt(int number, bool assert) {
-  (void)number;
-  (void)assert;
+  if (number < 0)
+    return;
+  if (CIo7 *io = io7((u32)number >> 8))
+    io->lsi((u32)number & 0xff, assert);
 }
 
 void CMarvel::interval_tick() {
@@ -142,9 +178,10 @@ u64 CMarvel::pci_space_base(int hose, pci_space space) const {
   return base;
 }
 
-/// No IO7 yet, so no DMA windows: a bus address is taken as physical.
+/// DMA through the windows of the IO7 port the hose is.
 u64 CMarvel::pci_phys(int hose, u32 address) {
-  (void)hose;
+  if (CIo7 *io = io7((u32)hose / 4))
+    return io->pci_phys((u32)hose % 4, address);
   return address;
 }
 
@@ -206,16 +243,25 @@ void CMarvel::start_secondaries_as_console(CAlphaCPU **cpus, int ncpus) {
 void CMarvel::reset() {
   for (auto &c : m_csr)
     c->reset();
+  for (auto &io : m_io7)
+    if (io)
+      io->reset();
 }
 
 void CMarvel::save_state(FILE *f) {
   for (auto &c : m_csr)
     c->save_state(f);
+  for (auto &io : m_io7)
+    if (io)
+      io->save_state(f);
 }
 
 bool CMarvel::restore_state(FILE *f) {
   for (auto &c : m_csr)
     if (!c->restore_state(f))
+      return false;
+  for (auto &io : m_io7)
+    if (io && !io->restore_state(f))
       return false;
   return true;
 }

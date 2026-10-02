@@ -28,8 +28,8 @@
  * What is here: the 44-bit physical address map (cpu/ev7/Ev7.hpp), memory
  * per PID, every processor's CSR block with its GIO port to a management
  * side (Gio.hpp), the Rbox interval timer, and the XSROM's handoff to the
- * console. What is not yet: the IO7 (packet M5) -- its space is traced as
- * unknown -- and the CMM's answers on GIO (packet M4).
+ * console, and the IO7s (Io7.hpp) with their PCI hoses: hose PID * 4 +
+ * port. The CMM's answers on GIO are the board's (platforms/es47/Cmm.hpp).
  * docs/platforms/marvel.md has the plan and the findings.
  **/
 #if !defined(INCLUDED_MARVEL_H_)
@@ -38,6 +38,7 @@
 #include "Chipset.hpp"
 #include "Ev7Csr.hpp"
 #include "Gio.hpp"
+#include "Io7.hpp"
 
 #include <memory>
 
@@ -81,12 +82,18 @@ public:
   /// The processor block of PE `pid`, or nullptr when there is none.
   CEv7Csr *csr(u32 pid) const;
 
+  /// The board puts an IO7 on PE `pid`'s I/O port.
+  void attach_io7(u32 pid);
+  /// The IO7 on PE `pid`, or nullptr.
+  CIo7 *io7(u32 pid) const;
+
 private:
   void start_secondaries_as_console(CAlphaCPU **cpus, int ncpus);
   static constexpr int kMaxPids = 4; ///< CSystem's processor limit
   u64 m_memory_per_pid = 0;
   std::unique_ptr<GioManagement> m_gio;
   std::unique_ptr<CEv7Csr> m_csr[kMaxPids];
+  std::unique_ptr<CIo7> m_io7[kMaxPids];
 };
 
 #endif // !defined(INCLUDED_MARVEL_H_)

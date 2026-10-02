@@ -41,6 +41,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <deque>
 #include <map>
 #include <mutex>
 
@@ -63,6 +64,7 @@ constexpr u32 RBOX_IT = 0x0a0;
 constexpr u32 RBOX_SCRATCH1 = 0x0b0;
 constexpr u32 RBOX_SCRATCH2 = 0x0c0; // Linux core_marvel.h; not in the table
 constexpr u32 RBOX_L_ERR = 0x0d0;
+constexpr u32 RBOX_IO_CFG = 0xc000;
 // GIO
 constexpr u32 GIO_CFG = 0x100;
 constexpr u32 GIO_DAT = 0x110;
@@ -71,6 +73,9 @@ constexpr u32 GIO_LOCK = 0x80000; // not in the table; the console's own use
 
 /// RBOX_INT bits the console's PALcode names by what it does with them.
 constexpr u64 INT_IT = U64(1) << 15; ///< interval timer (cleared by writing it)
+constexpr u64 INT_IOQ = U64(1) << 12; ///< an IID waits in RBOX_INTQ
+/// RBOX_INTQ <24>: the IID at the head of the queue is valid.
+constexpr u64 INTQ_VALID = U64(1) << 24;
 } // namespace ev7csr
 
 class CEv7Csr {
@@ -88,6 +93,11 @@ public:
   /// Another processor (or this one) sets request bits through this
   /// processor's RBOX_IREQ: they appear in its RBOX_INT.
   void request(u64 bits);
+  /// An IO7 sends this processor an interrupt identifier (Io7.hpp): it
+  /// waits in RBOX_INTQ and raises RBOX_INT<12> until the PALcode takes it.
+  void post_iid(u64 iid);
+  /// Whether an IO7 hangs on this processor's I/O port (RBOX_IO_CFG).
+  void set_io7_attached(bool on);
 
   void reset();
   void save_state(FILE *f);
@@ -118,6 +128,8 @@ private:
   std::atomic<u64> m_it{0};
   u64 m_start_hi = 0;
   bool m_start_hi_valid = false;
+  bool m_io7 = false;     ///< an IO7 is on the I/O port
+  std::deque<u64> m_intq; ///< IIDs the IO7s sent, oldest first
 };
 
 #endif // !defined(INCLUDED_EV7CSR_H_)

@@ -305,6 +305,16 @@ public:
   int RegisterMemory(CSystemComponent *component, int index, u64 base,
                      u64 length);
 
+  /// Whether a registered device range holds physical address `a`: what
+  /// answers there is a device, not the chipset (an IO7 asks which of its
+  /// slots hold a card).
+  bool device_at(u64 a) const {
+    for (int i = 0; i < iNumMemories; i++)
+      if (a >= aMemoryBounds[i].base && a < aMemoryBounds[i].end)
+        return true;
+    return false;
+  }
+
   /// A device's bulk data register, at its absolute physical address. The
   /// processor consults this before leaving the VM for a device access.
   struct BulkPort {

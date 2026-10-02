@@ -59,9 +59,10 @@ static const platform_config platforms[] = {
     // Under construction (docs/platforms/marvel.md): two EV7s, each with its
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
-    // the ES40's that decompresses to 0x440000. No IO7 yet, so no PCI.
+    // the ES40's that decompresses to 0x440000. One IO7, on PID 0: hoses
+    // 0-3.
     {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
-     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 0, SECONDARIES_BY_CONSOLE,
+     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      es47_board_devices, es47_pci_interrupt, es47_slot_refusal, 0, nullptr,
      0x480000},
     // Under construction (docs/platforms/es45.md): the first Titan board.

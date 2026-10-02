@@ -319,6 +319,13 @@ void CEv7Csr::reset() {
   // RBOX_WHOAMI: the PID [guess: the field's position is not known; the
   // console takes its PID from r28 and has not been seen to read this].
   m_regs[RBOX_WHOAMI] = m_pid;
+  // RBOX_IO_CFG: <0> and <2> say an IO7 is on the I/O port. The console's
+  // PALcode tests exactly those two (its interval-timer path, 0x3941c,
+  // before it touches the IO7's POx_RST registers), and with them clear the
+  // console reports "No Local I/O" [inference: the other bits configure the
+  // port and are not modelled].
+  m_regs[RBOX_IO_CFG] = m_io7 ? 5 : 0;
+  m_intq.clear();
   m_it.store(0, std::memory_order_relaxed);
   // BBOX_CTL<6:0>: the L2's enabled ways, 256 KB each, which the XSROM set
   // (the CMM's "cache_enable_mask") and get_bcache_size_pid counts.
@@ -352,6 +359,10 @@ u64 CEv7Csr::read(u32 off, int dsize) {
     break;
   case GIO_LOCK:
     v = m_gio.read_lock();
+    break;
+  case RBOX_INTQ:
+    // The oldest IID an IO7 sent, valid in <24>; 0 when none waits.
+    v = m_intq.empty() ? 0 : (m_intq.front() | INTQ_VALID);
     break;
   case 0x28020: {
     // The revision probe (see kMoreRegs): bit 19 reads 1 on an EV7z
@@ -400,8 +411,19 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     return; // read-only
   case RBOX_INT:
     m_regs[RBOX_INT] &= ~data; // write one to clear
+    if (!m_intq.empty())
+      m_regs[RBOX_INT] |= INT_IOQ; // still something in the queue
     update_irq();
     return;
+  case RBOX_INTQ:
+    // The PALcode writes back each IID it has taken (0x398f8): the queue
+    // moves on [inference].
+    m_regs[RBOX_INTQ] = data;
+    if (!m_intq.empty())
+      m_intq.pop_front();
+    return;
+  case RBOX_IO_CFG:
+    return; // the port's configuration, the XSROM's [read-only here]
   case RBOX_IMASK:
     m_regs[RBOX_IMASK] = data;
     update_irq();
@@ -434,6 +456,19 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
       (dsize == 32)
           ? ((it->second & ~U64(0xffffffff)) | (data & U64(0xffffffff)))
           : data;
+}
+
+void CEv7Csr::post_iid(u64 iid) {
+  std::lock_guard<std::mutex> g(m_lock);
+  m_intq.push_back(iid & (INTQ_VALID - 1));
+  m_regs[RBOX_INT] |= INT_IOQ;
+  update_irq();
+}
+
+void CEv7Csr::set_io7_attached(bool on) {
+  std::lock_guard<std::mutex> g(m_lock);
+  m_io7 = on;
+  m_regs[RBOX_IO_CFG] = on ? 5 : 0;
 }
 
 void CEv7Csr::request(u64 bits) {
@@ -527,6 +562,10 @@ void CEv7Csr::save_state(FILE *f) {
   fwrite(&s, sizeof(s), 1, f);
   fwrite(&m_start_hi, sizeof(m_start_hi), 1, f);
   fwrite(&m_start_hi_valid, sizeof(m_start_hi_valid), 1, f);
+  const u32 q = (u32)m_intq.size();
+  fwrite(&q, sizeof(q), 1, f);
+  for (u64 iid : m_intq)
+    fwrite(&iid, sizeof(iid), 1, f);
 }
 
 bool CEv7Csr::restore_state(FILE *f) {
@@ -548,6 +587,16 @@ bool CEv7Csr::restore_state(FILE *f) {
       fread(&m_start_hi_valid, sizeof(m_start_hi_valid), 1, f) != 1)
     return false;
   m_gio.restore(s);
+  u32 q = 0;
+  if (fread(&q, sizeof(q), 1, f) != 1)
+    return false;
+  m_intq.clear();
+  for (u32 i = 0; i < q; i++) {
+    u64 iid;
+    if (fread(&iid, sizeof(iid), 1, f) != 1)
+      return false;
+    m_intq.push_back(iid);
+  }
   m_lines = 0;
   update_irq();
   return true;
