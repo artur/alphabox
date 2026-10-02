@@ -72,6 +72,12 @@ static const platform_config platforms[] = {
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45_slot_refusal, 0, nullptr,
      0x680000},
+    // Under construction (docs/platforms/ds25.md): the second Titan board,
+    // its console from an update utility like the ES45's.
+    {"ds25", "AlphaServer DS25", CHIPSET_TITAN, "ev68cb", 2, 26, 34,
+     "DS25_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
+     ds25_board_devices, ds25_pci_interrupt, ds25_slot_refusal, 0, nullptr,
+     0x680000},
 };
 
 const platform_config *find_platform(const char *name) {

@@ -59,4 +59,9 @@ int es45_pci_interrupt(int hose, int slot, int intx);
 const char *es45_slot_refusal(int hose, int slot);
 void es45_board_devices(CConfigurator *cfg, CSystem *sys);
 
+// AlphaServer DS25 (platforms/ds25/Ds25.cpp)
+int ds25_pci_interrupt(int hose, int slot, int intx);
+const char *ds25_slot_refusal(int hose, int slot);
+void ds25_board_devices(CConfigurator *cfg, CSystem *sys);
+
 #endif // !defined(INCLUDED_BOARDS_H_)

@@ -60,6 +60,7 @@ Three layers, each added in a different way:
 | AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
+| AlphaServer DS25 (Titan) | L1: its update utility's console runs to its drivers and then faults probing an on-board device at hose 2 device 1 that is not modelled ([packet](platforms/ds25.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L1 on emulated EV7s (`es47` row, packets M0-M3): the console's PALcode runs its reset path, the console proper starts and reaches its conversation with the management processor (GIO) with every register it read modelled; it waits there for the CMM's answers (packet M4). The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
