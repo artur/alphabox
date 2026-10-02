@@ -47,7 +47,7 @@ Three layers, each added in a different way:
 | --- | --- |
 | AlphaServer ES40 | emulated: the machine this project is about |
 | AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS ([packet](platforms/ds20e.md)) |
-| AlphaServer DS10 | under construction: its console runs and names the machine, once the board's I2C bus controller was modelled ([packet](platforms/ds10.md)) |
+| AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | planned, phase 0 done: the console's PALcode runs its reset path on an EV68 core and the console proper starts (L1, experimental `marvel-probe` row); it then waits on the EV7's management port. The staged plan is in the [packet](platforms/marvel.md) |
 

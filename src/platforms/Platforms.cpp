@@ -109,8 +109,13 @@ static const char *ds20e_slot_refusal(int hose, int slot) {
  * DS10 interrupts. A single-processor board: its two on-board network
  * controllers sit at devices 9 and 11 with one interrupt input each, and
  * its four slots at devices 14 to 17, whose pins count down from the
- * slot's own base. Device 7 is the ISA bridge. (Linux carries the same
- * table as `webbrick_map_irq`.)
+ * slot's own base. Device 7 is the ISA bridge.
+ *
+ * The console's own table (a byte per pin, devices 0 to 17, at 0x155e38 of
+ * the decompressed DS10SRM.ROM V7.3-1) says the same, and also places the
+ * ISA bridge's IDE function at device 13 (ISA IRQ 14 and 15) and its USB
+ * function at device 1 (ISA IRQ 10): those interrupt through the bridge,
+ * so they have no input here (docs/platforms/ds10.md).
  */
 static int ds10_pci_interrupt(int hose, int slot, int intx) {
   if (slot == 9)
@@ -169,6 +174,9 @@ static void ds20e_i2c_devices(I2CBus &bus) {
 static const char *ds10_slot_refusal(int hose, int slot) {
   if (hose != 0)
     return "this machine has one PCI bus";
+  if (ds10_pci_interrupt(hose, slot, 0) < 0)
+    return "this machine wires add-in devices to devices 9, 11 and 14 to 17 "
+           "only";
   return nullptr;
 }
 
