@@ -1318,6 +1318,16 @@ public:
   /// how many were too long to be a delay.
   u64 m_stall_pc = 0;
   u64 m_stall_skips = 0, m_stall_cycles = 0, m_stall_capped = 0;
+
+  /// The processor's PID on an EV7 machine: where its memory and its
+  /// on-chip registers are (cpu/ev7/Ev7.hpp). The processor number unless
+  /// the board says otherwise; unused on the EV6 family. At the end of the
+  /// class, away from what compiled code addresses.
+  u32 get_pid() const { return m_pid; }
+  void set_pid(u32 pid) { m_pid = pid; }
+
+private:
+  u32 m_pid = 0;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow

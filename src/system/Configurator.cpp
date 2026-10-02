@@ -669,6 +669,10 @@ static const char *const kv_mpu401[] = {"midi_out", 0};
 classinfo classes[] = {
     {"tsunami", c_tsunami, N_P | IS_CS | HAS_PCI, kv_tsunami},
     {"ev68cb", c_ev68cb, ON_CS, kv_ev68cb},
+    // The EV7 parts are the same CPU class: the row (CpuModels.cpp) is what
+    // differs.
+    {"ev7", c_ev68cb, ON_CS, kv_ev68cb},
+    {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
     {"ali", c_ali, IS_PCI | HAS_ISA, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
     {"ali_usb", c_ali_usb, IS_PCI | HAS_DISK, kv_ali_usb},

@@ -408,6 +408,15 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
   m_model = find_cpu_model(cfg->get_myValue());
   if (!m_model)
     FAILURE_1(Configuration, "Unknown Alpha processor %s", cfg->get_myValue());
+  // A board takes processors of one core family: an EV7 has its memory
+  // controller and router on chip and no Tsunami can drive one, and an EV68
+  // has neither of those for a Marvel console to find.
+  {
+    const cpu_model *board = find_cpu_model(system->platform().cpu_model);
+    if (board && board->family != m_model->family)
+      FAILURE_2(Configuration, "the %s takes %s processors",
+                system->platform().description, board->part);
+  }
   // Native PALcode vs the vmspal replacement routines is a system-wide choice
   // (mixing them across CPUs in SMP is unsafe), decided while the CPUs are
   // constructed and read back in init(), which runs after all of them.
@@ -520,6 +529,7 @@ void CAlphaCPU::init() {
   parse_vmspal_off();
 
   state.iProcNum = cSystem->RegisterCPU(this);
+  m_pid = (u32)state.iProcNum; // the ES47's PIDs are its processor numbers
 
   // An IMB with nothing to flush costs nothing: the machine's code-page map
   // says whether anything has been written to a page code was compiled from.

@@ -25,8 +25,15 @@
  * The core (`CAlphaCPU`) implements the EV6 family: the 21264 instruction
  * set, its internal processor registers and its PALcode interface. Within
  * that family a part is a table row (CpuModels.cpp) -- the values software
- * reads to identify the processor. A part with a different core (EV4, EV5,
- * EV7) is not a row: it needs its own core.
+ * reads to identify the processor. A part with a different core (EV4, EV5)
+ * is not a row: it needs its own core.
+ *
+ * The EV7 (21364) is the exception that proves the rule: its core is the
+ * EV68's, with the same IPRs and PALcode instructions, and the system logic
+ * moved onto the chip. So it is a row with family CPU_FAMILY_EV7; what the
+ * family changes in the core is in cpu/ev7/, and its on-chip registers
+ * (router, memory controllers, the management port) are the Marvel
+ * chipset's (chipsets/marvel/).
  *
  * Every value here is read by the firmware or the operating system, so a
  * wrong one is visible: the console prints the processor's name from the
@@ -39,6 +46,14 @@
 
 #include "StdAfx.hpp"
 
+/// The core a part is built on: what decides the physical address map, how
+/// the processor is identified and started, and where its interrupts come
+/// from.
+enum cpu_family {
+  CPU_FAMILY_EV6, ///< 21264 and its shrinks (EV6, EV67, EV68)
+  CPU_FAMILY_EV7, ///< 21364: an EV68 core with Rbox, Zbox and Cbox on chip
+};
+
 struct cpu_model {
   const char *name; ///< configuration class, e.g. "ev68cb"
   const char *part; ///< the part, for messages, e.g. "21264CB (EV68CB)"
@@ -47,6 +62,9 @@ struct cpu_model {
   u8 type_minor;    ///< revision within the type
   u8 implver;       ///< IMPLVER result: 2 = EV6 family
   u64 amask;        ///< architecture extensions this part implements
+  cpu_family family;
+  u16 icache_kb, dcache_kb; ///< on-chip L1 caches
+  u16 l2_kb;                ///< on-chip L2 (0: off chip, as on the EV6)
 };
 
 /// Architecture extension bits, as AMASK reports them [ARM D-4].
