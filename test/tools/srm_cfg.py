@@ -11,14 +11,14 @@ change it for the SRM probes:
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
                         e.g. palcode.vms.nohle=true
   --cpu1-opt KEY=VALUE  extra setting on cpu1 only (repeatable)
-  --scsi CTRL           pci0.3 = one of the Symbios parts (sym53c810, 825,
-                        875, 895, 896) or the QLogic ones (isp1020, isp1040,
+  --scsi CTRL           pci0.3 (on the ES40; SLOTS has each board's) = one
+                        of the Symbios parts (sym53c810, 825, 875, 895, 896) or the QLogic ones (isp1020, isp1040,
                         isp1080, isp1240), with disk0.0 = a sparse 1 GB image
                         (dka0.img, created in --dir) and disk0.5 = a 10 MB
                         RAM disk. The two-bus parts, the 896 and the 1240,
                         also get disk1.0 = dkb0.img on their second bus.
-  --nic CLASS           pci0.4 = one of the Tulips (dec21040, dec21041,
-                        dec21140, dec21143) or the Intel parts (de600,
+  --nic CLASS           pci0.4 (on the ES40; see SLOTS) = one of the Tulips
+                        (dec21040, dec21041, dec21140, dec21143) or the Intel parts (de600,
                         i82557, i82558, i82559) on the null network backend
                         (nothing received, sends dropped; needs no host
                         privileges)
@@ -42,6 +42,24 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Where each board takes the base configuration's devices: the ISA bridge,
+# its IDE and USB functions (None drops one), the --scsi and the --nic
+# controller. The ES40's are the base configuration's own. The DS20E's
+# console scans devices 0-10 and wires hose 0 devices 6-9 and hose 1 7-10
+# (docs/platforms/ds20e.md), so its ISA bridge goes to 5, the IDE to the
+# board's own device 6, and the SCSI and NIC into slots 7 and 8. The
+# DS10's console table puts the IDE at device 13 and the USB at device 1;
+# its on-board NICs are at 9 and 11 and its slots at 14-17
+# (docs/platforms/ds10.md).
+SLOTS = {
+    "es40": {"ali": "pci0.7", "ali_ide": "pci0.15", "ali_usb": "pci0.19",
+             "scsi": "pci0.3", "nic": "pci0.4"},
+    "ds20e": {"ali": "pci0.5", "ali_ide": "pci0.6", "ali_usb": None,
+              "scsi": "pci0.7", "nic": "pci0.8"},
+    "ds10": {"ali": "pci0.7", "ali_ide": "pci0.13", "ali_usb": "pci0.1",
+             "scsi": "pci0.14", "nic": "pci0.9"},
+}
 BASE = os.path.join(HERE, "..", "rom", "es40.cfg")
 
 
@@ -115,6 +133,17 @@ def main():
         if n != 1:
             sys.exit("srm_cfg: empty ali_ide block not found in base config")
 
+    slots = SLOTS.get(args.platform or "es40", SLOTS["es40"])
+    for dev in ("ali", "ali_ide", "ali_usb"):
+        base = SLOTS["es40"][dev]
+        if slots[dev] is None:
+            t, n = re.subn(r"\n  %s = %s\s*\{[^}]*\}\n" % (re.escape(base), dev), "\n", t)
+        else:
+            t, n = re.subn(r"\b%s = %s\b" % (re.escape(base), dev),
+                           "%s = %s" % (slots[dev], dev), t)
+        if n != 1:
+            sys.exit("srm_cfg: %s block not found in base config" % dev)
+
     extra = ""
     if args.scsi:
         def sparse_disk(bus, name):
@@ -128,7 +157,7 @@ def main():
         # disk too, so a probe can see both of them.
         if args.scsi in ("sym53c896", "isp1240"):
             scsi += sparse_disk(1, "dkb0.img")
-        extra += "\n  pci0.3 = %s\n  {\n%s  }\n" % (args.scsi, scsi)
+        extra += "\n  %s = %s\n  {\n%s  }\n" % (slots["scsi"], args.scsi, scsi)
     if args.nic:
         if args.nic_udp:
             nic_port, peer_port = args.nic_udp.split(":")
@@ -137,7 +166,7 @@ def main():
                        "    udp_remote = \"127.0.0.1:%s\";\n") % (nic_port, peer_port)
         else:
             backend = "    type = \"null\";\n"
-        extra += "\n  pci0.4 = %s\n  {\n%s  }\n" % (args.nic, backend)
+        extra += "\n  %s = %s\n  {\n%s  }\n" % (slots["nic"], args.nic, backend)
     if args.platform:
         t = re.sub(r"(sys0 = tsunami\s*\{)",
                    lambda mm: mm.group(1) + '\n  platform = "%s";' % args.platform,

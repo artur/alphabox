@@ -506,9 +506,25 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
  * which is where the ES40's management processor puts one too.
  *
  * (Found by tracing the console's own attempt: docs/platforms/ds20e.md.)
+ *
+ * They are not released at once. Every processor runs the same PALcode
+ * reset, and the first to get there clears the Cchip's arbitration
+ * (MISC<ACL>) and becomes the console's primary; releasing all of them
+ * together left that to the order in which the host started their threads,
+ * and one of the first seven two-processor DS20E boots came up on
+ * processor 1 (`P01>>>`). So the others wait until processor 0 has cleared
+ * the arbitration itself (cchip_csr_write), which makes it the primary, as
+ * on a machine whose processor 0 leaves reset first. That ordering is a
+ * modelling choice: what a real DS20E's reset logic does is not known.
  */
 void CSystem::start_secondaries() {
-  if (m_platform->console_starts_secondaries)
+  if (m_platform->console_starts_secondaries || iNumCPUs < 2)
+    return;
+  m_secondaries_pending = true;
+}
+
+void CSystem::release_secondaries() {
+  if (!m_secondaries_pending.exchange(false))
     return;
   for (int i = 1; i < iNumCPUs; i++) {
     if (!acCPUs[i]->get_waiting())
@@ -2035,6 +2051,10 @@ void CSystem::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
       state.cchip.misc &= ~U64(0x0000000000ff0000); // Arbitration Clear
       printf("Arbitration clear from CPU %d (@%" PRIx64 ").\n",
              cpu->get_cpuid(), cpu->get_pc() - 4);
+      // On a board whose processors all run from reset, the others start
+      // now that processor 0 is the one that cleared it.
+      if (cpu->get_cpuid() == 0 && m_secondaries_pending)
+        release_secondaries();
     }
 
     if (data & U64(0x00000000000f0000)) {

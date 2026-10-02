@@ -46,7 +46,7 @@ Three layers, each added in a different way:
 | Machine | State |
 | --- | --- |
 | AlphaServer ES40 | emulated: the machine this project is about |
-| AlphaServer DS20E | under construction: its console runs, finds both processors, drives disks and network-boots ([packet](platforms/ds20e.md)) |
+| AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS ([packet](platforms/ds20e.md)) |
 | AlphaServer DS10 | under construction: its console runs and names the machine, once the board's I2C bus controller was modelled ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | under construction: its own update utility installs its console, which then runs to the prompt and names itself correctly ([packet](platforms/ds20l.md)) |
 | AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | planned, phase 0 done: the console's PALcode runs its reset path on an EV68 core and the console proper starts (L1, experimental `marvel-probe` row); it then waits on the EV7's management port. The staged plan is in the [packet](platforms/marvel.md) |
@@ -141,6 +141,14 @@ Facts that cost time to find and apply to the next machine:
   console scans devices 0 to 10 and no further, so devices at 15 and 19 --
   where the ES40 keeps its own -- are invisible on it. A device the console
   does not list may be a numbering difference, not a broken device.
+- **Consoles carry their interrupt map as data.** The DS20E's and the
+  DS10's consoles each hold a table of the line every pin of every device
+  gets; reading it out of the image settled maps that Linux's tables had
+  slightly wrong. Where a console has none, the lines it writes into
+  configuration space for cards at each device number are the answer.
+- **Who becomes primary is a race unless the board decides.** Where every
+  processor runs from reset, the first through the PALcode reset wins the
+  console's election; the emulator lets processor 0 go first.
 - **A wrong interrupt map is quiet.** The console polls its own devices, so
   it reaches its prompt and lists a controller with the wiring wrong; what
   fails is the disk behind it. Test interrupts with a guest driver, or with

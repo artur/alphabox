@@ -366,6 +366,10 @@ public:
    * processors up is board-specific (docs/platforms.md).
    */
   void start_secondaries();
+  void release_secondaries();
+  /// Set by start_secondaries() until processor 0 is far enough into its
+  /// PALcode reset to have won the console's election (release_secondaries).
+  std::atomic<bool> m_secondaries_pending{false};
   void trace_mp(const char *what, u32 reg, u64 value);
   static bool trace_mp_on();
 

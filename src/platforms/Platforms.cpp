@@ -64,33 +64,44 @@ static const char *es40_slot_refusal(int hose, int slot) {
 }
 
 /**
- * DS20E interrupts. The board's devices live at device numbers 5 to 10 --
- * the console scans no further -- and each one's pins reach a fixed set of
- * chipset interrupt inputs, counting down from 15 as the device number
- * rises. Device 5 is the ISA bridge, whose devices interrupt through it;
- * device 6 is the board's own SCSI.
+ * DS20E interrupts, as the console's own table has them (a byte per pin,
+ * devices 5 to 10 of each hose, at 0x156be0 in the decompressed
+ * PC264SRM.ROM V7.3-1; docs/platforms/ds20e.md):
  *
- * Confirmed against the console: it gives a controller at device 6 pin A
- * input 16+3 and at device 8 pin A input 16+11, which is what this returns.
- * (Linux carries the same table as `dp264_map_irq`.)
+ *   hose 0: 5 --, 6 13 12 -- --, 7 1f-1c, 8 1b-18, 9 17-14, 10 --
+ *   hose 1: 5 --, 6 --,          7 2f-2c, 8 2b-28, 9 27-24, 10 23-20
+ *
+ * Device 5 is the ISA bridge, whose devices interrupt through it, and
+ * device 6 of hose 0 is the board's own SCSI with two lines. In the slots
+ * each pin reaches an input counting down from 15 as the device number
+ * rises. Linux's `dp264_map_irq` wires device 10 on hose 0 too (to the
+ * same inputs as device 6); this console does not, and a card there gets
+ * no interrupt line from it -- OpenVMS then never sees its interrupts.
  */
 static int ds20e_pci_interrupt(int hose, int slot, int intx) {
+  const int h = hose & 1;
   int input;
-  if (slot == 6)
-    input = intx == 0 ? 3 : 2; // the board's own SCSI
-  else if (slot >= 7 && slot <= 10)
+  if (h == 0 && slot == 6 && intx <= 1)
+    input = 3 - intx; // the board's own SCSI: pins A and B only
+  else if (slot >= 7 && slot <= (h == 0 ? 9 : 10))
     input = 15 - 4 * (slot - 7) - intx;
   else
     return -1; // the ISA bridge and anything the board does not wire
 
-  return 16 + 16 * (hose & 1) + input;
+  return 16 + 16 * h + input;
 }
 
-/// DS20E slots: the console looks at device numbers 0 to 10 and the board
-/// wires 5 to 10; the ISA bridge belongs at 5.
+/**
+ * DS20E slots: the console looks at device numbers 0 to 10, and its table
+ * wires hose 0 devices 6 to 9 and hose 1 devices 7 to 10 (the ISA bridge
+ * belongs at hose 0 device 5). A card anywhere else would get no interrupt.
+ */
 static const char *ds20e_slot_refusal(int hose, int slot) {
   if (slot > 10)
     return "this machine's console does not look beyond PCI device 10";
+  if (ds20e_pci_interrupt(hose, slot, 0) < 0)
+    return "this machine wires add-in devices to hose 0 devices 6 to 9 and "
+           "hose 1 devices 7 to 10 only";
   return nullptr;
 }
 

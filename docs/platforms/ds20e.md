@@ -6,7 +6,9 @@ machine-independent structure rather than new hardware. See
 [platforms.md](../platforms.md) for the layers and the acceptance ladder.
 
 **Branch**: `platform/ds20e` (own worktree) · **Config**: `platform = "ds20e";`
-· **Status**: L4 (console prompt, devices, network boot)
+· **Status**: L5 (OpenVMS 8.4 boots from its CD and from an installed
+disk, on one and two processors); L3 not claimable without a reference
+listing
 
 ## The machine
 
@@ -69,12 +71,12 @@ such) the structure of the ES40 listing with DS20E slot names.
 | 5 | Second processor: this firmware does not find one | L2 | done: it finds both |
 | 6 | Processor SROM data: the revision, the cache size, and probably the machine's own name | L2 | open, investigated |
 | 7 | The bytes PALcode writes at PCI memory 0xfff80000 | L2 | answered: a diagnostic display, nothing reads it back |
-| 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | done, confirmed against the console |
+| 8 | Interrupt wiring: the slot-to-interrupt-bit map this firmware expects | L3 | done: the console's own table, confirmed with OpenVMS (see Findings, 2026-10-01) |
 | 9 | Why the IDE and USB functions are not listed | L3 | answered: the console looks no further than device 10 |
 | 10 | Console listings compared with the reference | L3 | blocked: no reference yet |
-| 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | network boot passes; disk boot needs media |
-| 12 | Guest boot, media permitting | L5 | |
-| 13 | ES40 regression sweep and JIT cross-check | L6 | |
+| 11 | Console tests: network boot with `net_peer.py`, disk boot, `test` | L4 | done: network boot, SCSI listing, disk boot of OpenVMS |
+| 12 | Guest boot | L5 | done: OpenVMS 8.4 CD to its menu, installed disk to login, 1 and 2 CPUs |
+| 13 | ES40 regression sweep and JIT cross-check | L6 | done for these changes (srm_run.sh diff clean on both lanes, 0 mismatches) |
 
 ## Open questions
 
@@ -254,6 +256,103 @@ this machine's non-volatile storage already works.
 
 **Not yet proven:** everything above is the console's own account of itself.
 Without the reference listing from a real DS20E, L3 is not claimed.
+
+### OpenVMS 8.4 (2026-10-01, L5)
+
+Transcripts are kept in `lab/platforms/ds20e/` (git-excluded): each run's
+`es40.cfg`, `console.log` and `result.txt`. The driver is
+`lab/platforms/tsu/tsu_srm.sh` with `tsuboot.py` (boot, date prompt,
+login, DCL lines).
+
+**The layout that works.** The console scans devices 0 to 10, so the ALi
+functions go where it looks: the ISA bridge at `pci0.5` and the IDE at
+`pci0.6`, the board's own device (the USB function has no place and is left
+out). The console then lists `dqa0.0.0.6.0` and `dqa1.1.0.6.0`, and both
+OpenVMS media boot from them. This is our placement, not the real board's:
+the real DS20E's south bridge is believed to be a Cypress 82C693 (the
+console carries its name and its IDE's), which Alphabox does not model.
+The console complains `Vector allocation failed for hose 0, bus 0, slot 6,
+pin 1, irq 19` because the IDE's two channels share one device and line;
+it is harmless (OpenVMS drives the IDE on ISA IRQ 14 and 15).
+
+**What boots** (JIT lane, 1 GB):
+
+- the distribution CD, `boot dqa1`: banner at 20 s, the date prompt at
+  52 s, the installation menu at 81 s (`tsu-ds20e-cd`);
+- the installed system disk from `lab/vms84` (installed on the ES40),
+  `boot dqa0`: startup done at 16 s, SYSTEM logged in at 32 s. OpenVMS calls
+  the machine `COMPAQ AlphaStation DS20E 833 MHz` (`F$GETSYI("HW_NAME")`,
+  SYSTYPE 34) and accepts the disk as it is (`tsu-ds20e-disk`);
+- two processors: `%SMP-I-CPUTRN, CPU #1 has joined the active set`,
+  `SHOW CPU` lists 0 and 1 active (`tsu-ds20e-2cpu`).
+
+**The interrupt map, from the console's own table.** `PC264SRM.ROM`
+V7.3-1 carries one table of interrupt lines, a byte per pin for devices 5
+to 10 of each hose, at 0x156be0 of the decompressed image:
+
+```
+hose 0: dev 5 ff ff ff ff, 6 13 12 ff ff, 7 1f 1e 1d 1c, 8 1b 1a 19 18,
+        9 17 16 15 14, 10 ff ff ff ff
+hose 1: dev 5 ff ff ff ff, 6 ff ff ff ff, 7 2f 2e 2d 2c, 8 2b 2a 29 28,
+        9 27 26 25 24, 10 23 22 21 20
+```
+
+The board row had Linux's `dp264_map_irq`, which differs in two places:
+it wires hose 0 device 10 (to the inputs of device 6) and hose 1 device 6.
+The console wires neither, and a card at hose 0 device 10 gets no
+interrupt line. The row now follows the console, and the configuration
+refuses an add-in device where the console gives none.
+
+**Confirmed with a guest driver that waits for interrupts.** OpenVMS's LAN
+driver started on DE500s (dec21143, UDP backend) with
+`MC LANCP SET DEVICE EWx0/MOPDLL=ENABLE`, while
+`lab/platforms/tsu/frame_tx.py` sent a broadcast frame to each NIC every
+0.5 s. `Packets received` after 50-60 s:
+
+| Position | Line | Received | Run |
+| --- | --- | --- | --- |
+| hose 0 device 7 | 0x1f | 90-100 | `tsu-ds20e-nic3-2cpu`, `-nic3b-1cpu` |
+| hose 0 device 8 | 0x1b | 90 | `tsu-ds20e-nic3b-1cpu` |
+| hose 0 device 9 | 0x17 | 124 | `tsu-ds20e-nic` |
+| hose 0 device 10 | none | 1 | `tsu-ds20e-nic3-2cpu`, `-nic3b-1cpu` |
+| hose 1 device 7 | 0x2f | 91 | `tsu-ds20e-nic3b-1cpu` |
+| hose 1 device 8 | 0x2b | 123 | `tsu-ds20e-nic-swap` |
+| hose 1 device 9 | 0x27 | 98 | `tsu-ds20e-nic3-2cpu` |
+
+Hose 1 device 10 and the second pins were not exercised.
+
+**Which processor is primary.** With every processor released at the
+PALcode reset at once, the first to run clears the Cchip arbitration and
+becomes the console's primary, so the host's thread start order decided it:
+one of the first seven two-processor boots came up as `P01>>>`. The
+secondaries are now released when processor 0 clears the arbitration
+(`CSystem::release_secondaries`), a modelling choice recorded in the code.
+Since then all 8 repeated two-processor boots and every SRM probe came up
+on `P00>>>`; 7 of the 8 reached the login (`tsu-rep2-ds20e.txt`; the eighth
+is the halt below).
+
+**Network boot and SCSI under the new layout** (`probe-l4`): a 53C875 at
+device 7 lists `dka0` and `dka500`; a DE500 at device 8 boots over BOOTP
+and TFTP from `net_peer.py` to the image's HALT. `srm_probe.sh` places the
+devices for `PLATFORM=ds20e` itself now (`SLOTS` in `srm_cfg.py`).
+
+**Still open:**
+
+- *Two processors, intermittent*: in 2 of 11 two-processor OpenVMS boots,
+  processor 0 executed a HALT at PC 0 during startup (`halted CPU 0 ...
+  PC = 0`; `tsu-ds20e-nic3b-2cpu`, `tsu-rep-ds20e-2cpu-8`). Not seen on one
+  processor. The ES40 is not clean either: 1 of 6 two-processor boots hung
+  after the password (`tsu-rep-es40.txt`). Not investigated further.
+- *OpenVMS with a SCSI controller bugchecks on every machine*, the ES40
+  included: `INVEXCEPTN` in `SYSMAN` during startup with a 53C875
+  (`SYS$PKWDRIVER`) or an ISP1040, interpreter or JIT, native or real
+  PALcode (`tsu-ds20e-scsi-1cpu`, `tsu-es40-scsi`). SDA shows an access
+  violation at `SYS$CPU_ROUTINES_2208+050A0` (a PCI configuration read
+  routine, length 4) on a null pointer, called from the driver's unit
+  initialisation. Not a board problem; left for the SCSI models.
+- *The DE600 receives nothing under OpenVMS*, on the ES40 too
+  (`tsu-es40-nic`): the i8255x model, not the board.
+- The SROM records, the I2C parts and the reference listing, as above.
 
 ## Rules
 
