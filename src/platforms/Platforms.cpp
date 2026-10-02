@@ -213,27 +213,27 @@ static const char *ds20l_slot_refusal(int hose, int slot) {
 }
 
 static const platform_config platforms[] = {
-    {"es40", "AlphaServer ES40", "ev68cb", 4, 26, 35, "cl67srmrom.exe",
-     FW_LFU_BUNDLE, 2, true, 0, nullptr, es40_pci_interrupt, es40_slot_refusal,
-     true},
+    {"es40", "AlphaServer ES40", CHIPSET_TSUNAMI, "ev68cb", 4, 26, 35,
+     "cl67srmrom.exe", FW_LFU_BUNDLE, 2, true, 0, nullptr, es40_pci_interrupt,
+     es40_slot_refusal, true},
     // Under construction (docs/platforms/ds20e.md). The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
     // until its row exists.
-    {"ds20e", "AlphaServer DS20E", "ev68cb", 2, 26, 32, "PC264SRM.ROM",
-     FW_ROM_HEADER, 2, false, U64(0x00000800fff80000), ds20e_i2c_devices,
-     ds20e_pci_interrupt, ds20e_slot_refusal, false},
+    {"ds20e", "AlphaServer DS20E", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
+     "PC264SRM.ROM", FW_ROM_HEADER, 2, false, U64(0x00000800fff80000),
+     ds20e_i2c_devices, ds20e_pci_interrupt, ds20e_slot_refusal, false},
     // Under construction (docs/platforms/ds10.md): one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E. The
     // I2C controller is at PCI 0 memory 0xffff0000, which is where the
     // console's own iic_read_csr/iic_write_csr address it.
-    {"ds10", "AlphaServer DS10", "ev68cb", 1, 26, 31, "DS10SRM.ROM",
-     FW_ROM_HEADER, 1, false, U64(0x00000800ffff0000), ds10_i2c_devices,
-     ds10_pci_interrupt, ds10_slot_refusal, false},
+    {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,
+     "DS10SRM.ROM", FW_ROM_HEADER, 1, false, U64(0x00000800ffff0000),
+     ds10_i2c_devices, ds10_pci_interrupt, ds10_slot_refusal, false},
     // Under construction (docs/platforms/ds20l.md): its console image comes
     // as an update file, with no header in front of it.
-    {"ds20l", "AlphaServer DS20L", "ev68cb", 2, 26, 32, "DS20L_V6_6.EXE",
-     FW_RAW_IMAGE, 2, false, 0, nullptr, ds20l_pci_interrupt,
+    {"ds20l", "AlphaServer DS20L", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
+     "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, false, 0, nullptr, ds20l_pci_interrupt,
      ds20l_slot_refusal, false},
     // EXPERIMENTAL, NOT A MACHINE (docs/platforms/marvel.md): the ES47/ES80/
     // GS1280 console image, loaded onto the ES40's hardware and an EV68 core
@@ -241,9 +241,9 @@ static const platform_config platforms[] = {
     // Nothing here is a Marvel fact except the firmware file and its form
     // (the same LFU wrapper as the ES40's, "CPQ MARVEL ALPH SRM"); there is
     // no EV7 core and no IO7, so the console cannot get far.
-    {"marvel-probe", "Marvel console probe (experimental)", "ev68cb", 1, 26, 35,
-     "SRM_V7_3.EXE", FW_LFU_BUNDLE, 2, false, 0, nullptr, es40_pci_interrupt,
-     ds20l_slot_refusal, false},
+    {"marvel-probe", "Marvel console probe (experimental)", CHIPSET_TSUNAMI,
+     "ev68cb", 1, 26, 35, "SRM_V7_3.EXE", FW_LFU_BUNDLE, 2, false, 0, nullptr,
+     es40_pci_interrupt, ds20l_slot_refusal, false},
 };
 
 const platform_config *find_platform(const char *name) {

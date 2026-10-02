@@ -334,7 +334,7 @@ void CAlphaCPU::jit_run(int budget) {
         // dropped.
         // Repay gaps are modulated (tick_next_gap_ns).
         if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
-          cSystem->interrupt(-1, true);
+          cSystem->interval_tick();
           tick_last_fire = now;
           tick_gap_ns = tick_next_gap_ns(period_ns);
           next_timer_fire += std::chrono::nanoseconds(period_ns);
@@ -342,7 +342,7 @@ void CAlphaCPU::jit_run(int budget) {
             next_timer_fire = now;
         }
       } else {
-        cSystem->interrupt(-1, true);
+        cSystem->interval_tick();
         tick_last_fire = now;
         next_timer_fire = now + std::chrono::seconds(1);
       }

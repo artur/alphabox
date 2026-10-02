@@ -37,6 +37,7 @@
 #include "Serial.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
+#include "Tsunami.hpp"
 #include <time.h>
 
 #define ToBCD(x) (((x) / 10 << 4) | ((x) % 10))
@@ -132,10 +133,10 @@ void CDPR::init() {
   state.ram[0xda] = 0xaa; // TIG load
 
   // DIMM config, from the modelled population
-  // (CSystem::init_spd_from_config_mb): array a = MMB a, DIMMs in slots J1-J4
+  // (CTsunami::init_spd): array a = MMB a, DIMMs in slots J1-J4
   // (and J5-J8 when twice-split).
-  const CSystem::SDimmLayout &lay = cSystem->get_dimm_layout();
-  const std::vector<uint8_t> &spd = cSystem->get_dimm_spd();
+  const CTsunami::SDimmLayout &lay = cSystem->tsunami()->dimm_layout();
+  const std::vector<uint8_t> &spd = cSystem->tsunami()->dimm_spd();
   for (int a = 0; a < lay.n_arrays; a++) {
     // 0x80+2a <7:4>: F = twice-split (8 DIMMs), 4 = lower set only;
     // <3:0> = array position. 0x81+2a: DIMM size in 64 MB units (the 16 and

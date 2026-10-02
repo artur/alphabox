@@ -31,7 +31,8 @@
  * it runs and in what format.
  *
  * What is NOT here: anything the chipset decides (address decoding, the
- * PCI windows, DMA translation, the interrupt controller), and anything
+ * PCI windows, DMA translation, the interrupt controller: the row only
+ * names which chipset, chipsets/), and anything
  * the processor decides (its identity: CpuModel.hpp). Adding a machine is
  * described in docs/platforms.md.
  **/
@@ -39,6 +40,8 @@
 #define INCLUDED_PLATFORM_H_
 
 #include "StdAfx.hpp"
+
+#include "Chipset.hpp"
 
 /// How a console firmware image is packaged.
 enum firmware_format {
@@ -57,6 +60,9 @@ enum firmware_format {
 struct platform_config {
   const char *name;        ///< the `platform` value, e.g. "es40"
   const char *description; ///< for messages, e.g. "AlphaServer ES40"
+
+  /// The system logic the board is built around (Chipset.hpp).
+  chipset_kind chipset;
 
   const char *cpu_model; ///< the processor class this board takes
   int max_cpus;

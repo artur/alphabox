@@ -34,6 +34,7 @@
  **/
 #include "AlphaCPU.hpp"
 #include "StdAfx.hpp"
+#include "Tsunami.hpp"
 
 #include "AliM1543C_ide.hpp"
 #include "Disk.hpp"
@@ -1024,18 +1025,18 @@ int CAlphaCPU::vmspal_ent_ext_int(int ei) {
   p23 = state.current_pc;
   p7 = ei;
   if (ei & 0x08) {
-    // Interprocessor interrupt (b_irq<3>, HRM 6.3.3). clear_ipi() acks it (no
+    // Interprocessor interrupt (b_irq<3>, HRM 6.3.3). ack_ipi() acks it (no
     // device deasserts the line), then vector via the OpenVMS IPINTR SCB slot.
     // Highest b_irq => checked before timer/device.
-    cSystem->clear_ipi(state.iProcNum);
+    cSystem->chipset()->ack_ipi(state.iProcNum);
     p20 = 0x610;
     p7 = 0x16;
     do_11670 = true;
   } else if (ei & 0x04) {
 
     // TIMER interrupt
-    cSystem->clear_clock_int(state.iProcNum);
-    p6 = cSystem->get_c_misc();
+    cSystem->chipset()->ack_interval_timer(state.iProcNum);
+    p6 = cSystem->tsunami()->misc();
 
     p22 += U64(0x0000010000000000);
     p22 &= U64(0xffff0fffffffffff);
@@ -1056,7 +1057,7 @@ int CAlphaCPU::vmspal_ent_ext_int(int ei) {
 
     do_11670 = true;
   } else if (ei & 0x02) {
-    p5 = cSystem->get_c_dir(state.iProcNum);
+    p5 = cSystem->tsunami()->dir(state.iProcNum);
     if (test_bit_64(p5, 0x32))
       FAILURE(NotImplemented, "Can't handle IRQ 50");
 
@@ -1113,8 +1114,8 @@ int CAlphaCPU::vmspal_ent_ext_int(int ei) {
     } else {
       p6 = p5 & U64(0x0060000000000000);
       if (p6)
-        cSystem->set_c_dim(state.iProcNum,
-                           cSystem->get_c_dim(state.iProcNum) & ~p6);
+        cSystem->tsunami()->set_dim(
+            state.iProcNum, cSystem->tsunami()->dim(state.iProcNum) & ~p6);
       return 0;
     }
   }
