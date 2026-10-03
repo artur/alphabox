@@ -131,6 +131,11 @@ uint64_t CRadeon::direct_view_hash() const {
   uint64_t h =
       hash_vram(native_start(), native_pitch_bytes() * (native_height() + 1));
   if (R(CRTC_GEN_CNTL) & CRTC_CUR_EN)
-    h = hash_vram(mc_to_vram(R(CUR_OFFSET) & 0x07fffff0u), 64 * 256, h);
+    // The same address draw_hw_cursor() reads: CUR_OFFSET is relative to
+    // DISPLAY_BASE_ADDR (the two only agree while the frame buffer sits at
+    // 0 in the memory controller's space).
+    h = hash_vram(
+        mc_to_vram(R(DISPLAY_BASE_ADDR) + (R(CUR_OFFSET) & 0x07fffff0u)),
+        64 * 256, h);
   return h;
 }
