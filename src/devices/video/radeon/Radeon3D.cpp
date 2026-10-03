@@ -74,7 +74,8 @@ enum : u8 {
   OP_3D_DRAW_VBUF_2 = 0x34,
   OP_3D_DRAW_IMMD_2 = 0x35,
   OP_3D_DRAW_INDX_2 = 0x36,
-  OP_3D_CLEAR_HIZ = 0x37
+  OP_3D_CLEAR_HIZ = 0x37,
+  OP_LOAD_PALETTE = 0x2c
 };
 constexpr u32 TCL_BYPASS = 1u << 8; // SE_CNTL_STATUS
 constexpr u32 VF_TCL_ENABLE = 1u << 9;
@@ -106,7 +107,7 @@ void CRadeon3D::warn_once(int id, const char *what) {
   if (id < 0 || id >= 64 || m_warned[id])
     return;
   m_warned[id] = true;
-  printf("%s: 3D: %s not modelled\n", c.devid_string, what);
+  printf("%s: 3D: %s\n", c.devid_string, what);
 }
 
 /// A dword the engine reads by bus mastering: the framebuffer, or the
@@ -157,6 +158,17 @@ bool CRadeon3D::reg_write(u32 r, u32 data) {
     m_scl_index += stride ? stride : 1;
     return true;
   }
+  case 0x1a14: // RADEON_FOG_TABLE_INDEX
+    c.R(r) = data;
+    m_fog_index = data & 0xff;
+    return true;
+  case 0x1a18: // RADEON_FOG_TABLE_DATA: four entries, low byte first
+               // [inference]
+    for (int k = 0; k < 4; k++)
+      m_fog_table[(m_fog_index + u32(k)) & 0xff] = u8(data >> (8 * k));
+    m_fog_index = (m_fog_index + 4) & 0xff;
+    c.R(0x1a14) = m_fog_index;
+    return true;
   case RE_STIPPLE_DATA: {
     const u32 a = c.R(RE_STIPPLE_ADDR);
     m_stipple[a & 31] = data;
@@ -299,6 +311,16 @@ void CRadeon3D::decode_vertex(u32 f, u32 cntl, const u32 *d,
     v.pos[3] = f32(d[i++]);
     v.has_w = true;
   }
+  // the blend weights, after the position [inference: no driver emits
+  // them on the R100; r100_get_vtx_size counts them]
+  v.nweights = int((f >> VTX_WEIGHT_SHIFT) & 7);
+  for (int k = 0; k < v.nweights; k++) {
+    const float w = f32(d[i++]);
+    if (k < 4)
+      v.weight[k] = w;
+  }
+  if (v.nweights > 4)
+    v.nweights = 4;
   if (f & VTX_N0) {
     for (int k = 0; k < 3; k++)
       v.norm[k] = f32(d[i++]);
@@ -382,7 +404,36 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
       }
     }
   };
+  // The R200 microcode's packets: the legacy DRM refuses the _2 draws,
+  // 3D_CLEAR_HIZ and INDX_BUFFER unless the R200 microcode is loaded
+  // ("safe but r200 only", radeon_state.c radeon_check_and_fixup_packet3),
+  // so the R100 microcode does not know them: on a part that loads it
+  // they do nothing.
   switch (op) {
+  case OP_3D_DRAW_IMMD_2:
+  case OP_3D_DRAW_VBUF_2:
+  case OP_3D_DRAW_INDX_2:
+  case OP_3D_CLEAR_HIZ:
+  case OP_INDX_BUFFER:
+    if (!c.m_chip->r200_cp_packets && !m_r200_packets) {
+      warn_once(3, "an R200 microcode packet (_2 draw, CLEAR_HIZ, "
+                   "INDX_BUFFER), which the R100 microcode does not have: "
+                   "ignored");
+      return true;
+    }
+    break;
+  }
+  switch (op) {
+  case OP_LOAD_PALETTE:
+    // [SCALE_DATATYPE: 1 16 entries, 2 256] [entries...] (R5xx
+    // Acceleration 6.2.2.12): the palette of the 2D scaler, which is not
+    // modelled; kept
+    if (!d.empty()) {
+      const size_t n = (d[0] & 3) == 1 ? 16 : 256;
+      for (size_t i = 0; i < n && i + 1 < d.size(); i++)
+        m_palette[i] = d[i + 1];
+    }
+    return true;
   case OP_3D_LOAD_VBPNTR: {
     if (d.empty())
       return true;
@@ -421,19 +472,26 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
       draw(c.R(SE_VTX_FMT), d[0], {}, nullptr, 0, 0);
     return true;
   case OP_3D_DRAW_INDX:
-    if (d.size() >= 2) {
-      std::vector<u32> ix;
-      indices_from(2, d[1], ix);
-      draw(d[0], d[1], {}, &ix, 0, 0);
+  case OP_3D_DRAW_INDX_2: {
+    const size_t at = op == OP_3D_DRAW_INDX ? 2 : 1;
+    if (d.size() < at)
+      return true;
+    const u32 fmt = op == OP_3D_DRAW_INDX ? d[0] : c.R(SE_VTX_FMT);
+    const u32 cntl = d[at - 1];
+    // with no indices in the packet, an INDX_BUFFER supplies them (R5xx
+    // Acceleration 6.2.3.11), where the microcode has it
+    if (d.size() == at && (cntl >> 16) &&
+        (c.m_chip->r200_cp_packets || m_r200_packets)) {
+      m_indx_pending = true;
+      m_indx_fmt = fmt;
+      m_indx_cntl = cntl;
+      return true;
     }
+    std::vector<u32> ix;
+    indices_from(at, cntl, ix);
+    draw(fmt, cntl, {}, &ix, 0, 0);
     return true;
-  case OP_3D_DRAW_INDX_2:
-    if (!d.empty()) {
-      std::vector<u32> ix;
-      indices_from(1, d[0], ix);
-      draw(c.R(SE_VTX_FMT), d[0], {}, &ix, 0, 0);
-    }
-    return true;
+  }
   case OP_3D_RNDR_GEN_INDX_PRIM:
     // [vertex buffer address] [vertex count or highest index] [VTX_FMT]
     // [VF_CNTL] [indices...] (Mesa radeon_ioctl.c, RADEON_OLD_PACKETS)
@@ -447,12 +505,42 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
     }
     return true;
   case OP_3D_CLEAR_ZMASK:
+    if (d.size() >= 3)
+      clear_zmask(d[0], d[1], d[2]);
+    return true;
   case OP_3D_CLEAR_HIZ:
-    warn_once(1, "the hierarchical Z / Z mask clears (HyperZ)");
+    // the hierarchical Z RAM only lets the chip skip work: clearing it
+    // changes no pixel
     return true;
-  case OP_INDX_BUFFER:
-    warn_once(2, "INDX_BUFFER (indirect buffer #2)");
+  case OP_INDX_BUFFER: {
+    // [ONE_REG_WR <31> | SKIP_COUNT <18:16> | destination <12:0>]
+    // [BUFFER_BASE] [BUFFER_SIZE, dwords] (R5xx Acceleration 6.2.3.11):
+    // the buffer is read as the pending draw's indices; the destination
+    // (the vertex port) is where they would go. ONE_REG_WR marks a buffer
+    // that starts in the upper half of a dword: its first 16-bit index is
+    // skipped [inference].
+    if (d.size() < 3 || !m_indx_pending)
+      return true;
+    m_indx_pending = false;
+    const u32 n = m_indx_cntl >> 16;
+    const u32 skip = (d[0] >> 16) & 7;
+    std::vector<u32> ix;
+    bool skip_half = (d[0] >> 31) & 1;
+    for (u32 k = skip; k < (d[2] & 0x7fffff) && ix.size() < n; k++) {
+      const u32 v = c.cp_fetch(d[1] + 4 * k);
+      if (m_indx_cntl & VF_INDEX_32) {
+        ix.push_back(v);
+        continue;
+      }
+      if (!skip_half)
+        ix.push_back(v & 0xffff);
+      skip_half = false;
+      if (ix.size() < n)
+        ix.push_back(v >> 16);
+    }
+    draw(m_indx_fmt, m_indx_cntl, {}, &ix, 0, 0);
     return true;
+  }
   }
   return false;
 }
@@ -651,6 +739,26 @@ void CRadeon3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
   for (auto &v : poly)
     to_window(v);
   to_window(flat);
+  // The TCL unit's own culling and two-sided lighting, by the winding as
+  // the screen shows it (SE_TCL_UCP_VERT_BLEND_CTL CULL_FRONT_IS_CCW <28>,
+  // CULL_FRONT <29>, CULL_BACK <30>; Mesa radeonCullFace/radeonFrontFace
+  // program them with SE_CNTL's)
+  const u32 tctl = c.R(SE_TCL_UCP_VERT_BLEND_CTL);
+  double area = 0;
+  for (size_t i = 1; i + 1 < poly.size() && area == 0; i++)
+    area = double(poly[i].x - poly[0].x) * (poly[i + 1].y - poly[0].y) -
+           double(poly[i + 1].x - poly[0].x) * (poly[i].y - poly[0].y);
+  const bool front = (tctl & (1u << 28)) ? area < 0 : area > 0;
+  if ((front && (tctl & (1u << 29))) || (!front && (tctl & (1u << 30))))
+    return;
+  if (!front && a.has_back) {
+    for (auto &v : poly) {
+      memcpy(v.col, v.col_back, sizeof(v.col));
+      memcpy(v.spec, v.spec_back, sizeof(v.spec));
+    }
+    memcpy(flat.col, flat.col_back, sizeof(flat.col));
+    memcpy(flat.spec, flat.spec_back, sizeof(flat.spec));
+  }
   for (size_t i = 1; i + 1 < poly.size(); i++) {
     const RadeonVertex *v[3] = {&poly[0], &poly[i], &poly[i + 1]};
     raster_triangle(v, &flat);
@@ -741,12 +849,77 @@ void CRadeon3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
       triangle(v[i], v[i + 3], v[i + 2], flat_sel);
     }
     return;
+  case PRIM_TRI_FLAG:
+    // TRI_TYPE_2 (radeon_reg.h RADEON_CP_VC_CNTL_PRIM_TYPE_TRI_TYPE_2):
+    // drawn as a triangle list [inference: no driver uses it; Mesa's TCL
+    // table leaves it unused]
+    for (size_t i = 0; i + 2 < n; i += 3)
+      triangle(v[i], v[i + 1], v[i + 2], flat_sel);
+    return;
+  case PRIM_POINT_LIST_3:
+    // 3VRT_POINT_LIST and 3VRT_LINE_LIST: Mesa's radeon_sanity.c wants a
+    // multiple of three vertices, as for a triangle list; that is all any
+    // source says. Drawn as each triple's vertices as points, and its
+    // three edges as lines [inference]
+    for (size_t i = 0; i + 2 < n; i += 3)
+      for (size_t k = 0; k < 3; k++)
+        if (!v[i + k].clip_space ||
+            (std::fabs(v[i + k].x) <= v[i + k].w &&
+             std::fabs(v[i + k].y) <= v[i + k].w && v[i + k].z >= 0 &&
+             v[i + k].z <= v[i + k].w))
+          raster_point(clipped(v[i + k]));
+    return;
+  case PRIM_LINE_LIST_3:
+    for (size_t i = 0; i + 2 < n; i += 3)
+      for (size_t k = 0; k < 3; k++)
+        raster_line(clipped(v[i + k]), clipped(v[i + (k + 1) % 3]));
+    return;
   default:
     warn_once(8 + int(prim),
-              "a primitive type (TRI_FLAG, the 3-vertex point/line lists, "
-              "sprites)");
+              "the sprite primitive (SPIRIT_LIST): not modelled");
     return;
   }
+}
+
+/**
+ * 3D_CLEAR_ZMASK [START] [COUNT] [MASK], the fast Z clear. No ATI document
+ * exists; the legacy DRM's clear (radeon_state.c radeon_cp_dispatch_clear,
+ * "based on reverse engineering") is the source: for the R100 and RV200
+ * (RADEON_HAS_HIERZ, R100 microcode) START is ((y / 8) * pitch + x) / 64
+ * times 8 and COUNT the span from x / 64 to x2 / 64 inclusive in 16-pixel
+ * units plus 4, for each band of 8 lines; RB3D_DEPTHCLEARVALUE holds the
+ * value, the stencil value in <31:24>. Read that way, START counts 8x8
+ * blocks along the band (pitch / 8 a band) and COUNT pairs of blocks
+ * [inference]. The visible effect is what is modelled: the blocks' Z
+ * (and stencil) read as the clear value afterwards -- written here into
+ * the Z buffer, the compressed form being the chip's business. MASK
+ * picks blocks not to clear by a pattern the DRM itself was unsure of;
+ * the DRM's R100 clears pass 0 (all) or a pattern it sets with
+ * hierarchical Z, which changes no pixel [inference]; it is ignored.
+ **/
+void CRadeon3D::clear_zmask(u32 start, u32 count, u32 mask) {
+  (void)mask;
+  raster_setup();
+  const u32 zf = rs.zfmt;
+  const int zb = (zf == 0 || zf == 7) ? 2 : 4;
+  const u32 pitch = rs.z_pitch; // pixels
+  if (!pitch)
+    return;
+  const u32 blocks_per_band = pitch / 8;
+  const u32 v = c.R(0x3230); // RB3D_DEPTHCLEARVALUE
+  const u32 b0 = start;      // 8x8 blocks
+  const u32 nblocks = count * 2;
+  for (u32 b = b0; b < b0 + nblocks; b++) {
+    const u32 band = b / blocks_per_band, col = b % blocks_per_band;
+    for (int y = 0; y < 8; y++)
+      for (int x = 0; x < 8; x++) {
+        const int px = int(col * 8) + x, py = int(band * 8) + y;
+        const u32 a =
+            surface_addr(rs.z_base, pitch, u32(zb), rs.z_micro, true, px, py);
+        surf_write(a, zb, zb == 2 ? (v & 0xffff) : v, rs.z_swap);
+      }
+  }
+  m_pixels += u64(nblocks) * 64;
 }
 
 /**

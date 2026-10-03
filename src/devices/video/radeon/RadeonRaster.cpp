@@ -79,9 +79,14 @@
  *   not), the logic op (ROP_ENABLE <6>, RB3D_ROPCNTL), the plane mask
  *   (<1>, RB3D_PLANEMASK) and the write in COLOR_FORMAT <13:10>: ARGB1555,
  *   RGB565, ARGB8888, RGB332, Y8, RGB8 (the red channel), ARGB4444.
- * Not modelled (each said once at runtime): tiled surfaces, cube and
- *   projected 3D textures, the chroma key, table fog, floating-point and
- *   W depth formats, the HyperZ blocks, dithering, polygon offset.
+ * Also: micro-tiled and endian-swapped surfaces, cube maps, table fog,
+ *   the floating-point and W depth formats, dithering and rounding,
+ *   polygon offset, anti-aliased lines and polygons (each at its code,
+ *   with its source or marked as an inference).
+ * Not modelled (each said once at runtime): macro tiling (no source gives
+ *   the R100's layout), volume textures (Mesa's r100 driver refuses them;
+ *   no layout source), the chroma key (no source names its key colour
+ *   register), the hierarchical Z (it changes no pixel).
  **/
 
 #include "Radeon.hpp"
@@ -323,6 +328,44 @@ void rgb565_f(u32 v, float o[3]) {
   o[1] = float((v >> 5) & 63) / 63.0f;
   o[2] = float(v & 31) / 31.0f;
 }
+
+/// A surface's endian swap of a dword as the chip reads or writes it:
+/// 1 the bytes of each 16-bit half, 2 all four bytes, 3 the two halves
+/// (radeon_reg.h TXO_ENDIAN_BYTE/WORD/HALFDW_SWAP, COLOR_ENDIAN_WORD/
+/// DWORD_SWAP; the same codes as CP_RB_CNTL BUF_SWAP in the R5xx guide)
+/// [inference: the texture codes' names read as "swap the bytes of each
+/// word" (1), "of each dword" (2), "the half-dwords" (3)].
+inline u32 surf_swap(u32 v, u32 mode) {
+  switch (mode & 3) {
+  case 1:
+    return ((v & 0x00ff00ffu) << 8) | ((v >> 8) & 0x00ff00ffu);
+  case 2:
+    return (v << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) | (v >> 24);
+  case 3:
+    return (v << 16) | (v >> 16);
+  }
+  return v;
+}
+
+/// An unsigned float of `e` exponent and `m` mantissa bits (bias `bias`)
+/// for v >= 0, saturating: a stand-in for the undocumented floating-point
+/// depth formats whose integer order is the value's order.
+inline u32 ufloat_bits(double v, int e, int m, int bias) {
+  if (!(v > 0))
+    return 0;
+  int ex;
+  const double fr = std::frexp(v, &ex); // v = fr * 2^ex, fr in [0.5, 1)
+  int be = ex - 1 + bias;               // v = (2 fr) * 2^(ex - 1)
+  const u32 emax = (1u << e) - 1, mmax = (1u << m) - 1;
+  if (be >= int(emax))
+    return (emax << m) | mmax;
+  if (be <= 0) { // denormal
+    const double d = std::ldexp(v, m - 1 + bias - 1 + 1);
+    return u32(std::min(double(mmax), std::floor(d)));
+  }
+  const u32 mant = u32(std::floor((2 * fr - 1) * double(1u << m)));
+  return (u32(be) << m) | std::min(mant, mmax);
+}
 } // namespace
 
 /// Snapshot the state a draw uses.
@@ -337,11 +380,23 @@ void CRadeon3D::raster_setup() {
   rs.color_pitch = reg(RB3D_COLORPITCH) & 0x1ff8;
   rs.color_fmt = (rs.rb3d_cntl >> 10) & 15;
   rs.color_bpp = u32(cb_bytes(rs.color_fmt));
-  if (reg(RB3D_COLORPITCH) & (3u << 16))
-    warn_once(20, "tiled colour buffers");
+  // RB3D_COLORPITCH COLOR_TILE_ENABLE <16>, COLOR_MICROTILE_ENABLE <17>,
+  // COLOR_ENDIAN <19:18>; RB3D_DEPTHPITCH DEPTH_HYPERZ <17:16>,
+  // DEPTH_ENDIAN <19:18> (radeon_reg.h)
+  rs.color_micro = (reg(RB3D_COLORPITCH) >> 17) & 1;
+  rs.color_swap = (reg(RB3D_COLORPITCH) >> 18) & 3;
+  if (reg(RB3D_COLORPITCH) & (1u << 16))
+    warn_once(20, "macro-tiled colour buffers (no source gives the R100's "
+                  "macro tile layout; drawn linear)");
   rs.z_base = c.mc_to_vram(reg(RB3D_DEPTHOFFSET) & ~15u);
   rs.z_pitch = reg(RB3D_DEPTHPITCH) & 0x1ff8;
   rs.zfmt = rs.zcntl & 15;
+  rs.z_micro = ((reg(RB3D_DEPTHPITCH) >> 16) & 3) != 0;
+  rs.z_swap = (reg(RB3D_DEPTHPITCH) >> 18) & 3;
+  rs.zbias_factor = regf(SE_ZBIAS_FACTOR);
+  rs.zbias_const = regf(SE_ZBIAS_CONSTANT);
+  rs.dither_y = -1;
+  rs.dither_err[0] = rs.dither_err[1] = rs.dither_err[2] = 0;
   const u32 tl = reg(RE_TOP_LEFT), br = reg(RE_WIDTH_HEIGHT);
   rs.clip_l = int(tl & 0x7ff);
   rs.clip_t = int((tl >> 16) & 0x7ff);
@@ -356,10 +411,6 @@ void CRadeon3D::raster_setup() {
   float fc[4];
   argb_to_f(reg(PP_FOG_COLOR), fc);
   memcpy(rs.fog_col, fc, sizeof(rs.fog_col));
-  if ((rs.pp_cntl & (1u << 22)) && (reg(PP_FOG_COLOR) & (1u << 24)))
-    warn_once(21, "table fog");
-  if (rs.pp_cntl & (3u << 24))
-    warn_once(27, "anti-aliased lines and polygons");
 
   for (int u = 0; u < 3; u++) {
     texunit_t &t = rs.tex[u];
@@ -378,13 +429,38 @@ void CRadeon3D::raster_setup() {
     t.persp = (t.format >> 31) & 1;
     t.route = int((t.format >> 24) & 3);
     t.bpp = texfmt_bytes(u32(t.fmt));
-    if (t.format & (1u << 30))
-      warn_once(22, "cube map textures");
+    // PP_TXOFFSET ENDIAN <1:0> (or TXFORMAT ENDIAN <27:26>), MACRO_TILE
+    // <2>, MICRO_TILE <4:3>; TXFORMAT CUBIC_MAP_ENABLE <30>
+    t.swap = (t.offset & 3) ? (t.offset & 3) : ((t.format >> 26) & 3);
+    t.micro = ((t.offset >> 3) & 3) != 0;
+    t.cube = (t.format >> 30) & 1;
+    if (t.offset & 4)
+      warn_once(24, "macro-tiled textures (no source gives the R100's "
+                    "macro tile layout; read linear)");
     if (t.format & (1u << 29))
-      warn_once(23, "the texture chroma key");
-    if (t.offset & 0x1c)
-      warn_once(24, "tiled textures");
+      warn_once(23, "the texture chroma key (no source names the R100's "
+                    "key colour register)");
     const u32 base = t.offset & ~31u;
+    if (t.cube) {
+      // A cube map (Mesa radeon_texstate.c, radeon_state_init.c
+      // cube_emit_cs): one level (r100 cube maps have no mip levels,
+      // radeon_tex.c), the faces +X, -X, +Y, -Y, +Z at
+      // PP_CUBIC_OFFSET_Tn_0..4 and -Z at PP_TXOFFSET_n, all the size
+      // TXFORMAT gives
+      static const u32 cube_base[3] = {0x1dd0, 0x1e00, 0x1e14};
+      for (int f = 0; f < 5; f++)
+        t.face_off[f] = reg(cube_base[u] + 4 * u32(f)) & ~31u;
+      t.face_off[5] = base;
+      const int lw = int((t.format >> 8) & 15), lh = int((t.format >> 12) & 15);
+      t.w = 1 << lw;
+      t.h = 1 << lh;
+      t.levels = 1;
+      t.level_off[0] = base;
+      t.level_w[0] = t.w;
+      t.level_h[0] = t.h;
+      t.level_pitch[0] = (t.w * t.bpp + 31) & ~31;
+      continue;
+    }
     if (t.npot) {
       const u32 sz = reg(PP_TEX_SIZE_0 + 8 * u32(u));
       t.w = int(sz & 0x7ff) + 1;
@@ -426,10 +502,15 @@ void CRadeon3D::raster_setup() {
 /// One texel of a level, decoded to 0..1 RGBA.
 void CRadeon3D::fetch_texel(const texunit_t &tu, int level, int x, int y,
                             float o[4]) {
-  const u32 base = tu.level_off[level];
+  const u32 base = tu.cube ? tu.face_off[m_cube_face] : tu.level_off[level];
   const u32 pitch = u32(tu.level_pitch[level]);
   const u32 f = u32(tu.fmt);
-  auto rd8 = [&](u32 off) { return mem_read8(base + off); };
+  auto rd8 = [&](u32 off) {
+    if (!tu.swap)
+      return mem_read8(base + off);
+    const u32 a = base + off;
+    return u8(surf_swap(mem_read32(a & ~3u), tu.swap) >> (8 * (a & 3)));
+  };
   auto rd16 = [&](u32 off) { return u32(rd8(off)) | (u32(rd8(off + 1)) << 8); };
   auto rd32 = [&](u32 off) { return rd16(off) | (rd16(off + 2) << 16); };
   bool has_alpha = (tu.format >> 6) & 1;
@@ -494,7 +575,11 @@ void CRadeon3D::fetch_texel(const texunit_t &tu, int level, int x, int y,
       o[3] = 1.0f;
     return;
   }
-  const u32 off = u32(y) * pitch + u32(x) * u32(tu.bpp);
+  // micro-tiled: 32-byte tiles of 8x4, 8x2 or 4x2 texels by size (Mesa
+  // radeon_tile.c) [inference: Mesa's r100 driver never tiles textures]
+  const u32 off = tu.micro ? surface_addr(0, pitch / u32(tu.bpp), u32(tu.bpp),
+                                          true, false, x, y)
+                           : u32(y) * pitch + u32(x) * u32(tu.bpp);
   switch (f) {
   case TXF_I8: {
     const float i = float(rd8(off)) / 255.0f;
@@ -694,9 +779,18 @@ void CRadeon3D::fragment(frag_t &f) {
   }
   // Textures.
   float tc[3][4] = {};
-  for (int u = 0; u < 3; u++)
-    if (rs.tex[u].enabled)
+  for (int u = 0; u < 3; u++) {
+    if (!rs.tex[u].enabled)
+      continue;
+    if (rs.tex[u].cube) {
+      float fs, ft;
+      m_cube_face = cube_face(f.tex[u][0], f.tex[u][1], f.tex[u][3], &fs, &ft);
+      sample(u, fs, ft, f.tex[u][2], tc[u]);
+      m_cube_face = 0;
+    } else {
       sample(u, f.tex[u][0], f.tex[u][1], f.tex[u][2], tc[u]);
+    }
+  }
 
   // Combiners.
   float cur[4] = {f.col[0], f.col[1], f.col[2], f.col[3]};
@@ -833,10 +927,26 @@ void CRadeon3D::fragment(frag_t &f) {
     k = clamp01(k);
   if (pp & (1u << 22)) { // fog
     const u32 src = (reg(PP_FOG_COLOR) >> 25) & 3;
-    const float fv = clamp01(src == 2 ? f.col[3] : f.spec[3]);
+    float fv = clamp01(src == 2 ? f.col[3] : f.spec[3]);
+    // Table fog (PP_FOG_COLOR FOG_TABLE <24>): the factor from the table
+    // loaded through FOG_TABLE_INDEX/DATA, indexed by the depth (FOG_
+    // USE_DEPTH), the diffuse alpha (2) or the specular alpha (3)
+    // [inference: 256 entries of 8 bits, the index the source scaled to
+    // 0..255; the table's form is not documented]
+    if (reg(PP_FOG_COLOR) & (1u << 24)) {
+      const float idx = src == 2   ? f.col[3]
+                        : src == 3 ? f.spec[3]
+                                   : std::min(std::max(f.z, 0.0f), 1.0f);
+      fv = float(m_fog_table[to_n(idx, 8)]) / 255.0f;
+    }
     for (int k = 0; k < 3; k++)
       cur[k] = cur[k] * fv + rs.fog_col[k] * (1 - fv);
   }
+  // Anti-aliasing (PP_CNTL ANTI_ALIAS <25:24>): the alpha times the share
+  // of the pixel the line or polygon covers, for blending to use
+  // [inference: GL's smooth lines and polygons; the R100's coverage
+  // computation is not documented]
+  cur[3] *= f.cov;
   if (pp & (1u << 23)) { // alpha test
     const u32 a8 = to_n(cur[3], 8);
     if (!compare(rs.misc >> 8, a8, rs.misc & 0xff))
@@ -847,26 +957,63 @@ void CRadeon3D::fragment(frag_t &f) {
   const u32 rb = rs.rb3d_cntl;
   const bool zen = (rb >> 8) & 1, sen = (rb >> 7) & 1;
   if (zen || sen) {
+    // RB3D_ZSTENCILCNTL DEPTH_FORMAT <3:0> (radeon_reg.h): 16-bit (0),
+    // 24-bit with stencil in <31:24> (2) and 32-bit (4) integer Z; 24-
+    // (3) and 32-bit (5) floating-point Z; 16-, 24- and 32-bit floating
+    // point W (7, 9, 11). The floating-point layouts are not documented:
+    // they are stored here as unsigned floats (Z: 4 exponent bits and 20
+    // mantissa for 24 bits, IEEE single for 32; W: 5/11, 6/18 and IEEE
+    // single) whose integer order is the value's, which is what the
+    // depth test sees [inference]. The 24-bit forms keep stencil above.
     const u32 zf = rs.zfmt;
-    const int zb = zf == 0 ? 2 : 4;
-    if (zf != 0 && zf != 2 && zf != 4)
-      warn_once(25, "floating-point and W depth formats");
-    const u32 za = rs.z_base + (u32(f.y) * rs.z_pitch + u32(f.x)) * u32(zb);
-    const u32 old = c.vram_read(za, zb);
-    u32 zmax, zold, sold = 0;
-    if (zf == 0) {
-      zmax = 0xffff;
-      zold = old;
-    } else if (zf == 4) {
-      zmax = 0xffffffffu;
-      zold = old;
-    } else {
-      zmax = 0xffffff;
+    const int zb = (zf == 0 || zf == 7) ? 2 : 4;
+    const bool z24 = zf == 2 || zf == 3 || zf == 9;
+    const u32 za = surface_addr(rs.z_base, rs.z_pitch, u32(zb), rs.z_micro,
+                                true, f.x, f.y);
+    const u32 old = surf_read(za, zb, rs.z_swap);
+    u32 zold, sold = 0;
+    if (z24) {
       zold = old & 0xffffff;
       sold = old >> 24;
+    } else {
+      zold = old;
     }
     const double zd = std::min(std::max(double(f.z), 0.0), 1.0);
-    const u32 znew = u32(std::llround(zd * double(zmax)));
+    u32 znew;
+    switch (zf) {
+    case 0:
+      znew = u32(std::llround(zd * 65535.0));
+      break;
+    case 2:
+      znew = u32(std::llround(zd * double(0xffffff)));
+      break;
+    case 4:
+      znew = u32(std::llround(zd * double(0xffffffffu)));
+      break;
+    case 3:
+      znew = ufloat_bits(zd, 4, 20, 15);
+      break;
+    case 5: {
+      const float zf32 = float(zd);
+      memcpy(&znew, &zf32, 4);
+      break;
+    }
+    case 7:
+      znew = ufloat_bits(f.w, 5, 11, 15);
+      break;
+    case 9:
+      znew = ufloat_bits(f.w, 6, 18, 31);
+      break;
+    case 11: {
+      const float w32 = f.w;
+      memcpy(&znew, &w32, 4);
+      break;
+    }
+    default:
+      warn_once(25, "an undefined depth format");
+      znew = u32(std::llround(zd * 65535.0));
+      break;
+    }
     u32 snew = sold;
     bool pass = true;
     auto sop = [&](u32 op) {
@@ -886,7 +1033,7 @@ void CRadeon3D::fragment(frag_t &f) {
       }
     };
     const u32 zc = rs.zcntl;
-    if (sen && zf == 2) {
+    if (sen && z24) {
       if (!compare(zc >> 12, rs.stencil_ref & rs.stencil_mask,
                    sold & rs.stencil_mask)) {
         snew = sop(zc >> 16);
@@ -896,18 +1043,18 @@ void CRadeon3D::fragment(frag_t &f) {
     bool zpass = true;
     if (pass && zen)
       zpass = compare(zc >> 4, znew, zold);
-    if (pass && sen && zf == 2)
+    if (pass && sen && z24)
       snew = sop(zpass ? zc >> 20 : zc >> 24);
     u32 zw = zold;
     if (pass && zpass && zen && (zc & (1u << 30)))
       zw = znew;
-    if (zf == 2) {
+    if (z24) {
       const u32 sw = (sold & ~rs.stencil_wmask) | (snew & rs.stencil_wmask);
       const u32 nv = (zw & 0xffffff) | (sw << 24);
       if (nv != old)
-        c.vram_write(za, 4, nv);
+        surf_write(za, 4, nv, rs.z_swap);
     } else if (zw != zold) {
-      c.vram_write(za, zb, zw);
+      surf_write(za, zb, zw, rs.z_swap);
     }
     if (!pass || !zpass)
       return;
@@ -915,8 +1062,9 @@ void CRadeon3D::fragment(frag_t &f) {
 
   // Blend, logic op, plane mask, write.
   const u32 bpp = rs.color_bpp;
-  const u32 ca = rs.color_base + (u32(f.y) * rs.color_pitch + u32(f.x)) * bpp;
-  const u32 dv = c.vram_read(ca, int(bpp));
+  const u32 ca = surface_addr(rs.color_base, rs.color_pitch, bpp,
+                              rs.color_micro, false, f.x, f.y);
+  const u32 dv = surf_read(ca, int(bpp), rs.color_swap);
   if (rb & 1) {
     float d[4];
     unpack_cb(rs.color_fmt, dv, d);
@@ -946,7 +1094,8 @@ void CRadeon3D::fragment(frag_t &f) {
       case 42:
         return k == 3 ? 1.0f : std::min(cur[3], 1 - d[3]);
       default:
-        warn_once(26, "blend factors outside the GL set (32..42)");
+        warn_once(26,
+                  "blend factors outside the GL set (32..42): not modelled");
         return code == 0 ? 0.0f : 1.0f;
       }
     };
@@ -958,7 +1107,7 @@ void CRadeon3D::fragment(frag_t &f) {
       cur[k] = clamp01((fn & 2) ? s - dd : s + dd);
     }
   }
-  u32 out = pack_cb(rs.color_fmt, cur);
+  u32 out = pack_color(cur, f.x, f.y);
   if (rb & (1u << 6))
     out = logic_op(rs.rop, out, dv);
   if (rb & (1u << 1))
@@ -966,7 +1115,7 @@ void CRadeon3D::fragment(frag_t &f) {
   const u32 mask = bpp == 4 ? 0xffffffffu : (1u << (8 * bpp)) - 1;
   out &= mask;
   if (out != (dv & mask))
-    c.vram_write(ca, int(bpp), out);
+    surf_write(ca, int(bpp), out, rs.color_swap);
   m_pixels++;
 }
 
@@ -1119,7 +1268,8 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
     e[i].dy = Y[j] - Y[i];
     e[i].incl = e[i].dy < 0 || (e[i].dy == 0 && e[i].dx > 0);
   }
-  auto texcoord = [&](int u, double px, double py, float &s, float &t) {
+  auto texcoord = [&](int u, double px, double py, float &s, float &t,
+                      float *r = nullptr) {
     double qv = eval(pt[u][2], px, py);
     double sv = eval(pt[u][0], px, py), tv = eval(pt[u][1], px, py);
     if (persp[u]) {
@@ -1129,6 +1279,15 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
         tv /= w;
         qv /= w;
       }
+    }
+    if (rs.tex[u].cube) {
+      // a cube map's third coordinate rides in the Q slot (Mesa
+      // radeon_swtcl.c, radeon_maos_arrays.c): no divide
+      s = float(sv);
+      t = float(tv);
+      if (r)
+        *r = float(qv);
+      return;
     }
     if (qv != 0 && qv != 1) {
       sv /= qv;
@@ -1141,6 +1300,16 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
     s = float(sv);
     t = float(tv);
   };
+  // Polygon offset (SE_CNTL ZBIAS_ENABLE_TRI <18>; SE_ZBIAS_FACTOR and
+  // SE_ZBIAS_CONSTANT, floats): GL's, the factor times the depth slope
+  // plus the constant, which Mesa (radeonPolygonOffset) loads as the
+  // units times one depth step
+  const double zbias =
+      (se & (1u << 18)) ? double(rs.zbias_factor) *
+                                  std::max(std::fabs(pz.a), std::fabs(pz.b)) +
+                              double(rs.zbias_const)
+                        : 0.0;
+  const bool aa = (rs.pp_cntl >> 25) & 1; // ANTI_ALIAS_POLY
   for (int py = y0; py <= y1; py++) {
     const double cy = py + 0.5;
     for (int px = x0; px <= x1; px++) {
@@ -1150,12 +1319,35 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
         const double ev = e[i].dx * (cy - e[i].ay) - e[i].dy * (cx - e[i].ax);
         in = ev > 0 || (ev == 0 && e[i].incl);
       }
-      if (!in)
+      if (!in && !aa)
         continue;
       frag_t f;
       f.x = px;
       f.y = py;
-      f.z = float(eval(pz, cx, cy));
+      f.z = float(eval(pz, cx, cy)) + zbias;
+      {
+        const double rhw = eval(pw, cx, cy);
+        f.w = rhw != 0 ? float(1.0 / rhw) : 0.0f;
+      }
+      f.cov = 1.0f;
+      if (aa) {
+        // the share of 4x4 sample points inside
+        int n = 0;
+        for (int sy = 0; sy < 4; sy++)
+          for (int sx = 0; sx < 4; sx++) {
+            const double qx = px + (sx + 0.5) / 4, qy = py + (sy + 0.5) / 4;
+            bool inside = true;
+            for (int i = 0; i < 3 && inside; i++) {
+              const double ev =
+                  e[i].dx * (qy - e[i].ay) - e[i].dy * (qx - e[i].ax);
+              inside = ev > 0 || (ev == 0 && e[i].incl);
+            }
+            n += inside;
+          }
+        if (!n)
+          continue;
+        f.cov = float(n) / 16.0f;
+      }
       for (int k = 0; k < 4; k++) {
         f.col[k] = clamp01(float(eval(pc[k], cx, cy)));
         f.spec[k] = clamp01(float(eval(ps[k], cx, cy)));
@@ -1163,8 +1355,15 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
       for (int u = 0; u < 3; u++) {
         if (!rs.tex[u].enabled)
           continue;
-        float s, t, s1, t1, s2, t2;
-        texcoord(u, cx, cy, s, t);
+        float s, t, s1, t1, s2, t2, r = 0;
+        texcoord(u, cx, cy, s, t, &r);
+        f.tex[u][3] = r;
+        if (rs.tex[u].cube) {
+          f.tex[u][0] = s;
+          f.tex[u][1] = t;
+          f.tex[u][2] = -100.0f; // no mip levels
+          continue;
+        }
         texcoord(u, cx + 1, cy, s1, t1);
         texcoord(u, cx, cy + 1, s2, t2);
         const float w = float(rs.tex[u].w), h = float(rs.tex[u].h);
@@ -1185,6 +1384,8 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
 static void frag_from(CRadeon3D::frag_t &f, const RadeonVertex &v,
                       const int route[3]) {
   f.z = v.z;
+  f.w = v.w != 0 ? 1.0f / v.w : 0.0f;
+  f.cov = 1.0f;
   memcpy(f.col, v.col, sizeof(f.col));
   memcpy(f.spec, v.spec, sizeof(f.spec));
   for (int u = 0; u < 3; u++) {
@@ -1193,6 +1394,7 @@ static void frag_from(CRadeon3D::frag_t &f, const RadeonVertex &v,
     f.tex[u][0] = t[0] / qv;
     f.tex[u][1] = t[1] / qv;
     f.tex[u][2] = 0.0f;
+    f.tex[u][3] = t[3];
   }
 }
 
@@ -1203,6 +1405,8 @@ void CRadeon3D::raster_point(const RadeonVertex &a) {
   const double centre = (rs.se_cntl & (1u << 27)) ? 0.0 : 0.5;
   f.x = int(std::floor(a.x + centre));
   f.y = int(std::floor(a.y + centre));
+  if (rs.se_cntl & (1u << 16)) // ZBIAS_ENABLE_POINT: the constant alone
+    f.z += rs.zbias_const;
   fragment(f);
 }
 
@@ -1212,8 +1416,33 @@ void CRadeon3D::raster_point(const RadeonVertex &a) {
  **/
 void CRadeon3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
   const u32 se = rs.se_cntl;
-  const float width = float(reg(SE_LINE_WIDTH) & 0xffff) / 16.0f;
-  if ((se & (1u << 20)) && width > 1.0f) {
+  float width = float(reg(SE_LINE_WIDTH) & 0xffff) / 16.0f;
+  // an anti-aliased line (PP_CNTL ANTI_ALIAS_LINE <24>) is drawn as the
+  // quad it covers with the polygons' coverage [inference]
+  const bool aa_line = (rs.pp_cntl >> 24) & 1;
+  if (aa_line) {
+    if (!(se & (1u << 20)) || width < 1.0f)
+      width = 1.0f;
+    const u32 save_pp = rs.pp_cntl, save_se = rs.se_cntl;
+    rs.pp_cntl |= 2u << 24;
+    rs.se_cntl |= 1u << 20;
+    RadeonVertex a2 = a, b2 = b;
+    if (se & (1u << 17)) { // ZBIAS_ENABLE_LINE
+      a2.z += rs.zbias_const;
+      b2.z += rs.zbias_const;
+    }
+    rs.se_cntl &= ~(1u << 18); // the line's own offset, not the polygons'
+    const u32 save_w = c.R(SE_LINE_WIDTH);
+    c.R(SE_LINE_WIDTH) = u32(width * 16.0f);
+    rs.pp_cntl &= ~(1u << 24);
+    raster_line(a2, b2);
+    c.R(SE_LINE_WIDTH) = save_w;
+    rs.pp_cntl = save_pp;
+    rs.se_cntl = save_se;
+    return;
+  }
+  if ((se & (1u << 20)) && width >= 1.0f &&
+      (width > 1.0f || (rs.pp_cntl & (2u << 24)))) {
     const float dx = b.x - a.x, dy = b.y - a.y;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len <= 0)
@@ -1272,6 +1501,8 @@ void CRadeon3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
       frag_from(f, m, route);
       f.x = x0;
       f.y = y0;
+      if (se & (1u << 17)) // ZBIAS_ENABLE_LINE: the constant alone
+        f.z += rs.zbias_const;
       fragment(f);
     }
     const int e2 = 2 * err;
@@ -1284,4 +1515,173 @@ void CRadeon3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
       y0 += sy;
     }
   }
+}
+
+/**
+ * Surfaces. A pitch is in pixels. Micro tiling (RB3D_COLORPITCH
+ * COLOR_MICROTILE_ENABLE, the Z buffer's DEPTH_HYPERZ tiling, PP_TXOFFSET
+ * MICRO_TILE) packs 32-byte tiles: 8x4 pixels of a byte, 8x2 of two bytes
+ * (4x4 for 16-bit depth), 4x2 of four, a tile row's tiles side by side,
+ * each tile's rows one after the other (Mesa radeon_tile.c, the family's
+ * software tiler) [inference for the R100: Mesa's r100 driver itself
+ * never tiles; the depth buffer's HyperZ tiling is taken to be this one].
+ **/
+u32 CRadeon3D::surface_addr(u32 base, u32 pitch_px, u32 bpp, bool micro,
+                            bool depth, int x, int y) const {
+  if (!micro)
+    return base + (u32(y) * pitch_px + u32(x)) * bpp;
+  u32 tw, th;
+  switch (bpp) {
+  case 1:
+    tw = 8;
+    th = 4;
+    break;
+  case 2:
+    tw = depth ? 4 : 8;
+    th = depth ? 4 : 2;
+    break;
+  default:
+    tw = 4;
+    th = 2;
+    break;
+  }
+  const u32 ux = u32(x), uy = u32(y);
+  return base + (uy / th) * th * pitch_px * bpp + (ux / tw) * 32 +
+         (uy % th) * tw * bpp + (ux % tw) * bpp;
+}
+
+u32 CRadeon3D::surf_read(u32 addr, int bytes, u32 swap) const {
+  if (!swap)
+    return c.vram_read(addr, bytes);
+  const u32 a = addr & ~3u;
+  const u32 dw = surf_swap(c.vram_read(a, 4), swap);
+  const u32 v = dw >> (8 * (addr & 3));
+  return bytes == 4 ? v : v & ((1u << (8 * bytes)) - 1);
+}
+
+void CRadeon3D::surf_write(u32 addr, int bytes, u32 data, u32 swap) {
+  if (!swap) {
+    c.vram_write(addr, bytes, data);
+    return;
+  }
+  const u32 a = addr & ~3u;
+  u32 dw = surf_swap(c.vram_read(a, 4), swap);
+  const u32 sh = 8 * (addr & 3);
+  const u32 m = (bytes == 4 ? 0xffffffffu : (1u << (8 * bytes)) - 1) << sh;
+  dw = (dw & ~m) | ((data << sh) & m);
+  c.vram_write(a, 4, surf_swap(dw, swap));
+}
+
+/**
+ * A channel quantised for the colour buffer (RB3D_CNTL, radeon_reg.h):
+ * DITHER_ENABLE <2> dithers, by default by carrying each pixel's
+ * quantisation error to the next one along the line, with
+ * SCALE_DITHER_ENABLE <4> by an ordered pattern; DITHER_INIT <5> starts
+ * each line's error afresh. Without dithering ROUND_ENABLE <3> rounds, and
+ * without that the value is truncated. Mesa's driconf options name the
+ * modes (dither_mode: "horizontal error diffusion", "... reset error at
+ * line start", "ordered 2D dithering"; round_mode: truncate or round;
+ * radeon_state_init.c); the pattern and the error's arithmetic are not
+ * documented: a 4x4 Bayer matrix and the error in the target's units
+ * [inference].
+ **/
+u32 CRadeon3D::quantise(float v, int bits, int ch, int x, int y) {
+  const float mx = float((1 << bits) - 1);
+  const float val = clamp01(v) * mx;
+  const u32 cntl = rs.rb3d_cntl;
+  float q;
+  if (cntl & (1u << 2)) {
+    if (cntl & (1u << 4)) {
+      static const int bayer[4][4] = {
+          {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+      q = std::floor(val + (float(bayer[y & 3][x & 3]) + 0.5f) / 16.0f);
+    } else {
+      if (ch < 3) {
+        const float t = val + rs.dither_err[ch];
+        q = std::floor(t + 0.5f);
+        rs.dither_err[ch] = t - std::min(std::max(q, 0.0f), mx);
+      } else {
+        q = std::floor(val + 0.5f);
+      }
+    }
+  } else if (cntl & (1u << 3)) {
+    q = std::floor(val + 0.5f);
+  } else {
+    q = std::floor(val + 1e-4f);
+  }
+  return u32(std::min(std::max(q, 0.0f), mx));
+}
+
+u32 CRadeon3D::pack_color(const float cc[4], int x, int y) {
+  // DITHER_INIT: each line's error starts afresh
+  if (y != rs.dither_y && (rs.rb3d_cntl & (1u << 5)))
+    rs.dither_err[0] = rs.dither_err[1] = rs.dither_err[2] = 0;
+  u32 v;
+  switch (rs.color_fmt) {
+  case CF_ARGB1555:
+    v = (cc[3] >= 0.5f ? 0x8000u : 0) | (quantise(cc[0], 5, 0, x, y) << 10) |
+        (quantise(cc[1], 5, 1, x, y) << 5) | quantise(cc[2], 5, 2, x, y);
+    break;
+  case CF_RGB565:
+    v = (quantise(cc[0], 5, 0, x, y) << 11) |
+        (quantise(cc[1], 6, 1, x, y) << 5) | quantise(cc[2], 5, 2, x, y);
+    break;
+  case CF_RGB332:
+    v = (quantise(cc[0], 3, 0, x, y) << 5) |
+        (quantise(cc[1], 3, 1, x, y) << 2) | quantise(cc[2], 2, 2, x, y);
+    break;
+  case CF_Y8:
+    v = quantise(0.299f * cc[0] + 0.587f * cc[1] + 0.114f * cc[2], 8, 0, x, y);
+    break;
+  case CF_RGB8:
+    v = quantise(cc[0], 8, 0, x, y);
+    break;
+  case CF_ARGB4444:
+    v = (quantise(cc[3], 4, 3, x, y) << 12) |
+        (quantise(cc[0], 4, 0, x, y) << 8) |
+        (quantise(cc[1], 4, 1, x, y) << 4) | quantise(cc[2], 4, 2, x, y);
+    break;
+  default:
+    v = (quantise(cc[3], 8, 3, x, y) << 24) |
+        (quantise(cc[0], 8, 0, x, y) << 16) |
+        (quantise(cc[1], 8, 1, x, y) << 8) | quantise(cc[2], 8, 2, x, y);
+    break;
+  }
+  rs.dither_y = y;
+  return v;
+}
+
+/**
+ * The cube map face of direction (s, t, r) and the coordinates on it,
+ * 0..1: OpenGL's table (the major axis picks the face; sc, tc and ma as
+ * the GL specification's 3.8.6), faces numbered +X, -X, +Y, -Y, +Z, -Z.
+ * PP_MISC RIGHT_HAND_CUBE_OGL <24> versus _D3D is not distinguished
+ * [inference: Mesa leaves the D3D setting and draws GL cube maps right
+ * with it].
+ **/
+int CRadeon3D::cube_face(float s, float t, float r, float *fs, float *ft) {
+  const float as = std::fabs(s), at = std::fabs(t), ar = std::fabs(r);
+  int face;
+  float sc, tc, ma;
+  if (as >= at && as >= ar) {
+    face = s >= 0 ? 0 : 1;
+    ma = as;
+    sc = s >= 0 ? -r : r;
+    tc = -t;
+  } else if (at >= ar) {
+    face = t >= 0 ? 2 : 3;
+    ma = at;
+    sc = s;
+    tc = t >= 0 ? r : -r;
+  } else {
+    face = r >= 0 ? 4 : 5;
+    ma = ar;
+    sc = r >= 0 ? s : -s;
+    tc = -t;
+  }
+  if (ma == 0)
+    ma = 1;
+  *fs = (sc / ma + 1) * 0.5f;
+  *ft = (tc / ma + 1) * 0.5f;
+  return face;
 }

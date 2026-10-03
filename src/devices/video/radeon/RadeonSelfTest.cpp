@@ -851,6 +851,9 @@ bool CRadeon::selftest() {
   // ======================================================================
   using namespace radeon3d;
   const int W = 128, H = 128;
+  // RB3D_CNTL ROUND_ENABLE: the references round to the nearest step (Mesa
+  // sets it for round_mode "round"; without it the chip truncates)
+  const u32 ROUNDING = 1u << 3;
   const u32 CB = 0x1000000, ZB = 0x1100000, TEX = 0x1200000;
   int scene_no = 0;
   auto clear_cb = [&](u32 v) {
@@ -874,7 +877,7 @@ bool CRadeon::selftest() {
         pkt0(RB3D_DEPTHPITCH, 1),
         u32(W),
         pkt0(RB3D_CNTL, 1),
-        6u << 10,
+        ROUNDING | 6u << 10,
         pkt0(RB3D_ZSTENCILCNTL, 1),
         2u,
         pkt0(RB3D_BLENDCNTL, 1),
@@ -1615,8 +1618,8 @@ bool CRadeon::selftest() {
                     {(41u << 16) | (40u << 24), 0.7f}};
     const float sc[3] = {0.3f, 0.6f, 0.9f};
     for (int i = 0; i < 5; i++) {
-      cp({pkt0(RB3D_CNTL, 1), (6u << 10) | 1u, pkt0(RB3D_BLENDCNTL, 1),
-          bs[i].blend});
+      cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10) | 1u,
+          pkt0(RB3D_BLENDCNTL, 1), bs[i].blend});
       const float x0 = float(i * 24), x1 = x0 + 24;
       immd_xyzc(PRIM_RECT_LIST, {{x0, 64, 0, sc[0], sc[1], sc[2], bs[i].a},
                                  {x1, 64, 0, sc[0], sc[1], sc[2], bs[i].a},
@@ -1651,7 +1654,7 @@ bool CRadeon::selftest() {
         }
     }
     // alpha test GREATER 0x80 over an alpha gradient (no blending)
-    cp({pkt0(RB3D_CNTL, 1), 6u << 10, pkt0(PP_CNTL, 1), 1u << 23,
+    cp({pkt0(RB3D_CNTL, 1), ROUNDING | 6u << 10, pkt0(PP_CNTL, 1), 1u << 23,
         pkt0(PP_MISC, 1), 0x80u | (5u << 8)});
     immd_xyzc(PRIM_TRI_LIST, {{0, 64, 0, 1, 1, 1, 0},
                               {64, 64, 0, 1, 1, 1, 1},
@@ -1712,7 +1715,7 @@ bool CRadeon::selftest() {
     for (int zf = 0; zf < 2; zf++) {
       const u32 zfmt = zf ? 2u : 0u;
       clear_z(zf ? 0x00ffffffu : 0xffffffffu);
-      cp({pkt0(RB3D_CNTL, 1), (6u << 10) | (1u << 8),
+      cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10) | (1u << 8),
           pkt0(RB3D_ZSTENCILCNTL, 1), zfmt | (1u << 4) | (1u << 30)});
       const float y0 = float(zf * 64);
       const V t1[3] = {{4, y0 + 4, 0.2f, 1, 0, 0, 1},
@@ -1761,7 +1764,7 @@ bool CRadeon::selftest() {
     clear_cb(0xff000000u);
     clear_z(0x00ffffffu);
     std::vector<u32> sref(size_t(W * H), 0xff000000u);
-    cp({pkt0(RB3D_CNTL, 1), (6u << 10) | (1u << 7) | (1u << 8),
+    cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10) | (1u << 7) | (1u << 8),
         pkt0(RB3D_STENCILREFMASK, 1), 5u | (0xffu << 16) | (0xffu << 24),
         pkt0(RB3D_ZSTENCILCNTL, 1),
         2u | (7u << 4) | (7u << 12) | (2u << 20) | (2u << 24),
@@ -1791,7 +1794,7 @@ bool CRadeon::selftest() {
       base_state();
       const u32 f = fmts[fi];
       const int bpp = (f == 7 || f == 9) ? 1 : 2;
-      cp({pkt0(RB3D_CNTL, 1), f << 10});
+      cp({pkt0(RB3D_CNTL, 1), ROUNDING | f << 10});
       for (u32 i = 0; i < u32(W * H * bpp); i += 4)
         vw32(CB + i, 0);
       const V tri[3] = {{0, 0, 0, 1, 0, 0, 1},
@@ -1930,7 +1933,8 @@ bool CRadeon::selftest() {
           PRIM_TRI_FAN | (WALK_LIST << 4) | (4u << 16)});
       fill_ref(48, 24, 64, 40, 0xffff00ffu);
     }
-    // 7: 3D_DRAW_IMMD_2 with SE_VTX_FMT
+    // 7: 3D_DRAW_IMMD_2 with SE_VTX_FMT: an R200 microcode packet, which
+    // the R100 microcode the RV200 loads does not have -- it draws nothing
     solid(0xff808080u);
     {
       cp({pkt0(SE_VTX_FMT, 1), 0});
@@ -1940,7 +1944,6 @@ bool CRadeon::selftest() {
       for (float v : q)
         p.push_back(fbits(v));
       cp(p);
-      fill_ref(72, 24, 88, 40, 0xff808080u);
     }
     // 8: through the registers: SE_VF_CNTL then SE_PORT_DATA
     solid(0xff408020u);
@@ -2160,7 +2163,7 @@ bool CRadeon::selftest() {
         1u | (0u << 1) | (3u << 3) | (2u << 8) | (2u << 10) | (2u << 12) |
             (2u << 14) | (3u << 24) | (1u << 27),
         pkt0(RB3D_CNTL, 1),
-        (6u << 10) | (1u << 8),
+        ROUNDING | (6u << 10) | (1u << 8),
         pkt0(RB3D_ZSTENCILCNTL, 1),
         2u | (1u << 4) | (1u << 30),
         pkt0(PP_CNTL, 1),
@@ -2508,7 +2511,8 @@ bool CRadeon::selftest() {
         pkt0(PP_TEX_SIZE_0 + 8, 1), u32(SW - 1) | (u32(SH - 1) << 16),
         pkt0(PP_TEX_PITCH_0 + 8, 1), 64 - 32,
         pkt0(PP_TXOFFSET_0 + PP_UNIT_STRIDE, 1), MSK, pkt0(PP_CNTL, 1),
-        (1u << 4) | (1u << 5) | (1u << 12), pkt0(RB3D_CNTL, 1), (6u << 10) | 1u,
+        (1u << 4) | (1u << 5) | (1u << 12), pkt0(RB3D_CNTL, 1),
+        ROUNDING | (6u << 10) | 1u,
         // IN: T0 colour x T1 alpha (A * B + C, C = 0)
         pkt0(PP_TXCBLEND_0, 1), 10u | (13u << 5) | (0u << 10) | (1u << 23),
         pkt0(PP_TXABLEND_0, 1), 5u | (6u << 4) | (0u << 8) | (1u << 23),
@@ -2608,8 +2612,8 @@ bool CRadeon::selftest() {
     }
     // float colours (FPCOLOR | FPALPHA), XOR logic op, plane mask 0x00ffff00
     cp({pkt0(PP_CNTL, 1), 0, pkt0(RB3D_CNTL, 1),
-        (6u << 10) | (1u << 6) | (1u << 1), pkt0(RB3D_ROPCNTL, 1), 6u << 8,
-        pkt0(RB3D_PLANEMASK, 1), 0x00ffff00u});
+        ROUNDING | (6u << 10) | (1u << 6) | (1u << 1), pkt0(RB3D_ROPCNTL, 1),
+        6u << 8, pkt0(RB3D_PLANEMASK, 1), 0x00ffff00u});
     for (int y = 40; y < 72; y++)
       for (int x = 0; x < 32; x++) {
         vw32(CB + u32(y * W + x) * 4, 0xff336699u);
@@ -2627,8 +2631,8 @@ bool CRadeon::selftest() {
     }
     // 32-bit indices through 3D_DRAW_INDX, and RNDR_GEN_INDX_PRIM with a
     // 16-bit index walk, solid colours
-    cp({pkt0(RB3D_CNTL, 1), 6u << 10, pkt0(RB3D_PLANEMASK, 1), 0xffffffffu,
-        pkt0(SE_CNTL, 1), (3u << 1) | (3u << 3) | (1u << 27),
+    cp({pkt0(RB3D_CNTL, 1), ROUNDING | 6u << 10, pkt0(RB3D_PLANEMASK, 1),
+        0xffffffffu, pkt0(SE_CNTL, 1), (3u << 1) | (3u << 3) | (1u << 27),
         pkt0(RE_SOLID_COLOR, 1), 0xff80ff80u});
     const u32 VB = TEX + 0x20000;
     const float xy[8] = {40, 40, 72, 40, 72, 72, 40, 72};
@@ -2656,6 +2660,627 @@ bool CRadeon::selftest() {
     scene_report("LOD bias, mirror-once/GL-clamp, ROP, plane mask, "
                  "float colours, 32-bit and RNDR_GEN indices",
                  d, mx);
+  }
+
+  // ======================================================================
+  // The features added to close the model's shortcuts (docs/radeon.md)
+  // ======================================================================
+  // a solid-colour rectangle list: X, Y and a packed colour
+  auto rect_c = [&](float x0, float y0, float x1, float y1, u32 argb) {
+    cp({pkt3(0x29, 2 + 9), VTX_PKCOLOR,
+        PRIM_RECT_LIST | (WALK_DATA << 4) | (3u << 16), fbits(x0), fbits(y1),
+        argb, fbits(x1), fbits(y1), argb, fbits(x1), fbits(y0), argb});
+  };
+  auto fill_rect = [&](std::vector<u32> &img, int x0, int y0, int x1, int y1,
+                       u32 v) {
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++)
+        img[size_t(y * W + x)] = v;
+  };
+  // the reference's own reading of a micro-tiled surface (Mesa
+  // radeon_tile.c: 32-byte tiles, 4x2 at 32 bpp, 8x2 at 16)
+  auto ref_tiled = [](u32 pitch_px, u32 bpp, int x, int y) {
+    const u32 tw = bpp == 4 ? 4 : 8, th = 2;
+    return (u32(y) / th) * th * pitch_px * bpp + (u32(x) / tw) * 32 +
+           (u32(y) % th) * tw * bpp + (u32(x) % tw) * bpp;
+  };
+  auto bswap = [](u32 v) {
+    return (v << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) | (v >> 24);
+  };
+
+  // -- scene: tiled and endian-swapped colour buffer and texture ---------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    // (a) four rectangles into a micro-tiled, dword-swapped colour buffer
+    // elsewhere, read back through the reference's own de-tiling
+    const u32 CB2 = TEX + 0x80000;
+    for (u32 i = 0; i < u32(W * H); i++)
+      vw32(CB2 + i * 4, 0);
+    cp({pkt0(RB3D_COLOROFFSET, 1), CB2, pkt0(RB3D_COLORPITCH, 1),
+        u32(W) | (1u << 17) | (2u << 18)});
+    rect_c(0, 0, 64, 32, 0xffff0000u);
+    rect_c(64, 0, 128, 32, 0xff00ff00u);
+    rect_c(0, 32, 64, 64, 0xff0000ffu);
+    rect_c(64, 32, 128, 64, 0xff123456u);
+    fill_rect(ref, 0, 0, 64, 32, 0xffff0000u);
+    fill_rect(ref, 64, 0, 128, 32, 0xff00ff00u);
+    fill_rect(ref, 0, 32, 64, 64, 0xff0000ffu);
+    fill_rect(ref, 64, 32, 128, 64, 0xff123456u);
+    sync();
+    for (int y = 0; y < 64; y++)
+      for (int x = 0; x < W; x++)
+        vw32(CB + u32(y * W + x) * 4,
+             bswap(vr32(CB2 + ref_tiled(u32(W), 4, x, y))));
+    // (b) a micro-tiled, byte-swapped (16-bit) RGB565 texture drawn 1:1
+    // with nearest sampling into the lower half
+    const int TW = 64;
+    cp({pkt0(RB3D_COLOROFFSET, 1), CB, pkt0(RB3D_COLORPITCH, 1), u32(W)});
+    std::vector<u16> tx(size_t(TW * TW));
+    for (int y = 0; y < TW; y++)
+      for (int x = 0; x < TW; x++)
+        tx[size_t(y * TW + x)] =
+            u16(((x * 31 / 63) << 11) | ((y * 63 / 63) << 5) | ((x ^ y) & 31));
+    for (int y = 0; y < TW; y++)
+      for (int x = 0; x < TW; x++) {
+        const u32 a = TEX + ref_tiled(u32(TW), 2, x, y);
+        const u16 v = tx[size_t(y * TW + x)];
+        // byte swap within each 16-bit half (TXO_ENDIAN_BYTE_SWAP)
+        vwr(a, 2, u32(((v & 0xff) << 8) | (v >> 8)));
+      }
+    cp({pkt0(PP_CNTL, 1), (1u << 4) | (1u << 12)});
+    set_tex(0, TEX | 1u | (1u << 3), 4, 6, 6, 0, C_REPLACE_T0, A_REPLACE_T0);
+    rect_st(32, 64, 96, 128, 0, 0, 1, 1);
+    for (int y = 0; y < TW; y++)
+      for (int x = 0; x < TW; x++) {
+        const u16 v = tx[size_t(y * TW + x)];
+        const u32 r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+        ref[size_t((64 + y) * W + 32 + x)] =
+            0xff000000u | (((r << 3) | (r >> 2)) << 16) |
+            (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+      }
+    int mx;
+    const int d = compare("tiling-endian", ref, 1, &mx);
+    scene_report("micro tiling and endian swaps (colour, texture)", d, mx);
+  }
+
+  // -- scene: polygon offset, dithering and rounding --------------------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    clear_z(0x00ffffffu);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    // a red quad at z 0.5, then the same quad in green with LESS: without
+    // an offset it fails everywhere (equal depth); with SE_ZBIAS_CONSTANT
+    // -4 steps (ZBIAS_ENABLE_TRI) it passes; then a sloped blue triangle
+    // offset by a positive factor that pushes it behind the green
+    cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10) | (1u << 8),
+        pkt0(RB3D_ZSTENCILCNTL, 1), 2u | (1u << 4) | (1u << 30)});
+    immd_xyzc(PRIM_RECT_LIST, {{0, 32, 0.5f, 1, 0, 0, 1},
+                               {64, 32, 0.5f, 1, 0, 0, 1},
+                               {64, 0, 0.5f, 1, 0, 0, 1}});
+    immd_xyzc(PRIM_RECT_LIST, {{0, 32, 0.5f, 0, 1, 0, 1},
+                               {32, 32, 0.5f, 0, 1, 0, 1},
+                               {32, 0, 0.5f, 0, 1, 0, 1}});
+    const float step = 1.0f / 16777215.0f;
+    cp({pkt0(SE_ZBIAS_FACTOR, 2), fbits(0.0f), fbits(-4 * step),
+        pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (3u << 6) | (2u << 8) | (2u << 10) |
+            (2u << 12) | (2u << 14) | (1u << 27) | (1u << 18)});
+    immd_xyzc(PRIM_RECT_LIST, {{32, 32, 0.5f, 0, 1, 0, 1},
+                               {64, 32, 0.5f, 0, 1, 0, 1},
+                               {64, 0, 0.5f, 0, 1, 0, 1}});
+    fill_rect(ref, 0, 0, 64, 32, 0xffff0000u);
+    fill_rect(ref, 32, 0, 64, 32, 0xff00ff00u);
+    // the sloped triangle: dz/dx = 0.004 a pixel; offset factor 1 and
+    // constant 0 move it back by its slope, behind a quad at its own depth
+    cp({pkt0(SE_ZBIAS_FACTOR, 2), fbits(0.0f), fbits(0.0f)});
+    immd_xyzc(PRIM_RECT_LIST, {{0, 64, 0.3f, 1, 1, 1, 1},
+                               {64, 64, 0.556f, 1, 1, 1, 1},
+                               {64, 40, 0.556f, 1, 1, 1, 1}});
+    cp({pkt0(SE_ZBIAS_FACTOR, 2), fbits(1.0f), fbits(0.0f)});
+    immd_xyzc(PRIM_RECT_LIST, {{0, 64, 0.3f, 0, 0, 1, 1},
+                               {64, 64, 0.556f, 0, 0, 1, 1},
+                               {64, 40, 0.556f, 0, 0, 1, 1}});
+    fill_rect(ref, 0, 40, 64, 64, 0xffffffffu);
+    // rounding and dithering into an RGB565 buffer: a horizontal ramp of
+    // red 0..1 in three bands: truncated, rounded, ordered dither
+    const u32 CB16 = TEX + 0x80000;
+    cp({pkt0(RB3D_ZSTENCILCNTL, 1), 2u | (7u << 4), pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (3u << 6) | (2u << 8) | (2u << 10) |
+            (2u << 12) | (2u << 14) | (1u << 27),
+        pkt0(RB3D_COLOROFFSET, 1), CB16, pkt0(RB3D_COLORPITCH, 1), u32(W)});
+    std::vector<u16> got16(size_t(W * 3), 0), want16(size_t(W * 3), 0);
+    const u32 modes[3] = {0, 1u << 3, (1u << 2) | (1u << 4)};
+    for (int b = 0; b < 3; b++) {
+      cp({pkt0(RB3D_CNTL, 1), (4u << 10) | modes[b]});
+      // one line, x = 0..127: red at the pixel centre is (x + 0.5) / 128
+      std::vector<u32> p = {pkt3(0x29, 2 + 2 * 4), VTX_FPCOLOR,
+                            PRIM_LINE_LIST | (WALK_DATA << 4) | (2u << 16)};
+      for (float x : {0.0f, 128.0f})
+        for (float v : {x, float(80 + b), x / 128.0f, 0.0f, 0.0f})
+          p.push_back(fbits(v));
+      p[0] = pkt3(0x29, u32(p.size()) - 1);
+      cp(p);
+      for (int x = 0; x < W; x++) {
+        // the line interpolates from x = 0 (0.0) towards 128 (1.0): the
+        // pixel at x has t = x / 128 (its start, the model's line walk)
+        const double v = double(x) / 128.0 * 31.0;
+        int q;
+        if (b == 0)
+          q = int(std::floor(v + 1e-4));
+        else if (b == 1)
+          q = int(std::floor(v + 0.5));
+        else {
+          static const int bayer[4][4] = {
+              {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+          q = int(std::floor(v + (bayer[(80 + b) & 3][x & 3] + 0.5) / 16.0));
+        }
+        q = std::min(31, std::max(0, q));
+        want16[size_t(b * W + x)] = u16(q << 11);
+      }
+    }
+    for (int b = 0; b < 3; b++)
+      for (int x = 0; x < W; x++)
+        got16[size_t(b * W + x)] =
+            u16(vrd(CB16 + u32((80 + b) * W + x) * 2, 2));
+    int bad16 = 0;
+    for (size_t i = 0; i < got16.size(); i++)
+      bad16 += got16[i] != want16[i];
+    int mx;
+    const int d = compare("zbias-dither", ref, 0, &mx);
+    scene_report("polygon offset (constant, slope factor)", d, mx);
+    report("3D: truncation, rounding, ordered dither (RGB565)", bad16 == 0,
+           bad16 ? std::to_string(bad16) + " pixels" : "");
+    // horizontal error diffusion along a line: the reference carries the
+    // error pixel to pixel
+    cp({pkt0(RB3D_CNTL, 1), (4u << 10) | (1u << 2) | (1u << 5)});
+    {
+      std::vector<u32> p = {pkt3(0x29, 2 + 2 * 5), VTX_FPCOLOR,
+                            PRIM_LINE_LIST | (WALK_DATA << 4) | (2u << 16)};
+      for (float x : {0.0f, 128.0f})
+        for (float v : {x, 90.0f, 1.0f / 3, 0.0f, 0.0f})
+          p.push_back(fbits(v));
+      cp(p);
+    }
+    int badd = 0;
+    double err = 0;
+    for (int x = 0; x < W; x++) {
+      const double t = 31.0 / 3 + err;
+      const int q = std::min(31, std::max(0, int(std::floor(t + 0.5))));
+      err = t - q;
+      badd += vrd(CB16 + u32(90 * W + x) * 2, 2) != u32(q << 11);
+    }
+    report("3D: horizontal error-diffusion dither", badd == 0,
+           badd ? std::to_string(badd) + " pixels" : "");
+  }
+
+  // -- scene: cube map, table fog, anti-aliased polygon ------------------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    // six 8x8 faces, one colour each, +X -X +Y -Y +Z at the cube offsets,
+    // -Z at TXOFFSET (Mesa's cube_emit_cs)
+    const u32 face_col[6] = {0xffff0000u, 0xff00ffffu, 0xff00ff00u,
+                             0xffff00ffu, 0xff0000ffu, 0xffffff00u};
+    const u32 FB0 = TEX + 0xa0000;
+    for (int f = 0; f < 6; f++)
+      for (int i = 0; i < 64; i++)
+        vw32(FB0 + u32(f) * 0x1000 + u32(i) * 4, face_col[f]);
+    std::vector<u32> cub = {pkt0(0x1dd0, 5)};
+    for (int f = 0; f < 5; f++)
+      cub.push_back(FB0 + u32(f) * 0x1000);
+    cp(cub);
+    cp({pkt0(PP_CNTL, 1), (1u << 4) | (1u << 12)});
+    set_tex(0, FB0 + 5 * 0x1000, 6 | (1u << 6) | (1u << 30), 3, 3, 0,
+            C_REPLACE_T0, A_REPLACE_T0);
+    // one rectangle per face, the direction (s, t, r) in ST0 and Q0
+    const float dirs[6][3] = {{1, 0.1f, 0.2f}, {-1, 0.2f, 0.1f},
+                              {0.1f, 1, 0.2f}, {0.2f, -1, 0.1f},
+                              {0.1f, 0.2f, 1}, {0.2f, 0.1f, -1}};
+    for (int f = 0; f < 6; f++) {
+      const float x0 = float(f % 3) * 40, y0 = float(f / 3) * 40;
+      std::vector<u32> p = {pkt3(0x29, 2 + 3 * 5), VTX_ST0 | VTX_Q0,
+                            PRIM_RECT_LIST | (WALK_DATA << 4) | (3u << 16)};
+      const float c3[3][2] = {{x0, y0 + 32}, {x0 + 32, y0 + 32}, {x0 + 32, y0}};
+      for (const auto &c2 : c3)
+        for (float v : {c2[0], c2[1], dirs[f][0], dirs[f][1], dirs[f][2]})
+          p.push_back(fbits(v));
+      cp(p);
+      fill_rect(ref, int(x0), int(y0), int(x0) + 32, int(y0) + 32, face_col[f]);
+    }
+    // table fog: a triangle whose depth runs 0..1 left to right, fogged
+    // to blue by a table of 256 entries (entry i = 255 - i)
+    cp({pkt0(PP_CNTL, 1), 1u << 22, pkt0(PP_FOG_COLOR, 1),
+        0x000000ffu | (1u << 24), pkt0(0x1a14, 1), 0});
+    for (u32 i = 0; i < 256; i += 4) {
+      u32 dw = 0;
+      for (u32 k = 0; k < 4; k++)
+        dw |= (255 - (i + k)) << (8 * k);
+      cp({pkt0(0x1a18, 1), dw});
+    }
+    immd_xyzc(PRIM_RECT_LIST, {{0, 112, 0.0f, 1, 1, 1, 1},
+                               {128, 112, 1.0f, 1, 1, 1, 1},
+                               {128, 88, 1.0f, 1, 1, 1, 1}});
+    for (int y = 88; y < 112; y++)
+      for (int x = 0; x < W; x++) {
+        const double z = (x + 0.5) / 128.0;
+        const int idx = int(std::lround(z * 255));
+        const double fv = (255 - idx) / 255.0;
+        const float c[4] = {float(fv), float(fv), float(fv + (1 - fv)), 1};
+        ref[size_t(y * W + x)] = argbf(c);
+      }
+    // an anti-aliased triangle blended over black: alpha times its 4x4
+    // coverage
+    cp({pkt0(PP_CNTL, 1), 2u << 24, pkt0(RB3D_CNTL, 1),
+        ROUNDING | (6u << 10) | 1u, pkt0(RB3D_BLENDCNTL, 1),
+        (38u << 16) | (39u << 24)});
+    // on the setup engine's 1/16-pixel grid, so that snapping moves nothing
+    const RefVtx ta = {80.25, 90.3125}, tb = {126.75, 100.125},
+                 tc = {96.375, 127.625};
+    immd_xyzc(PRIM_TRI_LIST, {{float(ta.x), float(ta.y), 0, 1, 1, 1, 1},
+                              {float(tb.x), float(tb.y), 0, 1, 1, 1, 1},
+                              {float(tc.x), float(tc.y), 0, 1, 1, 1, 1}});
+    for (int y = 86; y < H; y++)
+      for (int x = 76; x < W; x++) {
+        int n = 0;
+        for (int sy = 0; sy < 4; sy++)
+          for (int sx = 0; sx < 4; sx++) {
+            const double px = x + (sx + 0.5) / 4, py = y + (sy + 0.5) / 4;
+            const RefVtx v3[3] = {ta, tb, tc};
+            double area =
+                (tb.x - ta.x) * (tc.y - ta.y) - (tc.x - ta.x) * (tb.y - ta.y);
+            bool in = true;
+            for (int i = 0; i < 3 && in; i++) {
+              const RefVtx &p = v3[i], &q = v3[(i + 1) % 3];
+              const double e =
+                  (q.x - p.x) * (py - p.y) - (q.y - p.y) * (px - p.x);
+              in = area > 0 ? e > 0 : e < 0;
+            }
+            n += in;
+          }
+        if (n) {
+          const float a = float(n) / 16.0f;
+          // over the fog band's colour where they overlap
+          float dst[4];
+          unargb(ref[size_t(y * W + x)], dst);
+          // (the alpha blends too: a * a + 1 * (1 - a))
+          const float c[4] = {a + dst[0] * (1 - a), a + dst[1] * (1 - a),
+                              a + dst[2] * (1 - a), a * a + dst[3] * (1 - a)};
+          ref[size_t(y * W + x)] = argbf(c);
+        }
+      }
+    int mx;
+    const int d = compare("cube-fogtable-aa", ref, 2, &mx);
+    scene_report("cube map faces, table fog, anti-aliased polygon", d, mx);
+  }
+
+  // -- scene: floating-point and W depth, the HyperZ fast clear ----------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    // two triangles crossing in depth, in three formats: 24-bit float Z
+    // (3), 32-bit float Z (5), 24-bit float W (9, from W0 = 1/w); the
+    // nearer wins in each
+    const u32 fmts[3] = {3, 5, 9};
+    for (int k = 0; k < 3; k++) {
+      clear_z(0xffffffffu);
+      cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10) | (1u << 8),
+          pkt0(RB3D_ZSTENCILCNTL, 1), fmts[k] | (1u << 4) | (1u << 30)});
+      const float y0 = float(k * 40);
+      // X, Y, Z, W0 (1/w: nearer is larger), packed colour
+      struct VW {
+        float x, y, z, rhw;
+        u32 c;
+      };
+      const VW t1[3] = {{4, y0 + 2, 0.2f, 1 / 2.0f, 0xffff0000u},
+                        {124, y0 + 18, 0.8f, 1 / 8.0f, 0xffff0000u},
+                        {4, y0 + 36, 0.2f, 1 / 2.0f, 0xffff0000u}};
+      const VW t2[3] = {{124, y0 + 2, 0.1f, 1 / 1.5f, 0xff0000ffu},
+                        {4, y0 + 18, 0.9f, 1 / 9.0f, 0xff0000ffu},
+                        {124, y0 + 36, 0.1f, 1 / 1.5f, 0xff0000ffu}};
+      std::vector<u32> p = {pkt3(0x29, 2 + 6 * 5), VTX_Z | VTX_W0 | VTX_PKCOLOR,
+                            PRIM_TRI_LIST | (WALK_DATA << 4) | (6u << 16)};
+      for (const VW *t : {t1, t2})
+        for (int i = 0; i < 3; i++)
+          for (u32 v : {fbits(t[i].x), fbits(t[i].y), fbits(t[i].z),
+                        fbits(t[i].rhw), t[i].c})
+            p.push_back(v);
+      cp(p);
+      // the reference: which triangle is nearer at each covered pixel (by
+      // z, or by w for the W format), drawn in order with LESS
+      std::vector<double> dref(size_t(W * H), 1e30);
+      for (const VW *t : {t1, t2}) {
+        const VW &a = t[0], &b = t[1], &c = t[2];
+        const double area =
+            (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        ref_triangle(
+            {a.x, a.y}, {b.x, b.y}, {c.x, c.y}, W, H,
+            [&](int x, int y, double, double, double) {
+              const double px = x + 0.5, py = y + 0.5;
+              const double la =
+                  ((b.x - px) * (c.y - py) - (c.x - px) * (b.y - py)) / area;
+              const double lb =
+                  ((c.x - px) * (a.y - py) - (a.x - px) * (c.y - py)) / area;
+              const double lc = 1 - la - lb;
+              double dep;
+              if (fmts[k] == 9)
+                dep = 1 / (la * a.rhw + lb * b.rhw + lc * c.rhw);
+              else
+                dep = la * a.z + lb * b.z + lc * c.z;
+              double &o = dref[size_t(y * W + x)];
+              if (dep < o) {
+                o = dep;
+                ref[size_t(y * W + x)] = a.c;
+              }
+            });
+      }
+    }
+    // the fast clear: Z zero everywhere, then 3D_CLEAR_ZMASK of the 8-line
+    // bands 15 (y 120..127) from x 0 to 63 with clear value 1.0 (24-bit),
+    // then a quad at z 0.5 with LESS: it shows only where the clear went
+    clear_z(0);
+    cp({pkt0(RB3D_ZSTENCILCNTL, 1), 2u | (1u << 4) | (1u << 30),
+        pkt0(0x3230, 1), 0x00ffffffu});
+    {
+      // radeon_state.c: tileoffset = ((y1 >> 3) * pitch + x1) >> 6, START =
+      // tileoffset * 8, COUNT = (((x2 & ~63) - (x1 & ~63)) >> 4) + 4
+      const u32 y1 = 120, x1 = 0, x2 = 63;
+      const u32 tileoffset = ((y1 >> 3) * u32(W) + x1) >> 6;
+      cp({pkt3(0x32, 3), tileoffset * 8, (((x2 & ~63u) - (x1 & ~63u)) >> 4) + 4,
+          0});
+    }
+    immd_xyzc(PRIM_RECT_LIST, {{0, 128, 0.5f, 0, 1, 0, 1},
+                               {128, 128, 0.5f, 0, 1, 0, 1},
+                               {128, 120, 0.5f, 0, 1, 0, 1}});
+    fill_rect(ref, 0, 120, 64, 128, 0xff00ff00u);
+    int mx;
+    const int d = compare("floatz-wbuffer-fastclear", ref, 0, &mx);
+    // depths equal on the crossing may resolve either way
+    scene_report("float Z, W buffer, HyperZ fast clear", d, mx, 12);
+  }
+
+  // -- scene: TCL two-sided lighting, TCL culling, vertex blending -------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    auto vec4 = [&](u32 index, const float *v, int count) {
+      std::vector<u32> p = {pkt0(SE_TCL_STATE_FLUSH, 1), 0,
+                            pkt0(SE_TCL_VECTOR_INDX_REG, 1), index | (1u << 16),
+                            pkt0_one(SE_TCL_VECTOR_DATA_REG, u32(count * 4))};
+      for (int i = 0; i < count * 4; i++)
+        p.push_back(fbits(v[i]));
+      cp(p);
+    };
+    const float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float shift[16] = {1, 0, 0, 0.5f, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    vec4(0, ident, 4); // matrix 0: identity
+    vec4(4, shift, 4); // matrix 1: x + 0.5 (clip units)
+    const float L0[4] = {0, 0, 1, 0}, H0[4] = {0, 0, 1, 0},
+                dif[4] = {1, 1, 1, 1}, zero[4] = {0, 0, 0, 0},
+                glob[4] = {0.2f, 0.2f, 0.2f, 1}, eye[4] = {0, 0, 1, 1};
+    vec4(64, zero, 1);
+    vec4(72, dif, 1);
+    vec4(80, zero, 1);
+    vec4(88, L0, 1);
+    vec4(96, H0, 1);
+    vec4(122, glob, 1);
+    vec4(124, eye, 1);
+    std::vector<u32> mp = {pkt0(SE_TCL_MATERIAL_EMISSIVE, 17)};
+    const float me[4] = {0, 0, 0, 1}, ma[4] = {0, 0, 0, 1},
+                md[4] = {0.6f, 0.4f, 0.2f, 1}, ms[4] = {0, 0, 0, 1};
+    for (const float *m : {me, ma, md, ms})
+      for (int k = 0; k < 4; k++)
+        mp.push_back(fbits(m[k]));
+    mp.push_back(fbits(1.0f));
+    cp(mp);
+    // viewport: clip [-1, 1] onto 0..128, y down
+    cp({pkt0(SE_TCL_MATRIX_SELECT_0, 2),
+        0u,
+        0u,
+        pkt0(SE_TCL_OUTPUT_VTX_SEL, 1),
+        1u | 2u,
+        pkt0(SE_TCL_LIGHT_MODEL_CTL, 1),
+        1u,
+        pkt0(SE_TCL_PER_LIGHT_CTL_0, 1),
+        1u,
+        pkt0(SE_CNTL_STATUS, 1),
+        0,
+        pkt0(SE_VPORT_XSCALE, 6),
+        fbits(64.0f),
+        fbits(64.0f),
+        fbits(-64.0f),
+        fbits(64.0f),
+        fbits(1.0f),
+        fbits(0.0f),
+        pkt0(SE_CNTL, 1),
+        1u | (3u << 1) | (3u << 3) | (3u << 6) | (2u << 8) | (2u << 10) |
+            (2u << 12) | (2u << 14) | (3u << 24) | (1u << 27)});
+    // a quad as a rectangle-list-free pair of triangles in clip space,
+    // with a normal (0, 0, 1): position XYZ, normal
+    auto tcl_quad = [&](float x0, float y0, float x1, float y1, bool ccw) {
+      std::vector<u32> p = {pkt3(0x29, 2 + 6 * 6), VTX_Z | VTX_N0,
+                            PRIM_TRI_LIST | (WALK_DATA << 4) | (1u << 9) |
+                                (6u << 16)};
+      // (x0, y0) is the clip-space lower left, the screen's too
+      float c4[4][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
+      const int ccw_i[6] = {0, 1, 2, 0, 2, 3}, cw_i[6] = {0, 2, 1, 0, 3, 2};
+      for (int k = 0; k < 6; k++) {
+        const int i = ccw ? ccw_i[k] : cw_i[k];
+        for (float v : {c4[i][0], c4[i][1], 0.5f, 0.0f, 0.0f, 1.0f})
+          p.push_back(fbits(v));
+      }
+      cp(p);
+    };
+    auto clip_rect = [&](float x0, float y0, float x1, float y1, u32 v) {
+      fill_rect(
+          ref, int(std::lround((x0 + 1) * 64)), int(std::lround((1 - y1) * 64)),
+          int(std::lround((x1 + 1) * 64)), int(std::lround((1 - y0) * 64)), v);
+    };
+    const float lit[4] = {0.2f + 0.6f, 0.2f + 0.4f, 0.2f + 0.2f, 1};
+    const float back[4] = {0.2f, 0.2f, 0.2f, 1};
+    // the viewport's Y flip keeps the winding as the screen shows it:
+    // counter-clockwise in clip space is counter-clockwise on the screen,
+    // the front for SE_CNTL<0> and the TCL's CULL_FRONT_IS_CCW
+    const u32 base_ucp = 1u << 28;
+    // 1: without two-sided lighting both windings are lit the same
+    cp({pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1), base_ucp});
+    tcl_quad(-1.0f, 0.5f, -0.5f, 1.0f, true); // CCW on screen: front
+    tcl_quad(-0.5f, 0.5f, 0.0f, 1.0f, false); // CW on screen: back
+    clip_rect(-1.0f, 0.5f, -0.5f, 1.0f, argbf(lit));
+    clip_rect(-0.5f, 0.5f, 0.0f, 1.0f, argbf(lit));
+    // 2: with LIGHT_TWOSIDE the back face is lit with the normal reversed
+    cp({pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1), base_ucp | (1u << 11)});
+    tcl_quad(0.0f, 0.5f, 0.5f, 1.0f, true);
+    tcl_quad(0.5f, 0.5f, 1.0f, 1.0f, false);
+    clip_rect(0.0f, 0.5f, 0.5f, 1.0f, argbf(lit));
+    clip_rect(0.5f, 0.5f, 1.0f, 1.0f, argbf(back));
+    // 3: CULL_BACK in the TCL unit drops the back face
+    cp({pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1), base_ucp | (1u << 30)});
+    tcl_quad(-1.0f, 0.0f, -0.5f, 0.5f, true);
+    tcl_quad(-0.5f, 0.0f, 0.0f, 0.5f, false);
+    clip_rect(-1.0f, 0.0f, -0.5f, 0.5f, argbf(lit));
+    // 4: vertex blending of matrix 0 (identity) and 1 (x + 0.5) with one
+    // weight per vertex and VERTEX_BLEND_WGT_MINUS_ONE: weight 0.5 moves
+    // the quad by 0.25; unlit vertex colours
+    cp({pkt0(SE_TCL_LIGHT_MODEL_CTL, 1), 0u, pkt0(SE_TCL_OUTPUT_VTX_SEL, 1), 0u,
+        pkt0(SE_TCL_MATRIX_SELECT_1, 1), 0u | (1u << 4),
+        pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
+        base_ucp | (1u << 12) | (1u << 16) | (1u << 22)});
+    {
+      std::vector<u32> p = {
+          pkt3(0x29, 2 + 6 * 5), VTX_Z | (1u << VTX_WEIGHT_SHIFT) | VTX_PKCOLOR,
+          PRIM_TRI_LIST | (WALK_DATA << 4) | (1u << 9) | (6u << 16)};
+      const float c4[4][2] = {
+          {-1.0f, -0.5f}, {-0.5f, -0.5f}, {-0.5f, 0.0f}, {-1.0f, 0.0f}};
+      const int ix[6] = {0, 2, 1, 0, 3, 2};
+      for (int i : ix)
+        for (u32 v : {fbits(c4[i][0]), fbits(c4[i][1]), fbits(0.5f),
+                      fbits(0.5f), 0xff40c080u})
+          p.push_back(v);
+      cp(p);
+      clip_rect(-0.75f, -0.5f, -0.25f, 0.0f, 0xff40c080u);
+    }
+    cp({pkt0(SE_TCL_MATRIX_SELECT_1, 1), 0u, pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
+        0u, pkt0(SE_CNTL_STATUS, 1), 1u << 8});
+    int mx;
+    const int d = compare("tcl-twoside-blend", ref, 1, &mx);
+    scene_report("TCL two-sided lighting, TCL culling, vertex blending", d, mx);
+  }
+
+  // -- scene: TRI_TYPE_2, the 3-vertex lists, INDX_BUFFER -----------------
+  {
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    cp({pkt0(RE_SOLID_COLOR, 1), 0xffffffffu, pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (1u << 27)});
+    // TRI_TYPE_2 as a triangle list
+    auto xy_draw = [&](u32 prim, const std::vector<float> &xy) {
+      std::vector<u32> p = {pkt3(0x29, 2 + u32(xy.size())), 0,
+                            prim | (WALK_DATA << 4) |
+                                (u32(xy.size() / 2) << 16)};
+      for (float v : xy)
+        p.push_back(fbits(v));
+      cp(p);
+    };
+    xy_draw(PRIM_TRI_FLAG, {8, 8, 40, 8, 8, 40});
+    ref_triangle({8, 8}, {40, 8}, {8, 40}, W, H,
+                 [&](int x, int y, double, double, double) {
+                   ref[size_t(y * W + x)] = 0xffffffffu;
+                 });
+    // 3VRT_POINT_LIST: each vertex a point (pixel centres at +0.5, OpenGL)
+    xy_draw(PRIM_POINT_LIST_3, {60, 10, 70, 10, 80, 10});
+    for (int x : {60, 70, 80})
+      ref[size_t(10 * W + x)] = 0xffffffffu;
+    // 3VRT_LINE_LIST: the triple's three edges
+    xy_draw(PRIM_LINE_LIST_3, {60.5f, 30.5f, 100.5f, 30.5f, 100.5f, 50.5f});
+    // INDX_BUFFER with the R200 microcode's packets switched on: a
+    // DRAW_INDX without indices, then the indices from a buffer (one
+    // dword skipped, 16-bit indices)
+    m_3d->m_r200_packets = true;
+    const u32 VB = TEX + 0xc0000, IXB = TEX + 0xc1000;
+    const float vxy[8] = {8, 60, 40, 60, 40, 92, 8, 92};
+    for (int i = 0; i < 8; i++)
+      vw32(VB + u32(i) * 4, fbits(vxy[i]));
+    vw32(IXB, 0xdeadbeefu);          // skipped
+    vw32(IXB + 4, (1u << 16) | 0u);  // 0, 1
+    vw32(IXB + 8, (0u << 16) | 2u);  // 2, 0
+    vw32(IXB + 12, (3u << 16) | 2u); // 2, 3
+    cp({pkt3(0x2f, 3), 1, 2 | (2u << 8), VB});
+    cp({pkt3(0x2a, 2), 0, PRIM_TRI_LIST | (WALK_INDEX << 4) | (6u << 16)});
+    cp({pkt3(0x33, 3), (1u << 16) | 0x810, IXB, 4});
+    sync(); // the switch is the self-test's, not the FIFO's
+    m_3d->m_r200_packets = false;
+    for (int y = 60; y < 92; y++)
+      for (int x = 8; x < 40; x++)
+        ref[size_t(y * W + x)] = 0xffffffffu;
+    // and without the switch the same pair draws nothing (R100 microcode)
+    cp({pkt3(0x2a, 2), 0, PRIM_TRI_LIST | (WALK_INDEX << 4) | (6u << 16)});
+    cp({pkt3(0x33, 3), (1u << 16) | 0x810, IXB, 4});
+    // the line reference: Bresenham along the edges, the last pixel out
+    auto ref_line = [&](int x0, int y0, int x1, int y1) {
+      const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
+      const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+      int err = dx + dy;
+      const int steps = std::max(dx, -dy);
+      for (int i = 0; i < steps; i++) {
+        ref[size_t(y0 * W + x0)] = 0xffffffffu;
+        const int e2 = 2 * err;
+        if (e2 >= dy) {
+          err += dy;
+          x0 += sx;
+        }
+        if (e2 <= dx) {
+          err += dx;
+          y0 += sy;
+        }
+      }
+    };
+    // OpenGL pixel centres: a vertex at 60.5 is in pixel 60
+    ref_line(60, 30, 100, 30);
+    ref_line(100, 30, 100, 50);
+    ref_line(100, 50, 60, 30);
+    int mx;
+    const int d = compare("prims-r200-packets", ref, 0, &mx);
+    scene_report("TRI_TYPE_2, 3-vertex lists, INDX_BUFFER (R200 packets)", d,
+                 mx);
+  }
+
+  // -- 2D: the source scissor; LOAD_PALETTE --------------------------------
+  {
+    for (int y = 0; y < 256; y++)
+      for (int x = 0; x < 256; x++)
+        setpx(x, y, (y < 128) ? u32(0x00010101u * u32(x)) : 0u);
+    // a 64x64 copy from (40, 40) with the source scissor at x 60, y 70:
+    // only the source pixels up to it reach the destination
+    wr(0x146c, GMC_BRUSH_NONE | GMC_DST32 | GMC_SRC_COLOR | (0xccu << 16) |
+                   GMC_SRC_MEM | GMC_CLR_CMP_DIS | GMC_WRMSK_DIS | 4u);
+    wr(0x16f4, (70u << 16) | 60u); // SRC_SC_BOTTOM_RIGHT
+    wr(0x16c0, 3);
+    wr(0x1434, (40u << 16) | 40u);
+    wr(0x1438, (140u << 16) | 140u);
+    wr(0x143c, (64u << 16) | 64u);
+    int bad = 0;
+    for (int y = 0; y < 64; y++)
+      for (int x = 0; x < 64; x++) {
+        const bool in = 40 + x <= 60 && 40 + y <= 70;
+        bad += px32(140 + x, 140 + y) != (in ? 0x00010101u * u32(40 + x) : 0u);
+      }
+    report("2D: the source scissor (GMC_SRC_CLIPPING)", bad == 0,
+           bad ? std::to_string(bad) + " pixels" : "");
+    std::vector<u32> pal = {pkt3(0x2c, 17), 1};
+    for (u32 i = 0; i < 16; i++)
+      pal.push_back(0x00102030u * i);
+    cp(pal);
+    sync();
+    report("CP: LOAD_PALETTE (the scaler's 16 entries kept)",
+           m_3d->m_palette[15] == 0x00102030u * 15 && m_3d->m_palette[16] == 0,
+           "");
   }
 
   // ----------------------------------------------------------------------

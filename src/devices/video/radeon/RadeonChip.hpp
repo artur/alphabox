@@ -53,6 +53,9 @@ struct ChipInfo {
   /// rate the engine's busy time is modelled at.
   u32 engine_clock_khz;
   u32 pixels_per_clock;
+  /// The CP microcode the part loads has the R200's packets (the _2
+  /// draws, 3D_CLEAR_HIZ, INDX_BUFFER).
+  bool r200_cp_packets;
 };
 
 /// The row for a part by name (nullptr if there is none).

@@ -241,6 +241,13 @@ void CRadeon::engine_master_cntl(u32 data) {
   if (!(data & GMC_DST_PITCH_OFFSET_CNTL))
     split_pitch_offset(R(DEFAULT_PITCH_OFFSET), &eng.dst_offset,
                        &eng.dst_pitch);
+  // The source scissor (RRG 3-147, 3-165: GMC_SRC_CLIPPING 0 loads
+  // SRC_SC_RIGHT/BOTTOM from DEFAULT_SC_BOTTOM_RIGHT; the source has no
+  // left or top scissor but 0).
+  if (!(data & GMC_SRC_CLIPPING)) {
+    eng.src_sc_right = int(R(DEFAULT_SC_BOTTOM_RIGHT) & 0x3fff);
+    eng.src_sc_bottom = int((R(DEFAULT_SC_BOTTOM_RIGHT) >> 16) & 0x3fff);
+  }
   if (!(data & GMC_DST_CLIPPING)) {
     eng.sc_left = 0;
     eng.sc_top = 0;
@@ -343,6 +350,16 @@ void CRadeon::engine_write(u32 reg, u32 data) {
   case SC_BOTTOM_RIGHT:
     eng.sc_right = int(data & 0x3fff);
     eng.sc_bottom = int((data >> 16) & 0x3fff);
+    return;
+  case SRC_SC_RIGHT:
+    eng.src_sc_right = int(data & 0x3fff);
+    return;
+  case SRC_SC_BOTTOM:
+    eng.src_sc_bottom = int(data & 0x3fff);
+    return;
+  case SRC_SC_BOTTOM_RIGHT:
+    eng.src_sc_right = int(data & 0x3fff);
+    eng.src_sc_bottom = int((data >> 16) & 0x3fff);
     return;
   case DP_CNTL:
     eng.dp_cntl =
@@ -544,6 +561,11 @@ void CRadeon::engine_rect() {
       bool opaque = true;
       if (mem_src) {
         const int sx = sx0 + col, sy = sy0 + row;
+        // a source pixel outside the source scissor is not read, and its
+        // destination pixel not written [inference: the RRG names the
+        // scissor, not what it does]
+        if (sx < 0 || sy < 0 || sx > eng.src_sc_right || sy > eng.src_sc_bottom)
+          continue;
         if (stype == SRC_COLOR) {
           s = vram_read(mc_to_vram(eng.src_offset + u32(sy) * eng.src_pitch +
                                    u32(sx) * u32(bpp)),

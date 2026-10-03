@@ -37,8 +37,12 @@
  *   RadeonRaster.cpp  triangles, lines, points; textures, combiners, fog,
  *                     alpha/stencil/Z tests, blending, the colour write
  *
- * The engine draws synchronously inside the register write or packet
- * that starts it, like the 2D engine.
+ * The engine runs on the card's engine thread (RadeonQueue.cpp): a draw
+ * happens when the engine takes the register write or packet that
+ * starts it. What it needs of the card is narrow: the register file
+ * (CRadeon::R), VRAM (vram_read/vram_write, mc_to_vram), the memory
+ * controller's translation for bus-master fetches (cp_translate,
+ * cp_read32, cp_fetch) and the part's row (m_chip).
  */
 
 #if !defined(INCLUDED_RADEON3D_H)
@@ -179,7 +183,10 @@ struct RadeonVertex {
   float col[4];    ///< diffuse RGBA, 0..1
   float spec[4];   ///< specular RGB, fog factor in [3]
   float tex[4][4]; ///< texture coordinate sets: s, t, r, q
+  /// two-sided lighting: the colours a back-facing triangle takes
+  float col_back[4], spec_back[4];
   bool clip_space; ///< x/y/z/w still clip coordinates
+  bool has_back;   ///< col_back/spec_back are set
 };
 
 /// What a TCL input vertex carries, decoded from its dwords.
@@ -190,6 +197,8 @@ struct RadeonVertexIn {
   float spec[4];
   float fog;
   float tex[4][4];
+  float weight[4]; ///< vertex blend weights
+  int nweights;
   bool has_w, has_z, has_norm, has_col, has_alpha, has_spec, has_fog;
   bool has_tex[4], has_q[4];
 };
@@ -201,7 +210,12 @@ public:
     int x, y;
     float z;
     float col[4], spec[4];
-    float tex[3][4]; ///< s, t (divided by q, 0..1 across the image), lod
+    /// s, t (divided by q, 0..1 across the image), lod, r (cube maps)
+    float tex[3][4];
+    /// the share of the pixel the primitive covers (anti-aliasing)
+    float cov;
+    /// the eye-space w (W depth formats)
+    float w;
   };
 
   explicit CRadeon3D(CRadeon &card);
@@ -219,6 +233,11 @@ public:
 
   /// Counters the self-test checks.
   u64 m_prims = 0, m_pixels = 0;
+  /// The self-test's switch: take the R200 microcode's packets on this
+  /// part (to check them).
+  bool m_r200_packets = false;
+  /// the scaler's palette LOAD_PALETTE loads (the scaler is not modelled)
+  u32 m_palette[256] = {};
 
   // TCL state memory (public for the self-test's reference).
   float m_vec[128][4]; ///< VS_* vectors: matrices, lights, fog, ...
@@ -240,6 +259,13 @@ private:
   };
   aos_t m_aos[16] = {};
   u32 m_aos_count = 0;
+  /// a 3D_DRAW_INDX(_2) without indices, waiting for INDX_BUFFER
+  bool m_indx_pending = false;
+  u32 m_indx_fmt = 0, m_indx_cntl = 0;
+  /// the fog table (RADEON_FOG_TABLE_INDEX/DATA)
+  u8 m_fog_table[256] = {};
+  u32 m_fog_index = 0;
+
   std::vector<u32> m_port; ///< SE_PORT_DATA dwords of a register-port draw
   u32 m_port_fmt = 0, m_port_cntl = 0, m_port_need = 0;
   bool m_port_active = false;
@@ -257,11 +283,17 @@ private:
   void assemble(u32 prim, std::vector<RadeonVertex> &v);
   void triangle(const RadeonVertex &a, const RadeonVertex &b,
                 const RadeonVertex &c, int flat_index);
+  /// 3D_CLEAR_ZMASK: the fast Z clear (HyperZ)
+  void clear_zmask(u32 start, u32 count, u32 mask);
   void to_window(RadeonVertex &v) const;
   void bypass_to_window(RadeonVertex &v) const;
 
   // --- TCL (RadeonTcl.cpp) ---------------------------------------------------
   void tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out);
+  /// The lit colours for normal `n` at eye position `P` (two-sided
+  /// lighting calls it again with the normal negated).
+  void tcl_light(const RadeonVertexIn &in, const float *P, const float n[3],
+                 float col[4], float spec[4]);
   const float *matrix(u32 sel) const { return &m_vec[(sel & 15) * 4][0]; }
 
   // --- raster and pixel pipeline (RadeonRaster.cpp) --------------------------
@@ -273,6 +305,10 @@ private:
     int route;
     u32 level_off[12];
     int level_w[12], level_h[12], level_pitch[12];
+    u32 swap;   ///< the endian swap of its memory (0 none, 1-3)
+    bool micro; ///< micro-tiled (TXO_MICRO_TILE_X2)
+    bool cube;  ///< a cube map: six faces
+    u32 face_off[6];
   };
   struct raster_t {
     u32 pp_cntl, rb3d_cntl, se_cntl, zcntl, blend, misc;
@@ -283,6 +319,12 @@ private:
     u32 stencil_ref, stencil_mask, stencil_wmask;
     u32 planemask, rop;
     float fog_col[3];
+    u32 color_swap, z_swap;    ///< COLOR_ENDIAN, DEPTH_ENDIAN
+    bool color_micro, z_micro; ///< micro-tiled colour and depth buffers
+    float zbias_factor, zbias_const;
+    /// the dither's horizontal error, per channel, and the line it is on
+    float dither_err[3];
+    int dither_y;
   };
   raster_t rs;
   void raster_setup();
@@ -290,10 +332,23 @@ private:
   void raster_line(const RadeonVertex &a, const RadeonVertex &b);
   void raster_point(const RadeonVertex &a);
   void fragment(frag_t &f);
+  /// The byte address of pixel (x, y) of a surface: linear, or micro-tiled
+  /// (32-byte tiles, Mesa radeon_tile.c).
+  u32 surface_addr(u32 base, u32 pitch_px, u32 bpp, bool micro, bool depth,
+                   int x, int y) const;
+  u32 surf_read(u32 addr, int bytes, u32 swap) const;
+  void surf_write(u32 addr, int bytes, u32 data, u32 swap);
+  /// A colour quantised to `bits` with the dither or rounding RB3D_CNTL
+  /// asks for.
+  u32 quantise(float v, int bits, int ch, int x, int y);
+  u32 pack_color(const float c[4], int x, int y);
+  /// The cube map face and face coordinates of (s, t, r).
+  static int cube_face(float s, float t, float r, float *fs, float *ft);
   void sample(int unit, float s, float t, float lod, float out[4]);
   void texel(const texunit_t &tu, int level, int x, int y, float out[4]);
   void fetch_texel(const texunit_t &tu, int level, int x, int y, float out[4]);
   u32 line_stipple_count = 0;
+  int m_cube_face = 0; ///< the face a cube map unit is being sampled on
 };
 
 #endif // !defined(INCLUDED_RADEON3D_H)

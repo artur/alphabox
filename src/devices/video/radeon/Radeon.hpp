@@ -351,6 +351,7 @@ public:
     u32 src_offset, src_pitch;
     int dst_x, dst_y, src_x, src_y, width, height;
     int sc_left, sc_top, sc_right, sc_bottom; ///< inclusive
+    int src_sc_right, src_sc_bottom;          ///< the source's, inclusive
     int bpp;     ///< bytes a pixel of the destination
     u32 gmc;     ///< DP_GUI_MASTER_CNTL as last written
     u32 dp_cntl; ///< <0> left to right, <1> top to bottom

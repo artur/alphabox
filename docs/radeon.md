@@ -77,7 +77,11 @@ colour compare (source, destination or both; never, equal, not-equal and
 the flip function); 8, 16 and 32 bpp destinations; the side effects of a
 `DP_GUI_MASTER_CNTL` write (default pitch/offset and scissors, the
 directions in `DP_CNTL`, `GMC_WR_MSK_DIS` and `GMC_CLR_CMP_CNTL_DIS`
-loading `DP_WRITE_MSK`/`CLR_CMP_MSK` and clearing `CLR_CMP_CNTL`).
+loading `DP_WRITE_MSK`/`CLR_CMP_MSK` and clearing `CLR_CMP_CNTL`); the
+source scissor (`SRC_SC_RIGHT`/`BOTTOM`, `SRC_SC_BOTTOM_RIGHT`, loaded
+from `DEFAULT_SC_BOTTOM_RIGHT` unless `GMC_SRC_CLIPPING`, RRG 3-147 and
+3-165): a source pixel outside it is not read and its destination not
+written [inference: the guide names the scissor, not what it does].
 
 **Command processor** (`RadeonCP.cpp`), on the engine's thread: the
 ring buffer -- read from `CP_RB_RPTR` towards `CP_RB_WPTR` after the
@@ -106,7 +110,12 @@ printed (OpenVMS 8.4's DECwindows server loads one with CRC-32
 packets PAINT, PAINT_MULTI, BITBLT, BITBLT_MULTI, TRANS_BITBLT,
 HOSTDATA_BLT, POLYLINE, POLYSCANLINES, NEXTCHAR, PLY_NEXTSCAN,
 SET_SCISSORS (with the settings block, every brush packet,
-`BRUSH_Y_X`); the 3D packets below.
+`BRUSH_Y_X`); LOAD_PALETTE (R5xx guide 6.2.2.12; kept for the 2D
+scaler, which is not modelled); the 3D packets below. The R200
+microcode's packets -- the `_2` draws, `3D_CLEAR_HIZ`, `INDX_BUFFER` --
+do nothing on the RV200: the legacy DRM refuses them unless the R200
+microcode is loaded ("safe but r200 only", `radeon_state.c`); they are
+implemented for a part whose row says so.
 
 **The memory controller's view of the bus** (`RadeonGart.cpp`): an
 address the CP or the 3D engine fetches is the framebuffer
@@ -169,24 +178,68 @@ premultiplied alpha).
   factors (exp, exp2, linear, from eye depth or range), texture
   coordinates from the inputs or through the texture matrices with
   texture generation (object, eye, normal, reflection);
+- vertex blending (`SE_TCL_UCP_VERT_BLEND_CTL` BLEND_OP_COUNT,
+  POSITION/NORMAL_BLEND_OP_ENABLE, WGT_MINUS_ONE: the weighted sum of the
+  MODELPROJECT/MODELVIEW/IT_MODELVIEW matrices `SE_TCL_MATRIX_SELECT_n`
+  names, with the vertex's blend weights) [inference: no driver programs
+  it on the R100]; two-sided lighting (`LIGHT_TWOSIDE`: the vertex lit
+  again with its normal reversed, the triangle's facing choosing the
+  set; Mesa leaves it to the chip only when the front and back materials
+  are equal); the TCL unit's own culling (`CULL_FRONT`, `CULL_BACK`,
+  `CULL_FRONT_IS_CCW`);
 - setup and rasteriser: sub-pixel snapping, OpenGL or Direct3D pixel
   centres, face culling and point/line fill modes, the top-left rule,
   solid/flat/Gouraud shading per attribute, perspective-correct
   texturing, the clip rectangle, the polygon stipple and the line
-  pattern;
+  pattern; polygon offset (`SE_CNTL` `ZBIAS_ENABLE_POINT/LINE/TRI`,
+  `SE_ZBIAS_FACTOR` x the depth slope + `SE_ZBIAS_CONSTANT`, as Mesa's
+  `radeonPolygonOffset` loads them); anti-aliased lines and polygons
+  (`PP_CNTL` `ANTI_ALIAS` <25:24>: the alpha times the 4x4-sample
+  coverage) [inference]; the primitive types `TRI_TYPE_2` (as a triangle
+  list) and the 3-vertex point and line lists (each triple's vertices as
+  points, its edges as lines) [inference: Mesa only checks their vertex
+  count, a multiple of 3]; `3D_CLEAR_ZMASK`, the HyperZ fast clear, as
+  its visible effect (the Z blocks read as `RB3D_DEPTHCLEARVALUE`), from
+  the legacy DRM's reverse-engineered clear [inference: 8x8 blocks];
 - textures (three units): I8, AI88, RGB332, ARGB1555, RGB565, ARGB4444,
   ARGB8888, RGBA8888, Y8, both YUV 4:2:2 orders (with YUV-to-RGB),
   DXT1, DXT2/3, DXT4/5; power-of-two mip chains and non-power-of-two
   images (`PP_TEX_SIZE`/`PP_TEX_PITCH`); nearest, linear, mip-nearest
   and mip-linear filters, LOD bias, the maximum level; the eight wrap
-  modes and the border colour;
+  modes and the border colour; cube maps (`CUBIC_MAP_ENABLE`: faces +X
+  .. +Z at `PP_CUBIC_OFFSET_Tn_0..4`, -Z at `PP_TXOFFSET_n`, one level,
+  the third coordinate in the Q slot -- Mesa's `cube_emit_cs`,
+  `radeon_swtcl.c`; OpenGL's face selection); micro-tiled textures and
+  the texture endian swaps (`PP_TXOFFSET` <1:0>, `PP_TXFORMAT` <27:26>);
 - the combiners (`PP_TXCBLEND`/`PP_TXABLEND`, three stages): add,
   subtract, add-signed, blend, dot3, complemented arguments, the texture
   factor, x2/x4 scale and clamping; the specular colour sum; fog;
+- table fog (`PP_FOG_COLOR` `FOG_TABLE`: 256 8-bit entries loaded
+  through `FOG_TABLE_INDEX`/`DATA` four a dword, indexed by the depth or
+  an alpha) [inference];
 - the alpha test, stencil (eight functions, six operations, masks), Z
-  (16-, 24- with stencil and 32-bit integer), blending (the GL factors,
-  add and subtract), the logic op, the plane mask; colour buffers in
-  ARGB8888, RGB565, ARGB1555, ARGB4444, RGB332, Y8 and RGB8.
+  (16-, 24- with stencil and 32-bit integer; 24- and 32-bit floating-point
+  Z; 16-, 24- and 32-bit floating-point W -- stored as unsigned floats
+  whose integer order is the value's [inference: the layouts are not
+  documented]), blending (the GL factors, add and subtract), the logic
+  op, the plane mask; colour buffers in ARGB8888, RGB565, ARGB1555,
+  ARGB4444, RGB332, Y8 and RGB8, linear or micro-tiled (32-byte tiles of
+  4x2, 8x2 or 8x4 pixels, Mesa's `radeon_tile.c`; the depth buffer's
+  HyperZ tiling is taken to be the same [inference]), with the colour and
+  depth endian swaps (`COLOR_ENDIAN`, `DEPTH_ENDIAN`); the colour's
+  quantisation as `RB3D_CNTL` says -- truncated, rounded (`ROUND_ENABLE`),
+  dithered by horizontal error diffusion (`DITHER_ENABLE`, with
+  `DITHER_INIT` restarting each line) or by an ordered pattern
+  (`SCALE_DITHER_ENABLE`); Mesa's driconf options name the modes, the
+  pattern (4x4 Bayer) and the error's arithmetic are inferences.
+
+**Rasterisation rules.** No source documents the R100's setup
+arithmetic -- its sub-pixel precision beyond `SE_CNTL`'s `ROUND_PREC`
+and `ROUND_MODE` fields, its fill convention, its Z interpolation
+precision. The model snaps vertices as those fields say and then
+rasterises in double precision with the top-left rule and attribute
+planes evaluated at pixel centres; that stays as it is until a source
+says otherwise.
 
 ## How it is checked
 
@@ -205,14 +258,14 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 54 checks: 11 on the command FIFO, the engine's busy time,
+or `FAIL`. 64 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
-(`RadeonSelfTestQueue.cpp`), 24 on the 2D engine, the CP and the cursor,
-18 3D scenes, and one that every wait for idle ended. The self-test
+(`RadeonSelfTestQueue.cpp`), 26 on the 2D engine, the CP and the cursor,
+26 on the 3D engine, and one that every wait for idle ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (44 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+the queue checks are left out (54 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 
@@ -227,13 +280,19 @@ reference, differing pixels in white):
 | 07-combiners | modulate, add, add-signed, subtract, blend, dot3, x2 with the texture factor, two stages |
 | 08-blend-alphatest-fog | five blend modes, the alpha test, vertex fog, the specular sum |
 | 09-zbuffer, 10-stencil | 16- and 24-bit Z with LESS and writes; stencil REPLACE then EQUAL, plane mask 0 |
-| 11-primitives | quads, quad strips, polygons, lines, points, wide lines; the IMMD, IMMD_2, VBUF (two arrays), INDX, RNDR_GEN_INDX_PRIM and register-port walks |
+| 11-primitives | quads, quad strips, polygons, lines, points, wide lines; the IMMD, VBUF (two arrays), INDX, RNDR_GEN_INDX_PRIM and register-port walks; an IMMD_2 (an R200 packet) that draws nothing |
 | 12-stipple-pattern | the polygon stipple with offsets, the line pattern |
 | 13-tcl-lit-cube | TCL: matrices, two lights (directional with specular, local with attenuation), linear fog, Z, culling |
 | 14-tcl-texmatrix-ucp | TCL: the texture matrix, a user clip plane |
 | 15-tcl-near-clip | TCL: clipping at the near plane (a vertex behind the eye) |
 | 16-render-composite | X.org's Render composite as `R100PrepareComposite` programs it: OVER, an A8 mask, non-power-of-two textures |
 | 17-misc-state | LOD bias, mirror-once and GL clamp, the logic op and plane mask, float colours, 32-bit indices, an indexed `RNDR_GEN_INDX_PRIM` |
+| 18-tiling-endian | a micro-tiled, dword-swapped colour buffer read back by the reference's own de-tiling; a micro-tiled, byte-swapped RGB565 texture drawn 1:1 |
+| 19-zbias-dither | polygon offset by the constant (coplanar quads) and by the slope factor (a sloped quad pushed behind its twin); RGB565 truncation, rounding and ordered dither and error diffusion are checked pixel by pixel beside it |
+| 20-cube-fogtable-aa | the six cube faces; table fog over a depth ramp; an anti-aliased triangle blended by its coverage |
+| 21-floatz-wbuffer-fastclear | crossing triangles in 24- and 32-bit float Z and the 24-bit W buffer (where the crossing moves); a `3D_CLEAR_ZMASK` fast clear deciding a later depth test |
+| 22-tcl-twoside-blend | TCL lighting of front and back faces without and with `LIGHT_TWOSIDE`; TCL back-face culling; vertex blending of two matrices |
+| 23-prims-r200-packets | `TRI_TYPE_2`, the 3-vertex point and line lists; `INDX_BUFFER` after an index-less `3D_DRAW_INDX` with the R200 packets switched on, and nothing without |
 
 Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
 without a frame.
@@ -281,16 +340,29 @@ the FIFO and the cache flush) runs its test unchanged.
   polygon stipple's bit order and offsets, the YUV byte orders (from
   Mesa's YCbCr formats), the view-volume clip (exact, no guard band).
 
-## Not emulated
+## Not emulated, and what a real card would have to settle
 
-Said once at run time when a guest asks for them: tiled colour buffers
-and textures (macro/micro tiling), cube maps and 3D textures, the texture
-chroma key, table fog, floating-point and W depth formats, HyperZ (Z
-compression, hierarchical Z, `3D_CLEAR_ZMASK`/`3D_CLEAR_HIZ`), the
-3-vertex point/line lists, TRI_FLAG and sprite primitives, anti-aliased
-lines and polygons, `INDX_BUFFER`. Silently not modelled: dithering,
-polygon offset (`SE_ZBIAS_*`), vertex blending, two-sided lighting, dual
-cones, the specular threshold, the 2D source scissors, the endian swaps
-of texture and colour surfaces, the micro-engine's own program (see the
-command processor), the R5xx-only packets (PRED_EXEC, COND_EXEC, WAIT_SEMAPHORE, WAIT_MEM,
-MPEG_INDEX), `LOAD_PALETTE`, `CNTL_SMALLTEXT`.
+Said once at run time when a guest asks for them:
+
+- macro tiling of colour buffers and textures: no source gives the
+  R100's macro tile layout (Linux and X.org only set the bits); drawn
+  linear;
+- the texture chroma key: no source names the register the key colour is
+  in; volume (3D) textures: Mesa's r100 driver refuses them and nothing
+  gives their layout; the sprite primitive (`SPIRIT_LIST`);
+- `CNTL_SMALLTEXT` and `LOAD_MICROCODE`: no source gives their formats.
+
+Silently not modelled: dual-cone spots and the specular threshold (no
+source says what they compute); the hierarchical Z RAM (it only lets
+the chip skip work); the destination caches' contents (the engine writes
+memory directly); the R5xx-only packets (PRED_EXEC, COND_EXEC,
+WAIT_SEMAPHORE, WAIT_MEM, MPEG_INDEX); the micro-engine's own program.
+
+Inferences a real card would have to confirm, besides those marked
+above: the engine's busy time, the CP's PIO queue depth, the PLL's
+update and the test counter's rate, the source scissor's effect, the
+float and W depth layouts, the dither pattern, table fog's table, the
+anti-aliasing coverage, vertex blending, the 3-vertex lists, the fast
+clear's block geometry. The self-test's references are written from the
+same sources as the model: a pass shows consistency, not the silicon's
+behaviour.

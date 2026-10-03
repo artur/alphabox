@@ -144,6 +144,7 @@ void CRadeon::init() {
   R(HOST_PATH_CNTL) = 1u << 23;  // HDP aperture control, as QEMU reads it
   m_pll[PLL_PPLL_CNTL] = PPLL_RESET;
   engine_reset();
+  eng.src_sc_right = eng.src_sc_bottom = 0x1fff;
   ddc_attach_monitor();
 
   load_option_rom("radeon7500.rom");
