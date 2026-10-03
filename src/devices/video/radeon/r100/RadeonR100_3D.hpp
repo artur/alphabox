@@ -119,6 +119,8 @@ public:
   void save(FILE *f) const override;
   bool restore(FILE *f) override;
   u64 pixels() const override { return m_pixels; }
+  /// The scenes (RadeonR100SelfTest.cpp).
+  void selftest_scenes(radeon::SelfTest &t) override;
 
   /// Counters the self-test checks.
   u64 m_prims = 0, m_pixels = 0;

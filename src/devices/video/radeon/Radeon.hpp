@@ -52,10 +52,12 @@
  *   r100/              the R100 generation's 3D engine
  *                      (radeon::r100::CRadeonR100_3D, RadeonR100_3D.hpp):
  *                      vertex fetch and the 3D packets, TCL, rasteriser
- *                      and pixel pipeline
+ *                      and pixel pipeline; its self-test scenes
  *   RadeonSelfTest.cpp ALPHABOX_RADEON_SELFTEST: the engines driven
  *                      through the registers and the CP, checked
- *                      against software references
+ *                      against software references; the common checks
+ *                      (RadeonSelfTest.hpp: what a generation's scenes
+ *                      get)
  *   RadeonSelfTestQueue.cpp  its checks of the FIFO, the CP's streams,
  *                      the GART and the clocks
  *

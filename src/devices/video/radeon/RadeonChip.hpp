@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include "datatypes.hpp"
 
@@ -82,6 +83,8 @@ struct ChipInfo {
 const ChipInfo *find_chip(const char *name);
 /// The part this class emulates when the configuration names none.
 const ChipInfo &default_chip();
+/// The parts' names, for messages: "rv200, ...".
+std::string chip_names();
 
 } // namespace radeon
 

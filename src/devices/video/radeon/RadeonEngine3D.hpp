@@ -55,6 +55,7 @@
 class CRadeon;
 namespace radeon {
 struct ChipInfo;
+struct SelfTest;
 } // namespace radeon
 
 /**
@@ -127,6 +128,9 @@ public:
   /// Pixels the engine has written since it was made (the busy-time
   /// model's input; RadeonQueue.cpp).
   virtual u64 pixels() const = 0;
+  /// The self-test's 3D scenes (ALPHABOX_RADEON_SELFTEST), run between
+  /// the common checks with the means RadeonSelfTest.hpp gives them.
+  virtual void selftest_scenes(radeon::SelfTest &t) = 0;
 };
 
 #endif // !defined(INCLUDED_RADEON_ENGINE3D_H)

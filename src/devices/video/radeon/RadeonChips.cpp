@@ -65,4 +65,11 @@ const ChipInfo *find_chip(const char *name) {
 
 const ChipInfo &default_chip() { return kChips[0]; }
 
+std::string chip_names() {
+  std::string s;
+  for (const ChipInfo &c : kChips)
+    s += (s.empty() ? "" : ", ") + std::string(c.name);
+  return s;
+}
+
 } // namespace radeon

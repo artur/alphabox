@@ -610,7 +610,7 @@ static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
 static const char *const kv_permedia2[] = {"rom", "memory", 0};
 static const char *const kv_s3virge[] = {"rom", "chip", "memory", 0};
 static const char *const kv_tga[] = {"rom", "model", 0};
-static const char *const kv_radeon[] = {"rom", "memory", "model", 0};
+static const char *const kv_radeon[] = {"rom", "chip", "memory", "model", 0};
 static const char *const kv_tulip[] = {
     "adapter",   "mac",        "queue",  "crc",    "trace_packets",
     "type",      "host_ip",    "bridge", "uplink", "tap_create",

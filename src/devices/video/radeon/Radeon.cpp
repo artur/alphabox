@@ -55,13 +55,19 @@ void CRadeon::init() {
               (unsigned long long)mb);
   m_vram_bytes = u32(mb) << 20;
 
+  // "chip": the part, a row of RadeonChips.cpp; its generation builds the
+  // 3D engine.
+  const char *chip = myCfg->get_text_value("chip", default_chip().name);
+  m_chip = find_chip(chip);
+  if (!m_chip)
+    FAILURE_2(Configuration, "radeon: unknown chip \"%s\" (%s)", chip,
+              chip_names().c_str());
+  m_3d = m_chip->gen->make_3d(CRadeonEngineBus(*this));
+
   // "model": which board. The consoles tell the two Radeon 7500 boards HP
   // sold apart by their subsystem IDs alone (the ES40's and the Marvel's
   // SRM tables: 1002:013A "Radeon 7500 AGP", 1002:013B "Radeon 7500 PCI").
   const char *model = myCfg->get_text_value("model", "agp");
-  m_chip = &default_chip();
-  // The generation's 3D engine.
-  m_3d = m_chip->gen->make_3d(CRadeonEngineBus(*this));
   u32 subsystem;
   if (strcmp(model, "agp") == 0)
     subsystem = (u32(m_chip->subsys_agp) << 16) | PCI_VENDOR_ATI;

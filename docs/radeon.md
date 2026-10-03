@@ -7,9 +7,11 @@ guests are in [peripherals.md](peripherals.md) and
 emulated, where each behaviour comes from, how it is checked and what is
 not.
 
-Sources live in `src/devices/video/radeon/`. The documents and driver
-sources they were written from are collected, with their URLs, in
-`lab/docs-radeon/INDEX.md`. ATI never published an R100 register
+Sources live in `src/devices/video/radeon/` (the family's common code)
+and its generation directories (`r100/`; see
+[Layout](#layout-one-family-a-directory-per-generation)). The documents
+and driver sources they were written from are collected, with their
+URLs, in `lab/docs-radeon/INDEX.md`. ATI never published an R100 register
 reference or 3D documentation. What exists:
 
 - the **Rage 128 Pro Register Reference Guide** (RRG-G04500-C, 2000): the
@@ -29,6 +31,111 @@ reference or 3D documentation. What exists:
 
 Where the model follows a driver rather than a document, or infers, the
 source says so in its comments.
+
+## Layout: one family, a directory per generation
+
+The Radeons from the R100 to the R300 share most of the card: the PCI
+identity, the BIOS and VGA plumbing, the register file, the display
+(CRTC, PLLs, cursor), the memory controller and its GART, the command
+FIFO and the engine thread, the CP and its PM4 packets, the 2D engine.
+What each generation has of its own is the 3D engine (and its TCL). So:
+
+```
+src/devices/video/radeon/       the family's common code
+  Radeon.hpp/.cpp               CRadeon: PCI header, BARs, init(), state file
+  RadeonChip.hpp, RadeonChips.cpp
+                                the chip rows (radeon::ChipInfo) and the
+                                generations (radeon::Generation)
+  RadeonEngine3D.hpp            CRadeonEngine3D (a generation's 3D engine, as
+                                the common code calls it), CRadeonEngineBus
+                                (the card, as an engine reaches it)
+  RadeonRegs.hpp                the common registers
+  RadeonControl.cpp             the register aperture
+  RadeonTiming.cpp              PLLs, pixel clock, CRTC timing
+  RadeonMemory.cpp              framebuffer aperture, VRAM
+  RadeonDisplay.cpp             extended modes, cursor, palette
+  RadeonEngine.cpp              the 2D engine
+  RadeonQueue.cpp               the command FIFO, the engine thread, busy status
+  RadeonCP.cpp                  the CP: ring, indirect buffers, PIO queue,
+                                micro-engine RAM, packet dispatch
+  RadeonGart.cpp                the MC's view of the bus: AGP window, PCI GART
+  RadeonSelfTest.hpp/.cpp       the self-test's common checks and the means
+                                the generations' scenes use
+  RadeonSelfTestQueue.cpp       its FIFO, CP, GART and clock checks
+  r100/                         the R100 generation (R100, RV100, RV200, ...)
+    RadeonR100_3D.hpp/.cpp      radeon::r100::CRadeonR100_3D: ports, packets,
+                                vertex fetch, assembly, clipping; gen_r100
+    RadeonR100Tcl.cpp           transform and lighting
+    RadeonR100Raster.cpp        rasteriser and pixel pipeline
+    RadeonR100Regs.hpp          its registers and packet fields
+    RadeonR100SelfTest.cpp      its self-test scenes (01-23)
+```
+
+The common code is the radeon/ root rather than a `common/` beside the
+generations, as in the other families (sym53c8xx/, i8255x/): the
+generations are what is added, so they are the subdirectories.
+
+How the pieces meet:
+
+- **The chip row** (`RadeonChips.cpp`) is everything common code may ask
+  about a part: PCI device and subsystem IDs, command FIFO depth, PIO
+  queue depth, ME RAM size, the clocks, whether its microcode has the
+  R200 packets -- and its **generation**. The `radeon` class's `chip` key
+  names the row (`"rv200"`, the default); `model` (`agp`/`pci`) picks the
+  board's subsystem ID within it.
+- **The generation** (`radeon::Generation`, defined in its directory:
+  `gen_r100`) holds what the generation's register map decides in common
+  code -- the range of registers that go through the command FIFO
+  (0x1400-0x3fff on the R100) and RBBM_STATUS's 2D and 3D busy bits --
+  and the factory that builds its 3D engine.
+- **The 3D engine** (`CRadeonEngine3D`) is called by the common code only:
+  register writes and reads after the card's own registers have had their
+  turn, type-3 packets the CP does not know, reset, its block of the state
+  file, the pixels it wrote (the busy-time model), its self-test scenes. It
+  reaches the card only through `CRadeonEngineBus`: the register file,
+  VRAM, the bus-master translation (framebuffer, AGP window, PCI GART), the
+  part's row. Nothing in the common code names a generation.
+- **Threads.** An engine runs under the card's execution lock
+  (`m_exec_mx`), on the engine thread that drains the FIFO and the CP, or
+  inline on a CPU's thread (`ALPHABOX_RADEON_SYNC=1`, the state file, the
+  self-test). Every interface call is made with the lock held, so an engine
+  keeps its state without locks, starts no threads and never waits for the
+  CPU.
+- **The state file.** The card's block, then the engine's (its own magic
+  first: the R100's is `AR3D`), then the micro-engine's. A generation's
+  `restore()` returns false and leaves the file where it was when the block
+  is not its own, and the card then resets the engine.
+
+### Adding a generation (or a part)
+
+A part of an existing generation is a row in `kChips` (`RadeonChips.cpp`)
+with its facts and the generation's `Generation`; its name becomes a
+`chip` value. A new generation, say the R200:
+
+1. `src/devices/video/radeon/r200/`, files named `RadeonR200*` (headers
+   are included unqualified: names must not collide with r100/'s), code in
+   `namespace radeon::r200`.
+2. Add the directory to `CMakeLists.txt`'s `file(GLOB ...)` list and to
+   `target_include_directories`, and re-run the configure step of every
+   lane.
+3. The engine: a class deriving from `CRadeonEngine3D` that keeps a
+   `CRadeonEngineBus`, implementing every method; its own state-file magic.
+   Follow the threading rule above.
+4. `const radeon::Generation gen_r200` in its directory: the FIFOed
+   register range, the RBBM_STATUS busy bits, the factory; declare it
+   `extern` beside `gen_r100` in `RadeonChips.cpp`.
+5. The rows: device and subsystem IDs, FIFO and PIO depths, ME RAM size,
+   clocks, `r200_cp_packets = true` for parts whose microcode has the R200
+   packets, `&gen_r200`.
+6. Its self-test scenes: `selftest_scenes()` in `r200/RadeonR200SelfTest.cpp`,
+   using `radeon::SelfTest` and the helpers in `RadeonSelfTest.hpp`; the
+   common checks run before and after them.
+7. If the generation changes something the common code does (a register
+   the R100 does not have, a different CP packet, a different 2D engine
+   detail), the difference goes into the row or the `Generation` as a fact,
+   and the common code asks for it -- never a test of the part's name.
+8. Document it here and in `es40.cfg`'s `chip` list, add the row's name to
+   `docs/peripherals.md`, and run the self-test with `chip = "<it>"`.
 
 ## What is emulated
 
@@ -157,7 +264,8 @@ for (0x6c94) [inference: the time]; `MC_IDLE` <2> is the engine's idle.
 the hardware cursor (mono AND/XOR, and 64x64 ARGB blended as
 premultiplied alpha).
 
-**3D engine** (`Radeon3D.cpp`, `RadeonTcl.cpp`, `RadeonRaster.cpp`):
+**3D engine**, the R100 generation's (`r100/`: `RadeonR100_3D.cpp`,
+`RadeonR100Tcl.cpp`, `RadeonR100Raster.cpp`):
 
 - vertex input: `3D_DRAW_IMMD`, `3D_DRAW_VBUF`, `3D_DRAW_INDX` and their
   `_2` forms, `3D_RNDR_GEN_INDX_PRIM`, `3D_LOAD_VBPNTR` (up to 16
@@ -248,9 +356,11 @@ result) runs at the end of the card's `init()`, before the machine
 starts, and puts the card back as it found it. It drives the engines as a
 driver does -- register writes through the MMIO BAR, packets through the
 CP ring in VRAM -- and compares each result with a reference written
-independently in `RadeonSelfTest.cpp` (its own ROP3 truth table, line
-properties, bit expansion, a double-precision barycentric rasteriser,
-texture decoders, combiner equations, transform and lighting):
+independently in `RadeonSelfTest.cpp` and, for the 3D scenes, the
+generation's `r100/RadeonR100SelfTest.cpp` (its own ROP3 truth table,
+line properties, bit expansion, a double-precision barycentric
+rasteriser, texture decoders, combiner equations, transform and
+lighting):
 
 ```
 cd lab/radeon-selftest      # an ES40 config with pci0.2 = radeon and gui = sdl
@@ -261,7 +371,8 @@ It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
 or `FAIL`. 64 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
 (`RadeonSelfTestQueue.cpp`), 26 on the 2D engine, the CP and the cursor,
-26 on the 3D engine, and one that every wait for idle ended. The self-test
+26 on the 3D engine (the generation's scenes, run between the 2D checks
+and the last two 2D/CP ones), and one that every wait for idle ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
