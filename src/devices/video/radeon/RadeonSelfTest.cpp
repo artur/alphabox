@@ -220,23 +220,82 @@ bool CRadeon::selftest() {
     dir = "radeon-3d";
   mkdir(dir.c_str(), 0755);
 
-  // Through the MMIO BAR, as a driver.
-  auto wr = [&](u32 r, u32 v) { WriteMem_Bar(0, 2, r, 32, v); };
-  auto rd = [&](u32 r) { return ReadMem_Bar(0, 2, r, 32); };
-  auto vr32 = [&](u32 a) { return vram_read(a, 4); };
-  auto vw32 = [&](u32 a, u32 v) { vram_write(a, 4, v); };
+  // Saved separately: the micro-engine and the CP's queues.
+  u32 saved_me[256][2];
+  memcpy(saved_me, m_me_ram, sizeof(saved_me));
+  u32 saved_me_written[8];
+  memcpy(saved_me_written, m_me_written, sizeof(saved_me_written));
+  const bool saved_me_loaded = m_me_loaded;
+
+  // Through the MMIO BAR, as a driver. The engine works behind the
+  // command FIFO, so the CPU's accesses to memory the engine draws in
+  // wait for it as a driver does (r100_gui_wait_for_idle: 64 free FIFO
+  // entries, then GUI_ACTIVE clear).
+  // A driver that switches from the CP to MMIO (or reads what the CP
+  // wrote) waits for the CP's stream first: the two feed one engine
+  // (X.org's RADEONWaitForIdleCP before its MMIO paths).
+  bool dirty = false, cp_used = false;
+  int idle_timeouts = 0;
+  std::function<void()> sync;
+  auto wr = [&](u32 r, u32 v) {
+    if (cp_used && r != 0x0714)
+      sync();
+    WriteMem_Bar(0, 2, r, 32, v);
+    dirty = true;
+  };
+  auto rd = [&](u32 r) {
+    if (cp_used)
+      sync();
+    return ReadMem_Bar(0, 2, r, 32);
+  };
+  sync = [&]() {
+    cp_used = false;
+    if (!dirty)
+      return;
+    dirty = false;
+    const auto give_up =
+        std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    for (;;) {
+      const u32 s = ReadMem_Bar(0, 2, RBBM_STATUS, 32);
+      if ((s & RBBM_FIFOCNT_MASK) == m_chip->cmdfifo_entries &&
+          !(s & RBBM_ACTIVE))
+        return;
+      if (std::chrono::steady_clock::now() > give_up) {
+        idle_timeouts++;
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
+  };
+  auto vrd = [&](u32 a, int n) {
+    sync();
+    return vram_read(a, n);
+  };
+  auto vwr = [&](u32 a, int n, u32 v) {
+    sync();
+    vram_write(a, n, v);
+  };
+  auto vr32 = [&](u32 a) { return vrd(a, 4); };
+  auto vw32 = [&](u32 a, u32 v) { vwr(a, 4, v); };
 
   // The framebuffer at 0 in the memory controller's space.
   wr(MC_FB_LOCATION, ((m_vram_bytes - 1) & 0xffff0000u));
   wr(SURFACE_CNTL, 0);
 
+  // The command FIFO, the CP without and with microcode, the GART
+  // (RadeonSelfTestQueue.cpp); leaves the CP running with microcode.
+  selftest_queue(report);
+
   // The command processor's ring in VRAM, 64K dwords.
   const u32 RING = 0x800000, IB = 0x880000, SCRATCH = 0x8f0000;
+  wr(0x0740, 0);               // CP_CSQ_CNTL: off while the ring is set up
   wr(0x0700, RING);            // CP_RB_BASE
   wr(0x0704, 15 | (1u << 31)); // CP_RB_CNTL: 2^16 dwords, RPTR_WR_ENA
   wr(0x070c, SCRATCH);         // CP_RB_RPTR_ADDR
   wr(0x071c, 0);               // CP_RB_RPTR_WR
-  wr(0x0714, 0);               // CP_RB_WPTR
+  wr(0x0714, 0);               // CP_RB_WPTR: the read pointer follows
+  wr(0x0704, 15);              // CP_RB_CNTL: RPTR_WR_ENA off again
+  wr(0x0740, 4u << 28);        // CP_CSQ_CNTL: primary and indirect BM
   u32 ring_pos = 0;
   auto cp = [&](const std::vector<u32> &p) {
     for (u32 d : p) {
@@ -244,6 +303,7 @@ bool CRadeon::selftest() {
       ring_pos = (ring_pos + 1) & 0xffff;
     }
     wr(0x0714, ring_pos);
+    cp_used = true;
   };
 
   // ======================================================================
@@ -698,7 +758,7 @@ bool CRadeon::selftest() {
     wr(0x143c, (4u << 16) | 7u);
     for (int y = 3; y < 7; y++)
       for (int x = 5; x < 12; x++)
-        bad += vram_read(S16 + u32(y) * 512 + u32(x) * 2, 2) != 0xf81f;
+        bad += vrd(S16 + u32(y) * 512 + u32(x) * 2, 2) != 0xf81f;
     wr(0x146c, GMC_BRUSH_NONE | (4u << 8) | GMC_SRC_COLOR | (0xccu << 16) |
                    GMC_SRC_MEM | GMC_CLR_CMP_DIS | GMC_WRMSK_DIS | 3);
     wr(0x16c0, 3);
@@ -707,20 +767,19 @@ bool CRadeon::selftest() {
     wr(0x143c, (4u << 16) | 7u);
     for (int y = 0; y < 4; y++)
       for (int x = 0; x < 7; x++)
-        bad +=
-            vram_read(S16 + u32(50 + y) * 512 + u32(60 + x) * 2, 2) != 0xf81f;
+        bad += vrd(S16 + u32(50 + y) * 512 + u32(60 + x) * 2, 2) != 0xf81f;
     // 8 bpp, pitch 256
     const u32 S8 = 0x300000, PO8 = (4u << 22) | (S8 >> 10);
     wr(0x146c, GMC_BRUSH_SOLID | (2u << 8) | GMC_SRC_COLOR | (0x5au << 16) |
                    GMC_CLR_CMP_DIS | GMC_WRMSK_DIS | 2);
     wr(0x142c, PO8);
     for (int x = 0; x < 9; x++)
-      vram_write(S8 + 10 * 256 + u32(x), 1, u32(x * 17));
+      vwr(S8 + 10 * 256 + u32(x), 1, u32(x * 17));
     wr(0x147c, 0x3c);
     wr(0x1438, (10u << 16) | 0u);
     wr(0x143c, (1u << 16) | 9u);
     for (int x = 0; x < 9; x++)
-      bad += vram_read(S8 + 10 * 256 + u32(x), 1) != (u32(x * 17) ^ 0x3cu);
+      bad += vrd(S8 + 10 * 256 + u32(x), 1) != (u32(x * 17) ^ 0x3cu);
     report("2D: 16 bpp fill and blit, 8 bpp XOR fill", bad == 0);
   }
 
@@ -769,8 +828,8 @@ bool CRadeon::selftest() {
     wr(CUR_CLR1, 0x000000ff);
     for (u32 r = 0; r < 64; r++)
       for (u32 b = 0; b < 8; b++) {
-        vram_write(0x40000 + r * 16 + b, 1, 0x0f); // AND: left half 0
-        vram_write(0x40000 + r * 16 + 8 + b, 1, 0x33);
+        vwr(0x40000 + r * 16 + b, 1, 0x0f); // AND: left half 0
+        vwr(0x40000 + r * 16 + 8 + b, 1, 0x33);
       }
     bitmap_rgb32 bm2;
     bm2.allocate(64, 64);
@@ -1253,7 +1312,7 @@ bool CRadeon::selftest() {
             const u32 v = rnd();
             const u32 a = base + u32(y) * pitch + u32(x * f.bytes);
             for (int k = 0; k < f.bytes; k++)
-              vram_write(a + u32(k), 1, (v >> (8 * k)) & 0xff);
+              vwr(a + u32(k), 1, (v >> (8 * k)) & 0xff);
             float c[4] = {0, 0, 0, 1};
             const u32 b0 = v & 0xff, w16 = v & 0xffff;
             switch (f.fmt) {
@@ -1334,8 +1393,8 @@ bool CRadeon::selftest() {
               std::swap(c0, c1); // one 3-colour block too
             const u32 codes = rnd();
             const u32 cb = a + (f.fmt == 12 ? 0 : 8);
-            vram_write(cb, 2, c0);
-            vram_write(cb + 2, 2, c1);
+            vwr(cb, 2, c0);
+            vwr(cb + 2, 2, c1);
             vw32(cb + 4, codes);
             u32 alo = rnd(), ahi = rnd();
             if (f.fmt != 12) {
@@ -1770,7 +1829,7 @@ bool CRadeon::selftest() {
               want = q(c[0], 8);
               break;
             }
-            const u32 got = vram_read(CB + u32(y * W + x) * u32(bpp), bpp);
+            const u32 got = vrd(CB + u32(y * W + x) * u32(bpp), bpp);
             // a channel's least significant bit may round either
             // way where the 8-bit colour sits halfway
             u32 dif = got ^ want;
@@ -2437,7 +2496,7 @@ bool CRadeon::selftest() {
         const u32 r = (a * u32(x * 5)) / 255, g = (a * u32(y * 8)) / 255,
                   b = (a * 200) / 255;
         vw32(SRC + u32(y * 256 + x * 4), (a << 24) | (r << 16) | (g << 8) | b);
-        vram_write(MSK + u32(y * 64 + x), 1, u32(y * 255 / (SH - 1)));
+        vwr(MSK + u32(y * 64 + x), 1, u32(y * 255 / (SH - 1)));
       }
     const u32 txf_src = 6 | (1u << 6) | (1u << 7) | (0u << 24);
     const u32 txf_msk = 0 | (1u << 6) | (1u << 7) | (1u << 24);
@@ -2470,7 +2529,7 @@ bool CRadeon::selftest() {
       for (int x = 0; x < SW; x++) {
         float s[4], d[4], o[4];
         unargb(vr32(SRC + u32(y * 256 + x * 4)), s);
-        const float m = float(vram_read(MSK + u32(y * 64 + x), 1)) / 255;
+        const float m = float(vrd(MSK + u32(y * 64 + x), 1)) / 255;
         const size_t i = size_t((int(dy) + y) * W + int(dx) + x);
         unargb(bg[i], d);
         for (int c = 0; c < 4; c++) {
@@ -2601,14 +2660,20 @@ bool CRadeon::selftest() {
 
   // ----------------------------------------------------------------------
   // put the card back
+  sync();
+  report("FIFO: every wait for idle ended", idle_timeouts == 0,
+         idle_timeouts ? std::to_string(idle_timeouts) + " timed out" : "");
+  engine_drain();
+  memcpy(m_me_ram, saved_me, sizeof(saved_me));
+  memcpy(m_me_written, saved_me_written, sizeof(saved_me_written));
+  m_me_loaded = saved_me_loaded;
   memcpy(m_regs, saved_regs.data(), saved_regs.size() * 4);
   memcpy(m_pll, saved_pll.data(), saved_pll.size() * 4);
   memcpy(vga.memory, saved_vram.data(), saved_vram.size());
   eng = saved_eng;
   m_3d->reset();
-  m_cp = cp_parser{};
+  post_restore(); // the engine, the CP's parser, the PLL's dividers
   state.vga_mem_updated = 1;
-  refresh_direct_aperture();
 
   printf("%%RADEON-I-SELFTEST: %d checks, %d failed: %s (frames in %s)\n",
          checks, failures, failures ? "FAIL" : "PASS", dir.c_str());

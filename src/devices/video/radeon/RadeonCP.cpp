@@ -45,24 +45,35 @@
  * fields follow (source and destination pitch/offset, the clip
  * rectangles, the brush and source colours), then the operation's own.
  *
- * The CP works synchronously: the packets up to the new write pointer are
- * executed inside the register write that publishes them, and the read
- * pointer is written back before the write returns. The microcode a
- * driver loads (CP_ME_RAM) is kept and read back, not executed.
+ * The CP runs on the engine's thread (RadeonQueue.cpp): a write to
+ * CP_RB_WPTR wakes it and returns; the engine reads the ring a packet at
+ * a time when its FIFO is empty, the read pointer advancing as it goes,
+ * and writes its copy back to CP_RB_RPTR_ADDR. Which streams run is the
+ * CSQ mode's (CP_CSQ_CNTL, CP_CSQ_MODE): the ring when the primary
+ * stream bus masters, the PIO queue when it is pushed, indirect buffers
+ * when the indirect stream bus masters.
  *
- * Memory the CP reads is addressed in the memory controller's space:
- * MC_FB_LOCATION is the framebuffer, MC_AGP_LOCATION a window onto the
- * bus starting at AGP_BASE (on a PCI card, and on this AGP card without
- * a GART, the way a driver reaches host memory).
+ * The micro-engine. The CP parses packets with microcode a driver loads
+ * into its RAM (CP_ME_RAM_ADDR, then DATAH/DATAL pairs; R5xx
+ * Acceleration 5.12). ATI never documented the micro-engine's
+ * instruction set, so the packets are interpreted here natively; what
+ * the model keeps of the micro-engine is that without microcode there is
+ * no CP: until a complete image has been loaded (every entry written, not
+ * all zero) neither the ring nor the PIO queue is read, and the read
+ * pointer stays where it is. The image is kept and reads back.
+ *
+ * Memory the CP reads is addressed in the memory controller's space
+ * (RadeonGart.cpp): the framebuffer, the AGP window or the PCI GART.
  **/
 
 #include "Radeon.hpp"
 #include "System.hpp"
 
+#include <algorithm>
+
 using namespace radeon;
 
 namespace {
-constexpr u32 AGP_BASE = 0x0170;
 constexpr u32 CP_RB_BASE = 0x0700;
 constexpr u32 CP_RB_CNTL = 0x0704;
 constexpr u32 CP_RB_RPTR_ADDR = 0x070c;
@@ -77,6 +88,8 @@ constexpr u32 CP_ME_RAM_ADDR = 0x07d4;
 constexpr u32 CP_ME_RAM_RADDR = 0x07d8;
 constexpr u32 CP_ME_RAM_DATAH = 0x07dc;
 constexpr u32 CP_ME_RAM_DATAL = 0x07e0;
+constexpr u32 CP_CSQ_MODE = 0x0744;
+constexpr u32 CP_STAT = 0x07c0;
 constexpr u32 CP_CSQ_APER_PRIMARY = 0x1000;
 constexpr u32 CP_CSQ_APER_END = 0x1200;
 constexpr u32 SCRATCH_REG0 = 0x15e0;
@@ -196,35 +209,13 @@ int datatype_bytes(u32 t) {
 }
 } // namespace
 
-/**
- * A memory-controller address as the CP reads it: the framebuffer, or the
- * bus through the AGP window. Returns false when it is neither.
- **/
-bool CRadeon::cp_translate(u32 mc, bool *is_vram, u32 *addr) const {
-  const u32 fb = R(MC_FB_LOCATION), agp = R(MC_AGP_LOCATION);
-  const u32 fb_start = (fb & 0xffff) << 16,
-            fb_end = (fb & 0xffff0000u) | 0xffff;
-  const u32 agp_start = (agp & 0xffff) << 16,
-            agp_end = (agp & 0xffff0000u) | 0xffff;
-  if (mc >= fb_start && mc <= fb_end) {
-    *is_vram = true;
-    *addr = (mc - fb_start) & vram_mask();
-    return true;
-  }
-  if (agp_end > agp_start && mc >= agp_start && mc <= agp_end) {
-    *is_vram = false;
-    *addr = R(AGP_BASE) + (mc - agp_start);
-    return true;
-  }
-  return false;
-}
-
 u32 CRadeon::cp_read32(u32 mc) {
   bool vram;
   u32 a;
   if (!cp_translate(mc, &vram, &a)) {
     if (m_cp_bad_reads++ < 8)
-      printf("%s: CP read outside the framebuffer and AGP window: %08x\n",
+      printf("%s: CP read outside the framebuffer, AGP window and GART: "
+             "%08x\n",
              devid_string, mc);
     return 0x80000000u; // a type-2 filler
   }
@@ -247,54 +238,198 @@ void CRadeon::cp_write32(u32 mc, u32 data) {
   do_pci_write(a, &data, 4, 1);
 }
 
+/// The swaps of CP_RB_CNTL BUF_SWAP, CP_RB_RPTR_ADDR RB_RPTR_SWAP and
+/// SCRATCH_UMSK SCRATCH_SWAP (R5xx Acceleration, CP_RB_CNTL): 1 the bytes
+/// of each half, 2 all four, 3 the halves.
+static u32 cp_swap(u32 v, u32 mode) {
+  switch (mode & 3) {
+  case 1:
+    return ((v & 0x00ff00ffu) << 8) | ((v >> 8) & 0x00ff00ffu);
+  case 2:
+    return (v << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) | (v >> 24);
+  case 3:
+    return (v << 16) | (v >> 16);
+  }
+  return v;
+}
+
+u32 CRadeon::cp_fetch(u32 mc) {
+  bool vram;
+  u32 a;
+  const u32 v = cp_read32(mc);
+  if (cp_translate(mc, &vram, &a) && !vram)
+    return cp_swap(v, R(CP_RB_CNTL) >> 16);
+  return v;
+}
+
+/**
+ * The CSQ mode: CP_CSQ_CNTL<31:28> (0 off; 1, 3, 5, 7 primary by PIO; 2,
+ * 4, 6, 8 primary by bus mastering; 3-8 indirect buffers by bus
+ * mastering; 15 both by PIO), unless CP_CSQ_MODE's enables <31>, <29>
+ * override it (R5xx Acceleration, CP_CSQ_CNTL and CP_CSQ_MODE).
+ **/
+u32 CRadeon::cp_csq_mode() const { return R(CP_CSQ_CNTL) >> 28; }
+
+bool CRadeon::cp_primary_bm() const {
+  const u32 m = R(CP_CSQ_MODE);
+  if (m & (1u << 31))
+    return (m >> 30) & 1;
+  const u32 c = cp_csq_mode();
+  return c == 2 || c == 4 || c == 6 || c == 8;
+}
+
+bool CRadeon::cp_primary_pio() const {
+  const u32 m = R(CP_CSQ_MODE);
+  if (m & (1u << 31))
+    return !((m >> 30) & 1);
+  const u32 c = cp_csq_mode();
+  return c == 1 || c == 3 || c == 5 || c == 7 || c == 15;
+}
+
+bool CRadeon::cp_indirect_bm() const {
+  const u32 m = R(CP_CSQ_MODE);
+  if (m & (1u << 29))
+    return (m >> 28) & 1;
+  const u32 c = cp_csq_mode();
+  return c >= 3 && c <= 8;
+}
+
+/// The ring's size in dwords: 2^(RB_BUFSZ+1), RB_BUFSZ clamped to 2..22.
+static u32 ring_dwords(u32 cntl) {
+  const u32 b = std::min(22u, std::max(2u, cntl & 0x3f));
+  return 2u << b;
+}
+
+bool CRadeon::cp_ring_pending() const {
+  if (!cp_primary_bm())
+    return false;
+  const u32 mask = ring_dwords(R(CP_RB_CNTL)) - 1;
+  return (R(CP_RB_WPTR) & mask) != (R(CP_RB_RPTR) & mask);
+}
+
+bool CRadeon::cp_ring_has_work() const {
+  return cp_microcode_ok() && cp_ring_pending();
+}
+
 /**
  * The CP's registers. Returns true when the register is the CP's and
  * the write was handled.
  **/
 bool CRadeon::cp_reg_write(u32 reg, u32 data) {
   if (reg >= CP_CSQ_APER_PRIMARY && reg < CP_CSQ_APER_END) {
-    cp_feed(data);
+    // The primary PIO queue: the dwords go to the CP in the order written
+    // (R5xx Acceleration 5.11), while the CSQ is in a primary PIO mode.
+    if (!cp_primary_pio()) {
+      if (!m_cp_warned_pio) {
+        m_cp_warned_pio = true;
+        printf("%s: CP PIO write with the primary queue not in PIO mode "
+               "(CP_CSQ_CNTL %08x): ignored\n",
+               devid_string, R(CP_CSQ_CNTL));
+      }
+      return true;
+    }
+    if (in_engine() || m_sync) {
+      m_csq.push_back(data);
+      engine_kick();
+      return true;
+    }
+    {
+      std::unique_lock<std::mutex> l(m_q_mx);
+      while (m_csq.size() >= m_chip->csq_primary_dwords && m_eng_thread &&
+             !m_eng_stop && cp_microcode_ok())
+        m_q_space.wait_for(l, std::chrono::milliseconds(100));
+      m_csq.push_back(data);
+    }
+    engine_kick();
     return true;
   }
   switch (reg) {
-  case CP_RB_WPTR:
+  case CP_RB_WPTR: {
+    // RB_RPTR_WR_ENA: the writable read pointer becomes the read pointer
+    // when the write pointer is written (R5xx Acceleration 5.8).
+    if (R(CP_RB_CNTL) & RB_RPTR_WR_ENA) {
+      std::lock_guard<std::mutex> x(m_exec_mx);
+      R(CP_RB_RPTR) = R(CP_RB_RPTR_WR);
+      m_rptr_since_wb = 0;
+    }
     R(reg) = data;
-    cp_run_ring();
+    engine_kick();
     return true;
+  }
   case CP_RB_RPTR_WR:
     R(reg) = data;
-    if (R(CP_RB_CNTL) & RB_RPTR_WR_ENA)
-      R(CP_RB_RPTR) = data;
     return true;
   case CP_RB_RPTR:
     return true; // the chip's
+  case CP_CSQ_CNTL:
+  case CP_CSQ_MODE:
+    R(reg) = data;
+    engine_kick();
+    return true;
   case CP_IB_BUFSZ:
     R(reg) = data;
+    if (!in_engine()) {
+      // a CPU's write (PIO mode): the buffer is read now, by the engine
+      std::lock_guard<std::mutex> x(m_exec_mx);
+      engine_scope scope;
+      cp_run_buffer(R(CP_IB_BASE), data & 0x7fffff);
+      return true;
+    }
     cp_run_buffer(R(CP_IB_BASE), data & 0x7fffff);
     return true;
   case CP_ME_RAM_ADDR:
-    m_me_index = data & 0xff;
-    R(reg) = data;
-    return true;
   case CP_ME_RAM_RADDR:
-    m_me_index = data & 0xff;
+    m_me_index = data % m_chip->me_ram_entries;
     R(reg) = data;
     return true;
   case CP_ME_RAM_DATAH:
-    m_me_ram[m_me_index][0] = data;
+    // the high 8 bits of a 40-bit micro-engine word (R5xx 5.12)
+    m_me_ram[m_me_index][0] = data & 0xff;
     return true;
-  case CP_ME_RAM_DATAL:
+  case CP_ME_RAM_DATAL: {
     m_me_ram[m_me_index][1] = data;
-    m_me_index = (m_me_index + 1) & 0xff;
+    m_me_written[m_me_index >> 5] |= 1u << (m_me_index & 31);
+    m_me_index = (m_me_index + 1) % m_chip->me_ram_entries;
+    // A complete image: every entry loaded, and not all of them zero.
+    // The R100 microcode is a firmware blob (Linux radeon/R100_cp.bin);
+    // nothing in the sources identifies it by content, so any complete
+    // load is taken [inference]. Its CRC is printed to tell images apart.
+    bool all = true, any = false;
+    for (u32 i = 0; i < m_chip->me_ram_entries; i++) {
+      all = all && ((m_me_written[i >> 5] >> (i & 31)) & 1);
+      any = any || m_me_ram[i][0] || m_me_ram[i][1];
+    }
+    const bool was = m_me_loaded;
+    m_me_loaded = all && any;
+    if (m_me_loaded && !was) {
+      u32 crc = 0xffffffffu;
+      for (u32 i = 0; i < m_chip->me_ram_entries; i++)
+        for (int k = 0; k < 2; k++)
+          for (int b = 0; b < 32; b += 8) {
+            crc ^= (m_me_ram[i][k] >> b) & 0xff;
+            for (int j = 0; j < 8; j++)
+              crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+          }
+      printf("%s: CP microcode loaded, %u entries, CRC-32 %08x\n", devid_string,
+             m_chip->me_ram_entries, ~crc);
+      engine_kick();
+    }
     return true;
+  }
   }
   if (reg >= SCRATCH_REG0 && reg <= SCRATCH_REG5) {
     // A scratch register is a fence: written back to memory when its
-    // SCRATCH_UMSK bit is set.
+    // SCRATCH_UMSK bit is set, swapped as SCRATCH_SWAP <17:16> says.
     R(reg) = data;
     const u32 n = (reg - SCRATCH_REG0) / 4;
-    if (R(SCRATCH_UMSK) & (1u << n))
-      cp_write32(R(SCRATCH_ADDR) + 4 * n, data);
+    const u32 umsk = R(SCRATCH_UMSK);
+    if (umsk & (1u << n)) {
+      bool vram;
+      u32 a;
+      const u32 mc = R(SCRATCH_ADDR) + 4 * n;
+      const bool host = cp_translate(mc, &vram, &a) && !vram;
+      cp_write32(mc, host ? cp_swap(data, umsk >> 16) : data);
+    }
     return true;
   }
   return false;
@@ -307,43 +442,125 @@ bool CRadeon::cp_reg_read(u32 reg, u32 *v) {
     return true;
   case CP_ME_RAM_DATAL:
     *v = m_me_ram[m_me_index][1];
-    m_me_index = (m_me_index + 1) & 0xff;
+    m_me_index = (m_me_index + 1) % m_chip->me_ram_entries;
     return true;
-  case 0x07f8: // CP_CSQ_STAT: the queues are always drained
+  case CP_CSQ_CNTL: {
+    // CSQ_CNT_PRIMARY <7:0>: the dwords the primary PIO queue has room
+    // for (r100d.h)
+    size_t q;
+    {
+      std::lock_guard<std::mutex> l(m_q_mx);
+      q = m_csq.size();
+    }
+    const u32 room =
+        cp_primary_pio()
+            ? m_chip->csq_primary_dwords -
+                  u32(std::min<size_t>(q, m_chip->csq_primary_dwords))
+            : 0;
+    *v = (R(reg) & ~0xffu) | std::min(room, 0xffu);
+    return true;
+  }
+  case CP_CSQ_STAT: {
+    // the primary queue's read and write pointers <7:0>, <15:8>
+    // (radeon_reg.h): equal when it is drained
+    size_t q;
+    {
+      std::lock_guard<std::mutex> l(m_q_mx);
+      q = m_csq.size();
+    }
+    *v = u32(q & 0xff) << 8;
+    return true;
+  }
   case 0x07fc: // CP_CSQ2_STAT
-  case 0x07c0: // CP_STAT: idle
     *v = 0;
     return true;
+  case CP_STAT: {
+    // CP_BUSY <31>, CMDSTRM_BUSY <30>, CSF_PRIMARY_BUSY <9> (r100d.h)
+    bool pio;
+    {
+      std::lock_guard<std::mutex> l(m_q_mx);
+      pio = !m_csq.empty();
+    }
+    *v = (cp_ring_pending() || pio) ? 0xc0000200u : 0;
+    return true;
+  }
   }
   return false;
 }
 
 /**
- * Execute the ring from the read pointer to the write pointer, then write
- * the read pointer back where the driver asked for it.
+ * The ring, as the engine reads it: from the read pointer to the end of
+ * the next packet (or the write pointer, if the packet is not all there
+ * yet). The read pointer is the chip's and moves as dwords are read; the
+ * host's copy at CP_RB_RPTR_ADDR is written every 2^RB_BLKSZ quadwords
+ * and when the ring runs dry, unless RB_NO_UPDATE (R5xx Acceleration,
+ * CP_RB_CNTL).
  **/
-void CRadeon::cp_run_ring() {
-  if (m_cp_depth > 0)
-    return; // the ring publishing itself from inside a packet
+void CRadeon::cp_ring_step() {
+  if (!cp_ring_has_work())
+    return;
   const u32 cntl = R(CP_RB_CNTL);
-  const u32 dwords = 2u << (cntl & 0x3f);
-  const u32 mask = dwords - 1;
-  const u32 wptr = R(CP_RB_WPTR) & mask;
+  const u32 mask = ring_dwords(cntl) - 1;
+  const u32 block = 2u << std::min(21u, (cntl >> 8) & 0x3f); // dwords
   u32 rptr = R(CP_RB_RPTR) & mask;
-  m_cp_depth++;
-  int guard = 0;
-  while (rptr != wptr && guard++ < (1 << 22)) {
-    cp_feed(cp_read32(R(CP_RB_BASE) + rptr * 4));
+  for (int n = 0; n < 65536; n++) {
+    const u32 wptr = R(CP_RB_WPTR) & mask;
+    if (rptr == wptr)
+      break;
+    const u32 d = cp_fetch(R(CP_RB_BASE) + rptr * 4);
     rptr = (rptr + 1) & mask;
+    R(CP_RB_RPTR) = rptr;
+    cp_feed(d);
+    if (++m_rptr_since_wb >= block)
+      cp_rptr_writeback();
+    if (m_cp.remaining == 0)
+      break; // a packet's end
   }
-  m_cp_depth--;
-  R(CP_RB_RPTR) = rptr;
-  if (!(cntl & RB_NO_UPDATE))
-    cp_write32(R(CP_RB_RPTR_ADDR) & ~3u, rptr);
+  if ((R(CP_RB_WPTR) & mask) == rptr)
+    cp_rptr_writeback();
 }
 
-/// An indirect buffer: `dwords` dwords from `mc`.
+void CRadeon::cp_rptr_writeback() {
+  m_rptr_since_wb = 0;
+  if (R(CP_RB_CNTL) & RB_NO_UPDATE)
+    return;
+  const u32 addr = R(CP_RB_RPTR_ADDR);
+  bool vram;
+  u32 a;
+  const u32 mc = addr & ~3u;
+  const bool host = cp_translate(mc, &vram, &a) && !vram;
+  const u32 v = R(CP_RB_RPTR);
+  cp_write32(mc, host ? cp_swap(v, addr) : v);
+}
+
+/**
+ * RBBM_SOFT_RESET's CP bit: the parser forgets the packet in progress and
+ * the read pointer returns to zero (R5xx Acceleration 5.8: "the read
+ * pointer still resets to zero"). The microcode stays loaded.
+ **/
+void CRadeon::cp_soft_reset() {
+  m_cp = cp_parser{};
+  R(CP_RB_RPTR) = 0;
+  m_rptr_since_wb = 0;
+  std::lock_guard<std::mutex> l(m_q_mx);
+  m_csq.clear();
+}
+
+/**
+ * An indirect buffer: `dwords` dwords from `mc`, read when the write to
+ * CP_IB_BUFSZ that ends a type-0 packet reaches the CP (R5xx Acceleration
+ * 5.10), while the CSQ mode lets the indirect stream bus master.
+ **/
 void CRadeon::cp_run_buffer(u32 mc, u32 dwords) {
+  if (!cp_indirect_bm()) {
+    if (!m_cp_warned_ib) {
+      m_cp_warned_ib = true;
+      printf("%s: indirect buffer with the indirect stream disabled "
+             "(CP_CSQ_CNTL %08x): not read\n",
+             devid_string, R(CP_CSQ_CNTL));
+    }
+    return;
+  }
   if (m_cp_ib_depth > 2)
     return;
   m_cp_ib_depth++;
@@ -352,7 +569,7 @@ void CRadeon::cp_run_buffer(u32 mc, u32 dwords) {
   const cp_parser saved = m_cp;
   m_cp = cp_parser{};
   for (u32 i = 0; i < dwords; i++)
-    cp_feed(cp_read32(mc + i * 4));
+    cp_feed(cp_fetch(mc + i * 4));
   m_cp = saved;
   m_cp_ib_depth--;
 }

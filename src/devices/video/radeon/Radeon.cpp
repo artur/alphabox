@@ -43,6 +43,7 @@ CRadeon::CRadeon(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
  **/
 CRadeon::~CRadeon() {
   stop_threads();
+  engine_thread_stop();
   delete[] vga.memory;
   vga.memory = nullptr;
 }
@@ -59,11 +60,12 @@ void CRadeon::init() {
   // sold apart by their subsystem IDs alone (the ES40's and the Marvel's
   // SRM tables: 1002:013A "Radeon 7500 AGP", 1002:013B "Radeon 7500 PCI").
   const char *model = myCfg->get_text_value("model", "agp");
+  m_chip = &default_chip();
   u32 subsystem;
   if (strcmp(model, "agp") == 0)
-    subsystem = 0x013a1002;
+    subsystem = (u32(m_chip->subsys_agp) << 16) | PCI_VENDOR_ATI;
   else if (strcmp(model, "pci") == 0)
-    subsystem = 0x013b1002;
+    subsystem = (u32(m_chip->subsys_pci) << 16) | PCI_VENDOR_ATI;
   else
     FAILURE_1(Configuration, "radeon: model must be \"agp\" or \"pci\", not %s",
               model);
@@ -77,7 +79,7 @@ void CRadeon::init() {
   // AGP board, then power management at 0x50.
   u32 cfg_data[64] = {};
   u32 cfg_mask[64] = {};
-  cfg_data[0x00 >> 2] = (u32(PCI_DEVICE_RV200_QW) << 16) | PCI_VENDOR_ATI;
+  cfg_data[0x00 >> 2] = (u32(m_chip->device_id) << 16) | PCI_VENDOR_ATI;
   cfg_data[0x04 >> 2] = 0x02b00000; // caps, 66 MHz, fast b2b, medium DEVSEL
   cfg_data[0x08 >> 2] = 0x03000000; // VGA display controller, revision 0
   cfg_data[0x10 >> 2] = 0x00000008; // prefetchable 32-bit memory
@@ -145,6 +147,12 @@ void CRadeon::init() {
   ddc_attach_monitor();
 
   load_option_rom("radeon7500.rom");
+  read_bios_clocks();
+
+  // ALPHABOX_RADEON_SYNC=1: the engine runs each command inside the write
+  // that starts it and always reads idle (RadeonQueue.cpp).
+  if (const char *s = getenv("ALPHABOX_RADEON_SYNC"))
+    m_sync = s[0] == '1';
 
   state.last_bpp = 8;
   state.x_tilesize = X_TILESIZE;
@@ -168,9 +176,11 @@ void CRadeon::init() {
     if (const char *m = getenv("ALPHABOX_TRACE_RADEON_MAX"))
       m_trace_budget = atol(m);
   }
-  printf("%s: ATI Radeon 7500 (RV200) %s, %u MB, subsystem %04x:%04x\n",
-         devid_string, agp ? "AGP" : "PCI", m_vram_bytes >> 20,
-         subsystem & 0xffff, subsystem >> 16);
+  printf("%s: ATI %s %s, %u MB, subsystem %04x:%04x, engine %u.%02u MHz%s\n",
+         devid_string, m_chip->marketing, agp ? "AGP" : "PCI",
+         m_vram_bytes >> 20, subsystem & 0xffff, subsystem >> 16,
+         m_sclk_khz / 1000, (m_sclk_khz % 1000) / 10,
+         m_sync ? ", synchronous" : "");
 
   // ALPHABOX_RADEON_SELFTEST=1: check the engines before the machine
   // starts (the card's state is put back afterwards); "exit" ends the
@@ -182,6 +192,33 @@ void CRadeon::init() {
       exit(ok ? 0 : 1);
     }
   }
+}
+
+/**
+ * The clocks in the card's own BIOS: the PLL information block the
+ * ATI BIOS points at from its "fp_bios" table (u16 at 0x48, + 0x30):
+ * the engine clock at + 0x08 and the reference clock at + 0x0e, in
+ * 10 kHz units (Linux radeonfb radeon_get_pllinfo). Without a ROM, or
+ * with values out of reason, the chip row's.
+ **/
+void CRadeon::read_bios_clocks() {
+  m_ref_khz = m_chip->ref_clock_khz;
+  m_sclk_khz = m_chip->engine_clock_khz;
+  auto u16at = [&](u32 o) -> u32 {
+    return o + 1 < sizeof(option_rom) ? option_rom[o] | (option_rom[o + 1] << 8)
+                                      : 0;
+  };
+  if (option_rom[0] != 0x55 || option_rom[1] != 0xaa)
+    return;
+  const u32 fp = u16at(0x48);
+  const u32 pll = fp ? u16at(fp + 0x30) : 0;
+  if (!pll)
+    return;
+  const u32 sclk = u16at(pll + 0x08), ref = u16at(pll + 0x0e);
+  if (ref >= 1000 && ref <= 5000)
+    m_ref_khz = ref * 10;
+  if (sclk >= 5000 && sclk <= 50000)
+    m_sclk_khz = sclk * 10;
 }
 
 u32 CRadeon::config_read_custom(int func, u32 address, int dsize, u32 data) {
@@ -271,7 +308,12 @@ void CRadeon::WriteMem_Bar(int func, int bar, u32 address, int dsize,
  **/
 static constexpr u32 kRadeonMagic = 0x37354152; // 'RA57'
 
+static constexpr u32 kCpMagic = 0x50435241; // 'ARCP'
+
 int CRadeon::save_card_state(FILE *f) {
+  // The engine finishes what it was given first: the state file holds no
+  // FIFO.
+  engine_drain();
   fwrite(&kRadeonMagic, sizeof(u32), 1, f);
   long sz = sizeof(m_regs);
   fwrite(&sz, sizeof(long), 1, f);
@@ -281,6 +323,12 @@ int CRadeon::save_card_state(FILE *f) {
   fwrite(m_pll, sizeof(m_pll), 1, f);
   fwrite(&kRadeonMagic, sizeof(u32), 1, f);
   m_3d->save(f);
+  // The micro-engine RAM (without it a restored CP would refuse its ring).
+  fwrite(&kCpMagic, 4, 1, f);
+  fwrite(m_me_ram, sizeof(m_me_ram), 1, f);
+  fwrite(m_me_written, sizeof(m_me_written), 1, f);
+  const u32 loaded = m_me_loaded;
+  fwrite(&loaded, 4, 1, f);
   return 0;
 }
 
@@ -308,10 +356,32 @@ int CRadeon::restore_card_state(FILE *f) {
   // The 3D engine's block, absent from state files older than it.
   if (!m_3d->restore(f))
     m_3d->reset();
+  // The micro-engine's block, absent from older state files.
+  const long at = ftell(f);
+  u32 loaded = 0;
+  if (fread(&m, 4, 1, f) != 1 || m != kCpMagic ||
+      fread(m_me_ram, sizeof(m_me_ram), 1, f) != 1 ||
+      fread(m_me_written, sizeof(m_me_written), 1, f) != 1 ||
+      fread(&loaded, 4, 1, f) != 1) {
+    fseek(f, at, SEEK_SET);
+    // A machine saved before the CP needed microcode had a running CP.
+    m_me_loaded = R(0x0740) >> 28 != 0;
+  } else {
+    m_me_loaded = loaded != 0;
+  }
   return 0;
 }
 
 void CRadeon::post_restore() {
   engine_reset();
+  m_cp = cp_parser{};
+  {
+    // the PLL runs on the dividers it was left with
+    std::lock_guard<std::mutex> l(m_clk_mx);
+    m_ppll_update = false;
+    m_ppll_eff_ref = m_pll[PLL_PPLL_REF_DIV] & 0x3ff;
+    for (int i = 0; i < 4; i++)
+      m_ppll_eff_div[i] = m_pll[PLL_PPLL_DIV_0 + i];
+  }
   refresh_direct_aperture();
 }

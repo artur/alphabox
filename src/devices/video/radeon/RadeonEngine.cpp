@@ -29,9 +29,10 @@
  * destination's size: DST_HEIGHT_WIDTH and its aliases draw a rectangle
  * (a fill, a screen-to-screen blit, or a source expanded from the host
  * data registers that follow), DST_LINE_END a line from DST_LINE_START.
- * The engine finishes the work inside the write that starts it (host
- * data: as the data arrives), so RBBM_STATUS always shows the FIFO empty
- * and the engine idle.
+ * The registers reach the engine through the command FIFO
+ * (RadeonQueue.cpp), on the engine's thread; a command is done when the
+ * engine has taken the write that starts it (host data: as the data
+ * arrives), and RBBM_STATUS shows the FIFO and the engine's busy time.
  *
  * Every pixel goes through the full raster operation: the ROP3 of
  * pattern, source and destination, the write mask, the clip rectangle.
@@ -214,9 +215,6 @@ u32 CRadeon::engine_read(u32 reg) {
            ((dt & 0x30000) >> 4) | ((dt & DT_BYTE_PIX_ORDER) >> 16) |
            (mix & 0x00ff0000u) | ((mix & 0x700) << 16);
   }
-  case 0x1714: // DSTCACHE_CTLSTAT: never busy
-  case 0x1720: // WAIT_UNTIL
-    return 0;
   }
   return R(reg);
 }
@@ -508,6 +506,7 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
   const u32 wm = R(DP_WRITE_MASK);
   out = (d & ~wm) | (out & wm);
   vram_write(addr, bpp, out);
+  m_eng_pixels++;
 }
 
 /**

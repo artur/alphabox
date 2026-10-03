@@ -19,14 +19,53 @@ reference or 3D documentation. What exists:
   PM4 packet formats (types 0-3 and every 2D type-3 packet) that the R100
   microcode already used;
 - the open drivers: Linux's radeon DRM (`r100.c`: the command-stream
-  checker), Mesa's classic r100 driver (the 3D and TCL state as a driver
-  programs it), X.org's xf86-video-ati (2D acceleration, Render through
-  the 3D engine, the cursor).
+  checker, the CP and GART set-up; the legacy `radeon_cp.c` and
+  `radeon_state.c`), Linux's radeonfb (the PLLs), Mesa's classic r100
+  driver (the 3D and TCL state as a driver programs it; `radeon_tile.c`,
+  the family's micro tile layout), X.org's xf86-video-ati (2D
+  acceleration, Render through the 3D engine, the cursor);
+- the card's own BIOS (`roms/video/radeon7500`, disassembled in
+  `lab/docs-radeon/rom.dis`): its PLL block and its waits.
 
 Where the model follows a driver rather than a document, or infers, the
 source says so in its comments.
 
 ## What is emulated
+
+**The command FIFO and the engine** (`RadeonQueue.cpp`). A CPU write to a
+rendering-engine register -- 0x1400 and up, the Rage 128 guide's "GUI
+registers (FIFOed)" -- goes into a 64-entry command FIFO (the part's
+row, `RadeonChips.cpp`; Linux's `r100_gui_wait_for_idle` waits for 64).
+One engine thread takes the entries in order and, when the FIFO is
+empty, reads the CP's ring a packet at a time. RBBM_STATUS shows the
+free entries (`CMDFIFO_AVAIL` <6:0>), `CP_CMDSTRM_BUSY` <16> while the
+ring has unread dwords, the 2D or 3D blocks' busy bits and `GUI_ACTIVE`
+<31> while anything is queued, executing or still running on the
+engine's timeline: every command is charged a clock and every pixel half
+a clock of the engine clock (180 MHz, from the card's BIOS PLL block; two
+pixel pipes), the next command starting when the last ended, so the
+engine reads busy for its modelled time however fast the host drew
+[inference: the R100's per-command costs are not documented]. With the
+FIFO full a write waits until an entry is free (the chip holds the bus
+write; nothing is dropped). A CPU read of a queued register waits for the
+writes queued before it (the chip takes a register write long before the
+next bus read; OpenVMS's server writes `DEFAULT_PITCH_OFFSET` and reads
+it straight back) [inference]; the status registers read at once.
+`WAIT_UNTIL` stalls the FIFO: the idle conditions hold by construction
+(one command at a time, the timeline orders the rest), the CRTC
+conditions wait for the next vertical blank [inference: no
+`CRTC_GUI_TRIG_VLINE`]. The destination caches
+(`RB2D_DSTCACHE_CTLSTAT`, `RB3D_DSTCACHE_CTLSTAT`, `RB3D_ZCACHE_CTLSTAT`,
+`DSTCACHE_CTLSTAT`): the engine writes memory directly, so a flush or a
+purge is a point in the FIFO, `DC_BUSY` <31> reading set from the write
+until the engine has reached it and the work before it is over.
+`GEN_INT_STATUS` `GUI_IDLE` <19> latches when the engine goes idle and
+interrupts with `GEN_INT_CNTL` <19>. `RBBM_SOFT_RESET`'s engine bits
+finish the command running, reset the blocks and hold the engine while
+set (the FIFO keeps its entries). The state file waits for the engine to
+drain. `ALPHABOX_RADEON_SYNC=1` brings back the synchronous engine (every
+command inside its register write, the engine always idle), for A/B
+runs.
 
 **2D engine** (`RadeonEngine.cpp`): every ROP3; solid, 8x8 mono (with
 `BRUSH_Y_X`), 8x1/1x8 mono, 32x1 and 32x32 mono and 8x8 colour brushes;
@@ -40,13 +79,70 @@ the flip function); 8, 16 and 32 bpp destinations; the side effects of a
 directions in `DP_CNTL`, `GMC_WR_MSK_DIS` and `GMC_CLR_CMP_CNTL_DIS`
 loading `DP_WRITE_MSK`/`CLR_CMP_MSK` and clearing `CLR_CMP_CNTL`).
 
-**Command processor** (`RadeonCP.cpp`): the ring buffer (with the read
-pointer written back), indirect buffers, the PIO queue, scratch
-registers written back to memory; type-0 (consecutive and one-register),
-type-1 and type-2 packets; the type-3 2D packets PAINT, PAINT_MULTI,
-BITBLT, BITBLT_MULTI, TRANS_BITBLT, HOSTDATA_BLT, POLYLINE,
-POLYSCANLINES, NEXTCHAR, PLY_NEXTSCAN, SET_SCISSORS (with the settings
-block, every brush packet, `BRUSH_Y_X`); the 3D packets below.
+**Command processor** (`RadeonCP.cpp`), on the engine's thread: the
+ring buffer -- read from `CP_RB_RPTR` towards `CP_RB_WPTR` after the
+write that publishes it has returned, the host's copy written back to
+`CP_RB_RPTR_ADDR` every 2^`RB_BLKSZ` quadwords and when the ring runs
+dry (unless `RB_NO_UPDATE`), `CP_RB_RPTR_WR` taking effect on the next
+`CP_RB_WPTR` write while `RB_RPTR_WR_ENA` (R5xx guide 5.8), `BUF_SWAP`
+for buffers in host memory --, indirect buffers, the primary PIO queue
+(`CP_CSQ_APER_PRIMARY`, 64 dwords [inference], its room in
+`CP_CSQ_CNTL` <7:0>), scratch registers written back to memory (with
+`SCRATCH_SWAP`); `CP_STAT`, `CP_CSQ_STAT` from the queues. Which streams
+run is the CSQ mode's (`CP_CSQ_CNTL` <31:28>, or `CP_CSQ_MODE`'s
+enables): the ring when the primary stream bus masters, the PIO queue
+when it is pushed, indirect buffers when the indirect stream bus
+masters. The micro-engine: ATI never documented its instruction set, so
+the packets are interpreted natively, but there is no CP without
+microcode -- until every one of the 256 ME RAM entries has been loaded
+(`CP_ME_RAM_ADDR`, then `DATAH` (8 bits) / `DATAL` pairs, R5xx guide
+5.12) with something other than zeros, neither the ring nor the PIO
+queue is read and the read pointer stays put. No source identifies the
+R100 microcode by content (Linux loads it from a firmware file,
+`radeon/R100_cp.bin`), so any complete image is taken; its CRC-32 is
+printed (OpenVMS 8.4's DECwindows server loads one with CRC-32
+`b86caa2a`). The image is in the state file. Packets: type-0
+(consecutive and one-register), type-1 and type-2; the type-3 2D
+packets PAINT, PAINT_MULTI, BITBLT, BITBLT_MULTI, TRANS_BITBLT,
+HOSTDATA_BLT, POLYLINE, POLYSCANLINES, NEXTCHAR, PLY_NEXTSCAN,
+SET_SCISSORS (with the settings block, every brush packet,
+`BRUSH_Y_X`); the 3D packets below.
+
+**The memory controller's view of the bus** (`RadeonGart.cpp`): an
+address the CP or the 3D engine fetches is the framebuffer
+(`MC_FB_LOCATION`), the AGP window (`MC_AGP_LOCATION`, reaching the bus
+at `AGP_BASE`), or the card's own PCI GART: `AIC_CNTL`
+`PCIGART_TRANSLATE_EN`, the range `AIC_LO_ADDR`..`AIC_HI_ADDR`, a page
+table at `AIC_PT_BASE` of one dword a 4 KB page holding its bus address,
+itself in the framebuffer or in host memory (Linux
+`r100_pci_gart_enable`, `r100_pci_gart_set_page`; the legacy DRM's
+`radeon_set_pcigart`). The AGP window's addresses are bus addresses in
+the host bridge's AGP aperture; on the Alpha machines that have an AGP
+port (the Titan's, the Marvel IO7's port 3) Linux builds the aperture
+from the port's scatter-gather window (`titan_agp_*`, `marvel_agp_*`),
+which the chipset model translates already. Every access is translated
+afresh (Linux notes the chip caches one translation with no way to
+flush it) [inference]; an address in none of the ranges is not decoded.
+
+**Clocks** (`RadeonTiming.cpp`): the pixel clock is the PPLL's, ref x
+FB_DIV / (REF_DIV x POST_DIV) (radeonfb: `PPLL_REF_DIV` <9:0>,
+`PPLL_DIV_n` <10:0> and the post divider code <18:16>, the set chosen by
+`CLOCK_CNTL_INDEX` <9:8>, the CRTC on the PPLL when `VCLK_ECP_CNTL` <1:0>
+is 3), with the 27 MHz reference from the card's BIOS PLL block. With
+`PPLL_CNTL` `ATOMIC_UPDATE_EN` new dividers reach the PLL only through
+`PPLL_REF_DIV`'s atomic update bit, which reads 1 until it completes, a
+microsecond later [inference: radeonfb says most chips "pass at the very
+first test"]. A VGA mode's clock is the divider set the VGA clock select
+names [inference]. The CRTC's frame lasts total pixels / pixel clock:
+the current line, `CRTC_STATUS`'s vertical blank, `CRTC_CRNT_FRAME`, the
+VBLANK and VLINE interrupts (`CRTC_VLINE_CRNT_VLINE` <11:0>) follow, and
+stay continuous across mode changes; a rate outside 10-400 Hz (no PLL
+set up yet) is taken as 60 Hz. `PLL_TEST_CNTL` <31:24>, the counter the
+BIOS times its microsecond delays with (0x7154: 27 counts, 0x715d: 135),
+counts reference clocks from what was written and stops at 255
+[inference]. `MC_STATUS` `MEM_PWRUP_COMPL_A/B` <1:0> clear for two
+microseconds after each `MEM_SDRAM_MODE_REG` write, which the BIOS polls
+for (0x6c94) [inference: the time]; `MC_IDLE` <2> is the engine's idle.
 
 **Display** (`RadeonDisplay.cpp`): extended modes, the 8-bit palette,
 the hardware cursor (mono AND/XOR, and 64x64 ARGB blended as
@@ -109,8 +205,14 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 42 checks: 24 on the 2D engine, the CP and the cursor, 18 3D
-scenes. The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+or `FAIL`. 54 checks: 11 on the command FIFO, the engine's busy time,
+the CP's streams and micro-engine, the GART and the clocks
+(`RadeonSelfTestQueue.cpp`), 24 on the 2D engine, the CP and the cursor,
+18 3D scenes, and one that every wait for idle ended. The self-test
+waits for the engine as a driver does (64 free FIFO entries, then
+`GUI_ACTIVE` clear) before it touches memory the engine draws in, and
+for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
+the queue checks are left out (44 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 
@@ -146,10 +248,11 @@ by a guest.
 
 Guest-verified: OpenVMS 8.4 DECwindows (the CP ring, indirect buffers,
 solid and 8x8 mono pattern fills, mono host data in `HOSTDATA_BLT`, the
-mono cursor), unchanged by this work: before and after it the login
-screen's last frame is identical, and the server touches the same
-registers and CP operations (their counts vary with timing; evidence in
-`lab/radeon-3d/decw-check/`).
+mono cursor) -- its server loads the microcode, enables the CP and paces
+itself on RBBM_STATUS and the scratch registers, and its login screen's
+last frame is the same with the asynchronous engine as before it
+(`lab/radeon-gaps/`); nada's Windows 2000 driver (MMIO only, waiting on
+the FIFO and the cache flush) runs its test unchanged.
 
 ## Where the documents disagree, and inferences
 
@@ -188,6 +291,6 @@ compression, hierarchical Z, `3D_CLEAR_ZMASK`/`3D_CLEAR_HIZ`), the
 lines and polygons, `INDX_BUFFER`. Silently not modelled: dithering,
 polygon offset (`SE_ZBIAS_*`), vertex blending, two-sided lighting, dual
 cones, the specular threshold, the 2D source scissors, the endian swaps
-of texture and colour surfaces, the CP microcode (kept, not executed),
-the R5xx-only packets (PRED_EXEC, COND_EXEC, WAIT_SEMAPHORE, WAIT_MEM,
+of texture and colour surfaces, the micro-engine's own program (see the
+command processor), the R5xx-only packets (PRED_EXEC, COND_EXEC, WAIT_SEMAPHORE, WAIT_MEM,
 MPEG_INDEX), `LOAD_PALETTE`, `CNTL_SMALLTEXT`.

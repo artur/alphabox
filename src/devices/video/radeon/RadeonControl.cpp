@@ -28,15 +28,17 @@
  * A register without a meaning here reads back what was written. Those
  * with one:
  *
- *   - CLOCK_CNTL_INDEX/DATA: the PLL registers. A divider change through
- *     PPLL_REF_DIV's atomic-update bit is taken at once, so the bit reads
- *     back clear;
- *   - the CRTC's live status: the current line, the vertical blank (live
- *     and latched), the frame count, the vertical-blank interrupt;
+ *   - CLOCK_CNTL_INDEX/DATA: the PLL registers (RadeonTiming.cpp: the
+ *     atomic divider update, the test counter);
+ *   - the CRTC's live status, timed by the pixel clock (RadeonTiming.cpp):
+ *     the current line, the vertical blank (live and latched), the frame
+ *     count, the vertical-blank and VLINE interrupts;
  *   - the DAC: PALETTE_INDEX/DATA are the VGA DAC's own index and colours
  *     at eight bits a channel (PALETTE_30_DATA at ten);
  *   - the DDC lines (GPIO_VGA_DDC), with a monitor answering on them;
- *   - the memory controller's idle bit and the engine's FIFO and busy bit;
+ *   - the memory controller's power-up and idle bits; the engine's FIFO,
+ *     busy bits and cache status (RadeonQueue.cpp); the FIFO-ordered
+ *     registers are queued here and act when the engine takes them;
  *   - the configuration mirrors: CONFIG_APER_*_BASE from the BARs, and
  *     PCI configuration space at 0xf00;
  *   - the VGA's I/O ports, mirrored at their own numbers (0x3b0-0x3df).
@@ -91,7 +93,12 @@ u32 CRadeon::reg_read(u32 offset, int bytes) {
       v = 0;
     return v;
   }
-  v = reg_read32(reg) >> shift;
+  // A queued register reads after the writes queued before it
+  // (RadeonQueue.cpp); the status registers at once.
+  if (is_fifo_reg(reg) && !is_status_reg(reg) && !in_engine())
+    v = read_after_queue(reg) >> shift;
+  else
+    v = reg_read32(reg) >> shift;
   if (bytes < 4)
     v &= (1u << (8 * bytes)) - 1;
   if (m_trace || m_trace_new)
@@ -125,36 +132,18 @@ void CRadeon::reg_write(u32 offset, int bytes, u32 data) {
   const u32 shift = (offset & 3) * 8;
   const u32 mask = (bytes >= 4 ? 0xffffffffu : (1u << (8 * bytes)) - 1)
                    << shift;
+  // The rendering engine's registers go through the command FIFO; the
+  // engine merges the bytes when it takes the entry.
+  if (is_fifo_reg(reg) && !in_engine()) {
+    queue_write(reg, data << shift, mask);
+    return;
+  }
   // A PLL register is merged with its own value, not with the data port's.
   const u32 old = reg == CLOCK_CNTL_DATA
                       ? m_pll[R(CLOCK_CNTL_INDEX) & PLL_INDEX_MASK]
                       : R(reg);
   const u32 merged = (old & ~mask) | ((data << shift) & mask);
   reg_write32(reg, merged, old, mask);
-}
-
-/**
- * The CRTC's vertical position, from the card's clock: the current mode's
- * total lines swept 60 times a second. With no mode set (the totals zero)
- * a 525-line VGA frame.
- **/
-u32 CRadeon::current_vline(bool *in_vblank) const {
-  u32 total, disp;
-  if (native_crtc_active()) {
-    total = (R(CRTC_V_TOTAL_DISP) & 0xfff) + 1;
-    disp = ((R(CRTC_V_TOTAL_DISP) >> 16) & 0xfff) + 1;
-  } else {
-    total = 525;
-    disp = 480;
-  }
-  if (total < disp + 1)
-    total = disp + 1;
-  const long long us = radeon_clock_us();
-  const long long frame_us = 1000000 / 60;
-  const u32 line = u32(((us % frame_us) * total) / frame_us);
-  if (in_vblank)
-    *in_vblank = line >= disp;
-  return line;
 }
 
 u32 CRadeon::reg_read32(u32 reg) {
@@ -175,8 +164,11 @@ u32 CRadeon::reg_read32(u32 reg) {
   case CRTC_VLINE_CRNT_VLINE:
     return (current_vline(nullptr) << 16) | (R(reg) & 0xfff);
 
-  case CRTC_CRNT_FRAME:
-    return u32(radeon_clock_us() / (1000000 / 60)) & 0x1fffff;
+  case CRTC_CRNT_FRAME: {
+    long long frame;
+    current_vline(nullptr, &frame);
+    return u32(frame) & 0x1fffff;
+  }
 
   case GEN_INT_STATUS: {
     std::lock_guard<std::mutex> l(m_int_lock);
@@ -202,12 +194,19 @@ u32 CRadeon::reg_read32(u32 reg) {
   case MC_STATUS:
     // <1:0> both channels' SDRAM powered up (the BIOS waits for both after
     // each mode-register write: the loop at 0x6c94), <2> the controller
-    // idle (Linux's MC_IDLE).
-    return R(MC_STATUS) | 7u;
+    // idle (Linux's MC_IDLE): no engine traffic.
+    return (R(MC_STATUS) & ~7u) | mc_pwrup_bits() | (engine_busy() ? 0 : 4u);
 
   case RBBM_STATUS:
   case RBBM_STATUS_ALT:
-    return 64 | (engine_busy() ? RBBM_ACTIVE : 0);
+    engine_idle_check();
+    return rbbm_status();
+
+  case 0x1714: // DSTCACHE_CTLSTAT
+  case 0x3254: // RB3D_ZCACHE_CTLSTAT
+  case 0x325c: // RB3D_DSTCACHE_CTLSTAT
+  case 0x342c: // RB2D_DSTCACHE_CTLSTAT
+    return cache_ctlstat(reg);
 
   case CONFIG_APER_0_BASE:
     return config_read(0, 0x10, 32) & 0xfffffff0u;
@@ -232,7 +231,14 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
   switch (reg) {
   case CLOCK_CNTL_DATA:
     if (R(CLOCK_CNTL_INDEX) & PLL_WR_EN)
-      pll_write(u8(R(CLOCK_CNTL_INDEX) & PLL_INDEX_MASK), data);
+      pll_write(u8(R(CLOCK_CNTL_INDEX) & PLL_INDEX_MASK), data, byte_mask);
+    return;
+
+  case MEM_SDRAM_MODE_REG:
+    // a mode-register write: the channels report power-up again shortly
+    // (RadeonTiming.cpp)
+    R(reg) = data;
+    m_mc_pwrup_ns = radeon_clock_ns() + 2000;
     return;
 
   case CRTC_STATUS:
@@ -292,11 +298,23 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
     vga.dac.dirty = 1;
     return;
 
-  case RBBM_SOFT_RESET:
+  case RBBM_SOFT_RESET: {
+    // CP <0>, HI <1>, SE <2>, RE <3>, PP <4>, E2 <5>, RB <6>: the engine
+    // (radeon_reg.h). The command running finishes; the blocks are reset
+    // and held while their bits are set; the FIFO keeps its entries.
     R(reg) = data;
-    if (data & 0xff) // CP, HI, SE, RE, PP, E2, RB: the engine
+    if (data & 0x7f) {
+      std::lock_guard<std::mutex> x(m_exec_mx);
+      engine_scope scope;
       engine_reset();
+      if (data & 1)
+        cp_soft_reset();
+    }
+    std::lock_guard<std::mutex> l(m_q_mx);
+    m_eng_held = (data & 0x7f) != 0;
+    m_q_work.notify_all();
     return;
+  }
 
   case CRTC_GEN_CNTL:
   case CRTC_EXT_CNTL:
@@ -327,6 +345,8 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
   }
   if (reg >= PCI_CONFIG_MIRROR && reg < PCI_CONFIG_MIRROR + 0x100)
     return; // a read-only copy of configuration space
+  if (engine_sync_reg(reg, data))
+    return;
   if (cp_reg_write(reg, data))
     return;
   if (m_3d->reg_write(reg, data))
@@ -337,39 +357,6 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
     return;
   }
   R(reg) = data;
-}
-
-/**
- * The PLLs. Nothing here generates a clock; the registers keep what the
- * BIOS writes so that it reads back, and the atomic divider update
- * completes at once.
- **/
-u32 CRadeon::pll_read(u8 index) {
-  u32 v = m_pll[index & PLL_INDEX_MASK];
-  if (index == PLL_PPLL_REF_DIV || index == PLL_P2PLL_REF_DIV)
-    v &= ~PPLL_ATOMIC_UPDATE;
-  if (index == PLL_TEST_CNTL) {
-    // <31:24>: a counter the BIOS times its delays with (0x716b in the
-    // RV200 BIOS): it clears the byte, then polls until the byte reaches a
-    // count, a bounded number of times, and repeats. Under the console's
-    // x86 emulator each poll costs tens of microseconds, so a real-rate
-    // counter made the BIOS's thousands of delays take minutes; the
-    // counter here has always run out.
-    v |= 0xff000000u;
-  }
-  if (m_trace && m_trace_budget > 0) {
-    m_trace_budget--;
-    printf("%s: pll   read  %02x -> %08x\n", devid_string, index, v);
-  }
-  return v;
-}
-
-void CRadeon::pll_write(u8 index, u32 data) {
-  if (m_trace && m_trace_budget > 0) {
-    m_trace_budget--;
-    printf("%s: pll   write %02x <- %08x\n", devid_string, index, data);
-  }
-  m_pll[index & PLL_INDEX_MASK] = data;
 }
 
 /**
@@ -456,20 +443,40 @@ void CRadeon::card_tick() {
     if (on)
       fflush(stdout);
   }
-  const long long frame = radeon_clock_us() / (1000000 / 60);
+  engine_idle_check();
+  // The CRTC since the last tick: a frame begun (its vertical blank
+  // passed) latches VBLANK; the line CRTC_VLINE_CRNT_VLINE <11:0> names
+  // passed latches VLINE.
+  bool vb;
+  long long frame;
+  const u32 line = current_vline(&vb, &frame);
+  const u32 trig = R(CRTC_VLINE_CRNT_VLINE) & 0xfff;
   std::lock_guard<std::mutex> l(m_int_lock);
-  if (frame != m_last_vblank_frame) {
-    m_last_vblank_frame = frame;
+  // the latest frame whose vertical blank has begun
+  const long long blank = vb ? frame : frame - 1;
+  if (m_last_vblank_frame < 0)
+    m_last_vblank_frame = blank;
+  if (blank > m_last_vblank_frame) {
+    m_last_vblank_frame = blank;
     R(GEN_INT_STATUS) |= INT_CRTC_VBLANK;
     R(CRTC_STATUS) |= CRTC_VBLANK_SAVE;
   }
+  if (m_last_vline_frame >= 0 && (frame > m_last_vline_frame + 1 ||
+                                  (frame == m_last_vline_frame &&
+                                   m_last_vline_line < trig && line >= trig) ||
+                                  (frame == m_last_vline_frame + 1 &&
+                                   (m_last_vline_line < trig || line >= trig))))
+    R(GEN_INT_STATUS) |= INT_CRTC_VLINE;
+  m_last_vline_frame = frame;
+  m_last_vline_line = line;
   update_int_line();
 }
 
 /// Call with m_int_lock held.
 void CRadeon::update_int_line() {
-  const bool want = (R(GEN_INT_STATUS) & R(GEN_INT_CNTL) &
-                     (INT_CRTC_VBLANK | INT_GUI_IDLE | INT_SW)) != 0;
+  const bool want =
+      (R(GEN_INT_STATUS) & R(GEN_INT_CNTL) &
+       (INT_CRTC_VBLANK | INT_CRTC_VLINE | INT_GUI_IDLE | INT_SW)) != 0;
   if (want == m_int_asserted)
     return;
   m_int_asserted = want;
