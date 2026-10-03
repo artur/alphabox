@@ -35,6 +35,7 @@
 
 #include "SystemComponent.hpp"
 #include "telnet.hpp"
+#include <mutex>
 
 #define STAGE_SIZE 8192
 
@@ -71,6 +72,17 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   std::atomic_bool StopThread{false};
+  /// The UART's registers, receive FIFO and interrupt line are changed by
+  /// more than one thread: a processor reading or writing a register (any
+  /// processor, on a machine with several), and this port's own thread
+  /// putting received characters into the FIFO. Each of them
+  /// recompute IIR and re-drive the line (eval_interrupts), so without a
+  /// lock a processor could read IIR halfway through the other thread's
+  /// recompute -- "no interrupt pending" with a character waiting -- and
+  /// dismiss the interrupt; the edge-triggered PIC line stays high and no
+  /// further interrupt ever comes (the console hangs mid-line). Recursive:
+  /// the register paths call eval_interrupts and receive with it held.
+  std::recursive_mutex m_regs;
   bool breakHit = false;
   const char *listenAddress = nullptr;
 

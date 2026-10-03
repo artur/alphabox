@@ -276,6 +276,7 @@ u64 CSerial::ReadMem(int index, u64 address, int dsize) {
   if (disabled)
     return 0xffu; // missing-UART signature
 
+  std::lock_guard<std::recursive_mutex> g(m_regs);
   if (s_trace_serial == state.iNumber && address == 2) {
     if (s_ser_iir_first < 0)
       s_ser_iir_first = state.bIIR;
@@ -351,6 +352,7 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
   if (disabled)
     return; // ignore guest writes to a disabled port
 
+  std::lock_guard<std::recursive_mutex> g(m_regs);
   if (s_trace_serial == state.iNumber) {
     printf("SERT port %d: IIR reads since last write %llu (first %02x); write "
            "reg %llu = %02x (LCR %02x IER %02x FCR %02x)\n",
@@ -472,14 +474,17 @@ void CSerial::eval_interrupts() {
   // RX-available is a level (follows the receive FIFO); THR-empty is edge-
   // latched in thre_pending (set on THR write / THRE enable, cleared on IIR
   // read) because es40's instant TX would make a plain THRE level storm.
-  state.bIIR = 0x01; // no interrupt
+  // Under m_regs and into a local first: IIR is never seen half-computed.
+  std::lock_guard<std::recursive_mutex> g(m_regs);
+  u8 iir = 0x01; // no interrupt
   if ((state.bIER & 0x01) && (state.rcvR != state.rcvW))
-    state.bIIR = 0x04; // received data available
+    iir = 0x04; // received data available
   else if ((state.bIER & 0x02) && state.thre_pending)
-    state.bIIR = 0x02; // transmitter holding register empty
-  const bool pending = (state.bIIR & 0x01) == 0;
+    iir = 0x02; // transmitter holding register empty
+  const bool pending = (iir & 0x01) == 0;
   if (state.bFCR & 0x01)
-    state.bIIR |= 0xC0; // FIFOs enabled: a 16550 says so here
+    iir |= 0xC0; // FIFOs enabled: a 16550 says so here
+  state.bIIR = iir;
 
   // Drive IRQ4 (serial0) / IRQ3 (serial1) as a level following the cause;
   // pic_set_line() makes one edge per rising transition, retracting on fall.
@@ -507,6 +512,7 @@ void CSerial::write_cstr(const char *s) { write(s, (int)strlen(s)); }
  **/
 
 int CSerial::receive(const char *data, int dsize) {
+  std::lock_guard<std::recursive_mutex> g(m_regs);
   int consumed = 0;
 
   while (dsize) {
@@ -536,6 +542,7 @@ void CSerial::drain_staging() {
   if (stageLen == 0)
     return;
 
+  std::lock_guard<std::recursive_mutex> g(m_regs);
   // Only deliver when the guest has consumed the previous character.
   // This self-clocks to the emulated CPU speed, just like a real
   // UART where the next character doesn't arrive until the baud
