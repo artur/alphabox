@@ -46,8 +46,8 @@
  *   RadeonChips.cpp    the part's facts (RadeonChip.hpp)
  *   RadeonDisplay.cpp  the primary CRTC's extended modes, the hardware
  *                      cursor, the 8-bit palette
- *   Radeon3D.cpp, RadeonTcl.cpp, RadeonRaster.cpp
- *                      the 3D engine (CRadeon3D, Radeon3D.hpp): vertex
+ *   r100/RadeonR100_3D.cpp, RadeonR100Tcl.cpp, RadeonR100Raster.cpp
+ *                      the 3D engine (CRadeon3D, RadeonR100_3D.hpp): vertex
  *                      fetch and the 3D packets, TCL, rasteriser and
  *                      pixel pipeline
  *   RadeonSelfTest.cpp ALPHABOX_RADEON_SELFTEST: the engines driven
@@ -67,7 +67,7 @@
  * ati-vga (hw/display/ati*.c, GPL-2.0-or-later, BALATON Zoltan), which
  * models the Rage 128 Pro and the Radeon RV100. The code is this
  * project's own; where it follows QEMU's reading of a register it says so.
- * The 3D engine's sources are listed in Radeon3D.hpp.
+ * The 3D engine's sources are listed in RadeonR100_3D.hpp.
  */
 
 #if !defined(INCLUDED_RADEON_H)
@@ -84,7 +84,7 @@
 #include <thread>
 #include <vector>
 
-#include "Radeon3D.hpp"
+#include "RadeonR100_3D.hpp"
 #include "RadeonChip.hpp"
 #include "RadeonRegs.hpp"
 #include "VGACard.hpp"

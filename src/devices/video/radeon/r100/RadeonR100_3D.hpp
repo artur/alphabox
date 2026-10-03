@@ -31,11 +31,13 @@
  * radeon_exa_render.c (Render through the 3D engine). Where a behaviour
  * is inferred rather than read off a driver, the code says so.
  *
- *   Radeon3D.cpp      register ports, packets, vertex fetch, primitive
- *                     assembly, the TCL-bypass setup, clipping
- *   RadeonTcl.cpp     transform, lighting, fog, texture coordinates
- *   RadeonRaster.cpp  triangles, lines, points; textures, combiners, fog,
- *                     alpha/stencil/Z tests, blending, the colour write
+ *   RadeonR100_3D.cpp     register ports, packets, vertex fetch,
+ *                         primitive assembly, the TCL-bypass setup,
+ *                         clipping
+ *   RadeonR100Tcl.cpp     transform, lighting, fog, texture coordinates
+ *   RadeonR100Raster.cpp  triangles, lines, points; textures, combiners,
+ *                         fog, alpha/stencil/Z tests, blending, the
+ *                         colour write
  *
  * The engine runs on the card's engine thread (RadeonQueue.cpp): a draw
  * happens when the engine takes the register write or packet that
@@ -250,7 +252,7 @@ private:
   u32 mem_read32(u32 mc);
   u8 mem_read8(u32 mc);
 
-  // --- ports and packets (Radeon3D.cpp) -------------------------------------
+  // --- ports and packets (RadeonR100_3D.cpp) -------------------------------------
   u32 m_vec_index = 0, m_vec_comp = 0;
   u32 m_scl_index = 0;
   u32 m_stipple[32] = {};
@@ -288,7 +290,7 @@ private:
   void to_window(RadeonVertex &v) const;
   void bypass_to_window(RadeonVertex &v) const;
 
-  // --- TCL (RadeonTcl.cpp) ---------------------------------------------------
+  // --- TCL (RadeonR100Tcl.cpp) ---------------------------------------------------
   void tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out);
   /// The lit colours for normal `n` at eye position `P` (two-sided
   /// lighting calls it again with the normal negated).
@@ -296,7 +298,7 @@ private:
                  float col[4], float spec[4]);
   const float *matrix(u32 sel) const { return &m_vec[(sel & 15) * 4][0]; }
 
-  // --- raster and pixel pipeline (RadeonRaster.cpp) --------------------------
+  // --- raster and pixel pipeline (RadeonR100Raster.cpp) --------------------------
   struct texunit_t {
     bool enabled;
     u32 filter, format, offset, cblend, ablend, tfactor;

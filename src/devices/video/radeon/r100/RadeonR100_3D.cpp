@@ -22,7 +22,7 @@
  * \file
  * The Radeon's 3D engine, front half: the register ports, the 3D packets,
  * vertex fetch and decode, primitive assembly, the TCL-bypass setup and
- * clipping. See Radeon3D.hpp for where the meanings come from.
+ * clipping. See RadeonR100_3D.hpp for where the meanings come from.
  *
  * Vertices reach the engine four ways:
  *   - in the packet: 3D_DRAW_IMMD (0x29) and 3D_DRAW_IMMD_2 (0x35);
@@ -53,7 +53,7 @@
  * counted but not used.
  **/
 
-#include "Radeon3D.hpp"
+#include "RadeonR100_3D.hpp"
 #include "Radeon.hpp"
 
 #include <algorithm>

@@ -22,7 +22,7 @@
  * \file
  * The Radeon's 3D engine, back half: the rasteriser and the pixel
  * pipeline. Register meanings are radeon_reg.h's names as Mesa's r100
- * driver and X.org's composite use them (see Radeon3D.hpp):
+ * driver and X.org's composite use them (see RadeonR100_3D.hpp):
  *
  * Setup and rasteriser (SE_CNTL, RE_*):
  *   - vertices snap to SE_CNTL's ROUND_PREC <31:30> (1/16..1/2 pixel) by
@@ -90,7 +90,7 @@
  **/
 
 #include "Radeon.hpp"
-#include "Radeon3D.hpp"
+#include "RadeonR100_3D.hpp"
 
 #include <algorithm>
 #include <cmath>

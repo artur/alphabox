@@ -26,7 +26,7 @@
  * (radeon_state.c, radeon_state_init.c, radeon_tcl.c):
  *
  *   - state memory: 4-float vectors and scalars loaded through
- *     SE_TCL_VECTOR/SCALAR_INDX_REG and _DATA_REG (Radeon3D.cpp). A
+ *     SE_TCL_VECTOR/SCALAR_INDX_REG and _DATA_REG (RadeonR100_3D.cpp). A
  *     matrix is four vectors from 4 * its number, one row each (Mesa's
  *     upload_matrix writes column-major GL matrices transposed);
  *     SE_TCL_MATRIX_SELECT_0 picks the modelview <3:0> and the inverse
@@ -69,7 +69,7 @@
  **/
 
 #include "Radeon.hpp"
-#include "Radeon3D.hpp"
+#include "RadeonR100_3D.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -222,7 +222,7 @@ void CRadeon3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
     // reversed and the same material -- Mesa's r100 driver leaves two-sided
     // lighting to the hardware only when the front and back materials are
     // equal (check_twoside_fallback); the triangle's facing picks the set
-    // (Radeon3D.cpp) [inference: how the chip carries the second set is
+    // (RadeonR100_3D.cpp) [inference: how the chip carries the second set is
     // not documented].
     if (ucp & (1u << 11)) {
       memcpy(out.col_back, in.col, sizeof(out.col_back));
