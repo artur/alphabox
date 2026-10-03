@@ -38,7 +38,12 @@ RUN=$WORK/runs/d3dcheck
 
 # Build.
 B=$(mktemp -d) || exit 2
-{ cat "$NADA/lib/windows/kernel32.def"; printf '    LoadLibraryA\n    GetProcAddress\n    Sleep\n    GetTickCount\n'; } > "$B/kernel32.def"
+# The imports d3dcheck needs, added only where nada's kernel32.def lacks them
+# (newer nada trees have them, and reject a duplicate import).
+cp "$NADA/lib/windows/kernel32.def" "$B/kernel32.def"
+for f in LoadLibraryA GetProcAddress Sleep GetTickCount; do
+  grep -qw "$f" "$B/kernel32.def" || printf '    %s\n' "$f" >> "$B/kernel32.def"
+done
 "$NADA/nada" -t alpha-windows -o "$B/D3DCHECK.EXE" -I "$NADA/include" \
   -I "$NADA/include/windows" "$T/d3dcheck/d3dcheck.c" "$NADA/lib/windows.c" \
   "$NADA/lib/printf.c" "$NADA/lib/stdio.c" "$NADA/lib/string.c" \
