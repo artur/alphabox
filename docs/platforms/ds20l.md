@@ -131,8 +131,26 @@ its HALT (`tsu-ds20l-net-ei`). A DE500 does not work with this console:
 `show config` lists `ewa0.0.0.3.0` with no station address (all eight
 DE500s of the slot probe too) and `boot ewa0` answers `device ewa0 is
 invalid` (`tsu-ds20l-net`), although OpenVMS drives DE500s on this board.
-The V6.6 console's DE500 driver stops somewhere in its initialisation;
-not investigated.
+
+**Why a DE500 does not work (2026-10-03): this console has no DE500
+driver.** Its driver table (at 0x13b400 in memory: procedure descriptor,
+name, start phase) lists `ei` and `eg` among the phase-5 drivers but no
+`ew`, where the DS10's V7.3-1 console has `ew` between `isp1020` and `ei`;
+and the tulip driver's own strings (`TULIP CSRS:`, `Edit 21143 EEROM
+parameters.`) are absent from the image. The DE500 names come from the
+console's shared PCI name table, which is why the card is named and given
+a device name without anything to start it: the console never touches its
+registers (a `DEBUG_NIC` build saw no CSR access at all). Nothing in the
+emulation is missing: a real DS20L with this firmware would do the same.
+OpenVMS has its own driver, so DE500s work under OpenVMS. For network boot on this board use a DE600
+(`de600`, or another 8255x).
+
+The ES40's console speed patches were applied to this console too, until
+2026-10-03: in this image `0x68320` is a routine's `ret`, `0x8bc94` a
+`ldq gp` restoring the caller's frame pointer and `0x8bb78`/`0x8bc0c`
+arithmetic. The row no longer patches it (see the DS10 packet, where one of
+them broke the power-up network test). The console still reaches `P00>>>`,
+passes `Testing ei* devices.` and network-boots from a DE600 without them.
 
 Not done here: a CD boot (the CD is the same media the DS20E and DS10 boot
 from).
@@ -145,7 +163,7 @@ from).
 | 3 | The machine's real slots and interrupt wiring, from its own assignments | L3 | done for pin A, checked with OpenVMS; pins B-D of two devices guessed |
 | 4 | Its device set: what belongs on the board rather than the ES40's | L3 | open |
 | 5 | Console listings against a reference | L3 | blocked: no reference |
-| 6 | Console tests, guest boot | L4-L5 | L4: network boot with a DE600 (not a DE500); L5: OpenVMS 8.4 to login, 1 and 2 CPUs |
+| 6 | Console tests, guest boot | L4-L5 | L4: network boot with a DE600 (the V6.6-10 console has no DE500 driver); L5: OpenVMS 8.4 to login, 1 and 2 CPUs |
 
 ## Rules
 

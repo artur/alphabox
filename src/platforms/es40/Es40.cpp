@@ -74,9 +74,12 @@ void es40_board_devices(CConfigurator *cfg, CSystem *sys) {
 
 /**
  * Words the loader patches into the decompressed console for speed (unless
- * built with SRM_NO_SPEEDUPS). They are addresses in the ES40's console;
- * every Tsunami row applies them because the emulator always did, and
- * nobody has checked what they hit in the other consoles.
+ * built with SRM_NO_SPEEDUPS). They are addresses in the ES40's console
+ * and only the ES40 row applies them: in another console the same words are
+ * other code. In the DS10's, 0x68320 is the first instruction of
+ * mop_loop_requester (its stack-frame allocation, so the power-up network
+ * test returned through a clobbered frame), and 0x14248..0x142c8 are its
+ * PALcode's I/O addresses (docs/platforms/ds10.md).
  */
 const rom_patch es40_console_patches[] = {
     {U64(0x14248), 0xe7e00000}, // e7e00000 = BEQ r31, +0

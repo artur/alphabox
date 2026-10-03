@@ -57,7 +57,7 @@ Three layers, each added in a different way:
 | --- | --- |
 | AlphaServer ES40 | emulated: the machine this project is about |
 | AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS ([packet](platforms/ds20e.md)) |
-| AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works with the power-up network test off ([packet](platforms/ds10.md)) |
+| AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works, and the power-up network test passes ([packet](platforms/ds10.md)) |
 | AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
 | AlphaServer DS25 (Titan) | L5: its update utility installs its console (V7.3-2) in the flash, with the on-board AIC-7899 present as far as the console needs it (configuration space and expansion ROM, no SCSI); network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one and two processors, with NIC interrupts checked on all four hoses; `show config` matches a real DS25's (owner's guide) in name, core logic but the Cchip pass, on-board places and slot numbering ([packet](platforms/ds25.md)) |
@@ -189,8 +189,9 @@ Facts that cost time to find and apply to the next machine:
   that the emulation is right.
 - **Speed patches are addresses in one console.** The ES40's console
   patches, applied to the ES45's console, replaced words in its scheduler
-  and it hung silently in its idle loop. A board row has its own patch
-  table or none.
+  and it hung silently in its idle loop; applied to the DS10's, one of
+  them removed a routine's stack-frame allocation and its power-up network
+  test halted. A board row has its own patch table or none.
 - **A console can carry its own answers.** The Marvel console checks a
   magic word in low memory (0xcafebeef at 0xfc: its developers'
   simulator) and then builds every reply its management processors would

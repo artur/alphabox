@@ -42,20 +42,17 @@ static const platform_config platforms[] = {
     // until its row exists.
     {"ds20e", "AlphaServer DS20E", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
-     ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0,
-     es40_console_patches},
+     ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr},
     // Under construction (docs/platforms/ds10.md): one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,
      "DS10SRM.ROM", FW_ROM_HEADER, 1, SECONDARIES_AFTER_ARBITRATION,
-     ds10_board_devices, ds10_pci_interrupt, ds10_slot_refusal, 0,
-     es40_console_patches},
+     ds10_board_devices, ds10_pci_interrupt, ds10_slot_refusal, 0, nullptr},
     // Under construction (docs/platforms/ds20l.md): its console image comes
     // as an update file, with no header in front of it.
     {"ds20l", "AlphaServer DS20L", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, SECONDARIES_AFTER_ARBITRATION,
-     es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, 0,
-     es40_console_patches},
+     es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, 0, nullptr},
     // Under construction (docs/platforms/marvel.md): two EV7s, each with its
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
