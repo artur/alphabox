@@ -709,15 +709,16 @@ void clip_plane(std::vector<RadeonVertex> &poly, const float pl[4]) {
  * as a fan.
  **/
 void CRadeonR100_3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
-                              const RadeonVertex &c3, int flat_index) {
+                              const RadeonVertex &c3,
+                              const RadeonVertex &prov) {
   if (!a.clip_space) {
     const RadeonVertex *v[3] = {&a, &b, &c3};
-    raster_triangle(v, v[flat_index]);
+    raster_triangle(v, &prov);
     return;
   }
   std::vector<RadeonVertex> poly = {a, b, c3};
   // flat shading takes the provoking vertex's colours to every new vertex
-  RadeonVertex flat = flat_index == 0 ? a : flat_index == 1 ? b : c3;
+  RadeonVertex flat = prov;
   static const float planes[6][4] = {{1, 0, 0, 1}, {-1, 0, 0, 1},
                                      {0, 1, 0, 1}, {0, -1, 0, 1},
                                      {0, 0, 1, 0}, {0, 0, -1, 1}};
@@ -763,15 +764,39 @@ void CRadeonR100_3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
  * alternate their winding so every triangle keeps the strip's; a
  * rectangle list draws each three vertices as the rectangle they span
  * (the fourth corner v0 + v2 - v1, as X.org's composite and Mesa's blit
- * use it); quads and polygons draw as fans. The provoking vertex for flat
- * shading is SE_CNTL<7:6>: the triangle's first, second or third vertex,
- * or 3 its last.
+ * use it); quads and polygons draw as fans.
+ *
+ * The provoking vertex for flat shading is SE_CNTL FLAT_SHADE_VTX <7:6>:
+ * the primitive's vertex 0, 1 or 2 in the order the primitive was sent,
+ * or 3 (VTX_LAST) its last. That the numbering is the primitive's own and
+ * not the winding the strip's odd triangles are drawn in follows from
+ * how the drivers use the field: Mesa's r100 driver (radeon_tcl.c
+ * radeonTclPrimitive) sends GL strips and fans as the chip's strips and
+ * fans with VTX_LAST -- GL's provoking vertex of strip triangle i is
+ * v[i+2], odd or even -- and a GL polygon as a fan with VTX_0, GL's first
+ * vertex; Direct3D, which the D3D code (VTX_PIX_CENTER_D3D) serves, flat
+ * shades every strip triangle i with v[i]. A quad (and a rectangle) is one
+ * primitive and one colour: its vertex 0..2, or with VTX_LAST its last
+ * (GL's quad provoking vertex) [inference: Mesa never sends the chip
+ * quads]. A line takes its first vertex with VTX_0, its second otherwise
+ * [inference for VTX_2].
  **/
 void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
   const size_t n = v.size();
-  int flat_sel = int((c.R(SE_CNTL) >> 6) & 3);
-  if (flat_sel == 3)
-    flat_sel = 2;
+  const int flat_sel = int((c.R(SE_CNTL) >> 6) & 3);
+  // the provoking vertex of a triangle whose vertices, in the order the
+  // primitive sent them, are i0, i1, i2
+  auto prov3 = [&](size_t i0, size_t i1, size_t i2) -> const RadeonVertex & {
+    return flat_sel == 0 ? v[i0] : flat_sel == 1 ? v[i1] : v[i2];
+  };
+  // of a quad i0..i3
+  auto prov4 = [&](size_t i0, size_t i1, size_t i2,
+                   size_t i3) -> const RadeonVertex & {
+    return flat_sel == 0   ? v[i0]
+           : flat_sel == 1 ? v[i1]
+           : flat_sel == 2 ? v[i2]
+                           : v[i3];
+  };
   auto clipped = [&](RadeonVertex &x) {
     if (x.clip_space) {
       RadeonVertex y = x;
@@ -779,6 +804,10 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
       return y;
     }
     return x;
+  };
+  auto line = [&](RadeonVertex &x, RadeonVertex &y) {
+    const RadeonVertex a = clipped(x), b = clipped(y);
+    raster_line(a, b, flat_sel == 0 ? &a : &b);
   };
   m_prims++;
   switch (prim) {
@@ -791,31 +820,31 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
     return;
   case PRIM_LINE_LIST:
     for (size_t i = 0; i + 1 < n; i += 2)
-      raster_line(clipped(v[i]), clipped(v[i + 1]));
+      line(v[i], v[i + 1]);
     return;
   case PRIM_LINE_STRIP:
   case PRIM_LINE_LOOP:
     line_stipple_count = 0;
     for (size_t i = 0; i + 1 < n; i++)
-      raster_line(clipped(v[i]), clipped(v[i + 1]));
+      line(v[i], v[i + 1]);
     if (prim == PRIM_LINE_LOOP && n > 2)
-      raster_line(clipped(v[n - 1]), clipped(v[0]));
+      line(v[n - 1], v[0]);
     return;
   case PRIM_TRI_LIST:
     for (size_t i = 0; i + 2 < n; i += 3)
-      triangle(v[i], v[i + 1], v[i + 2], flat_sel);
+      triangle(v[i], v[i + 1], v[i + 2], prov3(i, i + 1, i + 2));
     return;
   case PRIM_TRI_FAN:
   case PRIM_POLYGON:
     for (size_t i = 1; i + 1 < n; i++)
-      triangle(v[0], v[i], v[i + 1], flat_sel);
+      triangle(v[0], v[i], v[i + 1], prov3(0, i, i + 1));
     return;
   case PRIM_TRI_STRIP:
     for (size_t i = 0; i + 2 < n; i++) {
       if (i & 1)
-        triangle(v[i + 1], v[i], v[i + 2], flat_sel);
+        triangle(v[i + 1], v[i], v[i + 2], prov3(i, i + 1, i + 2));
       else
-        triangle(v[i], v[i + 1], v[i + 2], flat_sel);
+        triangle(v[i], v[i + 1], v[i + 2], prov3(i, i + 1, i + 2));
     }
     return;
   case PRIM_RECT_LIST:
@@ -826,20 +855,25 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
       const size_t nf = offsetof(RadeonVertex, clip_space) / sizeof(float);
       for (size_t k = 0; k < nf; k++)
         pd[k] = p0[k] + p2[k] - p1[k];
-      triangle(v[i], v[i + 1], v[i + 2], flat_sel);
-      triangle(v[i], v[i + 2], d, flat_sel);
+      const RadeonVertex &pv = prov3(i, i + 1, i + 2);
+      triangle(v[i], v[i + 1], v[i + 2], pv);
+      triangle(v[i], v[i + 2], d, pv);
     }
     return;
   case PRIM_QUAD_LIST:
     for (size_t i = 0; i + 3 < n; i += 4) {
-      triangle(v[i], v[i + 1], v[i + 2], flat_sel);
-      triangle(v[i], v[i + 2], v[i + 3], flat_sel);
+      const RadeonVertex &pv = prov4(i, i + 1, i + 2, i + 3);
+      triangle(v[i], v[i + 1], v[i + 2], pv);
+      triangle(v[i], v[i + 2], v[i + 3], pv);
     }
     return;
   case PRIM_QUAD_STRIP:
+    // quad i is v[2i], v[2i+1], v[2i+3], v[2i+2] around; its vertices
+    // count in the order sent, so VTX_LAST is v[2i+3] (GL's)
     for (size_t i = 0; i + 3 < n; i += 2) {
-      triangle(v[i], v[i + 1], v[i + 3], flat_sel);
-      triangle(v[i], v[i + 3], v[i + 2], flat_sel);
+      const RadeonVertex &pv = prov4(i, i + 1, i + 2, i + 3);
+      triangle(v[i], v[i + 1], v[i + 3], pv);
+      triangle(v[i], v[i + 3], v[i + 2], pv);
     }
     return;
   case PRIM_TRI_FLAG:
@@ -847,7 +881,7 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
     // drawn as a triangle list [inference: no driver uses it; Mesa's TCL
     // table leaves it unused]
     for (size_t i = 0; i + 2 < n; i += 3)
-      triangle(v[i], v[i + 1], v[i + 2], flat_sel);
+      triangle(v[i], v[i + 1], v[i + 2], prov3(i, i + 1, i + 2));
     return;
   case PRIM_POINT_LIST_3:
     // 3VRT_POINT_LIST and 3VRT_LINE_LIST: Mesa's radeon_sanity.c wants a
@@ -865,7 +899,7 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
   case PRIM_LINE_LIST_3:
     for (size_t i = 0; i + 2 < n; i += 3)
       for (size_t k = 0; k < 3; k++)
-        raster_line(clipped(v[i + k]), clipped(v[i + (k + 1) % 3]));
+        line(v[i + k], v[i + (k + 1) % 3]);
     return;
   default:
     warn_once(8 + int(prim),

@@ -356,13 +356,71 @@ premultiplied alpha).
   (`SCALE_DITHER_ENABLE`); Mesa's driconf options name the modes, the
   pattern (4x4 Bayer) and the error's arithmetic are inferences.
 
-**Rasterisation rules.** No source documents the R100's setup
-arithmetic -- its sub-pixel precision beyond `SE_CNTL`'s `ROUND_PREC`
-and `ROUND_MODE` fields, its fill convention, its Z interpolation
-precision. The model snaps vertices as those fields say and then
-rasterises in double precision with the top-left rule and attribute
-planes evaluated at pixel centres; that stays as it is until a source
-says otherwise.
+**Rasterisation rules.** What the registers document is modelled as
+documented: every vertex of every primitive -- points' and lines' too --
+is snapped to `SE_CNTL`'s `ROUND_PREC` (1/16 to 1/2 pixel) by its
+`ROUND_MODE` (truncate, round, round with ties to even or to odd, read
+from radeon_reg.h's names), and `VTX_PIX_CENTER` puts pixel centres at
++0.5 (OpenGL) or on the integers (Direct3D). The provoking vertex
+(`FLAT_SHADE_VTX` <7:6>) counts a primitive's vertices in the order they
+were sent: a strip's odd triangles are drawn with their winding swapped,
+but their vertex 0 is still v[i] -- Mesa sends GL strips and fans as the
+chip's strips and fans with `VTX_LAST` (GL's provoking vertex of strip
+triangle i is v[i+2]) and GL polygons as fans with `VTX_0`, and
+Direct3D flat shades strip triangle i with v[i]. A quad is one primitive
+and one colour, its last vertex with `VTX_LAST` [inference: Mesa never
+sends the chip quads]. Flat, solid and Gouraud shading apply to lines and
+points per attribute group as to triangles.
+
+What no source documents -- the setup arithmetic after snapping, the fill
+convention, the line rasteriser, the Z interpolation precision, the
+texture-coordinate interpolator's precision, how the level of detail is
+estimated -- the model takes as exact: double precision, the top-left
+rule, attribute planes evaluated at pixel centres, texture coordinates
+sampled where they fall (a texel boundary exactly at a pixel centre goes
+to the texel after it), the level of detail from forward differences and
+the trilinear weight its fractional part (GL's definition). A one-pixel
+line runs between its snapped endpoints: along the major axis the pixels
+whose centres the segment passes (start in, end out), across it the one
+whose centre is nearest (GL's diamond-exit rule between diamonds), its
+attributes at the centre's projection onto the line. 4-bit and 5-bit
+texture channels widen by replicating their bits (0xF is 1.0), as
+GL's conversion c / (2^n - 1) has it and the other cards' models do.
+
+**Against Direct3D's software rasteriser.** `test/tools/d3d_check.sh`
+on a Windows 2000 guest with nada's nadarad DirectDraw/Direct3D 7 HAL
+(800x600x16; `lab/radeon-d3d/`) compares the HAL with d3dim700's RGB
+rasteriser. That rasteriser is not a reference for the R100; what the
+scenes that differ show:
+
+- point, modulate, perspective, alphatest, texalpha, colorkey, mipmap,
+  multitex, tex4444: every differing pixel lies on a texel boundary that
+  falls exactly on a pixel centre (scenes with whole-pixel corners; those
+  at x.3 match). The RGB rasteriser's fixed-point interpolation takes the
+  texel before the boundary at some boundaries and not at others (in
+  `point` only at s = 0.5); the model takes the one after. The R100's
+  interpolator precision is not documented: undecidable without a card.
+- tex4444 also differs by up to 17 off the boundaries: the RGB rasteriser
+  widens 4 bits by shifting (0xF is 240), the model by replicating
+  (within d3dcheck's tolerance).
+- miplinear (and mipramp, a probe): the trilinear weight is the fraction
+  of the level of detail in the model (GL's), linear in the texel ratio
+  in the RGB rasteriser (up to 0.086 apart, 22 of 255); plus the boundary
+  ties. Undecidable without a card.
+- lines (close since the sub-pixel line rule, 350 -> 99 pixels): the HAL
+  now follows the exact line through the endpoints; the RGB rasteriser
+  does at 85-100% of the columns, and draws the last pixel of a line
+  ending on a pixel centre (Direct3D's `LASTPIXEL`, which nadarad does not
+  pass on).
+- gouraud, flat (close): pixels whose centres lie exactly on an edge; the
+  model applies the top-left rule, the RGB rasteriser does not always.
+- clip (close): the clipped triangle's vertices are fractional and
+  nadarad programs truncation to 1/16 pixel, which moves the clipped
+  edge up across a row of pixel centres -- the R100 snapping as
+  documented.
+- wireframe (close): the triangles' edges as lines through the vertices;
+  the RGB rasteriser walks the edges its own way.
+- zbuffer (close, one pixel): a Z tie where the triangles cross.
 
 ## How it is checked
 
@@ -383,18 +441,18 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 68 checks: 11 on the command FIFO, the engine's busy time,
+or `FAIL`. 71 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
 (`RadeonSelfTestQueue.cpp`), 4 on the microcode lookups (the known-image
 table, synthetic images of each word width, the R100 and R200 packet
 sets, the self-test's own unknown image; `RadeonMicrocode.cpp`), 26 on
 the 2D engine, the CP and the cursor,
-26 on the 3D engine (the generation's scenes, run between the 2D checks
+29 on the 3D engine (the generation's scenes, run between the 2D checks
 and the last two 2D/CP ones), and one that every wait for idle ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (58 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+the queue checks are left out (61 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 
@@ -422,6 +480,9 @@ reference, differing pixels in white):
 | 21-floatz-wbuffer-fastclear | crossing triangles in 24- and 32-bit float Z and the 24-bit W buffer (where the crossing moves); a `3D_CLEAR_ZMASK` fast clear deciding a later depth test |
 | 22-tcl-twoside-blend | TCL lighting of front and back faces without and with `LIGHT_TWOSIDE`; TCL back-face culling; vertex blending of two matrices |
 | 23-prims-r200-packets | `TRI_TYPE_2`, the 3-vertex point and line lists; `INDX_BUFFER` after an index-less `3D_DRAW_INDX` with the R200 packets switched on, and nothing without |
+| 24-flat-provoking | `FLAT_SHADE_VTX_0` and `_LAST` on a triangle strip (the odd triangles' vertices counted as sent, not as wound), `_LAST` and `_1` on quads (one colour each), flat lines |
+| 25-round-modes | the four `ROUND_MODE`s at half-pixel `ROUND_PREC` on ties that tell them apart, under both pixel-centre conventions; a point and a line snapped too |
+| 26-line-subpixel | one-pixel lines between sub-pixel endpoints, both majors, both directions |
 
 Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
 without a frame.

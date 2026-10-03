@@ -170,8 +170,9 @@ private:
                       RadeonVertex &out);
   bool tcl_enabled() const;
   void assemble(u32 prim, std::vector<RadeonVertex> &v);
+  /// A triangle; `prov` is the vertex flat shading takes its colours from.
   void triangle(const RadeonVertex &a, const RadeonVertex &b,
-                const RadeonVertex &c, int flat_index);
+                const RadeonVertex &c, const RadeonVertex &prov);
   /// 3D_CLEAR_ZMASK: the fast Z clear (HyperZ)
   void clear_zmask(u32 start, u32 count, u32 mask);
   void to_window(RadeonVertex &v) const;
@@ -218,8 +219,16 @@ private:
   raster_t rs;
   void raster_setup();
   void raster_triangle(const RadeonVertex *v[3], const RadeonVertex *prov);
-  void raster_line(const RadeonVertex &a, const RadeonVertex &b);
-  void raster_point(const RadeonVertex &a);
+  /// `prov`: the vertex flat shading takes its colours from (the line's
+  /// second vertex when null).
+  void raster_line(const RadeonVertex &a, const RadeonVertex &b,
+                   const RadeonVertex *prov = nullptr);
+  void raster_point(const RadeonVertex &a, const RadeonVertex *prov = nullptr);
+  /// SE_CNTL's shading of a line's or a point's fragment: solid, flat
+  /// (from `prov`) or the fragment's own, per attribute group.
+  void shade_fragment(frag_t &f, const RadeonVertex *prov) const;
+  /// A window coordinate snapped as SE_CNTL ROUND_MODE and ROUND_PREC say.
+  double snap(double v) const;
   void fragment(frag_t &f);
   /// The byte address of pixel (x, y) of a surface: linear, or micro-tiled
   /// (32-byte tiles, Mesa radeon_tile.c).

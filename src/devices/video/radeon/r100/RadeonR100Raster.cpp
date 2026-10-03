@@ -25,8 +25,9 @@
  * driver and X.org's composite use them (see RadeonR100_3D.hpp):
  *
  * Setup and rasteriser (SE_CNTL, RE_*):
- *   - vertices snap to SE_CNTL's ROUND_PREC <31:30> (1/16..1/2 pixel) by
- *     ROUND_MODE <29:28> (truncate, round); pixel centres are at +0.5
+ *   - vertices (of every primitive) snap to SE_CNTL's ROUND_PREC <31:30>
+ *     (1/16..1/2 pixel) by ROUND_MODE <29:28> (truncate, round, round
+ *     with ties to even or to odd); pixel centres are at +0.5
  *     with VTX_PIX_CENTER_OGL <27>, at the integer otherwise (Direct3D);
  *   - culling: front faces wind as FFACE_CULL_DIR <0> says (1
  *     counter-clockwise, as the screen shows it) -- GL's winding, which
@@ -44,7 +45,9 @@
  *     linear in screen space; texture coordinates perspective-correct
  *     when the unit's TXFORMAT PERSPECTIVE_ENABLE <31> is set, then
  *     divided by Q;
- *   - lines one pixel wide by Bresenham without the last pixel, or with
+ *   - lines one pixel wide through the snapped endpoints (the pixels
+ *     whose centres the segment passes along its major axis, the nearest
+ *     across it) without the last pixel, or with
  *     WIDELINE_ENABLE <20> SE_LINE_WIDTH (12.4 pixels) wide as a quad;
  *     the line pattern RE_LINE_PATTERN when PP_CNTL PATTERN_ENABLE <2>;
  *     points one pixel; the polygon stipple (32x32, RE_STIPPLE_DATA, RE_MISC
@@ -1144,18 +1147,11 @@ inline double eval(const plane_t &p, double x, double y) {
 void CRadeonR100_3D::raster_triangle(const RadeonVertex *vin[3],
                                      const RadeonVertex *prov) {
   const u32 se = rs.se_cntl;
-  // snap to the setup engine's precision
-  static const double prec[4] = {16, 8, 4, 2};
-  const double q = prec[(se >> 30) & 3];
-  const bool round = ((se >> 28) & 3) != 0;
   const double centre = (se & (1u << 27)) ? 0.0 : 0.5; // D3D: +0.5 shift
   double x[3], y[3];
   for (int i = 0; i < 3; i++) {
-    double vx = double(vin[i]->x) * q, vy = double(vin[i]->y) * q;
-    vx = round ? std::floor(vx + 0.5) : std::floor(vx);
-    vy = round ? std::floor(vy + 0.5) : std::floor(vy);
-    x[i] = vx / q + centre;
-    y[i] = vy / q + centre;
+    x[i] = snap(vin[i]->x) + centre;
+    y[i] = snap(vin[i]->y) + centre;
   }
   double area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
   if (area == 0.0 || !std::isfinite(area))
@@ -1169,12 +1165,13 @@ void CRadeonR100_3D::raster_triangle(const RadeonVertex *vin[3],
   if (mode == 0)
     return;
   if (mode == 1 || mode == 2) {
+    // the triangle's provoking vertex shades its points and edges flat
     if (mode == 1)
       for (int i = 0; i < 3; i++)
-        raster_point(*vin[i]);
+        raster_point(*vin[i], prov);
     else
       for (int i = 0; i < 3; i++)
-        raster_line(*vin[i], *vin[(i + 1) % 3]);
+        raster_line(*vin[i], *vin[(i + 1) % 3], prov);
     return;
   }
   // orient so that the inside is positive
@@ -1398,23 +1395,96 @@ static void frag_from(CRadeonR100_3D::frag_t &f, const RadeonVertex &v,
   }
 }
 
-void CRadeonR100_3D::raster_point(const RadeonVertex &a) {
+/**
+ * A window coordinate snapped to the setup engine's grid: SE_CNTL
+ * ROUND_PREC <31:30> 1/16, 1/8, 1/4 or 1/2 pixel, ROUND_MODE <29:28>
+ * truncating (towards minus infinity, as a two's complement fixed-point
+ * value truncates), rounding, or rounding with a tie going to the even or
+ * the odd step (radeon_reg.h ROUND_MODE_TRUNC, _ROUND, _ROUND_EVEN,
+ * _ROUND_ODD; the modes are read from their names). Every vertex of every
+ * primitive is snapped (Mesa: TRUNC and 1/8 for GL, ROUND and 1/4 for its
+ * blits; nadarad: TRUNC and 1/16).
+ **/
+double CRadeonR100_3D::snap(double v) const {
+  static const double prec[4] = {16, 8, 4, 2};
+  const u32 se = rs.se_cntl;
+  const double q = prec[(se >> 30) & 3];
+  const double s = v * q;
+  double r;
+  switch ((se >> 28) & 3) {
+  case 0:
+    r = std::floor(s);
+    break;
+  case 1:
+    r = std::floor(s + 0.5);
+    break;
+  default: {
+    r = std::floor(s + 0.5);
+    if (r - s == 0.5) { // a tie: r is the step above
+      const bool odd = std::fmod(r, 2.0) != 0;
+      if (odd == (((se >> 28) & 3) == 2)) // even mode with r odd, or odd
+        r -= 1.0;                         // mode with r even: the other
+    }
+    break;
+  }
+  }
+  return r / q;
+}
+
+/**
+ * SE_CNTL's shading per attribute group for a fragment that is a vertex's
+ * or a line's: DIFFUSE <9:8>, ALPHA <11:10>, SPECULAR <13:12>, FOG <15:14>
+ * each solid (RE_SOLID_COLOR; no specular; no fog), flat (the provoking
+ * vertex's) or Gouraud (the fragment's own), as for triangles.
+ **/
+void CRadeonR100_3D::shade_fragment(frag_t &f, const RadeonVertex *prov) const {
+  const u32 se = rs.se_cntl;
+  const u32 dm = (se >> 8) & 3, am = (se >> 10) & 3, sm = (se >> 12) & 3,
+            fm = (se >> 14) & 3;
+  float solid[4];
+  argb_to_f(reg(RE_SOLID_COLOR), solid);
+  for (int k = 0; k < 3; k++) {
+    if (dm == 0)
+      f.col[k] = solid[k];
+    else if (dm == 1 && prov)
+      f.col[k] = prov->col[k];
+    if (sm == 0)
+      f.spec[k] = 0.0f;
+    else if (sm == 1 && prov)
+      f.spec[k] = prov->spec[k];
+  }
+  if (am == 0)
+    f.col[3] = solid[3];
+  else if (am == 1 && prov)
+    f.col[3] = prov->col[3];
+  if (fm == 0)
+    f.spec[3] = 1.0f;
+  else if (fm == 1 && prov)
+    f.spec[3] = prov->spec[3];
+}
+
+void CRadeonR100_3D::raster_point(const RadeonVertex &a,
+                                  const RadeonVertex *prov) {
   frag_t f;
   const int route[3] = {rs.tex[0].route, rs.tex[1].route, rs.tex[2].route};
   frag_from(f, a, route);
+  shade_fragment(f, prov ? prov : &a);
   const double centre = (rs.se_cntl & (1u << 27)) ? 0.0 : 0.5;
-  f.x = int(std::floor(a.x + centre));
-  f.y = int(std::floor(a.y + centre));
+  f.x = int(std::floor(snap(a.x) + centre));
+  f.y = int(std::floor(snap(a.y) + centre));
   if (rs.se_cntl & (1u << 16)) // ZBIAS_ENABLE_POINT: the constant alone
     f.z += rs.zbias_const;
   fragment(f);
 }
 
 /**
- * A line: one pixel wide by Bresenham between the pixels holding the
- * endpoints, the last left out; or SE_LINE_WIDTH wide as a quad.
+ * A line: one pixel wide through its snapped endpoints, the last pixel
+ * left out; or SE_LINE_WIDTH wide as a quad.
  **/
-void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
+void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b,
+                                 const RadeonVertex *prov) {
+  if (!prov)
+    prov = &b;
   const u32 se = rs.se_cntl;
   float width = float(reg(SE_LINE_WIDTH) & 0xffff) / 16.0f;
   // an anti-aliased line (PP_CNTL ANTI_ALIAS_LINE <24>) is drawn as the
@@ -1435,7 +1505,7 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
     const u32 save_w = c.R(SE_LINE_WIDTH);
     c.R(SE_LINE_WIDTH) = u32(width * 16.0f);
     rs.pp_cntl &= ~(1u << 24);
-    raster_line(a2, b2);
+    raster_line(a2, b2, prov);
     c.R(SE_LINE_WIDTH) = save_w;
     rs.pp_cntl = save_pp;
     rs.se_cntl = save_se;
@@ -1461,26 +1531,44 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
     rs.se_cntl |= (3u << 1) | (3u << 3); // no culling of a line's quad
     const RadeonVertex *t1[3] = {&q[0], &q[1], &q[2]};
     const RadeonVertex *t2[3] = {&q[0], &q[2], &q[3]};
-    raster_triangle(t1, &b);
-    raster_triangle(t2, &b);
+    raster_triangle(t1, prov);
+    raster_triangle(t2, prov);
     rs.se_cntl = save;
     return;
   }
+  // One pixel wide: through the endpoints as the setup engine snapped
+  // them (SE_CNTL ROUND_PREC keeps every vertex to a sixteenth of a pixel
+  // at best, a line's too), not through the pixels holding them. Along
+  // the major axis the pixels whose centres the segment passes, the
+  // start's in and the end's out; across it the pixel whose centre is
+  // nearest the line there (GL's diamond-exit rule for a segment between
+  // diamonds; Direct3D's lines likewise). A tie -- the line exactly
+  // between two centres -- goes to the higher coordinate [inference: no
+  // R100 source describes its line rasteriser, only the snapped sub-pixel
+  // vertices it starts from].
   const double centre = (se & (1u << 27)) ? 0.0 : 0.5;
-  int x0 = int(std::floor(a.x + centre)), y0 = int(std::floor(a.y + centre));
-  const int x1 = int(std::floor(b.x + centre)),
-            y1 = int(std::floor(b.y + centre));
-  const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
-  const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-  const int steps = std::max(dx, -dy);
-  int err = dx + dy;
+  const double ax = snap(a.x) + centre, ay = snap(a.y) + centre;
+  const double bx = snap(b.x) + centre, by = snap(b.y) + centre;
+  const double ldx = bx - ax, ldy = by - ay;
+  const double len2 = ldx * ldx + ldy * ldy;
+  if (len2 == 0 || !std::isfinite(len2))
+    return;
+  const bool xmaj = std::fabs(ldx) >= std::fabs(ldy);
+  const double s0 = xmaj ? ax : ay, s1 = xmaj ? bx : by;
+  const double m0 = xmaj ? ay : ax, dm = xmaj ? ldy : ldx;
+  const int dir = s1 > s0 ? 1 : -1;
+  // centres c + 0.5 in [s0, s1) going up, in (s1, s0] going down
+  const int c0 = dir > 0 ? int(std::ceil(s0 - 0.5)) : int(std::floor(s0 - 0.5));
+  const int c1 = dir > 0 ? int(std::ceil(s1 - 0.5)) : int(std::floor(s1 - 0.5));
   const u32 pat = reg(RE_LINE_PATTERN);
   const u32 repeat = std::max(1u, (pat >> 16) & 0xff);
   if (pat & (1u << 29))
     line_stipple_count = 0;
   const int route[3] = {rs.tex[0].route, rs.tex[1].route, rs.tex[2].route};
-  const bool flat = ((se >> 8) & 3) == 1;
-  for (int i = 0; i < steps; i++) {
+  for (int cc = c0; cc != c1; cc += dir) {
+    const double mc = double(cc) + 0.5;
+    const int mi = int(std::floor(m0 + dm * (mc - s0) / (s1 - s0)));
+    const int px = xmaj ? cc : mi, py = xmaj ? mi : cc;
     bool draw = true;
     if (rs.pp_cntl & 4) {
       const u32 bit = (line_stipple_count / repeat) & 15;
@@ -1488,31 +1576,24 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
     }
     line_stipple_count++;
     if (draw) {
-      const float t = steps ? float(i) / float(steps) : 0.0f;
+      // the attributes at the pixel centre's projection onto the line
+      // (GL's t for a line fragment)
+      const double tt = ((px + 0.5 - ax) * ldx + (py + 0.5 - ay) * ldy) / len2;
+      const float t = float(std::min(1.0, std::max(0.0, tt)));
       RadeonVertex m = a;
       const float *pa = &a.x, *pb = &b.x;
       float *pm = &m.x;
       const size_t nf = offsetof(RadeonVertex, clip_space) / sizeof(float);
       for (size_t k = 0; k < nf; k++)
         pm[k] = pa[k] + (pb[k] - pa[k]) * t;
-      if (flat)
-        memcpy(m.col, b.col, sizeof(m.col));
       frag_t f;
       frag_from(f, m, route);
-      f.x = x0;
-      f.y = y0;
+      shade_fragment(f, prov);
+      f.x = px;
+      f.y = py;
       if (se & (1u << 17)) // ZBIAS_ENABLE_LINE: the constant alone
         f.z += rs.zbias_const;
       fragment(f);
-    }
-    const int e2 = 2 * err;
-    if (e2 >= dy) {
-      err += dy;
-      x0 += sx;
-    }
-    if (e2 <= dx) {
-      err += dx;
-      y0 += sy;
     }
   }
 }

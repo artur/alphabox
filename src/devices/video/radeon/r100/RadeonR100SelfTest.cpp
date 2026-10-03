@@ -2012,9 +2012,9 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
       p[0] = pkt3(0x29, u32(p.size()) - 1);
       cp(p);
       for (int x = 0; x < W; x++) {
-        // the line interpolates from x = 0 (0.0) towards 128 (1.0): the
-        // pixel at x has t = x / 128 (its start, the model's line walk)
-        const double v = double(x) / 128.0 * 31.0;
+        // the line interpolates from x = 0 (0.0) to 128 (1.0): the pixel
+        // at x takes the value at its centre, t = (x + 0.5) / 128
+        const double v = (double(x) + 0.5) / 128.0 * 31.0;
         int q;
         if (b == 0)
           q = int(std::floor(v + 1e-4));
@@ -2430,32 +2430,186 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     // and without the switch the same pair draws nothing (R100 microcode)
     cp({pkt3(0x2a, 2), 0, PRIM_TRI_LIST | (WALK_INDEX << 4) | (6u << 16)});
     cp({pkt3(0x33, 3), (1u << 16) | 0x810, IXB, 4});
-    // the line reference: Bresenham along the edges, the last pixel out
-    auto ref_line = [&](int x0, int y0, int x1, int y1) {
-      const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
-      const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-      int err = dx + dy;
-      const int steps = std::max(dx, -dy);
-      for (int i = 0; i < steps; i++) {
-        ref[size_t(y0 * W + x0)] = 0xffffffffu;
-        const int e2 = 2 * err;
-        if (e2 >= dy) {
-          err += dy;
-          x0 += sx;
-        }
-        if (e2 <= dx) {
-          err += dx;
-          y0 += sy;
-        }
-      }
-    };
-    // OpenGL pixel centres: a vertex at 60.5 is in pixel 60
-    ref_line(60, 30, 100, 30);
-    ref_line(100, 30, 100, 50);
-    ref_line(100, 50, 60, 30);
+    // the edges, OpenGL pixel centres (a vertex at 60.5 is pixel 60's
+    // centre), the last pixel out: along x from 60, along y from 30, and
+    // back from x = 100 to 61 with y = 30.5 + (x - 60) / 2 there, a
+    // centre exactly between two rows going to the lower one on screen
+    for (int x = 60; x < 100; x++)
+      ref[size_t(30 * W + x)] = 0xffffffffu;
+    for (int y = 30; y < 50; y++)
+      ref[size_t(y * W + 100)] = 0xffffffffu;
+    for (int x = 61; x <= 100; x++)
+      ref[size_t((30 + (x - 60 + 1) / 2) * W + x)] = 0xffffffffu;
     int mx;
     const int d = compare("prims-r200-packets", ref, 0, &mx);
     scene_report("TRI_TYPE_2, 3-vertex lists, INDX_BUFFER (R200 packets)", d,
                  mx);
+  }
+
+  // -- scene: the provoking vertex in strips, quads and lines -------------
+  {
+    // SE_CNTL FLAT_SHADE_VTX <7:6> counts the vertices of a primitive in
+    // the order they were sent: strip triangle i is v[i], v[i+1], v[i+2]
+    // whichever winding the odd ones are drawn in (Direct3D flat shades
+    // it with v[i], Mesa's GL strips with VTX_LAST take v[i+2]); a quad is
+    // one colour, its last vertex's with VTX_LAST; a line takes its first
+    // vertex with VTX_0, its second otherwise
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    auto flat_cntl = [&](u32 vtx) {
+      cp({pkt0(SE_CNTL, 1), (3u << 1) | (3u << 3) | (vtx << 6) | (1u << 8) |
+                                (1u << 10) | (1u << 27)});
+    };
+    auto colour = [](int i) {
+      return V{0, 0, 0, float(i) / 5, float(5 - i) / 5, (i & 1) ? 1.f : 0.25f,
+               1};
+    };
+    auto fill_tri = [&](const V &a, const V &b, const V &c3, const V &col) {
+      ref_triangle({a.x, a.y}, {b.x, b.y}, {c3.x, c3.y}, W, H,
+                   [&](int x, int y, double, double, double) {
+                     float cc[4] = {col.r, col.g, col.b, col.a};
+                     ref[size_t(y * W + x)] = argbf(cc);
+                   });
+    };
+    for (u32 vtx : {0u, 3u}) {
+      flat_cntl(vtx);
+      std::vector<V> strip;
+      const float y0 = vtx == 0 ? 4.0f : 34.0f;
+      for (int i = 0; i < 6; i++) {
+        V v = colour(i);
+        v.x = 4.0f + 12.0f * float(i);
+        v.y = (i & 1) ? y0 + 26.0f : y0;
+        strip.push_back(v);
+      }
+      immd_xyzc(PRIM_TRI_STRIP, strip);
+      for (size_t i = 0; i + 2 < strip.size(); i++)
+        fill_tri(strip[i], strip[i + 1], strip[i + 2],
+                 strip[vtx == 0 ? i : i + 2]);
+    }
+    // quads: VTX_LAST, then VTX_1
+    for (u32 vtx : {3u, 1u}) {
+      flat_cntl(vtx);
+      const float y0 = vtx == 3 ? 4.0f : 34.0f;
+      std::vector<V> q;
+      const float xy[4][2] = {
+          {80, y0}, {120, y0}, {120, y0 + 26}, {80, y0 + 26}};
+      for (int i = 0; i < 4; i++) {
+        V v = colour(i + 1);
+        v.x = xy[i][0];
+        v.y = xy[i][1];
+        q.push_back(v);
+      }
+      immd_xyzc(PRIM_QUAD_LIST, q);
+      const V &pv = q[vtx];
+      fill_tri(q[0], q[1], q[2], pv);
+      fill_tri(q[0], q[2], q[3], pv);
+    }
+    // flat lines: VTX_0 the first vertex's colour, VTX_LAST the second's
+    for (u32 vtx : {0u, 3u}) {
+      flat_cntl(vtx);
+      const float y = vtx == 0 ? 80.5f : 90.5f;
+      V a = colour(1), b = colour(4);
+      a.x = 4.5f;
+      b.x = 100.5f;
+      a.y = b.y = y;
+      immd_xyzc(PRIM_LINE_LIST, {a, b});
+      const V &pv = vtx == 0 ? a : b;
+      float cc[4] = {pv.r, pv.g, pv.b, pv.a};
+      for (int x = 4; x < 100; x++)
+        ref[size_t(int(y) * W + x)] = argbf(cc);
+    }
+    int mx;
+    const int d = compare("flat-provoking", ref, 1, &mx);
+    scene_report("flat shading: provoking vertex of strips, quads, lines", d,
+                 mx);
+  }
+
+  // -- scene: vertex snapping, the four ROUND_MODEs ---------------------------
+  {
+    // SE_CNTL ROUND_PREC_HALF_PIX: every vertex to a half pixel, ties as
+    // ROUND_MODE <29:28> says. A bottom edge at y = 20.25 is a tie between
+    // 20.0 and 20.5: truncated or rounded to even 20.0, rounded or to odd
+    // 20.5; with Direct3D pixel centres (+0.5) only 20.5 takes in row 20.
+    // A bottom edge at y = 40.75 ties 40.5 and 41.0: truncated or to odd
+    // 40.5, rounded or to even 41.0; with OpenGL centres only 41.0 takes in
+    // row 40. So the four modes draw four different pairs
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    auto rect = [&](float x0, float y0, float x1, float y1) {
+      immd_xyzc(PRIM_TRI_LIST, {{x0, y0, 0, 1, 1, 1, 1},
+                                {x1, y0, 0, 1, 1, 1, 1},
+                                {x1, y1, 0, 1, 1, 1, 1},
+                                {x0, y0, 0, 1, 1, 1, 1},
+                                {x1, y1, 0, 1, 1, 1, 1},
+                                {x0, y1, 0, 1, 1, 1, 1}});
+    };
+    auto set_ref = [&](int x0, int x1, int y0, int y1) { // exclusive ends
+      for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+          ref[size_t(y * W + x)] = 0xffffffffu;
+    };
+    for (u32 m = 0; m < 4; m++) {
+      const u32 se = (3u << 1) | (3u << 3) | (2u << 8) | (2u << 10) |
+                     (m << 28) | (3u << 30);
+      const int x0 = 8 + 24 * int(m), x1 = x0 + 16;
+      cp({pkt0(SE_CNTL, 1), se}); // Direct3D centres
+      rect(float(x0), 10.0f, float(x1), 20.25f);
+      set_ref(x0, x1, 10, (m == 1 || m == 3) ? 21 : 20);
+      cp({pkt0(SE_CNTL, 1), se | (1u << 27)}); // OpenGL centres
+      rect(float(x0), 30.0f, float(x1), 40.75f);
+      set_ref(x0, x1, 30, (m == 1 || m == 2) ? 41 : 40);
+    }
+    // points and lines snap too: ROUND, half a pixel, OpenGL centres
+    cp({pkt0(SE_CNTL, 1), (3u << 1) | (3u << 3) | (2u << 8) | (2u << 10) |
+                              (1u << 27) | (1u << 28) | (3u << 30)});
+    immd_xyzc(PRIM_POINT_LIST, {{8.8f, 60.2f, 0, 1, 1, 1, 1}}); // (9, 60)
+    ref[size_t(60 * W + 9)] = 0xffffffffu;
+    immd_xyzc(PRIM_LINE_LIST, {{10.8f, 80.2f, 0, 1, 1, 1, 1},
+                               {40.8f, 80.2f, 0, 1, 1, 1, 1}}); // 11..40
+    set_ref(11, 41, 80, 81);
+    int mx;
+    const int d = compare("round-modes", ref, 0, &mx);
+    scene_report("vertex snapping: ROUND_MODE trunc/round/even/odd", d, mx);
+  }
+
+  // -- scene: lines through sub-pixel endpoints ------------------------------
+  {
+    // A line runs between its snapped endpoints, not between the pixels
+    // holding them: along the major axis the pixels whose centres lie
+    // from the start (in) to the end (out), across it the row (column)
+    // whose centre is nearest the line at that centre. Endpoints on
+    // sixteenths, so the default snapping (1/16, truncate) keeps them
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    cp({pkt0(RE_SOLID_COLOR, 1), 0xffffffffu, pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (1u << 27)});
+    struct L {
+      float x0, y0, x1, y1;
+    };
+    const L lines[] = {{10.25f, 10.25f, 70.75f, 30.75f},
+                       {120.8125f, 40.0625f, 20.1875f, 60.9375f},
+                       {100.6875f, 70.3125f, 110.0625f, 124.5f},
+                       {30.5f, 120.875f, 40.125f, 72.25f}};
+    for (const L &l : lines) {
+      immd_xyzc(PRIM_LINE_LIST,
+                {{l.x0, l.y0, 0, 1, 1, 1, 1}, {l.x1, l.y1, 0, 1, 1, 1, 1}});
+      const bool xmaj = std::fabs(l.x1 - l.x0) >= std::fabs(l.y1 - l.y0);
+      const double a0 = xmaj ? l.x0 : l.y0, a1 = xmaj ? l.x1 : l.y1;
+      const double b0 = xmaj ? l.y0 : l.x0, b1 = xmaj ? l.y1 : l.x1;
+      for (int c = 0; c < W; c++) {
+        const double m = c + 0.5;
+        const bool in = a1 > a0 ? (m >= a0 && m < a1) : (m <= a0 && m > a1);
+        if (!in)
+          continue;
+        const int k = int(std::floor(b0 + (b1 - b0) * (m - a0) / (a1 - a0)));
+        ref[size_t((xmaj ? k : c) * W + (xmaj ? c : k))] = 0xffffffffu;
+      }
+    }
+    int mx;
+    const int d = compare("line-subpixel", ref, 0, &mx);
+    scene_report("lines through sub-pixel endpoints", d, mx);
   }
 }
