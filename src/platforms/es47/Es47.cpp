@@ -91,11 +91,34 @@ void es47_board_devices(CConfigurator *cfg, CSystem *sys) {
  * slot <4:2>, INTx <1:0> (Linux core_marvel.h). The chipset's input number
  * is the IO7's PID << 8 | the LSI (CMarvel::interrupt). Hose h is PID h / 4,
  * port h % 4.
+ *
+ * Except on port 2 of an IO7 with embedded I/O, where slots 2 and 3 (the
+ * real ES47's IDE and USB controllers) have no lines of their own and use
+ * slot 1's spare ones: slot 2 INTB -- its function 1 INTD --, slot 3 INTC
+ * for every function, whatever pins the functions name. That is what the
+ * console writes into their interrupt line registers (the routine at
+ * 0x2eab70 in SRM V7.3-1, for a device directly on the hose: the I/O type
+ * from IO_SYS_REV<7:4>, port 2, then slot 2 -> slot 1 with pin 4 for
+ * function 1 and 2 otherwise, slot 3 -> slot 1 pin 3), and OpenVMS enables
+ * the LSI the line names. Probed: a card in hose 2 slot 2 gets 0x45, the
+ * NEC USB's three functions in slot 3 all 0x46, slots 4 and 5 0x50, 0x54.
+ * On the ES47 these are the I/O expander's controllers: the AIC-7892 (here
+ * a 53C895) on 0x44, the CMD 649 on 0x45 (OpenVMS's DQDRIVER enables it),
+ * the USS-344's four OHCI functions all on 0x46.
  */
-int marvel_pci_interrupt(int hose, int slot, int intx) {
+int marvel_pci_interrupt(int hose, int slot, int intx, int func) {
   if (hose < 0 || hose >= 4 * 256 || slot < 0 || slot > 7)
     return -1;
-  return ((hose / 4) << 8) | (int)io7::lsi(hose % 4, slot, intx);
+  const u32 port = (u32)hose % 4;
+  if (port == 2 && func >= 0 && (slot == 2 || slot == 3)) {
+    CMarvel *marvel = marvel_of(theSystem);
+    const CIo7 *io7 = marvel ? marvel->io7((u32)hose / 4) : nullptr;
+    if (io7 && io7->io_type() == io7::kIoTypeEmbedded) {
+      intx = slot == 3 ? 2 : (func == 1 ? 3 : 1);
+      slot = 1;
+    }
+  }
+  return ((hose / 4) << 8) | (int)io7::lsi(port, slot, intx);
 }
 
 /// A hose exists where the board has an IO7 (hose PID * 4 + port), and an
@@ -114,20 +137,12 @@ const char *marvel_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
-/**
- * The I/O expander module's three controllers on hose 2 (slots 1-3: SCSI,
- * IDE, USB) share slot 1's interrupt lines: slot s's INTA is slot 1's INTx
- * s - 1. The console says so -- it gives them interrupt lines (the LSIs
- * it expects) 0x44, 0x45 and 0x46, where the slots' own INTA would be
- * 0x44, 0x48 and 0x4c -- and OpenVMS enables LSI 0x45 for the CMD 649.
- * [inference: a device's INTB..INTD there rotate the same way]
- */
-int es47_pci_interrupt(int hose, int slot, int intx) {
+/// The ES47's hoses are PID 0's IO7 ports; the I/O expander's slots on
+/// hose 2 are marvel_pci_interrupt's embedded-I/O rule.
+int es47_pci_interrupt(int hose, int slot, int intx, int func) {
   if (hose < 0 || hose > 3)
     return -1;
-  if (hose == 2 && slot >= 1 && slot <= 3)
-    return marvel_pci_interrupt(hose, 1, (slot - 1 + intx) & 3);
-  return marvel_pci_interrupt(hose, slot, intx);
+  return marvel_pci_interrupt(hose, slot, intx, func);
 }
 
 const char *es47_slot_refusal(int hose, int slot) {

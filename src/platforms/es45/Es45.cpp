@@ -63,7 +63,7 @@ const es45_slot *find_slot(int hose, int slot) {
 } // namespace
 
 /// The input of the Titan's DRIR a device's pin reaches, or -1.
-int es45_pci_interrupt(int hose, int slot, int intx) {
+int es45_pci_interrupt(int hose, int slot, int intx, int func) {
   const es45_slot *s = find_slot(hose, slot);
   if (!s || (intx & 3) >= s->pins)
     return -1;

@@ -38,7 +38,7 @@
  * their pin already rotated (CPCIDevice::do_pci_interrupt), which is what
  * the console's own numbering does.
  */
-int es40_pci_interrupt(int hose, int slot, int intx) {
+int es40_pci_interrupt(int hose, int slot, int intx, int func) {
   return ((slot + 1) * 4 + (hose & 3) * 0x10 + (intx & 3)) & 0x3f;
 }
 

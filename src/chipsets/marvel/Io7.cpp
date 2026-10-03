@@ -234,7 +234,8 @@ void CIo7::reset() {
   for (int p = 0; p < kPorts; p++)
     m_regs[p][POx_CACHE_CTL] = 8;
   m_regs[kPorts][IO_ASIC_REV] = 0x12;
-  m_regs[kPorts][IO_SYS_REV] = (U64(1) << 16) | (1 << 4) | m_backplane_rev;
+  m_regs[kPorts][IO_SYS_REV] =
+      (U64(1) << 16) | (io_type() << 4) | m_backplane_rev;
   m_regs[kPorts][POx_RST + 3 * 0x40] = U64(6) << 6;
   // AGP_CAP_ID: the AGP capability, revision 2.0 in <23:16> as in a PCI
   // AGP capability header [inference: the console prints "AGP rev %d.%d"

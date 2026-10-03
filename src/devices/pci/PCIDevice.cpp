@@ -491,26 +491,44 @@ void CPCIDevice::WriteMem(int index, u64 address, int dsize, u64 data) {
 }
 
 bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
+  const int input = interrupt_input(func);
+  if (input < 0)
+    return false; // no pin, or this slot has no interrupt wiring
+
+  // Functions of one device can share an input -- a board can wire them to
+  // one line (the ES47's embedded USB) -- and the line is then the OR of
+  // their requests: one function letting go must not drop another's.
+  bool level = asserted;
+  {
+    std::lock_guard<std::mutex> lk(m_irq_mutex);
+    if (asserted)
+      m_irq_funcs |= (u8)(1u << func);
+    else
+      m_irq_funcs &= (u8)~(1u << func);
+    for (int f = 0; f < 8 && !level; f++)
+      if (f != func && (m_irq_funcs & (1u << f)) && interrupt_input(f) == input)
+        level = true;
+#ifdef DEBUG_PCI_IRQ
+    printf("PCI-IRQ: %s.%d %s slot=%d bus=%d -> input %d (level %d)\n",
+           devid_string, func, asserted ? "ASSERT  " : "DEASSERT", myPCIDev,
+           myPCIBus, input, level);
+#endif
+    cSystem->interrupt(input, level);
+  }
+  return true;
+}
+
+int CPCIDevice::interrupt_input(int func) const {
   // Which chipset interrupt input a slot's pin reaches is board wiring:
   // the platform descriptor answers it (src/platforms/).
   //
-  // Two gates the cfg-space CFIT longword tells us:
-  //   - Pin (cfg+0x3D) selects which INTx (1=A, 2=B, 3=C, 4=D); 0 means
-  //     the device declares no INTx capability and we early-return.
-  //   - Line (cfg+0x3C) == 0xFF is PCI spec's "no IRQ assigned" — that's
-  //     also the reset value, so it doubles as "SRM has not configured
-  //     this device's IRQ yet".  Honouring it prevents firing INTx into
-  //     the OS during the pre-bootstrap window where exception handlers
-  //     aren't installed yet (OpenVMS in particular crashes hard with
-  //     ACV through vector 0x80 if INTx delivers in that window).
-  //
-  // Once a real value lands in Line (any 8-bit value < 0xFF), we ignore
-  // it and use the slot formula instead
+  // Pin (cfg+0x3D) selects which INTx (1=A, 2=B, 3=C, 4=D); 0 means the
+  // device declares no INTx capability. The line (cfg+0x3C) the firmware
+  // writes is not used: the board's formula is.
   const u32 cfit = endian_32(pci_state.config_data[func][0x0f]);
-  const u8 line = cfit & 0xff;
   const u8 pin = (cfit >> 8) & 0xff;
   if (pin == 0)
-    return false;
+    return -1;
 
   // Behind bridges, INTx rotates by the device number at every level (the
   // PCI-PCI bridge "swizzle") until it reaches the slot the outermost bridge
@@ -522,17 +540,8 @@ bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
     dev = b->pci_dev();
   }
   const int slot = dev & 0x1f;
-  const int drir_bit = cSystem->platform().pci_interrupt(myPCIBus, slot, intx);
-  if (drir_bit < 0)
-    return false; // this slot has no interrupt wiring
-
-#ifdef DEBUG_PCI_IRQ
-  printf("PCI-IRQ: %s.%d %s line=0x%02x pin=%d slot=%d bus=%d -> DRIR bit %d\n",
-         devid_string, func, asserted ? "ASSERT  " : "DEASSERT", line, pin,
-         myPCIDev, myPCIBus, drir_bit);
-#endif
-  cSystem->interrupt(drir_bit, asserted);
-  return true;
+  return cSystem->platform().pci_interrupt(myPCIBus, slot, intx,
+                                           myBridge ? -1 : func);
 }
 
 static u32 pci_magic1 = 0xC1095A78;

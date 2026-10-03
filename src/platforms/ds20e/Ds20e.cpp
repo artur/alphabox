@@ -47,7 +47,7 @@
  * same inputs as device 6); this console does not, and a card there gets
  * no interrupt line from it -- OpenVMS then never sees its interrupts.
  */
-int ds20e_pci_interrupt(int hose, int slot, int intx) {
+int ds20e_pci_interrupt(int hose, int slot, int intx, int func) {
   const int h = hose & 1;
   int input;
   if (h == 0 && slot == 6 && intx <= 1)
@@ -68,7 +68,7 @@ int ds20e_pci_interrupt(int hose, int slot, int intx) {
 const char *ds20e_slot_refusal(int hose, int slot) {
   if (slot > 10)
     return "this machine's console does not look beyond PCI device 10";
-  if (ds20e_pci_interrupt(hose, slot, 0) < 0)
+  if (ds20e_pci_interrupt(hose, slot, 0, 0) < 0)
     return "this machine wires add-in devices to hose 0 devices 6 to 9 and "
            "hose 1 devices 7 to 10 only";
   return nullptr;

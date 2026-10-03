@@ -43,18 +43,18 @@
  * of the group in turn (B the first input, C the second, D the third),
  * which is a guess.
  */
-int ds20l_pci_interrupt(int hose, int slot, int intx) {
+int ds20l_pci_interrupt(int hose, int slot, int intx, int func) {
   const int h = hose & 1;
   if (slot < 3 || slot > (h == 0 ? 6 : 5))
     return -1;
   if (slot == (h == 0 ? 6 : 5))
     intx = (intx + 3) & 3; // pin A on the group's fourth input
-  return es40_pci_interrupt(h, slot, intx);
+  return es40_pci_interrupt(h, slot, intx, func);
 }
 
 /// DS20L slots: the places its console gives an interrupt line.
 const char *ds20l_slot_refusal(int hose, int slot) {
-  if (ds20l_pci_interrupt(hose, slot, 0) < 0)
+  if (ds20l_pci_interrupt(hose, slot, 0, 0) < 0)
     return "this machine wires add-in devices to hose 0 devices 3 to 6 and "
            "hose 1 devices 3 to 5 only";
   return nullptr;

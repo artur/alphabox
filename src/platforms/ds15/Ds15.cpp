@@ -63,7 +63,7 @@ const ds15_slot *find_slot(int hose, int slot) {
 } // namespace
 
 /// The input of the Titan's DRIR a device's pin reaches, or -1.
-int ds15_pci_interrupt(int hose, int slot, int intx) {
+int ds15_pci_interrupt(int hose, int slot, int intx, int func) {
   const ds15_slot *s = find_slot(hose, slot);
   if (!s || s->line[intx & 3] == 0xff)
     return -1;

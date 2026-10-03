@@ -102,6 +102,9 @@ constexpr u32 ctl_target(u64 ctl) { return (u32)(ctl >> 14) & 0x1ff; }
 constexpr u32 lsi(u32 port, u32 slot, u32 intx) {
   return (port & 7) << 5 | (slot & 7) << 2 | (intx & 3);
 }
+
+/// IO_SYS_REV<7:4>, the I/O type: 1 is "Embedded I/O" (show config).
+constexpr u32 kIoTypeEmbedded = 1;
 } // namespace io7
 
 class CIo7 {
@@ -110,6 +113,10 @@ public:
   CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev);
 
   u32 pid() const { return m_pid; }
+
+  /// The I/O type IO_SYS_REV reports (io7::kIoTypeEmbedded for every IO7
+  /// modelled: the ES47's, and the ES80's and GS1280's as well).
+  u32 io_type() const { return io7::kIoTypeEmbedded; }
 
   /// An access to the IO7's space that no device range claimed: `port` is
   /// 0-3 or 7, `off` the offset in that port's 4 GB.

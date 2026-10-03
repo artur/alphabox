@@ -115,9 +115,11 @@ struct platform_config {
    * The interrupt input a device's pin reaches, or -1 when the slot has no
    * interrupt. `hose` and `slot` are the device's place on the machine's
    * own buses (behind a bridge, the outermost bridge's slot), and `intx`
-   * is 0-3 for INTA-INTD.
+   * is 0-3 for INTA-INTD. `func` is the device's PCI function, or -1 for a
+   * device behind a bridge: on some boards an embedded slot wires its
+   * functions to other lines than their pins say (the ES47, es47/Es47.cpp).
    */
-  int (*pci_interrupt)(int hose, int slot, int intx);
+  int (*pci_interrupt)(int hose, int slot, int intx, int func);
 
   /**
    * Whether an add-in device may sit at this slot, and why not when it may

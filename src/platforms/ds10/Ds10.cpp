@@ -45,7 +45,7 @@
  * function at device 1 (ISA IRQ 10): those interrupt through the bridge,
  * so they have no input here (docs/platforms/ds10.md).
  */
-int ds10_pci_interrupt(int hose, int slot, int intx) {
+int ds10_pci_interrupt(int hose, int slot, int intx, int func) {
   if (slot == 9)
     return 29; // on-board network
   if (slot == 11)
@@ -59,7 +59,7 @@ int ds10_pci_interrupt(int hose, int slot, int intx) {
 const char *ds10_slot_refusal(int hose, int slot) {
   if (hose != 0)
     return "this machine has one PCI bus";
-  if (ds10_pci_interrupt(hose, slot, 0) < 0)
+  if (ds10_pci_interrupt(hose, slot, 0, 0) < 0)
     return "this machine wires add-in devices to devices 9, 11 and 14 to 17 "
            "only";
   return nullptr;

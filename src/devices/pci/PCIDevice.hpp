@@ -44,6 +44,7 @@
 #define PCI_ROM_ADDRESS_MASK 0xFFFFF800u   // ROM BAR: bits[31:11] addr
 
 #include "SystemComponent.hpp"
+#include <mutex>
 
 /**
  * \brief Abstract base class for devices on the PCI-bus.
@@ -96,6 +97,8 @@ public:
 
 protected:
   bool do_pci_interrupt(int func, bool asserted);
+  /// The chipset interrupt input function `func`'s pin reaches, or -1.
+  int interrupt_input(int func) const;
   void add_function(int func, u32 data[64], u32 mask[64]);
   void add_legacy_io(int id, u32 base, u32 length);
   void add_legacy_mem(int id, u32 base, u32 length);
@@ -129,6 +132,10 @@ protected:
   int myPCIBus;
   int myPCIDev;
   class CPCIBridge *myBridge = nullptr;
+
+  /// The functions whose interrupt request is asserted (do_pci_interrupt).
+  std::mutex m_irq_mutex;
+  u8 m_irq_funcs = 0;
 
   u32 std_config_data[8][64];
   u32 std_config_mask[8][64];
