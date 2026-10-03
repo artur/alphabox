@@ -36,6 +36,7 @@
 #include "UsbAsyncShim.hpp"
 #include "UsbAudio.hpp"
 #include "UsbHostDevice.hpp"
+#include "UsbKeyboard.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
 #include <chrono>
@@ -186,7 +187,7 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
 
   ResetPCI();
 
-  // Devices on the root hub's ports: port1..port3 = "tablet".
+  // Devices on the root hub's ports: port1..port3 = "tablet", "keyboard"...
   for (int p = 0; p < kPorts; ++p) {
     char key[8];
     snprintf(key, sizeof(key), "port%d", p + 1);
@@ -196,6 +197,11 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
       theUsbTablet.store(t.get());
       attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strcmp(what, "keyboard")) {
+      auto k = std::make_unique<CUsbKeyboard>();
+      theUsbKeyboard.store(k.get());
+      attach(p, std::move(k));
+      printf("%s: USB keyboard on port %d.\n", devid_string, p + 1);
     } else if (!strcmp(what, "audio")) {
       attach(p, usb_async_wrap(std::make_unique<CUsbAudio>(), devid_string,
                                p + 1));
@@ -227,9 +233,12 @@ CAliM1543C_usb::~CAliM1543C_usb() {
   stop_threads();
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
-  for (auto &port : m_port)
+  for (auto &port : m_port) {
     if (port.dev && theUsbTablet.load() == port.dev.get())
       theUsbTablet.store(nullptr);
+    if (port.dev && theUsbKeyboard.load() == port.dev.get())
+      theUsbKeyboard.store(nullptr);
+  }
 }
 
 void CAliM1543C_usb::register_disk(class CDisk *dsk, int bus, int dev) {
@@ -316,21 +325,20 @@ void CAliM1543C_usb::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 // (driver-polling diagnosis).
 static const bool g_usbtrace = getenv("ALPHABOX_USBTRACE") != nullptr;
 static const auto g_usbtrace_t0 = std::chrono::steady_clock::now();
-static u64 g_usb_reads[0x110 / 4 + 1];
-static u64 g_usb_reads_total;
-
-static void usbtrace_line(const char *what, u64 address, u64 data) {
+// A register write (or every 20000th read) and the reads since the last
+// line, per controller.
+void COhci::usbtrace_line(const char *what, u64 address, u64 data) {
   char buf[640];
-  int len = snprintf(buf, sizeof(buf), "USBT %10.1f %s %03x=%08x reads:",
+  int len = snprintf(buf, sizeof(buf), "USBT %10.1f %s %s %03x=%08x reads:",
                      std::chrono::duration<double, std::milli>(
                          std::chrono::steady_clock::now() - g_usbtrace_t0)
                          .count(),
-                     what, (unsigned)address, (unsigned)data);
+                     m_name, what, (unsigned)address, (unsigned)data);
   for (int i = 0; i <= 0x110 / 4 && len < (int)sizeof(buf) - 24; i++)
-    if (g_usb_reads[i]) {
+    if (m_trace_reads[i]) {
       len += snprintf(buf + len, sizeof(buf) - len, " %03x:%llu", i * 4,
-                      (unsigned long long)g_usb_reads[i]);
-      g_usb_reads[i] = 0;
+                      (unsigned long long)m_trace_reads[i]);
+      m_trace_reads[i] = 0;
     }
   printf("%s\n", buf);
 }
@@ -999,8 +1007,8 @@ u64 COhci::usb_hci_read(u64 address, int dsize) {
   std::lock_guard<std::mutex> lk(m_mx);
   u64 data = 0;
   if (g_usbtrace && address < 0x110) {
-    g_usb_reads[address / 4]++;
-    if (++g_usb_reads_total % 20000 == 0)
+    m_trace_reads[address / 4]++;
+    if (++m_trace_reads_total % 20000 == 0)
       usbtrace_line("R", address, state.usb_data[address / 4]);
   }
   if (dsize != 32)

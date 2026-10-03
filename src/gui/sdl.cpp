@@ -445,8 +445,7 @@ void bx_sdl_gui_c::build_window_titles() {
 void bx_sdl_gui_c::release_guest_key(SDL_Scancode scancode) {
   if (scancode > SDL_SCANCODE_UNKNOWN && scancode < SDL_SCANCODE_COUNT &&
       guest_key_pressed[scancode]) {
-    theKeyboard->gen_scancode(guest_key_by_scancode[scancode] |
-                              BX_KEY_RELEASED);
+    gui_guest_key(guest_key_by_scancode[scancode] | BX_KEY_RELEASED);
     guest_key_pressed[scancode] = false;
   }
 }
@@ -504,12 +503,12 @@ void bx_sdl_gui_c::suppress_hotkey_releases(const SDL_KeyboardEvent &event,
 }
 
 void bx_sdl_gui_c::send_guest_ctrl_alt_delete() {
-  theKeyboard->gen_scancode(BX_KEY_CTRL_L);
-  theKeyboard->gen_scancode(BX_KEY_ALT_L);
-  theKeyboard->gen_scancode(BX_KEY_DELETE);
-  theKeyboard->gen_scancode(BX_KEY_DELETE | BX_KEY_RELEASED);
-  theKeyboard->gen_scancode(BX_KEY_ALT_L | BX_KEY_RELEASED);
-  theKeyboard->gen_scancode(BX_KEY_CTRL_L | BX_KEY_RELEASED);
+  gui_guest_key(BX_KEY_CTRL_L);
+  gui_guest_key(BX_KEY_ALT_L);
+  gui_guest_key(BX_KEY_DELETE);
+  gui_guest_key(BX_KEY_DELETE | BX_KEY_RELEASED);
+  gui_guest_key(BX_KEY_ALT_L | BX_KEY_RELEASED);
+  gui_guest_key(BX_KEY_CTRL_L | BX_KEY_RELEASED);
 }
 
 static void sdl_select_media_file(bool force);
@@ -1128,11 +1127,11 @@ static bool sdl_debug_press(const char *token, bool press) {
     return false;
   if (press) {
     for (int i = 0; i < n; i++)
-      theKeyboard->gen_scancode(held[i]);
-    theKeyboard->gen_scancode(k);
-    theKeyboard->gen_scancode(k | BX_KEY_RELEASED);
+      gui_guest_key(held[i]);
+    gui_guest_key(k);
+    gui_guest_key(k | BX_KEY_RELEASED);
     for (int i = n - 1; i >= 0; i--)
-      theKeyboard->gen_scancode(held[i] | BX_KEY_RELEASED);
+      gui_guest_key(held[i] | BX_KEY_RELEASED);
   }
   return true;
 }
@@ -1183,14 +1182,14 @@ void bx_sdl_gui_c::handle_events(void) {
   // Debug aid: ALPHABOX_AUTOKEY_ENTER=<seconds> presses Enter once every
   // <seconds> (drives firmware prompts on headless/scripted runs).
   static const char *autokey = getenv("ALPHABOX_AUTOKEY_ENTER");
-  if (autokey && theKeyboard) {
+  if (autokey && gui_guest_has_keyboard()) {
     static Uint64 ak_last = 0;
     Uint64 ak_period = (Uint64)atol(autokey) * 1000;
     Uint64 ak_now = SDL_GetTicks();
     if (ak_period && ak_now - ak_last > ak_period) {
       ak_last = ak_now;
-      theKeyboard->gen_scancode(BX_KEY_ENTER);
-      theKeyboard->gen_scancode(BX_KEY_ENTER | BX_KEY_RELEASED);
+      gui_guest_key(BX_KEY_ENTER);
+      gui_guest_key(BX_KEY_ENTER | BX_KEY_RELEASED);
     }
   }
 
@@ -1222,7 +1221,7 @@ void bx_sdl_gui_c::handle_events(void) {
   // (names or modifier chords, see sdl_debug_press) at the given second
   // offsets (headless firmware/menu navigation).
   static const char *keyscript = getenv("ALPHABOX_KEYSCRIPT");
-  if (keyscript && theKeyboard) {
+  if (keyscript && gui_guest_has_keyboard()) {
     struct KScriptEvent {
       Uint64 t_ms;
       std::string token;
@@ -1264,7 +1263,7 @@ void bx_sdl_gui_c::handle_events(void) {
   // Tokens are whitespace-separated key names or modifier chords (same as
   // ALPHABOX_KEYSCRIPT); each token is pressed+released ~120 ms apart.
   static const char *keypipe = getenv("ALPHABOX_KEYPIPE");
-  if (keypipe && theKeyboard) {
+  if (keypipe && gui_guest_has_keyboard()) {
     static long kp_offset = 0;
     static Uint64 kp_last = 0;
     Uint64 kp_now = SDL_GetTicks();
@@ -1344,7 +1343,7 @@ void bx_sdl_gui_c::handle_events(void) {
         int dx = (int)sdl_mouse_accum_x;
         int dy = (int)sdl_mouse_accum_y;
 
-        if (dx != 0 || dy != 0) {
+        if ((dx != 0 || dy != 0) && theKeyboard) {
           sdl_mouse_accum_x -= dx;
           sdl_mouse_accum_y -= dy;
           theKeyboard->mouse_motion(dx, dy, 0, sdl_mouse_button_state);
@@ -1386,7 +1385,7 @@ void bx_sdl_gui_c::handle_events(void) {
 
       if (tablet)
         tablet->set_buttons(sdl_mouse_button_state);
-      else
+      else if (theKeyboard)
         theKeyboard->mouse_motion(0, 0, 0, sdl_mouse_button_state);
       break;
     }
@@ -1404,7 +1403,7 @@ void bx_sdl_gui_c::handle_events(void) {
         if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
           wy = -wy;
         int dz = (int)wy;
-        if (dz != 0)
+        if (dz != 0 && theKeyboard)
           theKeyboard->mouse_motion(0, 0, dz, sdl_mouse_button_state);
       }
       break;
@@ -1463,11 +1462,11 @@ void bx_sdl_gui_c::handle_events(void) {
       if (key_event == BX_KEY_UNHANDLED)
         break;
 
-      theKeyboard->gen_scancode(key_event);
+      gui_guest_key(key_event);
 
       // Locks: generate immediate press+release pair
       if ((key_event == BX_KEY_NUM_LOCK) || (key_event == BX_KEY_CAPS_LOCK)) {
-        theKeyboard->gen_scancode(key_event | BX_KEY_RELEASED);
+        gui_guest_key(key_event | BX_KEY_RELEASED);
       } else if (sdl_event.key.scancode > SDL_SCANCODE_UNKNOWN &&
                  sdl_event.key.scancode < SDL_SCANCODE_COUNT) {
         guest_key_by_scancode[sdl_event.key.scancode] = key_event;
@@ -1508,10 +1507,10 @@ void bx_sdl_gui_c::handle_events(void) {
         break;
 
       if ((key_event == BX_KEY_NUM_LOCK) || (key_event == BX_KEY_CAPS_LOCK)) {
-        theKeyboard->gen_scancode(key_event);
+        gui_guest_key(key_event);
       }
 
-      theKeyboard->gen_scancode(key_event | BX_KEY_RELEASED);
+      gui_guest_key(key_event | BX_KEY_RELEASED);
       break;
 
     case SDL_EVENT_QUIT:

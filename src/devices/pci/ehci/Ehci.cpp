@@ -25,6 +25,7 @@
 #include "UsbAsyncShim.hpp"
 #include "UsbAudio.hpp"
 #include "UsbHostDevice.hpp"
+#include "UsbKeyboard.hpp"
 #include "UsbStorage.hpp"
 #include "UsbTablet.hpp"
 #include <algorithm>
@@ -109,6 +110,10 @@ const CEhci::SChip *CEhci::find_chip(const char *name) {
   return &kChips[0];
 }
 
+// The companions' names in ALPHABOX_USBTRACE lines.
+static const char *const kCompanionNames[] = {"ohci0", "ohci1", "ohci2",
+                                              "ohci3"};
+
 // An OHCI companion: the card's function f, its memory accesses and its
 // interrupt pin the card's.
 struct CEhci::CCompanion : COhciHost {
@@ -116,8 +121,8 @@ struct CEhci::CCompanion : COhciHost {
   const int func;
   COhci ohci;
   CCompanion(CEhci &c, int f)
-      : card(c), func(f),
-        ohci(*this, c.m_ports_per_companion, c.m_chip.ohci_legacy, "ohci") {}
+      : card(c), func(f), ohci(*this, c.m_ports_per_companion,
+                               c.m_chip.ohci_legacy, kCompanionNames[f & 3]) {}
   void ohci_dma_read(u32 a, void *d, size_t size, size_t count) override {
     card.dma_read(a, d, size, count);
   }
@@ -176,6 +181,12 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
       theUsbTablet.store(t.get());
       attach(p, std::move(t));
       printf("%s: USB tablet on port %d.\n", devid_string, p + 1);
+    } else if (!strcmp(what, "keyboard") && m_with_companions) {
+      // Full speed: the EHCI leaves it for the port's companion.
+      auto k = std::make_unique<CUsbKeyboard>();
+      theUsbKeyboard.store(k.get());
+      attach(p, std::move(k));
+      printf("%s: USB keyboard on port %d.\n", devid_string, p + 1);
     } else if (!strcmp(what, "audio") && m_with_companions) {
       // Full speed: the EHCI leaves it for the port's companion.
       attach(p, usb_async_wrap(std::make_unique<CUsbAudio>(), devid_string,
@@ -193,7 +204,8 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
     } else if (*what) {
       FAILURE_2(Configuration,
                 "%s: unknown USB device \"%s\" (EHCI ports take tablet, "
-                "audio (with companions) or host:vvvv:pppp; disks are "
+                "keyboard or audio (with companions) or host:vvvv:pppp; "
+                "disks are "
                 "disk<port>.0)",
                 key, what);
     }
@@ -214,9 +226,12 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
 
 CEhci::~CEhci() {
   stop_threads();
-  for (auto &port : m_port)
+  for (auto &port : m_port) {
     if (port.dev && theUsbTablet.load() == port.dev.get())
       theUsbTablet.store(nullptr);
+    if (port.dev && theUsbKeyboard.load() == port.dev.get())
+      theUsbKeyboard.store(nullptr);
+  }
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
 }

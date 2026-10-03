@@ -1,6 +1,6 @@
 # USB
 
-Alphabox has three USB host controllers, four kinds of device to put on
+Alphabox has three USB host controllers, five kinds of device to put on
 them, and the test hooks to make a guest's USB driver prove itself.
 
 | | Controller | Speed | Ports | Guest drivers |
@@ -27,13 +27,14 @@ pci0.3 = ehci                  // a USB 2.0 card in a free slot
 {
   disk1.0 = file { file = "usb2.img"; }
   port2 = "tablet";
+  port3 = "keyboard";          // a USB keyboard: see below
   companions = true;           // the default; false: the EHCI alone
 }
 ```
 
 A port takes one device. Disks are named `disk<port>.0`, with the port
-counted from 1; `port<n>` takes `tablet`, `audio` (not on a card without
-companions) or `host:vvvv:pppp`. The sample
+counted from 1; `port<n>` takes `tablet`, `keyboard` or `audio` (these two
+not on a card without companions) or `host:vvvv:pppp`. The sample
 [`es40.cfg`](../es40.cfg) documents every value.
 
 ## Devices
@@ -45,6 +46,18 @@ host cursor is hidden over the window. On an EHCI card without companions
 it is a USB 2.0 device polled every millisecond; everywhere else it is the
 full-speed device a real tablet is (on the card: its companion's). Headless runs place it with
 `tablet:X:Y[:B]` key-pipe tokens ([headless.md](headless.md)).
+
+**Keyboard.** A HID boot keyboard (interface subclass 1, protocol 1):
+the modifier byte and six keys as HID usages, in the boot report under
+either protocol; the LEDs come back as an output report. It types what the
+SDL window's keyboard types, and `ALPHABOX_KEYPIPE`/`ALPHABOX_KEYSCRIPT`
+key names ([headless.md](headless.md)) reach it as well as the PS/2
+keyboard -- on a machine without an 8042 (the EV7 AlphaServers) it is the
+only keyboard. Each change of the keys held is a report of its own, queued
+until the host polls, so a scripted press and release between two polls
+still types the key. A full-speed device, so on the EHCI card a companion
+serves it. OpenVMS reads it as `KBD0` (with the tablet as `MOU0`), which
+is what DECwindows on an ES47 waits for (docs/platforms/marvel.md, M7b).
 
 **Mass storage.** Any disk image (`file`, `device` or `ramdisk`, as on the
 IDE and SCSI controllers) as a Bulk-Only Transport device with the SCSI

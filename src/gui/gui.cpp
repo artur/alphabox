@@ -46,6 +46,7 @@
 #include "gui.hpp"
 
 #include "Keyboard.hpp"
+#include "UsbKeyboard.hpp"
 
 bx_gui_c *bx_gui = NULL;
 
@@ -128,6 +129,15 @@ u32 get_user_key(char *key) {
 
   return BX_KEY_UNKNOWN;
 }
+
+void gui_guest_key(u32 key_event) {
+  if (theKeyboard)
+    theKeyboard->gen_scancode(key_event);
+  if (CUsbKeyboard *k = theUsbKeyboard.load())
+    k->key(key_event);
+}
+
+bool gui_guest_has_keyboard() { return theKeyboard || theUsbKeyboard.load(); }
 
 void bx_gui_c::mouse_enabled_changed(bool val) {
   if (theKeyboard)

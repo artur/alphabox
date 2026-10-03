@@ -164,6 +164,10 @@ private:
   const int m_ports;
   const bool m_legacy;
   const char *m_name;
+  // ALPHABOX_USBTRACE: register reads counted between trace lines.
+  void usbtrace_line(const char *what, u64 address, u64 data);
+  u64 m_trace_reads[0x110 / 4 + 1] = {};
+  u64 m_trace_reads_total = 0;
   CUsbPort *m_port[kMaxPorts] = {};
 
   // A device finishing a transfer on another thread wakes the frame thread,

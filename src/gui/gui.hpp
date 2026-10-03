@@ -87,6 +87,14 @@ typedef struct {
 
 extern class bx_gui_c *bx_gui;
 
+/// A key for the guest (a BX_KEY_* code, | BX_KEY_RELEASED for a release):
+/// to the PS/2 keyboard behind the 8042 and to a USB keyboard, whichever
+/// the machine has. A board without an 8042 (the EV7 machines) may have
+/// neither.
+void gui_guest_key(u32 key_event);
+/// Whether the machine has a keyboard gui_guest_key reaches.
+bool gui_guest_has_keyboard();
+
 /**
  * \brief Abstract base class for GUI implementations.
  **/
