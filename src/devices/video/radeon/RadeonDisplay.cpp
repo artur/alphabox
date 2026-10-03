@@ -35,13 +35,16 @@
  * bytes, an AND mask then an XOR mask, most significant bit first
  * (QEMU's reading): AND 0 draws CUR_CLR0 or CUR_CLR1 by the XOR bit, AND 1
  * leaves the pixel or inverts it. In ARGB mode (CUR_MODE 2) a row is 64
- * dwords blended by their alpha. CUR_OFFSET is where the first row shown
- * starts (the driver adds the vertical clip itself); CUR_HORZ_VERT_OFF's
- * <21:16> skips pixels of each row and <5:0> rows at the bottom.
+ * dwords, premultiplied by their alpha, blended over the screen. CUR_OFFSET is
+ * where the first row shown starts (the driver adds the vertical clip itself);
+ * CUR_HORZ_VERT_OFF's <21:16> skips pixels of each row and <5:0> rows at the
+ * bottom.
  **/
 
 #include "Radeon.hpp"
 #include "gui/gui.hpp"
+
+#include <algorithm>
 
 using namespace radeon;
 
@@ -233,14 +236,18 @@ void CRadeon::draw_hw_cursor(bitmap_rgb32 &bitmap) {
           const u32 p = vram[a & mask] | (u32(vram[(a + 1) & mask]) << 8) |
                         (u32(vram[(a + 2) & mask]) << 16) |
                         (u32(vram[(a + 3) & mask]) << 24);
+          // premultiplied alpha: X.org loads ARGB cursor images (which X
+          // keeps premultiplied) unchanged, and colours its mono cursors
+          // without premultiplying only because their pixels are opaque
+          // or clear (xf86-video-ati radeon_cursor.c)
           const u32 al = p >> 24;
-          if (al == 0)
+          if (p == 0)
             continue;
           const u32 d = line[x];
           u32 out = 0xff000000u;
           for (int s = 0; s < 24; s += 8) {
             const u32 sc = (p >> s) & 0xff, dc = (d >> s) & 0xff;
-            out |= ((sc * al + dc * (255 - al)) / 255) << s;
+            out |= std::min(255u, sc + (dc * (255 - al) + 127) / 255) << s;
           }
           line[x] = out;
         }

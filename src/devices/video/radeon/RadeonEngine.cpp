@@ -116,9 +116,18 @@ constexpr u32 GMC_DST_CLIPPING = 1u << 3;
 constexpr u32 GMC_CLR_CMP_CNTL_DIS = 1u << 28;
 constexpr u32 GMC_WR_MSK_DIS = 1u << 30;
 
+// DP_CNTL (Rage 128 Pro RRG 3-165): X and Y direction, Y major, and the
+// last pixel of a line drawn <5>.
+constexpr u32 DST_X_LEFT_TO_RIGHT = 1u << 0;
+constexpr u32 DST_Y_TOP_TO_BOTTOM = 1u << 1;
+constexpr u32 DST_LAST_PEL = 1u << 5;
+
 // DP_DATATYPE as DP_GUI_MASTER_CNTL loads it: destination <3:0>, brush
 // <11:8>, source <17:16>, byte pixel order <30>.
 constexpr u32 DT_BYTE_PIX_ORDER = 1u << 30;
+/// DP_DATATYPE <29>: host data in big-endian order (RRG 3-169): the bytes
+/// of each 16-bit pixel swapped, of each 32-bit pixel reversed.
+constexpr u32 DT_HOST_BIG_ENDIAN_EN = 1u << 29;
 
 // sources (DP_MIX <10:8>)
 enum { SRC_SOURCE_MEMORY = 2, SRC_SOURCE_HOST = 3, SRC_SOURCE_HOST_BYTE = 4 };
@@ -126,6 +135,8 @@ enum { SRC_SOURCE_MEMORY = 2, SRC_SOURCE_HOST = 3, SRC_SOURCE_HOST_BYTE = 4 };
 enum {
   BRUSH_8X8_MONO_FG_BG = 0,
   BRUSH_8X8_MONO_FG_LA = 1,
+  BRUSH_8X1_MONO_FG_LA = 2,
+  BRUSH_8X1_MONO_FG_LA_B = 3,
   BRUSH_1X8_MONO_FG_BG = 4,
   BRUSH_1X8_MONO_FG_LA = 5,
   BRUSH_32X1_MONO_FG_BG = 6,
@@ -238,6 +249,18 @@ void CRadeon::engine_master_cntl(u32 data) {
     eng.sc_right = int(R(DEFAULT_SC_BOTTOM_RIGHT) & 0x3fff);
     eng.sc_bottom = int((R(DEFAULT_SC_BOTTOM_RIGHT) >> 16) & 0x3fff);
   }
+  // The master control's side effects on other registers (Rage 128 Pro
+  // RRG 3-165 and 3-172..175; R5xx Acceleration 6.2.2 GUI_CONTROL):
+  // GMC_CLR_CMP_CNTL_DIS clears both colour compare functions,
+  // GMC_WR_MSK_DIS sets the write mask and the compare mask to all ones,
+  // and every write sets DP_CNTL's X and Y directions (and POLY_LINE).
+  if (data & GMC_CLR_CMP_CNTL_DIS)
+    R(CLR_CMP_CNTL) &= ~0x707u;
+  if (data & GMC_WR_MSK_DIS) {
+    R(DP_WRITE_MASK) = 0xffffffffu;
+    R(CLR_CMP_MASK) = 0xffffffffu;
+  }
+  eng.dp_cntl |= DST_X_LEFT_TO_RIGHT | DST_Y_TOP_TO_BOTTOM;
   eng.gmc = data;
 }
 
@@ -324,10 +347,12 @@ void CRadeon::engine_write(u32 reg, u32 data) {
     eng.sc_bottom = int((data >> 16) & 0x3fff);
     return;
   case DP_CNTL:
-    eng.dp_cntl = data & 3;
+    eng.dp_cntl =
+        data & (DST_X_LEFT_TO_RIGHT | DST_Y_TOP_TO_BOTTOM | 4 | DST_LAST_PEL);
     return;
   case DP_CNTL_XDIR_YDIR_YMAJOR:
-    eng.dp_cntl = ((data >> 31) & 1) | (((data >> 15) & 1) << 1);
+    eng.dp_cntl = (eng.dp_cntl & DST_LAST_PEL) | ((data >> 31) & 1) |
+                  (((data >> 15) & 1) << 1) | (data & 4);
     return;
 
   // The commands.
@@ -397,7 +422,9 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
   case BRUSH_8X8_MONO_FG_BG:
   case BRUSH_8X8_MONO_FG_LA:
   case BRUSH_1X8_MONO_FG_BG:
-  case BRUSH_1X8_MONO_FG_LA: {
+  case BRUSH_1X8_MONO_FG_LA:
+  case BRUSH_8X1_MONO_FG_LA:
+  case BRUSH_8X1_MONO_FG_LA_B: {
     // BRUSH_Y_X (y <12:8>, x <4:0>) is the pattern position at the screen
     // origin, as X.org programs it (HARDWARE_PATTERN_SCREEN_ORIGIN)
     // [inference: the direction of the offset is not documented here].
@@ -409,8 +436,8 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
     const u8 row = u8(R(BRUSH_DATA0 + (by >> 2) * 4) >> (8 * (by & 3)));
     if ((row >> (lsb_first ? bx : 7 - bx)) & 1)
       p = R(DP_BRUSH_FRGD_CLR);
-    else if (btype == BRUSH_8X8_MONO_FG_LA || btype == BRUSH_1X8_MONO_FG_LA)
-      return;
+    else if (btype != BRUSH_8X8_MONO_FG_BG && btype != BRUSH_1X8_MONO_FG_BG)
+      return; // the leave-alone brushes
     else
       p = R(DP_BRUSH_BKGD_CLR);
     break;
@@ -445,23 +472,41 @@ void CRadeon::engine_pixel(int x, int y, u32 src, bool src_opaque) {
     break;
   }
 
-  if (!(eng.gmc & GMC_CLR_CMP_CNTL_DIS) && (R(CLR_CMP_CNTL) & 7)) {
-    // Colour compare: <2:0> on the source, <10:8> on the destination;
-    // 4 "not equal" and 5 "equal" leave the pixel alone when they hold.
+  // Colour compare (CLR_CMP_CNTL, Rage 128 Pro RRG 3-178): a function on
+  // the source <2:0> and one on the destination <10:8>, which of them
+  // apply in CLR_CMP_SRC <25:24> (0 the destination's, 1 the source's,
+  // 2 both). A function that holds keeps the pixel from being written:
+  // 1 always, 4 when the colour equals the reference, 5 when it differs.
+  // 7 (source only) flips: an equal source pixel is written XORed with
+  // the source foreground colour.
+  // The polarity of 4 and 5 is the Radeon's, the reverse of the Rage 128
+  // guide's table: X.org's radeon driver gets "skip pixels equal to the
+  // transparent colour" from SRC_CMP_EQ_COLOR (4) on the Radeon and from
+  // SRC_CMP_NEQ_COLOR (5) on the Rage 128, and says so
+  // (xf86-video-ati RADEONSetTransparency, xf86-video-r128
+  // R128SetTransparency). The destination function is taken to follow the
+  // source's polarity.
+  const u32 cc = R(CLR_CMP_CNTL);
+  if (cc & 0x707u) {
     const u32 m = R(CLR_CMP_MASK);
-    const u32 sf = R(CLR_CMP_CNTL) & 7, df = (R(CLR_CMP_CNTL) >> 8) & 7;
+    const u32 which = (cc >> 24) & 3;
+    auto holds = [](u32 fn, bool eq) {
+      return fn == 1 || (fn == 4 && eq) || (fn == 5 && !eq);
+    };
+    const u32 sf = cc & 7, df = (cc >> 8) & 7;
     const bool src_eq = (src & m) == (R(CLR_CMP_CLR_SRC) & m);
     const bool dst_eq = (d & m) == (R(CLR_CMP_CLR_DST) & m);
-    if ((sf == 4 && !src_eq) || (sf == 5 && src_eq) || (df == 4 && !dst_eq) ||
-        (df == 5 && dst_eq))
+    const bool use_src = which == 1 || which == 2;
+    const bool use_dst = which == 0 || which == 2;
+    if ((use_src && holds(sf, src_eq)) || (use_dst && holds(df, dst_eq)))
       return;
+    if (use_src && sf == 7 && src_eq)
+      src ^= R(DP_SRC_FRGD_CLR);
   }
 
   u32 out = rop3((R(DP_MIX) >> 16) & 0xff, p, src, d);
-  if (!(eng.gmc & GMC_WR_MSK_DIS)) {
-    const u32 wm = R(DP_WRITE_MASK);
-    out = (d & ~wm) | (out & wm);
-  }
+  const u32 wm = R(DP_WRITE_MASK);
+  out = (d & ~wm) | (out & wm);
   vram_write(addr, bpp, out);
 }
 
@@ -550,7 +595,13 @@ void CRadeon::engine_host_data(u32 data, bool last) {
       s = on ? R(DP_SRC_FRGD_CLR) : R(DP_SRC_BKGD_CLR);
       opaque = on || stype != SRC_MONO_FG_LA;
     } else {
-      s = bpp == 4 ? data : (data >> (8 * bpp * k)) & ((1u << (8 * bpp)) - 1);
+      u32 hd = data;
+      if (R(DP_DATATYPE) & DT_HOST_BIG_ENDIAN_EN)
+        hd = bpp == 4   ? (hd << 24) | ((hd & 0xff00) << 8) |
+                              ((hd >> 8) & 0xff00) | (hd >> 24)
+             : bpp == 2 ? ((hd & 0x00ff00ffu) << 8) | ((hd >> 8) & 0x00ff00ffu)
+                        : hd;
+      s = bpp == 4 ? hd : (hd >> (8 * bpp * k)) & ((1u << (8 * bpp)) - 1);
     }
     engine_pixel(eng.dst_x + eng.hx, eng.dst_y + eng.hy, s, opaque);
     if (++eng.hx >= eng.width) {
@@ -566,9 +617,11 @@ void CRadeon::engine_host_data(u32 data, bool last) {
 
 /**
  * A line from DST_LINE_START to DST_LINE_END (y in <31:16>, x in <15:0>),
- * the end pixel left out, in the brush colour through the ROP3 (the
- * source is the source foreground colour). The next line of a polyline
- * starts where this one ended.
+ * the end pixel left out unless DP_CNTL's DST_LAST_PEL is set (RRG
+ * 3-165; X.org draws the last pixel of a line itself, as a 1x1
+ * rectangle, and so leaves the bit clear), in the brush colour through
+ * the ROP3 (the source is the source foreground colour). The next line
+ * of a polyline starts where this one ended.
  **/
 void CRadeon::engine_line(u32 reg) {
   (void)reg;
@@ -581,8 +634,11 @@ void CRadeon::engine_line(u32 reg) {
   int err = dx + dy;
   eng.line_pat = int(R(DST_LINE_PATCOUNT) & 0x1f);
   for (;;) {
-    if (x0 == x1 && y0 == y1)
+    if (x0 == x1 && y0 == y1) {
+      if (eng.dp_cntl & DST_LAST_PEL)
+        engine_pixel(x0, y0, R(DP_SRC_FRGD_CLR), true);
       break;
+    }
     engine_pixel(x0, y0, R(DP_SRC_FRGD_CLR), true);
     eng.line_pat = (eng.line_pat + 1) & 31;
     const int e2 = 2 * err;

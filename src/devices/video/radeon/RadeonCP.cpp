@@ -37,9 +37,10 @@
  *   type 1: two registers, <10:0> and <21:11>, one dword each;
  *   type 2: a filler;
  *   type 3: <29:16> count less one, <15:8> the operation: the 2D
- *           operations (CNTL_PAINT_MULTI, CNTL_BITBLT_MULTI,
- *           CNTL_HOSTDATA_BLT, CNTL_POLYLINE), NOP and WAIT_FOR_IDLE.
+ *           operations (see cp_packet3), NOP and WAIT_FOR_IDLE.
  *           3D operations are not modelled.
+ * (AMD's "Radeon R5xx Acceleration" v1.5, 6.1, documents the four
+ * types, as the R100 microcode already had them.)
  * A 2D operation starts with DP_GUI_MASTER_CNTL; its bits say which
  * fields follow (source and destination pitch/offset, the clip
  * rectangles, the brush and source colours), then the operation's own.
@@ -105,6 +106,10 @@ constexpr u32 DST_LINE_START = 0x1600;
 constexpr u32 DST_LINE_END = 0x1604;
 constexpr u32 HOST_DATA0 = 0x17c0;
 constexpr u32 HOST_DATA_LAST = 0x17e0;
+constexpr u32 BRUSH_Y_X = 0x1474;
+constexpr u32 CLR_CMP_CNTL = 0x15c0;
+constexpr u32 CLR_CMP_CLR_SRC = 0x15c4;
+constexpr u32 CLR_CMP_CLR_DST = 0x15c8;
 
 // type-3 operations
 enum : u8 {
@@ -120,7 +125,9 @@ enum : u8 {
   OP_CNTL_POLYSCANLINES = 0x98,
   OP_CNTL_PAINT_MULTI = 0x9a,
   OP_CNTL_BITBLT_MULTI = 0x9b,
-  OP_CNTL_TRANS_BITBLT = 0x9c
+  OP_CNTL_TRANS_BITBLT = 0x9c,
+  OP_PLY_NEXTSCAN = 0x1d,
+  OP_SET_SCISSORS = 0x1e
 };
 
 /// How many brush dwords a 2D packet carries, by brush type, and which
@@ -160,12 +167,32 @@ int brush_fields(u32 type, u32 *regs) {
       add(BRUSH_DATA0 + 4 * u32(i));
     break;
   case 13: // solid
+  case 14: // solid (R5xx Acceleration 6.2.2, BRUSH_PACKET table)
     add(DP_BRUSH_FRGD_CLR);
     break;
-  default: // none, and the colour brushes (not carried in a packet here)
+  default: // none; the 8x8 colour brush is sized by the destination
     break;
   }
   return n;
+}
+
+/// The bytes a pixel of a DP_DATATYPE destination type takes (24 bpp
+/// pixels count as 4 in a colour brush packet).
+int datatype_bytes(u32 t) {
+  switch (t & 0xf) {
+  case 3:
+  case 4:
+  case 11:
+  case 12:
+  case 15:
+    return 2;
+  case 5:
+  case 6:
+  case 14:
+    return 4;
+  default:
+    return 1;
+  }
 }
 } // namespace
 
@@ -380,7 +407,31 @@ void CRadeon::cp_feed(u32 d) {
 /**
  * A type-3 packet. The 2D operations load the engine's registers as the
  * fields say and start it through the same registers a driver would
- * write, so the two ways of driving the engine draw the same.
+ * write, so the two ways of driving the engine draw the same. The 3D
+ * operations are not modelled.
+ *
+ * The packet layouts are AMD's "Radeon R5xx Acceleration" v1.5, 6.2.2
+ * (the PM4 2D packets the R100 microcode already understood):
+ *   SETTINGS   GUI_CONTROL (DP_GUI_MASTER_CNTL), then as its bits say
+ *              SRC_PITCH_OFFSET <0>, DST_PITCH_OFFSET <1>,
+ *              SRC_SC_BOT_RITE <2>, SC_TOP_LEFT + SC_BOT_RITE <3>, the
+ *              brush packet of BRUSH_TYPE <7:4>, BRUSH_Y_X <31>;
+ *   PAINT          [TOP|LEFT] [BOTM|RITE] per rectangle (y high);
+ *   PAINT_MULTI    [X|Y] [W|H] per rectangle (x high);
+ *   BITBLT(_MULTI) [SRC_X|SRC_Y] [DST_X|DST_Y] [W|H] (x high);
+ *   TRANS_BITBLT   CLR_CMP_CNTL, the source and destination reference
+ *                  colours, then BITBLT's rectangles;
+ *   HOSTDATA_BLT   FRGD, BKGD, then per bitmap [Y|X] [H|W] NUMBER<13:0>
+ *                  and the data;
+ *   POLYLINE       [Y|X] per vertex (y high);
+ *   POLYSCANLINES  SCAN_COUNT, then per scan NUM_LINE, [HEIGHT|TOP] and
+ *                  NUM_LINE [END|START] pairs;
+ *   NEXTCHAR       [Y|X] [H|W] and the bitmap, no settings;
+ *   PLY_NEXTSCAN   [HEIGHT|TOP] and [END|START] pairs, no settings;
+ *   SET_SCISSORS   [TOP_LEFT] [BOTTOM_RIGHT].
+ * The guide does not say whether a rectangle's bottom-right corner or a
+ * span's end is inclusive; they are taken as exclusive, as the Windows
+ * RECTL these packets were designed for has them [inference].
  **/
 void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
   if (m_trace && m_trace_budget > 0) {
@@ -390,17 +441,51 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
       printf(" %08x", d[i]);
     printf("%s\n", d.size() > 12 ? " ..." : "");
   }
+  auto s16 = [](u32 v) { return int(int16_t(v & 0xffff)); };
+  // A rectangle filled with the current settings.
+  auto paint = [&](int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0)
+      return;
+    eng.dp_cntl |= 3;
+    reg_write(DST_Y_X, 4, (u32(y & 0xffff) << 16) | u32(x & 0xffff));
+    reg_write(DST_HEIGHT_WIDTH, 4, (u32(h) << 16) | u32(w));
+  };
   switch (op) {
   case OP_NOP:
   case OP_WAIT_FOR_IDLE:
   case OP_LOAD_MICROCODE:
     return;
+  case OP_SET_SCISSORS:
+    if (d.size() >= 2) {
+      reg_write(SC_TOP_LEFT, 4, d[0]);
+      reg_write(SC_BOTTOM_RIGHT, 4, d[1]);
+    }
+    return;
+  case OP_NEXT_CHAR:
+    // A character in the current colours, as HOSTDATA_BLT's bitmaps.
+    if (d.size() >= 2) {
+      eng.dp_cntl |= 3;
+      reg_write(DST_Y_X, 4, d[0]);
+      reg_write(DST_HEIGHT_WIDTH, 4, d[1]);
+      for (size_t k = 2; k < d.size(); k++)
+        reg_write(k + 1 == d.size() ? HOST_DATA_LAST : HOST_DATA0, 4, d[k]);
+    }
+    return;
+  case OP_PLY_NEXTSCAN:
+    if (!d.empty()) {
+      const int top = s16(d[0]), h = int(d[0] >> 16);
+      for (size_t k = 1; k < d.size(); k++)
+        paint(s16(d[k]), top, s16(d[k] >> 16) - s16(d[k]), h);
+    }
+    return;
   case OP_CNTL_PAINT:
   case OP_CNTL_PAINT_MULTI:
   case OP_CNTL_BITBLT:
   case OP_CNTL_BITBLT_MULTI:
+  case OP_CNTL_TRANS_BITBLT:
   case OP_CNTL_HOSTDATA_BLT:
   case OP_CNTL_POLYLINE:
+  case OP_CNTL_POLYSCANLINES:
     break;
   default:
     if (!m_cp_unknown_seen[op]) {
@@ -431,18 +516,55 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
     field(SC_TOP_LEFT);
     field(SC_BOTTOM_RIGHT);
   }
-  u32 brush_regs[40];
-  const int nb = brush_fields((gmc >> 4) & 0xf, brush_regs);
-  for (int b = 0; b < nb; b++)
-    field(brush_regs[b]);
-  const u32 src_type = (gmc >> 12) & 3;
-  const u32 source = (gmc >> 24) & 7;
+  const u32 btype = (gmc >> 4) & 0xf;
+  if (btype == 10) {
+    // The 8x8 colour brush: 64 pixels of the destination type, 16 dwords
+    // per byte of pixel.
+    const int n = 16 * datatype_bytes(gmc >> 8);
+    for (int b = 0; b < n && b < 64; b++)
+      field(BRUSH_DATA0 + 4 * u32(b));
+  } else {
+    u32 brush_regs[40];
+    const int nb = brush_fields(btype, brush_regs);
+    for (int b = 0; b < nb; b++)
+      field(brush_regs[b]);
+  }
+  if (gmc & 0x80000000u)
+    field(BRUSH_Y_X);
+
+  // source x/y, destination x/y, width/height (x high, y low), copied in
+  // whichever direction keeps an overlapping copy intact
+  auto blits = [&]() {
+    while (i + 3 <= d.size()) {
+      const int sx = int(d[i] >> 16) & 0x3fff, sy = int(d[i]) & 0x3fff;
+      const int dx = int(d[i + 1] >> 16) & 0x3fff, dy = int(d[i + 1]) & 0x3fff;
+      const int w = int(d[i + 2] >> 16) & 0x3fff, h = int(d[i + 2]) & 0x3fff;
+      const bool ttb = !(dy > sy), ltr = !(dy == sy && dx > sx);
+      eng.dp_cntl = (eng.dp_cntl & ~3u) | (ltr ? 1 : 0) | (ttb ? 2 : 0);
+      const int ox = ltr ? 0 : w - 1, oy = ttb ? 0 : h - 1;
+      reg_write(SRC_X_Y, 4, (u32(sx + ox) << 16) | u32(sy + oy));
+      reg_write(DST_X_Y, 4, (u32(dx + ox) << 16) | u32(dy + oy));
+      reg_write(DST_WIDTH_HEIGHT, 4, d[i + 2]);
+      eng.dp_cntl |= 3;
+      i += 3;
+    }
+  };
 
   switch (op) {
   case OP_CNTL_PAINT:
+    // rectangles by their corners: [top|left] [bottom|right]
+    while (i + 2 <= d.size()) {
+      const int l = s16(d[i]), t = s16(d[i] >> 16);
+      const int r = s16(d[i + 1]), b = s16(d[i + 1] >> 16);
+      paint(l, t, r - l, b - t);
+      i += 2;
+    }
+    return;
+
   case OP_CNTL_PAINT_MULTI:
     // rectangles: x <31:16> y <15:0>, width <31:16> height <15:0>
     while (i + 2 <= d.size()) {
+      eng.dp_cntl |= 3;
       reg_write(DST_X_Y, 4, d[i]);
       reg_write(DST_WIDTH_HEIGHT, 4, d[i + 1]);
       i += 2;
@@ -451,38 +573,27 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
 
   case OP_CNTL_BITBLT:
   case OP_CNTL_BITBLT_MULTI:
-    if (src_type != 3) { // mono source: its colours
-      field(DP_SRC_FRGD_CLR);
-      field(DP_SRC_BKGD_CLR);
-    }
-    // source x/y, destination x/y, width/height (x high, y low), copied
-    // in whichever direction keeps an overlapping copy intact
-    while (i + 3 <= d.size()) {
-      const int sx = int(d[i] >> 16) & 0x3fff, sy = int(d[i]) & 0x3fff;
-      const int dx = int(d[i + 1] >> 16) & 0x3fff, dy = int(d[i + 1]) & 0x3fff;
-      const int w = int(d[i + 2] >> 16) & 0x3fff, h = int(d[i + 2]) & 0x3fff;
-      const bool ttb = !(dy > sy), ltr = !(dy == sy && dx > sx);
-      eng.dp_cntl = (ltr ? 1 : 0) | (ttb ? 2 : 0);
-      const int ox = ltr ? 0 : w - 1, oy = ttb ? 0 : h - 1;
-      reg_write(SRC_X_Y, 4, (u32(sx + ox) << 16) | u32(sy + oy));
-      reg_write(DST_X_Y, 4, (u32(dx + ox) << 16) | u32(dy + oy));
-      reg_write(DST_WIDTH_HEIGHT, 4, d[i + 2]);
-      eng.dp_cntl = 3;
-      i += 3;
-    }
+    blits();
     return;
 
-  case OP_CNTL_HOSTDATA_BLT: {
+  case OP_CNTL_TRANS_BITBLT:
+    field(CLR_CMP_CNTL);
+    field(CLR_CMP_CLR_SRC);
+    field(CLR_CMP_CLR_DST);
+    blits();
+    return;
+
+  case OP_CNTL_HOSTDATA_BLT:
     // The source colours, then one or more rectangles, each y <31:16>
-    // x <15:0>, height/width, the number of data dwords and the data:
-    // DECwindows sends a run of glyphs in one packet this way.
+    // x <15:0>, height/width, the number of data dwords <13:0> and the
+    // data: DECwindows sends a run of glyphs in one packet this way.
     field(DP_SRC_FRGD_CLR);
     field(DP_SRC_BKGD_CLR);
-    eng.dp_cntl = 3;
+    eng.dp_cntl |= 3;
     while (i + 3 <= d.size()) {
       reg_write(DST_Y_X, 4, d[i]);
       reg_write(DST_HEIGHT_WIDTH, 4, d[i + 1]);
-      size_t n = d[i + 2];
+      size_t n = d[i + 2] & 0x3fff;
       i += 3;
       if (n > d.size() - i)
         n = d.size() - i;
@@ -490,19 +601,27 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
         reg_write(k + 1 == n ? HOST_DATA_LAST : HOST_DATA0, 4, d[i + k]);
       i += n;
     }
-    (void)source;
     return;
-  }
 
   case OP_CNTL_POLYLINE:
-    // the brush colour drawn through the vertices (x high, y low)
+    // the brush colour drawn through the vertices, [y|x] each: the layout
+    // of DST_LINE_START/END
+    if (i < d.size())
+      reg_write(DST_LINE_START, 4, d[i++]);
+    while (i < d.size())
+      reg_write(DST_LINE_END, 4, d[i++]);
+    return;
+
+  case OP_CNTL_POLYSCANLINES:
     if (i < d.size()) {
-      const u32 v = d[i++];
-      reg_write(DST_LINE_START, 4, (v << 16) | (v >> 16));
-    }
-    while (i < d.size()) {
-      const u32 v = d[i++];
-      reg_write(DST_LINE_END, 4, (v << 16) | (v >> 16));
+      u32 scans = d[i++];
+      while (scans-- && i + 2 <= d.size()) {
+        u32 n = d[i] & 0x3fff;
+        const int top = s16(d[i + 1]), h = int(d[i + 1] >> 16);
+        i += 2;
+        for (; n && i < d.size(); n--, i++)
+          paint(s16(d[i]), top, s16(d[i] >> 16) - s16(d[i]), h);
+      }
     }
     return;
   }
