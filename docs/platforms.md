@@ -62,7 +62,7 @@ Three layers, each added in a different way:
 | AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses ([packet](platforms/es45.md)) |
 | AlphaServer DS25 (Titan) | L5: its update utility installs its console (V7.3-2) in the flash, with the on-board AIC-7899 present as far as the console needs it (configuration space and expansion ROM, no SCSI); network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one and two processors, with NIC interrupts checked on all four hoses; `show config` matches a real DS25's (owner's guide) in name, core logic but the Cchip pass, on-board places and slot numbering ([packet](platforms/ds25.md)) |
 | AlphaServer DS15 (Titan) | L5: its update utility installs its console (V7.3-2); its RMC is reached through a different mailbox and its halt register does not halt the processor (both found in the console's code); one PA-chip, so hoses 0 and 2; network boot; OpenVMS 8.4 boots its CD and an installed disk to login, with NIC interrupts checked on both hoses; `show config` matches a real DS15's (owner's guide) in name, one PA-chip, core logic but the Cchip pass, on-board places and slot numbering ([packet](platforms/ds15.md)) |
-| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L5 on emulated EV7s (`es47`, `es80` and `gs1280` rows, packets M0-M6): the console reaches `P00>>>` on the telnet console that the emulated CMMs carry (GIO); `show config` lists the IO7s with their four buses and the devices behind them -- on the ES47 the I/O expander's CMD 649 IDE (`cmd649`, the CD as `dqa0`) and four-function USB (`uss344`) as the real listing has them, a 53C895 and a DE500-BA standing in for the AIC-7892 and the gigabit card; OpenVMS 8.4 boots from its CD to DCL on every processor: the ES47 with two (`ev7`, or `ev7z` at 1300 MHz, which the console names "EV7 rev 3.0" as a real 7/1300 does), the ES80 with eight and four IO7s, the GS1280 with sixteen. The staged plan is in the [packet](platforms/marvel.md) |
+| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L5 on emulated EV7s (`es47`, `es80` and `gs1280` rows, packets M0-M6): the console reaches `P00>>>` on the telnet console that the emulated CMMs carry (GIO); `show config` lists the IO7s with their four buses and the devices behind them -- on the ES47 the I/O expander's CMD 649 IDE (`cmd649`, the CD as `dqa0`) and four-function USB (`uss344`) as the real listing has them, a 53C895 and a DE500-BA standing in for the AIC-7892 and the gigabit card; OpenVMS 8.4 boots from its CD to DCL on every processor: the ES47 with two (`ev7`, or `ev7z` at 1300 MHz, which the console names "EV7 rev 3.0" as a real 7/1300 does), the ES80 with eight and four IO7s, the GS1280 with sixteen. Installed to a SCSI disk (M7b) it boots to login on the ES47 and the ES80, and DECwindows draws its login box on the Radeon 7500 AGP with a USB keyboard and pointer. The staged plan is in the [packet](platforms/marvel.md) |
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
@@ -306,7 +306,10 @@ device or an absent CPU.
      rows for the ES80 (eight processors, four IO7s) and the GS1280
      (sixteen), from a processor topology (`chipsets/marvel/Topology.*`)
      and a CMM per module.
-   - **M7**: OpenVMS 8.4 to an installed disk, and Linux.
+   - **M7** (OpenVMS done): OpenVMS 8.4 installed to disk and booted to
+     login, DECwindows on the Radeon with USB input; fixes to the embedded
+     slots' interrupt lines, shared lines, the EV7 clock rendezvous, and a
+     USB keyboard. Linux is open.
 
 The EV7 machines are the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its

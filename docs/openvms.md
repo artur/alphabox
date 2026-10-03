@@ -207,7 +207,12 @@ correctly; the trace of one session is in
 `lab/platforms/radeon/p3-decw-trace.out`. On the ES47 (the card in the
 AGP slot, `pci3.5`), booted from the CD, `SYSMAN IO AUTOCONFIGURE` finds
 the card and tries to configure `GHA0`, but the CD's minimal system has no
-`SYS$GHDRIVER.EXE`; DECwindows there needs an installed system.
+`SYS$GHDRIVER.EXE`. An installed system has it: the DECwindows Motif kit
+on the same CD installs `SYS$GHDRIVER.EXE` and
+`DECW$SERVER_DDX_RADEON.EXE`, and on an ES47 installed from the CD the
+server draws the same login box ("Welcome to ES47") once it has a
+keyboard and a mouse -- on the EV7 machines, which have no 8042, those
+are USB devices (`KBD0`, `MOU0`): see docs/platforms/marvel.md, M7b.
 
 SRM does not use the Permedia 2 as its console (README, known limitations), so the
 console stays on the serial port while DECwindows takes the card. With a

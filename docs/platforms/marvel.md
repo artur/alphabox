@@ -12,7 +12,11 @@ or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`) processors and a
 `serial0` for the console terminal, PCI devices as `pci<hose>.<slot>`,
 hose = PID * 4 + IO7 port · **Status**: packets M0-M6 done (2026-10-02):
 L5 on all three (M6c: the ES80 with eight processors and four IO7s, the
-GS1280 with sixteen, OpenVMS 8.4 to DCL on every processor). On emulated
+GS1280 with sixteen, OpenVMS 8.4 to DCL on every processor). M7
+(2026-10-03): OpenVMS 8.4 installed to a SCSI disk on the ES47 boots to
+login (and on the ES80), and DECwindows draws its login box on the Radeon
+7500 with a USB keyboard and pointer on the ES47's own USB; a JIT-only
+crash in OpenVMS's USB driver at boot (about one boot in ten) is open. On emulated
 EV7s, with the management processor (CMM) on the other side of each
 processor's GIO port emulated and the IO7 on PID 0, the console reaches
 `P00>>>`, `show config` lists IO7 0 with its four buses and the devices
@@ -445,7 +449,7 @@ type and revision), not whole listings.
 | L2 | `P00>>>` on the telnet port, through the emulated CMM's GIO terminal | **reached** with M4 (2026-10-02) |
 | L3 | `show config` matches the real ES47 listing in structure: "PID 0 ... EV7 rev x, NNN MHz", "Memory 0 ...", "IO7 0 ...", "PCI Bus 0 Hose 0 ...", PID 1 "No Local I/O", the RIMM table; `show cpu` "Type Major 15"; `show mem` with PID 1 at 400000000 | **reached** with M5 (2026-10-02). Real listings exist only for other configurations and console versions (V7.3-11 against our V7.3-1), so L3 is a structural match. Device lines depend on which I/O we emulate behind the IO7 |
 | L4 | `test` and console network boot through a NIC on an IO7 hose; disk boot of a CD | **reached** for the CD: `boot dka400` loads OpenVMS's APB from a SCSI CD on hose 2 (M5); network boot not tried |
-| L5 | OpenVMS 8.4 boots from `lab/ALPHA084.ISO` | **reached** with M5: date prompt, installation menu and DCL on both EV7s (2026-10-02) |
+| L5 | OpenVMS 8.4 boots from `lab/ALPHA084.ISO` | **reached** with M5: date prompt, installation menu and DCL on both EV7s (2026-10-02); with M7 installed to disk, booted to login on the ES47 and the ES80, DECwindows on the Radeon (2026-10-03) |
 | L6 | the ES40 console-log check is clean, the JIT cross-check is 0 | after every packet that touches shared code (M0, M1) |
 
 ## Plan
@@ -463,7 +467,7 @@ moved lines of code, **[guess]**.
 | M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | **done** 2026-10-02 (see "M4"): ~800 lines |
 | M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | **done** 2026-10-02 (see "M5"): ~900 lines, and L5 with two CMM fixes |
 | M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | **done** 2026-10-02 for one partition: routes (M6a), EV7z (M6b), ES80 and GS1280 rows (M6c) |
-| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | the CD boot to DCL came with M5; from the real CMD 649 IDE (`dqa0`) with M7a, beside the real USB; an installation to disk and Linux are open |
+| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | OpenVMS: **done** 2026-10-03: the CD boot to DCL came with M5; from the real CMD 649 IDE (`dqa0`) with M7a, beside the real USB; installed to disk, login on the ES47 and the ES80, DECwindows on the Radeon with M7b. Linux is open |
 
 The order is M0, then M1+M2+M3 together (the console reaches the GIO
 conversation with real answers to its CSR reads), then M4 (the prompt),
@@ -598,6 +602,181 @@ hardware, not Adaptec's code). That is a model the size of the
 53C8xx's SCRIPTS processor (some 5000 lines here) or larger, with no
 reference trace to check it against; OpenVMS and the console already
 have a working SCSI path in the 53C895, so it was left.
+### M7b: OpenVMS 8.4 installed, DECwindows on the Radeon (2026-10-03)
+
+**Result**: OpenVMS 8.4 installs from its CD onto a SCSI disk of the
+emulated ES47 and boots from it to the login prompt on both EV7s; the same
+disk boots on the ES80 row with eight. With a USB keyboard (new) and the
+tablet on the ES47's own USB -- the USS-344 in hose 2 slot 3 (M7a) --
+DECwindows starts on the Radeon 7500 in the AGP slot and draws the CDE
+login box, "Welcome to ES47", at 1024x768: typed keys reach it, the pointer
+moves and clicks, its Help dialog opens. Without licences it goes no
+further than on the ES40 (docs/openvms.md). On the final build it started
+cleanly in 8 of 8 two-processor runs. One fault is open: a JIT-only crash
+in OpenVMS's USB driver at boot (below). The disk image, its README, the
+transcripts and frames are in `lab/platforms/marvel/m7/`.
+
+**The installation** (`install-console.log`): `boot dka400` with the CD at
+hose 2 slot 1 (53C895, ID 4) and an empty 4 GB file at ID 0 (DKA0), then
+the usual answers (INITIALIZE, DKA0, ODS-5, SCSNODE ES47, no DECnet,
+DECwindows and TCP/IP). The PCSI execution phase took 12 minutes on the JIT
+lane, as on the ES40; the first boot of DKA0 asked for the date (every
+first boot does), ran AUTOGEN and rebooted through the console by itself,
+and came up to `Username:`. Later boots reach a DCL prompt in about a
+minute. `SHOW CPU`: "hp AlphaServer ES47 7/1000", 0 and 1 active.
+
+**The ES80** (`es80-8cpu-login-console.log`, `platform = "es80"`, eight
+`ev7` at 512 MB each, the same devices on PID 0's IO7): the installed disk
+boots to login, seven `%SMP-I-CPUTRN`, `SHOW CPU` "hp AlphaServer ES80
+7/1000" with 0, 1, 8, 9, 16, 17, 24, 25 active, `SHOW MEMORY` 4.00 GB.
+
+**The Radeon's driver.** The CD's own system has no `SYS$GHDRIVER.EXE`;
+the DECwindows Motif kit on the same CD installs it, with
+`DECW$SERVER_DDX_RADEON.EXE` (and DRM, Mesa and GLX images) in SYS$LIBRARY.
+`GHA0` configures on the first boot with the card, and the startup sets
+WINDOW_SYSTEM to 1. `@SYS$MANAGER:DECW$STARTUP` by hand then starts the
+server -- once there is a keyboard and a mouse.
+
+**Input devices.** The EV7 machines have no 8042: DECW$DEVICE.COM's
+platform path waits 15 s for `MOU` and then `KBD` USB devices
+(`%DECW$DEVICE-I-NOINPUTDEVICES` otherwise), which is where the server
+stopped at first. OpenVMS 8.4 Alpha has only the OHCI driver
+(`SYS$OHCIDRIVER`, bound to the Lucent/Agere USS-344, the NEC 1033:0035 and
+the Philips 1131:1561 in SYS$CONFIG.DAT) and the HID class
+(`SYS$HIDDRIVER`, `SYS$KBDDRIVER` for usage page 1 usage 6,
+`SYS$MOUDRIVER` for usage 2). So, on the on-board USB:
+
+```
+  pci2.3 = uss344
+  {
+    port1 = "tablet";
+    port2 = "keyboard";
+  }
+```
+
+The tablet's top collection is a mouse, and `SYS$MOUDRIVER` follows its
+absolute coordinates (the pointer lands where it is put). The keyboard is
+the new `CUsbKeyboard` (docs/usb.md). OpenVMS enumerates them as `HID0`,
+`MOU0`, `KBD0` under `UCM0`, and sets the keyboard's report protocol, its
+LEDs and idle 0. It configures OHA0-OHC0, three of the USS-344's four
+functions (M7a): `SYSMAN IO SHOW BUS` lists nodes 24-26 (slot 3,
+functions 0-2) and no node 27, although the console gives function 3 its
+BAR and line 0x46 like the others -- why is still not known.
+
+All four functions interrupt on one LSI (0x46), and that only works
+because the USS-344 is not a NEC: `SYS$OHCIDRIVER`'s interrupt routine
+(SYS$OHCIDRIVER+0A10) services, for a NEC controller, only its own; for
+anything else it polls up to four controllers that share the vector
+(`IO_INTERRUPT` keeps one VEC per SCB slot). Before M7a, with the `ehci`
+card (a NEC) in that slot, OHA's start-of-frame interrupt was never
+acknowledged and the line stormed until startup stopped; a NEC card works
+in an option slot (`pci1.1`), where its functions have lines of their own.
+
+**Fixed:**
+
+1. **The embedded slots' interrupt lines** (`marvel_pci_interrupt`,
+   platforms/es47/Es47.cpp; one implementation, which M7a's rotation of
+   slot s's INTA onto slot 1's INTx s - 1 is now part of). On port 2 of an
+   IO7 whose I/O type is "Embedded I/O", the console (the routine at
+   0x2eab70 that writes configuration register 0x3c) gives slot 2 slot 1's
+   INTB -- function 1 INTD -- and slot 3 slot 1's INTC for every function,
+   whatever their pins say; OpenVMS takes the line from that register and
+   enables that LSI. Probed: a card in 2/2 gets 0x45, three functions in
+   2/3 all 0x46, cards in 2/4 and 2/5 0x50 and 0x54. That agrees with M7a
+   for every device there (the 53C895 0x44, the CMD 649 0x45, the USS-344's
+   functions, all on INTA, 0x46) and differs only where M7a's rotation was
+   an inference: other pins, and slot 2's function 1. The board's
+   `pci_interrupt` hook takes the function (-1 behind a bridge; every other
+   board ignores it). It is the rule of any embedded-I/O IO7, so the ES80's
+   and GS1280's too.
+2. **Shared lines** (`CPCIDevice::do_pci_interrupt`). Functions of one
+   device on the same input are now ORed: one function dropping its request
+   no longer drops another's (the USS-344's four on 0x46).
+3. **The clock rendezvous** (Ev7Csr.cpp). Every 128th interval-timer
+   interrupt, the PALcode's handler (0x39344; the console's and OpenVMS's)
+   makes the primary write RBOX_INT<23> to every other processor's
+   RBOX_IREQ (0x396b8), while a secondary clears its own <23> and spins, in
+   PALmode, until <23> or <22> is set (0x3972c). On the hardware the
+   secondary is waiting before the broadcast leaves; here CPU 0's thread
+   ticks both and runs its own handler first, so the broadcast often came
+   before CPU 1 had taken the same tick, CPU 1's clear erased it, and CPU 1
+   spun a whole window (128 ticks, ~130 ms) with its interrupts off -- every
+   window. `ALPHABOX_TRACE_RBOX` showed PID 1 holding enabled interrupts
+   150-280 ms in PALmode at 0x39734 and merging a quarter of its ticks
+   (59,000 of 252,000); OpenVMS bugchecked CPUSPINWAIT when the DECwindows
+   server started, in 11 of 14 two-processor runs (one processor: 3 of 3
+   clean). A broadcast that arrives before the processor has begun waiting
+   is now held and set at its clear. After: 861 merged in 279,000, and no
+   150 ms waits.
+4. **A USB keyboard** (`port<n> = "keyboard"`, devices/usb/UsbKeyboard.*):
+   a boot keyboard whose state changes are queued as reports, so a scripted
+   press and release between two polls still types.
+5. **Keys and pointer without an 8042** (gui/sdl.cpp): the window's keys
+   and `ALPHABOX_KEYPIPE`/`ALPHABOX_KEYSCRIPT` now reach the USB keyboard as
+   well as the PS/2 one (`gui_guest_key`); before, a key pressed in the
+   window of a machine with no 8042 dereferenced a null keyboard.
+6. **JIT_VERIFY counted only GPR differences.** A differing store, STx_C,
+   PC, IPR, FP register or store count was printed and left out of the
+   "N mismatches" summary, so `srm_run.sh` and a verify run reported 0 with
+   real differences on the screen. Each now counts its block as a mismatch
+   (once), with the block's words printed. Counting showed 86 in one
+   OpenVMS boot of the ES47, all one block (a kernel-process context switch
+   at ffffffff80a63948: `MF_FPCR f0; STT f0`, ... `LDT f0; MT_FPCR f0`):
+   **the verifier**, not the JIT -- it restored the GPRs, FP registers and
+   the IPRs a compiled pass reads before that pass, but not FPCR, so the
+   compiled `MF_FPCR` read what the interpreter's later `MT_FPCR` had left.
+   FPCR and EXC_SUM are now restored too. That exposed one real
+   divergence, in the JIT: `LDS`/`LDT` to f31 (a prefetch) was dropped,
+   where the interpreter's FPSTART takes the FEN trap with FP disabled and
+   otherwise clears EXC_SUM; both emitters now do the same. After: an ES47
+   OpenVMS boot on the verify lane, 546 and 554 million compiled blocks on
+   one and two processors, 0 mismatches; `srm_run.sh` on the verify lane 0.
+
+Also: the OHCI register trace (`ALPHABOX_USBTRACE`) names its controller
+(`ohci0`..`ohci3` on the card) and counts reads per controller.
+
+**Open: a USB crash at boot, JIT only.** In about one boot in ten with USB
+devices, OpenVMS bugchecks INVEXCEPTN during startup, often after
+`%SYSTEM-W-POOLEXPF, Pool expansion failed -- insufficient NPAGEVIR`: an
+access violation in `SYS$USBDRIVER+04F48` (a structure pointer read as 2),
+on CPU 0 at IPL 8 with IOLOCK8 held (`runs/boot-crash1` holds a dump).
+Counts, two processors unless said:
+
+| build | USB | crashed |
+| --- | --- | --- |
+| before the rebase, JIT | NEC card | 4 of 19 |
+| before the rebase, interpreter lane | NEC card | 0 of 10 |
+| before the rebase, JIT | none | 0 of 6 |
+| before the rebase, JIT, `ALPHABOX_USBTRACE` on | NEC card | 0 of 6 |
+| before the rebase, JIT_VERIFY lane | NEC card | 0 of 6 (one and two processors) |
+| before the rebase, JIT, one processor | NEC card | 1 of 4 |
+| on 86b2469 (the DTB page-cache fix), JIT | USS-344 | 1 of 10 |
+| on 86b2469, JIT | NEC card | 1 of 10 |
+| final, JIT (8 of them DECwindows runs) | USS-344 | 2 of 28 |
+
+So it is neither SMP nor the page-cache fault 86b2469 fixed. Memory
+corruption that needs the JIT's speed, with the verify lane clean; the
+OHCI's done-queue protocol (HccaDoneHead only while WDH is clear) was
+checked and is right, and guest MB is DMB ISH in compiled code. What the
+verify lane cannot see is what it compiles out: the chain gates and the
+inline data-page-cache fast paths.
+
+**No longer seen** on the final build (8 two-processor DECwindows runs):
+the CPUSPINWAIT that remained after the rendezvous fix (1 of 3 starts
+before the rebase, CPU 1 holding INVALIDATE and XFC with no interrupt
+pending -- plausibly the DTB page-cache fault 86b2469 fixed), and the
+keyboard's failed enumeration ("hub_configure_device Set configuration
+failed", 3 times in about thirty boots before).
+
+**Diagnostic.** `ALPHABOX_TRACE_RBOX=<ms>` (default 200) starts a thread
+that reports any EV7 leaving an enabled interrupt (RBOX_INT & RBOX_IMASK)
+pending that long -- with its EI lines, the core's pc, `eir`, `eien`,
+`check_int` and instruction count -- and when it is finally taken, and
+every 10 s each processor's interval ticks and how many found the previous
+one still pending (`%MVL-T-RBOX`). It tells an interrupt not raised from
+one not taken, and a processor stuck in PALmode from one not running.
+`ALPHABOX_TRACE_IO7=1` shows which processor OpenVMS sends each LSI to
+(LSI_CTL<22:14>): the OHCIs to PID 0, the DE500 to PID 1.
 
 ### M6c: the ES80 and the GS1280 (2026-10-02)
 
