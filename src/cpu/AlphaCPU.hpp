@@ -759,10 +759,13 @@ public:
   /// with a granularity hint spans pages and cannot be indexed, so while any
   /// is live (m_tb_gh_live) the scan is used. A hit is still validated
   /// against the entry exactly as the scan would, so the index can never
-  /// return a wrong mapping; a false negative (three live pages in one set)
-  /// costs a refill from the shadow at worst. In a JIT_VERIFY build the
-  /// scan runs as the oracle after every index miss and counts the false
-  /// negatives.
+  /// return a wrong mapping. Nor may it miss one: a set that overflowed is
+  /// marked (m_tb_idx_lost) and a miss there falls back to the scan. (It
+  /// used to be served by a refill from the shadow "at worst" -- but the
+  /// shadow may not have the page either, and then a page the TB holds
+  /// took a DTB miss: see dtb_still_maps for why PALcode cannot take one.)
+  /// In a JIT_VERIFY build the scan runs as the oracle after every index
+  /// miss and counts the false negatives.
   /// Derived state: rebuilt from state.tb on reset and restore, not saved.
   static constexpr int kTbIdxBits = 11;
   static constexpr int kTbIdxEntries = 1 << kTbIdxBits;
@@ -790,6 +793,8 @@ public:
     int k = 0;
     while (k < kTbIdxWays - 1 && w[k] != v && w[k] != 0)
       k++;
+    if (w[k] != v && w[k] != 0) // the last way, someone else's: it falls out
+      m_tb_idx_lost[t][tb_idx_set(virt)] = 1;
     for (; k > 0; k--)
       w[k] = w[k - 1];
     w[0] = v;
@@ -834,13 +839,18 @@ public:
     }
     const u64 idx = dpc_index(virt);
     const u64 idx2 = dpc2_index(virt);
-    const u64 vp = virt & ~U64(0x1FFF);
+    // A TB entry keeps VA<47:13> only (its match mask), while a page-cache
+    // slot holds the whole sign-extended address: compare the bits both
+    // have, or a system-space page would never match its own entry.
+    const auto same = [virt](u64 vp) {
+      return !((vp ^ virt) & U64(0x0000ffffffffe000));
+    };
     for (int rw = 0; rw < 2; rw++) {
-      if (!m_dpc_keep || data_page_cache[rw][idx].virt_page == vp) {
+      if (!m_dpc_keep || same(data_page_cache[rw][idx].virt_page)) {
         data_page_cache[rw][idx].invalidate();
         dpc_sync(rw, idx);
       }
-      if (!m_dpc_keep || data_page_cache2[rw][idx2].virt_page == vp)
+      if (!m_dpc_keep || same(data_page_cache2[rw][idx2].virt_page))
         data_page_cache2[rw][idx2].invalidate();
     }
   }
@@ -1192,6 +1202,10 @@ public:
   /// compiled AArch64 code reads its mirror, dpc_l1, near the front.
   SDataPageCache data_page_cache[2][kDpcEntries];
   u8 m_tb_idx[2][kTbIdxEntries][kTbIdxWays] = {}; // slot + 1; 0 = empty
+  /// A set whose oldest way fell out while its entry was still live: a miss
+  /// there is not proof of absence, and FindTBEntry scans the TB. Cleared
+  /// when the index is rebuilt or the TB emptied.
+  u8 m_tb_idx_lost[2][kTbIdxEntries] = {};
 
   /// A shadow of 8 KB data translations, kept after the 128-entry TB evicts
   /// them. A real EV6 has 128 DTB entries; a program walking more pages than
@@ -1213,6 +1227,22 @@ public:
     return (va >> 13) & (u64)(kTbShadowEntries - 1);
   }
   int tb_refill_from_shadow(u64 virt, int asn); // -1 if the shadow has nothing
+  /// The data page cache is a TB that holds entries longer (add_tb), and
+  /// that is only invisible while a page it maps is one the DTB still
+  /// translates without PALcode: in the TB itself or in its shadow, from
+  /// which FindTBEntry refills. A page that has left both must leave the
+  /// page cache too. PALcode depends on it: having stored to a page, it
+  /// clears I_CTL[SDE] and stores to the same page again, sure that the
+  /// second store cannot miss -- a DTB miss taken with the shadow
+  /// registers off runs the miss handler on the interrupted code's
+  /// registers (an ES40-family VMS PALcode then enters the console:
+  /// "halt code = 5, PC = 0"). dtb_still_maps says whether a translation
+  /// the TB just let go is still there; drop_unmapped_page acts on it.
+  bool dtb_still_maps(const STBEntry &e) const;
+  void drop_unmapped_page(const STBEntry &e) {
+    if (e.valid && !dtb_still_maps(e))
+      flush_data_page_cache_range(e.virt, e.match_mask);
+  }
 
 
   u64 last_dtb_virt[2]; /**< DTB_TAG0/1 staging registers for DTB_PTE0/1 writes

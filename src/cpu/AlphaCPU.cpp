@@ -2473,6 +2473,18 @@ int CAlphaCPU::FindTBEntry(u64 virt, int flags) {
         return i;
       }
     }
+    // An overflowed set: the entry may be live and only missing from the
+    // index. Scan, and put a find back at the front of its set.
+    if (m_tb_idx_lost[t][tb_idx_set(virt)]) {
+      for (int j = 0; j < TB_ENTRIES; j++)
+        if (state.tb[t][j].valid &&
+            !((state.tb[t][j].virt ^ virt) & state.tb[t][j].match_mask) &&
+            TB_ASN_MATCH(state.tb[t][j])) {
+          tb_idx_insert(t, state.tb[t][j].virt, j);
+          state.last_found_tb[t][rw] = j;
+          return j;
+        }
+    }
 #ifdef JIT_VERIFY
     // Oracle: the index is derived state no differential test can see, so
     // the scan checks every "absent" here. A find is a false negative: an
@@ -2528,14 +2540,16 @@ int CAlphaCPU::tb_refill_from_shadow(u64 virt, int asn) {
   const int t = TB_INDEX_DATA;
   const int i = state.next_tb[t];
   state.next_tb[t] = (i + 1 == TB_ENTRIES) ? 0 : i + 1;
-  if (state.tb[t][i].valid) {
+  const STBEntry victim = state.tb[t][i];
+  if (victim.valid) {
     if (!m_dpc_keep)
-      flush_data_page_cache_range(state.tb[t][i].virt,
-                                  state.tb[t][i].match_mask);
+      flush_data_page_cache_range(victim.virt, victim.match_mask);
     tb_idx_drop(t, i);
   }
   state.tb[t][i] = sh;
   tb_idx_add(t, i);
+  if (m_dpc_keep)
+    drop_unmapped_page(victim); // kept only while the shadow still has it
   m_tb_shadow_refills++;
   return i;
 }
@@ -3075,11 +3089,35 @@ void CAlphaCPU::tb_idx_add(int t, int slot) {
 
 void CAlphaCPU::tb_idx_rebuild() {
   memset(m_tb_idx, 0, sizeof(m_tb_idx));
+  memset(m_tb_idx_lost, 0, sizeof(m_tb_idx_lost));
   m_tb_gh_live[0] = m_tb_gh_live[1] = 0;
   for (int t = 0; t < 2; t++)
     for (int i = 0; i < TB_ENTRIES; i++)
       if (state.tb[t][i].valid)
         tb_idx_add(t, i);
+}
+
+bool CAlphaCPU::dtb_still_maps(const STBEntry &e) const {
+  // Only 8 KB entries are kept anywhere but the TB; a larger page that left
+  // the TB is gone.
+  if (e.match_mask != GH_0_MATCH)
+    return false;
+  const auto same = [&e](const STBEntry &x) {
+    return x.valid && x.match_mask == GH_0_MATCH && x.virt == e.virt &&
+           (x.asm_bit ? e.asm_bit : (!e.asm_bit && x.asn == e.asn));
+  };
+  if (same(m_tb_shadow[tb_shadow_index(e.virt)]))
+    return true;
+  // The TB, through its index: every 8 KB entry is in it.
+  const u8 *w = m_tb_idx[TB_INDEX_DATA][tb_idx_set(e.virt)];
+  for (int k = 0; k < kTbIdxWays && w[k]; k++)
+    if (same(state.tb[TB_INDEX_DATA][w[k] - 1]))
+      return true;
+  if (m_tb_idx_lost[TB_INDEX_DATA][tb_idx_set(e.virt)])
+    for (int j = 0; j < TB_ENTRIES; j++)
+      if (same(state.tb[TB_INDEX_DATA][j]))
+        return true;
+  return false;
 }
 
 void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
@@ -3149,6 +3187,8 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
   const bool old_valid = state.tb[t][i].valid;
   const u64 old_virt = state.tb[t][i].virt;
   const u64 old_mask = state.tb[t][i].match_mask;
+  const STBEntry old_entry = state.tb[t][i];
+  STBEntry old_shadow{}; // what the shadow slot held, if this fill replaces it
 
   state.tb[t][i].match_mask = match_mask;
   state.tb[t][i].keep_mask = keep_mask;
@@ -3177,8 +3217,11 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
   tb_idx_add(t, i);
   // Keep an 8 KB data translation in the shadow (see m_tb_shadow): what the
   // TB evicts later can then be refilled without a trap to PALcode.
-  if (t == TB_INDEX_DATA && match_mask == GH_0_MATCH)
-    m_tb_shadow[tb_shadow_index(virt)] = state.tb[t][i];
+  if (t == TB_INDEX_DATA && match_mask == GH_0_MATCH) {
+    STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+    old_shadow = sh;
+    sh = state.tb[t][i];
+  }
   state.last_found_tb[t][rw] = i;
 
 #ifdef ES40_JIT
@@ -3197,8 +3240,17 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
     // rests on. Emptying it here bounded the page cache by the 128-entry
     // DTB: on makecab 43% of the inline probe's misses found such an empty
     // slot (docs/performance.md). ALPHABOX_DPC_KEEP=0 restores it.
+    //
+    // Held longer, but not past the point where the DTB itself would miss:
+    // the evicted entry, and what this fill pushed out of the shadow, stay
+    // cached only while the TB or the shadow still has them (see
+    // dtb_still_maps).
     if (old_valid && !m_dpc_keep)
       flush_data_page_cache_range(old_virt, old_mask);
+    else if (old_valid)
+      drop_unmapped_page(old_entry);
+    if (m_dpc_keep)
+      drop_unmapped_page(old_shadow);
     flush_data_page_cache_range(virt, match_mask);
   }
 
@@ -3303,6 +3355,7 @@ void CAlphaCPU::tbia(int flags) {
   for (i = 0; i < TB_ENTRIES; i++)
     state.tb[t][i].valid = false;
   memset(m_tb_idx[t], 0, sizeof(m_tb_idx[t]));
+  memset(m_tb_idx_lost[t], 0, sizeof(m_tb_idx_lost[t]));
   m_tb_gh_live[t] = 0;
   state.last_found_tb[t][0] = 0;
   state.last_found_tb[t][1] = 0;

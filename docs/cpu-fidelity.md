@@ -226,6 +226,41 @@ much longer. A missing `TBIS` is a guest bug that hardware usually hides;
 Alphabox hides it less often. `ALPHABOX_DPC_KEEP=0` makes the page cache
 drop an evicted entry's page again. The shadow has no switch.
 
+**Closed (2026-10-03): the page cache outlived the shadow too.** The page
+cache is only an invisible longer-lived TB while every page it maps is one
+the DTB still translates without PALcode -- in the TB, or in the shadow,
+from which `FindTBEntry` refills. It was not: the shadow is direct-mapped
+and a later fill overwrites its slot, so a page could leave the TB and the
+shadow and stay in the page cache. Compiled code's loads and stores probe
+the page cache and kept hitting such a page; the interpreter and the
+helpers ask the TB and took a DTB miss on it: more than two hundred in
+every DS20E boot of OpenVMS 8.4 (the diagnostic stopped counting there),
+none with the fix. Almost all are harmless -- PALcode refills the TB. One
+is fatal. The VMS PALcode (on the DS20E,
+the DS25) builds an exception frame by storing two quadwords to the
+kernel stack with the PALshadow registers on, clears `I_CTL[SDE]`, and
+stores the interrupted code's R4-R7 to the same 64 bytes -- a store that
+cannot miss on real hardware, since the first two just used the page. Here
+the first two ran compiled, the next ones interpreted, and the miss came
+with `SDE` clear: the miss handler ran on the interrupted code's registers,
+its double-miss path read a garbage impure pointer, found `VA_CTL`
+"corrupt" and entered the console -- "halt code = 5, PC = 0" on one
+processor, `CPUSPINWAIT` on the other, in about one boot in twenty-five on
+two processors (lab/smp-flaky). Now a TB fill that evicts an entry, or
+pushes one out of the shadow, also drops that page from the page cache
+unless the TB or the shadow still has it (`dtb_still_maps`).
+
+Two more holes of the same shape were closed with it. The TB index
+(`m_tb_idx`, eight ways a set) drops the oldest way of a full set, and its
+own comment said a false negative "costs a refill from the shadow at
+worst" -- but the shadow may not have the page, and then a page the TB
+held took a DTB miss. A set that overflowed is now marked and a miss there
+scans the TB. And `flush_data_page_cache_range` compared a TB entry's
+address, which keeps VA<47:13> only, with the page cache's sign-extended
+one, so for a system-space page (`ffffffff8...`) it never matched: the
+`ALPHABOX_DPC_KEEP=0` eviction path and the per-entry pass of `tbis_d` did
+nothing there. It compares VA<47:13> now.
+
 ### Smaller ones
 
 | What | Where | Consequence |
