@@ -49,6 +49,21 @@
 #define BX_ERROR(a) BX_DEBUG(a)
 #include "vga.hpp"
 
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <thread>
+
+// Where bx_gui_c::lock() was called from, filled in by the compiler at each
+// call site (for the ALPHABOX_TRACE_GUILOCK report).
+#if defined(__GNUC__) || defined(__clang__) ||                                 \
+    (defined(_MSC_VER) && _MSC_VER >= 1926)
+#define GUI_LOCK_SITE                                                          \
+  const char *file = __builtin_FILE(), int line = __builtin_LINE()
+#else
+#define GUI_LOCK_SITE const char *file = "?", int line = 0
+#endif
+
 /// VGA mode information for GUI
 typedef struct {
   u16 start_address;
@@ -117,13 +132,28 @@ public:
   static void mouse_enabled_changed(bool val);
   static void init_signal_handlers();
 
-  void lock();
+  /// The gui lock: serializes the display thread's update() with the GUI's
+  /// event handling and the CPUs' VGA register writes. It never times out.
+  /// The CMutex it replaces gave up after 5 s of wall-clock time, so a host
+  /// that slept, or stalled the process, while a thread waited for it
+  /// killed the emulator with nobody holding the lock.
+  /// ALPHABOX_TRACE_GUILOCK reports long waits and holds (docs/headless.md).
+  void lock(GUI_LOCK_SITE);
   void unlock();
   virtual void graphics_frame_update(const u32 *pixels, unsigned width,
                                      unsigned height);
 
 protected:
-  CMutex *guiMutex;
+  // Recursive, as the CMutex it replaces was: the thread holding it may take
+  // it again. Timed only so that the trace can report a wait while it lasts.
+  std::recursive_timed_mutex guiMutex;
+  // The holder, for the trace (kept only while ALPHABOX_TRACE_GUILOCK is
+  // set). gui_lock_depth is touched only by the thread holding the lock.
+  int gui_lock_depth = 0;
+  std::atomic<const char *> gui_lock_file{nullptr};
+  std::atomic<int> gui_lock_line{0};
+  std::atomic<std::thread::id> gui_lock_owner{};
+  std::atomic<int64_t> gui_lock_since_us{0};
   static s32 make_text_snapshot(char **snapshot, u32 *length);
 
   //  static void toggle_mouse_enable(void);

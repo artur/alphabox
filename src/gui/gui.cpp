@@ -37,12 +37,11 @@
  * SDL and other device interfaces.
  **/
 
-//#define DEBUG_LOCKS
-//#define NO_LOCK_TIMEOUTS
-
 #include "StdAfx.hpp"
 
+#include <chrono>
 #include <signal.h>
+#include <string>
 
 #include "gui.hpp"
 
@@ -78,16 +77,28 @@ static user_key_t user_keys[N_USER_KEYS] = {
     {"tab", BX_KEY_TAB},         {"up", BX_KEY_UP},
     {"win", BX_KEY_WIN_L},       {"print", BX_KEY_PRINT}};
 
+// ALPHABOX_TRACE_GUILOCK threshold in ms (0: off), and the thread the GUI
+// was created on, which the trace calls "main".
+static long gui_lock_trace_ms = 0;
+static std::thread::id gui_main_thread;
+
 bx_gui_c::bx_gui_c(void) {
   framebuffer = NULL;
-  guiMutex = new CMutex("gui-lock");
+  gui_main_thread = std::this_thread::get_id();
+  if (const char *t = getenv("ALPHABOX_TRACE_GUILOCK")) {
+    const long v = atol(t);
+    gui_lock_trace_ms = v == 1 ? 1000 : v > 0 ? v : 0;
+    if (gui_lock_trace_ms)
+      printf("%%GUI-I-TRACELOCK: reporting gui-lock waits and holds of %ld ms "
+             "or more.\n",
+             gui_lock_trace_ms);
+  }
 }
 
 bx_gui_c::~bx_gui_c() {
   if (framebuffer != NULL) {
     delete[] framebuffer;
   }
-  delete guiMutex;
 }
 
 void bx_gui_c::init(unsigned tilewidth, unsigned tileheight) {
@@ -306,6 +317,85 @@ void bx_gui_c::graphics_frame_update(const u32 *pixels, unsigned width,
   }
 }
 
-void bx_gui_c::lock() { MUTEX_LOCK(guiMutex); }
+static int64_t gui_now_us() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
-void bx_gui_c::unlock() { MUTEX_UNLOCK(guiMutex); }
+static const char *gui_site_name(const char *file) {
+  if (!file)
+    return "?";
+  const char *slash = strrchr(file, '/');
+  const char *bslash = strrchr(file, '\\');
+  if (bslash && (!slash || bslash > slash))
+    slash = bslash;
+  return slash ? slash + 1 : file;
+}
+
+// "main" for the thread that created the GUI, else a number per thread.
+static std::string gui_thread_name(std::thread::id id) {
+  if (id == gui_main_thread)
+    return "main";
+  if (id == std::thread::id())
+    return "none";
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%08zx",
+           (size_t)std::hash<std::thread::id>()(id) & 0xffffffff);
+  return buf;
+}
+
+void bx_gui_c::lock(const char *file, int line) {
+  if (!gui_lock_trace_ms) {
+    guiMutex.lock();
+    return;
+  }
+
+  // Traced: wait in steps of the threshold and name the holder each time a
+  // step runs out, so a lock that is never released (a deadlock) keeps
+  // saying who has it. The wait itself never gives up.
+  const int64_t t0 = gui_now_us();
+  while (!guiMutex.try_lock_for(std::chrono::milliseconds(gui_lock_trace_ms))) {
+    const int64_t now = gui_now_us();
+    const int64_t since = gui_lock_since_us.load();
+    printf("%%GUI-W-LOCKWAIT: thread %s at %s:%d has waited %lld ms; held by "
+           "thread %s from %s:%d for %lld ms\n",
+           gui_thread_name(std::this_thread::get_id()).c_str(),
+           gui_site_name(file), line, (long long)(now - t0) / 1000,
+           gui_thread_name(gui_lock_owner.load()).c_str(),
+           gui_site_name(gui_lock_file.load()), gui_lock_line.load(),
+           since ? (long long)(now - since) / 1000 : -1LL);
+    fflush(stdout);
+  }
+  const int64_t now = gui_now_us();
+  if (now - t0 >= gui_lock_trace_ms * 1000) {
+    printf("%%GUI-W-LOCKWAIT: thread %s at %s:%d got the lock after %lld ms\n",
+           gui_thread_name(std::this_thread::get_id()).c_str(),
+           gui_site_name(file), line, (long long)(now - t0) / 1000);
+    fflush(stdout);
+  }
+  if (gui_lock_depth++ == 0) {
+    gui_lock_file = file;
+    gui_lock_line = line;
+    gui_lock_owner = std::this_thread::get_id();
+    gui_lock_since_us = now;
+  }
+}
+
+void bx_gui_c::unlock() {
+  if (gui_lock_trace_ms && gui_lock_depth > 0 && --gui_lock_depth == 0) {
+    const int64_t held = gui_now_us() - gui_lock_since_us.load();
+    if (held >= gui_lock_trace_ms * 1000) {
+      printf("%%GUI-W-LOCKHOLD: thread %s held the gui lock from %s:%d for "
+             "%lld ms\n",
+             gui_thread_name(std::this_thread::get_id()).c_str(),
+             gui_site_name(gui_lock_file.load()), gui_lock_line.load(),
+             (long long)held / 1000);
+      fflush(stdout);
+    }
+    gui_lock_since_us = 0;
+    gui_lock_owner = std::thread::id();
+    gui_lock_file = nullptr;
+  }
+  guiMutex.unlock();
+}

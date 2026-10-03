@@ -37,6 +37,7 @@ To run the whole GUI stack without a window or a display server, set
 
 | Variable | Effect |
 |---|---|
+| `ALPHABOX_TRACE_GUILOCK=1\|<ms>` | Watch the gui lock (the display thread's redraw, the GUI's event handling and the CPUs' VGA register writes share it). `1` reports at 1000 ms, a larger number is the threshold in ms. A wait that long prints `%GUI-W-LOCKWAIT` with the waiter's thread and call site and the holder's thread, call site and hold time so far, again every threshold while it lasts -- a deadlock keeps naming its holder -- and once more when the lock is got; a hold that long prints `%GUI-W-LOCKHOLD` with the site that took it. `main` is the thread that created the GUI (the SDL pump on macOS). The lock has no timeout, so this only reports. A host that sleeps, or a stopped process, shows up as one long wait or hold. |
 | `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
 | `ALPHABOX_VMSPAL_OFF=<list>` | Interpreter builds, OpenVMS PALcode: hand single vmspal replacement routines (`src/cpu/AlphaCPU_vmspal.cpp`) back to the real PALcode while the rest stay native. Comma-separated `CALL_PAL` function numbers in hex (`92` = REI) and `int` (the interrupt entries). Bisecting with it is how a routine that diverges from the PALcode is found. |
 | `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates: CPU interrupt entries by source, Cchip interval-timer ticks, 8259 edges and acknowledges per ISA IRQ, and Cchip DRIR rises. Spots interrupt storms. |
