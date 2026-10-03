@@ -221,6 +221,8 @@ u32 CRadeon::reg_read32(u32 reg) {
   u32 cpv;
   if (cp_reg_read(reg, &cpv))
     return cpv;
+  if (m_3d->reg_read(reg, &cpv))
+    return cpv;
   if (is_engine_reg(reg))
     return engine_read(reg);
   return R(reg);
@@ -326,6 +328,8 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
   if (reg >= PCI_CONFIG_MIRROR && reg < PCI_CONFIG_MIRROR + 0x100)
     return; // a read-only copy of configuration space
   if (cp_reg_write(reg, data))
+    return;
+  if (m_3d->reg_write(reg, data))
     return;
   if (is_engine_reg(reg)) {
     R(reg) = data;

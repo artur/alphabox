@@ -37,6 +37,10 @@
  *                      buffers and the packets they carry
  *   RadeonDisplay.cpp  the primary CRTC's extended modes, the hardware
  *                      cursor, the 8-bit palette
+ *   Radeon3D.cpp, RadeonTcl.cpp, RadeonRaster.cpp
+ *                      the 3D engine (CRadeon3D, Radeon3D.hpp): vertex
+ *                      fetch and the 3D packets, TCL, rasteriser and
+ *                      pixel pipeline
  *
  * Every register the card has is kept in one 64 KB register file and
  * reads back what was written, unless this model gives it a meaning:
@@ -49,17 +53,19 @@
  * ati-vga (hw/display/ati*.c, GPL-2.0-or-later, BALATON Zoltan), which
  * models the Rage 128 Pro and the Radeon RV100. The code is this
  * project's own; where it follows QEMU's reading of a register it says so.
- * 3D (the TCL engine) is not modelled.
+ * The 3D engine's sources are listed in Radeon3D.hpp.
  */
 
 #if !defined(INCLUDED_RADEON_H)
 #define INCLUDED_RADEON_H
 
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "Radeon3D.hpp"
 #include "RadeonRegs.hpp"
 #include "VGACard.hpp"
 #include "i2c_spd.hpp"
@@ -74,6 +80,8 @@ inline long long radeon_clock_us() {
 }
 
 class CRadeon : public CVGACard {
+  friend class CRadeon3D;
+
 public:
   CRadeon(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
   virtual ~CRadeon();
@@ -172,6 +180,8 @@ protected:
   void cp_run_buffer(u32 mc, u32 dwords);
   void cp_feed(u32 d);
   void cp_packet3(u8 op, const std::vector<u32> &payload);
+  /// A type-3 packet for the 3D engine; false when it is not one.
+  bool r3d_packet3(u8 op, const std::vector<u32> &payload);
 
   // --- display (RadeonDisplay.cpp) -------------------------------------------
   bool native_crtc_active() const override;
@@ -217,6 +227,8 @@ protected:
     std::vector<u32> payload;
   };
   cp_parser m_cp;
+  /// The 3D engine.
+  std::unique_ptr<CRadeon3D> m_3d;
   int m_cp_depth = 0, m_cp_ib_depth = 0;
   u32 m_me_ram[256][2] = {}; ///< the CP microcode, kept for read-back
   u32 m_me_index = 0;

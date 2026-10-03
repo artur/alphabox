@@ -37,8 +37,8 @@
  *   type 1: two registers, <10:0> and <21:11>, one dword each;
  *   type 2: a filler;
  *   type 3: <29:16> count less one, <15:8> the operation: the 2D
- *           operations (see cp_packet3), NOP and WAIT_FOR_IDLE.
- *           3D operations are not modelled.
+ *           operations (see cp_packet3), NOP and WAIT_FOR_IDLE, and the
+ *           3D draws (Radeon3D.cpp).
  * (AMD's "Radeon R5xx Acceleration" v1.5, 6.1, documents the four
  * types, as the R100 microcode already had them.)
  * A 2D operation starts with DP_GUI_MASTER_CNTL; its bits say which
@@ -408,7 +408,7 @@ void CRadeon::cp_feed(u32 d) {
  * A type-3 packet. The 2D operations load the engine's registers as the
  * fields say and start it through the same registers a driver would
  * write, so the two ways of driving the engine draw the same. The 3D
- * operations are not modelled.
+ * operations go to the 3D engine (Radeon3D.cpp).
  *
  * The packet layouts are AMD's "Radeon R5xx Acceleration" v1.5, 6.2.2
  * (the PM4 2D packets the R100 microcode already understood):
@@ -488,6 +488,8 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
   case OP_CNTL_POLYSCANLINES:
     break;
   default:
+    if (r3d_packet3(op, d))
+      return;
     if (!m_cp_unknown_seen[op]) {
       m_cp_unknown_seen[op] = true;
       printf("%s: CP operation %02x (%zu dwords) not modelled\n", devid_string,

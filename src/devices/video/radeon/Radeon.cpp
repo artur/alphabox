@@ -34,6 +34,7 @@ CRadeon::CRadeon(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
   memset(m_regs, 0, sizeof(m_regs));
   memset(m_pll, 0, sizeof(m_pll));
   memset(&eng, 0, sizeof(eng));
+  m_3d = std::make_unique<CRadeon3D>(*this);
 }
 
 /**
@@ -268,6 +269,7 @@ int CRadeon::save_card_state(FILE *f) {
   fwrite(&sz, sizeof(long), 1, f);
   fwrite(m_pll, sizeof(m_pll), 1, f);
   fwrite(&kRadeonMagic, sizeof(u32), 1, f);
+  m_3d->save(f);
   return 0;
 }
 
@@ -292,6 +294,9 @@ int CRadeon::restore_card_state(FILE *f) {
     printf("%s: Radeon end MAGIC does not match!\n", devid_string);
     return -1;
   }
+  // The 3D engine's block, absent from state files older than it.
+  if (!m_3d->restore(f))
+    m_3d->reset();
   return 0;
 }
 
