@@ -54,13 +54,13 @@
  **/
 
 #include "RadeonR100_3D.hpp"
-#include "Radeon.hpp"
+#include "Radeon.hpp" // CRadeonEngineBus's definitions
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
-using namespace radeon3d;
+using namespace radeon::r100;
 
 namespace {
 enum : u8 {
@@ -74,8 +74,7 @@ enum : u8 {
   OP_3D_DRAW_VBUF_2 = 0x34,
   OP_3D_DRAW_IMMD_2 = 0x35,
   OP_3D_DRAW_INDX_2 = 0x36,
-  OP_3D_CLEAR_HIZ = 0x37,
-  OP_LOAD_PALETTE = 0x2c
+  OP_3D_CLEAR_HIZ = 0x37
 };
 constexpr u32 TCL_BYPASS = 1u << 8; // SE_CNTL_STATUS
 constexpr u32 VF_TCL_ENABLE = 1u << 9;
@@ -87,9 +86,11 @@ inline float f32(u32 v) {
 }
 } // namespace
 
-CRadeon3D::CRadeon3D(CRadeon &card) : c(card) { reset(); }
+CRadeonR100_3D::CRadeonR100_3D(const CRadeonEngineBus &bus) : c(bus) {
+  reset();
+}
 
-void CRadeon3D::reset() {
+void CRadeonR100_3D::reset() {
   memset(m_vec, 0, sizeof(m_vec));
   memset(m_scl, 0, sizeof(m_scl));
   m_vec_index = m_vec_comp = m_scl_index = 0;
@@ -100,25 +101,25 @@ void CRadeon3D::reset() {
   m_port_active = false;
 }
 
-u32 CRadeon3D::reg(u32 r) const { return c.R(r); }
-float CRadeon3D::regf(u32 r) const { return f32(c.R(r)); }
+u32 CRadeonR100_3D::reg(u32 r) const { return c.R(r); }
+float CRadeonR100_3D::regf(u32 r) const { return f32(c.R(r)); }
 
-void CRadeon3D::warn_once(int id, const char *what) {
+void CRadeonR100_3D::warn_once(int id, const char *what) {
   if (id < 0 || id >= 64 || m_warned[id])
     return;
   m_warned[id] = true;
-  printf("%s: 3D: %s\n", c.devid_string, what);
+  printf("%s: 3D: %s\n", c.devid(), what);
 }
 
 /// A dword the engine reads by bus mastering: the framebuffer, or the
-/// AGP/PCI window (CRadeon::cp_translate).
-u32 CRadeon3D::mem_read32(u32 mc) { return c.cp_read32(mc); }
+/// AGP/PCI window (CRadeonEngineBus::bm_translate).
+u32 CRadeonR100_3D::mem_read32(u32 mc) { return c.bm_read32(mc); }
 
-u8 CRadeon3D::mem_read8(u32 mc) {
+u8 CRadeonR100_3D::mem_read8(u32 mc) {
   bool vram;
   u32 a;
-  if (c.cp_translate(mc, &vram, &a) && vram)
-    return c.vga.memory[a & c.vram_mask()];
+  if (c.bm_translate(mc, &vram, &a) && vram)
+    return c.vram_byte(a);
   return u8(mem_read32(mc & ~3u) >> (8 * (mc & 3)));
 }
 
@@ -131,7 +132,7 @@ u8 CRadeon3D::mem_read8(u32 mc) {
  * RE_STIPPLE_DATA loads the 32x32 polygon stipple a row at a time from
  * RE_STIPPLE_ADDR on.
  **/
-bool CRadeon3D::reg_write(u32 r, u32 data) {
+bool CRadeonR100_3D::reg_write(u32 r, u32 data) {
   switch (r) {
   case SE_TCL_VECTOR_INDX_REG:
     c.R(r) = data;
@@ -202,7 +203,7 @@ bool CRadeon3D::reg_write(u32 r, u32 data) {
   return false;
 }
 
-bool CRadeon3D::reg_read(u32 r, u32 *v) {
+bool CRadeonR100_3D::reg_read(u32 r, u32 *v) {
   switch (r) {
   case SE_TCL_VECTOR_DATA_REG: {
     const float f = m_vec[m_vec_index & 127][m_vec_comp];
@@ -228,7 +229,7 @@ bool CRadeon3D::reg_read(u32 r, u32 *v) {
 }
 
 /// The dwords one vertex of format `fmt` takes (Linux r100_get_vtx_size).
-int CRadeon3D::vertex_dwords(u32 f) const {
+int CRadeonR100_3D::vertex_dwords(u32 f) const {
   int n = 2;
   if (f & VTX_W0)
     n++;
@@ -292,8 +293,8 @@ static void unpack_color(u32 v, bool rgba_order, float out[4]) {
   out[3] = float(v >> 24) * k;
 }
 
-void CRadeon3D::decode_vertex(u32 f, u32 cntl, const u32 *d,
-                              RadeonVertexIn &v) const {
+void CRadeonR100_3D::decode_vertex(u32 f, u32 cntl, const u32 *d,
+                                   RadeonVertexIn &v) const {
   memset(&v, 0, sizeof(v));
   v.pos[3] = 1.0f;
   v.col[0] = v.col[1] = v.col[2] = v.col[3] = 1.0f;
@@ -371,7 +372,7 @@ void CRadeon3D::decode_vertex(u32 f, u32 cntl, const u32 *d,
 
 /// One vertex from the loaded arrays: each array's components, in array
 /// order, at `index` times its stride.
-void CRadeon3D::fetch_aos(u32 index, std::vector<u32> &out) {
+void CRadeonR100_3D::fetch_aos(u32 index, std::vector<u32> &out) {
   out.clear();
   for (u32 a = 0; a < m_aos_count; a++) {
     const aos_t &s = m_aos[a];
@@ -381,7 +382,7 @@ void CRadeon3D::fetch_aos(u32 index, std::vector<u32> &out) {
   }
 }
 
-bool CRadeon3D::tcl_enabled() const {
+bool CRadeonR100_3D::tcl_enabled() const {
   return !(c.R(SE_CNTL_STATUS) & TCL_BYPASS);
 }
 
@@ -391,7 +392,7 @@ bool CRadeon3D::tcl_enabled() const {
  * from the packet. Indices come 16 bits at a time, the first in the low
  * half of each dword, unless VF_CNTL<11> asks for 32.
  **/
-bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
+bool CRadeonR100_3D::packet3(u8 op, const std::vector<u32> &d) {
   auto indices_from = [&](size_t i, u32 cntl, std::vector<u32> &ix) {
     const u32 n = cntl >> 16;
     for (; i < d.size() && ix.size() < n; i++) {
@@ -415,7 +416,7 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
   case OP_3D_DRAW_INDX_2:
   case OP_3D_CLEAR_HIZ:
   case OP_INDX_BUFFER:
-    if (!c.m_chip->r200_cp_packets && !m_r200_packets) {
+    if (!c.chip().r200_cp_packets && !m_r200_packets) {
       warn_once(3, "an R200 microcode packet (_2 draw, CLEAR_HIZ, "
                    "INDX_BUFFER), which the R100 microcode does not have: "
                    "ignored");
@@ -424,16 +425,6 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
     break;
   }
   switch (op) {
-  case OP_LOAD_PALETTE:
-    // [SCALE_DATATYPE: 1 16 entries, 2 256] [entries...] (R5xx
-    // Acceleration 6.2.2.12): the palette of the 2D scaler, which is not
-    // modelled; kept
-    if (!d.empty()) {
-      const size_t n = (d[0] & 3) == 1 ? 16 : 256;
-      for (size_t i = 0; i < n && i + 1 < d.size(); i++)
-        m_palette[i] = d[i + 1];
-    }
-    return true;
   case OP_3D_LOAD_VBPNTR: {
     if (d.empty())
       return true;
@@ -481,7 +472,7 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
     // with no indices in the packet, an INDX_BUFFER supplies them (R5xx
     // Acceleration 6.2.3.11), where the microcode has it
     if (d.size() == at && (cntl >> 16) &&
-        (c.m_chip->r200_cp_packets || m_r200_packets)) {
+        (c.chip().r200_cp_packets || m_r200_packets)) {
       m_indx_pending = true;
       m_indx_fmt = fmt;
       m_indx_cntl = cntl;
@@ -527,7 +518,7 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
     std::vector<u32> ix;
     bool skip_half = (d[0] >> 31) & 1;
     for (u32 k = skip; k < (d[2] & 0x7fffff) && ix.size() < n; k++) {
-      const u32 v = c.cp_fetch(d[1] + 4 * k);
+      const u32 v = c.bm_fetch(d[1] + 4 * k);
       if (m_indx_cntl & VF_INDEX_32) {
         ix.push_back(v);
         continue;
@@ -553,9 +544,9 @@ bool CRadeon3D::packet3(u8 op, const std::vector<u32> &d) {
  *   `vbuf_mc`  3D_RNDR_GEN_INDX_PRIM's single vertex buffer (0: the
  *              arrays of 3D_LOAD_VBPNTR).
  **/
-void CRadeon3D::draw(u32 fmt, u32 cntl, const std::vector<u32> &vdata,
-                     const std::vector<u32> *indices, u32 vbuf_mc,
-                     u32 vbuf_max) {
+void CRadeonR100_3D::draw(u32 fmt, u32 cntl, const std::vector<u32> &vdata,
+                          const std::vector<u32> *indices, u32 vbuf_mc,
+                          u32 vbuf_max) {
   const u32 prim = cntl & 15;
   const u32 walk = (cntl >> 4) & 3;
   u32 n = cntl >> 16;
@@ -604,8 +595,8 @@ void CRadeon3D::draw(u32 fmt, u32 cntl, const std::vector<u32> &vdata,
 }
 
 /// TCL or the bypass setup.
-void CRadeon3D::process_vertex(u32 fmt, u32 cntl, const RadeonVertexIn &in,
-                               RadeonVertex &out) {
+void CRadeonR100_3D::process_vertex(u32 fmt, u32 cntl, const RadeonVertexIn &in,
+                                    RadeonVertex &out) {
   (void)fmt;
   if ((cntl & VF_TCL_ENABLE) && tcl_enabled()) {
     tcl_vertex(in, out);
@@ -633,7 +624,7 @@ void CRadeon3D::process_vertex(u32 fmt, u32 cntl, const RadeonVertexIn &in,
  * texture coordinates as well. Then the viewport (SE_VPORT_*), when
  * SE_CNTL's VPORT_XY_XFORM_ENABLE <24> and VPORT_Z_XFORM_ENABLE <25> ask.
  **/
-void CRadeon3D::bypass_to_window(RadeonVertex &v) const {
+void CRadeonR100_3D::bypass_to_window(RadeonVertex &v) const {
   const u32 cf = c.R(SE_COORD_FMT), se = c.R(SE_CNTL);
   float rhw = v.w;
   if (cf & (1u << 16))
@@ -659,7 +650,7 @@ void CRadeon3D::bypass_to_window(RadeonVertex &v) const {
 }
 
 /// A TCL vertex after clipping: the perspective divide and the viewport.
-void CRadeon3D::to_window(RadeonVertex &v) const {
+void CRadeonR100_3D::to_window(RadeonVertex &v) const {
   const float rhw = v.w != 0.0f ? 1.0f / v.w : 1.0f;
   float x = v.x * rhw, y = v.y * rhw, z = v.z * rhw;
   const u32 se = c.R(SE_CNTL);
@@ -715,8 +706,8 @@ void clip_plane(std::vector<RadeonVertex> &poly, const float pl[4]) {
  * enables <7:2> (VS_UCP vectors 116..121, in clip space), then rasterised
  * as a fan.
  **/
-void CRadeon3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
-                         const RadeonVertex &c3, int flat_index) {
+void CRadeonR100_3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
+                              const RadeonVertex &c3, int flat_index) {
   if (!a.clip_space) {
     const RadeonVertex *v[3] = {&a, &b, &c3};
     raster_triangle(v, v[flat_index]);
@@ -774,7 +765,7 @@ void CRadeon3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
  * shading is SE_CNTL<7:6>: the triangle's first, second or third vertex,
  * or 3 its last.
  **/
-void CRadeon3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
+void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
   const size_t n = v.size();
   int flat_sel = int((c.R(SE_CNTL) >> 6) & 3);
   if (flat_sel == 3)
@@ -897,7 +888,7 @@ void CRadeon3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
  * the DRM's R100 clears pass 0 (all) or a pattern it sets with
  * hierarchical Z, which changes no pixel [inference]; it is ignored.
  **/
-void CRadeon3D::clear_zmask(u32 start, u32 count, u32 mask) {
+void CRadeonR100_3D::clear_zmask(u32 start, u32 count, u32 mask) {
   (void)mask;
   raster_setup();
   const u32 zf = rs.zfmt;
@@ -928,7 +919,7 @@ void CRadeon3D::clear_zmask(u32 start, u32 count, u32 mask) {
  **/
 static constexpr u32 k3dMagic = 0x44335241; // 'AR3D'
 
-void CRadeon3D::save(FILE *f) const {
+void CRadeonR100_3D::save(FILE *f) const {
   fwrite(&k3dMagic, 4, 1, f);
   fwrite(m_vec, sizeof(m_vec), 1, f);
   fwrite(m_scl, sizeof(m_scl), 1, f);
@@ -941,7 +932,7 @@ void CRadeon3D::save(FILE *f) const {
 
 /// Returns false (and leaves the file where it was) when the next block
 /// is not this one's: state files written before the 3D engine existed.
-bool CRadeon3D::restore(FILE *f) {
+bool CRadeonR100_3D::restore(FILE *f) {
   const long at = ftell(f);
   u32 m = 0;
   if (fread(&m, 4, 1, f) != 1 || m != k3dMagic) {
@@ -961,6 +952,23 @@ bool CRadeon3D::restore(FILE *f) {
   return true;
 }
 
-bool CRadeon::r3d_packet3(u8 op, const std::vector<u32> &d) {
-  return m_3d->packet3(op, d);
-}
+/**
+ * The R100 generation (the R100, RV100, RV200, RS100 and RS200 parts, which
+ * load the R100 microcode): the rendering engine's registers from 0x1400 to
+ * 0x3fff go through the command FIFO -- the Rage 128 Pro guide's "GUI
+ * registers (FIFOed)" (RRG 3-149), which the R100 kept --, and RBBM_STATUS
+ * shows the 2D blocks busy in E2 <17> and RB2D <18>, the 3D blocks in
+ * <24:19> (Linux r100d.h).
+ **/
+namespace radeon {
+extern const Generation gen_r100; // the chip rows name it (RadeonChips.cpp)
+const Generation gen_r100 = {
+    "r100",
+    0x1400,
+    0x4000,
+    (1u << 17) | (1u << 18),
+    (1u << 19) | (1u << 20) | (1u << 21) | (1u << 22) | (1u << 23) | (1u << 24),
+    [](const CRadeonEngineBus &bus) -> std::unique_ptr<CRadeonEngine3D> {
+      return std::make_unique<r100::CRadeonR100_3D>(bus);
+    }};
+} // namespace radeon

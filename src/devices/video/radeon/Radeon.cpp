@@ -34,7 +34,6 @@ CRadeon::CRadeon(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
   memset(m_regs, 0, sizeof(m_regs));
   memset(m_pll, 0, sizeof(m_pll));
   memset(&eng, 0, sizeof(eng));
-  m_3d = std::make_unique<CRadeon3D>(*this);
 }
 
 /**
@@ -61,6 +60,8 @@ void CRadeon::init() {
   // SRM tables: 1002:013A "Radeon 7500 AGP", 1002:013B "Radeon 7500 PCI").
   const char *model = myCfg->get_text_value("model", "agp");
   m_chip = &default_chip();
+  // The generation's 3D engine.
+  m_3d = m_chip->gen->make_3d(CRadeonEngineBus(*this));
   u32 subsystem;
   if (strcmp(model, "agp") == 0)
     subsystem = (u32(m_chip->subsys_agp) << 16) | PCI_VENDOR_ATI;

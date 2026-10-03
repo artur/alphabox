@@ -19,24 +19,44 @@
  */
 
 /* The facts that tell one Radeon part from another, one row per part
- * (RadeonChips.cpp). Everything the common code (the register aperture,
- * the command FIFO, the CP, the GART, the PLLs and the CRTC) needs to know
- * about the chip it is is here, so that a part of another generation is a
- * row plus its own 3D engine. Only the RV200 (Radeon 7500) exists today.
+ * (RadeonChips.cpp), and the facts its generation shares with its
+ * siblings (radeon::Generation, one per generation directory: r100/).
+ * Everything the common code (the register aperture, the command FIFO,
+ * the CP, the GART, the PLLs and the CRTC) needs to know about the chip
+ * it is is here, so that a part of another generation is a row plus its
+ * generation's directory with its 3D engine. Only the RV200 (Radeon 7500)
+ * exists today.
  */
 
 #if !defined(INCLUDED_RADEON_CHIP_H)
 #define INCLUDED_RADEON_CHIP_H
 
 #include <cstdint>
+#include <memory>
 
 #include "datatypes.hpp"
 
+class CRadeonEngine3D;
+class CRadeonEngineBus;
+
 namespace radeon {
+
+/// What a generation's parts share that the common code depends on.
+struct Generation {
+  const char *name; ///< the generation's directory: "r100"
+  /// The registers whose writes go through the RBBM's command FIFO,
+  /// [fifo_reg_lo, fifo_reg_hi): the rendering engine's (RadeonQueue.cpp).
+  u32 fifo_reg_lo, fifo_reg_hi;
+  /// RBBM_STATUS's busy bits for the 2D and for the 3D blocks.
+  u32 rbbm_2d_busy, rbbm_3d_busy;
+  /// Builds the generation's 3D engine (RadeonEngine3D.hpp).
+  std::unique_ptr<CRadeonEngine3D> (*make_3d)(const CRadeonEngineBus &bus);
+};
 
 struct ChipInfo {
   const char *name;      ///< the config's name for the part
   const char *marketing; ///< what the banner prints
+  const Generation *gen; ///< its generation: the 3D engine and its kin
   u16 device_id;         ///< PCI device
   u16 subsys_agp;        ///< subsystem device of the AGP board (vendor ATI)
   u16 subsys_pci;        ///< ... of the PCI board

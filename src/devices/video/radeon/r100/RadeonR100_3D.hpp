@@ -39,143 +39,29 @@
  *                         fog, alpha/stencil/Z tests, blending, the
  *                         colour write
  *
- * The engine runs on the card's engine thread (RadeonQueue.cpp): a draw
- * happens when the engine takes the register write or packet that
- * starts it. What it needs of the card is narrow: the register file
- * (CRadeon::R), VRAM (vram_read/vram_write, mc_to_vram), the memory
- * controller's translation for bus-master fetches (cp_translate,
- * cp_read32, cp_fetch) and the part's row (m_chip).
+ *   RadeonR100Regs.hpp    the registers and the packets' fields
+ *
+ * The engine is the R100 generation's CRadeonEngine3D (RadeonEngine3D.hpp,
+ * which has its threading rule): it runs on the card's engine thread
+ * (RadeonQueue.cpp), and a draw happens when the engine takes the
+ * register write or packet that starts it. It reaches the card through
+ * CRadeonEngineBus alone: the register file, VRAM, the memory
+ * controller's translation for bus-master fetches and the part's row.
  */
 
-#if !defined(INCLUDED_RADEON3D_H)
-#define INCLUDED_RADEON3D_H
+#if !defined(INCLUDED_RADEON_R100_3D_H)
+#define INCLUDED_RADEON_R100_3D_H
 
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
+#include "RadeonEngine3D.hpp"
+#include "RadeonR100Regs.hpp"
 #include "datatypes.hpp"
 
-class CRadeon;
-
-namespace radeon3d {
-
-// --- registers (radeon_reg.h names) -----------------------------------------
-constexpr u32 PP_MISC = 0x1c14;
-constexpr u32 PP_FOG_COLOR = 0x1c18;
-constexpr u32 RE_SOLID_COLOR = 0x1c1c;
-constexpr u32 RB3D_BLENDCNTL = 0x1c20;
-constexpr u32 RB3D_DEPTHOFFSET = 0x1c24;
-constexpr u32 RB3D_DEPTHPITCH = 0x1c28;
-constexpr u32 RB3D_ZSTENCILCNTL = 0x1c2c;
-constexpr u32 PP_CNTL = 0x1c38;
-constexpr u32 RB3D_CNTL = 0x1c3c;
-constexpr u32 RB3D_COLOROFFSET = 0x1c40;
-constexpr u32 RE_WIDTH_HEIGHT = 0x1c44;
-constexpr u32 RB3D_COLORPITCH = 0x1c48;
-constexpr u32 SE_CNTL = 0x1c4c;
-constexpr u32 SE_COORD_FMT = 0x1c50;
-constexpr u32 PP_TXFILTER_0 = 0x1c54; ///< unit n at + 0x18 * n
-constexpr u32 PP_TXFORMAT_0 = 0x1c58;
-constexpr u32 PP_TXOFFSET_0 = 0x1c5c;
-constexpr u32 PP_TXCBLEND_0 = 0x1c60;
-constexpr u32 PP_TXABLEND_0 = 0x1c64;
-constexpr u32 PP_TFACTOR_0 = 0x1c68;
-constexpr u32 PP_UNIT_STRIDE = 0x18;
-constexpr u32 RE_STIPPLE_ADDR = 0x1cc8;
-constexpr u32 RE_STIPPLE_DATA = 0x1ccc;
-constexpr u32 RE_LINE_PATTERN = 0x1cd0;
-constexpr u32 RE_LINE_STATE = 0x1cd4;
-constexpr u32 PP_TEX_SIZE_0 = 0x1d04; ///< unit n at + 8 * n
-constexpr u32 PP_TEX_PITCH_0 = 0x1d08;
-constexpr u32 PP_BORDER_COLOR_0 = 0x1d40; ///< unit n at + 4 * n
-constexpr u32 RB3D_STENCILREFMASK = 0x1d7c;
-constexpr u32 RB3D_ROPCNTL = 0x1d80;
-constexpr u32 RB3D_PLANEMASK = 0x1d84;
-constexpr u32 SE_VPORT_XSCALE = 0x1d98;
-constexpr u32 SE_VPORT_XOFFSET = 0x1d9c;
-constexpr u32 SE_VPORT_YSCALE = 0x1da0;
-constexpr u32 SE_VPORT_YOFFSET = 0x1da4;
-constexpr u32 SE_VPORT_ZSCALE = 0x1da8;
-constexpr u32 SE_VPORT_ZOFFSET = 0x1dac;
-constexpr u32 SE_ZBIAS_FACTOR = 0x1db0;
-constexpr u32 SE_ZBIAS_CONSTANT = 0x1db4;
-constexpr u32 SE_LINE_WIDTH = 0x1db8;
-constexpr u32 SE_PORT_DATA0 = 0x2000; ///< ... 0x203c
-constexpr u32 SE_PORT_DATA_LAST = 0x203c;
-constexpr u32 SE_VTX_FMT = 0x2080;
-constexpr u32 SE_VF_CNTL = 0x2084;
-constexpr u32 SE_CNTL_STATUS = 0x2140;
-constexpr u32 SE_TCL_VECTOR_INDX_REG = 0x2200;
-constexpr u32 SE_TCL_VECTOR_DATA_REG = 0x2204;
-constexpr u32 SE_TCL_SCALAR_INDX_REG = 0x2208;
-constexpr u32 SE_TCL_SCALAR_DATA_REG = 0x220c;
-constexpr u32 SE_TCL_MATERIAL_EMISSIVE = 0x2210; ///< RGBA floats
-constexpr u32 SE_TCL_MATERIAL_AMBIENT = 0x2220;
-constexpr u32 SE_TCL_MATERIAL_DIFFUSE = 0x2230;
-constexpr u32 SE_TCL_MATERIAL_SPECULAR = 0x2240;
-constexpr u32 SE_TCL_SHININESS = 0x2250;
-constexpr u32 SE_TCL_OUTPUT_VTX_FMT = 0x2254;
-constexpr u32 SE_TCL_OUTPUT_VTX_SEL = 0x2258;
-constexpr u32 SE_TCL_MATRIX_SELECT_0 = 0x225c;
-constexpr u32 SE_TCL_MATRIX_SELECT_1 = 0x2260;
-constexpr u32 SE_TCL_UCP_VERT_BLEND_CTL = 0x2264;
-constexpr u32 SE_TCL_TEXTURE_PROC_CTL = 0x2268;
-constexpr u32 SE_TCL_LIGHT_MODEL_CTL = 0x226c;
-constexpr u32 SE_TCL_PER_LIGHT_CTL_0 = 0x2270; ///< two lights a register
-constexpr u32 SE_TCL_STATE_FLUSH = 0x2284;
-constexpr u32 RE_TOP_LEFT = 0x26c0;
-constexpr u32 RE_MISC = 0x26c4;
-
-// --- vertex format (SE_VTX_FMT, the packets' VTX_FMT) ------------------------
-constexpr u32 VTX_W0 = 1u << 0;
-constexpr u32 VTX_FPCOLOR = 1u << 1;
-constexpr u32 VTX_FPALPHA = 1u << 2;
-constexpr u32 VTX_PKCOLOR = 1u << 3;
-constexpr u32 VTX_FPSPEC = 1u << 4;
-constexpr u32 VTX_FPFOG = 1u << 5;
-constexpr u32 VTX_PKSPEC = 1u << 6;
-constexpr u32 VTX_ST0 = 1u << 7;
-constexpr u32 VTX_ST1 = 1u << 8;
-constexpr u32 VTX_Q1 = 1u << 9;
-constexpr u32 VTX_ST2 = 1u << 10;
-constexpr u32 VTX_Q2 = 1u << 11;
-constexpr u32 VTX_ST3 = 1u << 12;
-constexpr u32 VTX_Q3 = 1u << 13;
-constexpr u32 VTX_Q0 = 1u << 14;
-constexpr u32 VTX_WEIGHT_SHIFT = 15; ///< <17:15> blend weights
-constexpr u32 VTX_N0 = 1u << 18;
-constexpr u32 VTX_XY1 = 1u << 27;
-constexpr u32 VTX_Z1 = 1u << 28;
-constexpr u32 VTX_W1 = 1u << 29;
-constexpr u32 VTX_N1 = 1u << 30;
-constexpr u32 VTX_Z = 1u << 31;
-
-// --- vertex control (SE_VF_CNTL, the packets' VF_CNTL)
-// ------------------------
-enum : u32 {
-  PRIM_NONE = 0,
-  PRIM_POINT_LIST = 1,
-  PRIM_LINE_LIST = 2,
-  PRIM_LINE_STRIP = 3,
-  PRIM_TRI_LIST = 4,
-  PRIM_TRI_FAN = 5,
-  PRIM_TRI_STRIP = 6,
-  PRIM_TRI_FLAG = 7,
-  PRIM_RECT_LIST = 8,
-  PRIM_POINT_LIST_3 = 9,
-  PRIM_LINE_LIST_3 = 10,
-  PRIM_SPIRIT_LIST = 11,
-  PRIM_LINE_LOOP = 12,
-  PRIM_QUAD_LIST = 13,
-  PRIM_QUAD_STRIP = 14,
-  PRIM_POLYGON = 15
-};
-enum : u32 { WALK_STATE = 0, WALK_INDEX = 1, WALK_LIST = 2, WALK_DATA = 3 };
-constexpr u32 VF_COLOR_ORDER_RGBA = 1u << 6;
-constexpr u32 VF_INDEX_32 = 1u << 11;
-
-} // namespace radeon3d
+namespace radeon {
+namespace r100 {
 
 /// A vertex as the setup engine takes it. Before setup x/y/z/w are clip
 /// coordinates (TCL) or what the vertex carried (bypass); after it, the
@@ -205,7 +91,7 @@ struct RadeonVertexIn {
   bool has_tex[4], has_q[4];
 };
 
-class CRadeon3D {
+class CRadeonR100_3D : public CRadeonEngine3D {
 public:
   /// A fragment as the rasteriser hands it to the pixel pipeline.
   struct frag_t {
@@ -220,39 +106,38 @@ public:
     float w;
   };
 
-  explicit CRadeon3D(CRadeon &card);
+  explicit CRadeonR100_3D(const CRadeonEngineBus &bus);
 
   /// A register write the 3D engine acts on (the vertex and TCL state
   /// ports, SE_VF_CNTL). Returns true when the write is consumed; plain
   /// state registers are left to the register file.
-  bool reg_write(u32 reg, u32 data);
-  bool reg_read(u32 reg, u32 *v);
+  bool reg_write(u32 reg, u32 data) override;
+  bool reg_read(u32 reg, u32 *v) override;
   /// A type-3 packet the 3D engine owns. Returns false for any other.
-  bool packet3(u8 op, const std::vector<u32> &d);
-  void reset();
-  void save(FILE *f) const;
-  bool restore(FILE *f);
+  bool packet3(u8 op, const std::vector<u32> &d) override;
+  void reset() override;
+  void save(FILE *f) const override;
+  bool restore(FILE *f) override;
+  u64 pixels() const override { return m_pixels; }
 
   /// Counters the self-test checks.
   u64 m_prims = 0, m_pixels = 0;
   /// The self-test's switch: take the R200 microcode's packets on this
   /// part (to check them).
   bool m_r200_packets = false;
-  /// the scaler's palette LOAD_PALETTE loads (the scaler is not modelled)
-  u32 m_palette[256] = {};
 
   // TCL state memory (public for the self-test's reference).
   float m_vec[128][4]; ///< VS_* vectors: matrices, lights, fog, ...
   float m_scl[64];     ///< SS_* scalars
 
 private:
-  CRadeon &c;
+  CRadeonEngineBus c;
   u32 reg(u32 r) const;
   float regf(u32 r) const;
   u32 mem_read32(u32 mc);
   u8 mem_read8(u32 mc);
 
-  // --- ports and packets (RadeonR100_3D.cpp) -------------------------------------
+  // --- ports and packets (RadeonR100_3D.cpp) ---------------------------------
   u32 m_vec_index = 0, m_vec_comp = 0;
   u32 m_scl_index = 0;
   u32 m_stipple[32] = {};
@@ -290,7 +175,7 @@ private:
   void to_window(RadeonVertex &v) const;
   void bypass_to_window(RadeonVertex &v) const;
 
-  // --- TCL (RadeonR100Tcl.cpp) ---------------------------------------------------
+  // --- TCL (RadeonR100Tcl.cpp) -----------------------------------------------
   void tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out);
   /// The lit colours for normal `n` at eye position `P` (two-sided
   /// lighting calls it again with the normal negated).
@@ -298,7 +183,7 @@ private:
                  float col[4], float spec[4]);
   const float *matrix(u32 sel) const { return &m_vec[(sel & 15) * 4][0]; }
 
-  // --- raster and pixel pipeline (RadeonR100Raster.cpp) --------------------------
+  // --- raster and pixel pipeline (RadeonR100Raster.cpp) ----------------------
   struct texunit_t {
     bool enabled;
     u32 filter, format, offset, cblend, ablend, tfactor;
@@ -353,4 +238,7 @@ private:
   int m_cube_face = 0; ///< the face a cube map unit is being sampled on
 };
 
-#endif // !defined(INCLUDED_RADEON3D_H)
+} // namespace r100
+} // namespace radeon
+
+#endif // !defined(INCLUDED_RADEON_R100_3D_H)

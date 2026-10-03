@@ -48,9 +48,12 @@
 
 namespace radeon {
 
+// The generations (each in its own directory).
+extern const Generation gen_r100; // r100/RadeonR100_3D.cpp
+
 static const ChipInfo kChips[] = {
-    {"rv200", "Radeon 7500 (RV200)", 0x5157, 0x013a, 0x013b, 64, 64, 256, 27000,
-     180000, 2, false},
+    {"rv200", "Radeon 7500 (RV200)", &gen_r100, 0x5157, 0x013a, 0x013b, 64, 64,
+     256, 27000, 180000, 2, false},
 };
 
 const ChipInfo *find_chip(const char *name) {

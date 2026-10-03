@@ -96,7 +96,7 @@
 #include <cmath>
 #include <cstring>
 
-using namespace radeon3d;
+using namespace radeon::r100;
 
 namespace {
 inline float f32(u32 v) {
@@ -369,7 +369,7 @@ inline u32 ufloat_bits(double v, int e, int m, int bias) {
 } // namespace
 
 /// Snapshot the state a draw uses.
-void CRadeon3D::raster_setup() {
+void CRadeonR100_3D::raster_setup() {
   rs.pp_cntl = reg(PP_CNTL);
   rs.rb3d_cntl = reg(RB3D_CNTL);
   rs.se_cntl = reg(SE_CNTL);
@@ -500,8 +500,8 @@ void CRadeon3D::raster_setup() {
 }
 
 /// One texel of a level, decoded to 0..1 RGBA.
-void CRadeon3D::fetch_texel(const texunit_t &tu, int level, int x, int y,
-                            float o[4]) {
+void CRadeonR100_3D::fetch_texel(const texunit_t &tu, int level, int x, int y,
+                                 float o[4]) {
   const u32 base = tu.cube ? tu.face_off[m_cube_face] : tu.level_off[level];
   const u32 pitch = u32(tu.level_pitch[level]);
   const u32 f = u32(tu.fmt);
@@ -664,8 +664,8 @@ void CRadeon3D::fetch_texel(const texunit_t &tu, int level, int x, int y,
     o[3] = 1.0f;
 }
 
-void CRadeon3D::texel(const texunit_t &tu, int level, int x, int y,
-                      float o[4]) {
+void CRadeonR100_3D::texel(const texunit_t &tu, int level, int x, int y,
+                           float o[4]) {
   const int w = tu.level_w[level], h = tu.level_h[level];
   const int xi = wrap(x, w, tu.filter >> 23), yi = wrap(y, h, tu.filter >> 27);
   if (xi < 0 || yi < 0) {
@@ -679,7 +679,7 @@ void CRadeon3D::texel(const texunit_t &tu, int level, int x, int y,
  * A filtered sample at (s, t) -- texture space, 0..1 across the level-0
  * image -- and level of detail `lod` (log2 of texels per pixel).
  **/
-void CRadeon3D::sample(int unit, float s, float t, float lod, float o[4]) {
+void CRadeonR100_3D::sample(int unit, float s, float t, float lod, float o[4]) {
   const texunit_t &tu = rs.tex[unit];
   const u32 flt = tu.filter;
   // LOD bias: Mesa's encoding, -1.0 at -128 up to +4.0 at 127
@@ -765,7 +765,7 @@ void CRadeon3D::sample(int unit, float s, float t, float lod, float o[4]) {
  * A fragment through the pixel pipeline, written to the colour buffer
  * unless a test drops it.
  **/
-void CRadeon3D::fragment(frag_t &f) {
+void CRadeonR100_3D::fragment(frag_t &f) {
   if (f.x < rs.clip_l || f.x > rs.clip_r || f.y < rs.clip_t ||
       f.y > rs.clip_b || f.x < 0 || f.y < 0)
     return;
@@ -1141,8 +1141,8 @@ inline double eval(const plane_t &p, double x, double y) {
  * A triangle in window coordinates. `prov` is the provoking vertex whose
  * colours flat shading uses (or nullptr).
  **/
-void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
-                                const RadeonVertex *prov) {
+void CRadeonR100_3D::raster_triangle(const RadeonVertex *vin[3],
+                                     const RadeonVertex *prov) {
   const u32 se = rs.se_cntl;
   // snap to the setup engine's precision
   static const double prec[4] = {16, 8, 4, 2};
@@ -1381,7 +1381,7 @@ void CRadeon3D::raster_triangle(const RadeonVertex *vin[3],
 }
 
 /// A fragment at a vertex (points, line pixels): its own attributes.
-static void frag_from(CRadeon3D::frag_t &f, const RadeonVertex &v,
+static void frag_from(CRadeonR100_3D::frag_t &f, const RadeonVertex &v,
                       const int route[3]) {
   f.z = v.z;
   f.w = v.w != 0 ? 1.0f / v.w : 0.0f;
@@ -1398,7 +1398,7 @@ static void frag_from(CRadeon3D::frag_t &f, const RadeonVertex &v,
   }
 }
 
-void CRadeon3D::raster_point(const RadeonVertex &a) {
+void CRadeonR100_3D::raster_point(const RadeonVertex &a) {
   frag_t f;
   const int route[3] = {rs.tex[0].route, rs.tex[1].route, rs.tex[2].route};
   frag_from(f, a, route);
@@ -1414,7 +1414,7 @@ void CRadeon3D::raster_point(const RadeonVertex &a) {
  * A line: one pixel wide by Bresenham between the pixels holding the
  * endpoints, the last left out; or SE_LINE_WIDTH wide as a quad.
  **/
-void CRadeon3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
+void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
   const u32 se = rs.se_cntl;
   float width = float(reg(SE_LINE_WIDTH) & 0xffff) / 16.0f;
   // an anti-aliased line (PP_CNTL ANTI_ALIAS_LINE <24>) is drawn as the
@@ -1526,8 +1526,8 @@ void CRadeon3D::raster_line(const RadeonVertex &a, const RadeonVertex &b) {
  * software tiler) [inference for the R100: Mesa's r100 driver itself
  * never tiles; the depth buffer's HyperZ tiling is taken to be this one].
  **/
-u32 CRadeon3D::surface_addr(u32 base, u32 pitch_px, u32 bpp, bool micro,
-                            bool depth, int x, int y) const {
+u32 CRadeonR100_3D::surface_addr(u32 base, u32 pitch_px, u32 bpp, bool micro,
+                                 bool depth, int x, int y) const {
   if (!micro)
     return base + (u32(y) * pitch_px + u32(x)) * bpp;
   u32 tw, th;
@@ -1550,7 +1550,7 @@ u32 CRadeon3D::surface_addr(u32 base, u32 pitch_px, u32 bpp, bool micro,
          (uy % th) * tw * bpp + (ux % tw) * bpp;
 }
 
-u32 CRadeon3D::surf_read(u32 addr, int bytes, u32 swap) const {
+u32 CRadeonR100_3D::surf_read(u32 addr, int bytes, u32 swap) const {
   if (!swap)
     return c.vram_read(addr, bytes);
   const u32 a = addr & ~3u;
@@ -1559,7 +1559,7 @@ u32 CRadeon3D::surf_read(u32 addr, int bytes, u32 swap) const {
   return bytes == 4 ? v : v & ((1u << (8 * bytes)) - 1);
 }
 
-void CRadeon3D::surf_write(u32 addr, int bytes, u32 data, u32 swap) {
+void CRadeonR100_3D::surf_write(u32 addr, int bytes, u32 data, u32 swap) {
   if (!swap) {
     c.vram_write(addr, bytes, data);
     return;
@@ -1585,7 +1585,7 @@ void CRadeon3D::surf_write(u32 addr, int bytes, u32 data, u32 swap) {
  * documented: a 4x4 Bayer matrix and the error in the target's units
  * [inference].
  **/
-u32 CRadeon3D::quantise(float v, int bits, int ch, int x, int y) {
+u32 CRadeonR100_3D::quantise(float v, int bits, int ch, int x, int y) {
   const float mx = float((1 << bits) - 1);
   const float val = clamp01(v) * mx;
   const u32 cntl = rs.rb3d_cntl;
@@ -1612,7 +1612,7 @@ u32 CRadeon3D::quantise(float v, int bits, int ch, int x, int y) {
   return u32(std::min(std::max(q, 0.0f), mx));
 }
 
-u32 CRadeon3D::pack_color(const float cc[4], int x, int y) {
+u32 CRadeonR100_3D::pack_color(const float cc[4], int x, int y) {
   // DITHER_INIT: each line's error starts afresh
   if (y != rs.dither_y && (rs.rb3d_cntl & (1u << 5)))
     rs.dither_err[0] = rs.dither_err[1] = rs.dither_err[2] = 0;
@@ -1659,7 +1659,7 @@ u32 CRadeon3D::pack_color(const float cc[4], int x, int y) {
  * [inference: Mesa leaves the D3D setting and draws GL cube maps right
  * with it].
  **/
-int CRadeon3D::cube_face(float s, float t, float r, float *fs, float *ft) {
+int CRadeonR100_3D::cube_face(float s, float t, float r, float *fs, float *ft) {
   const float as = std::fabs(s), at = std::fabs(t), ar = std::fabs(r);
   int face;
   float sc, tc, ma;

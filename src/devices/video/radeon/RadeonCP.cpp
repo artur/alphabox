@@ -130,6 +130,7 @@ enum : u8 {
   OP_NEXT_CHAR = 0x19,
   OP_WAIT_FOR_IDLE = 0x26,
   OP_LOAD_MICROCODE = 0x24,
+  OP_LOAD_PALETTE = 0x2c,
   OP_CNTL_PAINT = 0x91,
   OP_CNTL_BITBLT = 0x92,
   OP_CNTL_SMALLTEXT = 0x93,
@@ -625,7 +626,8 @@ void CRadeon::cp_feed(u32 d) {
  * A type-3 packet. The 2D operations load the engine's registers as the
  * fields say and start it through the same registers a driver would
  * write, so the two ways of driving the engine draw the same. The 3D
- * operations go to the 3D engine (RadeonR100_3D.cpp).
+ * operations go to the generation's 3D engine (RadeonEngine3D.hpp; the
+ * R100's in r100/RadeonR100_3D.cpp).
  *
  * The packet layouts are AMD's "Radeon R5xx Acceleration" v1.5, 6.2.2
  * (the PM4 2D packets the R100 microcode already understood):
@@ -678,6 +680,16 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
       reg_write(SC_BOTTOM_RIGHT, 4, d[1]);
     }
     return;
+  case OP_LOAD_PALETTE:
+    // [SCALE_DATATYPE: 1 16 entries, 2 256] [entries...] (R5xx
+    // Acceleration 6.2.2.12): the palette of the 2D scaler, which is not
+    // modelled; kept
+    if (!d.empty()) {
+      const size_t n = (d[0] & 3) == 1 ? 16 : 256;
+      for (size_t i = 0; i < n && i + 1 < d.size(); i++)
+        m_scaler_palette[i] = d[i + 1];
+    }
+    return;
   case OP_NEXT_CHAR:
     // A character in the current colours, as HOSTDATA_BLT's bitmaps.
     if (d.size() >= 2) {
@@ -705,7 +717,7 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
   case OP_CNTL_POLYSCANLINES:
     break;
   default:
-    if (r3d_packet3(op, d))
+    if (m_3d->packet3(op, d))
       return;
     if (!m_cp_unknown_seen[op]) {
       m_cp_unknown_seen[op] = true;

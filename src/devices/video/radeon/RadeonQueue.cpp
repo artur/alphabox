@@ -106,11 +106,9 @@ constexpr u32 WAIT_RE_CRTC_VLINE = 1u << 1;
 constexpr u32 WAIT_FE_CRTC_VLINE = 1u << 2;
 constexpr u32 WAIT_CRTC_VLINE = 1u << 3;
 
-// RBBM_STATUS (r100d.h)
+// RBBM_STATUS (r100d.h); the 2D and 3D blocks' busy bits are the
+// generation's (RadeonChip.hpp)
 constexpr u32 RBBM_CP_CMDSTRM_BUSY = 1u << 16;
-constexpr u32 RBBM_2D_BUSY = (1u << 17) | (1u << 18); // E2, RB2D
-constexpr u32 RBBM_3D_BUSY =
-    (1u << 19) | (1u << 20) | (1u << 21) | (1u << 22) | (1u << 23) | (1u << 24);
 constexpr u32 RBBM_GUI_ACTIVE = 1u << 31;
 
 long long now_ns() {
@@ -128,8 +126,9 @@ CRadeon::engine_scope::engine_scope() : saved(t_in_engine) {
 }
 CRadeon::engine_scope::~engine_scope() { t_in_engine = saved; }
 
-bool CRadeon::is_fifo_reg(u32 reg) {
-  return reg >= 0x1400 && reg < 0x4000 && reg != RBBM_STATUS_ALT;
+bool CRadeon::is_fifo_reg(u32 reg) const {
+  return reg >= m_chip->gen->fifo_reg_lo && reg < m_chip->gen->fifo_reg_hi &&
+         reg != RBBM_STATUS_ALT;
 }
 
 bool CRadeon::is_status_reg(u32 reg) {
@@ -190,13 +189,13 @@ void CRadeon::queue_write(u32 reg, u32 data, u32 mask) {
  * plus the pixels it wrote.
  **/
 void CRadeon::queue_apply(const fifo_entry &e) {
-  const u64 px0 = m_eng_pixels, px3 = m_3d->m_pixels;
+  const u64 px0 = m_eng_pixels, px3 = m_3d->pixels();
   const u32 old = R(e.reg);
   reg_write32(e.reg, (old & ~e.mask) | (e.data & e.mask), old, e.mask);
-  const u64 px = (m_eng_pixels - px0) + (m_3d->m_pixels - px3);
+  const u64 px = (m_eng_pixels - px0) + (m_3d->pixels() - px3);
   if (m_eng_pixels != px0)
     m_last_unit = 1;
-  else if (m_3d->m_pixels != px3)
+  else if (m_3d->pixels() != px3)
     m_last_unit = 2;
   engine_charge(1 + px / m_chip->pixels_per_clock);
 }
@@ -399,9 +398,9 @@ void CRadeon::engine_main() {
       l.unlock();
       {
         std::lock_guard<std::mutex> x(m_exec_mx);
-        const u64 px0 = m_eng_pixels, px3 = m_3d->m_pixels;
+        const u64 px0 = m_eng_pixels, px3 = m_3d->pixels();
         cp_feed(d);
-        engine_charge(1 + ((m_eng_pixels - px0) + (m_3d->m_pixels - px3)) /
+        engine_charge(1 + ((m_eng_pixels - px0) + (m_3d->pixels() - px3)) /
                               m_chip->pixels_per_clock);
       }
       l.lock();
@@ -412,9 +411,9 @@ void CRadeon::engine_main() {
     l.unlock();
     {
       std::lock_guard<std::mutex> x(m_exec_mx);
-      const u64 px0 = m_eng_pixels, px3 = m_3d->m_pixels;
+      const u64 px0 = m_eng_pixels, px3 = m_3d->pixels();
       cp_ring_step();
-      engine_charge(1 + ((m_eng_pixels - px0) + (m_3d->m_pixels - px3)) /
+      engine_charge(1 + ((m_eng_pixels - px0) + (m_3d->pixels() - px3)) /
                             m_chip->pixels_per_clock);
     }
     l.lock();
@@ -482,7 +481,8 @@ u32 CRadeon::rbbm_status() const {
   if (cp_ring_pending())
     v |= RBBM_CP_CMDSTRM_BUSY;
   if (engine_busy())
-    v |= RBBM_GUI_ACTIVE | (m_last_unit == 2 ? RBBM_3D_BUSY : RBBM_2D_BUSY);
+    v |= RBBM_GUI_ACTIVE | (m_last_unit == 2 ? m_chip->gen->rbbm_3d_busy
+                                             : m_chip->gen->rbbm_2d_busy);
   return v;
 }
 

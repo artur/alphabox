@@ -75,7 +75,7 @@
 #include <cmath>
 #include <cstring>
 
-using namespace radeon3d;
+using namespace radeon::r100;
 
 namespace {
 inline float f32(u32 v) {
@@ -122,7 +122,7 @@ constexpr u32 LIGHT_RANGE_ATTEN = 1u << 6;
 constexpr u32 LIGHT_CONST_ATTEN = 1u << 7;
 } // namespace
 
-void CRadeon3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
+void CRadeonR100_3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
   const u32 sel0 = c.R(SE_TCL_MATRIX_SELECT_0);
   const u32 sel1 = c.R(SE_TCL_MATRIX_SELECT_1);
   const u32 lm = c.R(SE_TCL_LIGHT_MODEL_CTL);
@@ -318,8 +318,8 @@ void CRadeon3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
  * `spec` (rgb) as SE_TCL_OUTPUT_VTX_SEL asks, for the normal `n` at the
  * position `P` (eye or model space).
  **/
-void CRadeon3D::tcl_light(const RadeonVertexIn &in, const float *P,
-                          const float n[3], float col[4], float spec[4]) {
+void CRadeonR100_3D::tcl_light(const RadeonVertexIn &in, const float *P,
+                               const float n[3], float col[4], float spec[4]) {
   const u32 lm = c.R(SE_TCL_LIGHT_MODEL_CTL);
   const u32 vsel = c.R(SE_TCL_OUTPUT_VTX_SEL);
   auto source = [&](int shift, u32 reg, float o[4]) {

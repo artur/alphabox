@@ -43,13 +43,16 @@
  *                      the packets they carry
  *   RadeonGart.cpp     the memory controller's view of the bus: the AGP
  *                      window and the card's own PCI GART
- *   RadeonChips.cpp    the part's facts (RadeonChip.hpp)
+ *   RadeonChips.cpp    the part's facts and its generation (RadeonChip.hpp)
+ *   RadeonEngine3D.hpp what a generation's 3D engine is to the card
+ *                      (CRadeonEngine3D) and the card to it
+ *                      (CRadeonEngineBus)
  *   RadeonDisplay.cpp  the primary CRTC's extended modes, the hardware
  *                      cursor, the 8-bit palette
- *   r100/RadeonR100_3D.cpp, RadeonR100Tcl.cpp, RadeonR100Raster.cpp
- *                      the 3D engine (CRadeon3D, RadeonR100_3D.hpp): vertex
- *                      fetch and the 3D packets, TCL, rasteriser and
- *                      pixel pipeline
+ *   r100/              the R100 generation's 3D engine
+ *                      (radeon::r100::CRadeonR100_3D, RadeonR100_3D.hpp):
+ *                      vertex fetch and the 3D packets, TCL, rasteriser
+ *                      and pixel pipeline
  *   RadeonSelfTest.cpp ALPHABOX_RADEON_SELFTEST: the engines driven
  *                      through the registers and the CP, checked
  *                      against software references
@@ -84,8 +87,8 @@
 #include <thread>
 #include <vector>
 
-#include "RadeonR100_3D.hpp"
 #include "RadeonChip.hpp"
+#include "RadeonEngine3D.hpp"
 #include "RadeonRegs.hpp"
 #include "VGACard.hpp"
 #include "i2c_spd.hpp"
@@ -99,7 +102,7 @@ inline long long radeon_clock_ns() {
 }
 
 class CRadeon : public CVGACard {
-  friend class CRadeon3D;
+  friend class CRadeonEngineBus;
 
 public:
   CRadeon(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
@@ -221,8 +224,9 @@ protected:
   // --- the command FIFO and the engine thread (RadeonQueue.cpp) ----------
   /// Registers whose writes go through the RBBM's command FIFO: the
   /// rendering engine's, from 0x1400 on (Rage 128 Pro RRG 3-149's map:
-  /// "Rendering Engine (GUI) Registers (FIFOed)").
-  static bool is_fifo_reg(u32 reg);
+  /// "Rendering Engine (GUI) Registers (FIFOed)"); the range is the
+  /// generation's (RadeonChip.hpp).
+  bool is_fifo_reg(u32 reg) const;
   /// Of those, the status registers a read must not wait behind the FIFO
   /// for.
   static bool is_status_reg(u32 reg);
@@ -312,8 +316,6 @@ protected:
   u32 cp_fetch(u32 mc);
   void cp_feed(u32 d);
   void cp_packet3(u8 op, const std::vector<u32> &payload);
-  /// A type-3 packet for the 3D engine; false when it is not one.
-  bool r3d_packet3(u8 op, const std::vector<u32> &payload);
 
   // --- the memory controller's view of the bus (RadeonGart.cpp) ------------
   /// A memory-controller address: the framebuffer (`*is_vram`, `*addr` a
@@ -380,8 +382,11 @@ protected:
     std::vector<u32> payload;
   };
   cp_parser m_cp;
-  /// The 3D engine.
-  std::unique_ptr<CRadeon3D> m_3d;
+  /// The 3D engine, the generation's (built in init() from the chip row).
+  std::unique_ptr<CRadeonEngine3D> m_3d;
+  /// The 2D scaler's palette, which LOAD_PALETTE loads (the scaler is not
+  /// modelled).
+  u32 m_scaler_palette[256] = {};
   int m_cp_depth = 0, m_cp_ib_depth = 0;
   u32 m_me_ram[256][2] = {}; ///< the CP microcode, kept for read-back
   u32 m_me_index = 0;
@@ -417,5 +422,32 @@ protected:
   const char *m_trace_path = "?";
   void trace_access(bool write, u32 reg, int bytes, u32 data);
 };
+
+// The 3D engine's view of the card (RadeonEngine3D.hpp).
+inline u32 &CRadeonEngineBus::R(u32 reg) { return c.R(reg); }
+inline u32 CRadeonEngineBus::R(u32 reg) const {
+  return static_cast<const CRadeon &>(c).R(reg);
+}
+inline u32 CRadeonEngineBus::vram_read(u32 addr, int bytes) const {
+  return c.vram_read(addr, bytes);
+}
+inline void CRadeonEngineBus::vram_write(u32 addr, int bytes, u32 data) {
+  c.vram_write(addr, bytes, data);
+}
+inline u8 CRadeonEngineBus::vram_byte(u32 addr) const {
+  return c.vga.memory[addr & c.vram_mask()];
+}
+inline u32 CRadeonEngineBus::mc_to_vram(u32 mc) const {
+  return c.mc_to_vram(mc);
+}
+inline bool CRadeonEngineBus::bm_translate(u32 mc, bool *is_vram, u32 *addr) {
+  return c.cp_translate(mc, is_vram, addr);
+}
+inline u32 CRadeonEngineBus::bm_read32(u32 mc) { return c.cp_read32(mc); }
+inline u32 CRadeonEngineBus::bm_fetch(u32 mc) { return c.cp_fetch(mc); }
+inline const radeon::ChipInfo &CRadeonEngineBus::chip() const {
+  return *c.m_chip;
+}
+inline const char *CRadeonEngineBus::devid() const { return c.devid_string; }
 
 #endif // !defined(INCLUDED_RADEON_H)

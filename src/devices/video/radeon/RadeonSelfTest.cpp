@@ -39,6 +39,7 @@
  **/
 
 #include "Radeon.hpp"
+#include "RadeonR100_3D.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -849,7 +850,9 @@ bool CRadeon::selftest() {
   // ======================================================================
   // 3D engine
   // ======================================================================
-  using namespace radeon3d;
+  using namespace radeon::r100;
+  // the R100 engine's own switch (the scenes are the R100's)
+  auto &r100_3d = static_cast<CRadeonR100_3D &>(*m_3d);
   const int W = 128, H = 128;
   // RB3D_CNTL ROUND_ENABLE: the references round to the nearest step (Mesa
   // sets it for round_mode "round"; without it the chip truncates)
@@ -3202,7 +3205,7 @@ bool CRadeon::selftest() {
     // INDX_BUFFER with the R200 microcode's packets switched on: a
     // DRAW_INDX without indices, then the indices from a buffer (one
     // dword skipped, 16-bit indices)
-    m_3d->m_r200_packets = true;
+    r100_3d.m_r200_packets = true;
     const u32 VB = TEX + 0xc0000, IXB = TEX + 0xc1000;
     const float vxy[8] = {8, 60, 40, 60, 40, 92, 8, 92};
     for (int i = 0; i < 8; i++)
@@ -3215,7 +3218,7 @@ bool CRadeon::selftest() {
     cp({pkt3(0x2a, 2), 0, PRIM_TRI_LIST | (WALK_INDEX << 4) | (6u << 16)});
     cp({pkt3(0x33, 3), (1u << 16) | 0x810, IXB, 4});
     sync(); // the switch is the self-test's, not the FIFO's
-    m_3d->m_r200_packets = false;
+    r100_3d.m_r200_packets = false;
     for (int y = 60; y < 92; y++)
       for (int x = 8; x < 40; x++)
         ref[size_t(y * W + x)] = 0xffffffffu;
@@ -3279,7 +3282,8 @@ bool CRadeon::selftest() {
     cp(pal);
     sync();
     report("CP: LOAD_PALETTE (the scaler's 16 entries kept)",
-           m_3d->m_palette[15] == 0x00102030u * 15 && m_3d->m_palette[16] == 0,
+           m_scaler_palette[15] == 0x00102030u * 15 &&
+               m_scaler_palette[16] == 0,
            "");
   }
 
