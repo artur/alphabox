@@ -719,9 +719,16 @@ void CRadeonR100_3D::sample(int unit, float s, float t, float lod, float o[4]) {
     }
   }
   // GL's clamp (6) and mirror-once clamp (7): the coordinate clamped to
-  // the image, so that only a linear filter reaches the border
+  // the image, so that only a linear filter reaches the border (GL_CLAMP)
+  // -- unless BORDER_MODE_D3D <31>: then the coordinate runs on and every
+  // texel outside the image is the border colour (GL_CLAMP_TO_BORDER,
+  // Direct3D's border; Mesa radeonSetTexWrap programs CLAMP_GL with
+  // BORDER_MODE_D3D for GL_CLAMP_TO_BORDER and falls back to software when
+  // one texture wants both kinds, the bit being one for both axes)
   const u32 ms = (flt >> 23) & 7, mt = (flt >> 27) & 7;
-  const bool gl_clamp_s = ms >= 6, gl_clamp_t = mt >= 6;
+  const bool d3d_border = (flt >> 31) & 1;
+  const bool gl_clamp_s = ms >= 6 && !d3d_border,
+             gl_clamp_t = mt >= 6 && !d3d_border;
   auto at_level = [&](int l, float out[4]) {
     const float w = float(tu.level_w[l]), h = float(tu.level_h[l]);
     float u = s * w, v = t * h;

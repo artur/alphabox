@@ -2612,4 +2612,34 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     const int d = compare("line-subpixel", ref, 0, &mx);
     scene_report("lines through sub-pixel endpoints", d, mx);
   }
+
+  // -- scene: PP_TXFILTER BORDER_MODE with the GL clamp -----------------------
+  {
+    // CLAMP_GL (6) on both axes, bilinear, coordinates 1.25..1.5 (all
+    // beyond the image). BORDER_MODE_OGL: the coordinate clamps to the
+    // edge, so the filter takes the last texel and the border half and
+    // half on each axis -- a quarter red, three quarters border (GL_CLAMP).
+    // BORDER_MODE_D3D: the coordinate runs on, every texel there is the
+    // border (GL_CLAMP_TO_BORDER, as Mesa programs it)
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    for (u32 i = 0; i < 32; i++) // 4x4, rows 32-byte aligned
+      vw32(TEX + i * 4, 0xffff0000u);
+    cp({pkt0(PP_CNTL, 1), (1u << 4) | (1u << 12), pkt0(PP_BORDER_COLOR_0, 1),
+        0xff0000ffu});
+    for (u32 d3d : {0u, 1u}) {
+      const u32 filter = 1u | (1u << 1) | (6u << 23) | (6u << 27) | (d3d << 31);
+      set_tex(0, TEX, 6 | (1u << 6), 2, 2, filter, C_REPLACE_T0, A_REPLACE_T0);
+      const float x0 = d3d ? 64.0f : 0.0f;
+      rect_st(x0, 0, x0 + 64, 64, 1.25f, 1.25f, 1.5f, 1.5f);
+      float c[4] = {d3d ? 0.0f : 0.25f, 0, d3d ? 1.0f : 0.75f, 1};
+      for (int y = 0; y < 64; y++)
+        for (int x = int(x0); x < int(x0) + 64; x++)
+          ref[size_t(y * W + x)] = argbf(c);
+    }
+    int mx;
+    const int d = compare("border-mode", ref, 2, &mx);
+    scene_report("textures: BORDER_MODE_OGL/D3D with the GL clamp", d, mx);
+  }
 }

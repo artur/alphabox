@@ -329,7 +329,9 @@ premultiplied alpha).
   DXT1, DXT2/3, DXT4/5; power-of-two mip chains and non-power-of-two
   images (`PP_TEX_SIZE`/`PP_TEX_PITCH`); nearest, linear, mip-nearest
   and mip-linear filters, LOD bias, the maximum level; the eight wrap
-  modes and the border colour; cube maps (`CUBIC_MAP_ENABLE`: faces +X
+  modes and the border colour, with `BORDER_MODE` <31> turning the GL
+  clamps into GL_CLAMP_TO_BORDER (Mesa's `radeonSetTexWrap`: `CLAMP_GL`
+  + `BORDER_MODE_D3D`); cube maps (`CUBIC_MAP_ENABLE`: faces +X
   .. +Z at `PP_CUBIC_OFFSET_Tn_0..4`, -Z at `PP_TXOFFSET_n`, one level,
   the third coordinate in the Q slot -- Mesa's `cube_emit_cs`,
   `radeon_swtcl.c`; OpenGL's face selection); micro-tiled textures and
@@ -400,24 +402,35 @@ scenes that differ show:
   texel before the boundary at some boundaries and not at others (in
   `point` only at s = 0.5); the model takes the one after. The R100's
   interpolator precision is not documented: undecidable without a card.
+  `VTX_PIX_CENTER_D3D` does not settle it: it is the convention (pixel
+  centres on the integers) that puts the centres on the boundaries. The
+  one driver hint at where the chip really samples is Mesa's viewport
+  offset of +1/8 pixel (`SUBPIXEL_X/Y`, "to correctly position
+  primitives", with OpenGL centres and truncation to 1/8), which the
+  model does not explain and does not need; a card would.
 - tex4444 also differs by up to 17 off the boundaries: the RGB rasteriser
   widens 4 bits by shifting (0xF is 240), the model by replicating
   (within d3dcheck's tolerance).
+- mipmap: nearest-mip filtering rounds the level of detail, as GL
+  defines it and as Mesa relies on (no bias for the `*_MIPMAP_NEAREST`
+  filters); the RGB rasteriser truncates, which nadarad matches with a
+  -0.5 LOD bias (11249 -> 197 differing pixels, the rest boundary ties).
 - miplinear (and mipramp, a probe): the trilinear weight is the fraction
   of the level of detail in the model (GL's), linear in the texel ratio
   in the RGB rasteriser (up to 0.086 apart, 22 of 255); plus the boundary
   ties. Undecidable without a card.
-- lines (close since the sub-pixel line rule, 350 -> 99 pixels): the HAL
-  now follows the exact line through the endpoints; the RGB rasteriser
+- lines (close since the sub-pixel line rule: 350 -> 99 pixels, 77
+  with the 1/8-pixel snapping nadarad now programs): the HAL now
+  follows the exact line through the endpoints; the RGB rasteriser
   does at 85-100% of the columns, and draws the last pixel of a line
   ending on a pixel centre (Direct3D's `LASTPIXEL`, which nadarad does not
   pass on).
 - gouraud, flat (close): pixels whose centres lie exactly on an edge; the
   model applies the top-left rule, the RGB rasteriser does not always.
 - clip (close): the clipped triangle's vertices are fractional and
-  nadarad programs truncation to 1/16 pixel, which moves the clipped
-  edge up across a row of pixel centres -- the R100 snapping as
-  documented.
+  nadarad programs truncation (to 1/16, now 1/8, pixel), which moves
+  the clipped edge up across a row of pixel centres -- the R100
+  snapping as documented.
 - wireframe (close): the triangles' edges as lines through the vertices;
   the RGB rasteriser walks the edges its own way.
 - zbuffer (close, one pixel): a Z tie where the triangles cross.
@@ -441,18 +454,18 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 71 checks: 11 on the command FIFO, the engine's busy time,
+or `FAIL`. 72 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
 (`RadeonSelfTestQueue.cpp`), 4 on the microcode lookups (the known-image
 table, synthetic images of each word width, the R100 and R200 packet
 sets, the self-test's own unknown image; `RadeonMicrocode.cpp`), 26 on
 the 2D engine, the CP and the cursor,
-29 on the 3D engine (the generation's scenes, run between the 2D checks
+30 on the 3D engine (the generation's scenes, run between the 2D checks
 and the last two 2D/CP ones), and one that every wait for idle ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (61 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+the queue checks are left out (62 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 
@@ -483,6 +496,7 @@ reference, differing pixels in white):
 | 24-flat-provoking | `FLAT_SHADE_VTX_0` and `_LAST` on a triangle strip (the odd triangles' vertices counted as sent, not as wound), `_LAST` and `_1` on quads (one colour each), flat lines |
 | 25-round-modes | the four `ROUND_MODE`s at half-pixel `ROUND_PREC` on ties that tell them apart, under both pixel-centre conventions; a point and a line snapped too |
 | 26-line-subpixel | one-pixel lines between sub-pixel endpoints, both majors, both directions |
+| 27-border-mode | `CLAMP_GL` with `BORDER_MODE_OGL` (GL_CLAMP: edge and border blended) and `_D3D` (border only) |
 
 Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
 without a frame.
