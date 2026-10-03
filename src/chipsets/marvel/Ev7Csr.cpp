@@ -41,6 +41,25 @@
  * PID's; 0x3f3f4: 1 << 22). Bits 11, 13 and 20 drive no line here: nothing
  * the console does says which they would [guess: none of them is raised by
  * anything this emulator models yet].
+ *
+ * The clock rendezvous. The interval-timer handler of the PALcode (0x39344,
+ * the console's and OpenVMS's) counts its entries in its per-processor
+ * area (+480); on every 128th, the primary (after some IO7 housekeeping)
+ * writes 1 << 23 to every other processor's RBOX_IREQ (0x396b8), and a
+ * secondary writes 1 << 23 to its own RBOX_INT -- clearing it -- and spins,
+ * in PALmode, until RBOX_INT<23> or <22> is set (0x3972c-0x39738). <23> is
+ * masked in RBOX_IMASK: it is only ever polled there. On the hardware both
+ * processors' timers fire together and the secondary is waiting before the
+ * primary's broadcast leaves; here CPU 0's thread delivers the tick to both
+ * and runs its own handler at once, so the broadcast often reached CPU 1
+ * before CPU 1 had taken the same tick -- and CPU 1's clear then erased it,
+ * leaving it to spin for the next window, 128 ticks (~130 ms) with its
+ * interrupts off, every window: ALPHABOX_TRACE_RBOX showed CPU 1 losing a
+ * third of its ticks that way, and OpenVMS 8.4 bugchecked CPUSPINWAIT (and
+ * once ran out of nonpaged pool) under DECwindows with two processors. So a
+ * broadcast that arrives before the processor has started waiting for it
+ * is held, and set at its clear -- the order the hardware's timing gives
+ * [inference: nothing documents the bit beyond this code].
  **/
 #include "StdAfx.hpp"
 
@@ -347,6 +366,8 @@ void CEv7Csr::reset() {
   m_lines = 0;
   m_start_hi = 0;
   m_start_hi_valid = false;
+  m_sync_waiting = true; // nothing held: the first broadcast goes through
+  m_sync_held = false;
 }
 
 u64 CEv7Csr::reg(u32 off) const {
@@ -418,6 +439,12 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     return; // read-only
   case RBOX_INT:
     m_regs[RBOX_INT] &= ~data; // write one to clear
+    if (data & INT_SYNC) {     // waiting for the clock rendezvous
+      m_sync_waiting = !m_sync_held;
+      if (m_sync_held)
+        m_regs[RBOX_INT] |= INT_SYNC; // the broadcast that came first
+      m_sync_held = false;
+    }
     if (!m_intq.empty())
       m_regs[RBOX_INT] |= INT_IOQ; // still something in the queue
     update_irq();
@@ -439,6 +466,14 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     // A request to this processor: the bits appear in its RBOX_INT. The
     // register itself reads back what was last written.
     m_regs[RBOX_IREQ] = data;
+    if (data & INT_SYNC) {
+      if (m_sync_waiting)
+        m_sync_waiting = false; // the rendezvous it is waiting for
+      else {
+        m_sync_held = true; // not waiting yet: kept for its clear
+        data &= ~INT_SYNC;
+      }
+    }
     m_regs[RBOX_INT] |= data;
     update_irq();
     return;
@@ -498,6 +533,49 @@ void CEv7Csr::request(u64 bits) {
   update_irq();
 }
 
+/// With m_lock held: RBOX_INT & RBOX_IMASK is `pending` now; note when an
+/// enabled interrupt began to wait (ALPHABOX_TRACE_RBOX, check_pending).
+void CEv7Csr::note_pending(u64 pending) {
+  if (pending && !m_pend) {
+    m_pend_since = std::chrono::steady_clock::now();
+    m_pend_reported = false;
+  } else if (!pending && m_pend && m_pend_reported) {
+    printf("%%MVL-T-RBOX: PID %u took its interrupt after %lld ms\n", m_pid,
+           (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - m_pend_since)
+               .count());
+  }
+  m_pend = pending != 0;
+}
+
+void CEv7Csr::check_pending(int ms) {
+  std::lock_guard<std::mutex> g(m_lock);
+  if (!m_pend || m_pend_reported)
+    return;
+  const auto age = std::chrono::steady_clock::now() - m_pend_since;
+  if (age < std::chrono::milliseconds(ms))
+    return;
+  m_pend_reported = true;
+  CAlphaCPU *c = cpu();
+  printf("%%MVL-T-RBOX: PID %u has had an enabled interrupt pending %lld ms: "
+         "RBOX_INT %016" PRIx64 " IMASK %016" PRIx64 " lines %02x",
+         m_pid,
+         (long long)std::chrono::duration_cast<std::chrono::milliseconds>(age)
+             .count(),
+         reg(RBOX_INT), reg(RBOX_IMASK), m_lines);
+  if (c) {
+    printf("; cpu pc %016" PRIx64 " eir %02x eien %02x check_int %d icount "
+           "%" PRIu64,
+           c->get_pc(), (unsigned)c->state.eir.load(), (unsigned)c->state.eien,
+           (int)c->state.check_int.load(), (u64)c->state.instruction_count);
+#ifdef ES40_JIT
+    printf(" idle-sleeping %d", (int)c->m_idle_sleeping.load());
+#endif
+  }
+  printf("\n");
+  fflush(stdout);
+}
+
 /**
  * The interval timer. The console's PALcode clears RBOX_IT early, takes
  * RBOX_INT<15> as the clock interrupt, and on each one reads RBOX_IT<31:22>
@@ -521,8 +599,18 @@ void CEv7Csr::interval_tick() {
   std::lock_guard<std::mutex> g(m_lock);
   if (!reg(RBOX_IT))
     return;
+  ++m_ticks;
+  if (m_regs[RBOX_INT] & INT_IT)
+    ++m_ticks_merged; // the last one not taken yet: this one is lost
   m_regs[RBOX_INT] |= INT_IT;
   update_irq();
+}
+
+void CEv7Csr::tick_stats() {
+  std::lock_guard<std::mutex> g(m_lock);
+  printf("%%MVL-T-RBOX: PID %u interval ticks %" PRIu64 ", merged into one "
+         "not yet taken %" PRIu64 "\n",
+         m_pid, m_ticks, m_ticks_merged);
 }
 
 void CEv7Csr::update_irq() {
@@ -530,6 +618,7 @@ void CEv7Csr::update_irq() {
   if (!c)
     return;
   const u64 pending = reg(RBOX_INT) & reg(RBOX_IMASK);
+  note_pending(pending);
   int lines = 0;
   for (int l = 0; l < 6; l++)
     if (pending & line_mask(l))
@@ -618,6 +707,10 @@ bool CEv7Csr::restore_state(FILE *f) {
       return false;
     m_intq.push_back(iid);
   }
+  // Not in the file: a processor that may be waiting for the clock
+  // rendezvous (<23> clear) is let through by the next broadcast.
+  m_sync_waiting = !(reg(RBOX_INT) & INT_SYNC);
+  m_sync_held = false;
   m_lines = 0;
   update_irq();
   return true;

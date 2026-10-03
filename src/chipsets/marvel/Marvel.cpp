@@ -43,6 +43,23 @@ CMarvel::CMarvel(CSystem *sys) : CChipset(sys), m_gio(new GioRecorder()) {
       FAILURE(Configuration, "a processor's PID beyond the console's range");
     m_csr[pid].reset(new CEv7Csr(sys, pid, m_gio.get()));
   }
+  // ALPHABOX_TRACE_RBOX=<ms> (default 200): report any processor that
+  // leaves an enabled interrupt pending that long, with its state -- for a
+  // guest's CPUSPINWAIT, to tell an interrupt not raised from one not taken.
+  if (const char *e = getenv("ALPHABOX_TRACE_RBOX")) {
+    const int ms = atoi(e) > 1 ? atoi(e) : 200;
+    m_rbox_watch = std::thread([this, ms] {
+      for (int n = 1; !m_rbox_watch_stop.load(); n++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        for (auto &c : m_csr)
+          if (c) {
+            c->check_pending(ms);
+            if (n % 500 == 0) // every 10 s
+              c->tick_stats();
+          }
+      }
+    });
+  }
 }
 
 int CMarvel::present() const { return m_sys->get_cpu_num(); }
@@ -52,7 +69,11 @@ u32 CMarvel::cpu_pid(int index) const {
   return index < m_topology.count() ? m_topology.node(index).pid : (u32)index;
 }
 
-CMarvel::~CMarvel() = default;
+CMarvel::~CMarvel() {
+  m_rbox_watch_stop = true;
+  if (m_rbox_watch.joinable())
+    m_rbox_watch.join();
+}
 
 void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
   for (auto &c : m_csr)

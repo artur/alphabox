@@ -41,7 +41,9 @@
 #include "Io7.hpp"
 #include "Topology.hpp"
 
+#include <atomic>
 #include <memory>
+#include <thread>
 
 class CMarvel : public CChipset {
 public:
@@ -104,6 +106,9 @@ private:
   std::unique_ptr<GioManagement> m_gio;
   std::unique_ptr<CEv7Csr> m_csr[kMaxPids];
   std::unique_ptr<CIo7> m_io7[kMaxPids];
+  /// ALPHABOX_TRACE_RBOX=<ms>: a thread that reports interrupts left pending.
+  std::thread m_rbox_watch;
+  std::atomic<bool> m_rbox_watch_stop{false};
 };
 
 #endif // !defined(INCLUDED_MARVEL_H_)

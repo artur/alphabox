@@ -40,6 +40,7 @@
 #include "Gio.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <deque>
 #include <map>
@@ -81,6 +82,9 @@ constexpr u32 GIO_LOCK = 0x80000; // not in the table; the console's own use
 /// RBOX_INT bits the console's PALcode names by what it does with them.
 constexpr u64 INT_IT = U64(1) << 15; ///< interval timer (cleared by writing it)
 constexpr u64 INT_IOQ = U64(1) << 12; ///< an IID waits in RBOX_INTQ
+/// The primary's clock-window broadcast (Ev7Csr.cpp, "The clock
+/// rendezvous"): masked in RBOX_IMASK, polled by the secondaries.
+constexpr u64 INT_SYNC = U64(1) << 23;
 /// RBOX_INTQ <24>: the IID at the head of the queue is valid.
 constexpr u64 INTQ_VALID = U64(1) << 24;
 } // namespace ev7csr
@@ -114,6 +118,15 @@ public:
   bool restore_state(FILE *f);
 
   u32 pid() const { return m_pid; }
+
+  /// ALPHABOX_TRACE_RBOX: report an enabled interrupt (RBOX_INT & RBOX_IMASK)
+  /// still pending after `ms` milliseconds, with this processor's state, and
+  /// when it is finally taken.
+  void check_pending(int ms);
+  /// ALPHABOX_TRACE_RBOX: interval ticks delivered, and how many found the
+  /// previous one still pending.
+  void tick_stats();
+
   /// The far side of this processor's GIO port (CMarvel::set_management).
   void set_gio_management(GioManagement *far) { m_gio.set_far(far); }
 
@@ -122,6 +135,7 @@ private:
   CAlphaCPU *cpu() const;
   /// Deliver RBOX_INT & RBOX_IMASK to the core's external interrupt lines.
   void update_irq();
+  void note_pending(u64 pending);
   /// RBOX_SCRATCH1 written: the XSROM's wait for a start address, served
   /// for a processor that is still parked.
   void scratch_written(u64 v);
@@ -140,6 +154,13 @@ private:
   bool m_start_hi_valid = false;
   bool m_io7 = false;     ///< an IO7 is on the I/O port
   std::deque<u64> m_intq; ///< IIDs the IO7s sent, oldest first
+  // ALPHABOX_TRACE_RBOX (check_pending).
+  bool m_pend = false, m_pend_reported = false;
+  // The clock rendezvous (RBOX_INT<23>): this processor has cleared the bit
+  // to wait for the next broadcast; a broadcast that came first is held.
+  bool m_sync_waiting = false, m_sync_held = false;
+  u64 m_ticks = 0, m_ticks_merged = 0;
+  std::chrono::steady_clock::time_point m_pend_since;
 };
 
 #endif // !defined(INCLUDED_EV7CSR_H_)
