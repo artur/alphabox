@@ -1,12 +1,13 @@
 # USB
 
-Alphabox has two USB host controllers, four kinds of device to put on
+Alphabox has three USB host controllers, four kinds of device to put on
 them, and the test hooks to make a guest's USB driver prove itself.
 
 | | Controller | Speed | Ports | Guest drivers |
 | --- | --- | --- | --- | --- |
 | `ali_usb` (pci0.19) | the ALi M1543C's own OHCI 1.0a function, on every ES40 | USB 1.1 (12 Mb/s) | 3 | Windows 2000 and Whistler (AXP64) ship `openhci.sys`, `usbhub.sys`, `usbstor.sys`, `hidusb.sys`, `mouhid.sys` |
 | `ehci` (an add-in card) | a NEC uPD720101: EHCI 1.0 (function 2, 1033:00e0, class 0C0320) with two OHCI 1.0a companions (functions 0 and 1, 1033:0035, class 0C0310) | USB 2.0 (480 Mb/s); full speed through the companions | 4 | EHCI: none shipped for any Alpha Windows; `nadaehci.sys`, written for this card with the nada compiler (a separate project), drives it on Windows 2000. The companions: Windows' own `openhci.sys` |
+| `uss344` (the ES47's on-board USB, hose 2 slot 3) | an Agere (Lucent) USS-344 QuadraBus: four OHCI 1.0a functions (11C1:5803, class 0C0310, all on INTA), one root hub port each -- the `ehci` card's companions without the EHCI | USB 1.1 (12 Mb/s) | 4 | the ES47 console lists usba..usbd; OpenVMS 8.4 configures OHA0..OHC0; Windows' `openhci.sys` binds to any OHCI |
 
 ## Configuration
 

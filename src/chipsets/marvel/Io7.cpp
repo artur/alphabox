@@ -203,8 +203,9 @@ int slot_of(u32 port) { return port < kPorts ? (int)port : kPorts; }
 
 } // namespace
 
-CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid)
-    : m_sys(sys), m_marvel(marvel), m_pid(pid) {
+CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev)
+    : m_sys(sys), m_marvel(marvel), m_pid(pid),
+      m_backplane_rev(backplane_rev & 0xf) {
   reset();
 }
 
@@ -220,7 +221,8 @@ CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid)
  *    get_io_type (0x2ea0f0) returns and show config names from a table
  *    ("3.3V PCI-X I/O", "Embedded I/O", "X-Shelf I/O", "Std PCI-X I/O" for 2
  *    to 5 [inference from the table's layout]); the ES47's is the embedded
- *    I/O;
+ *    I/O. <3:0> is the I/O backplane's revision, from the board row:
+ *    show_core_system (0x2dcd3c) prints it as "Backplane rev";
  *  - POx_RST3 <8:6>: the AGP PLL range, 6 for 1x/4x (Linux
  *    marvel_agp_configure), which the real listing prints;
  *  - the error registers, the windows and the interrupt controls 0.
@@ -232,7 +234,7 @@ void CIo7::reset() {
   for (int p = 0; p < kPorts; p++)
     m_regs[p][POx_CACHE_CTL] = 8;
   m_regs[kPorts][IO_ASIC_REV] = 0x12;
-  m_regs[kPorts][IO_SYS_REV] = (U64(1) << 16) | (1 << 4);
+  m_regs[kPorts][IO_SYS_REV] = (U64(1) << 16) | (1 << 4) | m_backplane_rev;
   m_regs[kPorts][POx_RST + 3 * 0x40] = U64(6) << 6;
   // AGP_CAP_ID: the AGP capability, revision 2.0 in <23:16> as in a PCI
   // AGP capability header [inference: the console prints "AGP rev %d.%d"

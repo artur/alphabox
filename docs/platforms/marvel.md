@@ -38,7 +38,7 @@ register tables) are in `lab/docs-ev7/`, which git does not track. Section
 | Chipset | none. Each EV7 has two Zbox memory controllers (RDRAM RIMMs), a Cbox with a 1.75 MB L2 cache, and an Rbox router with N/S/E/W inter-processor ports and one I/O port. **known** (Technical Summary; the console's register tables) |
 | Memory | per EV7, up to 32 GB (Technical Summary). Each processor's memory is placed by its PID: PID 1 at 0x4_0000_0000, PID 2 at 0x8_0000_0000, PID 4 at 0x20_0000_0000. **known** (console listings) |
 | PCI | one IO7 per EV7 I/O port. An IO7 has 4 ports: S0 to S2 are PCI/PCI-X, S3 is AGP. A hose is numbered PID*4 + port. **known** (`core_marvel.h`, `marvel_find_console_vga_hose`, console logs) |
-| South bridge | none: the ES47's "Embedded I/O" is an I/O expander module on hose 2 with an AIC-7892 SCSI controller (slot 1), a CMD 649 IDE controller for the CD (slot 2) and a four-function USB controller (slot 3); a real ES47 adds option cards (DEGX2-TA gigabit Ethernet in hose 0 slot 1, a Radeon 7500 in the AGP slot). Sources: the real `show config`, User Information (2P backplane: "a 1-slot high performance PCI-X bus, two 2-slot PCI-X buses, and an AGP bus"; 2P I/O expander module). Linux's Marvel code says there is no legacy (ISA) hose. The console also carries an "Acer Labs M1543C" driver, which no Marvel drawer is known to use |
+| South bridge | none: the ES47's "Embedded I/O" is an I/O expander module on hose 2 with an AIC-7892 SCSI controller (slot 1), a CMD 649 IDE controller for the CD (slot 2) and a four-function USB controller (slot 3), an Agere USS-344 (four single-port OHCI functions; the console's table names 11C1:5803 with subsystem 11C1:5803 "USB"); a real ES47 adds option cards (DEGX2-TA gigabit Ethernet in hose 0 slot 1, a Radeon 7500 in the AGP slot). Sources: the real `show config`, User Information (2P backplane: "a 1-slot high performance PCI-X bus, two 2-slot PCI-X buses, and an AGP bus"; 2P I/O expander module). Linux's Marvel code says there is no legacy (ISA) hose. The console also carries an "Acer Labs M1543C" driver, which no Marvel drawer is known to use |
 | Console devices | the console terminal is reached through the management hardware, not a UART on the I/O drawer **[inference]**: the console has a `giott` (a terminal over the GIO port), and the manuals reach the console through the MBM's serial port or the management LAN |
 | Board hardware | per CPU module a **CMM** (CPU Module Manager). Per drawer an **MBM** (Marvel Backplane Manager) and **PBM** (PCI Backplane Manager). The SROM and XSROM run on the EV7 itself and are loaded through the CMM. **known** (User Information v3.0 pp. 68-71) |
 
@@ -463,7 +463,7 @@ moved lines of code, **[guess]**.
 | M4 | **CMM/MBM replacement (GIO protocol)** | the console's GIO protocol, reverse-engineered from its `cmm_*`/`giott`/`get_mbm_configuration` code and the CMM/MBM firmware as references; a terminal on telnet; the configuration, partition database, FRU, TOY and NVRAM answers | 1.5-3 k, **most uncertain** | L2 | **done** 2026-10-02 (see "M4"): ~800 lines |
 | M5 | **IO7 module** | port 7 CSRs, four ports (3 PCI/PCI-X + AGP), config/mem/IO windows, SG DMA (reusing the Pchip window logic once M0 has separated it), LSI/MSI control routing IIDs to an EV7's Rbox, the error registers clean; existing PCI devices on IO7 hoses | 2-3 k | L3-L4 | **done** 2026-10-02 (see "M5"): ~900 lines, and L5 with two CMM fixes |
 | M6 | **Board rows** | `es47` (2 EV7, 1 IO7), then `es80` (up to 8, router mesh) and `gs1280` (up to 64, multiple IO7s, partitions); the PID-to-memory placement, the hose numbering, which I/O sits behind the ES47's embedded IO7 | 200-400 each | L3 | **done** 2026-10-02 for one partition: routes (M6a), EV7z (M6b), ES80 and GS1280 rows (M6c) |
-| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | the CD boot to DCL came with M5; an installation to disk and Linux are open |
+| M7 | **Guests** | OpenVMS 8.4 from the ISO: GCT, HWRPB checks, interrupts end to end, TOY through cserve | ? | L5 | the CD boot to DCL came with M5; from the real CMD 649 IDE (`dqa0`) with M7a, beside the real USB; an installation to disk and Linux are open |
 
 The order is M0, then M1+M2+M3 together (the console reaches the GIO
 conversation with real answers to its CSR reads), then M4 (the prompt),
@@ -472,6 +472,132 @@ it is disassembly of the console and of the CMM firmware, no emulator
 code.
 
 ## Findings
+
+### M7a: the ES47's on-board I/O (2026-10-03)
+
+**Result**: the I/O expander module's USB and IDE controllers are the real
+parts now, and `show config` matches the real ES47's listing
+(`test/platforms/es47/show-config.txt`) everywhere the emulated machine
+has the same hardware: the IO7 and drawer lines, "Backplane rev 2", and
+hose 2's slots 2 and 3 line for line -- "CMD 649 PCI-IDE ... dqa",
+`dqa.0.0.2.2`, `dqa0.0.0.2.2 CD-W216E` (with `model_number = "CD-W216E"`),
+"USB" usba..usbd at functions 0-3, `hub` under usba-usbc and none under
+usbd. What still differs is what is configured differently: the option
+cards (DEGX2-TA, the SIIG serial card, the Radeon), the console version
+(V7.3-1 against V7.3-11), and slot 1, where a 53C895 still stands in for
+the AIC-7892 (below). The machine block (`lab/es47-onboard/final.cfg`;
+the listing and its diff against the real one are
+`lab/es47-onboard/final-show-config.{txt,diff}`):
+
+```
+  pci2.1 = sym53c895 { disk0.0 = ramdisk { size = 64M; } disk0.1 = ... }
+  pci2.2 = cmd649
+  {
+    disk0.0 = file { file = "ALPHA084.ISO"; read_only = true; cdrom = true;
+                     model_number = "CD-W216E"; }
+  }
+  pci2.3 = uss344 { port1 = "tablet"; }
+```
+
+**The USB part is an Agere (Lucent) USS-344 QuadraBus**, not a NEC
+uPD720101: the console's PCI table (0x3a9a08) names 11C1:5803 "USB" only
+with subsystem 11C1:5803 -- the entry the real listing's four "USB"
+functions come from --, and the USS-344 data sheet (Advance Data Sheet
+rev. 9, June 2001) has exactly four PCI functions, each a single-port
+OHCI 1.0a host controller, all on INTA, revision 0x10, a power-management
+capability at 0x50, the OHCI legacy support registers. That is the `ehci`
+card's companions without its EHCI, so it is the same model (`CEhci`,
+class `uss344`): a chip row says whether there is an EHCI, how many OHCI
+functions and with what identity; without an EHCI the ports are the OHCIs'
+for good and the EHCI's schedule thread never starts. The console lists
+the four functions as the real one does, root hubs included; OpenVMS 8.4
+configures OHA0, OHB0 and OHC0 -- three of the four; why not the fourth
+is not known (the console, real and emulated, gives usbd no root hub
+either) -- and shows them Offline in the installation environment, where
+the USB configuration manager is not started. Windows 2000 RC2 on an ES40 (the card at `pci1.2`) binds
+"Standard OpenHCD USB Host Controller" to all four functions and mounts a
+USB disk on port 2 (`lab/es47-onboard/w2k-uss344-evidence.txt`).
+
+**The CMD 649** (`cmd649`, `devices/pci/Cmd649.*`) is a new part on the
+IDE core that the ALi's IDE function was: `CIdeController`
+(`IdeController.*`, the former `AliM1543C_ide.*`, moved with no change in
+behaviour) holds the task file, PIO, bus-master DMA, ATAPI and the
+controller threads; a part declares its PCI function and where a
+channel's interrupt goes. The ALi's are its legacy ports and the ISA
+IRQ 14/15 or, in native mode, INTA; the CMD 649's are 1095:0649, class
+0101 programming interface 8F (both channels native), BARs 0-4 in I/O
+space, one INTA, and the CMD's per-channel interrupt latches (CFR<2>,
+ARTTIM23<4>, both in MRDMODE<3:2> and bus-master byte 1; write one to
+clear; MRDMODE<5:4> keep a channel off INTA), from the register layout
+Linux's cmd64x driver programs. Neither the console nor OpenVMS touched
+those latches in any run: both drive it as a plain SFF-8038i controller.
+The console prints "do not use secondary IDE channel on CMD controller"
+while probing hose 2, as real power-up logs in the User Information do.
+
+**The expander's interrupts share slot 1's lines.** The console gives the
+three controllers interrupt lines 0x44, 0x45 and 0x46 -- the IO7 LSIs it
+expects them on --, where their slots' own INTA would be 0x44, 0x48 and
+0x4c, and OpenVMS enables LSI_CTL 0x45 for the CMD 649. So slot s's INTA
+is slot 1's INTx s - 1, a board fact in `es47_pci_interrupt`
+**[inference from the console and OpenVMS: no schematic]**. With the
+slots' own lines, OpenVMS's DQDRIVER waited ten seconds for each command
+(IDENTIFY, IDENTIFY PACKET, ...) and never reached its date prompt; the
+USB functions interrupted on an LSI nobody enabled.
+
+**OpenVMS 8.4 boots from dqa0** (the 53C895 and the USS-344 beside it,
+`lab/es47-onboard/onboard.cfg`; `lab/es47-onboard/vms-dqa0-dcl-console.log`):
+`boot dqa0` to the date prompt, the installation menu and DCL in about
+four minutes from power-on on the JIT lane, both EV7s active. `SHOW
+DEVICE`: DQA0 mounted (ALPHA084, 0 errors, 1525 operations), DQA1 (the
+empty slave position: the driver's SYS$CONFIG entry gives the CMD 649 two
+units) offline with one error, PKA0, EWA0, OHA0-OHC0; `DIRECTORY
+DQA0:[000000]` lists the CD. The console's part of the boot -- reading
+APB, then everything OpenVMS loads through the console's I/O callbacks
+until its own DQDRIVER takes over -- moves one 2 KB block about every
+20 ms (`dq_poll`: the console's IDE driver never enables its interrupt and
+polls), some 6 MB in 95 s.
+
+**Windows 2000** has no CMD 649 driver -- RC2's `mshdc.inf` names only the
+CMD 0640, 0643 and 0646 -- and needs none: the card (on an ES40,
+`pci1.1`) matches `PCI\CC_0101` and runs on the generic "Standard Dual
+Channel PCI IDE Controller" (`pciide`), with both channels native. A FAT
+disk on its primary master was read and written (`dir`, `copy`), and its
+CD-ROM got a drive letter (the OpenVMS CD's ODS-2 file system is not one
+Windows reads: "Incorrect function")
+(`lab/es47-onboard/w2k-cmd649-evidence.txt`). Two IDE controllers in one
+Windows 2000 guest need distinct `serial_number` values on their drives:
+with the default (every disk "ES40EM00000") the second controller's drives
+duplicate the first's device IDs and Windows stops with 0xCA
+(PNP_DETECTED_FATAL_ERROR, duplicate PDO).
+
+**Where the "I/O Drawer" line comes from** (`show_core_system`,
+0x2dcd3c-0x2dcdd4): the drawer, cabinet and riser are bytes 0-2 of the
+IO7's entry in the CMM's partition database (`find_io7_data`, 0x2f2d70,
+finds it by the EV7's coordinates in bytes 3-4), and the backplane
+revision is the IO7's IO_SYS_REV<3:0> (`read_p7_csr` of 0x300040). The
+board row gives the revision (`marvel_layout::io_backplane_rev`: 2 on the
+ES47 as listed, 2 on the ES80 **[inference: the same 2P drawer]**, 0 on
+the GS1280); the CMM fills the drawer and cabinet from the PID as the
+console's own `pid2drawer`/`pid2rack` read it (<4:3>, <7:5>), riser 0. On
+the ES47 nothing in the listing changes but the revision; an ES80's IO7s
+now print drawers 0-3 **[inference: no real ES80 listing]**.
+
+**The AIC-7892, assessed** (it stays a 53C895 stand-in): the console's
+`aic78xx` driver is Adaptec's CHIM (Common Hardware Interface Module):
+421 routines, 138 KB of console code (0x34c4c0-0x36dff0), including
+`scsihloadsequencer` -- it downloads Adaptec's own sequencer program into
+the chip. OpenVMS drives 9005:008F with `SYS$PKADRIVER` (its
+SYS$CONFIG entry "Adaptec AIC-7892"), which carries its own sequencer
+code too. So the chip cannot be modelled at the level of a command
+interface, as the ISP1040's mailboxes are: an emulation has to execute
+the AIC-7xxx sequencer -- its instruction set, the SCB RAM and the
+queue-in/queue-out FIFOs, the data FIFOs and DMA, and the SCSI bus phases
+at the REQ/ACK level the sequencer works at -- against two different,
+undocumented programs (the free aic7xxx sequencer source documents the
+hardware, not Adaptec's code). That is a model the size of the
+53C8xx's SCRIPTS processor (some 5000 lines here) or larger, with no
+reference trace to check it against; OpenVMS and the console already
+have a working SCSI path in the 53C895, so it was left.
 
 ### M6c: the ES80 and the GS1280 (2026-10-02)
 
@@ -562,8 +688,8 @@ bits 1-2 in the drawer field, so an ES80's second drawer starts at PID 8.
 
 **Open:**
 
-- `show config` prints "I/O Drawer 0 ... Riser 0" for every IO7 [where
-  the console takes the drawer number from is not found];
+- `show config` prints "I/O Drawer 0 ... Riser 0" for every IO7: found
+  and changed by M7a (the partition database's I/O entries);
 - each ES80 drawer's second processor can be cabled to an I/O expansion
   drawer, a GS1280's processors to several I/O drawers: one layout choice
   each here;
@@ -727,7 +853,7 @@ M4 table holds):
 | | real | emulated | why |
 | --- | --- | --- | --- |
 | IO7 line | IO7 0, Embedded I/O, IO7 pass 3 | the same | IO_SYS_REV type 1, IO_ASIC_REV 0x12 |
-| drawer line | I/O Drawer 0, Cabinet 0, Riser 0, Backplane rev 2 | Backplane rev 0 | where the console takes the backplane revision from is not found **[open]** |
+| drawer line | I/O Drawer 0, Cabinet 0, Riser 0, Backplane rev 2 | Backplane rev 0 | IO_SYS_REV<3:0>: matches since M7a |
 | hoses | Bus 0 66 MHz, 1-2 33 MHz, PCI 2.2 mode; AGP Bus 3, AGP rev 2.0, 1x/4x | the same | HP_DEV_CAP gives hose 0's slots 66 MHz (with no card there it reads 33 MHz) |
 | devices | DEGX2-TA (0/1), a SIIG serial card (1/3), AIC-7892 (2/1), CMD 649 (2/2), USB (2/3), Radeon (3/5) | DE500-BA (0/1), 53C895 (2/1) | Alphabox has no AIC-7892, CMD 649 or BCM5703: the 53C895 stands in. The Radeon 7500 AGP exists since 2026-10-02 (`radeon` class; `pci3.5` gives the real listing's "Radeon 7500 AGP ... vga0.0.0.5.3", see docs/peripherals.md) for the AIC-7892 in its slot, the DE500-BA for the gigabit card; the console has drivers for both |
 
@@ -822,14 +948,15 @@ lanes build.
 
 - the IO7's MSIs, the data mover, error reporting (the registers read
   clean and nothing sets them), INT_PND/INT_CLR/MISC_PND;
-- `get_pbm_configuration` (0x0322) is never asked on the embedded I/O, and
-  "Backplane rev" reads 0;
+- `get_pbm_configuration` (0x0322) is never asked on the embedded I/O;
+  "Backplane rev" is IO_SYS_REV<3:0> (M7a);
 - SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1;
 - OpenVMS printed "mvcpu_get_numa_distances: bad route IPR for self" per
   CPU: fixed by M6a (the route table in the CMM);
 - DKA400 shows 4 errors in OpenVMS's `SHOW DEVICE` **[not investigated]**;
-- the AIC-7892, CMD 649 and USB of the real embedded I/O, network boot
-  through the NIC (`net_peer.py`), an installation to disk, Linux.
+- the AIC-7892, CMD 649 and USB of the real embedded I/O (the CMD 649 and
+  the USB since M7a), network boot through the NIC (`net_peer.py`), an
+  installation to disk, Linux.
 
 ### M4: the CMM, the console's management side (2026-10-02)
 

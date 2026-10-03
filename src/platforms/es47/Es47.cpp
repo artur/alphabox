@@ -62,7 +62,8 @@ CMarvel *marvel_of(CSystem *sys) {
 
 } // namespace
 
-const marvel_layout es47_layout = {0x11, es47_coordinates, es47_has_io7};
+/// Backplane revision 2: a real ES47's show config.
+const marvel_layout es47_layout = {0x11, es47_coordinates, es47_has_io7, 2};
 
 /**
  * Every Marvel board: the CMMs answer every processor's GIO port (Cmm.hpp),
@@ -75,9 +76,10 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   marvel->set_management(std::unique_ptr<GioManagement>(
       new CEs47Cmm(sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"))));
   const CMarvelTopology &t = marvel->topology();
+  const marvel_layout *layout = sys->platform().marvel;
   for (int i = 0; i < t.count(); i++)
     if (t.has_io7(t.node(i).pid))
-      marvel->attach_io7(t.node(i).pid);
+      marvel->attach_io7(t.node(i).pid, layout ? layout->io_backplane_rev : 0);
 }
 
 void es47_board_devices(CConfigurator *cfg, CSystem *sys) {
@@ -112,9 +114,19 @@ const char *marvel_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
+/**
+ * The I/O expander module's three controllers on hose 2 (slots 1-3: SCSI,
+ * IDE, USB) share slot 1's interrupt lines: slot s's INTA is slot 1's INTx
+ * s - 1. The console says so -- it gives them interrupt lines (the LSIs
+ * it expects) 0x44, 0x45 and 0x46, where the slots' own INTA would be
+ * 0x44, 0x48 and 0x4c -- and OpenVMS enables LSI 0x45 for the CMD 649.
+ * [inference: a device's INTB..INTD there rotate the same way]
+ */
 int es47_pci_interrupt(int hose, int slot, int intx) {
   if (hose < 0 || hose > 3)
     return -1;
+  if (hose == 2 && slot >= 1 && slot <= 3)
+    return marvel_pci_interrupt(hose, 1, (slot - 1 + intx) & 3);
   return marvel_pci_interrupt(hose, slot, intx);
 }
 

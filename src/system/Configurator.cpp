@@ -38,6 +38,7 @@
 #include "AlphaCPU.hpp"
 #include "CirrusGD5430.hpp"
 #include "CirrusGD5434.hpp"
+#include "Cmd649.hpp"
 #include "DMA.hpp"
 #include "DiskDevice.hpp"
 #include "DiskFile.hpp"
@@ -602,6 +603,7 @@ static const char *const kv_ali_ide[] = {"dma", 0};
 static const char *const kv_ali_usb[] = {"port1", "port2", "port3", 0};
 static const char *const kv_ehci[] = {"port1", "port2",      "port3",
                                       "port4", "companions", 0};
+static const char *const kv_uss344[] = {"port1", "port2", "port3", "port4", 0};
 static const char *const kv_vga[] = {"rom", 0};
 static const char *const kv_cirrus[] = {"rom", "chip", 0};
 static const char *const kv_mach64[] = {"rom", "chip", "memory", 0};
@@ -680,6 +682,7 @@ classinfo classes[] = {
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
     {"ali", c_ali, IS_PCI | HAS_ISA, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
+    {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_ali_ide},
     {"ali_usb", c_ali_usb, IS_PCI | HAS_DISK, kv_ali_usb},
     {"ali_pmu", c_ali_pmu, IS_PCI, kv_none},
     {"serial", c_serial, ON_CS, kv_serial},
@@ -725,6 +728,7 @@ classinfo classes[] = {
     {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
     {"mpu401", c_mpu401, ON_CS, kv_mpu401},
     {"ehci", c_ehci, IS_PCI | HAS_DISK, kv_ehci},
+    {"uss344", c_ehci, IS_PCI | HAS_DISK, kv_uss344},
     {"virtio_blk", c_virtio_blk, IS_PCI | HAS_DISK, kv_none},
     {"virtio_net", c_virtio_net, IS_PCI | IS_NIC, kv_virtio_net},
     {"es1370", c_es137x, IS_PCI, kv_none},
@@ -936,6 +940,11 @@ void CConfigurator::initialize() {
         (CDiskController *)new CAliM1543C_ide(this, theSystem, pcibus, pcidev);
     break;
 
+  case c_cmd649:
+    // A disk controller: see c_ali_ide.
+    myDevice = (CDiskController *)new CCmd649(this, theSystem, pcibus, pcidev);
+    break;
+
   case c_ali_usb:
     // A disk controller too (USB mass storage): see c_ali_ide.
     myDevice =
@@ -1010,8 +1019,10 @@ void CConfigurator::initialize() {
   }
 
   case c_ehci:
-    // A disk controller too (USB mass storage): see c_ali_ide.
-    myDevice = (CDiskController *)new CEhci(this, theSystem, pcibus, pcidev);
+    // A disk controller too (USB mass storage): see c_ali_ide. The class
+    // name ("ehci", "uss344") names the card.
+    myDevice = (CDiskController *)new CEhci(this, theSystem, pcibus, pcidev,
+                                            *CEhci::find_chip(myValue));
     break;
 
   case c_virtio_blk:

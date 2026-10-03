@@ -89,8 +89,9 @@ public:
   /// How many processors are configured (the topology's first ones).
   int present() const;
 
-  /// The board puts an IO7 on PE `pid`'s I/O port.
-  void attach_io7(u32 pid);
+  /// The board puts an IO7 on PE `pid`'s I/O port, on an I/O backplane of
+  /// revision `backplane_rev`.
+  void attach_io7(u32 pid, u8 backplane_rev);
   /// The IO7 on PE `pid`, or nullptr.
   CIo7 *io7(u32 pid) const;
 

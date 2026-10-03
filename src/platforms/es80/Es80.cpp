@@ -53,7 +53,9 @@ bool es80_has_io7(u32 pid) { return (pid & 7) == 0; }
 } // namespace
 
 /// System type 0x11 with <19:16> 1: "ES80" (build_dsrdb, 0x2dd8f0).
-const marvel_layout es80_layout = {0x10011, es80_coordinates, es80_has_io7};
+/// The ES47's 2P drawer and I/O backplane, revision 2 [inference: no real
+/// ES80 listing].
+const marvel_layout es80_layout = {0x10011, es80_coordinates, es80_has_io7, 2};
 
 void es80_board_devices(CConfigurator *cfg, CSystem *sys) {
   marvel_board_devices(cfg, sys);

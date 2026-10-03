@@ -94,10 +94,10 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
   return bits;
 }
 
-void CMarvel::attach_io7(u32 pid) {
+void CMarvel::attach_io7(u32 pid, u8 backplane_rev) {
   if (pid >= (u32)kMaxPids || !m_csr[pid])
     FAILURE(Configuration, "an IO7 on a processor that cannot exist");
-  m_io7[pid].reset(new CIo7(m_sys, this, pid));
+  m_io7[pid].reset(new CIo7(m_sys, this, pid, backplane_rev));
   m_csr[pid]->set_io7_attached(true);
 }
 

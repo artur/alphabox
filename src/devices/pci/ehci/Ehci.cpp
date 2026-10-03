@@ -65,25 +65,48 @@ static void ehci_config_space(u32 *data, u32 *mask, bool companions) {
   mask[0x60 >> 2] = 0x00003f00; // FLADJ
 }
 
-// PCI configuration space: an OHCI companion function of a NEC uPD720101,
-// function f on INTA + f.
-static void ohci_config_space(u32 *data, u32 *mask, int f) {
-  data[0x00 >> 2] = 0x00351033; // CFID: NEC, uPD720101 OHCI function
-  data[0x04 >> 2] = 0x02100000; // CFCS: DEVSEL medium, capabilities list
-  data[0x08 >> 2] = 0x0c031043; // CFRV: serial bus / USB / OHCI, rev. 43
-  data[0x0c >> 2] = 0x00800000; // header type: multi-function
-  data[0x10 >> 2] = 0x00000000; // BAR0: registers, 4 KB of memory
-  data[0x2c >> 2] = 0x00351033; // CSID: subsystem = the part itself
-  data[0x34 >> 2] = 0x00000040; // CCAP: power management at 0x40
-  data[0x3c >> 2] = 0x2a0100ff | ((u32)(f + 1) << 8); // CFIT: no line yet
-  data[0x40 >> 2] = 0x7e020001; // PMC: power management 1.1, no PME
-  data[0x44 >> 2] = 0x00000000; // PMCSR: D0
+// PCI configuration space: an OHCI function of the card, function f -- on
+// a uPD720101 a companion on INTA + f, on a USS-344 a controller of its own
+// on INTA.
+static void ohci_config_space(u32 *data, u32 *mask, int f,
+                              const CEhci::SChip &chip) {
+  const u32 pm = chip.ohci_pm;
+  data[0x00 >> 2] = chip.ohci_id; // CFID: vendor + device
+  data[0x04 >> 2] = 0x02100000;   // CFCS: DEVSEL medium, capabilities list
+  data[0x08 >> 2] = 0x0c031000 | chip.ohci_rev; // CFRV: serial bus/USB/OHCI
+  data[0x0c >> 2] = 0x00800000;                 // header type: multi-function
+  data[0x10 >> 2] = 0x00000000;   // BAR0: registers, 4 KB of memory
+  data[0x2c >> 2] = chip.ohci_id; // CSID: subsystem = the part itself
+  data[0x34 >> 2] = pm;           // CCAP: power management
+  // CFIT: Max_Lat, Min_Gnt, the pin, no line yet.
+  data[0x3c >> 2] =
+      chip.ohci_inta ? 0x560301ff : 0x2a0000ff | (u32)(f + 1) << 8;
+  data[pm >> 2] = chip.ohci_pmc;    // PMC: power management 1.1
+  data[(pm + 4) >> 2] = 0x00000000; // PMCSR: D0
 
   mask[0x04 >> 2] = 0x00000157; // CFCS: command
   mask[0x0c >> 2] = 0x0000ffff; // CFLT: latency timer + cache line size
   mask[0x10 >> 2] = 0xfffff000; // BAR0
   mask[0x3c >> 2] = 0x000000ff; // CFIT: interrupt line
-  mask[0x44 >> 2] = 0x00000003; // PMCSR: power state
+  mask[(pm + 4) >> 2] = 0x00000003; // PMCSR: power state
+}
+
+// The cards: the class names the part.
+static const CEhci::SChip kChips[] = {
+    // NEC uPD720101: two OHCI companions (1033:0035, rev. 43, INTA/INTB,
+    // power management at 0x40) and the EHCI as function 2.
+    {"ehci", true, 2, 0x00351033, 0x43, false, false, 0x40, 0x7e020001},
+    // Agere USS-344 QuadraBus: four single-port OHCI functions, no EHCI
+    // (data sheet tables 6-9 and 130-133: 11c1:5803 rev. 10, Min_Gnt 3,
+    // Max_Lat 0x56, INTA each, PMC 0x7602 -- D1, D2, PME from D1-D3hot).
+    {"uss344", false, 4, 0x580311c1, 0x10, true, true, 0x50, 0x76020001},
+};
+
+const CEhci::SChip *CEhci::find_chip(const char *name) {
+  for (const SChip &c : kChips)
+    if (!strcmp(c.name, name))
+      return &c;
+  return &kChips[0];
 }
 
 // An OHCI companion: the card's function f, its memory accesses and its
@@ -93,7 +116,8 @@ struct CEhci::CCompanion : COhciHost {
   const int func;
   COhci ohci;
   CCompanion(CEhci &c, int f)
-      : card(c), func(f), ohci(*this, kPortsPerCompanion, false, "ohci") {}
+      : card(c), func(f),
+        ohci(*this, c.m_ports_per_companion, c.m_chip.ohci_legacy, "ohci") {}
   void ohci_dma_read(u32 a, void *d, size_t size, size_t count) override {
     card.dma_read(a, d, size, count);
   }
@@ -113,26 +137,32 @@ static const u32 kHccParams = 0x00000012; // programmable list; IST 1 frame
 u32 CEhci::hcs_params() const {
   u32 v = kPorts | (1u << 4);
   if (m_with_companions)
-    v |= ((u32)kPortsPerCompanion << 8) | ((u32)kCompanions << 12);
+    v |= ((u32)m_ports_per_companion << 8) | ((u32)m_companions << 12);
   return v;
 }
 
-CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
-    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1) {
-  m_with_companions = myCfg->get_bool_value("companions", true);
-  m_func = m_with_companions ? kCompanions : 0;
-  u32 cfg_data[64] = {}, cfg_mask[64] = {};
-  ehci_config_space(cfg_data, cfg_mask, m_with_companions);
-  add_function(m_func, cfg_data, cfg_mask);
-  if (m_with_companions)
-    for (int f = 0; f < kCompanions; ++f) {
-      u32 od[64] = {}, om[64] = {};
-      ohci_config_space(od, om, f);
-      add_function(f, od, om);
-      m_comp[f] = std::make_unique<CCompanion>(*this, f);
-      for (int i = 0; i < kPortsPerCompanion; ++i)
-        m_comp[f]->ohci.bind_port(i, &m_port[f * kPortsPerCompanion + i]);
-    }
+CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev,
+             const SChip &chip)
+    : CPCIDevice(cfg, c, pcibus, pcidev), CDiskController(kPorts + 1, 1),
+      m_chip(chip) {
+  // Without an EHCI the OHCIs are all there is.
+  m_with_companions = !chip.ehci || myCfg->get_bool_value("companions", true);
+  m_companions = m_with_companions ? chip.companions : 0;
+  m_ports_per_companion = m_companions ? kPorts / m_companions : 0;
+  m_func = !chip.ehci ? -1 : m_with_companions ? m_companions : 0;
+  if (m_func >= 0) {
+    u32 cfg_data[64] = {}, cfg_mask[64] = {};
+    ehci_config_space(cfg_data, cfg_mask, m_with_companions);
+    add_function(m_func, cfg_data, cfg_mask);
+  }
+  for (int f = 0; f < m_companions; ++f) {
+    u32 od[64] = {}, om[64] = {};
+    ohci_config_space(od, om, f, chip);
+    add_function(f, od, om);
+    m_comp[f] = std::make_unique<CCompanion>(*this, f);
+    for (int i = 0; i < m_ports_per_companion; ++i)
+      m_comp[f]->ohci.bind_port(i, &m_port[f * m_ports_per_companion + i]);
+  }
   m_xfer.resize(0x5000);
   ResetPCI();
   for (int p = 0; p < kPorts; ++p) {
@@ -168,10 +198,14 @@ CEhci::CEhci(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
                 key, what);
     }
   }
-  if (m_with_companions)
+  if (m_func < 0)
+    printf("%s: USB 1.1 controller, %d OHCI functions with %d port%s each.\n",
+           devid_string, m_companions, m_ports_per_companion,
+           m_ports_per_companion == 1 ? "" : "s");
+  else if (m_with_companions)
     printf("%s: EHCI USB 2.0 controller (function %d), %d ports, and %d OHCI "
            "companions (functions 0-%d).\n",
-           devid_string, m_func, kPorts, kCompanions, kCompanions - 1);
+           devid_string, m_func, kPorts, m_companions, m_companions - 1);
   else
     printf("%s: EHCI USB 2.0 controller, %d ports, no companions.\n",
            devid_string, kPorts);
@@ -246,11 +280,11 @@ void CEhci::ResetPCI() {
 }
 
 COhci *CEhci::companion_of(int p, int *local) {
-  if (!m_comp[p / kPortsPerCompanion])
+  if (!m_companions)
     return nullptr;
   if (local)
-    *local = p % kPortsPerCompanion;
-  return &m_comp[p / kPortsPerCompanion]->ohci;
+    *local = p % m_ports_per_companion;
+  return &m_comp[p / m_ports_per_companion]->ohci;
 }
 
 void CEhci::route(int p, bool to_companion) {
@@ -296,7 +330,7 @@ void CEhci::start_threads() {
   for (auto &c : m_comp)
     if (c)
       c->ohci.start_threads();
-  if (!myThread) {
+  if (!myThread && m_func >= 0) { // a card without an EHCI has no schedule
     printf(" ehci");
     StopThread = false;
     myThread = std::make_unique<std::thread>([this]() { run(); });
@@ -379,7 +413,8 @@ void CEhci::update_irq() {
            state.usbsts & 0x3f);
     m_irq_traced = level;
   }
-  do_pci_interrupt(m_func, level);
+  if (m_func >= 0)
+    do_pci_interrupt(m_func, level);
 }
 
 void CEhci::status(u32 bits) {
@@ -549,7 +584,7 @@ u32 CEhci::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
   if (bar != 0)
     return 0;
   if (func != m_func)
-    return func < kCompanions && m_comp[func]
+    return func >= 0 && func < m_companions
                ? (u32)m_comp[func]->ohci.usb_hci_read(address, dsize)
                : 0;
   std::lock_guard<std::mutex> lk(m_mx);
@@ -569,7 +604,7 @@ void CEhci::WriteMem_Bar(int func, int bar, u32 address, int dsize, u32 data) {
   if (bar != 0)
     return;
   if (func != m_func) {
-    if (func < kCompanions && m_comp[func])
+    if (func >= 0 && func < m_companions)
       m_comp[func]->ohci.usb_hci_write(address, dsize, data);
     return;
   }
@@ -1040,8 +1075,8 @@ int CEhci::SaveState(FILE *f) {
   // The companions' registers follow (a card without them saves as before).
   if (m_with_companions) {
     fwrite(&ehci_magic_comp, sizeof(u32), 1, f);
-    for (auto &c : m_comp)
-      fwrite(&c->ohci.state, sizeof(c->ohci.state), 1, f);
+    for (int i = 0; i < m_companions; ++i)
+      fwrite(&m_comp[i]->ohci.state, sizeof(m_comp[i]->ohci.state), 1, f);
   }
   // The companions' runtime state and the devices, in a block of its own
   // (a state saved before it existed restores as before).
@@ -1071,8 +1106,9 @@ int CEhci::RestoreState(FILE *f) {
   if (m_with_companions) {
     u32 m3;
     bool ok = fread(&m3, sizeof(u32), 1, f) == 1 && m3 == ehci_magic_comp;
-    for (auto &c : m_comp)
-      ok = ok && fread(&c->ohci.state, sizeof(c->ohci.state), 1, f) == 1;
+    for (int i = 0; i < m_companions; ++i)
+      ok = ok && fread(&m_comp[i]->ohci.state, sizeof(m_comp[i]->ohci.state), 1,
+                       f) == 1;
     if (!ok) {
       printf("%s: saved state has no companions' block (saved with "
              "companions = false, or before they existed).\n",
@@ -1639,10 +1675,11 @@ bool CEhci::selftest_companions(u32 base) {
            "its routing not checked\n");
     reg(0x20, CMD_HCRESET);
     for (auto &c : m_comp)
-      c->ohci.reset();
+      if (c)
+        c->ohci.reset();
     return pass;
   }
-  const int cq = q / kPortsPerCompanion, lq = q % kPortsPerCompanion;
+  const int cq = q / m_ports_per_companion, lq = q % m_ports_per_companion;
   const u32 psc = 0x64 + 4 * q, rhps = 0x54 + 4 * lq;
   if (probe) {
     std::lock_guard<std::mutex> lk(m_mx);
@@ -1723,6 +1760,7 @@ bool CEhci::selftest_companions(u32 base) {
       m_port[q].dev->reset();
   }
   for (auto &c : m_comp)
-    c->ohci.reset();
+    if (c)
+      c->ohci.reset();
   return pass;
 }

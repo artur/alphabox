@@ -616,9 +616,13 @@ void CEs47Cmm::nvram_save() {
  *                               0 another member, <1> N/S, <2> E/W,
  *                               <3> PID, <4> hard partition,
  *                               <6> sub partition
- *   I/O, 8 each:                <3> N/S, <4> E/W of the IO7's EV7
- *                               (coord2pid, 0x2e1240, matches them with
- *                               the processors' <1> and <2>), <5> present
+ *   I/O, 8 each:                <0> I/O drawer, <1> cabinet, <2> riser
+ *                               (show_core_system, 0x2dcdac, prints them
+ *                               in the "I/O Drawer" line, as found by
+ *                               find_io7_data), <3> N/S, <4> E/W of the
+ *                               IO7's EV7 (coord2pid, 0x2e1240, matches
+ *                               them with the processors' <1> and <2>),
+ *                               <5> present
  *
  * One hard and one sub partition holding every processor and every IO7,
  * at the coordinates the topology gives them (Topology.hpp); coord2id
@@ -666,6 +670,13 @@ void CEs47Cmm::partition_database(u8 *db) {
     const ev7_node &n = t.node(i);
     if (!mv->io7(n.pid))
       continue;
+    // The drawer and cabinet the PID names (<4:3>, <7:5>: the console's
+    // pid2drawer and pid2rack), riser 0: a real ES47's "I/O Drawer 0
+    // Cabinet 0 Riser 0" [inference beyond PID 0: the I/O of a drawer's
+    // own backplane, in that drawer].
+    p[0] = (u8)((n.pid >> 3) & 3);
+    p[1] = (u8)(n.pid >> 5);
+    p[2] = 0;
     p[3] = n.ns;
     p[4] = n.ew;
     p[5] = 1;

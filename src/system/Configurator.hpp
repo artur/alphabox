@@ -52,6 +52,7 @@ typedef enum {
   // pci devices
   c_ali,
   c_ali_ide,
+  c_cmd649,
   c_ali_usb,
   c_ali_pmu,
   c_s3,

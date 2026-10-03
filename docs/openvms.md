@@ -52,7 +52,7 @@ controller error` writing `[SYS$LDR]PROCESS_MANAGEMENT.EXE`, and a DCL
 controller raised a DMA write's completion interrupt before it had written
 the disk and cleared BSY; OpenVMS's driver moved on to the CD on the same
 channel, and the end of the disk command then landed on the CD, leaving the
-disk busy for good. Fixed in `AliM1543C_ide.cpp`: a command's interrupt is
+disk busy for good. Fixed in the IDE core (`IdeController.cpp` since the CMD 649 joined it): a command's interrupt is
 delivered only once the command is complete, and the controller finishes a
 command on the drive it was issued to, whichever drive the guest selects
 meanwhile. Since then the installation completes with the CD on `dqa1`, and

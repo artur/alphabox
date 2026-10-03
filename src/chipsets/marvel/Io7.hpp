@@ -106,7 +106,8 @@ constexpr u32 lsi(u32 port, u32 slot, u32 intx) {
 
 class CIo7 {
 public:
-  CIo7(CSystem *sys, CMarvel *marvel, u32 pid);
+  /// `backplane_rev`: the I/O backplane's revision, IO_SYS_REV<3:0>.
+  CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev);
 
   u32 pid() const { return m_pid; }
 
@@ -142,6 +143,7 @@ private:
   CSystem *m_sys;
   CMarvel *m_marvel;
   u32 m_pid;
+  u8 m_backplane_rev;
   std::mutex m_lock;
   /// Every register's contents, ports 0-3 and port 7 (index 4).
   std::map<u32, u64> m_regs[io7::kPorts + 1];

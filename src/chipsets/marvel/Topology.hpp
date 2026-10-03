@@ -58,6 +58,9 @@ struct marvel_layout {
   void (*coordinates)(int index, u8 *ns, u8 *ew);
   /// Whether the EV7 with PID `pid` has an IO7 on its I/O port.
   bool (*has_io7)(u32 pid);
+  /// The I/O backplane's revision, which the IO7 reports in IO_SYS_REV<3:0>
+  /// and `show config` prints as "Backplane rev" (a real ES47: 2).
+  u8 io_backplane_rev;
 };
 
 /// One EV7: its PID and its coordinates.

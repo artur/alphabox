@@ -53,6 +53,13 @@
  * INTA): only high-speed devices can then be used on it, a full- or
  * low-speed one being left for a companion that is not there.
  *
+ * The same card without the EHCI is the Agere (Lucent) USS-344 QuadraBus
+ * (configuration class `uss344`), a USB 1.1 controller: four OHCI 1.0a
+ * functions (11c1:5803, subsystem 11c1:5803, revision 10, all on INTA,
+ * power management at 0x50, legacy support registers) with one root hub
+ * port each -- the AlphaServer ES47's on-board USB, which its console
+ * lists as "USB" usba..usbd. Its ports are its OHCIs' for good.
+ *
  * EHCI: one 256-byte memory BAR; 32-bit data structures; port power
  * switching.
  *
@@ -79,13 +86,29 @@
  * Documentation consulted: Enhanced Host Controller Interface Specification
  * for Universal Serial Bus, revision 1.0 (Intel, 2002), chapter 4.2 for the
  * companions; Universal Serial Bus Specification 2.0, chapters 8, 9 and 11;
- * NEC uPD720101 data sheet (function layout).
+ * NEC uPD720101 data sheet (function layout); Agere USS-344 QuadraBus
+ * Advance Data Sheet, rev. 9, June 2001.
  **/
 class CEhci : public CPCIDevice,
               public CDiskController,
               public CUsbFaultTarget {
 public:
-  CEhci(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev);
+  /// Which card: its configuration class names it.
+  struct SChip {
+    const char *name; ///< the configuration class
+    bool ehci;        ///< an EHCI function after the companions
+    int companions;   ///< OHCI functions 0 to companions - 1
+    u32 ohci_id;      ///< their vendor and device
+    u32 ohci_rev;     ///< their revision byte
+    bool ohci_inta;   ///< every OHCI on INTA (else function f on INTA + f)
+    bool ohci_legacy; ///< the OHCI legacy support registers
+    u8 ohci_pm;       ///< where their power management capability is
+    u32 ohci_pmc;     ///< and its PMC word
+  };
+  static const SChip *find_chip(const char *name);
+
+  CEhci(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
+        const SChip &chip);
   ~CEhci() override;
   int SaveState(FILE *f) override;
   int RestoreState(FILE *f) override;
@@ -102,14 +125,16 @@ public:
   bool inject_fault(const char *op, int port, int ep, int arg) override;
 
   static constexpr int kPorts = 4;
-  static constexpr int kCompanions = 2;
-  static constexpr int kPortsPerCompanion = kPorts / kCompanions;
+  static constexpr int kMaxCompanions = 4;
 
 private:
   struct CCompanion;      // an OHCI function of the card
+  const SChip &m_chip;
   bool m_with_companions; // companions = true (the default)
-  int m_func;             // the EHCI's PCI function: 2, or 0 when alone
-  std::unique_ptr<CCompanion> m_comp[kCompanions];
+  int m_companions;       // how many: 0, or the chip's
+  int m_ports_per_companion;
+  int m_func; // the EHCI's PCI function: 2, 0 when alone, -1 when none
+  std::unique_ptr<CCompanion> m_comp[kMaxCompanions];
   /// The companion port p is routed to (its port number there in *local),
   /// or nullptr when the card has none.
   COhci *companion_of(int p, int *local = nullptr);

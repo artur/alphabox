@@ -51,7 +51,9 @@ bool gs1280_has_io7(u32 pid) { return pid == 0; }
 } // namespace
 
 /// System type 1: "GS1280" (build_dsrdb, 0x2dd8f0).
-const marvel_layout gs1280_layout = {0x1, gs1280_coordinates, gs1280_has_io7};
+/// The I/O backplane's revision is not known: 0.
+const marvel_layout gs1280_layout = {0x1, gs1280_coordinates, gs1280_has_io7,
+                                     0};
 
 void gs1280_board_devices(CConfigurator *cfg, CSystem *sys) {
   marvel_board_devices(cfg, sys);
