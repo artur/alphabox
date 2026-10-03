@@ -32,6 +32,7 @@
 #include "DiskController.hpp"
 #include "PCIDevice.hpp"
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -191,6 +192,11 @@ private:
   static constexpr int kCatchUpFrames = 32;
   u32 m_done_head = 0;  // TDs retired and not yet written back
   int m_done_delay = 7; // frames until the done queue interrupts; 7 = none
+  // The done queue holds a control-endpoint TD, and may not go back before
+  // this time (see write_back_early).
+  bool m_done_hold = false;
+  std::chrono::steady_clock::time_point m_done_hold_until;
+  bool write_back_early() const;
 
   // OHCI 1.0a register bits
   static constexpr u32 OHCI_CTL_PLE = 0x00000004; // PeriodicListEnable

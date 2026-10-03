@@ -325,6 +325,20 @@ void CAliM1543C_usb::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 // (driver-polling diagnosis).
 static const bool g_usbtrace = getenv("ALPHABOX_USBTRACE") != nullptr;
 static const auto g_usbtrace_t0 = std::chrono::steady_clock::now();
+// ALPHABOX_OHCI_EARLY_CTL=1: a control TD's completion goes back as early as
+// any other, as it did before (see write_back_early).
+static const bool g_ohci_early_ctl =
+    getenv("ALPHABOX_OHCI_EARLY_CTL") != nullptr;
+// ALPHABOX_USBTRACE=2: also every retired TD and every done-queue write-back.
+static const bool g_usbtrace2 = [] {
+  const char *e = getenv("ALPHABOX_USBTRACE");
+  return e && strcmp(e, "2") == 0;
+}();
+static double usbtrace_ms() {
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - g_usbtrace_t0)
+      .count();
+}
 // A register write (or every 20000th read) and the reads since the last
 // line, per controller.
 void COhci::usbtrace_line(const char *what, u64 address, u64 data) {
@@ -362,6 +376,7 @@ void COhci::reset() {
   m_frame = 0;
   m_done_head = 0;
   m_done_delay = 7;
+  m_done_hold = false;
   ohci_update_irq();
 }
 
@@ -483,7 +498,7 @@ void COhci::run() {
           // TDs that want their interrupt at once get it now, not at the
           // frame's end: a driver waiting on each transfer (usbstor waits on
           // three per command) would otherwise wait a frame for each.
-          if (m_done_head && m_done_delay == 0)
+          if (write_back_early())
             write_back_done();
         }
       }
@@ -545,12 +560,13 @@ void COhci::frame() {
   }
   (void)cmd;
   service_async_lists();
-  // The done queue goes out when its interrupt delay runs out.
+  // The done queue goes out when its interrupt delay runs out -- and a
+  // control TD has had its frame (see write_back_early).
   if (m_done_head && m_done_delay != 7) {
-    if (m_done_delay == 0)
-      write_back_done();
-    else
+    if (m_done_delay != 0)
       --m_done_delay;
+    else if (write_back_early())
+      write_back_done();
   }
   ohci_status(OHCI_INT_SF);
 }
@@ -677,10 +693,15 @@ int COhci::service_ed(u32 ed_addr, bool periodic, bool *found) {
     else
       t.w[1] = cbp + n;
     const u32 next_td = t.w[2] & ~0xfu;
-    if (g_usbtrace && cc && cc != 9) // an error: the endpoint halts
-      printf("USBT %s td %08x addr %d ep %d %s len %d: cc %d\n", m_name, t.addr,
-             (int)(flags & 0x7f), ep, in ? "in" : "out", t.len, cc);
+    if (g_usbtrace2 || (g_usbtrace && cc && cc != 9)) // an error: halts
+      printf("USBT %s td %08x addr %d ep %d %s len %d n %d: cc %d\n", m_name,
+             t.addr, (int)(flags & 0x7f), ep, in ? "in" : "out", t.len, n, cc);
     retire_td(t.addr, t.w, cc);
+    if (ep == 0 && !g_ohci_early_ctl && !m_done_hold) {
+      m_done_hold = true;
+      m_done_hold_until =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+    }
     ed[2] = next_td | ((u32)toggle << 1) | (cc ? 1u : 0u);
     do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1);
     return cc;
@@ -910,6 +931,9 @@ void COhci::retire_iso_td(u32 td_addr, u32 td[8], int cc) {
 // delay is the smallest any of its TDs asks for.
 void COhci::retire_td(u32 td_addr, u32 td[4], int cc) {
   td[0] = (td[0] & 0x0fffffff & ~(3u << 26)) | ((u32)cc << 28);
+  if (g_usbtrace2)
+    printf("USBT %10.1f %s retire td %08x cc %d cbp %08x di %d\n",
+           usbtrace_ms(), m_name, td_addr, cc, td[1], (td[0] >> 21) & 7);
   td[2] = m_done_head;
   do_pci_write(td_addr, td, sizeof(u32), 4);
   m_done_head = td_addr;
@@ -929,10 +953,32 @@ void COhci::write_back_done() {
   const u32 other = state.usb_data[0x0c / 4] & state.usb_data[0x10 / 4] &
                     ~OHCI_INT_WDH & 0x7f;
   u32 dh = m_done_head | (other ? 1u : 0u);
+  if (g_usbtrace2)
+    printf("USBT %10.1f %s done head %08x\n", usbtrace_ms(), m_name, dh);
   do_pci_write(hcca + 0x84, &dh, sizeof(u32), 1);
   m_done_head = 0;
   m_done_delay = 7;
+  m_done_hold = false;
   ohci_status(OHCI_INT_WDH);
+}
+
+// Whether the done queue may go back now, between frames. Bulk and
+// interrupt TDs that ask for their interrupt at once (DI=0) may: usbstor
+// waits on three transfers a command, and waiting for the frame's end made
+// USB storage four to five times slower. A queue holding a control TD may
+// not: on a real controller a control transfer spends its stages' bus time
+// in a frame and is written back at that frame's end, never microseconds
+// after the driver asked for it, and OpenVMS 8.4 depends on that. A
+// completion that came back within microseconds was completed a second
+// time five seconds later, by the request's timeout, and the system
+// bugchecked INVEXCEPTN in SYS$USBDRIVER (docs/platforms/marvel.md, M7b).
+// So such a queue waits until a millisecond after the TD was retired --
+// real time, so that a frame thread catching up on frames it overslept
+// does not run the wait out in a burst.
+bool COhci::write_back_early() const {
+  return m_done_head && m_done_delay == 0 &&
+         (!m_done_hold ||
+          std::chrono::steady_clock::now() >= m_done_hold_until);
 }
 
 void COhci::ohci_status(u32 bits) {
@@ -1143,7 +1189,7 @@ void COhci::usb_hci_write(u64 address, int dsize, u64 data) {
   case 0x0c: // HcInterruptStatus: write 1 to clear
     state.usb_data[address / 4] &= ~(u32)data;
     // A consumed done head lets the next one go out.
-    if ((data & OHCI_INT_WDH) && m_done_head && m_done_delay == 0)
+    if ((data & OHCI_INT_WDH) && write_back_early())
       write_back_done();
     break;
 

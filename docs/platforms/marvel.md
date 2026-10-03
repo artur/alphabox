@@ -612,9 +612,10 @@ DECwindows starts on the Radeon 7500 in the AGP slot and draws the CDE
 login box, "Welcome to ES47", at 1024x768: typed keys reach it, the pointer
 moves and clicks, its Help dialog opens. Without licences it goes no
 further than on the ES40 (docs/openvms.md). On the final build it started
-cleanly in 8 of 8 two-processor runs. One fault is open: a JIT-only crash
-in OpenVMS's USB driver at boot (below). The disk image, its README, the
-transcripts and frames are in `lab/platforms/marvel/m7/`.
+cleanly in 8 of 8 two-processor runs. A crash in OpenVMS's USB driver at
+boot, first taken for a JIT fault, was the OHCI answering control transfers
+faster than any controller can (below, fixed). The disk image, its README,
+the transcripts and frames are in `lab/platforms/marvel/m7/`.
 
 **The installation** (`install-console.log`): `boot dka400` with the CD at
 hose 2 slot 1 (53C895, ID 4) and an empty 4 GB file at ID 0 (DKA0), then
@@ -735,31 +736,75 @@ in an option slot (`pci1.1`), where its functions have lines of their own.
 Also: the OHCI register trace (`ALPHABOX_USBTRACE`) names its controller
 (`ohci0`..`ohci3` on the card) and counts reads per controller.
 
-**Open: a USB crash at boot, JIT only.** In about one boot in ten with USB
-devices, OpenVMS bugchecks INVEXCEPTN during startup, often after
-`%SYSTEM-W-POOLEXPF, Pool expansion failed -- insufficient NPAGEVIR`: an
-access violation in `SYS$USBDRIVER+04F48` (a structure pointer read as 2),
-on CPU 0 at IPL 8 with IOLOCK8 held (`runs/boot-crash1` holds a dump).
-Counts, two processors unless said:
+**Fixed (2026-10-03): the USB crash at boot was not the JIT's.** In about
+one boot in ten with USB devices, OpenVMS bugchecked INVEXCEPTN during
+startup, at the same moment every time (just after `%EWA0, Half Duplex
+10BaseT connection selected`): an access violation in
+`SYS$USBDRIVER+04F48`, a structure pointer read as 2, on CPU 0 at IPL 8
+with IOLOCK8 held. The counts M7b first gathered (4 of 19 on the JIT,
+0 of 10 on the interpreter, 0 of 6 on the verify lane) made it look
+JIT-only; they were too small to say so, and the interpreter crashed the
+same way in 1 of 30 boots once it was given that many.
 
-| build | USB | crashed |
+What the dump says (`runs/boot-crash1`, ANALYZE/CRASH; transcripts in
+`lab/jitverify-sweep/sda-crash1*.txt`). `+04F48` is in a completion routine
+(the procedure at `+04EF0`) that the USB stack's kernel process calls for
+each request on its work queue (the loop at `+01970`). The routine asks a
+helper (`+03790`) for a pointer out of the request, and the helper refuses
+-- the request's state word is 0, not 5 -- returning an error status the
+caller does not check; the 2 is whatever was in the stack slot. The
+request had been completed already. Each request keeps a ring of its own
+events with timestamps and caller addresses (`+0x88`, `+0x90`, `+0x890`
+from its base), and this one shows the queue-to-kernel-process and
+dequeue entries twice: once with the rest of its life, and again 5.0 s
+later -- a request timeout firing for a request that had completed
+[inference: that its timeout was started after the completion came back,
+so there was nothing to cancel].
+
+What the emulator did to bring that about (`ALPHABOX_USBTRACE=2`, which
+also made the crash far more likely: 2 of 5 boots). Both devices -- the
+tablet on the USS-344's function 0, the keyboard on function 1 --
+enumerate at once, on two controllers. In each crash one of them sent a
+control request (SET_ADDRESS twice, GET_DESCRIPTOR once), the controller
+ran it and wrote the done queue back within the same 0.1 ms -- the OHCI
+model's early done queue, there for usbstor's sake, applied to control
+transfers too -- the OHCI interrupt was serviced, and that device's
+enumeration never took another step. Five seconds later the driver
+disabled and reset its port, and the system bugchecked (or, once, hung).
+No real controller answers that fast: a control transfer takes its
+stages' bus time inside a frame and is written back at the frame's end.
+
+**The fix** (`COhci::write_back_early`, devices/pci/AliM1543C_usb.cpp): a
+done queue holding a control TD now waits at least a millisecond of real
+time after the TD was retired, and goes back at the next frame end or pass
+after that; bulk and interrupt TDs keep the early done queue (usb.md).
+`ALPHABOX_OHCI_EARLY_CTL=1` restores the old behaviour for A/B runs.
+
+| build | trace | crashed |
 | --- | --- | --- |
-| before the rebase, JIT | NEC card | 4 of 19 |
-| before the rebase, interpreter lane | NEC card | 0 of 10 |
-| before the rebase, JIT | none | 0 of 6 |
-| before the rebase, JIT, `ALPHABOX_USBTRACE` on | NEC card | 0 of 6 |
-| before the rebase, JIT_VERIFY lane | NEC card | 0 of 6 (one and two processors) |
-| before the rebase, JIT, one processor | NEC card | 1 of 4 |
-| on 86b2469 (the DTB page-cache fix), JIT | USS-344 | 1 of 10 |
-| on 86b2469, JIT | NEC card | 1 of 10 |
-| final, JIT (8 of them DECwindows runs) | USS-344 | 2 of 28 |
+| main 0104207, JIT | -- | 1 of 13 |
+| main 0104207, interpreter | -- | 1 of 30 |
+| main + trace, JIT | `ALPHABOX_USBTRACE=2` | 2 of 5 |
+| control TDs at the frame's end only (first try) | `ALPHABOX_USBTRACE=2` | 0 of 17 |
+| control TDs at the frame's end only (first try) | -- | 1 of 30 |
+| first try + 10 ms root-port reset | `ALPHABOX_USBTRACE=2` | 1 of 10 (a hang: the same lost completion) |
+| **the fix: a control TD's completion at least 1 ms after it ran** | `ALPHABOX_USBTRACE=2` | **0 of 15** |
+| **the fix**, JIT | -- | **0 of 60** |
+| **the fix**, interpreter | -- | **0 of 20** |
 
-So it is neither SMP nor the page-cache fault 86b2469 fixed. Memory
-corruption that needs the JIT's speed, with the verify lane clean; the
-OHCI's done-queue protocol (HccaDoneHead only while WDH is clear) was
-checked and is right, and guest MB is DMB ISH in compiled code. What the
-verify lane cannot see is what it compiles out: the chain gates and the
-inline data-page-cache fast paths.
+The first try (write a control TD back only at a frame's end) was not
+enough: a request made just before the frame thread's tick still came back
+within microseconds (the hang's trace has a GET_DESCRIPTOR answered within
+0.1 ms of the request). A 10 ms root-port reset, tried with it, did not help
+-- OpenVMS polls a reset for about 9 ms, then asks again -- and was
+dropped. The verify lane's earlier 0 of 6 said nothing either way: it runs
+the guest several times slower, which changes the timing the race needs.
+The production JIT with chaining, inline memory and the RPCC stub all
+switched off (`ALPHABOX_JIT_CHAIN=0`, `INLMEM=0`, `RPCC=0`) ran clean in
+the 7 boots it had before the interpreter's crash made the question moot.
+
+Counts and traces: `lab/jitverify-sweep/usbcrash/` (`bootcount.txt`, the
+crashes' console logs and `ALPHABOX_USBTRACE=2` output).
 
 **No longer seen** on the final build (8 two-processor DECwindows runs):
 the CPUSPINWAIT that remained after the rendezvous fix (1 of 3 starts

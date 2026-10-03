@@ -152,6 +152,22 @@ and each frame otherwise. Either is woken at once when a device finishes a
 transfer, or when the driver fills a list. Consecutive bulk TDs on an OHCI
 endpoint go to the device as one transfer, as a stream of packets would.
 
+A done queue holding a control TD waits until a millisecond after the TD
+ran, then goes back at the next frame end (or the next pass between
+frames). Bulk and interrupt TDs that ask for their interrupt at once
+(DI=0) still have it between frames -- usbstor waits on three transfers a
+command, and the frame's end made USB storage four to five times slower --
+but a control transfer's completion never comes sooner than a controller
+could send it: on hardware its stages take bus time in a frame and the
+done queue is written at the frame's end. OpenVMS 8.4 needs that: with two
+devices enumerating at once on two controllers, a completion that came back
+within microseconds was completed a second time by the request's timeout
+five seconds later, and the system bugchecked (docs/platforms/marvel.md,
+M7b). The millisecond is real time, so a frame thread catching up on
+frames it overslept cannot run it out in a burst.
+`ALPHABOX_OHCI_EARLY_CTL=1` lets control TDs go back early again, for A/B
+runs.
+
 The card's two companions are the same OHCI engine as the ALi function
 (`COhci`), two ports each: card ports 1-2 belong to function 0, 3-4 to
 function 1 (HCSPARAMS N_CC = 2, N_PCC = 2). A port belongs to the EHCI or
