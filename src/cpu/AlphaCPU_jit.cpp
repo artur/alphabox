@@ -267,6 +267,14 @@ void CAlphaCPU::dbg_dump_state() {
 // bank"). Now the probe refuses such lines, and the other two reports
 // should never appear.
 static const bool g_trace_icprobe = getenv("ALPHABOX_TRACE_ICPROBE") != nullptr;
+// ALPHABOX_JIT_CHAIN=0: compiled blocks never run on into one another --
+// no link is patched and every computed jump returns to the dispatcher -- so
+// every block starts from jit_run, the way a JIT_VERIFY build runs them. A
+// switch for telling a chaining fault from anything else, not for speed.
+static const bool g_jit_chain = [] {
+  const char *e = getenv("ALPHABOX_JIT_CHAIN");
+  return !(e && strcmp(e, "0") == 0);
+}();
 void CAlphaCPU::trace_icprobe(int i, u64 va) {
   const auto &l = state.icache[i];
   if (!(l.valid && (l.asn == state.asn || l.asm_bit) &&
@@ -1063,6 +1071,10 @@ void CAlphaCPU::jit_run(int budget) {
             sn; // interp's RECORDED store count (sn), NOT the replay cursor
                 // m_jit_slog_i; a compiled pass must consume exactly this many
                 // (catches a missing/extra store)
+        // The same for loads: a compiled pass that reads more or fewer
+        // values than the interpreter loaded would replay the wrong ones.
+        // (Only while the log holds them all: past 64 it stops recording.)
+        const u32 n_loads_interp = vn;
 #if defined(__aarch64__)
         // Sample as production does, so the pin sets adaptation picks are
         // the ones verified.
@@ -1126,6 +1138,12 @@ void CAlphaCPU::jit_run(int budget) {
                    "jit=%u\n",
                    (unsigned long long)start_virt, n_stores_interp,
                    m_jit_slog_i);
+          if (n_loads_interp < 64 && m_jit_vlog_i != n_loads_interp &&
+              (m_jit_vbad = true))
+            printf("[JIT][VERIFY] LOAD COUNT MISMATCH at %016llx: interp=%u "
+                   "jit=%u\n",
+                   (unsigned long long)start_virt, n_loads_interp,
+                   m_jit_vlog_i);
           cc_last_sync += ns_to_host_ticks(
               m_jit->verify_compare(start_virt, r_interp, state.r, vw,
                                     b->prefix_len, m_jit_vbad) +
@@ -1211,6 +1229,12 @@ void CAlphaCPU::jit_run(int budget) {
                        "interp=%u trace=%u\n",
                        (unsigned long long)start_virt, n_stores_interp,
                        m_jit_slog_i);
+              if (n_loads_interp < 64 && m_jit_vlog_i != n_loads_interp &&
+                  (m_jit_vbad = true))
+                printf("[JIT][VERIFY] TRACE LOAD COUNT MISMATCH at %016llx: "
+                       "interp=%u trace=%u\n",
+                       (unsigned long long)start_virt, n_loads_interp,
+                       m_jit_vlog_i);
               m_jit->verify_compare(start_virt, r_interp, state.r, vw, n_interp,
                                     m_jit_vbad);
             }
@@ -1231,7 +1255,8 @@ void CAlphaCPU::jit_run(int budget) {
       // successor pointer so it jumps straight in instead of returning. Never
       // link into a learned idle/parked loop head: idle pacing (above) only
       // sees passes that come back through here.
-      if (m_link_from && (start_virt == m_idle_pc || start_virt == m_park_pc)) {
+      if (m_link_from && (!g_jit_chain || start_virt == m_idle_pc ||
+                          start_virt == m_park_pc)) {
         m_jit->note_link_bail();
         m_link_from = nullptr;
       }
@@ -1609,6 +1634,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // than re-reading (another CPU may have written it)
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf(
@@ -1638,6 +1664,7 @@ int CAlphaCPU::jit_fp_read(CAlphaCPU *cpu, u64 va, u32 fa, u32 descr) {
   if (cpu->m_jit_vreplay) {
     const u32 i = cpu->m_jit_vlog_i++;
     if (va != cpu->m_jit_vaddr[i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf("[JIT] FP LOAD ADDR MISMATCH: compiled va=%016llx interp "
@@ -1952,6 +1979,7 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
   CSystem::CLLSCDRAMGuard llsc_guard(cpu->cSystem, true);
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf("[JIT] LDx_L ADDR MISMATCH: compiled va=%016llx interp "
@@ -1998,6 +2026,7 @@ int CAlphaCPU::jit_read_vpte(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
 
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf(
@@ -2049,6 +2078,7 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
 
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf(
@@ -2091,6 +2121,7 @@ int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
 
   if (cpu->m_jit_vreplay) {
     if (phys != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
+      cpu->m_jit_vbad = true; // a wrong address replays a right value
       static int n = 0;
       if (n++ < 50)
         printf("[JIT] HW_LD ADDR MISMATCH: compiled pa=%016llx interp "
@@ -2556,7 +2587,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   cpu->m_jit->note_helper(CJitEngine::HK_INDIRECT);
   HELPER_TIMER(cpu, CJitEngine::HK_INDIRECT);
   // PAL reset-vector entry: never chain in, so the dispatcher's flush runs.
-  if (target == (cpu->state.pal_base | 1))
+  if (!g_jit_chain || target == (cpu->state.pal_base | 1))
     return nullptr;
   CJitEngine::JitBlock *b =
       cpu->m_jit->lookup(target, (u32)cpu->state.asn, (uint8_t)cpu->state.cm);

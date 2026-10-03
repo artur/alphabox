@@ -72,6 +72,9 @@ To run the whole GUI stack without a window or a display server, set
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
 | `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |
 | `ALPHABOX_JIT_PINSET=1\|2` | Experiment: start from a different pin set of 14 (AArch64 emitter). `1` gives R17, R18 and R27's slots to R13-R15, the nada benchmark's hot registers; `2` gives R9-R11, R26, R27, R29 and R30's to R8, R4-R6 and R21-R23, those of Microsoft's `makecab`. Combine with `ALPHABOX_JIT_ADAPTPIN=0` to keep it. See docs/performance.md, "What a pinned register is worth". |
+| `ALPHABOX_JIT_CHAIN=0` | Compiled blocks never run on into one another: no link is patched and every computed jump returns to the dispatcher, as on a JIT_VERIFY build. With the next two, the production JIT minus what the verify lane cannot see -- for telling such a fault from anything else, not for speed. |
+| `ALPHABOX_JIT_INLMEM=0` | Every load and store from compiled code calls its helper, as on a JIT_VERIFY build: no inline page-cache probe, no probe reuse, no inline physical `HW_LD`/`HW_ST` (both emitters). |
+| `ALPHABOX_JIT_RPCC=0` | `RPCC` calls its helper instead of the generated stub, as on a JIT_VERIFY build. |
 | `ALPHABOX_JIT_RPCCTEST=1` | Check the generated `RPCC` stub against the helper it replaces, from six fixed starting states, and print the verdict. |
 | `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
 | `ALPHABOX_RATE=<sec>` | Every `<sec>` seconds (fractions allowed), print each processor's instruction rate, and what its `IMB`s, its cycle-counter reads and its delay loops are costing. Accurate enough to measure with -- it looks at the clock once every 256 batches -- and `cpu_bench.sh` reads it rather than timing runs from outside. |

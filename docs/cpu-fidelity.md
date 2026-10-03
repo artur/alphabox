@@ -17,7 +17,22 @@ running Alpha code inside the emulator rather than by reading alone.
   and boot anything. Every compiled block is re-run by the interpreter and
   compared; a clean SRM boot is about 130 million blocks. This finds
   disagreements between the two engines, not disagreements with the
-  architecture — both can be wrong together.
+  architecture — both can be wrong together. A block counts as a mismatch
+  for any difference: a GPR, an FP register, an IPR, the PC, a store, an
+  `STx_C`, the number of stores -- and, since 2026-10-03, a load from
+  another address or a different number of loads. The compiled pass is
+  handed the values the interpreter loaded, in order, so a compiled load
+  from the wrong address used to come back with the right value and pass;
+  it printed `LOAD ADDR MISMATCH` and counted nothing.
+- **What the verify lane cannot see**: it runs every block from the
+  dispatcher, through the memory helpers, with `RPCC` through its helper.
+  The production JIT also chains blocks into one another, probes the data
+  page cache inline (and reuses a probe for the next access on the same
+  page), and reads `RPCC` through a generated stub. `ALPHABOX_JIT_CHAIN=0`,
+  `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0` take those away from a
+  production build one at a time (docs/headless.md): a fault that goes with
+  one of them is in it, and one that survives all three is not the JIT's
+  compiled code.
 - **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a `JIT_VERIFY`
   build checks the JIT's inline IEEE operations against the interpreter over
   8.5 million cases at startup.
@@ -348,6 +363,28 @@ against the manuals, and most of it by running code:
   side effects and returns before touching memory, a register or the lock
   flag, so a fault is taken once, by the interpreter, with the instruction
   not half-executed.
+- **The JIT against the interpreter on the main guests** (2026-10-03,
+  AArch64, the verifier counting every kind of difference, loads
+  included): no mismatch in any of them. Compiled blocks executed and
+  compared, both processors together:
+
+  | guest | machine, CPUs | blocks | mismatches |
+  | --- | --- | --- | --- |
+  | OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW SYSTEM`, a DCL loop, a MACRO-32 program | ES40, 1 | 1.44 billion | 0 |
+  | the same | ES40, 2 | 1.85 billion | 0 |
+  | OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW DEVICE`, `SHOW MEMORY/PHYSICAL` | DS20E, 2 | 5.5 billion | 0 |
+  | the same | ES45, 2 | 1.8 billion | 0 |
+  | OpenVMS 8.4 to DCL with USB devices (M7b's runs, before loads were counted) | ES47, 1 and 2 | 0.55 billion each | 0 |
+  | Windows 2000 RC2 to the desktop, then ten `dir /s c:\winnt` | ES40, 1 | 1.26 billion | 0 |
+  | the same | ES40, 2 | 1.69 billion | 0 |
+  | Whistler (Windows XP 64-bit, build 2210) to the desktop | ES40, 1 | 1.60 billion | 0 |
+  | SRM to `P00>>>` (`srm_run.sh`) | ES40, 1 | 112 million | 0 |
+
+  The x86-64 emitter was not run: this host has no Rosetta. The verify
+  lane cannot see compiled code's chaining, inline memory paths or the
+  `RPCC` stub (above); for those, run a production build with
+  `ALPHABOX_JIT_CHAIN=0`, `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0`
+  against one without.
 - **Floating point**: which rounding mode applies (the instruction's field,
   with FPCR consulted only for `/D`), the IEEE and VAX trap-mode tables
   being mirror images (a classic emulator bug, and we decode both), sticky

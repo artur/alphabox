@@ -75,6 +75,13 @@ const bool g_a64_peep = [] {
   return !(e && strcmp(e, "0") == 0);
 }();
 
+// ALPHABOX_JIT_RPCC=0: RPCC calls jit_misc, as on a JIT_VERIFY build,
+// instead of the inline stub. For telling a stub fault from anything else.
+const bool g_a64_rpcc_stub = [] {
+  const char *e = getenv("ALPHABOX_JIT_RPCC");
+  return !(e && strcmp(e, "0") == 0);
+}();
+
 // ALPHABOX_JIT_REUSE=0: every memory op probes the page cache itself.
 const bool g_a64_reuse = [] {
   const char *e = getenv("ALPHABOX_JIT_REUSE");
@@ -98,7 +105,7 @@ void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
   int32_t prev_disp = 0;
   for (uint32_t i = 0; i < n; ++i) {
     plan[i] = 0;
-    if (!g_a64_reuse)
+    if (!g_a64_reuse || !g_jit_inline_mem)
       continue;
     const uint32_t ins = w[i], op = ins >> 26;
     const int ra = (ins >> 21) & 0x1f, rb = (ins >> 16) & 0x1f, rc = ins & 0x1f;
@@ -921,6 +928,13 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      if (!g_jit_inline_mem) {
+        ea_x2((int16_t)(ins & 0xFFFF));
+        if (op == OP_LDQ_U)
+          a.and_(x2, x2, imm(~(uint64_t)7));
+        emit_helper();
+        continue;
+      }
       const uint8_t rp = (i < kColdMax) ? m_reuse_plan[i] : 0;
       // A zero-displacement access on a pinned base probes and accesses
       // through the pin itself: no copy into x2 on the hot path.
@@ -1009,6 +1023,13 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.and_(x2, x2, imm(~(uint64_t)7));
       emit_helper();
 #else
+      if (!g_jit_inline_mem) {
+        ea_x2((int16_t)(ins & 0xFFFF));
+        if (op == OP_STQ_U)
+          a.and_(x2, x2, imm(~(uint64_t)7));
+        emit_helper();
+        continue;
+      }
       // Store Ra: straight from its pin where it has one (or from XZR for
       // R31), else from x12 after a load of its guest slot.
       auto store_to = [&](const a64::Mem &m) {
@@ -1150,7 +1171,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       (void)israw;
       emit_helper();
 #else
-      if (!israw) {
+      if (!israw || !g_jit_inline_mem) {
         emit_helper();
         continue;
       }
@@ -1227,7 +1248,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         mov_to_reg(ra, x0);
       };
 #ifndef JIT_VERIFY
-      const bool ld_phys = (op == OP_HW_LDL || op == OP_HW_LDQ);
+      const bool ld_phys =
+          (op == OP_HW_LDL || op == OP_HW_LDQ) && g_jit_inline_mem;
       if (m_cold_pass) { // only the physical forms record; x2 = pa
         a.bind(Label(m_cold_slow[cold_idx]));
         ld_helper();
@@ -1364,7 +1386,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         bail_if_w0();
       };
 #ifndef JIT_VERIFY
-      const bool st_phys = (op == OP_HW_STL || op == OP_HW_STQ);
+      const bool st_phys =
+          (op == OP_HW_STL || op == OP_HW_STQ) && g_jit_inline_mem;
       if (m_cold_pass) { // only the physical forms record; x2 = pa
         a.bind(Label(m_cold_slow[cold_idx]));
         st_helper();
@@ -1447,7 +1470,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #ifdef JIT_VERIFY
       const bool inline_rpcc = false;
 #else
-      const bool inline_rpcc = true;
+      const bool inline_rpcc = g_a64_rpcc_stub;
 #endif
       void *stub = (op == OP_RPCC && inline_rpcc) ? a64_rpcc_stub() : nullptr;
       if (stub) {

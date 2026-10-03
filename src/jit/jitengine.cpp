@@ -54,6 +54,16 @@
 
 namespace {
 
+// ALPHABOX_JIT_INLMEM=0: every load and store calls its helper, as on a
+// JIT_VERIFY build -- no inline page-cache probe, no probe reuse, no inline
+// physical HW_LD/HW_ST -- on both emitters. A switch for telling a fault in
+// the inline memory paths from anything else (the verify lane cannot see
+// them), not for speed.
+const bool g_jit_inline_mem = [] {
+  const char *e = getenv("ALPHABOX_JIT_INLMEM");
+  return !(e && strcmp(e, "0") == 0);
+}();
+
 #ifdef JIT_DISASM
 // Log/error any asmjit emit failure (badly formed instruction / bad operand)
 // that the Assembler would otherwise accept and then ship as a silently
@@ -1993,6 +2003,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #ifdef JIT_VERIFY
       emit_helper();
 #else
+      if (!g_jit_inline_mem) {
+        emit_helper();
+        continue;
+      }
       // Inline fast path: aligned + data_page_cache[0][dpc_index(va)] hit +
       // DRAM. Falls to the helper on misalign / cache miss / MMIO. Mirrors
       // jit_read's data-cache path. RDX = va (preserved); R11 = slot byte
@@ -2088,6 +2102,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #ifdef JIT_VERIFY
       emit_helper();
 #else
+      if (!g_jit_inline_mem) {
+        emit_helper();
+        continue;
+      }
       // Inline fast path: aligned + data_page_cache[1][dpc_index(va)] hit +
       // DRAM. RDX = va (preserved for the helper); R11 = write-cache slot byte
       // offset; RAX/R10/R9 scratch.
@@ -2209,7 +2227,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
 #ifdef JIT_VERIFY
       emit_helper();
 #else
-      if (!israw) {
+      if (!israw || !g_jit_inline_mem) {
         emit_helper();
         continue;
       } // LDS/STS: ieee conversion only via the helper
