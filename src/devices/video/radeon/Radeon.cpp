@@ -171,6 +171,17 @@ void CRadeon::init() {
   printf("%s: ATI Radeon 7500 (RV200) %s, %u MB, subsystem %04x:%04x\n",
          devid_string, agp ? "AGP" : "PCI", m_vram_bytes >> 20,
          subsystem & 0xffff, subsystem >> 16);
+
+  // ALPHABOX_RADEON_SELFTEST=1: check the engines before the machine
+  // starts (the card's state is put back afterwards); "exit" ends the
+  // emulator with the result (status 0 when every check passed).
+  if (const char *st = getenv("ALPHABOX_RADEON_SELFTEST")) {
+    const bool ok = selftest();
+    if (strcmp(st, "exit") == 0) {
+      fflush(stdout);
+      exit(ok ? 0 : 1);
+    }
+  }
 }
 
 u32 CRadeon::config_read_custom(int func, u32 address, int dsize, u32 data) {

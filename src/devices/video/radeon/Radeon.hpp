@@ -41,6 +41,9 @@
  *                      the 3D engine (CRadeon3D, Radeon3D.hpp): vertex
  *                      fetch and the 3D packets, TCL, rasteriser and
  *                      pixel pipeline
+ *   RadeonSelfTest.cpp ALPHABOX_RADEON_SELFTEST: the engines driven
+ *                      through the registers and the CP, checked
+ *                      against software references
  *
  * Every register the card has is kept in one 64 KB register file and
  * reads back what was written, unless this model gives it a meaning:
@@ -182,6 +185,10 @@ protected:
   void cp_packet3(u8 op, const std::vector<u32> &payload);
   /// A type-3 packet for the 3D engine; false when it is not one.
   bool r3d_packet3(u8 op, const std::vector<u32> &payload);
+
+  // --- the self-test (RadeonSelfTest.cpp) -----------------------------------
+  /// ALPHABOX_RADEON_SELFTEST: true when every check passed.
+  bool selftest();
 
   // --- display (RadeonDisplay.cpp) -------------------------------------------
   bool native_crtc_active() const override;
