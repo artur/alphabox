@@ -1112,8 +1112,18 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                                                             : 0u;
       const int size_bits = (fmt == 1 || fmt == 2) ? 32 : 64;
       const uint32_t descr = (fmt << 16) | (uint32_t)size_bits;
-      if (isload && fa == 31)
-        continue; // LDT/LDS f31: interp skips the read (NOP)
+      if (isload && fa == 31) {
+        // LDT/LDS f31 reads nothing, but it is still an FP instruction to
+        // the interpreter (FPSTART): FP disabled takes the FEN trap there,
+        // and otherwise EXC_SUM is cleared.
+        Label fok = a.new_label();
+        a.ldrb(w11, fld(m_off.fpen, 0));
+        a.cbnz(w11, fok);
+        bail(i); // the interpreter takes the trap
+        a.bind(fok);
+        a.str(a64::xzr, fld(m_off.exc_sum, 3));
+        continue;
+      }
 #ifndef JIT_VERIFY
       if (m_cold_pass) { // only the raw LDT/STT inline path records; x2 = va
         a.bind(Label(m_cold_slow[cold_idx]));

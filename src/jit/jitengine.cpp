@@ -2164,8 +2164,23 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       const uint32_t descr =
           (fmt << 16) | (uint32_t)size_bits; // fmt<<16 | size
 
-      if (isload && fa == 31)
-        continue; // LDT/LDS f31: interp skips the read (NOP)
+      if (isload && fa == 31) {
+        // LDT/LDS f31 reads nothing, but it is still an FP instruction to
+        // the interpreter (FPSTART): FP disabled takes the FEN trap there,
+        // and otherwise EXC_SUM is cleared.
+        Label fen = a.new_label(), fok = a.new_label();
+        a.cmp(x86::byte_ptr(x86::rbp, m_off.fpen), imm(0));
+        a.je(fen);
+        a.mov(x86::qword_ptr(x86::rbp, m_off.exc_sum), imm(0));
+        a.jmp(fok);
+        a.bind(fen);
+        set_pc(b->tag + 4 * (uint64_t)i); // the interpreter takes the trap
+        a.mov(x86::eax, imm(i));
+        a.add(x86::eax, x86::dword_ptr(x86::rsp, 40));
+        a.jmp(done);
+        a.bind(fok);
+        continue;
+      }
 
       if (rb == 31)
         a.mov(x86::rdx, imm(disp)); // va -> RDX (preserved for helper)
@@ -4396,12 +4411,14 @@ void *CJitEngine::code_alloc(size_t bytes) {
 #ifdef JIT_VERIFY
 uint64_t CJitEngine::verify_compare(uint64_t blk_virt, const uint64_t *interp,
                                     const uint64_t *jit, const uint32_t *words,
-                                    uint32_t nwords) {
+                                    uint32_t nwords, bool other_mismatch) {
   m_v_exec++;
+  bool gpr_mismatch = false;
   for (int r = 0; r < 63; ++r) { // r0..r30 main bank + r32..r62 PALshadow bank
     if (r == 31)
       continue; // zero register
     if (interp[r] != jit[r]) {
+      gpr_mismatch = true;
       m_v_fail++;
       printf("[JIT][VERIFY] MISMATCH at block pc=%016llx: r%d interp=%016llx "
              "jit=%016llx\n",
@@ -4414,6 +4431,17 @@ uint64_t CJitEngine::verify_compare(uint64_t blk_virt, const uint64_t *interp,
       printf("\n");
       break;
     }
+  }
+  if (other_mismatch && !gpr_mismatch) {
+    // A store, the PC, an IPR or an FP register differed (printed by the
+    // dispatcher above this line): a mismatch as much as a GPR is.
+    m_v_fail++;
+    printf("[JIT][VERIFY] MISMATCH at block pc=%016llx: not in the GPRs "
+           "(see the lines above)\n   words:",
+           (unsigned long long)blk_virt);
+    for (uint32_t w = 0; w < nwords && w < 64; ++w)
+      printf(" %08x", words[w]);
+    printf("\n");
   }
   if ((m_v_exec % 500000) == 0) {
     const auto t0 = std::chrono::steady_clock::now(); // exclude this print's

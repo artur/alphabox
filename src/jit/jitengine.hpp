@@ -851,7 +851,7 @@ public:
   // wall-clock-pinned RPCC (same Heisenberg fix as note_exec).
   uint64_t verify_compare(uint64_t blk_virt, const uint64_t *interp,
                           const uint64_t *jit, const uint32_t *words,
-                          uint32_t nwords);
+                          uint32_t nwords, bool other_mismatch = false);
   void trace_selftest(); // M0: unit-test trace_ok's source-coherence
                          // (SMC/IMB/ITB-remap/head-remap)
 #endif

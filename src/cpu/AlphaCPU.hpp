@@ -1036,6 +1036,10 @@ public:
   // compiled pass compares against it (stores touch memory, not GPRs, so the
   // GPR check can't see them).
   u32 m_jit_slog_i = 0;       // store-compare cursor
+  // Set by any difference the GPR compare cannot see -- a store, an STx_C,
+  // the PC, an IPR, an FP register, the store count -- so verify_compare
+  // counts the block as a mismatch too.
+  bool m_jit_vbad = false;
   u64 m_jit_slog_addr[64];    // store addresses the interpreter pass wrote
   u64 m_jit_slog_val[64];     // store values the interpreter pass wrote
   u64 m_jit_slog_success[64]; // STx_C outcome (1/0) the interp pass got; 1 for
