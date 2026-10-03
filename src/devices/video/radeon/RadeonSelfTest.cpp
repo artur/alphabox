@@ -272,6 +272,11 @@ bool CRadeon::selftest() {
   // The command FIFO, the CP without and with microcode, the GART
   // (RadeonSelfTestQueue.cpp); leaves the CP running with microcode.
   selftest_queue(report);
+  // The microcode lookups (RadeonMicrocode.cpp); the queue's image is a
+  // pattern, unknown and accepted.
+  selftest_microcode(*m_chip, report);
+  report("microcode: the self-test's pattern image, unknown, runs the CP",
+         cp_microcode_ok() && !m_ucode.known && !m_ucode.wrong_width, "");
 
   // The command processor's ring in VRAM, 64K dwords.
   const u32 RING = 0x800000, IB = 0x880000, SCRATCH = 0x8f0000;

@@ -377,6 +377,9 @@ int CRadeon::restore_card_state(FILE *f) {
   } else {
     m_me_loaded = loaded != 0;
   }
+  m_ucode = m_me_loaded
+                ? identify_microcode(m_me_ram, m_chip->me_ram_entries, *m_chip)
+                : MicrocodeId();
   return 0;
 }
 

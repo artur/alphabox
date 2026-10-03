@@ -91,6 +91,9 @@ public:
   const radeon::ChipInfo &chip() const;
   /// The device's name for messages.
   const char *devid() const;
+  /// Whether the loaded CP microcode handles type-3 `op`: 1 yes, 0 it
+  /// skips it as a NOP, -1 not known (radeon::microcode_packet).
+  int cp_microcode_packet(u8 op) const;
 
 private:
   CRadeon &c;

@@ -60,7 +60,8 @@
  * the model keeps of the micro-engine is that without microcode there is
  * no CP: until a complete image has been loaded (every entry written, not
  * all zero) neither the ring nor the PIO queue is read, and the read
- * pointer stays where it is. The image is kept and reads back.
+ * pointer stays where it is. The image is kept and reads back; a known
+ * image's packet set is used (RadeonMicrocode.cpp, docs/radeon-microcode.md).
  *
  * Memory the CP reads is addressed in the memory controller's space
  * (RadeonGart.cpp): the framebuffer, the AGP window or the PCI GART.
@@ -392,9 +393,9 @@ bool CRadeon::cp_reg_write(u32 reg, u32 data) {
     m_me_written[m_me_index >> 5] |= 1u << (m_me_index & 31);
     m_me_index = (m_me_index + 1) % m_chip->me_ram_entries;
     // A complete image: every entry loaded, and not all of them zero.
-    // The R100 microcode is a firmware blob (Linux radeon/R100_cp.bin);
-    // nothing in the sources identifies it by content, so any complete
-    // load is taken [inference]. Its CRC is printed to tell images apart.
+    // Any complete load is taken [inference]; the known images are
+    // identified by CRC, and what they say about the packets is used
+    // (RadeonMicrocode.cpp). Identified again when a load ends.
     bool all = true, any = false;
     for (u32 i = 0; i < m_chip->me_ram_entries; i++) {
       all = all && ((m_me_written[i >> 5] >> (i & 31)) & 1);
@@ -402,18 +403,13 @@ bool CRadeon::cp_reg_write(u32 reg, u32 data) {
     }
     const bool was = m_me_loaded;
     m_me_loaded = all && any;
-    if (m_me_loaded && !was) {
-      u32 crc = 0xffffffffu;
-      for (u32 i = 0; i < m_chip->me_ram_entries; i++)
-        for (int k = 0; k < 2; k++)
-          for (int b = 0; b < 32; b += 8) {
-            crc ^= (m_me_ram[i][k] >> b) & 0xff;
-            for (int j = 0; j < 8; j++)
-              crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
-          }
-      printf("%s: CP microcode loaded, %u entries, CRC-32 %08x\n", devid_string,
-             m_chip->me_ram_entries, ~crc);
-      engine_kick();
+    if (m_me_loaded && (!was || m_me_index == 0)) {
+      const u32 n = m_chip->me_ram_entries;
+      m_ucode = identify_microcode(m_me_ram, n, *m_chip);
+      log_microcode(m_ucode, *m_chip, n, devid_string);
+      dump_microcode(m_me_ram, n, devid_string);
+      if (!was)
+        engine_kick();
     }
     return true;
   }
@@ -659,6 +655,16 @@ void CRadeon::cp_packet3(u8 op, const std::vector<u32> &d) {
     for (size_t i = 0; i < d.size() && i < 12; i++)
       printf(" %08x", d[i]);
     printf("%s\n", d.size() > 12 ? " ..." : "");
+  }
+  if (cp_microcode_packet(op) == 0) {
+    // the image's dispatch table sends it to NOP's handler: skipped
+    if (!m_cp_unknown_seen[op]) {
+      m_cp_unknown_seen[op] = true;
+      printf("%s: CP operation %02x: the %s microcode has no handler for "
+             "it, skipped as a NOP\n",
+             devid_string, op, m_ucode.known->name);
+    }
+    return;
   }
   auto s16 = [](u32 v) { return int(int16_t(v & 0xffff)); };
   // A rectangle filled with the current settings.

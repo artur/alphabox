@@ -46,6 +46,8 @@ src/devices/video/radeon/       the family's common code
   RadeonChip.hpp, RadeonChips.cpp
                                 the chip rows (radeon::ChipInfo) and the
                                 generations (radeon::Generation)
+  RadeonMicrocode.hpp/.cpp      the known CP microcode images of every
+                                generation, by CRC, and their packet sets
   RadeonEngine3D.hpp            CRadeonEngine3D (a generation's 3D engine, as
                                 the common code calls it), CRadeonEngineBus
                                 (the card, as an engine reaches it)
@@ -80,7 +82,9 @@ How the pieces meet:
 - **The chip row** (`RadeonChips.cpp`) is everything common code may ask
   about a part: PCI device and subsystem IDs, command FIFO depth, PIO
   queue depth, ME RAM size, the clocks, whether its microcode has the
-  R200 packets -- and its **generation**. The `radeon` class's `chip` key
+  R200 packets, the CP microcode family a driver loads on it
+  (`cp_microcode`, which `RadeonMicrocode.cpp`'s known-image rows are
+  matched against) -- and its **generation**. The `radeon` class's `chip` key
   names the row (`"rv200"`, the default); `model` (`agp`/`pci`) picks the
   board's subsystem ID within it.
 - **The generation** (`radeon::Generation`, defined in its directory:
@@ -126,7 +130,11 @@ with its facts and the generation's `Generation`; its name becomes a
    `extern` beside `gen_r100` in `RadeonChips.cpp`.
 5. The rows: device and subsystem IDs, FIFO and PIO depths, ME RAM size,
    clocks, `r200_cp_packets = true` for parts whose microcode has the R200
-   packets, `&gen_r200`.
+   packets, `cp_microcode = "R200"`, `&gen_r200`. The generation's
+   microcode images go into `RadeonMicrocode.cpp`'s table (CRC, word
+   width, dispatch-table packet set; [radeon-microcode.md](radeon-microcode.md)
+   and `test/tools/radeon_me_dis.py --table` give them) -- the R200's and
+   R300's are already there.
 6. Its self-test scenes: `selftest_scenes()` in `r200/RadeonR200SelfTest.cpp`,
    using `radeon::SelfTest` and the helpers in `RadeonSelfTest.hpp`; the
    common checks run before and after them.
@@ -208,11 +216,16 @@ the packets are interpreted natively, but there is no CP without
 microcode -- until every one of the 256 ME RAM entries has been loaded
 (`CP_ME_RAM_ADDR`, then `DATAH` (8 bits) / `DATAL` pairs, R5xx guide
 5.12) with something other than zeros, neither the ring nor the PIO
-queue is read and the read pointer stays put. No source identifies the
-R100 microcode by content (Linux loads it from a firmware file,
-`radeon/R100_cp.bin`), so any complete image is taken; its CRC-32 is
-printed (OpenVMS 8.4's DECwindows server loads one with CRC-32
-`b86caa2a`). The image is in the state file. Packets: type-0
+queue is read and the read pointer stays put. Any complete image is
+taken; its CRC-32 is looked up in the table of every CP microcode image
+the open sources published (`RadeonMicrocode.cpp`,
+[radeon-microcode.md](radeon-microcode.md)) and its name printed, or
+"unknown microcode". OpenVMS 8.4's DECwindows server loads `b86caa2a`,
+ATI's R100 image -- the one Linux loads from `radeon/R100_cp.bin`, which
+never changed from its first publication in 2001. A known image's
+dispatch table says which type-3 packets it handles: one it sends to
+NOP's handler is skipped. An image for another generation is accepted
+with a warning (`%RADEON-W-UCODE`). The image is in the state file. Packets: type-0
 (consecutive and one-register), type-1 and type-2; the type-3 2D
 packets PAINT, PAINT_MULTI, BITBLT, BITBLT_MULTI, TRANS_BITBLT,
 HOSTDATA_BLT, POLYLINE, POLYSCANLINES, NEXTCHAR, PLY_NEXTSCAN,
@@ -221,8 +234,10 @@ SET_SCISSORS (with the settings block, every brush packet,
 scaler, which is not modelled); the 3D packets below. The R200
 microcode's packets -- the `_2` draws, `3D_CLEAR_HIZ`, `INDX_BUFFER` --
 do nothing on the RV200: the legacy DRM refuses them unless the R200
-microcode is loaded ("safe but r200 only", `radeon_state.c`); they are
-implemented for a part whose row says so.
+microcode is loaded ("safe but r200 only", `radeon_state.c`), and the
+R100 image's dispatch table has no handler for them; they are
+implemented for a part whose row says so, or when the R200 image is
+loaded.
 
 **The memory controller's view of the bus** (`RadeonGart.cpp`): an
 address the CP or the 3D engine fetches is the framebuffer
@@ -368,15 +383,18 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 64 checks: 11 on the command FIFO, the engine's busy time,
+or `FAIL`. 68 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
-(`RadeonSelfTestQueue.cpp`), 26 on the 2D engine, the CP and the cursor,
+(`RadeonSelfTestQueue.cpp`), 4 on the microcode lookups (the known-image
+table, synthetic images of each word width, the R100 and R200 packet
+sets, the self-test's own unknown image; `RadeonMicrocode.cpp`), 26 on
+the 2D engine, the CP and the cursor,
 26 on the 3D engine (the generation's scenes, run between the 2D checks
 and the last two 2D/CP ones), and one that every wait for idle ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (54 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+the queue checks are left out (58 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 

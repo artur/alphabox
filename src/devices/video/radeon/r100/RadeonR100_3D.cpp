@@ -416,7 +416,8 @@ bool CRadeonR100_3D::packet3(u8 op, const std::vector<u32> &d) {
   case OP_3D_DRAW_INDX_2:
   case OP_3D_CLEAR_HIZ:
   case OP_INDX_BUFFER:
-    if (!c.chip().r200_cp_packets && !m_r200_packets) {
+    if (!c.chip().r200_cp_packets && !m_r200_packets &&
+        c.cp_microcode_packet(op) != 1) {
       warn_once(3, "an R200 microcode packet (_2 draw, CLEAR_HIZ, "
                    "INDX_BUFFER), which the R100 microcode does not have: "
                    "ignored");
@@ -472,7 +473,8 @@ bool CRadeonR100_3D::packet3(u8 op, const std::vector<u32> &d) {
     // with no indices in the packet, an INDX_BUFFER supplies them (R5xx
     // Acceleration 6.2.3.11), where the microcode has it
     if (d.size() == at && (cntl >> 16) &&
-        (c.chip().r200_cp_packets || m_r200_packets)) {
+        (c.chip().r200_cp_packets || m_r200_packets ||
+         c.cp_microcode_packet(OP_INDX_BUFFER) == 1)) {
       m_indx_pending = true;
       m_indx_fmt = fmt;
       m_indx_cntl = cntl;

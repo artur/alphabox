@@ -77,6 +77,9 @@ struct ChipInfo {
   /// The CP microcode the part loads has the R200's packets (the _2
   /// draws, 3D_CLEAR_HIZ, INDX_BUFFER).
   bool r200_cp_packets;
+  /// The CP microcode a driver loads on the part, by family (Linux's
+  /// <family>_cp.bin; RadeonMicrocode.cpp).
+  const char *cp_microcode;
 };
 
 /// The row for a part by name (nullptr if there is none).

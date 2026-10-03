@@ -91,6 +91,7 @@
 
 #include "RadeonChip.hpp"
 #include "RadeonEngine3D.hpp"
+#include "RadeonMicrocode.hpp"
 #include "RadeonRegs.hpp"
 #include "VGACard.hpp"
 #include "i2c_spd.hpp"
@@ -304,6 +305,10 @@ protected:
   bool cp_indirect_bm() const;
   /// The micro-engine holds a complete microcode image.
   bool cp_microcode_ok() const { return m_me_loaded; }
+  /// Whether the loaded image handles type-3 `op` (radeon::microcode_packet)
+  int cp_microcode_packet(u8 op) const {
+    return radeon::microcode_packet(m_ucode, op);
+  }
   /// The ring has dwords the CP will read (enabled, microcode loaded).
   bool cp_ring_has_work() const;
   /// The ring has unread dwords at all (CP_CMDSTRM busy).
@@ -394,6 +399,7 @@ protected:
   u32 m_me_index = 0;
   u32 m_me_written[8] = {}; ///< which entries a driver has loaded
   bool m_me_loaded = false;
+  radeon::MicrocodeId m_ucode; ///< what the loaded image is
   bool m_cp_warned_noucode = false, m_cp_warned_ib = false,
        m_cp_warned_pio = false;
   u32 m_rptr_since_wb = 0; ///< dwords read since the last write-back
@@ -451,5 +457,8 @@ inline const radeon::ChipInfo &CRadeonEngineBus::chip() const {
   return *c.m_chip;
 }
 inline const char *CRadeonEngineBus::devid() const { return c.devid_string; }
+inline int CRadeonEngineBus::cp_microcode_packet(u8 op) const {
+  return c.cp_microcode_packet(op);
+}
 
 #endif // !defined(INCLUDED_RADEON_H)
