@@ -68,10 +68,7 @@ file(GLOB srcs
     src/devices/video/radeon/r100/*.cpp
     src/devices/net/*.cpp
     src/devices/usb/*.cpp
-    src/base/*.cpp
     src/gui/*.cpp)
-file(GLOB include_sources src/base/*WIN32.cpp src/base/*POSIX.cpp)
-list(REMOVE_ITEM srcs ${include_sources})
 # Cirrus is not ported to the MAME-derived VGA core (disabled upstream too)
 list(REMOVE_ITEM srcs ${CMAKE_SOURCE_DIR}/src/devices/video/Cirrus.cpp)
 
@@ -95,7 +92,7 @@ target_include_directories(alphabox PRIVATE
     src/devices/video/virge src/devices/video/tga src/devices/video/radeon
     src/devices/video/radeon/r100
     src/devices/net src/devices/usb
-    src/base src/gui ${CMAKE_BINARY_DIR}/src)
+    src/gui ${CMAKE_BINARY_DIR}/src)
 
 if (NOT ES40_DISABLE_ASMJIT)
     if (NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/asmjit/CMakeLists.txt)

@@ -378,7 +378,7 @@ interpreter boots to login on two processors with no options
 - An unknown register access is traced and reported, never given a
   convenient value to make the firmware proceed. A value chosen to satisfy
   the firmware is marked as such, in the code and in **Findings**.
-- Threading uses `std::` facilities; `src/base/` is off limits.
+- Threading uses `std::` facilities, never Poco-style wrappers.
 - Format changed lines with the repository's `.clang-format`.
 - Report the highest acceptance level actually reached, with the command
   output that shows it.

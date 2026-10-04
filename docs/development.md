@@ -16,9 +16,9 @@
 | `test/` | firmware regression data and the test tools |
 | `docs/` | this documentation |
 
-New code uses `std::thread`/`std::mutex`/`std::chrono`, not the inherited
-Poco-style wrappers in `src/base/`. Format changed lines with the repository's
-`.clang-format` (`git clang-format`).
+Threading uses `std::thread`/`std::mutex`/`std::chrono`; the Poco-style
+wrappers inherited from es40 are gone and stay gone. Format changed lines
+with the repository's `.clang-format` (`git clang-format`).
 
 ## Test tools
 

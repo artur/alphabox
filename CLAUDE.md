@@ -136,8 +136,7 @@ Titan share (DMA windows; the DIMM model, reached as `CChipset::dimms()`);
 | `devices/usb/` | devices on the emulated USB, behind the OHCI controllers (`COhci` in `AliM1543C_usb`) and the EHCI card: `UsbDevice` (endpoint 0, chapter 9 requests; `CUsbPort`, a root hub port that owns its device), `UsbTablet` (absolute HID pointer), `UsbKeyboard` (a HID boot keyboard, `port<n> = "keyboard"`: the GUI's keys through `gui_guest_key`, the only keyboard of a machine without an 8042), `UsbStorage` (Bulk-Only mass storage around a `CDisk`, declared as `disk<port>.0`), `UsbAudio` (a USB Audio Class 1.0 speaker, `port<n> = "audio"`: isochronous OUT, SDL output, `ALPHABOX_USBAUDIO_WAV` capture), `UsbHostDevice` (a host device passed through with libusb, `port<n> = "host:vvvv:pppp"`; optional, `HAVE_LIBUSB`), `UsbAsyncShim` (test harness: an emulated device with libusb-like timing, isochronous included); user guide in `docs/usb.md` |
 | `devices/net/` | `Ethernet`, `NicAddress` (shared station-address default), `NetworkBackend` and its backends `NetworkPcap`, `NetworkTap`, `NetworkUdp`, `NetworkNull` |
 | `gui/` | `bx_gui` backends; SDL3 (`sdl.cpp`) is the maintained one |
-| `base/` | inherited Poco-style wrappers — do NOT use in new code |
-| `common/` | `StdAfx`, `datatypes`, `es40_debug`, `es40_endian`, `config_debug`, `banner`, `telnet`, `lockstep` |
+| `common/` | `StdAfx`, `datatypes`, `es40_debug` (+ `Exception`, what its `FAILURE()` throws), `es40_endian`, `config_debug`, `banner`, `telnet`, `lockstep`, `WakeSemaphore` (a device thread's wake-up) |
 | `src/*` | entry points `Main.cpp`, `AlphaSim.cpp`, `es40-cfg.cpp` (+ its `*Question.hpp`), and `config.hpp.in` |
 
 Headers are included unqualified (`#include "System.hpp"`) — every source
@@ -213,10 +212,12 @@ sample `es40.cfg` at the repo root documents every value.
 
 Threading: each active device runs a `std::thread` (`myThread`, lambda
 calling `run()`, `std::atomic_bool myThreadDead` checked by
-`check_state()`). `src/base/` contains inherited Poco-style wrappers
-(CMutex, CSemaphore, ...) still used by old code — do NOT use them in new
-or newly ported code; use `std::mutex`/`std::thread`/`std::chrono`
-equivalents (hard project rule).
+`check_state()`). The Poco-style wrappers inherited from es40 (`src/base/`:
+CMutex, CSemaphore, CThread, ...) were removed in October 2026 -- do not
+bring them back with ported code; use `std::mutex`/`std::thread`/
+`std::chrono`/`std::condition_variable` (hard project rule). A lock or wait
+never times out into a failure: a host that sleeps, or a stopped process,
+must make the emulator late, not dead.
 
 ## Other machines
 

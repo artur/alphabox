@@ -220,13 +220,14 @@ inline char printable(char c) {
 #include <thread>
 #include <typeinfo>
 
-#define POCO_NO_UNWINDOWS
+#include <cstdio>
+#include <string>
 
-#include "base/Mutex.hpp"
-#include "base/RWLock.hpp"
-#include "base/Semaphore.hpp"
-#include "base/Timestamp.hpp"
+#if defined(_MSC_VER)
+#pragma warning(disable : 4996) // VC++ 8.0 deprecation warnings
+#endif
 
+#include "Exception.hpp"
 #include "es40_debug.hpp"
 
 #include "es40_endian.hpp"

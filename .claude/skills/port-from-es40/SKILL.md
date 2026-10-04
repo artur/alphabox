@@ -139,8 +139,9 @@ Pick the strategy:
 ## Step 3 — alphabox invariants (apply to every ported line)
 
 1. **No Poco-style wrappers in new code.** Upstream uses `CThread`,
-   `CMutex`, `CSemaphore`, `SCOPED_M_LOCK`, `CRunnable` (from
-   `src/base/`). New/ported code must use `std::` equivalents:
+   `CMutex`, `CSemaphore`, `SCOPED_M_LOCK`, `CRunnable` (from its
+   `src/base/`, which alphabox no longer has). Ported code must use
+   `std::` equivalents:
    - `CThread::sleep(ms)` → `std::this_thread::sleep_for(std::chrono::milliseconds(ms))`
    - `CThread* myThread` → `std::unique_ptr<std::thread> myThread;`
      started as `myThread = std::make_unique<std::thread>([this]() { this->run(); });`
@@ -151,8 +152,11 @@ Pick the strategy:
      `std::lock_guard<std::recursive_mutex> lock(m);` (upstream CMutex
      IS recursive — keep recursive semantics unless you can prove
      no re-entry). `#include <mutex>` in the header.
-   - Pre-existing `CMutex`/`CSemaphore` uses already in alphabox
-     (e.g. Sym53C810, the CPU semaphore) may stay — do not churn them.
+   - `CSemaphore(0, 1)` as a thread's wake-up → `WakeSemaphore`
+     (`src/common/WakeSemaphore.hpp`: `set()`, `wait()`,
+     `try_wait_for(ms)`; saturates at 1 like the CSemaphore did).
+   - Never a lock or wait whose timeout throws: a host sleep or SIGSTOP
+     must not kill the emulator (the old CMutex did, after 5 s).
 2. **Preserve the alphabox-only bug fixes** when replacing CPU/JIT code:
    - `execute()` advances the PC with `next_pc()`, never bare
      `state.pc += 4` (keeps `pc_phys`/`rem_ins_in_page` in sync).

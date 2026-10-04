@@ -72,7 +72,7 @@ worth keeping afterwards.
   the firmware is marked as such, in the code and in **Findings**.
 - New device families get their own directory, split by concern, in the
   style of `devices/pci/sym53c8xx/` and `devices/pci/i8255x/`.
-- Threading uses `std::` facilities; `src/base/` is off limits.
+- Threading uses `std::` facilities, never Poco-style wrappers.
 - Format changed lines with the repository's `.clang-format`.
 - Report the highest acceptance level actually reached, with the command
   output that shows it. Never report a level you did not run.
