@@ -14,6 +14,13 @@
   [DS20E](platforms/ds20e.md)).
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
+- [OpenVMS](openvms.md): installing and running OpenVMS 8.4, DECwindows.
+- [The ATI Radeon 7500](radeon.md): what the model covers, how it is
+  checked, and how a Radeon generation is added; its command processor's
+  [microcode](radeon-microcode.md).
+- [Guest drivers](guest-drivers.md): the Windows drivers written with nada
+  for hardware no Alpha Windows had a driver for (USB 2.0, virtio, the
+  Radeon 7500 with Direct3D).
 - [USB](usb.md): the built-in OHCI and the EHCI card, the tablet, USB
   disks, host passthrough, and the hooks for testing a guest's USB driver.
 - [Paravirtual devices](virtio.md): virtio-blk and virtio-net (legacy
