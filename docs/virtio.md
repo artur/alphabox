@@ -52,8 +52,8 @@ pci0.4 = virtio_net
 }
 ```
 
-Any free slot works (the ES40's `pci0.3`-`pci0.6`, `pci1.x`, or behind a
-bridge). The `virtio_blk` takes exactly one disk, `disk0.0`. The
+Any free slot works (on the ES40 `pci0.1`-`pci0.4` and `pci1.1`-`pci1.6`,
+or behind a bridge). The `virtio_blk` takes exactly one disk, `disk0.0`. The
 `virtio_net` reads `mac` and the backend keys (`type`, `adapter`,
 `udp_local`, `udp_remote`, `host_ip`, `bridge`, `uplink`, `tap_create`); see
 the NIC section of the sample `es40.cfg`.

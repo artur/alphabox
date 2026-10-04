@@ -70,7 +70,11 @@ sys0 = tsunami {
 }
 ```
 
-- `es40` (the default): the AlphaServer ES40.
+- `es40` (the default): the AlphaServer ES40. Its ten PCI slots are
+  `pci0.1`-`pci0.4` and `pci1.1`-`pci1.6`; the M1543C's functions sit at
+  `pci0.7`, `pci0.15`, `pci0.17` and `pci0.19`, and any other place is
+  refused (Windows 2000's HAL routes no interrupt to one: a driver
+  starting on `pci0.5` stops it with 0xA5). A bridge in a slot adds more.
 - `ds20e`: the AlphaServer DS20E, under construction.
 - `ds10`: the AlphaServer DS10, started; its console does not reach the
   prompt yet.

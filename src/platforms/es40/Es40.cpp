@@ -43,21 +43,31 @@ int es40_pci_interrupt(int hose, int slot, int intx, int func) {
 }
 
 /**
- * ES40 slots: hose 0 device 0 is the bridge's own place, and 7, 15, 17 and
- * 19 hold the M1543C's functions. Firmware that meets an add-in device
- * there fails in obscure ways (SCSI disks going missing, device conflicts),
- * so the configuration is refused instead.
+ * ES40 slots: ten, four on hose 0 (devices 1 to 4) and six on hose 1
+ * (devices 1 to 6), as the sample es40.cfg has always said and the only
+ * slots `alphabox configure` offers. Hose 0 device 0 is the bridge's own
+ * place, and 7, 15, 17 and 19 hold the M1543C's functions. The wiring
+ * above gives each hose 16 inputs, four slots' worth from device 1, so
+ * hose 0 devices 5 and 6 would share hose 1 devices 1 and 2's lines. The
+ * console writes (device + 1) * 4 + 16 * hose into any card it finds,
+ * wherever it is (DE500s at hose 0 devices 1-14 and hose 1 devices 0-11
+ * all got a line, lab/serial-slot), so it does not object -- but hose 0
+ * device 5 gets 0x18, hose 1 device 1's. Windows 2000's HAL
+ * routes only the real slots: it stops with 0xA5 (0x10003, PDO, 5, ...)
+ * when a driver starts on hose 0 device 5, and the same driver on device 3
+ * runs (lab/driver-release-test/slot5). Firmware that meets a device on the
+ * M1543C's places fails in obscure ways (SCSI disks going missing, device
+ * conflicts). So everything else is refused.
  */
 const char *es40_slot_refusal(int hose, int slot) {
-  if (hose != 0)
+  if (hose == 0 && (slot == 7 || slot == 15 || slot == 17 || slot == 19))
+    return "that PCI slot is reserved for a system-internal device. The "
+           "ES40's PCI slots are pci0.1 to pci0.4 and pci1.1 to pci1.6";
+  if ((hose == 0 && slot >= 1 && slot <= 4) ||
+      (hose == 1 && slot >= 1 && slot <= 6))
     return nullptr;
-  if (slot == 0)
-    return "PCI slot pci0.0 is reserved and cannot be used for add-in "
-           "devices. Use pci0.1 through pci0.4";
-  if (slot == 7 || slot == 15 || slot == 17 || slot == 19)
-    return "that PCI slot is reserved for a system-internal device. Use "
-           "pci0.1 through pci0.4 for add-in devices";
-  return nullptr;
+  return "the ES40 has no such PCI slot. Its PCI slots are pci0.1 to "
+         "pci0.4 and pci1.1 to pci1.6 (a bridge in one of them adds more)";
 }
 
 /**
