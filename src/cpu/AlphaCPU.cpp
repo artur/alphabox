@@ -74,13 +74,7 @@
 #endif
 #endif
 
-void CAlphaCPU::release_threads() {
-  try {
-    mySemaphore.set();
-  } catch (const std::overflow_error &) {
-    // Already signaled, nothing to do
-  }
-}
+void CAlphaCPU::release_threads() { mySemaphore.set(); }
 
 thread_local CAlphaCPU *t_running_cpu = nullptr;
 
@@ -396,7 +390,7 @@ uint64_t CAlphaCPU::hv_run_loop(void *self) {
  * Constructor.
  **/
 CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
-    : CSystemComponent(cfg, system), mySemaphore(0, 1) {
+    : CSystemComponent(cfg, system) {
 #ifdef ALPHABOX_HVF
   // Under ALPHABOX_HV=1 the compiled code lives in the VM allocator's
   // memory, which our stage-1 entries mark executable INSIDE the VM and
@@ -820,7 +814,7 @@ void CAlphaCPU::ResetForSystemReset() {
 
 void CAlphaCPU::start_threads() {
   char buffer[5];
-  mySemaphore.tryWait(1);
+  mySemaphore.try_wait_for(std::chrono::milliseconds(1));
   if (!myThread) {
     sprintf(buffer, "cpu%d", state.iProcNum);
     printf(" %s", buffer);
@@ -840,7 +834,7 @@ void CAlphaCPU::stop_threads() {
     myThread = nullptr;
   }
 
-  mySemaphore.tryWait(1);
+  mySemaphore.try_wait_for(std::chrono::milliseconds(1));
 }
 
 // ============================================================================

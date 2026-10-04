@@ -46,7 +46,7 @@
 #include "Ethernet.hpp"
 #include "NetworkBackend.hpp"
 #include "PCIDevice.hpp"
-#include "base/Semaphore.hpp"
+#include "WakeSemaphore.hpp"
 
 /**
  * \brief How a part hands the driver the station address.
@@ -168,7 +168,7 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   bool StopThread;
-  CSemaphore mySemaphore;
+  WakeSemaphore mySemaphore;
   /** serializes NIC thread vs CPU-thread CSR access (recursive: nic_read /
    * nic_write paths may re-enter through the interrupt plumbing) */
 

@@ -83,11 +83,8 @@ void CIdeController::init() {
   // start controller threads
   StopThread = false;
 
-  for (int i = 0; i < 2; i++) {
-    semController[i] = new CSemaphore(0, 1); // disk controller
-    semBusMaster[i] = new CSemaphore(0, 1);  // bus master
+  for (int i = 0; i < 2; i++)
     thrController[i] = nullptr;
-  }
 
   printf("%%IDE-I-INIT: New IDE emulator initialized.\n");
 }
@@ -110,7 +107,7 @@ void CIdeController::stop_threads() {
   for (int i = 0; i < 2; i++) {
     if (thrController[i]) {
       printf(" ide%d", i);
-      semController[i]->set();
+      semController[i].set();
       thrController[i]->join();
       thrController[i] = nullptr;
     }
@@ -860,7 +857,7 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
       if (g_idetrace)
         printf("IDET %10.1f ch%d BM start %02x\n", idetrace_ms(), index,
                (unsigned)data);
-      semBusMaster[index]->set(); // wake up the controller for busmastering
+      semBusMaster[index].set(); // wake up the controller for busmastering
     } else {
 
       // clear the status register
@@ -2378,7 +2375,7 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   u8 count = 0;
   u32 prd;
   work_done[index].store(work_queued[index].load()); // parked on the guest
-  semBusMaster[index]->wait(); // wait until the start bit is set.
+  semBusMaster[index].wait(); // wait until the start bit is set.
   {
     SCOPED_READ_LOCK(mtBusMaster[index]);
     prd = endian_32(*(u32 *)(&CONTROLLER(index).busmaster[4]));
@@ -2517,7 +2514,7 @@ u64 CIdeController::media_time_us(int index) {
  **/
 void CIdeController::wake_controller(int index) {
   work_queued[index].fetch_add(1);
-  semController[index]->set();
+  semController[index].set();
 }
 
 /**
@@ -2542,7 +2539,7 @@ void CIdeController::sync_controller(int index) {
 void CIdeController::run(int index) {
   try {
     for (;;) {
-      semController[index]->wait();
+      semController[index].wait();
       if (StopThread)
         return;
       const u64 queued = work_queued[index].load();

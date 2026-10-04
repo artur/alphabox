@@ -53,6 +53,7 @@
 #include "SCSIBus.hpp"
 #include "SCSIDevice.hpp"
 
+#include "WakeSemaphore.hpp"
 #include <shared_mutex>
 
 // Scoped reader/writer locks for the per-controller register state.
@@ -161,8 +162,8 @@ private:
   // finished (or parked on the guest for).
   std::atomic<u64> work_queued[2]{};
   std::atomic<u64> work_done[2]{};
-  CSemaphore *semController[2];     // controller start/stop
-  CSemaphore *semBusMaster[2];      // bus master start/stop
+  WakeSemaphore semController[2];   // controller start/stop
+  WakeSemaphore semBusMaster[2];    // bus master start/stop
   std::shared_mutex mtRegisters[2]; // main registers
   std::shared_mutex mtBusMaster[2]; // busmaster registers
   bool StopThread;

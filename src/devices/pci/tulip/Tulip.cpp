@@ -84,7 +84,7 @@ void CTulip::run() {
           state.irq_was_asserted = asserted;
       }
 
-      mySemaphore.tryWait(10);
+      mySemaphore.try_wait_for(std::chrono::milliseconds(10));
     }
   }
 
@@ -102,7 +102,7 @@ void CTulip::run() {
  **/
 CTulip::CTulip(CConfigurator *confg, CSystem *c, int pcibus, int pcidev,
                const tulip_chip_config &chip)
-    : CPCIDevice(confg, c, pcibus, pcidev), m_chip(chip), mySemaphore(0, 1) {}
+    : CPCIDevice(confg, c, pcibus, pcidev), m_chip(chip) {}
 
 /**
  * Initialize the network device.
@@ -151,7 +151,6 @@ void CTulip::start_threads() {
 void CTulip::stop_threads() {
   StopThread = true;
   if (myThread) {
-    mySemaphore.tryWait(0);
     mySemaphore.set();
     printf(" nic");
     myThread->join();
@@ -297,12 +296,10 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     /* CaVa interpretation... */
     state.reg[CSR_STATUS / 8] &= ~STATUS_TU;
     state.tx.suspend = false;
-    mySemaphore.tryWait(0);
     mySemaphore.set();
     break;
 
   case CSR_RXPOLL: /*  csr2  */
-    mySemaphore.tryWait(0);
     mySemaphore.set();
     break;
 
@@ -374,7 +371,6 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
         set_tx_state(STATUS_TS_SUSPENDED);
         /* transmitter running -> clear 'process stopped' */
         state.reg[CSR_STATUS / 8] &= ~STATUS_TPS;
-        mySemaphore.tryWait(0);
         mySemaphore.set();
       } else { // ST went low
         set_tx_state(STATUS_TS_STOPPED);
@@ -388,7 +384,6 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
       if (data & OPMODE_SR) { // SR went high
         set_rx_state(STATUS_RS_WAIT);
         state.reg[CSR_STATUS / 8] &= ~STATUS_RPS;
-        mySemaphore.tryWait(0);
         mySemaphore.set();
       } else { // SR went low
         /* BUGFIX: this must change the RX state, not TX */

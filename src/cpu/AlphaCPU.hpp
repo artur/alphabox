@@ -44,6 +44,7 @@
 #include "CpuModel.hpp"
 #include "System.hpp"
 #include "SystemComponent.hpp"
+#include "WakeSemaphore.hpp"
 #include "cpu_defs.hpp"
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
@@ -194,7 +195,7 @@ public:
 private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
-  CSemaphore mySemaphore;
+  WakeSemaphore mySemaphore;
   bool StopThread;
 
   int get_icache(u64 address, u32 *data);
