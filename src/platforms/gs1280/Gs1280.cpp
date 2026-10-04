@@ -37,6 +37,7 @@
 #include "StdAfx.hpp"
 
 #include "Boards.hpp"
+#include "Io7.hpp"
 #include "Topology.hpp"
 
 namespace {
@@ -48,12 +49,19 @@ void gs1280_coordinates(int index, u8 *ns, u8 *ew) {
 
 bool gs1280_has_io7(u32 pid) { return pid == 0; }
 
+/// I/O drawers are numbered apart from the 8P drawers, by the ID switch on
+/// their control panel: a real GS1280 lists its first as "I/O Drawer 1"
+/// (SRM Reference Manual, show config).
+u8 gs1280_io_drawer(u32) { return 1; }
+
 } // namespace
 
-/// System type 1: "GS1280" (build_dsrdb, 0x2dd8f0).
-/// The I/O backplane's revision is not known: 0.
-const marvel_layout gs1280_layout = {0x1, gs1280_coordinates, gs1280_has_io7,
-                                     0};
+/// System type 1: "GS1280" (build_dsrdb, 0x2dd8f0). The IO7 is a standard
+/// I/O drawer's riser: "3.3V PCI-X I/O", "Backplane rev 0", as a real
+/// GS1280's show config prints it (SRM Reference Manual).
+const marvel_layout gs1280_layout = {
+    0x1, gs1280_coordinates,    gs1280_has_io7,
+    0,   io7::kIoTypeStdDrawer, gs1280_io_drawer};
 
 void gs1280_board_devices(CConfigurator *cfg, CSystem *sys) {
   marvel_board_devices(cfg, sys);

@@ -56,14 +56,18 @@ void es47_coordinates(int index, u8 *ns, u8 *ew) {
 /// The drawer's one IO7, on PID 0's I/O port: PID 1 has "No Local I/O".
 bool es47_has_io7(u32 pid) { return pid == 0; }
 
+/// I/O Drawer 0: a real ES47's show config.
+u8 es47_io_drawer(u32) { return 0; }
+
 CMarvel *marvel_of(CSystem *sys) {
   return sys ? dynamic_cast<CMarvel *>(sys->chipset()) : nullptr;
 }
 
 } // namespace
 
-/// Backplane revision 2: a real ES47's show config.
-const marvel_layout es47_layout = {0x11, es47_coordinates, es47_has_io7, 2};
+/// Backplane revision 2, embedded I/O: a real ES47's show config.
+const marvel_layout es47_layout = {0x11, es47_coordinates,     es47_has_io7,
+                                   2,    io7::kIoTypeEmbedded, es47_io_drawer};
 
 /**
  * Every Marvel board: the CMMs answer every processor's GIO port (Cmm.hpp),
@@ -79,7 +83,8 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   const marvel_layout *layout = sys->platform().marvel;
   for (int i = 0; i < t.count(); i++)
     if (t.has_io7(t.node(i).pid))
-      marvel->attach_io7(t.node(i).pid, layout ? layout->io_backplane_rev : 0);
+      marvel->attach_io7(t.node(i).pid, layout ? layout->io_backplane_rev : 0,
+                         layout ? layout->io_type : io7::kIoTypeEmbedded);
 }
 
 void es47_board_devices(CConfigurator *cfg, CSystem *sys) {
@@ -105,6 +110,14 @@ void es47_board_devices(CConfigurator *cfg, CSystem *sys) {
  * On the ES47 these are the I/O expander's controllers: the AIC-7892 (here
  * a 53C895) on 0x44, the CMD 649 on 0x45 (OpenVMS's DQDRIVER enables it),
  * the USS-344's four OHCI functions all on 0x46.
+ *
+ * The I/O type is the board row's (marvel_layout::io_type): the ES47's and
+ * ES80's 2P drawers have embedded I/O, the GS1280's I/O drawers do not, and
+ * there the console gives slots 2 and 3 their own lines. Behind a PCI-PCI
+ * bridge (func -1) the console swizzles onto the bridge's slot with no
+ * remap, which is CPCIDevice::interrupt_input's rotation. Checked against
+ * the console's writes on every hose of an ES80 and on a GS1280
+ * (docs/platforms/marvel.md, M7c).
  */
 int marvel_pci_interrupt(int hose, int slot, int intx, int func) {
   if (hose < 0 || hose >= 4 * 256 || slot < 0 || slot > 7)

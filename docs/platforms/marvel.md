@@ -477,6 +477,148 @@ code.
 
 ## Findings
 
+### M7c: the open Marvel bugs -- USB function 3, DQA1, the ES80/GS1280 I/O (2026-10-04)
+
+**Result**: of the three bugs M7a/M7b left open, one is not the model's
+(the fourth USB function), one was the IDE core answering for an absent
+drive the wrong way, and one was the GS1280 row describing its I/O as the
+ES47's. Runs, configurations and console logs: `lab/marvel-bugs/`.
+
+**1. OpenVMS takes three of the USS-344's four functions: not the model.**
+Every function's configuration space is the same apart from its BAR
+(traced: OpenVMS's bus probe reads function 3 in full -- vendor, class,
+header type 0x80, BAR, capability, pin and line 0x46 -- exactly as it
+reads function 2, and probes functions 4-7, which master-abort). What
+decides is where the function is, not what it says. Experiments, each
+with `SYSMAN IO SHOW BUS` and `SHOW DEVICE OH`:
+
+| the 4-function device | configured |
+| --- | --- |
+| the USS-344 at hose 2 slot 3 (as shipped) | nodes 24-26, OHA0-OHC0 |
+| the same at hose 1 slot 1 | nodes 8-10 |
+| two of them, hose 1 slot 1 and hose 2 slot 3 | 8-10 and 24-26, OHA0-OHF0 |
+| with the Philips 1131:1561 ID (another OHCI SYS$CONFIG names) | 24-26 |
+| with class code FF0000 (no driver binds) | 24-26 |
+| with subsystem 1234:5678 | 24-26 |
+| with a DE500 in hose 2 slot 4 after it | 24-26 (and 32) |
+| the NEC card, three functions, at hose 1 slot 1 | all three, 8-10 |
+
+So OpenVMS 8.4 configures the first three functions of a multi-function
+device and never a fourth, whatever the device; the NEC card's three are
+all configured. The console has its own rule for this very part:
+`usb_start` (0x3190e0) returns without starting the controller when the
+device is on port 2 of an IO7 (hose & 3 == 2), slot 3, function 3 --
+before its check for the Philips EHCI --, which is why both the emulated
+console and the real ES47 (`test/platforms/es47/show-config.txt`) list
+`usbd` without a `hub`. The ES47's User Information gives the I/O
+expander "three USB connectors for a keyboard, mouse, and modem". Read
+together: function 3 is not wired on the ES47 and neither firmware uses
+it. Left as it is: devices go on `port1`..`port3` (docs/usb.md). Where in
+OpenVMS the three-function limit sits was not found (the probe's caller
+is behind the machine-check-protected read at ffffffff80083d78) **[the
+OpenVMS rule is inferred from the experiments]**.
+
+**2. DQA1 offline with an error: the IDE core now answers as ATA says,
+the error stays.** With the CD as master and no slave, OpenVMS's DQDRIVER
+probes each unit by selecting it, reading Alternate Status and the
+signature registers, and issuing IDENTIFY DEVICE (EC) or IDENTIFY PACKET
+DEVICE (A1); it detects an absent unit only by the command timing out
+(about 10 s; "device type Nonexistent IDE/ATAPI disk, is offline, unit
+timed out" -- a type name the driver has for exactly this). The
+register trace (`ALPHABOX_IDETRACE=2`) showed what the core answered for
+the absent slave: Status 0xFF (BSY, DRQ, ERR -- the "nothing on the bus"
+value) but Alternate Status 0x00, and the slave's own copy of the
+cylinder registers (0xFFAA, left from the console's register test). A
+real channel with a master answers for the absent slave (ATA/ATAPI-5
+9.16.1, "Device 0 only configurations"): Status and Alternate Status
+00h, the other registers as if device 0 were selected, a command written
+for device 1 ignored (EXECUTE DEVICE DIAGNOSTIC excepted) -- Linux's
+libata relies on the 00h (an ATA signature with status 0 is "no device").
+The core now does that (`CIdeController::get_status`,
+`ide_command_read`); with neither drive present the bus still floats to
+0xFF. OpenVMS then sees the master's signature (EB14, a packet device)
+through the slave's registers and tries IDENTIFY DEVICE and IDENTIFY
+PACKET DEVICE, each timing out: **DQA1 is offline with 2 errors** on the
+ES47 (before: 1, one IDENTIFY PACKET DEVICE). On the ES40 (ALi, ATA disk
+master, signature 0000) it stays at 1, as do DQB0/DQB1 (no device on the
+channel). The timeouts run while the startup goes on: login time is
+unchanged (ES47 63 s, before 54-55 s on a busier host; ES40 interpreter
+70 s). An empty position offline with an error count is what this driver
+does; no controller behaviour avoids the timeout. Also: a controller
+thread waiting for the bus master's start bit in a DMA command is now
+woken by `stop_threads` (it used to wait on `semBusMaster` for ever, so a
+SIGTERM or a snapshot in that window hung); SIGTERM exits cleanly on the
+ES40 IDE boot and the SRM runs.
+
+**3. The ES80's and GS1280's I/O: console-derived now.** How the console
+gives a device its interrupt line (`get_pci_csr_vector`, 0x2ea710; the
+line is written to configuration register 0x3c and OpenVMS enables the
+LSI it names):
+
+- a device directly on a hose: line = port << 5 | slot << 2 | (pin - 1);
+- except when the IO7's I/O type (`get_io_type`, IO_SYS_REV<7:4>) is 1,
+  "Embedded I/O", and the port is 2: slot 2 becomes slot 1 with pin B
+  (function 1: pin D), slot 3 becomes slot 1 with pin C (M7b's rule);
+- a device behind a PCI-PCI bridge: the bridge's secondary bus carries a
+  base -- 1 for a bridge on the hose, ((slot + parent base - 1) & 3) + 1
+  for one behind another bridge -- and the line is port << 5 | the hose
+  slot << 2 | ((slot + base + pin - 2) & 3): the standard swizzle onto the
+  hose slot, with no embedded remap.
+
+So the remap belongs to the embedded I/O, not to every Marvel. Which I/O
+each machine has (GS1280 Technical Summary, User Information): every 2P
+drawer -- the ES47's and each of an ES80's up to four -- has its IO7 on
+the backplane with the I/O expander, "Embedded I/O"; a GS1280's IO7s sit
+on riser modules in separate I/O drawers, and a real GS1280's show config
+(SRM Reference Manual, `more`) prints "3.3V PCI-X I/O", "I/O Drawer 1
+Cabinet 0 Riser 0 Backplane rev 0". The console also names "X-Shelf I/O"
+(type 2) and "Std PCI-X I/O" (3); the GS1280 high-performance drawer's
+type is not known.
+
+The board rows now carry it (`marvel_layout::io_type`, `io_drawer`):
+ES47 and ES80 type 1, the GS1280 type 0 and "I/O Drawer 1". The IO7
+reports it (`CIo7::io_type`), `marvel_pci_interrupt` applies the remap
+only to type 1 (as before, now from the row), and the console prints the
+GS1280 as the real one does. A standard I/O drawer has a backplane
+manager (PBM) whose 17 sensors the console reads (`build_pbm_hw`,
+0x2f9070: 17 for types 0 and 3, 23 for 2, none for the embedded I/O);
+the CMM answers them (phys2ip type 4, 10.254.<EW>.<NS>), which removed
+"build_pbm_hw: Sensor subpacket count error, actual = 8, expected = 17".
+The "Hose Cab Dwr IOR Port Slots" table then gives hose 0 slots 1-3,
+hose 1 1-2, hose 2 1-6, AGP 1 -- the standard drawer's buses as the
+Technical Summary describes them.
+
+**Checked, console line against model** (a temporary trace compared the
+console's write of 0x3c with the model's LSI for every function):
+
+| machine | devices | result |
+| --- | --- | --- |
+| ES80, 8 EV7s, IO7s on PIDs 0, 8, 16, 24 | 17 functions: NICs on hoses 0, 1, 32, 33, 34 (slot 2, remapped to 0x45), 64, 66 (slot 3, 0x46), 67 (AGP slot 5, 0x74), 96, two behind a DEC 21152 at hose 97 slot 1 (0x26, 0x27); the 53C895, CMD 649, USS-344 on hose 2 | all equal |
+| GS1280, 16 EV7s | the CMD 649 at hose 2 slot 2 now 0x48, the USS-344 at slot 3 0x4c (no remap), a NIC behind a bridge at hose 0 slot 2 (0x0b), NICs at hoses 0, 1 | all equal |
+
+**OpenVMS 8.4** from the installed disk (a clone of
+`lab/platforms/marvel/m7/disk-installed.img`): the ES80 with 8 EV7s to
+DCL, `SHOW CPU` 0,1,8,9,16,17,24,25, and each of the ten UDP-backed NICs
+(every IO7, the remapped slots, AGP, behind the bridge) counted 201-204
+received broadcast frames in LANCP (frame_tx.py, 0.5 s apart), so every
+line reaches the guest; the GS1280 with 16 to DCL (`Active 0-15`, 626 s
+to login on this host), its NICs 105-106 frames, DQA0, OHA0-OHC0, MOU,
+KBD online on their own lines.
+
+**What is console-derived and what is not:**
+
+- console-derived: the interrupt rule above (all three cases), the I/O
+  type's role, the PBM sensor counts, the USB function-3 skip;
+- from a real listing: the GS1280's "3.3V PCI-X I/O", "I/O Drawer 1",
+  backplane rev 0;
+- from the Technical Summary: the ES80's drawers have embedded I/O like
+  the ES47's, the GS1280's I/O sits in separate drawers;
+- still guessed: the ES80's drawer numbers 0-3 and backplane rev 2 (no
+  real ES80 listing); one IO7 on the GS1280 (PID 0); what the PBM's 17
+  sensors are; the GS1280's hose speeds (a real one prints 33/33/66 MHz
+  and "AGP 2x", the model the ES47's 66/33/33 and "1x/4x"); the expansion
+  and high-performance drawers are not modelled.
+
 ### M7a: the ES47's on-board I/O (2026-10-03)
 
 **Result**: the I/O expander module's USB and IDE controllers are the real
@@ -515,9 +657,9 @@ class `uss344`): a chip row says whether there is an EHCI, how many OHCI
 functions and with what identity; without an EHCI the ports are the OHCIs'
 for good and the EHCI's schedule thread never starts. The console lists
 the four functions as the real one does, root hubs included; OpenVMS 8.4
-configures OHA0, OHB0 and OHC0 -- three of the four; why not the fourth
-is not known (the console, real and emulated, gives usbd no root hub
-either) -- and shows them Offline in the installation environment, where
+configures OHA0, OHB0 and OHC0 -- three of the four, as it does with
+any four-function device (M7c; the console, real and emulated, gives usbd
+no root hub either, by its own rule) -- and shows them Offline in the installation environment, where
 the USB configuration manager is not started. Windows 2000 RC2 on an ES40 (the card at `pci1.2`) binds
 "Standard OpenHCD USB Host Controller" to all four functions and mounts a
 USB disk on port 2 (`lab/es47-onboard/w2k-uss344-evidence.txt`).
@@ -662,7 +804,8 @@ the new `CUsbKeyboard` (docs/usb.md). OpenVMS enumerates them as `HID0`,
 LEDs and idle 0. It configures OHA0-OHC0, three of the USS-344's four
 functions (M7a): `SYSMAN IO SHOW BUS` lists nodes 24-26 (slot 3,
 functions 0-2) and no node 27, although the console gives function 3 its
-BAR and line 0x46 like the others -- why is still not known.
+BAR and line 0x46 like the others -- OpenVMS takes no fourth function of
+any device (M7c).
 
 All four functions interrupt on one LSI (0x46), and that only works
 because the USS-344 is not a NEC: `SYS$OHCIDRIVER`'s interrupt routine
@@ -689,7 +832,7 @@ in an option slot (`pci1.1`), where its functions have lines of their own.
    an inference: other pins, and slot 2's function 1. The board's
    `pci_interrupt` hook takes the function (-1 behind a bridge; every other
    board ignores it). It is the rule of any embedded-I/O IO7, so the ES80's
-   and GS1280's too.
+   too (M7c: not the GS1280's, whose I/O drawers are another type).
 2. **Shared lines** (`CPCIDevice::do_pci_interrupt`). Functions of one
    device on the same input are now ORed: one function dropping its request
    no longer drops another's (the USS-344's four on 0x46).

@@ -103,20 +103,24 @@ constexpr u32 lsi(u32 port, u32 slot, u32 intx) {
   return (port & 7) << 5 | (slot & 7) << 2 | (intx & 3);
 }
 
-/// IO_SYS_REV<7:4>, the I/O type: 1 is "Embedded I/O" (show config).
+/// IO_SYS_REV<7:4>, the I/O type, which show config names from a table at
+/// 0x3ac378: 0 "3.3V PCI-X I/O" (the GS1280's standard I/O drawer, as a
+/// real one lists it), 1 "Embedded I/O" (the 2P drawer's backplane, a real
+/// ES47), 2 "X-Shelf I/O", 3 "Std PCI-X I/O".
+constexpr u32 kIoTypeStdDrawer = 0;
 constexpr u32 kIoTypeEmbedded = 1;
 } // namespace io7
 
 class CIo7 {
 public:
-  /// `backplane_rev`: the I/O backplane's revision, IO_SYS_REV<3:0>.
-  CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev);
+  /// `backplane_rev`: the I/O backplane's revision, IO_SYS_REV<3:0>;
+  /// `io_type`: what the IO7 sits in, IO_SYS_REV<7:4> (io7::kIoType*).
+  CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev, u8 io_type);
 
   u32 pid() const { return m_pid; }
 
-  /// The I/O type IO_SYS_REV reports (io7::kIoTypeEmbedded for every IO7
-  /// modelled: the ES47's, and the ES80's and GS1280's as well).
-  u32 io_type() const { return io7::kIoTypeEmbedded; }
+  /// The I/O type IO_SYS_REV reports (io7::kIoType*), from the board row.
+  u32 io_type() const { return m_io_type; }
 
   /// An access to the IO7's space that no device range claimed: `port` is
   /// 0-3 or 7, `off` the offset in that port's 4 GB.
@@ -151,6 +155,7 @@ private:
   CMarvel *m_marvel;
   u32 m_pid;
   u8 m_backplane_rev;
+  u8 m_io_type;
   std::mutex m_lock;
   /// Every register's contents, ports 0-3 and port 7 (index 4).
   std::map<u32, u64> m_regs[io7::kPorts + 1];

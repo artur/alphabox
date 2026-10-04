@@ -166,7 +166,7 @@ private:
   WakeSemaphore semBusMaster[2];    // bus master start/stop
   std::shared_mutex mtRegisters[2]; // main registers
   std::shared_mutex mtBusMaster[2]; // busmaster registers
-  bool StopThread;
+  std::atomic_bool StopThread{false};
 
   // The drive each channel's last command was issued to (not saved state:
   // RestoreState takes the selected drive), and, on a controller thread, the

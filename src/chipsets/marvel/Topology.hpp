@@ -61,6 +61,14 @@ struct marvel_layout {
   /// The I/O backplane's revision, which the IO7 reports in IO_SYS_REV<3:0>
   /// and `show config` prints as "Backplane rev" (a real ES47: 2).
   u8 io_backplane_rev;
+  /// What the IO7s sit in, IO_SYS_REV<7:4> (io7::kIoType*): the 2P drawer's
+  /// own backplane ("Embedded I/O") on the ES47 and ES80, a standard I/O
+  /// drawer ("3.3V PCI-X I/O") on the GS1280. The console's interrupt rule
+  /// depends on it (marvel_pci_interrupt).
+  u8 io_type;
+  /// The "I/O Drawer" number `show config` prints for the IO7 on `pid`
+  /// (the CMM's partition database, Cmm.cpp).
+  u8 (*io_drawer)(u32 pid);
 };
 
 /// One EV7: its PID and its coordinates.

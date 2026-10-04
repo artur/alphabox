@@ -102,14 +102,27 @@ void CIdeController::start_threads() {
   }
 }
 
+namespace {
+/// Thrown on a controller thread woken to stop while a command waited for
+/// the guest (do_dma_transfer): run() ends there.
+struct IdeStopping {};
+} // namespace
+
 void CIdeController::stop_threads() {
   StopThread = true;
   for (int i = 0; i < 2; i++) {
     if (thrController[i]) {
       printf(" ide%d", i);
+      // The thread waits for its next command or, in the middle of a DMA
+      // command, for the guest to set the bus master's start bit: wake
+      // either.
       semController[i].set();
+      semBusMaster[i].set();
       thrController[i]->join();
       thrController[i] = nullptr;
+      // A wake-up the thread did not take must not start the next DMA
+      // early once the threads run again.
+      semBusMaster[i].try_wait_for(std::chrono::milliseconds(0));
     }
   }
 }
@@ -375,6 +388,11 @@ u32 CIdeController::ide_command_read(int index, u32 address, int dsize) {
     return 0xffffffff;
   }
 
+  // With device 1 selected and absent, device 0 answers for it (ATA/ATAPI-5
+  // 9.16.1, "Device 0 only configurations"): the Command Block registers read
+  // as if device 0 were selected, and Status reads 00h (get_status).
+  const int answering = SEL_DISK(index) ? SEL_DRIVE(index) : 0;
+
   switch (address) {
   case REG_COMMAND_DATA:
     if (!SEL_STATUS(index).drq) {
@@ -425,30 +443,30 @@ u32 CIdeController::ide_command_read(int index, u32 address, int dsize) {
     break;
 
   case REG_COMMAND_ERROR:
-    data = SEL_REGISTERS(index).error;
+    data = REGISTERS(index, answering).error;
     break;
 
   case REG_COMMAND_SECTOR_COUNT:
-    data = SEL_REGISTERS(index).sector_count;
+    data = REGISTERS(index, answering).sector_count;
     break;
 
   case REG_COMMAND_SECTOR_NO:
-    data = SEL_REGISTERS(index).sector_no;
+    data = REGISTERS(index, answering).sector_no;
     break;
 
   case REG_COMMAND_CYL_LOW:
-    data = SEL_REGISTERS(index).cylinder_no & 0xff;
+    data = REGISTERS(index, answering).cylinder_no & 0xff;
     break;
 
   case REG_COMMAND_CYL_HI:
-    data = (SEL_REGISTERS(index).cylinder_no >> 8) & 0xff;
+    data = (REGISTERS(index, answering).cylinder_no >> 8) & 0xff;
     break;
 
   case REG_COMMAND_DRIVE:
-    data = 0x80 | (SEL_REGISTERS(index).lba_mode ? 0x40 : 0x00) |
+    data = 0x80 | (REGISTERS(index, answering).lba_mode ? 0x40 : 0x00) |
            0x20 // 512 byte sector size
            | (CONTROLLER(index).selected ? 0x10 : 0x00) |
-           (SEL_REGISTERS(index).head_no & 0x0f);
+           (REGISTERS(index, answering).head_no & 0x0f);
     break;
 
   case REG_COMMAND_STATUS:
@@ -1009,9 +1027,10 @@ u8 CIdeController::get_status(int index) {
     printf("%%IDE-I-STATUS: Read status for nonexiting device %d.%d\n", index,
            SEL_DRIVE(index));
 #endif
-    // Absent drive: real hardware pulls all data lines high, so the
+    // Absent drive: device 0 answers for an absent device 1 with 00h (ATA/
+    // ATAPI-5 9.16.1); with neither there, nothing drives the bus and the
     // host reads 0xff.
-    return 0xff;
+    return get_disk(index, 0) ? 0x00 : 0xff;
   }
 
   data = (SEL_STATUS(index).busy ? 0x80 : 0x00) |
@@ -2376,6 +2395,8 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   u32 prd;
   work_done[index].store(work_queued[index].load()); // parked on the guest
   semBusMaster[index].wait(); // wait until the start bit is set.
+  if (StopThread)
+    throw IdeStopping(); // stop_threads woke us: the command ends here
   {
     SCOPED_READ_LOCK(mtBusMaster[index]);
     prd = endian_32(*(u32 *)(&CONTROLLER(index).busmaster[4]));
@@ -2586,6 +2607,10 @@ void CIdeController::run(int index) {
 #endif
       }
     }
+  }
+
+  catch (const IdeStopping &) {
+    exec_drive = -1;
   }
 
   catch (CException &e) {

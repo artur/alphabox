@@ -38,6 +38,7 @@
 #include "StdAfx.hpp"
 
 #include "Boards.hpp"
+#include "Io7.hpp"
 #include "Topology.hpp"
 
 namespace {
@@ -50,12 +51,18 @@ void es80_coordinates(int index, u8 *ns, u8 *ew) {
 /// The drawer backplane's IO7, on the drawer's first processor.
 bool es80_has_io7(u32 pid) { return (pid & 7) == 0; }
 
+/// The 2P drawer the IO7 is in: PID<4:3> (the console's pid2drawer), as
+/// "Drawer" in the processor's own line [inference: no real ES80 listing].
+u8 es80_io_drawer(u32 pid) { return (u8)((pid >> 3) & 3); }
+
 } // namespace
 
 /// System type 0x11 with <19:16> 1: "ES80" (build_dsrdb, 0x2dd8f0).
 /// The ES47's 2P drawer and I/O backplane, revision 2 [inference: no real
 /// ES80 listing].
-const marvel_layout es80_layout = {0x10011, es80_coordinates, es80_has_io7, 2};
+const marvel_layout es80_layout = {
+    0x10011, es80_coordinates,     es80_has_io7,
+    2,       io7::kIoTypeEmbedded, es80_io_drawer};
 
 void es80_board_devices(CConfigurator *cfg, CSystem *sys) {
   marvel_board_devices(cfg, sys);

@@ -104,6 +104,8 @@ private:
   void mbm_configuration(u32 mbm_ip, u8 *c);
   void memory_assignment(u8 *a);
   static bool is_mbm(u32 ip);
+  static bool is_pbm(u32 ip);
+  static const char *micro_name(u32 ip);
   int sensor_readings(u32 ip, bool volts, u8 *r);
   void nvram_load();
   void nvram_save();

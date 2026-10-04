@@ -203,9 +203,9 @@ int slot_of(u32 port) { return port < kPorts ? (int)port : kPorts; }
 
 } // namespace
 
-CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev)
+CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev, u8 io_type)
     : m_sys(sys), m_marvel(marvel), m_pid(pid),
-      m_backplane_rev(backplane_rev & 0xf) {
+      m_backplane_rev(backplane_rev & 0xf), m_io_type(io_type & 0xf) {
   reset();
 }
 
@@ -219,9 +219,9 @@ CIo7::CIo7(CSystem *sys, CMarvel *marvel, u32 pid, u8 backplane_rev)
  *    and a real ES47 says pass 3 [inference from our runs: 0 printed pass 1];
  *  - IO_SYS_REV: <16> valid and <7:4> the I/O type, which the console's
  *    get_io_type (0x2ea0f0) returns and show config names from a table
- *    ("3.3V PCI-X I/O", "Embedded I/O", "X-Shelf I/O", "Std PCI-X I/O" for 2
- *    to 5 [inference from the table's layout]); the ES47's is the embedded
- *    I/O. <3:0> is the I/O backplane's revision, from the board row:
+ *    (io7::kIoType*: 1 prints "Embedded I/O"); the board row gives it, the
+ *    embedded I/O on the ES47 and ES80, a standard I/O drawer on the
+ *    GS1280. <3:0> is the I/O backplane's revision, from the board row:
  *    show_core_system (0x2dcd3c) prints it as "Backplane rev";
  *  - POx_RST3 <8:6>: the AGP PLL range, 6 for 1x/4x (Linux
  *    marvel_agp_configure), which the real listing prints;

@@ -92,8 +92,8 @@ public:
   int present() const;
 
   /// The board puts an IO7 on PE `pid`'s I/O port, on an I/O backplane of
-  /// revision `backplane_rev`.
-  void attach_io7(u32 pid, u8 backplane_rev);
+  /// revision `backplane_rev` in I/O of type `io_type` (io7::kIoType*).
+  void attach_io7(u32 pid, u8 backplane_rev, u8 io_type);
   /// The IO7 on PE `pid`, or nullptr.
   CIo7 *io7(u32 pid) const;
 

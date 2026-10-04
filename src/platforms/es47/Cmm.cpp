@@ -670,11 +670,12 @@ void CEs47Cmm::partition_database(u8 *db) {
     const ev7_node &n = t.node(i);
     if (!mv->io7(n.pid))
       continue;
-    // The drawer and cabinet the PID names (<4:3>, <7:5>: the console's
-    // pid2drawer and pid2rack), riser 0: a real ES47's "I/O Drawer 0
-    // Cabinet 0 Riser 0" [inference beyond PID 0: the I/O of a drawer's
-    // own backplane, in that drawer].
-    p[0] = (u8)((n.pid >> 3) & 3);
+    // The I/O drawer the board row names, the cabinet the PID names (<7:5>,
+    // the console's pid2rack), riser 0: a real ES47's "I/O Drawer 0
+    // Cabinet 0 Riser 0", a real GS1280's "I/O Drawer 1 Cabinet 0 Riser 0".
+    const marvel_layout *layout = m_sys->platform().marvel;
+    p[0] = layout && layout->io_drawer ? layout->io_drawer(n.pid)
+                                       : (u8)((n.pid >> 3) & 3);
     p[1] = (u8)(n.pid >> 5);
     p[2] = 0;
     p[3] = n.ns;
@@ -761,6 +762,14 @@ void CEs47Cmm::memory_assignment(u8 *a) {
 /// (stored least significant byte first).
 bool CEs47Cmm::is_mbm(u32 ip) { return (ip >> 16) == 0x0100; }
 
+/// An I/O drawer's backplane manager (phys2ip type 4, 0x2e1610):
+/// 10.254.<E/W>.<N/S> of the EV7 its IO7 hangs on.
+bool CEs47Cmm::is_pbm(u32 ip) { return (ip & 0xffff) == 0xfe0a; }
+
+const char *CEs47Cmm::micro_name(u32 ip) {
+  return is_mbm(ip) ? "the MBM" : is_pbm(ip) ? "the PBM" : "the CMM";
+}
+
 /**
  * Environmental readings (SMLAN 0x0901 voltages, 0x0902 temperatures):
  * <0> u32 the count, then records of 0x1c bytes: <0> u16 the sensor's
@@ -769,11 +778,13 @@ bool CEs47Cmm::is_mbm(u32 ip) { return (ip >> 16) == 0x0100; }
  * for a voltage and 0xc for a temperature (build_cmm_hw, build_mbm_hw;
  * locate_voltage_data, locate_temp_data). The console expects a CMM to
  * have 8 sensors and an MBM 17 on an ES47 or ES80 (system type 0x11), 5 on
- * a GS1280, voltages and temperatures together (build_mbm_hw, 0x2f8db0);
+ * a GS1280, voltages and temperatures together (build_mbm_hw, 0x2f8db0),
+ * and an I/O drawer's PBM 17 in a standard I/O drawer (build_pbm_hw,
+ * 0x2f9070: 17 for I/O types 0 and 3, 23 for 2; the embedded I/O has none);
  * what each one is, and the reading's unit, are [guess]: six voltages and
  * the two EV7s' temperatures on the CMM, thirteen and four on a 2P
- * drawer's MBM, three and two on an 8P drawer's, readings in mV and
- * degrees C, the subpacket data zero. Returns the count.
+ * drawer's MBM and on a PBM, three and two on an 8P drawer's, readings in mV
+ * and degrees C, the subpacket data zero. Returns the count.
  */
 int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
   static const s16 cmm_mv[] = {1500, 1500, 1800, 2500, 1500, 1200};
@@ -781,11 +792,11 @@ int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
   static const s16 mbm_mv[] = {3300, 3300, 5000, 5000, 12000, 12000, 1500,
                                1500, 2500, 2500, 1800, 1800,  3300};
   static const s16 mbm_c[] = {25, 27, 30, 30};
-  const bool mbm = is_mbm(ip);
+  const bool mbm = is_mbm(ip) || is_pbm(ip);
   const bool gs = (marvel()->topology().cmm_systype() & 0xff) == 1;
   const s16 *v = volts ? (mbm ? mbm_mv : cmm_mv) : (mbm ? mbm_c : cmm_c);
   int n = volts ? (mbm ? 13 : 6) : (mbm ? 4 : 2);
-  if (mbm && gs)
+  if (is_mbm(ip) && gs)
     n = volts ? 3 : 2;
   memset(r, 0, 0x1e0);
   put32(r, (u32)n);
@@ -846,7 +857,7 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
         sensor_readings(get32(req + M_DEST), cmd == 0x0901, r.data());
     note("PID %u: SMLAN %04x (%s of %s) id %u: %d sensors", n, cmd,
          cmd == 0x0901 ? "voltages" : "temperatures",
-         is_mbm(get32(req + M_DEST)) ? "the MBM" : "the CMM", id, count);
+         micro_name(get32(req + M_DEST)), id, count);
     respond(n, req, 0, r.data(), (u32)r.size());
     return;
   }
