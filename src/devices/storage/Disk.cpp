@@ -36,6 +36,8 @@
 #include "DiskFile.hpp"
 #include "StdAfx.hpp"
 
+#include <algorithm>
+
 /**
  * \brief Constructor.
  **/
@@ -65,8 +67,9 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
 
   // Accept both spellings: es40-cfg and the sample config have always
   // emitted the long forms, while the code historically read the short ones.
+  // Without one, get_serial() makes the default from the disk's place.
   serial_number = myCfg->get_text_value(
-      "serial_number", myCfg->get_text_value("serial_num", "ES40EM00000"));
+      "serial_number", myCfg->get_text_value("serial_num", nullptr));
   revision_number = myCfg->get_text_value(
       "rev_number", myCfg->get_text_value("rev_num", "0.0"));
   is_cdrom = myCfg->get_bool_value("cdrom");
@@ -94,6 +97,31 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
   set_locked(false);
 
   myCtrl->register_disk(this, myBus, myDev);
+}
+
+/**
+ * The serial number the guest is shown: the configured one, or a default
+ * that is unique in the machine. Windows 2000 takes an IDE drive's serial
+ * as part of its device ID, and two drives with one serial stop it with
+ * 0xCA, duplicate device (two CDs on one channel,
+ * lab/driver-release-test/dupserial; drives on two IDE controllers). So
+ * the default is not one fixed string: it is "ES40EM" and five digits --
+ * the controller's number (CDiskController::serial_ordinal: the ALi's IDE
+ * 0, the other controllers that show serials in configuration order), the
+ * bus and the unit, two, one and two digits. The ALi's disk0.0 stays
+ * "ES40EM00000", the one serial every disk had before, so an installed
+ * guest's boot disk keeps its identity; disk1.1 there is "ES40EM00101".
+ **/
+const char *CDisk::get_serial() {
+  if (serial_number)
+    return serial_number;
+  if (default_serial.empty()) {
+    const int ordinal = std::max(myCtrl->serial_ordinal(), 0);
+    char s[32];
+    snprintf(s, sizeof(s), "ES40EM%02d%d%02d", ordinal, myBus, myDev);
+    default_serial = s;
+  }
+  return default_serial.c_str();
 }
 
 /**

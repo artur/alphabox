@@ -202,7 +202,7 @@ buffers must come before device-writable ones.
 | 0 IN | read | writable, a multiple of 512 | data + 1 |
 | 1 OUT | write | readable, a multiple of 512 | 1 |
 | 4 FLUSH | flush the image to the host | none | 1 |
-| 8 GET_ID | device ID | writable, 20 bytes: the disk's serial number (`serial_number`, default `ES40EM00000`), NUL-padded, not terminated if it fills 20 | bytes written + 1 |
+| 8 GET_ID | device ID | writable, 20 bytes: the disk's serial number (`serial_number`; default `ES40EM` and the controller's number, then `000` -- see configuration.md), NUL-padded, not terminated if it fills 20 | bytes written + 1 |
 | other | | | 1, status UNSUPP |
 
 Status: 0 OK, 1 IOERR (out of range, not a multiple of 512, a read-only

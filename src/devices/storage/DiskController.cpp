@@ -34,6 +34,16 @@
 #include "Disk.hpp"
 #include "StdAfx.hpp"
 
+#include <algorithm>
+#include <vector>
+
+/// The controllers that show the guest their disks' serial numbers, in the
+/// order that numbers them (number_disk_serials).
+static std::vector<const CDiskController *> &serial_controllers() {
+  static std::vector<const CDiskController *> list;
+  return list;
+}
+
 CDiskController::CDiskController(int num_busses, int num_devices) {
   num_bus = num_busses;
   num_dev = num_devices;
@@ -41,7 +51,26 @@ CDiskController::CDiskController(int num_busses, int num_devices) {
   disks = (CDisk **)calloc(num_bus * num_dev, sizeof(CDisk *));
 }
 
-CDiskController::~CDiskController(void) { free(disks); }
+CDiskController::~CDiskController(void) {
+  auto &list = serial_controllers();
+  list.erase(std::remove(list.begin(), list.end(), this), list.end());
+  free(disks);
+}
+
+void CDiskController::number_disk_serials(bool first) {
+  auto &list = serial_controllers();
+  list.erase(std::remove(list.begin(), list.end(), this), list.end());
+  if (first)
+    list.insert(list.begin(), this);
+  else
+    list.push_back(this);
+}
+
+int CDiskController::serial_ordinal() const {
+  const auto &list = serial_controllers();
+  const auto it = std::find(list.begin(), list.end(), this);
+  return it == list.end() ? -1 : (int)(it - list.begin());
+}
 
 void CDiskController::register_disk(class CDisk *dsk, int bus, int dev) {
   if (bus >= num_bus)

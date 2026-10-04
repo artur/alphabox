@@ -39,6 +39,7 @@
 #include "SCSIDevice.hpp"
 #include <atomic>
 #include <memory>
+#include <string>
 
 struct MediaImage;
 /// Deleter defined in DiskFile.cpp, so a MediaRelease can be held and
@@ -116,7 +117,7 @@ public:
   long get_heads() { return heads; };
   long get_sectors() { return sectors; };
 
-  char *get_serial() { return serial_number; };
+  const char *get_serial();
   char *get_model() { return model_number; };
   char *get_rev() { return revision_number; };
 
@@ -174,7 +175,8 @@ protected:
   int myBus;
   int myDev;
 
-  char *serial_number;
+  char *serial_number; ///< configured, or nullptr: see get_serial()
+  std::string default_serial;
   char *model_number;
   char *revision_number;
 

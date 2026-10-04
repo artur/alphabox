@@ -225,6 +225,19 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
   - The ES40 console knows the `isp1020` and `isp1040` and boots from
     them; it has no entry for the `isp1080` or the `isp1240`, which only a
     guest operating system can use.
+- **Serial numbers**: a drive's `serial_number` (alias `serial_num`) is
+  what the guest reads from ATA IDENTIFY (`ali_ide`, `cmd649`) and from
+  `virtio_blk`'s GET_ID. Without one, every drive gets its own: `ES40EM`
+  and five digits -- the controller's number (the `ali_ide` is always 00;
+  other IDE controllers and `virtio_blk` count from 01 in configuration
+  order, or from 00 when there is no `ali_ide`), the bus and the unit. The
+  `ali_ide`'s `disk0.0` is `ES40EM00000`, the serial every drive had
+  before, so an installed guest's boot disk is unchanged; its `disk1.0` is
+  `ES40EM00100` and `disk1.1` `ES40EM00101`. Windows 2000 stops with 0xCA
+  (duplicate device) when two IDE drives report one serial (seen on one
+  channel and across two controllers), so give explicit serials distinct
+  values. SCSI disks report their own
+  (INQUIRY page 0x80), USB disks theirs (one per device, see [USB](usb.md)).
 - **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
   (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD
   drives are read-only unless `read_only = false`.

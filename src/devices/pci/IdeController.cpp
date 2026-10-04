@@ -65,6 +65,7 @@ CIdeController::CIdeController(CConfigurator *cfg, CSystem *c, int pcibus,
   CSCSIBus *b = new CSCSIBus(cfg, c);
   scsi_register(0, a, 7); // scsi id 7 by default
   scsi_register(1, b, 7); // scsi id 7 by default
+  number_disk_serials(false); // IDENTIFY shows the guest the serial
 }
 
 /**

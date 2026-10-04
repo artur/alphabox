@@ -175,6 +175,7 @@ CAliM1543C_ide::CAliM1543C_ide(CConfigurator *cfg, CSystem *c, int pcibus,
   if (theIDE != 0)
     FAILURE(Configuration, "More than one IDE controller");
   theIDE = this;
+  number_disk_serials(true); // its disk0.0 keeps "ES40EM00000"
 }
 
 void CAliM1543C_ide::add_functions() {

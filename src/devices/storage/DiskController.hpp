@@ -44,6 +44,17 @@ public:
   virtual void register_disk(class CDisk *dsk, int bus, int dev);
   class CDisk *get_disk(int bus, int dev);
 
+  /// This controller's number in its disks' default serial numbers, or -1
+  /// when it does not show the guest a serial number (CDisk::get_serial).
+  int serial_ordinal() const;
+
+protected:
+  /// Called by a controller that shows the guest its disks' serial numbers
+  /// (ATA IDENTIFY, virtio-blk GET_ID): such controllers are numbered in
+  /// configuration order, except that `first` -- the south bridge's IDE --
+  /// is always number 0, so the boot disk keeps "ES40EM00000".
+  void number_disk_serials(bool first);
+
 private:
   int num_bus;
   int num_dev;

@@ -246,8 +246,12 @@ Firmware images live in the git-ignored `roms/`; never download one.
   0.75.1 and were deliberate; don't reintroduce the config options.
 - User-facing text says "Alphabox" (banner in `src/common/banner.hpp` with the
   author-era credits); guest-visible identifiers deliberately keep their
-  ES40 names (`ES40EM00000` disk serial, `ES40RAMDISK`, MAC seed "ES40",
-  the `es40.cfg` filename).
+  ES40 names (the `ES40EM` disk serial prefix, `ES40RAMDISK`, MAC seed
+  "ES40", the `es40.cfg` filename). The default disk serial is unique per
+  drive: the ALi IDE's disk0.0 keeps `ES40EM00000` (installed guests'
+  boot disks unchanged), every other drive is numbered from its place --
+  controller, bus, unit (`CDisk::get_serial`); two drives with one serial
+  stop Windows 2000 with 0xCA.
 - Alphabox versions itself via `project(Alphabox VERSION x.y.z)` in
   CMakeLists.txt — never adopt upstream's version number.
 - In `src/gui/sdl.cpp`, keep the focus-bounce re-grab logic (WSLg

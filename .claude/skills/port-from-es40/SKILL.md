@@ -217,7 +217,8 @@ Tim Stark/fsword7 2018, Tomas Glozar 2020-2023, Remy van Elst
 serial telnet greeting, debugger greeting, stat lines.
 
 Do NOT rename GUEST-visible or protocol identifiers: disk serial
-default `"ES40EM00000"`, ramdisk model `"ES40RAMDISK"`, the MAC seed
+prefix `"ES40EM"` (default `"ES40EM00000"` for the first drive, the others
+numbered by place -- keep that numbering), ramdisk model `"ES40RAMDISK"`, the MAC seed
 `"ES40"`, the `es40.cfg` file name, `"[]ES40.CFG"`, hardware/SRM
 references ("AlphaServer ES40" is the emulated machine — keep), state
 file magics, include guards.

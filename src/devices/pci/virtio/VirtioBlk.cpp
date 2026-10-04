@@ -36,6 +36,7 @@ CVirtioBlk::CVirtioBlk(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     : CVirtioPci(cfg, c, pcibus, pcidev, 2, 0x018000, 1, "virtio-blk"),
       CDiskController(1, 1) {
   fill_config();
+  number_disk_serials(false); // GET_ID shows the guest the serial
   printf("%s: virtio-blk (legacy), 1 queue of %d.\n", devid_string, kQueueSize);
 }
 

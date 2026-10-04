@@ -711,10 +711,11 @@ disk on its primary master was read and written (`dir`, `copy`), and its
 CD-ROM got a drive letter (the OpenVMS CD's ODS-2 file system is not one
 Windows reads: "Incorrect function")
 (`lab/es47-onboard/w2k-cmd649-evidence.txt`). Two IDE controllers in one
-Windows 2000 guest need distinct `serial_number` values on their drives:
-with the default (every disk "ES40EM00000") the second controller's drives
-duplicate the first's device IDs and Windows stops with 0xCA
-(PNP_DETECTED_FATAL_ERROR, duplicate PDO).
+Windows 2000 guest used to need distinct `serial_number` values on their
+drives: with the old default (every disk "ES40EM00000") the second
+controller's drives duplicated the first's device IDs and Windows stopped
+with 0xCA (PNP_DETECTED_FATAL_ERROR, duplicate PDO). The default is now
+unique per drive (docs/configuration.md, "Serial numbers").
 
 **Where the "I/O Drawer" line comes from** (`show_core_system`,
 0x2dcd3c-0x2dcdd4): the drawer, cabinet and riser are bytes 0-2 of the
