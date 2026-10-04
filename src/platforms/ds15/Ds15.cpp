@@ -28,6 +28,7 @@
 #include "Ds15Dpr.hpp"
 #include "Ds15Tig.hpp"
 #include "Flash.hpp"
+#include "Titan.hpp"
 
 namespace {
 /// A place's interrupt lines, one per pin (INTA-INTD), 0xff for none.
@@ -85,3 +86,8 @@ void ds15_board_devices(CConfigurator *cfg, CSystem *sys) {
   new CDs15Tig(cfg, sys);
   new CFlash(cfg, sys, 2);
 }
+
+/// Its Cchip is pass 18 (the owner's guide's show config, example 2-5). Its
+/// memory is two arrays of two DIMMs, 0 and 2: 1 GB in one array (example
+/// 2-7), 2 GB as two alike (example 2-5).
+const titan_layout ds15_titan = {18, true};

@@ -46,6 +46,7 @@
 class CConfigurator;
 class CSystem;
 struct marvel_layout;
+struct titan_layout;
 
 /// How a console firmware image is packaged.
 enum firmware_format {
@@ -153,6 +154,10 @@ struct platform_config {
   /// A Marvel board's processor layout: their coordinates, PIDs and IO7s
   /// (chipsets/marvel/Topology.hpp); nullptr on every other board.
   const marvel_layout *marvel = nullptr;
+
+  /// A Titan board's chipset facts: the Cchip's pass, how memory fills
+  /// the arrays (chipsets/titan/Titan.hpp); nullptr elsewhere.
+  const titan_layout *titan = nullptr;
 };
 
 /// The board named `name`, or nullptr.

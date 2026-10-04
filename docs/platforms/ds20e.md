@@ -352,11 +352,37 @@ interpreter boots to login on two processors with no options
 
 **Still open:**
 
-- *Two processors, intermittent*: in 2 of 11 two-processor OpenVMS boots,
-  processor 0 executed a HALT at PC 0 during startup (`halted CPU 0 ...
-  PC = 0`; `tsu-ds20e-nic3b-2cpu`, `tsu-rep-ds20e-2cpu-8`). Not seen on one
-  processor. The ES40 is not clean either: 1 of 6 two-processor boots hung
-  after the password (`tsu-rep-es40.txt`). Not investigated further.
+- Resolved 2026-10-03 in the models: *two processors, intermittent* (in 2
+  of 11 two-processor OpenVMS boots processor 0 executed a HALT at PC 0
+  during startup). The JIT's data-page cache outlived the TB entry that
+  filled it (86b2469), and a UART race lost console interrupts (0abdd52);
+  0 of 81 two-processor boots failed after them (`lab/smp-flaky/`). The
+  ES40's one hang after the password in 6 two-processor boots has not
+  come back: 0 of 8 on the SMP work's base binary, 0 of 12 after the
+  fixes, and 0 of 20 on main 29e213e (2026-10-04, JIT, each boot logging
+  in and copying and comparing a 1049-block file:
+  `lab/smp-flaky/results/t-es40-jit2.txt`).
+- Not a fault: *the console "stalls" at `Testing the Memory`* (seen in 1
+  of 6 interpreter boots with two processors, and once on JIT_VERIFY, by
+  harnesses that gave the console 300 s to reach its prompt). That step is
+  a real memory test: the power-up script runs `testmem`, and with 1 GB
+  `memtest` walks the memory (the pattern loops at 0xa6400-0xa6800 hold the
+  processor's samples). It takes about 110 s on the interpreter and 10 s
+  on the JIT. 2026-10-04 on main 29e213e, 20 boots each of the interpreter
+  and the JIT on one and two processors, timed line by line with the
+  emulator's own CPU time and the host's load logged each second
+  (`lab/tsu-bugs/srmloop2.sh`, results `lab/tsu-bugs/results/m-*`): 80 of
+  80 reached `P00>>>`. Prompt times: interpreter 114-206 s, two outliers at
+  388 s and 899 s, both two-processor runs; JIT 23-32 s. In the two
+  outliers the emulator received 0.25 to 0.6 CPU seconds per second (2.0
+  when its two processor threads run) while the host's load average was 30
+  to 210 on its 16 cores (other sessions' guests and benchmarks, and once
+  this work's own seven-lane build); the threads were runnable, not
+  waiting, and the guest's instruction rate fell in step with the CPU time
+  it got. No guest-side wait was involved. The ES40's console speed
+  patches, which had hit an `lda` at 0x8bb78 in this console, are not
+  applied to the DS20E since 213aae5. The harnesses now wait 900 s for the
+  prompt (`SRMTO`, `lab/smp-flaky/tsuboot.py`, `lab/platforms/tsu/`).
 - Resolved 2026-10-02 in the models, not the board: *OpenVMS with a SCSI
   controller bugchecked on every machine* (`INVEXCEPTN` in `SYSMAN`). The
   routine at `SYS$CPU_ROUTINES_2208+050A0` is `IOC$READ_IO`'s worker, and

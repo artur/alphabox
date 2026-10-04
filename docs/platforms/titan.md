@@ -44,16 +44,24 @@ hose within the I/O space.
   `CChipset::dimms()`). MISC, DIM and the interval timer are written out
   again rather than shared: the Tsunami's live inside its byte-exact state
   layout (the state file), and the Titan's are a few lines.
-- What the ES45 console prints for the chips (show config) comes from
+- What the consoles print for the chips (show config) comes from
   MISC<39:32>, DREV, SCTL<7:0> and TIG offset 0; they read as the real
-  ES45's (17, 17, 17, TIG 2.6). Constants in `Titan.hpp`.
-- Board facts stay in `platforms/es45/`: the interrupt table, the slots,
-  the DPR contents, the flash parts.
+  listings: Dchip and PA-chips 17 (constants in `Titan.hpp`), the Cchip
+  17 on the ES45 and 18 on the DS25 and DS15 (the board row's
+  `titan_layout::cchip_rev`; the consoles only print it).
+- The memory arrays (AARn) and CSC<51>, which the consoles print as the
+  interleave mode ("1-Way" when set): CSC<51> is set unless arrays 0 and 2
+  are populated alike, the rule the ES45's, DS25's and DS15's real
+  listings all follow (ds15.md, Findings). The DS15 row fills arrays 0 and
+  2 (`paired_arrays`); the others one array up to 8 GB.
+- Board facts stay in `platforms/<board>/`: the interrupt table, the slots,
+  the DPR contents, the flash parts, the `titan_layout`.
 
 ## Assumed, not established
 
-- CSC, the Dchips' DSC/STR/DSC2 and the AAR encoding: the Typhoon's values.
-  The console's memory listing agrees for one array.
+- CSC (but bit 51), the Dchips' DSC/STR/DSC2 and the AAR encoding: the
+  Typhoon's values. The consoles' memory listings agree for one and two
+  arrays.
 - PCTL<17> (66 MHz) and APCTL<57> (AGP present) read-only; SCTL<7:0>
   read-only.
 - No AGP: hose 2 reports no AGP device (APCTL<57> = 0), so the console

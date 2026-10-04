@@ -86,13 +86,13 @@ static const platform_config platforms[] = {
     {"es45", "AlphaServer ES45", CHIPSET_TITAN, "ev68cb", 4, 26, 35,
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45_slot_refusal, 0, nullptr,
-     0x680000},
+     0x680000, nullptr, &es45_titan},
     // Under construction (docs/platforms/ds25.md): the second Titan board,
     // its console from an update utility like the ES45's.
     {"ds25", "AlphaServer DS25", CHIPSET_TITAN, "ev68cb", 2, 26, 34,
      "DS25_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds25_board_devices, ds25_pci_interrupt, ds25_slot_refusal, 0, nullptr,
-     0x680000},
+     0x680000, nullptr, &ds25_titan},
     // Under construction (docs/platforms/ds15.md): the one-processor Titan
     // board, its console from an update utility like the DS25's, which runs
     // up to 0x702000 (console_bytes). One PA-chip: the slot table uses
@@ -100,7 +100,7 @@ static const platform_config platforms[] = {
     {"ds15", "AlphaServer DS15", CHIPSET_TITAN, "ev68cb", 1, 26, 32,
      "DS15_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds15_board_devices, ds15_pci_interrupt, ds15_slot_refusal, 0, nullptr,
-     0x710000},
+     0x710000, nullptr, &ds15_titan},
 };
 
 const platform_config *find_platform(const char *name) {

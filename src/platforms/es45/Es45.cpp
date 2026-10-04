@@ -30,6 +30,7 @@
 #include "Boards.hpp"
 #include "Es45Dpr.hpp"
 #include "Flash.hpp"
+#include "Titan.hpp"
 
 namespace {
 /// A slot's interrupt inputs: the DRIR bit of INTA, and how many pins are
@@ -86,3 +87,6 @@ void es45_board_devices(CConfigurator *cfg, CSystem *sys) {
   new CEs45Dpr(cfg, sys);
   new CFlash(cfg, sys, 2); // two 2 MB parts (es45.md)
 }
+
+/// Its Cchip is pass 17 (the owner's guide's show config).
+const titan_layout es45_titan = {17, false};

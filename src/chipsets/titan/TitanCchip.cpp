@@ -64,15 +64,15 @@ u64 CTitan::cchip_read(u32 a, CSystemComponent *source) {
   case 0x140:
   case 0x180:
   case 0x1c0: {
-    // AAR0-3: the Typhoon's encoding, array n at n * 8 GB [assumed for the
-    // Titan until the console's memory listing says otherwise].
-    const int arr = (int)((a >> 6) & 3);
-    const unsigned bits = m_sys->get_memory_bits();
-    const unsigned arr_bits = bits > 33 ? 33 : bits;
-    const int n_arr = 1 << (bits - arr_bits);
-    if (arr >= n_arr)
+    // AAR0-3: the Typhoon's encoding, as the consoles read it: the base
+    // in <34:24>, the size 2^(<15:12> + 23) bytes, 0 when not populated.
+    const auto &arr = m_array[(a >> 6) & 3];
+    if (!arr.size)
       return 0;
-    return ((u64)arr << arr_bits) | ((u64)(arr_bits - 23) << 12);
+    unsigned log2 = 0;
+    while ((U64(1) << log2) < arr.size)
+      log2++;
+    return (arr.base & U64(0x7ff000000)) | ((u64)(log2 - 23) << 12);
   }
   case 0x200:
   case 0x240:

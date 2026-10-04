@@ -58,6 +58,21 @@
 #include "i2c_spd.hpp"
 #include <mutex>
 
+/**
+ * What a Titan board decides about its chipset, from the board row
+ * (platform_config::titan): the boards' real listings differ here, the
+ * chipset model does not.
+ **/
+struct titan_layout {
+  /// The Cchip's pass, MISC<39:32>: the ES45's listing says 17, the DS25's
+  /// and DS15's 18 (test/platforms/). The console only prints it.
+  u8 cchip_rev;
+  /// Memory arrays 0 and 2 hold half the memory each above 1 GB, one array
+  /// below (the DS15: two arrays of two DIMMs, its owner's guide examples
+  /// 2-5 and 2-7). Otherwise one array up to 8 GB, more arrays above.
+  bool paired_arrays;
+};
+
 class CTitan : public CChipset {
 public:
   explicit CTitan(CSystem *sys);
@@ -88,8 +103,9 @@ public:
   bool restore_state(FILE *f) override;
 
   static const int HOSES = 4;
-  /// The revision the Cchip (MISC<39:32>), the Dchips (DREV) and the PA-chips
-  /// (SCTL<7:0>) report: 17, as a real ES45 lists them.
+  /// The revision the Dchips (DREV) and the PA-chips (SCTL<7:0>) report,
+  /// and the Cchip (MISC<39:32>) on a board whose row does not say: 17, as
+  /// the real ES45, DS25 and DS15 list them.
   static const u8 TITAN_REV = 17;
   /// The TIG's revision register (offset 0): the console prints
   /// "TIG Rev (<7:4> + 2).<3:0>"; 0x06 is the TIG V2.6 of firmware CD V7.3.
@@ -106,6 +122,15 @@ private:
   void drive_lines(int cpu); ///< b_irq<1:0> from DRIR & DIMn; m_lock held
   void update_halt_lines();
   void power_on_state();
+
+  /// The board's facts (titan_layout), fixed at construction.
+  u8 m_cchip_rev = TITAN_REV;
+  /// Memory array n: base and size in bytes (size 0: not populated); what
+  /// AARn and CSC<51> report.
+  struct {
+    u64 base, size;
+  } m_array[4] = {};
+  bool interleaved() const;
 
   dimm_population m_dimms;
   struct {

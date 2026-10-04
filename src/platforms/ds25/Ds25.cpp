@@ -30,6 +30,7 @@
 #include "Ds25Aic7899.hpp"
 #include "Ds25Dpr.hpp"
 #include "Flash.hpp"
+#include "Titan.hpp"
 
 namespace {
 /// A slot's interrupt inputs: the DRIR bit of INTA, and how many pins are
@@ -94,3 +95,6 @@ void ds25_board_devices(CConfigurator *cfg, CSystem *sys) {
   new CFlash(cfg, sys, 2);
   new CDs25Aic7899(cfg, sys, 2, 1);
 }
+
+/// Its Cchip is pass 18 (the owner's guide's show config).
+const titan_layout ds25_titan = {18, false};

@@ -33,7 +33,41 @@ CTitan::CTitan(CSystem *sys) : CChipset(sys) {
   m_dimms = model_dimms(
       static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20));
   attach_dimm_spd(m_mpd_bus, m_dimms);
+
+  const titan_layout *board = sys->platform().titan;
+  if (board)
+    m_cchip_rev = board->cchip_rev;
+  const unsigned bits = sys->get_memory_bits();
+  if (board && board->paired_arrays && bits > 30) {
+    // Two equal arrays, 0 then 2, as the DS15's listing of 2048 MB shows
+    // them: array 0 at 0, array 2 at half the memory.
+    const u64 half = U64(1) << (bits - 1);
+    m_array[0] = {0, half};
+    m_array[2] = {half, half};
+  } else {
+    // Arrays of up to 8 GB from 0, in order, as the Typhoon's AARs [assumed
+    // for the ES45 and DS25: no listing of theirs is of a power of two
+    // above 8 GB].
+    const unsigned arr_bits = bits > 33 ? 33 : bits;
+    for (int n = 0; n < (1 << (bits - arr_bits)) && n < 4; n++)
+      m_array[n] = {(u64)n << arr_bits, U64(1) << arr_bits};
+  }
   power_on_state();
+}
+
+/**
+ * Whether memory is interleaved: arrays 0 and 2 populated alike. The
+ * consoles print "1-Way" when CSC<51> is set, which the real listings show
+ * for one array (DS15 example 2-7, the DS25's show memory) and for arrays 0
+ * and 2 of different sizes (the DS25's 512 + 1024 MB), and print 2-Way (or
+ * 4-Way on the DS25 and ES45, when arrays 0 and 1 match too) otherwise:
+ * arrays 0 and 2 of one size (DS15 example 2-5, the ES45's 10 GB). With
+ * CSC<51> clear and one array the DS15 console printed an uninitialised
+ * register as the mode. CSC<51> is what the SROM, which is not emulated,
+ * leaves after configuring memory.
+ **/
+bool CTitan::interleaved() const {
+  return m_array[0].size && m_array[0].size == m_array[2].size;
 }
 
 /**
@@ -45,10 +79,13 @@ void CTitan::power_on_state() {
   // CSC: the Typhoon's value [assumed]. Bit 14 (P1P) says PA-chip 1 is
   // there, which is how Linux decides whether hoses 1 and 3 exist.
   state.cchip.csc = U64(0x3142444014157803);
+  if (!interleaved())
+    state.cchip.csc |= U64(1) << 51;
   // The chip revisions: the console's show config prints MISC<39:32>, the
   // Dchips' DREV and each PA-chip's SCTL<7:0> (ES45 V7.3-2 console, 0x96fc0);
-  // a real ES45's listing (its owner's guide) says 17 for all three.
-  state.cchip.misc = U64(0x0000001100000000);
+  // the real listings (owner's guides) say 17 for all three on the ES45,
+  // and a Cchip of 18 on the DS25 and DS15 (the board row's cchip_rev).
+  state.cchip.misc = (u64)m_cchip_rev << 32;
   state.dchip.drev = TITAN_REV;
 
   // The other Dchip registers: the Typhoon's values [assumed].
