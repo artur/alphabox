@@ -5,9 +5,8 @@
   interrupts to CPUs 0–1. Tru64 is untested with more than one CPU.
 - Big-endian hosts.
 - Some SCSI and IDE commands. The ES47's on-board Adaptec AIC-7892 is
-  stood in for by a Symbios 53C895, and the DS25's AIC-7899, Broadcom and
-  Intel network chips and the ES45/DS25 hot-plug controllers are not
-  modelled.
+  stood in for by a Symbios 53C895, and the DS25's AIC-7899 and Broadcom
+  network chip and the ES45/DS25 hot-plug controllers are not modelled.
 - Cirrus screen-to-system BitBLT transfers (Windows 2000 does not use them),
   and the Mach64's front-end scaler and bus-master DMA (Windows 2000's
   drivers use neither: stretched blits go through the 3D engine). The 3D

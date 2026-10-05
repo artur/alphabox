@@ -100,7 +100,10 @@ Two NIC families are available, each in any free PCI slot:
   names those by their chip and boots over any of them.
 - `de600`: the DE600-AA, an Intel 82559 board, which the console calls
   `eia0` and shows by name; `i82557`, `i82558` and `i82559` are Intel's
-  own PRO/100 boards with those controllers.
+  own PRO/100 boards with those controllers. `i82559er` is the 82559ER,
+  the controller on the AlphaServer DS25's board: that machine has one at
+  `pci0.8` whether the file names it or not (unconnected, `type = "null"`,
+  when it does not).
 
 Either connects to the host through one of four backends, selected with
 `type`:

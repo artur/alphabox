@@ -51,7 +51,6 @@ around the core, and that is where the model is thin:
 
 | Gap | To close it |
 | --- | --- |
-| DS25 Intel 82559ER | **Q1**: a row of the 8255x family |
 | DS25 Broadcom BCM5703c | **N1**: a new NIC family |
 | DS25 AIC-7899: configuration space and ROM only, no SCSI | A1 |
 | Hot-plug controllers (ES45, DS25) | **H1**: with the IO7's hot-plug registers as the model |
@@ -73,7 +72,8 @@ around the core, and that is where the model is thin:
 In order. Each step is one agent with one question, merged through the
 gate.
 
-1. **Q1, the cheap ones**: the 82559ER row; the DS10 loopback option;
+1. **Q1, the cheap ones**: ~~the 82559ER row~~ (done: `i82559er`, on the
+   DS25's board); the DS10 loopback option;
    DKA400's errors; network boot and the TOY calls on the ES47; AGP and
    three/four arrays on the Titan.
 2. **E1, the PALcode audit**: a script lists every internal register and
