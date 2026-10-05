@@ -17,6 +17,8 @@
   [DS20E](platforms/ds20e.md)).
 - [Emulated hardware](hardware.md): every machine, chip and card, and
   [known limitations](limitations.md): what is missing or known to differ.
+- [What is missing, and the plan](backlog.md): the processors' and
+  chipsets' gaps, and the order they are closed in.
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
 - [OpenVMS](openvms.md): installing and running OpenVMS 8.4, DECwindows.

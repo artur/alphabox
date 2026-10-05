@@ -272,12 +272,10 @@ device or an absent CPU.
    rows, a board descriptor for the ES40, the trace, the `PLATFORM=`
    selector, the template and the skill. Separating the chipset is left for
    the first machine that needs a different one.
-2. **Pilot: DS20E** ([packet](platforms/ds20e.md)), in progress: the
-   console runs (L2). What remains is the machine's own hardware -- how it
-   finds a second processor, the processor SROM data it reads, its flash --
-   and a real machine's listing to check against.
-3. **The rest of the Tsunami family**: DS10 and DS20L (their consoles run),
-   DS20, and the UP2000 and XP1000 boards.
+2. ~~**Pilot: DS20E**~~ ([packet](platforms/ds20e.md)): at L5. No real
+   machine's listing was found, so L3 is not claimed.
+3. **The rest of the Tsunami family**: the DS10 and DS20L are at L5; the
+   DS20 and the UP2000 and XP1000 boards are not started.
 4. **Titan**: the ES45 ([packet](platforms/es45.md)), the DS25
    ([packet](platforms/ds25.md)) and the DS15 ([packet](platforms/ds15.md))
    are at L5, with L3 checked structurally against owner's guide listings.
@@ -310,6 +308,9 @@ device or an absent CPU.
      login, DECwindows on the Radeon with USB input; fixes to the embedded
      slots' interrupt lines, shared lines, the EV7 clock rendezvous, and a
      USB keyboard. Linux is open.
+
+What is missing on every machine, and the order it is planned in, is in
+[backlog.md](backlog.md).
 
 The EV7 machines are the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its

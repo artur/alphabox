@@ -15,8 +15,10 @@ L5 on all three (M6c: the ES80 with eight processors and four IO7s, the
 GS1280 with sixteen, OpenVMS 8.4 to DCL on every processor). M7
 (2026-10-03): OpenVMS 8.4 installed to a SCSI disk on the ES47 boots to
 login (and on the ES80), and DECwindows draws its login box on the Radeon
-7500 with a USB keyboard and pointer on the ES47's own USB; a JIT-only
-crash in OpenVMS's USB driver at boot (about one boot in ten) is open. On emulated
+7500 with a USB keyboard and pointer on the ES47's own USB (the crash
+in OpenVMS's USB driver at boot was the OHCI model completing control
+transfers too soon, fixed in 29e213e; it was not the JIT's). What is
+still missing is in [backlog.md](../backlog.md). On emulated
 EV7s, with the management processor (CMM) on the other side of each
 processor's GIO port emulated and the IO7 on PID 0, the console reaches
 `P00>>>`, `show config` lists IO7 0 with its four buses and the devices
