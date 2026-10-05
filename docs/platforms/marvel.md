@@ -1323,7 +1323,21 @@ lanes build.
 - SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1;
 - OpenVMS printed "mvcpu_get_numa_distances: bad route IPR for self" per
   CPU: fixed by M6a (the route table in the CMM);
-- DKA400 shows 4 errors in OpenVMS's `SHOW DEVICE` **[not investigated]**;
+- DKA400 showed 4 errors in OpenVMS's `SHOW DEVICE`: **explained, half of
+  them fixed** (2026-10-05, `lab/es47-dka400/`, traced with
+  `ALPHABOX_TRACE_SCSI=1`). OpenVMS mounts the CD it booted from twice, and
+  DKDRIVER logged two rejected commands each time. MODE SENSE(6) for the
+  control mode page (`1a 00 0a 00 ff 00`, sense 5/24/00): the emulator's
+  fault -- INQUIRY says CmdQue and the page that governs queuing was
+  missing -- and fixed in `CDisk` for every disk and CD. READ DISC
+  INFORMATION (`51 00 .. 22 00`, sense 5/20/00, as the error log entry
+  shows): the guest's probe for recordable media, which the drive the CD
+  claims to be -- a DEC RRD42, a SCSI-2 CD-ROM -- does not have; SCSI-2's
+  CD-ROM command set (clause 14) has no operation code 51h (it came with
+  MMC, for CD-R), and an unimplemented operation code is answered CHECK
+  CONDITION, ILLEGAL REQUEST, 20h/00h. The count is now 2 after a boot
+  from the CD and 1 per `MOUNT` otherwise; the ES40 with the same adapter
+  and CD counts the same, so it is the device and not the board;
 - the AIC-7892, CMD 649 and USB of the real embedded I/O (the CMD 649 and
   the USB since M7a), network boot through the NIC (`net_peer.py`), an
   installation to disk, Linux.

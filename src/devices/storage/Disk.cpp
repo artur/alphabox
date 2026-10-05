@@ -574,6 +574,7 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSIMP_RIGID_GEOMETRY 0x04
 #define SCSIMP_FLEX_PARAMS 0x05
 #define SCSIMP_CACHING 0x08
+#define SCSIMP_CONTROL 0x0A
 #define SCSIMP_INFO_EXCEPTIONS 0x1C
 #define SCSIMP_CDROM_CAP 0x2A
 
@@ -591,6 +592,13 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSI_NO_MEDIA_TRAY_OPEN -9   /* 02/3A/02 */
 #define SCSI_MEDIA_LOCKED -10        /* 05/53/02 medium removal prevented */
 #define SCSI_READ_ERROR -11          /* 03/11/00 unrecovered read error */
+
+// ALPHABOX_TRACE_SCSI=1: every command a SCSI device is given, and the
+// sense data of each one it answers with CHECK CONDITION.
+static bool scsi_trace() {
+  static const bool on = getenv("ALPHABOX_TRACE_SCSI") != 0;
+  return on;
+}
 
 void CDisk::do_scsi_error(int errcode, int info) {
   state.scsi.stat.available = 1;
@@ -704,6 +712,12 @@ void CDisk::do_scsi_error(int errcode, int info) {
 #endif
     break;
   }
+  if (scsi_trace())
+    printf("SCSI %s: cmd %02x -> CHECK CONDITION, sense %x/%02x/%02x "
+           "info %x\n",
+           devid_string, state.scsi.cmd.data[0],
+           state.scsi.sense.data[2] & 0x0f, state.scsi.sense.data[12],
+           state.scsi.sense.data[13], info);
 }
 
 /**
@@ -947,6 +961,9 @@ int CDisk::mode_sense_page(int page, bool changeable, int q) {
   case SCSIMP_CACHING:
     len = 0x12;
     break;
+  case SCSIMP_CONTROL:
+    len = 6;
+    break;
   case SCSIMP_INFO_EXCEPTIONS:
     len = 0x0a;
     break;
@@ -1028,6 +1045,12 @@ int CDisk::do_scsi_command() {
 #endif
   if (state.scsi.cmd.written < 1)
     return 0;
+  if (scsi_trace()) {
+    printf("SCSI %s: cmd", devid_string);
+    for (unsigned int x = 0; x < state.scsi.cmd.written; x++)
+      printf(" %02x", state.scsi.cmd.data[x]);
+    printf("\n");
+  }
 
   if (state.scsi.cmd.data[1] & 0xe0) {
 #if defined(DEBUG_SCSI)
@@ -1601,6 +1624,7 @@ int CDisk::do_scsi_command() {
           q = mode_sense_page(SCSIMP_RIGID_GEOMETRY, changeable, q);
         }
         q = mode_sense_page(SCSIMP_CACHING, changeable, q);
+        q = mode_sense_page(SCSIMP_CONTROL, changeable, q);
         q = mode_sense_page(SCSIMP_INFO_EXCEPTIONS, changeable, q);
         if (cdrom())
           q = mode_sense_page(SCSIMP_CDROM_CAP, changeable, q);
@@ -1624,6 +1648,17 @@ int CDisk::do_scsi_command() {
       case SCSIMP_READ_WRITE_ERRREC: //  read-write error recovery page
         state.scsi.dati.data[q + 0] = pagecode;
         state.scsi.dati.data[q + 1] = 10;
+        break;
+
+      case SCSIMP_CONTROL:
+        // Control mode page (SCSI-2 8.3.3.1), where tagged queuing is
+        // governed: queue algorithm modifier, QErr, DQue. INQUIRY says
+        // CmdQue, so an initiator that queues reads this page first --
+        // OpenVMS's DKDRIVER on every disk and CD it mounts, and it logged
+        // a device error for the page's absence. All zero: restricted
+        // reordering, queuing enabled, nothing changeable.
+        state.scsi.dati.data[q + 0] = pagecode;
+        state.scsi.dati.data[q + 1] = 6;
         break;
 
       case SCSIMP_FORMAT_PARAMS: //  format device page

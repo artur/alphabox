@@ -43,8 +43,8 @@ around the core, and that is where the model is thin:
 | One I/O layout per machine: no expansion or high-performance drawers, one IO7 on the GS1280 | M9 |
 | ES80 drawer numbers and backplane revision, the GS1280's hose speeds | inference; a published listing would settle it |
 | ES47 on-board Adaptec AIC-7892: a Symbios 53C895 stands in | **A1** (with the DS25's AIC-7899) |
-| DKA400 shows 4 errors under OpenVMS | **Q1**: never investigated |
-| Console network boot, cserve GET_TOY/PUT_TOY | **Q1**: never exercised |
+| DKA400 shows 2 errors under OpenVMS booted from the CD (one per mount otherwise) | the guest's probe: READ DISC INFORMATION (0x51), which the CD (a DEC RRD42, a SCSI-2 CD-ROM) rejects as a real one would. The other 2 of the former 4 were the missing control mode page, fixed. Same on the ES40: the device, not the board. See marvel.md, M5 |
+| A time set by the guest is not kept across a restart (every board: the clock is the host's plus an offset held in memory) | a choice: every start is at the host's time. The ES47's console network boot and OpenVMS's SET TIME through the TOY calls work (checked 2026-10-05) |
 | The console's ALi M1543C driver: which Marvel I/O has that chip | unknown; nothing depends on it |
 
 ## Titan (ES45, DS25, DS15)
@@ -56,7 +56,7 @@ around the core, and that is where the model is thin:
 | Hot-plug controllers (ES45, DS25) | **H1**: with the IO7's hot-plug registers as the model |
 | Scatter-gather TLB: invalidates ignored | fidelity only: translations are read from the tables every time |
 | No AGP on hose 2 | **Q1**: check what the ES45 console does with `APCTL<57>` set and a card there |
-| CSC, Dchip and AAR encodings assumed the Typhoon's | checked for one and two arrays; Q1: three and four |
+| CSC, Dchip and AAR encodings assumed the Typhoon's | what `memory.bits` can describe matches (ES45, DS25 to 8 GB: one array; DS15: one and two). Three and four arrays, and unequal ones, cannot be configured: **Q1**, a key for the arrays' sizes (Tsunami and Titan), then the check |
 | `show fru`, the ES45 model "B" | with M10's FRU work |
 
 ## Tsunami (ES40, DS20E, DS10, DS20L)
@@ -72,10 +72,11 @@ around the core, and that is where the model is thin:
 In order. Each step is one agent with one question, merged through the
 gate.
 
-1. **Q1, the cheap ones**: ~~the 82559ER row~~ (done: `i82559er`, on the
-   DS25's board); the DS10 loopback option;
-   DKA400's errors; network boot and the TOY calls on the ES47; AGP and
-   three/four arrays on the Titan.
+1. **Q1, the cheap ones**. Done: the 82559ER (`i82559er`, on the DS25's
+   board); DKA400's errors (the control mode page; the two left are the
+   guest's probe); network boot on the ES47 (`boot ewa0`: BOOTP and TFTP).
+   Left: the DS10 loopback option; a key for a board's memory arrays, then
+   three and four arrays on the Titan; AGP on the ES45.
 2. **E1, the PALcode audit**: a script lists every internal register and
    field both EV7 PALcodes touch; each is checked against the core. The
    result is a table in marvel.md and fixes for what differs.
