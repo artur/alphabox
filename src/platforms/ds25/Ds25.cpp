@@ -110,4 +110,4 @@ const onboard_device ds25_onboard[] = {
 };
 
 /// Its Cchip is pass 18 (the owner's guide's show config).
-const titan_layout ds25_titan = {18, false};
+const titan_layout ds25_titan = {18, false, false};

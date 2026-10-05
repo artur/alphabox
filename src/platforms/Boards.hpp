@@ -74,6 +74,8 @@ int es45_pci_interrupt(int hose, int slot, int intx, int func);
 const char *es45_slot_refusal(int hose, int slot);
 void es45_board_devices(CConfigurator *cfg, CSystem *sys);
 extern const titan_layout es45_titan;
+const char *es45m1_slot_refusal(int hose, int slot); // the Model 1 backplane
+extern const titan_layout es45m1_titan;
 
 // AlphaServer DS25 (platforms/ds25/Ds25.cpp)
 int ds25_pci_interrupt(int hose, int slot, int intx, int func);

@@ -90,4 +90,4 @@ void ds15_board_devices(CConfigurator *cfg, CSystem *sys) {
 /// Its Cchip is pass 18 (the owner's guide's show config, example 2-5). Its
 /// memory is two arrays of two DIMMs, 0 and 2: 1 GB in one array (example
 /// 2-7), 2 GB as two alike (example 2-5).
-const titan_layout ds15_titan = {18, true};
+const titan_layout ds15_titan = {18, true, false};

@@ -27,6 +27,11 @@
 #   image instead of the SRM file -- test/arc/flash.rom, whose nvram
 #   script starts AlphaBIOS (the test-arc skill) -- with the ALi's
 #   vga_console set as there.
+#   PLATFORM=<board> boots another machine, whose console must come from
+#   FLASH (no SRM file is given then); SLOT=<place> puts the card elsewhere
+#   than pci0.2. The ES45 Model 1 with the Radeon in its AGP slot:
+#     CARD=radeon PLATFORM=es45m1 SLOT=pci2.5 FLASH=<its installed flash>
+#   (docs/platforms/es45.md; settled set with SRM V7.3-2: see there).
 #
 # The screen settles on two frames (text cursor on/off). With SRM V7.3-1 the
 # settled sets are:
@@ -118,8 +123,16 @@ cp "$R/test/rom/cl67srmrom.exe" "$D/" || exit 2
 FLASHCFG=""
 if [ -n "${FLASH:-}" ]; then
   cp "$FLASH" "$D/flash.rom" || exit 2
+  chmod u+w "$D/flash.rom"
   FLASHCFG="arc_year_compat = true;"
 fi
+SRMCFG='rom.srm = "cl67srmrom.exe"; rom.decompressed = "decompressed.rom";'
+if [ -n "${PLATFORM:-}" ]; then
+  [ -n "${FLASH:-}" ] || { echo "vga_boot: PLATFORM needs FLASH, the board's installed console"; exit 2; }
+  SRMCFG="platform = \"$PLATFORM\";"
+  FLASHCFG=""
+fi
+SLOT=${SLOT:-pci0.2}
 ROMLINE=""
 if [ -n "$ROM" ]; then
   cp "$ROM" "$D/vgabios.bin" || exit 2
@@ -134,8 +147,7 @@ gui = sdl
 sys0 = tsunami
 {
   memory.bits = 26;
-  rom.srm = "cl67srmrom.exe";
-  rom.decompressed = "decompressed.rom";
+  $SRMCFG
   rom.flash = "flash.rom";
   rom.dpr = "dpr.rom";
   $FLASHCFG
@@ -150,7 +162,7 @@ sys0 = tsunami
     null_attach = true;
   }
 
-  pci0.2 = $CARD
+  $SLOT = $CARD
   {
     $ROMLINE
     $EXTRA

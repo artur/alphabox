@@ -20,6 +20,8 @@
 
 #include "Es45Dpr.hpp"
 #include "StdAfx.hpp"
+#include "System.hpp"
+#include "Titan.hpp"
 
 void CEs45Dpr::board_init() {
   // The PCI backplane's FRU EEPROM, which the RMC copies to 0x2900: the
@@ -27,7 +29,13 @@ void CEs45Dpr::board_init() {
   // type -- 1 for the Model 3's, 2 for the Model 2's ten-slot backplane
   // (ES45 V7.3-2 console, 0x8f9d0). The Model 2 is the machine of the
   // owner's guide's show config listing.
-  state.ram[0x2906] = 2;
+  // The Model 1's backplane, the one with the AGP slot, is type 0: the
+  // console's hot-plug code takes its AGP slot table for 0 without asking
+  // the chipset, and for 3 asks APCTL<57> (cpqphpc_configure, 0x8dc50)
+  // [so 0 is the AGP backplane's own value: inferred from that code; no
+  // dump of a Model 1's EEPROM is known].
+  const titan_layout *board = cSystem->platform().titan;
+  state.ram[0x2906] = (board && board->agp) ? 0 : 2;
 
   // RMC firmware revisions, as the firmware CD V7.3's FWREADME.TXT lists
   // them for the ES45 (RMC V2.4) [the on-chip and flash code are given the

@@ -49,7 +49,11 @@
 
 /// PCTL bits a write does not change: <17> PCISPD66 (a strap) and the
 /// A-port's <57> AGP_PRESENT [both read-only per the field names in Linux
-/// core_titan.h; that they are read-only is assumed].
+/// core_titan.h; that they are read-only is assumed. The ES45 console
+/// reads both and writes neither on hardware]. The A-port's AGP fields --
+/// <53:52> rate, <54> sideband addressing, <55> AGP enable -- are stored:
+/// the console clears them and runs the AGP slot's card as a PCI device,
+/// and no guest so far enables AGP transactions, which are not modelled.
 static const u64 PCTL_RO = U64(0x0200000000020000);
 
 u64 CTitan::port_read(int hose, u32 a) {

@@ -82,6 +82,21 @@ const char *es45_slot_refusal(int hose, int slot) {
   return nullptr;
 }
 
+/**
+ * The Model 1 backplane ("Model 1B", owner's guide table 1-2 and figure
+ * 4-15): six PCI slots and, alone on hose 2, the AGP slot at device 5.
+ * The interrupt table above is the console's for every backplane.
+ **/
+const char *es45m1_slot_refusal(int hose, int slot) {
+  const bool ok = (hose == 0 && (slot == 10 || slot == 11)) ||
+                  ((hose == 1 || hose == 3) && (slot == 1 || slot == 2)) ||
+                  (hose == 2 && slot == 5);
+  if (!ok)
+    return "the ES45 Model 1's slots are hose 0 devices 10 and 11, hoses 1 "
+           "and 3 devices 1 and 2, and the AGP slot, hose 2 device 5";
+  return nullptr;
+}
+
 /// The ES45's RMC dual-port RAM and the flash the console lives in.
 void es45_board_devices(CConfigurator *cfg, CSystem *sys) {
   new CEs45Dpr(cfg, sys);
@@ -89,4 +104,7 @@ void es45_board_devices(CConfigurator *cfg, CSystem *sys) {
 }
 
 /// Its Cchip is pass 17 (the owner's guide's show config).
-const titan_layout es45_titan = {17, false};
+const titan_layout es45_titan = {17, false, false};
+
+/// The Model 1 backplane: hose 2 is the AGP bus.
+const titan_layout es45m1_titan = {17, false, true};

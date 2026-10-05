@@ -71,6 +71,12 @@ struct titan_layout {
   /// below (the DS15: two arrays of two DIMMs, its owner's guide examples
   /// 2-5 and 2-7). Otherwise one array up to 8 GB, more arrays above.
   bool paired_arrays;
+  /// Hose 2, PA-chip 0's A-port, is the board's AGP bus: APCTL<57>
+  /// (AGP_PRESENT) reads 1. The ES45 console decides everything it does
+  /// about AGP from that bit (is_titan_agp, 0x8abe0 in V7.3-2): the model's
+  /// name, "PAchip 0" and the hose's "AGP" in show config. True for the
+  /// ES45's Model 1 backplane, whose hose 2 is one AGP slot, device 5.
+  bool agp;
 };
 
 class CTitan : public CChipset {
@@ -125,6 +131,7 @@ private:
 
   /// The board's facts (titan_layout), fixed at construction.
   u8 m_cchip_rev = TITAN_REV;
+  bool m_agp = false; ///< hose 2 is an AGP bus (APCTL<57>)
   /// Memory array n: base and size in bytes (size 0: not populated); what
   /// AARn and CSC<51> report.
   struct {

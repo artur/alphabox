@@ -35,8 +35,10 @@ CTitan::CTitan(CSystem *sys) : CChipset(sys) {
   attach_dimm_spd(m_mpd_bus, m_dimms);
 
   const titan_layout *board = sys->platform().titan;
-  if (board)
+  if (board) {
     m_cchip_rev = board->cchip_rev;
+    m_agp = board->agp;
+  }
   const unsigned bits = sys->get_memory_bits();
   if (board && board->paired_arrays && bits > 30) {
     // Two equal arrays, 0 then 2, as the DS15's listing of 2048 MB shows
@@ -99,6 +101,13 @@ void CTitan::power_on_state() {
     // until a second Titan board needs otherwise].
     state.port[h].csr[0x300 >> 6] = (h == 0) ? 0 : U64(0x20000);
   }
+  // APCTL<57> AGP_PRESENT, on PA-chip 0's A-port: the board's AGP bus
+  // (titan_layout::agp). The ES45 console never sets it on hardware (its
+  // setup_io, 0x900f0, sets it only when it runs in its simulator) and
+  // keeps it when it clears the AGP rate and enable fields <55:52> and the
+  // queue depths <63:58>: a strap, like PCISPD66 [inferred from that code].
+  if (m_agp)
+    state.port[2].csr[0x300 >> 6] |= U64(1) << 57;
   // SCTL is the G-port's; its low byte is the PA-chip's revision.
   state.port[0].csr[0x700 >> 6] = TITAN_REV;
   state.port[1].csr[0x700 >> 6] = TITAN_REV;

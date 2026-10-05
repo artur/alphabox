@@ -87,6 +87,13 @@ static const platform_config platforms[] = {
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45_slot_refusal, 0, nullptr,
      0x680000, nullptr, &es45_titan},
+    // The same machine on its Model 1 backplane (the owner's guide's "Model
+    // 1B"): six PCI slots and an AGP slot, hose 2 device 5. The console
+    // tells it from the others by the A-port's AGP_PRESENT alone.
+    {"es45m1", "AlphaServer ES45 Model 1", CHIPSET_TITAN, "ev68cb", 4, 26, 35,
+     "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
+     es45_board_devices, es45_pci_interrupt, es45m1_slot_refusal, 0, nullptr,
+     0x680000, nullptr, &es45m1_titan},
     // Under construction (docs/platforms/ds25.md): the second Titan board,
     // its console from an update utility like the ES45's.
     {"ds25", "AlphaServer DS25", CHIPSET_TITAN, "ev68cb", 2, 26, 34,
