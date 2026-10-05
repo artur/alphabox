@@ -230,18 +230,34 @@ To diagnose, set `ALPHABOX_MOUSE_DEBUG=1`:
     them; it has no entry for the `isp1080` or the `isp1240`, which only a
     guest operating system can use.
 - **Serial numbers**: a drive's `serial_number` (alias `serial_num`) is
-  what the guest reads from ATA IDENTIFY (`ali_ide`, `cmd649`) and from
-  `virtio_blk`'s GET_ID. Without one, every drive gets its own: `ES40EM`
-  and five digits -- the controller's number (the `ali_ide` is always 00;
-  other IDE controllers and `virtio_blk` count from 01 in configuration
-  order, or from 00 when there is no `ali_ide`), the bus and the unit. The
-  `ali_ide`'s `disk0.0` is `ES40EM00000`, the serial every drive had
-  before, so an installed guest's boot disk is unchanged; its `disk1.0` is
-  `ES40EM00100` and `disk1.1` `ES40EM00101`. Windows 2000 stops with 0xCA
+  what the guest reads from ATA IDENTIFY (`ali_ide`, `cmd649`), from
+  `virtio_blk`'s GET_ID and from a SCSI disk or CD's INQUIRY (the unit
+  serial number page, 0x80). Without one, every drive gets its own:
+  `ES40EM`, the controller's part, the bus (one digit) and the unit (two
+  digits).
+
+  | Controller | Its part | Bus, unit | Examples |
+  | --- | --- | --- | --- |
+  | `ali_ide` | `00`, always | channel, drive | `disk0.0` `ES40EM00000`, `disk1.0` `ES40EM00100`, `disk1.1` `ES40EM00101` |
+  | `cmd649`, `virtio_blk` | two digits, counted from `01` in configuration order (from `00` when there is no `ali_ide`) | channel, drive (`virtio_blk`: `000`) | the first `cmd649`'s `disk1.0` `ES40EM01100` |
+  | `sym53c8xx`, `isp10x0`/`isp1240` | `S` and the adapter's PCI place: hose and slot, two digits each (then `B` and the slot on each bridge's bus, for an adapter behind bridges) | SCSI bus (the 53C896's channel, the ISP1240's bus), SCSI id | `pci0.3`'s `disk0.5` `ES40EMS0003005`; `pci1.2`'s `disk1.12` `ES40EMS0102112`; `pci.2` behind a bridge in `pci0.3`, `disk0.0`: `ES40EMS0003B02000` |
+  | `ali_usb`, `ehci` (USB disks) | -- | -- | the device's own `0000A1FA0001`, ... (see [USB](usb.md)); INQUIRY and iSerialNumber say the same |
+
+  The `ali_ide`'s `disk0.0` is `ES40EM00000`, the serial every IDE drive
+  had before, so an installed guest's boot disk is unchanged. A SCSI
+  adapter's part is where it sits, not a count, so adding, removing or
+  reordering controllers never changes another disk's serial; the letter
+  keeps it apart from the counted controllers. Windows 2000 stops with 0xCA
   (duplicate device) when two IDE drives report one serial (seen on one
   channel and across two controllers), so give explicit serials distinct
-  values. SCSI disks report their own
-  (INQUIRY page 0x80), USB disks theirs (one per device, see [USB](usb.md)).
+  values. SCSI disks used to report `SRL` and their SCSI id twice
+  (`SRL0000`, `SRL0101`, ...), the same on every adapter and for every USB
+  disk; a guest that keeps a disk's identity by that serial (none of
+  Windows 2000, the 64-bit Whistler beta or OpenVMS 8.4 reads the page for
+  a parallel SCSI disk) gets the old one back with
+  `serial_number = "SRL0000";`. The pages a SCSI disk has are 0x00 and
+  0x80; any other (0x83, device identification) is refused with ILLEGAL
+  REQUEST.
 - **CD images**: a cdrom `file` ending in `.cue` is read as a BIN/CUE image
   (multi-file, MODE1/MODE2/audio tracks); anything else is a flat ISO. CD
   drives are read-only unless `read_only = false`.

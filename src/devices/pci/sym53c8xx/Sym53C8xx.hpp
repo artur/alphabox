@@ -154,6 +154,12 @@ public:
 
   virtual void register_disk(class CDisk *dsk, int bus, int dev);
 
+protected:
+  /// Disks' default serials carry the adapter's PCI place; the bus digit
+  /// that follows is the channel (the 53C896's two PCI functions).
+  std::string serial_place() const override { return "S" + place_digits(); }
+
+public:
   CSym53C8xx(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
              const sym_chip_config &chip);
   virtual ~CSym53C8xx();

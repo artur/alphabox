@@ -250,8 +250,11 @@ Firmware images live in the git-ignored `roms/`; never download one.
   "ES40", the `es40.cfg` filename). The default disk serial is unique per
   drive: the ALi IDE's disk0.0 keeps `ES40EM00000` (installed guests'
   boot disks unchanged), every other drive is numbered from its place --
-  controller, bus, unit (`CDisk::get_serial`); two drives with one serial
-  stop Windows 2000 with 0xCA.
+  controller, bus, unit (`CDisk::get_serial`): IDE and virtio-blk
+  controllers by a two-digit count, SCSI adapters by `S` and their PCI
+  hose and slot (`ES40EMS0003005`: pci0.3, bus 0, id 5), which INQUIRY
+  page 0x80 reports; a USB disk's is its iSerialNumber. Never renumber
+  them; two drives with one serial stop Windows 2000 with 0xCA.
 - Alphabox versions itself via `project(Alphabox VERSION x.y.z)` in
   CMakeLists.txt — never adopt upstream's version number.
 - In `src/gui/sdl.cpp`, keep the focus-bounce re-grab logic (WSLg

@@ -64,7 +64,12 @@ IDE and SCSI controllers) as a Bulk-Only Transport device with the SCSI
 transparent command set -- the standard USB stick. The SCSI commands are
 the same engine the IDE ATAPI path and the SCSI adapters use. On an EHCI
 port it is USB 2.0 (512-byte bulk packets, a device qualifier). Each disk
-has its own serial number, so two copies of one image are two devices.
+has its own serial number, so two copies of one image are two devices:
+`0000A1FA0001` for the first USB disk in the configuration, `...0002` for
+the second, or the disk's `serial_number` when it has one (Bulk-Only
+Transport wants at least 12 hexadecimal digits). The device's
+iSerialNumber string and the disk's SCSI unit serial number page (INQUIRY,
+page 0x80) say the same.
 
 **Speaker** (`audio`: a full-speed device, so on the EHCI card it is
 served by a companion, and a card with `companions = false` refuses it). A USB Audio

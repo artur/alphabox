@@ -121,6 +121,12 @@ public:
 
   virtual void register_disk(class CDisk *dsk, int bus, int dev);
 
+protected:
+  /// Disks' default serials carry the adapter's PCI place; the bus digit
+  /// that follows is the SCSI bus (the ISP1240 has two).
+  std::string serial_place() const override { return "S" + place_digits(); }
+
+public:
   /// The part named `name` ("isp1020", "isp1080"), or nullptr.
   static const isp_chip_config *find_chip(const char *name);
 

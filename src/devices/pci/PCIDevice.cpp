@@ -544,6 +544,19 @@ int CPCIDevice::interrupt_input(int func) const {
                                            myBridge ? -1 : func);
 }
 
+std::string CPCIDevice::place_digits() const {
+  char s[16];
+  std::string below; // the slots under the outermost bridge, top down
+  int dev = myPCIDev;
+  for (const CPCIBridge *b = myBridge; b; b = b->upstream_bridge()) {
+    snprintf(s, sizeof(s), "B%02d", dev);
+    below.insert(0, s);
+    dev = b->pci_dev();
+  }
+  snprintf(s, sizeof(s), "%02d%02d", myPCIBus, dev);
+  return s + below;
+}
+
 static u32 pci_magic1 = 0xC1095A78;
 static u32 pci_magic2 = 0x87A5901C;
 

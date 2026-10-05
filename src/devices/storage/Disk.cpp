@@ -100,27 +100,35 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
 }
 
 /**
- * The serial number the guest is shown: the configured one, or a default
- * that is unique in the machine. Windows 2000 takes an IDE drive's serial
- * as part of its device ID, and two drives with one serial stop it with
- * 0xCA, duplicate device (two CDs on one channel,
- * lab/driver-release-test/dupserial; drives on two IDE controllers). So
- * the default is not one fixed string: it is "ES40EM" and five digits --
- * the controller's number (CDiskController::serial_ordinal: the ALi's IDE
- * 0, the other controllers that show serials in configuration order), the
- * bus and the unit, two, one and two digits. The ALi's disk0.0 stays
- * "ES40EM00000", the one serial every disk had before, so an installed
- * guest's boot disk keeps its identity; disk1.1 there is "ES40EM00101".
+ * The serial number the guest is shown -- in ATA IDENTIFY, virtio-blk's
+ * GET_ID and SCSI INQUIRY's unit serial number page: the configured one,
+ * or a default that is unique in the machine. Windows 2000 takes an IDE
+ * drive's serial as part of its device ID, and two drives with one serial
+ * stop it with 0xCA, duplicate device (two CDs on one channel,
+ * lab/driver-release-test/dupserial; drives on two IDE controllers); an
+ * operating system that tells SCSI disks apart by the serial number page
+ * takes two disks with one serial for two paths to one disk. So the
+ * default is not one fixed string. It is "ES40EM", the controller's part,
+ * the bus (one digit) and the unit (two):
+ *
+ *  - an IDE controller or a virtio-blk is a two-digit number
+ *    (CDiskController::serial_ordinal: the ALi's IDE 00, the others in
+ *    configuration order). The ALi's disk0.0 stays "ES40EM00000", the one
+ *    serial every disk had before, so an installed guest's boot disk keeps
+ *    its identity; disk1.1 there is "ES40EM00101".
+ *  - a SCSI adapter is "S" and its PCI place (CPCIDevice::place_digits:
+ *    hose and slot, two digits each), which does not depend on what else
+ *    the machine has or on the order of the configuration file; the bus is
+ *    the adapter's channel and the unit the SCSI id. The disk with id 5 on
+ *    a 53C875 in pci0.3 is "ES40EMS0003005".
+ *  - a USB disk has the serial its device reports in iSerialNumber
+ *    (CUsbStorage, set_default_serial).
  **/
 const char *CDisk::get_serial() {
   if (serial_number)
     return serial_number;
-  if (default_serial.empty()) {
-    const int ordinal = std::max(myCtrl->serial_ordinal(), 0);
-    char s[32];
-    snprintf(s, sizeof(s), "ES40EM%02d%d%02d", ordinal, myBus, myDev);
-    default_serial = s;
-  }
+  if (default_serial.empty())
+    default_serial = myCtrl->default_serial(myBus, myDev);
   return default_serial.c_str();
 }
 
@@ -1199,26 +1207,57 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: INQUIRY.\n", devid_string);
 #endif
-    if ((state.scsi.cmd.data[1] & 0x1e) != 0x00) {
-      FAILURE_2(NotImplemented,
-                "%s: Don't know how to handle INQUIRY with cmd[1]=0x%02x.\n",
-                devid_string, state.scsi.cmd.data[1]);
+    // EVPD is the only bit of byte 1 there is (bit 1, CmdDt, came and went
+    // with SPC-2); a page code without EVPD asks for nothing; and the vital
+    // product data pages we have are 0x00 and 0x80 (not 0x83, device
+    // identification: page 0 does not list it). Anything else is ILLEGAL
+    // REQUEST, INVALID FIELD IN CDB -- not something to stop the machine
+    // for, which an unknown page used to do.
+    const bool evpd = (state.scsi.cmd.data[1] & 0x01) != 0;
+    const u8 vpd_page = state.scsi.cmd.data[2];
+    // ALPHABOX_TRACE_INQUIRY=1: what each guest asks a disk about itself.
+    static const bool trace_inquiry = getenv("ALPHABOX_TRACE_INQUIRY") != 0;
+    if ((state.scsi.cmd.data[1] & 0x1e) != 0x00 ||
+        (evpd ? (vpd_page != 0x00 && vpd_page != 0x80) : vpd_page != 0)) {
+      if (trace_inquiry)
+        printf("%s: INQUIRY cdb %02x %02x %02x %02x %02x: refused (invalid "
+               "field).\n",
+               devid_string, state.scsi.cmd.data[0], state.scsi.cmd.data[1],
+               state.scsi.cmd.data[2], state.scsi.cmd.data[3],
+               state.scsi.cmd.data[4]);
+      do_scsi_error(SCSI_INVALID_FIELD);
       break;
+    }
+    if (trace_inquiry) {
+      if (!evpd)
+        printf("%s: INQUIRY, %d bytes%s.\n", devid_string,
+               state.scsi.cmd.data[4],
+               state.scsi.lun_selected ? " (a LUN we do not have)" : "");
+      else if (vpd_page == 0x80)
+        printf("%s: INQUIRY page 0x80, %d bytes: serial number \"%s\".\n",
+               devid_string, state.scsi.cmd.data[4], get_serial());
+      else
+        printf("%s: INQUIRY page 0x00, %d bytes: pages 0x00, 0x80.\n",
+               devid_string, state.scsi.cmd.data[4]);
     }
 
     u8 qual_dev = state.scsi.lun_selected ? 0x7F : (cdrom() ? 0x05 : 0x00);
 
     retlen = state.scsi.cmd.data[4];
+    // The data phase is as long as the initiator allows, as it always was
+    // here (no controller model takes a short one in its stride); what lies
+    // past the page is zeros, not what the last command left behind.
+    memset(state.scsi.dati.data, 0, std::max<size_t>(retlen, 36));
     state.scsi.dati.data[0] = qual_dev; // device type
-    if (state.scsi.cmd.data[1] & 0x01) {
+    if (evpd) {
 
       // Vital Product Data
-      switch (state.scsi.cmd.data[2]) {
+      switch (vpd_page) {
       case 0x00:
 
         // Page 0 is basically a list of page codes supported, so if
         // any others are added, make sure to insert them in the proper
-        // place and increase the page length.
+        // place (ascending order) and increase the page length.
         state.scsi.dati.data[1] = 0x00; // page code 0
         state.scsi.dati.data[2] = 0x00; // reserved
         state.scsi.dati.data[3] = 0x02; // page length
@@ -1226,27 +1265,23 @@ int CDisk::do_scsi_command() {
         state.scsi.dati.data[5] = 0x80; // page 0x80 is supported.
         break;
 
-      case 0x80:
-        char serial_number2[20];
-        sprintf(serial_number2, "SRL%04x", scsi_initiator_id[0] * 0x0101);
-
-        // unit serial number page
+      case 0x80: {
+        // Unit serial number page: the disk's own serial (get_serial), the
+        // one an IDE drive shows in IDENTIFY. It was "SRL" and the SCSI id
+        // twice ("SRL0101"): the same disk on every adapter of the machine,
+        // and "SRL0000" for every USB disk. ASCII graphic characters only.
+        std::string serial = get_serial();
+        if (serial.size() > 32)
+          serial.resize(32);
+        for (char &ch : serial)
+          if (ch < 0x20 || ch > 0x7e)
+            ch = ' ';
         state.scsi.dati.data[1] = 0x80; // page code: 0x80
         state.scsi.dati.data[2] = 0x00; // reserved
-        state.scsi.dati.data[3] = (u8)strlen(serial_number2);
-        memcpy(&state.scsi.dati.data[4], serial_number2,
-               strlen(serial_number2));
+        state.scsi.dati.data[3] = (u8)serial.size();
+        memcpy(&state.scsi.dati.data[4], serial.data(), serial.size());
         break;
-
-      default:
-#if 1
-        FAILURE_1(NotImplemented,
-                  "Don't know format for vital product data page %02x!!\n",
-                  state.scsi.cmd.data[2]);
-#else
-        state.scsi.dati.data[1] = state.scsi.cmd.data[2]; // page code
-        state.scsi.dati.data[2] = 0x00;                   // reserved
-#endif
+      }
       }
     } else {
 

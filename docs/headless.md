@@ -153,6 +153,11 @@ the case it was written for).
 `ALPHABOX_TRACE_FLASH=1` reports the commands firmware sends the flash,
 which tells "it never found the part" from "it read what it wanted".
 
+`ALPHABOX_TRACE_INQUIRY=1` reports every SCSI INQUIRY a disk or CD gets --
+on a SCSI adapter, behind USB mass storage or as an ATAPI packet -- with
+the page asked for and, for the unit serial number page, the serial
+answered: which guests read a disk's serial at all, and what they are told.
+
 `ALPHABOX_TRACE_SERIAL=1`, `ALPHABOX_TRACE_KBC=1` and
 `ALPHABOX_TRACE_PORT61=1` report the UARTs, the keyboard controller and the
 ISA refresh-toggle port; `ALPHABOX_TRACE_LFB=1` reports the S3's linear

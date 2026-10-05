@@ -33,6 +33,8 @@
 #if !defined(__DISKCONTROLLER_H__)
 #define __DISKCONTROLLER_H__
 
+#include <string>
+
 /**
  * \brief Abstract base class for disk controllers (uses CDisk's)
  **/
@@ -48,7 +50,17 @@ public:
   /// when it does not show the guest a serial number (CDisk::get_serial).
   int serial_ordinal() const;
 
+  /// The default serial number of the disk at (bus, dev) here: "ES40EM",
+  /// this controller's part and the disk's (see CDisk::get_serial).
+  std::string default_serial(int bus, int dev) const;
+
 protected:
+  /// A controller whose disks are numbered by where it sits rather than by
+  /// a count -- the SCSI adapters, by their PCI place -- returns that part
+  /// of the serial here: a letter and what follows it, which no counted
+  /// controller's two digits can equal. Empty for a counted controller.
+  virtual std::string serial_place() const { return std::string(); }
+
   /// Called by a controller that shows the guest its disks' serial numbers
   /// (ATA IDENTIFY, virtio-blk GET_ID): such controllers are numbered in
   /// configuration order, except that `first` -- the south bridge's IDE --

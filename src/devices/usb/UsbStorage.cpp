@@ -59,9 +59,19 @@ static const std::vector<u8> kConfigurationDescriptor = {
     7, 5, 0x02, 2, 64, 0, 0};
 
 CUsbStorage::CUsbStorage(CSCSIBus *bus, CDisk *disk) : m_disk(disk) {
-  // Numbered in configuration order, so a machine keeps its serials.
+  // Numbered in configuration order, so a machine keeps its serials. The
+  // disk's SCSI unit serial number page (INQUIRY, page 0x80) says the same
+  // as iSerialNumber: a serial_number in the configuration is both, and
+  // without one the disk is told what the device calls itself.
   static int instances = 0;
-  snprintf(m_serial, sizeof(m_serial), "0000A1FA%04X", ++instances);
+  char serial[16];
+  snprintf(serial, sizeof(serial), "0000A1FA%04X", ++instances);
+  if (disk->configured_serial() && *disk->configured_serial()) {
+    m_serial = disk->configured_serial();
+  } else {
+    m_serial = serial;
+    disk->set_default_serial(m_serial);
+  }
   scsi_register(0, bus, 7);
   disk->scsi_register(0, bus, 0);
   disk->set_atapi_mode(); // command, data, status: no message phases
@@ -135,10 +145,11 @@ std::vector<u8> CUsbStorage::string_descriptor(int index) const {
   case 2:
     return utf16_string("Alphabox USB Disk");
   case 3:
-    // Bulk-Only Transport asks for at least 12 hexadecimal digits. Each disk
-    // has its own: a host sees two disks with one serial as one device
-    // (Windows 2000 bugchecks 0xCA on two copies of an image).
-    return utf16_string(m_serial);
+    // Bulk-Only Transport asks for at least 12 hexadecimal digits (a
+    // configured serial_number is passed on as it is). Each disk has its
+    // own: a host sees two disks with one serial as one device (Windows
+    // 2000 bugchecks 0xCA on two copies of an image).
+    return utf16_string(m_serial.c_str());
   default:
     return {};
   }

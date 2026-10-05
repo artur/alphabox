@@ -45,6 +45,7 @@
 
 #include "SystemComponent.hpp"
 #include <mutex>
+#include <string>
 
 /**
  * \brief Abstract base class for devices on the PCI-bus.
@@ -89,6 +90,14 @@ public:
   /// root bus. myPCIBus is always the hose (Pchip) number; the bus number
   /// a configuration cycle carries is the bridge's secondary bus.
   class CPCIBridge *upstream_bridge() const { return myBridge; }
+
+  /// Where this device sits, as digits: the hose and the slot on the
+  /// hose's root bus, two digits each ("0003" for pci0.3; a hose past 99
+  /// takes three), then "B" and the slot on each bridge's secondary bus on
+  /// the way down ("0003B02" for pci.2 behind a bridge in pci0.3). The same
+  /// for a given place whatever else the machine holds: the SCSI adapters
+  /// number their disks' serials with it (CDisk::get_serial).
+  std::string place_digits() const;
 
   /// (Re)place the configuration-space windows at the current bus number:
   /// 0 on the root bus, the upstream bridge's secondary bus otherwise

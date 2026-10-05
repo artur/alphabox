@@ -72,6 +72,18 @@ int CDiskController::serial_ordinal() const {
   return it == list.end() ? -1 : (int)(it - list.begin());
 }
 
+std::string CDiskController::default_serial(int bus, int dev) const {
+  char s[32];
+  const std::string place = serial_place();
+  if (!place.empty()) {
+    snprintf(s, sizeof(s), "%d%02d", bus, dev);
+    return "ES40EM" + place + s;
+  }
+  snprintf(s, sizeof(s), "ES40EM%02d%d%02d", std::max(serial_ordinal(), 0), bus,
+           dev);
+  return s;
+}
+
 void CDiskController::register_disk(class CDisk *dsk, int bus, int dev) {
   if (bus >= num_bus)
     FAILURE(Configuration, "Can't register disk: bus number out of range");

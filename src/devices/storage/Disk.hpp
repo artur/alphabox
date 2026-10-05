@@ -118,6 +118,10 @@ public:
   long get_sectors() { return sectors; };
 
   const char *get_serial();
+  /// The serial_number the configuration gives, or nullptr.
+  const char *configured_serial() const { return serial_number; }
+  /// For a disk whose default serial is its device's to choose (USB).
+  void set_default_serial(const std::string &s) { default_serial = s; }
   char *get_model() { return model_number; };
   char *get_rev() { return revision_number; };
 
