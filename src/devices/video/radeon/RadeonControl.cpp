@@ -175,6 +175,9 @@ u32 CRadeon::reg_read32(u32 reg) {
     return R(GEN_INT_STATUS);
   }
 
+  case OV0_REG_LOAD_CNTL:
+    return overlay_load_cntl_read();
+
   case GPIO_VGA_DDC:
   case GPIO_DVI_DDC:
   case GPIO_MONID:
@@ -228,6 +231,10 @@ u32 CRadeon::reg_read32(u32 reg) {
 }
 
 void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
+  if (reg == OV0_REG_LOAD_CNTL || is_overlay_reg(reg)) {
+    overlay_write(reg, data, old);
+    return;
+  }
   switch (reg) {
   case CLOCK_CNTL_DATA:
     if (R(CLOCK_CNTL_INDEX) & PLL_WR_EN)

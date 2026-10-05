@@ -105,6 +105,7 @@ constexpr u32 WAIT_CRTC_PFLIP = 1u << 0;
 constexpr u32 WAIT_RE_CRTC_VLINE = 1u << 1;
 constexpr u32 WAIT_FE_CRTC_VLINE = 1u << 2;
 constexpr u32 WAIT_CRTC_VLINE = 1u << 3;
+constexpr u32 WAIT_OV0_FLIP = 1u << 11;
 
 // RBBM_STATUS (r100d.h); the 2D and 3D blocks' busy bits are the
 // generation's (RadeonChip.hpp)
@@ -239,6 +240,16 @@ bool CRadeon::engine_sync_reg(u32 reg, u32 data) {
             std::chrono::steady_clock::now() >= give_up)
           break;
       }
+    }
+    if (!m_sync && (data & WAIT_OV0_FLIP)) {
+      // until the overlay's registers have flipped (the Rage 128 Pro guide's
+      // EVENT_OV0_FLIP: "stall cmdfifo 'til OV0_FLIP = 1 ... If it is
+      // already high, there is no stall"), a tenth of a second at the most
+      const auto give_up =
+          std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+      while (!(overlay_load_cntl_read() & OV0_FLIP_READBACK) &&
+             std::chrono::steady_clock::now() < give_up)
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
     return true;
   case DSTCACHE_CTLSTAT:

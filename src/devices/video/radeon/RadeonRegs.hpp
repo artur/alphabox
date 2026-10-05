@@ -177,6 +177,64 @@ enum : u8 {
   PIX_32BPP = 6
 };
 
+// --- the overlay scaler (RadeonOverlay.cpp) ---------------------------------
+/// The double-buffered block.
+constexpr u32 OV0_BLOCK_FIRST = 0x0400;
+constexpr u32 OV0_BLOCK_LAST = 0x04fc;
+constexpr u32 OV0_Y_X_START = 0x0400;
+constexpr u32 OV0_Y_X_END = 0x0404;
+constexpr u32 OV0_EXCLUSIVE_HORZ = 0x0408;
+constexpr u32 OV0_EXCLUSIVE_VERT = 0x040c;
+constexpr u32 OV0_REG_LOAD_CNTL = 0x0410;
+constexpr u32 OV0_SCALE_CNTL = 0x0420;
+constexpr u32 OV0_V_INC = 0x0424;
+constexpr u32 OV0_P1_V_ACCUM_INIT = 0x0428;
+constexpr u32 OV0_P23_V_ACCUM_INIT = 0x042c;
+constexpr u32 OV0_P1_BLANK_LINES_AT_TOP = 0x0430;
+constexpr u32 OV0_P23_BLANK_LINES_AT_TOP = 0x0434;
+constexpr u32 OV0_BASE_ADDR = 0x043c;
+constexpr u32 OV0_VID_BUF0_BASE_ADRS = 0x0440; ///< ... BUF5 0x0454
+constexpr u32 OV0_VID_BUF_PITCH0_VALUE = 0x0460;
+constexpr u32 OV0_VID_BUF_PITCH1_VALUE = 0x0464;
+constexpr u32 OV0_AUTO_FLIP_CNTL = 0x0470;
+constexpr u32 OV0_DEINTERLACE_PATTERN = 0x0474;
+constexpr u32 OV0_H_INC = 0x0480;
+constexpr u32 OV0_STEP_BY = 0x0484;
+constexpr u32 OV0_P1_H_ACCUM_INIT = 0x0488;
+constexpr u32 OV0_P23_H_ACCUM_INIT = 0x048c;
+constexpr u32 OV0_P1_X_START_END = 0x0494;
+constexpr u32 OV0_P2_X_START_END = 0x0498;
+constexpr u32 OV0_P3_X_START_END = 0x049c;
+constexpr u32 OV0_FILTER_CNTL = 0x04a0;
+constexpr u32 OV0_FOUR_TAP_COEF_0 = 0x04b0; ///< ... COEF_4 0x04c0
+constexpr u32 OV0_VIDEO_KEY_CLR_LOW = 0x04e4;
+constexpr u32 OV0_VIDEO_KEY_CLR_HIGH = 0x04e8;
+constexpr u32 OV0_GRAPHICS_KEY_CLR_LOW = 0x04ec;
+constexpr u32 OV0_GRAPHICS_KEY_CLR_HIGH = 0x04f0;
+constexpr u32 OV0_KEY_CNTL = 0x04f4;
+constexpr u32 OV0_TEST = 0x04f8;
+constexpr u32 FCP_CNTL = 0x0910;
+constexpr u32 OV0_LIN_TRANS_A = 0x0d20; ///< ... F 0x0d34
+constexpr u32 OV0_LIN_TRANS_B = 0x0d24;
+constexpr u32 OV0_LIN_TRANS_C = 0x0d28;
+constexpr u32 OV0_LIN_TRANS_D = 0x0d2c;
+constexpr u32 OV0_LIN_TRANS_E = 0x0d30;
+constexpr u32 OV0_LIN_TRANS_F = 0x0d34;
+constexpr u32 DISP_MERGE_CNTL = 0x0d60;
+// OV0_REG_LOAD_CNTL
+constexpr u32 OV0_LOCK = 1u << 0;
+constexpr u32 OV0_LOCK_READBACK = 1u << 3;
+constexpr u32 OV0_FLIP_READBACK = 1u << 4;
+// OV0_SCALE_CNTL
+constexpr u32 OV0_HORZ_PICK_NEAREST = 1u << 2;
+constexpr u32 OV0_VERT_PICK_NEAREST = 1u << 3;
+constexpr u32 OV0_SIGNED_UV = 1u << 4;
+constexpr u32 OV0_SCALER_CRTC_SEL = 1u << 14;
+constexpr u32 OV0_DOUBLE_BUFFER = 1u << 24;
+constexpr u32 OV0_LIN_TRANS_BYPASS = 1u << 28;
+constexpr u32 OV0_SCALER_ENABLE = 1u << 30;
+constexpr u32 OV0_SCALER_SOFT_RESET = 1u << 31;
+
 // --- the PLL registers (CLOCK_CNTL_INDEX <5:0>, write enable <7>)
 // --------------
 constexpr u32 PLL_INDEX_MASK = 0x3f;

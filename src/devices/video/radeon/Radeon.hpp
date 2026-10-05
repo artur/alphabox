@@ -49,6 +49,10 @@
  *                      (CRadeonEngineBus)
  *   RadeonDisplay.cpp  the primary CRTC's extended modes, the hardware
  *                      cursor, the 8-bit palette
+ *   RadeonOverlay.cpp  the overlay scaler (OV0): the video window, its
+ *                      surface formats, scaling and filtering, YUV to
+ *                      RGB, the colour keys and the merge with the
+ *                      graphics, the register lock
  *   r100/              the R100 generation's 3D engine
  *                      (radeon::r100::CRadeonR100_3D, RadeonR100_3D.hpp):
  *                      vertex fetch and the 3D packets, TCL, rasteriser
@@ -338,6 +342,8 @@ protected:
                                              const std::string &detail)>;
   /// The FIFO, CP and GART checks (RadeonSelfTestQueue.cpp).
   void selftest_queue(const selftest_report &report);
+  /// The overlay scaler's checks (RadeonSelfTestOverlay.cpp).
+  void selftest_overlay(const selftest_report &report, const std::string &dir);
 
   // --- display (RadeonDisplay.cpp) -------------------------------------------
   bool native_crtc_active() const override;
@@ -346,6 +352,28 @@ protected:
   uint64_t hw_cursor_signature() const override;
   void render_native(bitmap_rgb32 &bitmap);
   void draw_hw_cursor(bitmap_rgb32 &bitmap);
+
+  // --- the overlay scaler (RadeonOverlay.cpp) ------------------------------
+  /// The double-buffered registers (0x0400-0x04ff but the lock itself).
+  static bool is_overlay_reg(u32 reg);
+  /// A write to one of them or to OV0_REG_LOAD_CNTL.
+  void overlay_write(u32 reg, u32 data, u32 old);
+  u32 overlay_load_cntl_read() const;
+  /// Brings the scaler's copy up to date when its vertical blank has come.
+  void overlay_sync() const;
+  /// The scaler takes the registers as they are (reset, a restored state).
+  void overlay_latch();
+  void overlay_reset();
+  long long overlay_frame() const;
+  bool overlay_active() const;
+  uint64_t overlay_signature() const;
+  void draw_overlay(bitmap_rgb32 &bitmap);
+  /// The scaler's own copy of the block, what is waiting for it, the
+  /// frame it is due at, FLIP_READBACK; their lock.
+  mutable u32 m_ov[64] = {};
+  mutable bool m_ov_dirty = false, m_ov_flip = true;
+  mutable long long m_ov_latch_frame = 0;
+  mutable std::mutex m_ov_mx;
   unsigned native_width() const;
   unsigned native_height() const;
   unsigned native_bytes_pp() const;

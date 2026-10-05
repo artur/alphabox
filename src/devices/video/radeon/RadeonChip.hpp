@@ -80,6 +80,9 @@ struct ChipInfo {
   /// The CP microcode a driver loads on the part, by family (Linux's
   /// <family>_cp.bin; RadeonMicrocode.cpp).
   const char *cp_microcode;
+  /// How many pixels the overlay's window (OV0_Y_X_START/END) lies to the
+  /// right of the screen's X (RadeonOverlay.cpp).
+  u32 ov0_x_shift;
 };
 
 /// The row for a part by name (nullptr if there is none).

@@ -39,7 +39,11 @@
  *     0x30, + 0x0e: 2700 in 10 kHz units; radeonfb's default for the
  *     family), an 180 MHz engine clock (the same block, + 0x08) with two
  *     pixel pipelines [the rate the busy time is modelled at; the BIOS's
- *     values are read again from the ROM the card runs, when it has one].
+ *     values are read again from the ROM the card runs, when it has one];
+ *   - the overlay's window is programmed eight pixels to the right of
+ *     where it shows: X.org adds x_off = 8 to OV0_Y_X_START/END on every
+ *     part that is neither an R200 nor an R300 (radeon_video.c
+ *     RADEONDisplayVideo), vidix the same (R_OVL_SHIFT).
  **/
 
 #include "RadeonChip.hpp"
@@ -53,7 +57,7 @@ extern const Generation gen_r100; // r100/RadeonR100_3D.cpp
 
 static const ChipInfo kChips[] = {
     {"rv200", "Radeon 7500 (RV200)", &gen_r100, 0x5157, 0x013a, 0x013b, 64, 64,
-     256, 27000, 180000, 2, false, "R100"},
+     256, 27000, 180000, 2, false, "R100", 8},
 };
 
 const ChipInfo *find_chip(const char *name) {

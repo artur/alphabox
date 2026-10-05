@@ -21,7 +21,8 @@
 /**
  * \file
  * Radeon display: the primary CRTC's extended modes, the hardware cursor,
- * the 8-bit palette.
+ * the 8-bit palette. The overlay scaler's window is laid over the CRTC's
+ * picture, under the cursor (RadeonOverlay.cpp).
  *
  * With CRTC_GEN_CNTL's EXT_DISP_EN and CRTC_EN both set the Radeon's own
  * CRTC drives the screen: the size from CRTC_H_TOTAL_DISP (<24:16>
@@ -111,14 +112,17 @@ void CRadeon::palette_update() {
   }
 }
 
+/// What the refresh gate cannot see in VRAM's dirty flag: the cursor's
+/// registers, and the overlay (its registers and its surface).
 uint64_t CRadeon::hw_cursor_signature() const {
+  const uint64_t ovl = native_crtc_active() ? overlay_signature() : 0;
   if (!(R(CRTC_GEN_CNTL) & CRTC_CUR_EN))
-    return 0;
+    return ovl;
   uint64_t sig = 1;
   for (u32 reg : {CRTC_GEN_CNTL, CUR_OFFSET, CUR_HORZ_VERT_POSN,
                   CUR_HORZ_VERT_OFF, CUR_CLR0, CUR_CLR1})
     sig = sig * 1000003u ^ R(reg);
-  return sig;
+  return sig ^ ovl;
 }
 
 static inline u32 argb(u32 rr, u32 g, u32 b) {
@@ -260,6 +264,7 @@ uint32_t CRadeon::screen_update(bitmap_rgb32 &bitmap,
                                 const rectangle &cliprect) {
   if (native_crtc_active()) {
     render_native(bitmap);
+    draw_overlay(bitmap);
     draw_hw_cursor(bitmap);
     return 0;
   }

@@ -888,6 +888,10 @@ bool CRadeon::selftest() {
            "");
   }
 
+  // the overlay scaler (RadeonSelfTestOverlay.cpp)
+  sync();
+  selftest_overlay(report, dir);
+
   // ----------------------------------------------------------------------
   // put the card back
   sync();
