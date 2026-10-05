@@ -25,7 +25,9 @@ reference or 3D documentation. What exists:
   `radeon_state.c`), Linux's radeonfb (the PLLs), Mesa's classic r100
   driver (the 3D and TCL state as a driver programs it; `radeon_tile.c`,
   the family's micro tile layout), X.org's xf86-video-ati (2D
-  acceleration, Render through the 3D engine, the cursor);
+  acceleration, Render through the 3D engine, the cursor, the overlay in
+  `radeon_video.c`), MPlayer's vidix `radeon_vid.c` (the overlay's set-up,
+  which is ATI's sample code with its comments);
 - the card's own BIOS (`roms/video/radeon7500`, disassembled in
   `lab/docs-radeon/rom.dis`): its PLL block and its waits.
 
@@ -56,6 +58,8 @@ src/devices/video/radeon/       the family's common code
   RadeonTiming.cpp              PLLs, pixel clock, CRTC timing
   RadeonMemory.cpp              framebuffer aperture, VRAM
   RadeonDisplay.cpp             extended modes, cursor, palette
+  RadeonOverlay.hpp/.cpp        the overlay scaler (OV0): the video window
+                                over the CRTC's picture
   RadeonEngine.cpp              the 2D engine
   RadeonQueue.cpp               the command FIFO, the engine thread, busy status
   RadeonCP.cpp                  the CP: ring, indirect buffers, PIO queue,
@@ -64,13 +68,14 @@ src/devices/video/radeon/       the family's common code
   RadeonSelfTest.hpp/.cpp       the self-test's common checks and the means
                                 the generations' scenes use
   RadeonSelfTestQueue.cpp       its FIFO, CP, GART and clock checks
+  RadeonSelfTestOverlay.cpp     its overlay checks
   r100/                         the R100 generation (R100, RV100, RV200, ...)
     RadeonR100_3D.hpp/.cpp      radeon::r100::CRadeonR100_3D: ports, packets,
                                 vertex fetch, assembly, clipping; gen_r100
     RadeonR100Tcl.cpp           transform and lighting
     RadeonR100Raster.cpp        rasteriser and pixel pipeline
     RadeonR100Regs.hpp          its registers and packet fields
-    RadeonR100SelfTest.cpp      its self-test scenes (01-23)
+    RadeonR100SelfTest.cpp      its self-test scenes (01-31)
 ```
 
 The common code is the radeon/ root rather than a `common/` beside the
@@ -279,6 +284,78 @@ for (0x6c94) [inference: the time]; `MC_IDLE` <2> is the engine's idle.
 the hardware cursor (mono AND/XOR, and 64x64 ARGB blended as
 premultiplied alpha).
 
+**The overlay scaler** (`RadeonOverlay.cpp`, common to the family: it is
+the Rage 128's back-end scaler). A window of the screen
+(`OV0_Y_X_START`/`END`) is filled from a video surface of its own and
+laid over the CRTC's picture, under the cursor, so the window and the
+frame dumps show it. No ATI register reference covers it; it is written
+from X.org's `radeon_video.c` (`RADEONDisplayVideo` and its neighbours)
+and from vidix's `radeon_vid.c`, whose `ComputeAccumInit`,
+`Calc_H_INC_STEP_BY`, `ComputeBorders` and `FilterSetup` are ATI's sample
+code, with the Rage 128 documents for the lock. The file's head has the
+registers one by one; in short:
+
+- **the lock**: the block 0x0400-0x04ff is double buffered. A write
+  reaches the scaler at the next vertical blank, and not while
+  `OV0_REG_LOAD_CNTL`'s `LOCK` is set; `LOCK_READBACK` <3> follows the
+  lock, `FLIP_READBACK` <4> goes low at unlock and high at the blank that
+  takes the registers (Rage 128 Pro guide, `EVENT_OV0_FLIP`: "will go low
+  at unlock and then high during VBlank (when the hardware double
+  buffering flips the registers)"), and `WAIT_UNTIL`'s `OV0_FLIP` <11>
+  stalls the FIFO for it. Without `OV0_SCALE_CNTL`'s `DOUBLE_BUFFER` a
+  write is immediate [inference];
+- **surfaces** (`OV0_SCALE_CNTL` <11:8>): packed 4:2:2 in both byte
+  orders (11, YUY2 in memory; 12, UYVY), planar 4:2:0 and 4:1:0 (10, 9:
+  Y in buffer 0, U in 1, V in 2, `OV0_TEST` <5> swapping them), RGB1555,
+  RGB565 and xRGB8888 (3, 4, 6); the buffers at `OV0_BASE_ADDR` +
+  `OV0_VID_BUFn_BASE_ADRS` in the memory controller's space, with either
+  pitch register;
+- **scaling**: `OV0_H_INC` (2.12 a scaler clock, the chroma planes' in
+  <29:16>), `OV0_STEP_BY`, `OV0_V_INC` (20 fractional bits); the scaler's
+  clock is the pixel clock divided by `VCLK_ECP_CNTL`'s `ECP_DIV`; the
+  accumulators' starting values as ATI's code sets them -- 2.5 across and
+  1.5 down "puts the kernel 50% of the way between the source pixel that
+  is off screen and the first on-screen source pixel", plus half a step
+  to the first destination pixel's centre -- so the first tap is at the
+  value less 3 (less 2 down); the source window (`OV0_Pn_X_START_END`,
+  the lines in `OV0_Pn_BLANK_LINES_AT_TOP`), a tap beyond it taking the
+  edge's pixel [inference];
+- **filter taps modelled**: nearest (`HORZ_PICK_NEAREST`,
+  `VERT_PICK_NEAREST`); across, the four-tap filter with eight phases from
+  the five rows of `OV0_FOUR_TAP_COEF_0..4` (the phases past a half are
+  the rows mirrored [inference]); down, two taps (linear), or the same
+  four-tap filter when `OV0_STEP_BY` is 0. Where `OV0_FILTER_CNTL` asks
+  for the chip's own coefficients, which are not published, the two-tap
+  linear filter is used [inference]. The filter works in 32nds (the
+  accumulators' five fractional bits) and rounds to the nearest
+  [inference];
+- **colour**: `OV0_LIN_TRANS_A..F`, X.org's `RADEONSetTransform` format
+  (ten-bit Y, Cb, Cr; coefficients with eleven fractional bits; offsets in
+  halves), BT.601 at power-on [inference: X.org's reset values];
+  `SIGNED_UV`; RGB surfaces and `LIN_TRANS_BYPASS` skip it;
+- **keys and merge**: the graphics pixel (eight bits a channel, a 16-bit
+  pixel's bits shifted up as X.org builds its key) within
+  `OV0_GRAPHICS_KEY_CLR_LOW..HIGH`, the video pixel within
+  `OV0_VIDEO_KEY_CLR_LOW..HIGH`, each through its function in
+  `OV0_KEY_CNTL` (false, true, in range, out of range), ANDed or ORed
+  (`CMP_MIX`); `DISP_MERGE_CNTL`: the key, a global alpha pair, or the
+  graphics pixel's own alpha [inference: how the alpha modes combine];
+- **the window's X** is eight pixels to the right of the screen's on the
+  parts before the R200 (X.org's `x_off`, vidix's `X_ADJUST`): the part's
+  row (`ov0_x_shift`). Both ends of the window are inclusive [inference:
+  ATI's set-up counts the destination width plus one].
+
+Not modelled: the gamma curves (`OV0_GAMMA_*`: taken as 1.0), the
+deinterlacer and its second set of buffers (`OV0_AUTO_FLIP_CNTL`,
+`OV0_DEINTERLACE_PATTERN`), the exclusive window, the capture port, the
+subpicture, blending several source lines when shrinking (lines are
+dropped), the blank lines at the top. X.org loads the vertical
+accumulator without the half step, so its picture sits half a line low:
+that is its programming, kept. The Mach64's and the ViRGE's overlays
+(`mach64/Mach64Display.cpp`, `virge/S3VirgeDisplay.cpp`) share nothing
+with it but the idea: fixed YUV equations there, a programmed transform
+and a programmed filter here.
+
 **3D engine**, the R100 generation's (`r100/`: `RadeonR100_3D.cpp`,
 `RadeonR100Tcl.cpp`, `RadeonR100Raster.cpp`):
 
@@ -294,13 +371,16 @@ premultiplied alpha).
 - TCL (when `VF_CNTL<9>` asks and `SE_CNTL_STATUS` does not bypass it):
   the model-view-projection, model-view and inverse-transpose matrices
   from the vector memory (`SE_TCL_VECTOR_INDX_REG`/`DATA_REG`, scalars
-  likewise), clipping to the view volume and the six user clip planes,
-  the viewport, OpenGL fixed-function lighting (eight lights: infinite,
-  local, spot; range attenuation; material from the registers or the
+  likewise), clipping of triangles, lines and points to the view volume,
+  the guard band and the six user clip planes, the viewport, OpenGL
+  fixed-function lighting (eight lights: infinite, local, spot and
+  dual-cone spot; range attenuation; material from the registers or the
   vertex colours; separate or combined specular; local viewer), fog
   factors (exp, exp2, linear, from eye depth or range), texture
   coordinates from the inputs or through the texture matrices with
-  texture generation (object, eye, normal, reflection);
+  texture generation (object, eye, normal, reflection). The unit is read
+  as Mesa programs it -- see [The TCL unit as Mesa programs
+  it](#the-tcl-unit-as-mesa-programs-it);
 - vertex blending (`SE_TCL_UCP_VERT_BLEND_CTL` BLEND_OP_COUNT,
   POSITION/NORMAL_BLEND_OP_ENABLE, WGT_MINUS_ONE: the weighted sum of the
   MODELPROJECT/MODELVIEW/IT_MODELVIEW matrices `SE_TCL_MATRIX_SELECT_n`
@@ -389,6 +469,82 @@ attributes at the centre's projection onto the line. 4-bit and 5-bit
 texture channels widen by replicating their bits (0xF is 1.0), as
 GL's conversion c / (2^n - 1) has it and the other cards' models do.
 
+### The TCL unit as Mesa programs it
+
+nada's nadarad drives the TCL unit behind Direct3D's T&L HAL, programming
+it as Mesa's r100 driver does, and its TCLTEST (below) met five places
+where the model had read the unit otherwise. Mesa's source decides each;
+`r100/RadeonR100Tcl.cpp` and `RadeonR100_3D.cpp` quote it.
+
+- **The view volume is OpenGL's**, -w <= x, y, z <= w. Mesa loads GL's
+  projection as it is and `SE_VPORT_ZSCALE`/`ZOFFSET` = (far - near) / 2,
+  (near + far) / 2 (`radeonUpdateWindow`, Mesa's
+  `_mesa_get_viewport_xform`): z/w from -1..1 onto the depth range, which
+  shows the near half of the volume only if the chip clips at z = -w. The
+  R200 and R300 name the choice (`R200_VAP_DX_CLIP_SPACE_DEF`; R300
+  `VAP_CNTL` <22>, "0: -W < Z < W (OpenGL definition), 1: 0 < Z < W
+  (DirectX definition)"); the R100 has no such bit in any header. The
+  model clipped at z = 0 before and would have dropped the near half of
+  every Mesa frame. A Direct3D driver gets its near plane from a user
+  clip plane (nadarad keeps the sixth for z >= 0) or from the projection.
+- **The guard band** (scalars 48-51, `VERT/HORZ_GUARD_CLIP_ADJ` and
+  `_DISCARD_ADJ`, 1.0 in Mesa): x and y clip at w times the CLIP_ADJ, a
+  primitive wholly beyond w times the DISCARD_ADJ is dropped [inference:
+  the R300's registers of the same names, "should be set to 1.0 for no
+  guard band"].
+- **A texture coordinate set has three coordinates**, and the third is a
+  2D texture's Q or a cube map's R (`radeonUploadTexMatrix`: "on r100,
+  only 3 tex coords can be submitted, so the vector looks like this
+  probably: (s t r|q 0)"). A set enters the texture matrix as (s, t,
+  third, 0), the third being 1 when the vertex has none -- Mesa swaps the
+  matrix's third and fourth columns for a two-coordinate set so that GL's
+  translation meets it, and it is Direct3D's own rule; of the matrix's
+  outputs the third is Q (Mesa moves GL's q row there for 2D textures);
+  it leaves the unit only with `SE_TCL_OUTPUT_VTX_FMT`'s Q bit. The model
+  had (s, t, 0, 1) and divided by the fourth output: a translation was
+  lost. The matrix multiplies only with `TEXMAT_n_ENABLE`
+  (`TEXGEN_TEXMAT_n_ENABLE` alone is a generated coordinate as it is).
+- **The eye vector** (vector 124) is the direction the viewer looks in,
+  its opposite the direction to the viewer: Mesa's `update_light` loads
+  (`_EyeZDir[0]`, `_EyeZDir[1]`, `-_EyeZDir[2]`), (0, 0, -1) for GL's eye
+  space; nadarad loads (0, 0, 1) for Direct3D's camera space. The model
+  had taken it as the direction to the viewer [inference: only eye-space
+  lighting pins it; Mesa's value for model-space lighting fits no single
+  reading].
+- **Lines and points are clipped** by the unit like triangles (Mesa sends
+  them unclipped: `radeon_tcl.c`). The model only projected a line's
+  ends, so one with an end behind the eye crossed the screen.
+- **The dual-cone spot** (`LIGHT_n_DUAL_CONE` <5>, scalar
+  `SS_LIGHT_DCD`): ((cos - cutoff) x DCD) ^ exponent, clamped to 0..1 --
+  Direct3D's spot light, the cutoff the outer cone's cosine, DCD 1 /
+  (cos(inner) - cos(outer)) [inference: no driver programs it; the R200
+  has DCD and DCM by name and nothing more].
+- **Attenuation above 1** is left as OpenGL's, 1 / (c + l d + q d^2)
+  with no clamp. Direct3D 7's own pipeline holds it at 1; nothing says
+  what the chip does. Mesa loads the chip's reciprocal scalar with 1 / c
+  for any c and `FLT_MAX` for c = 0, which a factor used as it is would
+  need [undecided without a card].
+
+**Against Direct3D's own vertex pipeline.** nada's TCLTEST
+(`examples/alpha-nt/radeon/tcl_check.sh` in nada's tree, on the Windows
+2000 guest of `lab/radeon-d3d/guest2`) draws 43 scenes through the T&L
+HAL (this unit), the HAL behind Direct3D's software vertex pipeline (the
+same rasteriser) and the RGB device. With the readings above, the scenes
+that had differed between the first two (`lab/radeon-tcl/`):
+
+| scene | before | after |
+|---|---|---|
+| farviewpoint (a point light, viewer at infinity) | DIFF 4248 | same |
+| texmove (a texture transform that translates) | DIFF 29247 | same |
+| lineclip (lines through the near plane) | DIFF 479 | close (73) |
+| bright (attenuation above 1) | DIFF 921 | DIFF 921: OpenGL's, kept |
+| spot2, spot3 (theta < phi) | DIFF 6610, 4320 | the same: nadarad does not program the dual cone |
+
+The 35 counted scenes stay same or close. The test's `texreflect3d`
+scene and one draw of `strip` end in a floating-point exception inside
+Microsoft's `d3dim700.dll`; that is the DLL's own, on any Alpha
+([cpu-fidelity.md](cpu-fidelity.md#a-guests-floating-point-exception-that-is-the-guests-own)).
+
 **Against Direct3D's software rasteriser.** `test/tools/d3d_check.sh`
 on a Windows 2000 guest with nada's nadarad DirectDraw/Direct3D 7 HAL
 (800x600x16; `lab/radeon-d3d/`) compares the HAL with d3dim700's RGB
@@ -454,18 +610,20 @@ SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 72 checks: 11 on the command FIFO, the engine's busy time,
+or `FAIL`. 91 checks: 11 on the command FIFO, the engine's busy time,
 the CP's streams and micro-engine, the GART and the clocks
 (`RadeonSelfTestQueue.cpp`), 4 on the microcode lookups (the known-image
 table, synthetic images of each word width, the R100 and R200 packet
 sets, the self-test's own unknown image; `RadeonMicrocode.cpp`), 26 on
 the 2D engine, the CP and the cursor,
-30 on the 3D engine (the generation's scenes, run between the 2D checks
-and the last two 2D/CP ones), and one that every wait for idle ended. The self-test
+34 on the 3D engine (the generation's scenes, run between the 2D checks
+and the last two 2D/CP ones), 15 on the overlay scaler
+(`RadeonSelfTestOverlay.cpp`, below), and one that every wait for idle
+ended. The self-test
 waits for the engine as a driver does (64 free FIFO entries, then
 `GUI_ACTIVE` clear) before it touches memory the engine draws in, and
 for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (62 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
+the queue checks are left out (81 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
 (default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
 reference, differing pixels in white):
 
@@ -482,9 +640,9 @@ reference, differing pixels in white):
 | 09-zbuffer, 10-stencil | 16- and 24-bit Z with LESS and writes; stencil REPLACE then EQUAL, plane mask 0 |
 | 11-primitives | quads, quad strips, polygons, lines, points, wide lines; the IMMD, VBUF (two arrays), INDX, RNDR_GEN_INDX_PRIM and register-port walks; an IMMD_2 (an R200 packet) that draws nothing |
 | 12-stipple-pattern | the polygon stipple with offsets, the line pattern |
-| 13-tcl-lit-cube | TCL: matrices, two lights (directional with specular, local with attenuation), linear fog, Z, culling |
-| 14-tcl-texmatrix-ucp | TCL: the texture matrix, a user clip plane |
-| 15-tcl-near-clip | TCL: clipping at the near plane (a vertex behind the eye) |
+| 13-tcl-lit-cube | TCL: matrices, two lights (directional with specular; local with attenuation and a specular colour, the viewer at infinity by the eye vector as Mesa loads it), linear fog, Z, culling |
+| 14-tcl-texmatrix-ucp | TCL: the texture matrix, a translating one uploaded as Mesa's `radeonUploadTexMatrix` uploads it for a two-coordinate set; a user clip plane |
+| 15-tcl-near-clip | TCL: clipping at the near plane (a vertex behind the eye), with OpenGL's projection and Mesa's viewport: the plane is z = -w |
 | 16-render-composite | X.org's Render composite as `R100PrepareComposite` programs it: OVER, an A8 mask, non-power-of-two textures |
 | 17-misc-state | LOD bias, mirror-once and GL clamp, the logic op and plane mask, float colours, 32-bit indices, an indexed `RNDR_GEN_INDX_PRIM` |
 | 18-tiling-endian | a micro-tiled, dword-swapped colour buffer read back by the reference's own de-tiling; a micro-tiled, byte-swapped RGB565 texture drawn 1:1 |
@@ -497,17 +655,39 @@ reference, differing pixels in white):
 | 25-round-modes | the four `ROUND_MODE`s at half-pixel `ROUND_PREC` on ties that tell them apart, under both pixel-centre conventions; a point and a line snapped too |
 | 26-line-subpixel | one-pixel lines between sub-pixel endpoints, both majors, both directions |
 | 27-border-mode | `CLAMP_GL` with `BORDER_MODE_OGL` (GL_CLAMP: edge and border blended) and `_D3D` (border only) |
+| 28-tcl-texmatrix-q | TCL: the third coordinate as Q -- three submitted coordinates through a matrix that moves r to q, and eye-linear texture generation with a q plane, both uploaded Mesa's way |
+| 29-tcl-gl-volume | TCL: OpenGL's view volume and depth range: quads in the near half (z/w < 0) drawn and Z-tested, one before the near plane and one beyond the far plane not |
+| 30-tcl-line-point-clip | TCL: a line cut at the near plane, one at a user clip plane, one behind the eye; points inside, in the near half, before the near plane, outside a user plane |
+| 31-tcl-spot-dualcone-eye | TCL: OpenGL's spot light; the dual-cone spot with falloff 1 and 2.5; a point light's highlight for a viewer at infinity |
 
 Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
 without a frame.
 
+The overlay's checks (`ov01.png` .. in the same directory) set a 256 x
+192 mode of the card's own CRTC over a patterned desktop, put a surface
+in off-screen memory, program the scaler under its lock as ATI's sample
+code computes the set-up, and compare the frame the display path renders
+with a reference resampler written beside them: YUY2 at 1:1 behind the
+graphics colour key; UYVY doubled with the two-tap filter, and the same
+picture with `ECP_DIV` 1; a planar 4:2:0 surface doubled with the
+programmed four-tap filter across, and both ways; RGB565 and xRGB8888
+surfaces; the key functions (graphics not equal; video in range AND
+graphics equal); the global and per-pixel alpha modes; that an update
+written under the lock does not show until the unlock and the blank
+after it (`FLIP_READBACK`); the scaler disabled; the transform's
+power-on values against BT.601's equations. The scales are ones the
+accumulators' five fractional bits hold exactly; the reference's
+rounding is the model's.
+
 The references are written from the same sources as the model, so a
 scene that passes shows that the engine does what the drivers' reading of
 the hardware says, consistently, through the guest-visible interfaces --
-not that the silicon does it. No Alpha guest drives the 3D engine today
-(Windows 2000 has no Radeon driver; OpenVMS's DECwindows uses only 2D;
-Linux does not run on Marvel), so nothing in the 3D engine has been seen
-by a guest.
+not that the silicon does it. One guest drives the 3D engine: Windows
+2000 with nada's nadarad (its Direct3D 7 HAL and T&L HAL; `d3d_check.sh`
+and TCLTEST above compare it with Direct3D's software, which is not the
+R100 either). OpenVMS's DECwindows uses only 2D, Linux does not run on
+Marvel, and nothing drives the overlay yet (nadarad offers none;
+d3d_check's two overlay scenes report n/a).
 
 Guest-verified: OpenVMS 8.4 DECwindows (the CP ring, indirect buffers,
 solid and 8x8 mono pattern fills, mono host data in `HOSTDATA_BLT`, the
@@ -542,7 +722,14 @@ the FIFO and the cache flush) runs its test unchanged.
   draw, the solid shading of specular and fog, the bypass setup's
   `STn_PRE_MULT_1_OVER_W0`, the face fill modes 1/2 (points/lines), the
   polygon stipple's bit order and offsets, the YUV byte orders (from
-  Mesa's YCbCr formats), the view-volume clip (exact, no guard band).
+  Mesa's YCbCr formats), the clipper's arithmetic (exact).
+- **The TCL unit's reflection vector** (`TEXGEN_INPUT_EYE_REFLECT`) is
+  GL's r = u - 2 n (n . u), which is also Direct3D's. Mesa multiplies it
+  by -1 for `GL_REFLECTION_MAP` ("TODO: unknown if this is
+  needed/correct"; on the R200, "pretty weird, must only negate when
+  lighting is enabled?"), which would make the chip's the opposite
+  vector. Undecided; nadarad's `texreflect` scene agrees with the model's
+  only because both follow the same definition.
 
 ## Not emulated, and what a real card would have to settle
 
@@ -556,8 +743,9 @@ Said once at run time when a guest asks for them:
   gives their layout; the sprite primitive (`SPIRIT_LIST`);
 - `CNTL_SMALLTEXT` and `LOAD_MICROCODE`: no source gives their formats.
 
-Silently not modelled: dual-cone spots and the specular threshold (no
-source says what they compute); the hierarchical Z RAM (it only lets
+Silently not modelled: the specular threshold (no source says what it
+computes), `LOCAL_LIGHT_VEC_GL` and `LIGHT_NO_NORMAL_AMBIENT_ONLY`, user
+clip planes in model space; the hierarchical Z RAM (it only lets
 the chip skip work); the destination caches' contents (the engine writes
 memory directly); the R5xx-only packets (PRED_EXEC, COND_EXEC,
 WAIT_SEMAPHORE, WAIT_MEM, MPEG_INDEX); the micro-engine's own program.
@@ -567,6 +755,11 @@ above: the engine's busy time, the CP's PIO queue depth, the PLL's
 update and the test counter's rate, the source scissor's effect, the
 float and W depth layouts, the dither pattern, table fog's table, the
 anti-aliasing coverage, vertex blending, the 3-vertex lists, the fast
-clear's block geometry. The self-test's references are written from the
+clear's block geometry; in the TCL unit the guard band, the eye vector
+outside eye space, the dual cone, whether attenuation is held at 1, the
+reflection vector's sign; in the overlay everything marked above -- the
+lock's timing, the window's inclusive end, the fetch groups, the mirrored
+filter phases, the chip's own coefficients, the rounding, the video key,
+the alpha modes, the transform's reset values. The self-test's references are written from the
 same sources as the model: a pass shows consistency, not the silicon's
 behaviour.
