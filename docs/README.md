@@ -7,6 +7,9 @@
   hotkeys, disk and CD images, and guest installation guides.
 - [Headless operation and debug hooks](headless.md): window-less runs,
   screen dumps, scripted keyboard and mouse input, and trace switches.
+- [Source layout and architecture](source-layout.md): every source
+  directory, device family and chip, and how the CPU, JIT, configuration
+  and threading fit together.
 - [Development and testing](development.md): source layout, test tools, and
   what verifying a change involves.
 - [Machines](platforms.md): how a CPU, a chipset and a board fit together,
