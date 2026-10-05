@@ -958,8 +958,29 @@ void CAlphaCPU::ieee_trap(u64 trap, u32 instenb, u64 fpcrdsb, u32 ins) {
       && !((ins & I_FTRP_S) &&
            (state.fpcr & fpcrdsb))) /* /S and disabled? ignore */
     real_trap |= trap;              // trap bit in EXC_SUM
-  if (real_trap)
+  if (real_trap) {
+    /* ALPHABOX_TRACE_ARITH=<n>: the first n IEEE arithmetic traps (default
+       200) with what a handler would want to know: the trigger, its
+       operands as they were, the FPCR, the summary's trap bits (`trap`:
+       SWC 01, INV 02, DZE 04, OVF 08, UNF 10, INE 20, IOV 40; 00 when the
+       trap only asks PALcode to set FPCR status bits, which are in `set`)
+       and the current mode. */
+    static const long trace_max = [] {
+      const char *e = getenv("ALPHABOX_TRACE_ARITH");
+      return e ? (atol(e) > 1 ? atol(e) : 200) : 0;
+    }();
+    static std::atomic<long> traced{0};
+    if (trace_max && traced.fetch_add(1) < trace_max)
+      fprintf(stderr,
+              "%%CPU-I-ARITH: cpu%d pc %016" PRIx64 " ins %08x fa %016" PRIx64
+              " fb %016" PRIx64 " fpcr %016" PRIx64 " trap %02x set %02x%s"
+              " cm %d\n",
+              state.iProcNum, state.current_pc, ins, state.f[I_GETRA(ins)],
+              state.f[I_GETRB(ins)], state.fpcr, (unsigned)(real_trap & 0x7f),
+              (unsigned)((real_trap >> 41) & 0x7f),
+              (ins & I_FTRP_S) ? " /S" : "", (int)state.cm);
     ARITH_TRAP(real_trap | ((ins & I_FTRP_S) ? TRAP_SWC : 0), I_GETRC(ins));
+  }
   return;
 }
 

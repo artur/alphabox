@@ -43,6 +43,11 @@ running Alpha code inside the emulator rather than by reading alone.
   off and the console comes back, so results stored in memory can be read
   with `examine -p -q <address>`. This is how most of the findings below
   were shown rather than argued.
+- **Arithmetic traps**: `ALPHABOX_TRACE_ARITH=<n>` prints the first `n`
+  IEEE arithmetic traps (docs/headless.md): the trigger's address and
+  instruction word, both operands as they were, the FPCR and the summary.
+  With the address of an exception a guest reports, that is the faulting
+  instruction and what it was given, without a debugger in the guest.
 - **A guest that traps**: the SRM bootstrap has no operating system behind
   it, so an enabled trap ends in "kernel stack not valid halt". That makes a
   fine yes/no trap detector, but anything about what a *handler* sees needs
@@ -289,6 +294,7 @@ nothing there. It compares VA<47:13> now.
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Architecturally legal — a virtual I-cache need not be coherent, and `IMB` works — but a guest that gets away with a missing `IMB` on real hardware can fail here, because stale bytes live far longer. Its lines carry the flush generation they were filled in, so an `IMB` invalidates every one of them with a single store instead of a walk -- and it must invalidate them, whatever else a flush decides to skip: the lines are tagged by virtual address, so code mapped at an address that has held other code is a change no physically-keyed bookkeeping can see |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
+| `FPCR[DNZ]` turns a denormal operand into zero for every IEEE instruction; the 21264 does so only for instructions with `/S` ("when FPCR[DNZ] is set, denormal input operand traps can be avoided for arithmetic operations that include the /S qualifier", 21264/21364 Compiler Writer's Guide C) | `AlphaCPU_ieeefloat.cpp`, `ieee_unpack` | A program that sets `DNZ` and runs instructions without `/S` on denormals gets zeros where hardware would trap. Windows and OpenVMS leave `DNZ` clear |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the only row that exists (EV68CB implements all of them). It matters the day a row is added for a part that does not |
 
 ## What was checked and found correct
@@ -390,6 +396,67 @@ against the manuals, and most of it by running code:
   being mirror images (a classic emulator bug, and we decode both), sticky
   bits set independently of trap enables, NaN propagation and quieting,
   `CMPTxx` signalling rules, `DNZ`, and the S-format load/store mapping.
+
+## A guest's floating-point exception that is the guest's own
+
+Recorded because it looks exactly like an emulator fault and is not one
+(2026-10-05; `lab/radeon-tcl/`).
+
+Direct3D 7's software vertex pipeline in Windows 2000 RC2 for Alpha
+(`d3dim700.dll`, build 2128) ends a program with
+`STATUS_FLOAT_INVALID_OPERATION` (c0000090) in two places: every time a
+texture stage asks for `D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR` (the
+exception at `d3dim700 + 0x3285c`), and once a run in a scene that draws
+vertices without normals after scenes with them (`+ 0x34114`). Both were
+followed to the instruction with `ALPHABOX_TRACE_ARITH`:
+
+| | `+ 0x32858` | `+ 0x34110` |
+| --- | --- | --- |
+| instruction | `MULS f10, f11, f10` (`594b104a`), no `/S` | `MULS f12, f25, f12` (`5999104c`), no `/S` |
+| operands | f10 = `00000000a0000000`, then `0000200000000000`: the words 5 and 0x10000 loaded by `LDS` -- denormals; f11 = 0 | f12 = `fff0101000000000`: the word `ff808080` loaded by `LDS` -- a signalling NaN; f25 = 1.0 |
+| FPCR | `8990000000000000`: no `DNZ`, no trap disabled | the same |
+| where the operand comes from | 12 bytes past a three-float temporary on the stack | the colour of a vertex (`ARGB ff808080`), read as its normal |
+
+The first is a loop in the DLL that is wrong as built. The reflection
+vectors are computed by a loop at `+ 0x53020` whose counter and both of
+its pointers step *backwards* (`SUBL r13, #1`; `LDA r9, -12(r9)`;
+`LDA r10, -68(r10)`) under an unsigned `CMPULT r13, count`, so it runs
+once; the texture transform that follows (`+ 0x32830`) then walks `count`
+vectors of 12 bytes from that one result into whatever the stack holds.
+On x86 the same slip costs nothing -- the wrong values are multiplied,
+overwritten on the next call and never trap. The second reads a normal
+from a vertex format that has none because a flag (bit 30 of the word at
+`+ 5532` of the device) was left set by an earlier draw.
+
+Whether hardware does the same is not in doubt. A denormal or a
+signalling NaN as the operand of an IEEE arithmetic instruction is an
+invalid-operation trap that nothing masks ("the 21264/21364 traps on a
+Denormal input operand for all arithmetic operations unless FPCR[DNZ] =
+1"; "SNaN operand ... Invalid Op", 21264/21364 Compiler Writer's Guide,
+appendix C; the Alpha Architecture Handbook 4.7.6: "This trap is always
+enabled"), and without `/S` there is nothing for the operating system to
+complete: Windows raises the exception with the destination register's
+mask as its argument (`00000400` and `00001000` here: F10 and F12). The
+operands are words the guest's own integer code put there. The emulator's
+part was checked three ways: the interpreter (`ALPHABOX_INTERP=1`) takes
+the same traps at the same addresses with the same operands; a
+`JIT_VERIFY` build ran the whole test (2.7 billion compiled blocks) with
+0 mismatches and the same traps; and the stack words are the same on
+every run. So it is Microsoft's pre-release code, compiled without IEEE
+mode for a processor that -- unlike the x86 it was written on -- traps on
+operands that are not numbers.
+
+One related question came up with it. An FP instruction that traps has
+its destination written first here (the result the operation gives with
+the trap masked), so a handler that completes an `/S` instruction whose
+destination is also an operand finds the operand gone. That is within
+the architecture -- "if this trap occurs, an UNPREDICTABLE value is
+stored in the result register", and software completion requires that no
+instruction in the trap shadow modify a register the trigger reads
+(Handbook 4.7.6, conditions 1 and 3) -- so code generated for software
+completion keeps the destination apart from the operands (GCC's `-mieee`
+patterns are early-clobber for this reason). A compiler that does not is
+relying on what no Alpha promised.
 
 ## The rule this audit produced
 

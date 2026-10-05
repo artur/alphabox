@@ -135,6 +135,21 @@ differs from board to board.
 site and routine, which is how a silent failure inside a console is read
 (it found the DS10's). Interpreter builds only.
 
+`ALPHABOX_TRACE_ARITH=<n>` reports the first `n` IEEE arithmetic traps
+(200 for `=1`): the trigger's address and instruction word, its two
+operands as they were, the FPCR, the trap summary's bits (`trap`: SWC 01,
+INV 02, DZE 04, OVF 08, UNF 10, INE 20, IOV 40 -- 00 when the trap only
+asks PALcode to set the status bits in `set`), `/S` when the instruction
+has it, and the processor's mode:
+
+```
+%CPU-I-ARITH: cpu0 pc 00000000701a2858 ins 594b104a fa 00000000a0000000 fb 0000000000000000 fpcr 8990000000000000 trap 02 set 02 cm 1
+```
+
+With the address a guest reports for a floating-point exception this is
+the faulting instruction and what it was given (docs/cpu-fidelity.md has
+the case it was written for).
+
 `ALPHABOX_TRACE_FLASH=1` reports the commands firmware sends the flash,
 which tells "it never found the part" from "it read what it wanted".
 
