@@ -700,13 +700,66 @@ void clip_plane(std::vector<RadeonVertex> &poly, const float pl[4]) {
 } // namespace
 
 /**
- * A triangle: clipped in clip space (TCL vertices: the view volume
- * -w <= x, y <= w, 0 <= z <= w -- Direct3D's depth range, which Mesa's
- * viewport transform (ZSCALE = ZOFFSET = 0.5 for the GL range) does not
- * reach [inference: the guard band and the near plane are not documented;
- * this clips exactly], then the user clip planes SE_TCL_UCP_VERT_BLEND_CTL
- * enables <7:2> (VS_UCP vectors 116..121, in clip space), then rasterised
- * as a fan.
+ * The planes the TCL unit clips to, in clip space (a point is inside a
+ * plane when its dot product with it is not negative), and how many.
+ *
+ * The view volume is OpenGL's: -w <= x, y, z <= w. No R100 document says
+ * so; the drivers do. Mesa's r100 driver loads OpenGL's projection as it
+ * is and a viewport that maps z/w from -1..1 to the depth range
+ * (radeonUpdateWindow: SE_VPORT_ZSCALE = (far - near) / 2, ZOFFSET =
+ * (near + far) / 2, Mesa's _mesa_get_viewport_xform), which shows the
+ * near half of the volume only on a chip that clips at z = -w. The R200
+ * and R300 name the choice (R200_VAP_DX_CLIP_SPACE_DEF, R300 VAP_CNTL<22>:
+ * "0: -W < Z < W (OpenGL definition), 1: 0 < Z < W (DirectX
+ * definition)"); the R100's registers have no such bit, so a Direct3D
+ * driver gets its near plane from the projection or from a user clip
+ * plane (nada's nadarad keeps the sixth one for z >= 0).
+ *
+ * The guard band: scalars 48..51 (VERT_GUARD_CLIP_ADJ, VERT_GUARD_
+ * DISCARD_ADJ, HORZ_GUARD_CLIP_ADJ, HORZ_GUARD_DISCARD_ADJ), which Mesa
+ * loads with 1.0. Read as the R300's registers of the same names are
+ * documented ("should be set to 1.0 for no guard band"): x and y are
+ * clipped at w times the CLIP_ADJ, and a primitive wholly beyond w times
+ * the DISCARD_ADJ on one side is dropped [inference for the R100; a
+ * scalar below 1, never loaded, counts as 1].
+ *
+ * Then the user clip planes SE_TCL_UCP_VERT_BLEND_CTL enables <7:2>
+ * (VS_UCP vectors 116..121), in clip space as Mesa loads them
+ * (UCP_IN_CLIP_SPACE <0>; UCP_IN_MODEL_SPACE <1> is not modelled).
+ **/
+size_t CRadeonR100_3D::tcl_clip_planes(float pl[12][4]) const {
+  const float gv = std::max(m_scl[48], 1.0f), gh = std::max(m_scl[50], 1.0f);
+  const float vol[6][4] = {{1, 0, 0, gh},  {-1, 0, 0, gh}, {0, 1, 0, gv},
+                           {0, -1, 0, gv}, {0, 0, 1, 1},   {0, 0, -1, 1}};
+  memcpy(pl, vol, sizeof(vol));
+  size_t n = 6;
+  const u32 ucp = c.R(SE_TCL_UCP_VERT_BLEND_CTL);
+  for (int p = 0; p < 6; p++)
+    if (ucp & (1u << (2 + p)))
+      memcpy(pl[n++], m_vec[116 + p], 4 * sizeof(float));
+  return n;
+}
+
+/// The guard band's discard test: every vertex beyond w times the
+/// DISCARD_ADJ on the same side.
+bool CRadeonR100_3D::tcl_discard(const RadeonVertex *const *v, int n) const {
+  const float dv = std::max(m_scl[49], 1.0f), dh = std::max(m_scl[51], 1.0f);
+  const float pl[4][4] = {
+      {1, 0, 0, dh}, {-1, 0, 0, dh}, {0, 1, 0, dv}, {0, -1, 0, dv}};
+  for (const auto &p : pl) {
+    int out = 0;
+    for (int i = 0; i < n; i++)
+      out += v[i]->x * p[0] + v[i]->y * p[1] + v[i]->w * p[3] < 0;
+    if (out == n)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * A triangle: a TCL one is clipped in clip space to the unit's planes
+ * (tcl_clip_planes) [inference: the clipper's arithmetic is not
+ * documented; this clips exactly], then rasterised as a fan.
  **/
 void CRadeonR100_3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
                               const RadeonVertex &c3,
@@ -716,18 +769,18 @@ void CRadeonR100_3D::triangle(const RadeonVertex &a, const RadeonVertex &b,
     raster_triangle(v, &prov);
     return;
   }
+  {
+    const RadeonVertex *v[3] = {&a, &b, &c3};
+    if (tcl_discard(v, 3))
+      return;
+  }
   std::vector<RadeonVertex> poly = {a, b, c3};
   // flat shading takes the provoking vertex's colours to every new vertex
   RadeonVertex flat = prov;
-  static const float planes[6][4] = {{1, 0, 0, 1}, {-1, 0, 0, 1},
-                                     {0, 1, 0, 1}, {0, -1, 0, 1},
-                                     {0, 0, 1, 0}, {0, 0, -1, 1}};
-  for (int p = 0; p < 6 && !poly.empty(); p++)
+  float planes[12][4];
+  const size_t np = tcl_clip_planes(planes);
+  for (size_t p = 0; p < np && !poly.empty(); p++)
     clip_plane(poly, planes[p]);
-  const u32 ucp = c.R(SE_TCL_UCP_VERT_BLEND_CTL);
-  for (int p = 0; p < 6 && !poly.empty(); p++)
-    if (ucp & (1u << (2 + p)))
-      clip_plane(poly, m_vec[116 + p]);
   if (poly.size() < 3)
     return;
   for (auto &v : poly)
@@ -797,26 +850,68 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
            : flat_sel == 2 ? v[i2]
                            : v[i3];
   };
-  auto clipped = [&](RadeonVertex &x) {
-    if (x.clip_space) {
-      RadeonVertex y = x;
-      to_window(y);
-      return y;
-    }
-    return x;
+  // Points and lines through the TCL unit are clipped like triangles: a
+  // point outside a plane is not drawn, a line is cut where it crosses
+  // one (Mesa hands the chip GL lines and points with TCL and relies on
+  // it: radeon_tcl.c sends them unclipped, "render unclipped vertex
+  // buffers by emitting vertices directly"). A cut line keeps the colours
+  // of its own provoking vertex when flat shaded.
+  float cplanes[12][4];
+  size_t ncp = 0;
+  if (!v.empty() && v[0].clip_space)
+    ncp = tcl_clip_planes(cplanes);
+  auto pdist = [&](const RadeonVertex &x, size_t p) {
+    return x.x * cplanes[p][0] + x.y * cplanes[p][1] + x.z * cplanes[p][2] +
+           x.w * cplanes[p][3];
   };
-  auto line = [&](RadeonVertex &x, RadeonVertex &y) {
-    const RadeonVertex a = clipped(x), b = clipped(y);
-    raster_line(a, b, flat_sel == 0 ? &a : &b);
+  auto point = [&](const RadeonVertex &x) {
+    if (!x.clip_space) {
+      raster_point(x);
+      return;
+    }
+    for (size_t p = 0; p < ncp; p++)
+      if (pdist(x, p) < 0)
+        return;
+    RadeonVertex y = x;
+    to_window(y);
+    raster_point(y);
+  };
+  auto line = [&](const RadeonVertex &x, const RadeonVertex &y) {
+    if (!x.clip_space) {
+      raster_line(x, y, flat_sel == 0 ? &x : &y);
+      return;
+    }
+    const RadeonVertex *ends[2] = {&x, &y};
+    if (tcl_discard(ends, 2))
+      return;
+    RadeonVertex a = x, b = y, flat = flat_sel == 0 ? x : y;
+    const size_t nf = offsetof(RadeonVertex, clip_space) / sizeof(float);
+    for (size_t p = 0; p < ncp; p++) {
+      const float da = pdist(a, p), db = pdist(b, p);
+      if (da < 0 && db < 0)
+        return;
+      if (da >= 0 && db >= 0)
+        continue;
+      const float t = da / (da - db);
+      RadeonVertex m;
+      const float *pa = &a.x, *pb = &b.x;
+      float *pm = &m.x;
+      for (size_t k = 0; k < nf; k++)
+        pm[k] = pa[k] + (pb[k] - pa[k]) * t;
+      m.clip_space = true;
+      m.has_back = a.has_back;
+      (da < 0 ? a : b) = m;
+    }
+    to_window(a);
+    to_window(b);
+    to_window(flat);
+    raster_line(a, b, &flat);
   };
   m_prims++;
   switch (prim) {
   case PRIM_POINT_LIST:
     for (size_t i = 0; i < n; i++)
-      if (!v[i].clip_space ||
-          (std::fabs(v[i].x) <= v[i].w && std::fabs(v[i].y) <= v[i].w &&
-           v[i].z >= 0 && v[i].z <= v[i].w))
-        raster_point(clipped(v[i]));
+      point(v[i]);
     return;
   case PRIM_LINE_LIST:
     for (size_t i = 0; i + 1 < n; i += 2)
@@ -890,11 +985,7 @@ void CRadeonR100_3D::assemble(u32 prim, std::vector<RadeonVertex> &v) {
     // three edges as lines [inference]
     for (size_t i = 0; i + 2 < n; i += 3)
       for (size_t k = 0; k < 3; k++)
-        if (!v[i + k].clip_space ||
-            (std::fabs(v[i + k].x) <= v[i + k].w &&
-             std::fabs(v[i + k].y) <= v[i + k].w && v[i + k].z >= 0 &&
-             v[i + k].z <= v[i + k].w))
-          raster_point(clipped(v[i + k]));
+        point(v[i + k]);
     return;
   case PRIM_LINE_LIST_3:
     for (size_t i = 0; i + 2 < n; i += 3)

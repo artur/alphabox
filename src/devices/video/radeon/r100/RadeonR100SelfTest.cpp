@@ -34,6 +34,7 @@
 #include "RadeonSelfTest.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1302,7 +1303,10 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     vec_upload(4, mv, 4);  // matrix 1: model-view
     vec_upload(8, mv, 4);  // matrix 2: its inverse transpose (rotation)
     // light 0: directional from the upper left front (eye space), white;
-    // light 1: a local orange light with linear attenuation
+    // light 1: a local orange light with linear attenuation and a specular
+    // colour: with the viewer at infinity its half vector needs the eye
+    // vector, loaded as Mesa's update_light loads it for GL's eye space,
+    // (0, 0, -1): the direction the viewer looks in
     const double L0[3] = {-0.4, 0.5, 0.768};
     const double l0n = std::sqrt(L0[0] * L0[0] + L0[1] * L0[1] + L0[2] * L0[2]);
     const double L0n[4] = {L0[0] / l0n, L0[1] / l0n, L0[2] / l0n, 0};
@@ -1319,7 +1323,7 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     vec_upload(96, H0, 1);
     const double P1[4] = {1.5, -1.0, -2.0, 1};
     const double amb1[4] = {0, 0, 0, 1}, dif1[4] = {0.9, 0.5, 0.1, 1},
-                 spc1[4] = {0, 0, 0, 1}, att1[4] = {0, 0.3, 1.0, 0},
+                 spc1[4] = {0.5, 0.4, 0.3, 1}, att1[4] = {0, 0.3, 1.0, 0},
                  dir1[4] = {0, 0, 0, 0};
     vec_upload(65, amb1, 1);
     vec_upload(73, dif1, 1);
@@ -1327,7 +1331,7 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     vec_upload(89, P1, 1);
     vec_upload(97, dir1, 1);
     vec_upload(105, att1, 1);
-    const double glob[4] = {0.05, 0.05, 0.1, 1}, eye[4] = {0, 0, 1, 1};
+    const double glob[4] = {0.05, 0.05, 0.1, 1}, eye[4] = {0, 0, -1, 1};
     vec_upload(122, glob, 1);
     vec_upload(124, eye, 1);
     // fog: linear from 3.5 to 8 (C = end / (end - start), D = -1 / (e - s))
@@ -1355,7 +1359,7 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
         1u | (1u << 3) | (1u << 5) | (1u << 16) | (1u << 18) | (1u << 20) |
             (1u << 22),
         pkt0(SE_TCL_PER_LIGHT_CTL_0, 1),
-        (1u | 2u | 4u) | ((1u | 2u | 8u | 64u) << 16),
+        (1u | 2u | 4u) | ((1u | 2u | 4u | 8u | 64u) << 16),
         pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
         3u << 8,
         pkt0(SE_CNTL_STATUS, 1),
@@ -1451,6 +1455,16 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
       const double ndl1 = nn[0] * L[0] + nn[1] * L[1] + nn[2] * L[2];
       for (int k = 0; k < 3; k++)
         dif[k] += at * std::max(0.0, ndl1) * dif1[k] * mat_d[k];
+      if (ndl1 > 0) {
+        // the viewer at infinity, towards +z in GL's eye space
+        double Hv[3] = {L[0], L[1], L[2] + 1};
+        const double hn =
+            std::sqrt(Hv[0] * Hv[0] + Hv[1] * Hv[1] + Hv[2] * Hv[2]);
+        const double ndh = (nn[0] * Hv[0] + nn[1] * Hv[1] + nn[2] * Hv[2]) / hn;
+        if (ndh > 0)
+          for (int k = 0; k < 3; k++)
+            spc[k] += at * std::pow(ndh, 16.0) * spc1[k] * mat_s[k];
+      }
       for (int k = 0; k < 3; k++) {
         t.col[k] = std::min(1.0, std::max(0.0, dif[k]));
         t.spec[k] = std::min(1.0, std::max(0.0, spc[k]));
@@ -1510,6 +1524,33 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
                  12);
   }
 
+  // Mesa's radeonUploadTexMatrix (radeon_state.c), transcribed: a GL
+  // texture matrix (column-major `src`) as the four vectors the driver
+  // loads. For a 2D target the third and fourth rows change places (the
+  // unit's third output is Q), and for a two-coordinate set without
+  // texture generation (`swapcols`) the third and fourth columns too (the
+  // unit's third input is the set's Q slot). Mesa's first two elements of
+  // the last two vectors in the swapcols case are as it has them.
+  auto mesa_texmat = [](const double *src, bool target2d, bool swapcols,
+                        double *dest) {
+    if (target2d && swapcols) {
+      const int order[16] = {0, 4, 12, 8,  1, 5, 13, 9,
+                             2, 6, 15, 11, 3, 7, 14, 10};
+      for (int i = 0; i < 16; i++)
+        dest[i] = src[order[i]];
+    } else if (target2d) {
+      int k = 0;
+      for (int i : {0, 1, 3, 2})
+        for (int c = 0; c < 4; c++)
+          dest[k++] = src[i + 4 * c];
+    } else {
+      int k = 0;
+      for (int i = 0; i < 4; i++)
+        for (int c = 0; c < 4; c++)
+          dest[k++] = src[i + 4 * c];
+    }
+  };
+
   // -- scene: TCL texture matrix, user clip plane, near-plane clipping ------
   {
     base_state();
@@ -1524,8 +1565,14 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     };
     const double ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     // matrix 0: identity MVP and MV; matrix 3: the texture matrix
-    // s' = 2s + 0.25, t' = 3t
-    const double tm[16] = {2, 0, 0, 0.25, 0, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // s' = 2s + 0.25, t' = 3t -- GL's (column-major, the translation in
+    // the fourth column) uploaded as Mesa uploads it for a two-coordinate
+    // set on a 2D texture (mesa_texmat with the column swap): the
+    // translation then meets the unit's third input, which is 1
+    const double tm_gl[16] = {2, 0, 0, 0, 0,    3, 0, 0,
+                              0, 0, 1, 0, 0.25, 0, 0, 1};
+    double tm[16];
+    mesa_texmat(tm_gl, true, true, tm);
     vec_upload(0, ident, 4);
     vec_upload(12, tm, 4);
     // the user clip plane 0: keep clip y <= 0.5 w  (0, -1, 0, 0.5)
@@ -1542,14 +1589,15 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
         pkt0(SE_TCL_MATRIX_SELECT_0, 2),
         0u,
         0u | (3u << 16),
-        pkt0(SE_TCL_OUTPUT_VTX_SEL, 1),
+        pkt0(SE_TCL_OUTPUT_VTX_FMT, 2),
+        VTX_Z | VTX_W0 | VTX_PKCOLOR | VTX_ST0,
         1u | (8u << 16),
         pkt0(SE_TCL_TEXTURE_PROC_CTL, 1),
-        (1u << 4) | (0u << 16),
+        (1u << 0) | (1u << 4) | (0u << 16),
         pkt0(SE_TCL_LIGHT_MODEL_CTL, 1),
         0,
         pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
-        1u << 2,
+        1u | (1u << 2),
         pkt0(SE_CNTL_STATUS, 1),
         0,
         pkt0(SE_VPORT_XSCALE, 6),
@@ -1591,14 +1639,30 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     scene_report("TCL: texture matrix, user clip plane", d, mx, 8);
 
     // near-plane clipping: a flat triangle with a vertex behind the eye,
-    // its coverage solved per pixel in clip space
+    // its coverage solved per pixel in clip space. Programmed as Mesa
+    // programs the chip: OpenGL's projection (z/w from -1 at the near
+    // plane to 1 at the far one) and a viewport that maps that to 0..1
+    // (radeonUpdateWindow), so the volume is -w <= z <= w
     base_state();
     clear_cb(0xff000000u);
     std::vector<u32> nref(size_t(W * H), 0xff000000u);
     const double f = 1.0, n = 1, fa = 10;
-    const double pr[16] = {
-        f, 0, 0,  0, 0, f, 0, 0, 0, 0, fa / (n - fa), n * fa / (n - fa),
-        0, 0, -1, 0};
+    const double pr[16] = {f,
+                           0,
+                           0,
+                           0,
+                           0,
+                           f,
+                           0,
+                           0,
+                           0,
+                           0,
+                           (fa + n) / (n - fa),
+                           2 * n * fa / (n - fa),
+                           0,
+                           0,
+                           -1,
+                           0};
     vec_upload(0, pr, 4);
     cp({pkt0(SE_TCL_MATRIX_SELECT_0, 2),
         0u,
@@ -1608,7 +1672,7 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
         pkt0(SE_TCL_TEXTURE_PROC_CTL, 1),
         0,
         pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
-        0,
+        1u,
         pkt0(SE_CNTL_STATUS, 1),
         0,
         pkt0(SE_VPORT_XSCALE, 6),
@@ -1616,8 +1680,8 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
         fbits(64.0f),
         fbits(-64.0f),
         fbits(64.0f),
-        fbits(1.0f),
-        fbits(0.0f),
+        fbits(0.5f),
+        fbits(0.5f),
         pkt0(SE_CNTL, 1),
         (3u << 1) | (3u << 3) | (1u << 8) | (1u << 10) | (3u << 6) |
             (3u << 24) | (1u << 27)});
@@ -1672,7 +1736,7 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
             continue;
           const double w = a * cv[0][3] + b * cv[1][3] + c * cv[2][3];
           const double z = a * cv[0][2] + b * cv[1][2] + c * cv[2][2];
-          if (w > 0 && z >= 0 && z <= w)
+          if (w > 0 && z >= -w && z <= w)
             nref[size_t(y * W + x)] = 0xffffc040u;
         }
       next:;
@@ -2641,5 +2705,480 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     int mx;
     const int d = compare("border-mode", ref, 2, &mx);
     scene_report("textures: BORDER_MODE_OGL/D3D with the GL clamp", d, mx);
+  }
+  // ==== the TCL unit as Mesa's r100 driver programs it ======================
+  // What the scenes below share: vectors and scalars, OpenGL's viewport
+  // (clip -1..1 onto the 128 pixels, y down; z/w -1..1 onto 0..1, Mesa's
+  // radeonUpdateWindow) and OpenGL's projection (near 1, far 10).
+  auto tvec = [&](u32 index, const double *v4, int count) {
+    std::vector<u32> p = {pkt0(SE_TCL_STATE_FLUSH, 1), 0,
+                          pkt0(SE_TCL_VECTOR_INDX_REG, 1), index | (1u << 16),
+                          pkt0_one(SE_TCL_VECTOR_DATA_REG, u32(count * 4))};
+    for (int i = 0; i < count * 4; i++)
+      p.push_back(fbits(float(v4[i])));
+    cp(p);
+  };
+  auto tscl = [&](u32 index, double v) {
+    cp({pkt0(SE_TCL_SCALAR_INDX_REG, 1), index | (1u << 16),
+        pkt0(SE_TCL_SCALAR_DATA_REG, 1), fbits(float(v))});
+  };
+  auto gl_viewport = [&]() {
+    cp({pkt0(SE_VPORT_XSCALE, 6), fbits(64.0f), fbits(64.0f), fbits(-64.0f),
+        fbits(64.0f), fbits(0.5f), fbits(0.5f)});
+  };
+  const double identd[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  const double gl_near = 1, gl_far = 10;
+  const double gl_proj[16] = {1,
+                              0,
+                              0,
+                              0,
+                              0,
+                              1,
+                              0,
+                              0,
+                              0,
+                              0,
+                              (gl_far + gl_near) / (gl_near - gl_far),
+                              2 * gl_near * gl_far / (gl_near - gl_far),
+                              0,
+                              0,
+                              -1,
+                              0};
+  // the guard band as Mesa loads it: none
+  for (u32 i = 48; i < 52; i++)
+    tscl(i, 1.0);
+
+  // -- scene: the third texture coordinate (Q) through the texture matrix ----
+  {
+    // A 2D texture's divisor is the unit's third coordinate, in and out.
+    // Left: three coordinates submitted, (s, t, r), and a GL texture matrix
+    // that moves r to q -- Mesa's upload for that (no column swap, the q
+    // row third) makes the vertex's third coordinate the divisor. Right:
+    // eye-linear texture generation with a q plane (Mesa's
+    // set_texgen_matrix: the four planes as the matrix, uploaded the same
+    // way), the unit's EYE input having all four coordinates.
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    for (int y = 0; y < 8; y++)
+      for (int x = 0; x < 8; x++)
+        vw32(TEX + u32(y * 8 + x) * 4,
+             0xff000000u | (u32(x * 32) << 16) | (u32(y * 32) << 8) | 0x80);
+    set_tex(0, TEX, 6 | (1u << 6) | (1u << 31), 3, 3, 0, C_REPLACE_T0,
+            A_REPLACE_T0);
+    tvec(0, identd, 4);
+    tvec(4, identd, 4);
+    cp({pkt0(PP_CNTL, 1), (1u << 4) | (1u << 12),
+        pkt0(SE_TCL_MATRIX_SELECT_0, 2), 1u | (2u << 16), 0u | (3u << 16),
+        pkt0(SE_TCL_LIGHT_MODEL_CTL, 1), 0, pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
+        1u, pkt0(SE_CNTL_STATUS, 1), 0, pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (2u << 8) | (2u << 10) | (3u << 24) |
+            (1u << 27)});
+    gl_viewport();
+    auto texel_of = [](double u, double v) {
+      const int i = ((int(std::floor(u * 8)) % 8) + 8) % 8;
+      const int j = ((int(std::floor(v * 8)) % 8) + 8) % 8;
+      return 0xff000000u | (u32(i * 32) << 16) | (u32(j * 32) << 8) | 0x80;
+    };
+    // left: (s, t, r) and the matrix (s, t, r, q) -> (s, t, 0, r)
+    double gl[16] = {0}, tm[16];
+    gl[0] = gl[5] = 1;
+    gl[11] = 1; // the q row takes r
+    mesa_texmat(gl, true, false, tm);
+    tvec(12, tm, 4);
+    cp({pkt0(SE_TCL_OUTPUT_VTX_FMT, 2),
+        VTX_Z | VTX_W0 | VTX_PKCOLOR | VTX_ST0 | VTX_Q0, 1u | (8u << 16),
+        pkt0(SE_TCL_TEXTURE_PROC_CTL, 1), (1u << 0) | (1u << 4) | (0u << 16)});
+    {
+      const float q[4][6] = {{-1, -1, 0, 0, 0, 1},
+                             {0, -1, 0, 2, 0, 2},
+                             {0, 1, 0, 2, 1, 2},
+                             {-1, 1, 0, 0, 1, 1}};
+      std::vector<u32> p = {pkt3(0x29, 2 + 4 * 6), VTX_Z | VTX_ST0 | VTX_Q0,
+                            PRIM_TRI_FAN | (WALK_DATA << 4) | (1u << 9) |
+                                (4u << 16)};
+      for (const auto &v : q)
+        for (float c : v)
+          p.push_back(fbits(c));
+      cp(p);
+    }
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < 64; x++) {
+        const double X = (x + 0.5) / 64, Y = 1 - (y + 0.5) / 128;
+        const double r = 1 + X;
+        ref[size_t(y * W + x)] = texel_of(2 * X / r, Y / r);
+      }
+    // right: generated from the eye position, s = x, t = y / 2 + 1 / 2,
+    // q = 1 + x / 2
+    double tg[16] = {0};
+    tg[0] = 1;            // s plane (1, 0, 0, 0)
+    tg[5] = tg[13] = 0.5; // t plane (0, 0.5, 0, 0.5)
+    tg[3] = 0.5;          // q plane (0.5, 0, 0, 1)
+    tg[15] = 1;
+    mesa_texmat(tg, true, false, tm);
+    tvec(12, tm, 4);
+    cp({pkt0(SE_TCL_TEXTURE_PROC_CTL, 1), (1u << 0) | (1u << 4) | (5u << 16)});
+    {
+      const float q[4][3] = {{0, -1, 0}, {1, -1, 0}, {1, 1, 0}, {0, 1, 0}};
+      std::vector<u32> p = {pkt3(0x29, 2 + 4 * 3), VTX_Z,
+                            PRIM_TRI_FAN | (WALK_DATA << 4) | (1u << 9) |
+                                (4u << 16)};
+      for (const auto &v : q)
+        for (float c : v)
+          p.push_back(fbits(c));
+      cp(p);
+    }
+    for (int y = 0; y < H; y++)
+      for (int x = 64; x < W; x++) {
+        const double X = (x + 0.5 - 64) / 64, Y = -(y + 0.5 - 64) / 64;
+        const double q = 1 + 0.5 * X;
+        ref[size_t(y * W + x)] = texel_of(X / q, (0.5 * Y + 0.5) / q);
+      }
+    cp({pkt0(SE_TCL_OUTPUT_VTX_FMT, 1), 0u, pkt0(SE_TCL_TEXTURE_PROC_CTL, 1),
+        0u});
+    int mx;
+    const int d = compare("tcl-texmatrix-q", ref, 0, &mx);
+    // a texel boundary may pass within a rounding of a pixel centre
+    scene_report("TCL: Q through the texture matrix (3 coords, texgen)", d, mx,
+                 24);
+  }
+
+  // -- scene: OpenGL's view volume and depth range -------------------------
+  {
+    // Quads at eye depths 1.5, 5 and 1.2 (z/w -0.26, 0.78, -0.63: two of
+    // them in the near half of the volume, where z is negative) with a
+    // Z test, one before the near plane and one beyond the far plane
+    base_state();
+    clear_cb(0xff000000u);
+    clear_z(0x00ffffffu);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    std::vector<double> zref(size_t(W * H), 2.0);
+    tvec(0, gl_proj, 4);
+    cp({pkt0(SE_TCL_MATRIX_SELECT_0, 2),
+        0u,
+        0u,
+        pkt0(SE_TCL_OUTPUT_VTX_FMT, 2),
+        0u,
+        1u,
+        pkt0(SE_TCL_TEXTURE_PROC_CTL, 1),
+        0,
+        pkt0(SE_TCL_LIGHT_MODEL_CTL, 1),
+        0,
+        pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
+        1u,
+        pkt0(SE_CNTL_STATUS, 1),
+        0,
+        pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (1u << 8) | (1u << 10) | (3u << 6) |
+            (3u << 24) | (1u << 27),
+        pkt0(RB3D_CNTL, 1),
+        ROUNDING | (6u << 10) | (1u << 8),
+        pkt0(RB3D_ZSTENCILCNTL, 1),
+        2u | (1u << 4) | (1u << 30)});
+    gl_viewport();
+    struct Q {
+      double d, x0, y0, x1, y1; // depth; the rectangle in z/w units
+      u32 rgba, argb;
+      bool visible;
+    };
+    const Q quads[] = {
+        {1.5, -0.5, -0.5, 0.25, 0.5, 0xff4040ffu, 0xffff4040u, true},
+        {5.0, -0.25, -0.25, 0.75, 0.75, 0xff40ff40u, 0xff40ff40u, true},
+        {1.2, 0.0, -0.75, 0.5, 0.0, 0xffff4040u, 0xff4040ffu, true},
+        {0.9, -0.875, 0.5, -0.625, 0.875, 0xffffffffu, 0xffffffffu, false},
+        {12.0, -0.875, -0.875, -0.625, -0.625, 0xffffffffu, 0xffffffffu,
+         false}};
+    for (const Q &q : quads) {
+      const double c4[4][2] = {
+          {q.x0, q.y0}, {q.x1, q.y0}, {q.x1, q.y1}, {q.x0, q.y1}};
+      std::vector<u32> p = {pkt3(0x29, 2 + 4 * 4), VTX_Z | VTX_PKCOLOR,
+                            PRIM_TRI_FAN | (WALK_DATA << 4) | (1u << 9) |
+                                VF_RGBA | (4u << 16)};
+      for (const auto &c : c4) {
+        p.push_back(fbits(float(c[0] * q.d)));
+        p.push_back(fbits(float(c[1] * q.d)));
+        p.push_back(fbits(float(-q.d)));
+        p.push_back(q.rgba);
+      }
+      cp(p);
+      if (!q.visible)
+        continue;
+      const double zn = (gl_far + gl_near) / (gl_far - gl_near) -
+                        2 * gl_far * gl_near / ((gl_far - gl_near) * q.d);
+      const double zw = 0.5 * zn + 0.5;
+      for (int y = int(64 - 64 * q.y1); y < int(64 - 64 * q.y0); y++)
+        for (int x = int(64 + 64 * q.x0); x < int(64 + 64 * q.x1); x++)
+          if (zw < zref[size_t(y * W + x)]) {
+            zref[size_t(y * W + x)] = zw;
+            ref[size_t(y * W + x)] = q.argb;
+          }
+    }
+    cp({pkt0(RB3D_CNTL, 1), ROUNDING | (6u << 10)});
+    int mx;
+    const int d = compare("tcl-gl-volume", ref, 0, &mx);
+    scene_report("TCL: OpenGL's view volume (-w <= z <= w) and depth range", d,
+                 mx);
+  }
+
+  // -- scene: lines and points clipped by the TCL unit -----------------------
+  {
+    // A line with an end behind the eye stops at the near plane; a line
+    // across a user clip plane stops there; a line behind the eye is not
+    // drawn; points before the near plane, outside the user plane or the
+    // side of the volume are not drawn, one in the near half is
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    tvec(0, gl_proj, 4);
+    const double ucp0[4] = {0, -1, 0, 0.25}; // keep y <= w / 4
+    tvec(116, ucp0, 1);
+    cp({pkt0(SE_TCL_MATRIX_SELECT_0, 2), 0u, 0u, pkt0(SE_TCL_OUTPUT_VTX_FMT, 2),
+        0u, 1u, pkt0(SE_TCL_TEXTURE_PROC_CTL, 1), 0,
+        pkt0(SE_TCL_LIGHT_MODEL_CTL, 1), 0, pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1),
+        1u | (1u << 2), pkt0(SE_CNTL_STATUS, 1), 0, pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (2u << 8) | (2u << 10) | (3u << 24) |
+            (1u << 27)});
+    gl_viewport();
+    struct P3 {
+      double x, y, z;
+    };
+    auto tcl_prims = [&](u32 prim, const std::vector<P3> &vs) {
+      std::vector<u32> p = {pkt3(0x29, 2 + u32(vs.size()) * 4),
+                            VTX_Z | VTX_PKCOLOR,
+                            prim | (WALK_DATA << 4) | (1u << 9) | VF_RGBA |
+                                (u32(vs.size()) << 16)};
+      for (const P3 &v : vs) {
+        p.push_back(fbits(float(v.x)));
+        p.push_back(fbits(float(v.y)));
+        p.push_back(fbits(float(v.z)));
+        p.push_back(0xffffffffu);
+      }
+      cp(p);
+    };
+    tcl_prims(PRIM_LINE_LIST, {{0, 0, -2},       // the centre
+                               {2, -1, 2},       // behind the eye
+                               {-1.5, -1.5, -2}, // z/w (-0.75, -0.75)
+                               {0, 1.5, -2},     // (0, 0.75): past the plane
+                               {0.5, 0.5, 1},    // both ends behind the eye
+                               {1, 1, 2},
+                               {0.5, -1, -2}, // inside throughout
+                               {1.5, -1.25, -2}});
+    // the visible parts, in pixels (start in, end out): to the near plane
+    // at (96, 80); to the user plane at (48, 48); nothing; whole
+    struct L {
+      double x0, y0, x1, y1;
+    };
+    const L vis[] = {{64, 64, 96, 80}, {16, 112, 48, 48}, {80, 96, 112, 104}};
+    for (const L &l : vis) {
+      const bool xmaj = std::fabs(l.x1 - l.x0) >= std::fabs(l.y1 - l.y0);
+      const double a0 = xmaj ? l.x0 : l.y0, a1 = xmaj ? l.x1 : l.y1;
+      const double b0 = xmaj ? l.y0 : l.x0, b1 = xmaj ? l.y1 : l.x1;
+      for (int c = 0; c < W; c++) {
+        const double m = c + 0.5;
+        const bool in = a1 > a0 ? (m >= a0 && m < a1) : (m <= a0 && m > a1);
+        if (!in)
+          continue;
+        const int k = int(std::floor(b0 + (b1 - b0) * (m - a0) / (a1 - a0)));
+        ref[size_t((xmaj ? k : c) * W + (xmaj ? c : k))] = 0xffffffffu;
+      }
+    }
+    // points at pixel centres: (32, 80) at depth 2; (20, 100) at depth
+    // 1.25, in the near half; then one before the near plane, one past
+    // the user plane, one beyond the right side
+    tcl_prims(PRIM_POINT_LIST, {{-0.984375, -0.515625, -2},
+                                {-0.849609375, -0.712890625, -1.25},
+                                {0.1, -0.1, -0.5},
+                                {0.2, 1.0, -2},
+                                {2.4, -0.4, -2}});
+    ref[size_t(80 * W + 32)] = 0xffffffffu;
+    ref[size_t(100 * W + 20)] = 0xffffffffu;
+    cp({pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1), 1u});
+    int mx;
+    const int d = compare("tcl-line-point-clip", ref, 0, &mx);
+    // a clipped end is not on a sixteenth: its snapping may move one pixel
+    scene_report("TCL: lines and points clipped (near plane, user plane)", d,
+                 mx, 2);
+  }
+
+  // -- scene: spot lights, the dual cone, the eye vector ---------------------
+  {
+    // Four lit planes (a 4x4 grid of cells each, Gouraud): OpenGL's spot
+    // light; the dual-cone spot (Direct3D's: inner cone 10 degrees, outer
+    // 30) with falloff 1 and 2.5; a point light's specular highlight for a
+    // viewer at infinity, the eye vector as Mesa loads it. The reference
+    // lights the grid's vertices in double and interpolates.
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    const double mv[16] = {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, -3, 0, 0, 0, 1};
+    const double itmv[16] = {0.5, 0, 0, 0, 0, 0.5, 0, 0,
+                             0,   0, 1, 0, 0, 0,   0, 1};
+    tvec(4, mv, 4);
+    tvec(8, itmv, 4);
+    const double zero4[4] = {0, 0, 0, 0}, eyev[4] = {0, 0, -1, 1};
+    tvec(122, zero4, 1); // no global ambient
+    tvec(124, eyev, 1);
+    tvec(64, zero4, 1);
+    tscl(32, 1e30); // no range cutoff
+    {
+      std::vector<u32> mp = {pkt0(SE_TCL_MATERIAL_EMISSIVE, 17)};
+      const float me[4] = {0, 0, 0, 1}, one[4] = {1, 1, 1, 1};
+      for (const float *m : {me, me, one, one})
+        for (int k = 0; k < 4; k++)
+          mp.push_back(fbits(m[k]));
+      mp.push_back(fbits(20.0f));
+      cp(mp);
+    }
+    cp({pkt0(SE_TCL_MATRIX_SELECT_0, 2), 1u | (2u << 16), 0u,
+        pkt0(SE_TCL_OUTPUT_VTX_FMT, 2), 0u, 1u | 2u,
+        pkt0(SE_TCL_TEXTURE_PROC_CTL, 1), 0, pkt0(SE_TCL_LIGHT_MODEL_CTL, 1),
+        1u | (1u << 5) | (1u << 6) | (1u << 16) | (1u << 18) | (1u << 20) |
+            (1u << 22),
+        pkt0(SE_TCL_UCP_VERT_BLEND_CTL, 1), 1u, pkt0(SE_CNTL_STATUS, 1), 0,
+        pkt0(SE_CNTL, 1),
+        1u | (3u << 1) | (3u << 3) | (3u << 6) | (2u << 8) | (2u << 10) |
+            (2u << 12) | (2u << 14) | (3u << 24) | (1u << 27)});
+    gl_viewport();
+    const double deg = M_PI / 180;
+    struct Lt {
+      double pos[3], dif[3], spc[3];
+      bool spot, dual;
+      double cutoff, dcd, expo;
+    };
+    const Lt lights[4] = {{{0.3, 0.2, 0},
+                           {1, 0.9, 0.8},
+                           {0, 0, 0},
+                           true,
+                           false,
+                           std::cos(25 * deg),
+                           0,
+                           8},
+                          {{0.3, 0.2, 0},
+                           {1, 0.9, 0.8},
+                           {0, 0, 0},
+                           true,
+                           true,
+                           std::cos(30 * deg),
+                           1 / (std::cos(10 * deg) - std::cos(30 * deg)),
+                           1},
+                          {{0.3, 0.2, 0},
+                           {1, 0.9, 0.8},
+                           {0, 0, 0},
+                           true,
+                           true,
+                           std::cos(30 * deg),
+                           1 / (std::cos(10 * deg) - std::cos(30 * deg)),
+                           2.5},
+                          {{1.0, 0.5, -1.5},
+                           {0.3, 0.3, 0.3},
+                           {1, 1, 0.8},
+                           false,
+                           false,
+                           0,
+                           0,
+                           0}};
+    for (int q = 0; q < 4; q++) {
+      const Lt &lt = lights[q];
+      const double cx = (q & 1) ? 0.5 : -0.5, cy = (q & 2) ? -0.5 : 0.5;
+      const double mvp[16] = {0.5, 0, 0, cx, 0, 0.5, 0, cy,
+                              0,   0, 0, 0,  0, 0,   0, 1};
+      tvec(0, mvp, 4);
+      const double dif4[4] = {lt.dif[0], lt.dif[1], lt.dif[2], 1},
+                   spc4[4] = {lt.spc[0], lt.spc[1], lt.spc[2], 1},
+                   pos4[4] = {lt.pos[0], lt.pos[1], lt.pos[2], 1},
+                   dir4[4] = {0, 0, 1, 0}; // the spot points down -z
+      tvec(72, dif4, 1);
+      tvec(80, spc4, 1);
+      tvec(88, pos4, 1);
+      tvec(96, dir4, 1);
+      tscl(0, lt.dcd);
+      tscl(8, lt.expo);
+      tscl(16, lt.cutoff);
+      cp({pkt0(SE_TCL_PER_LIGHT_CTL_0, 1),
+          1u | 8u | (lt.spot ? 16u : 4u) | (lt.dual ? 32u : 0u)});
+      // the lit colour of the vertex at (x, y) of the plane
+      auto lit = [&](double x, double y, double col[3]) {
+        const double P[3] = {2 * x, 2 * y, -3};
+        double L[3] = {lt.pos[0] - P[0], lt.pos[1] - P[1], lt.pos[2] - P[2]};
+        const double dl = std::sqrt(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+        for (double &k : L)
+          k /= dl;
+        double at = 1;
+        if (lt.spot) {
+          const double cs = L[2]; // against (0, 0, 1)
+          if (cs < lt.cutoff)
+            at = 0;
+          else if (lt.dual)
+            at = std::pow(
+                std::min(1.0, std::max(0.0, (cs - lt.cutoff) * lt.dcd)),
+                lt.expo);
+          else
+            at = std::pow(cs, lt.expo);
+        }
+        const double ndl = L[2]; // the normal is (0, 0, 1)
+        double sp = 0;
+        if (!lt.spot && ndl > 0) {
+          // the viewer at infinity towards +z
+          const double hn =
+              std::sqrt(L[0] * L[0] + L[1] * L[1] + (L[2] + 1) * (L[2] + 1));
+          const double ndh = (L[2] + 1) / hn;
+          if (ndh > 0)
+            sp = std::pow(ndh, 20.0);
+        }
+        for (int k = 0; k < 3; k++)
+          col[k] =
+              std::min(1.0, std::max(0.0, at * (std::max(0.0, ndl) * lt.dif[k] +
+                                                sp * lt.spc[k])));
+      };
+      std::vector<u32> p = {pkt3(0x29, 2 + 16 * 6 * 6), VTX_Z | VTX_N0,
+                            PRIM_TRI_LIST | (WALK_DATA << 4) | (1u << 9) |
+                                (96u << 16)};
+      for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++) {
+          const double x0 = -1 + 0.5 * i, y0 = -1 + 0.5 * j;
+          const double c4[4][2] = {
+              {x0, y0}, {x0 + 0.5, y0}, {x0 + 0.5, y0 + 0.5}, {x0, y0 + 0.5}};
+          for (const auto &tri :
+               {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{0, 2, 3}}) {
+            struct SV {
+              double x, y, col[3];
+            } sv[3];
+            for (int k = 0; k < 3; k++) {
+              const double *c = c4[tri[size_t(k)]];
+              for (float v : {float(c[0]), float(c[1]), 0.0f, 0.0f, 0.0f, 1.0f})
+                p.push_back(fbits(v));
+              sv[k].x = (0.5 * c[0] + cx) * 64 + 64;
+              sv[k].y = (0.5 * c[1] + cy) * -64 + 64;
+              lit(c[0], c[1], sv[k].col);
+            }
+            const double area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) -
+                                (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
+            ref_triangle(
+                {sv[0].x, sv[0].y}, {sv[1].x, sv[1].y}, {sv[2].x, sv[2].y}, W,
+                H, [&](int x, int y, double, double, double) {
+                  const double px = x + 0.5, py = y + 0.5;
+                  const double la = ((sv[1].x - px) * (sv[2].y - py) -
+                                     (sv[2].x - px) * (sv[1].y - py)) /
+                                    area;
+                  const double lb = ((sv[2].x - px) * (sv[0].y - py) -
+                                     (sv[0].x - px) * (sv[2].y - py)) /
+                                    area;
+                  const double lc = 1 - la - lb;
+                  float o[4] = {0, 0, 0, 1};
+                  for (int k = 0; k < 3; k++)
+                    o[k] = float(la * sv[0].col[k] + lb * sv[1].col[k] +
+                                 lc * sv[2].col[k]);
+                  ref[size_t(y * W + x)] = argbf(o);
+                });
+          }
+        }
+      cp(p);
+    }
+    cp({pkt0(SE_TCL_PER_LIGHT_CTL_0, 1), 0u, pkt0(SE_TCL_LIGHT_MODEL_CTL, 1),
+        0u, pkt0(SE_CNTL_STATUS, 1), 1u << 8});
+    int mx;
+    const int d = compare("tcl-spot-dualcone-eye", ref, 2, &mx);
+    scene_report("TCL: spot light, dual-cone spot, eye vector (far viewer)", d,
+                 mx);
   }
 }

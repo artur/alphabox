@@ -35,14 +35,17 @@
  *   - per light i (0..7): ambient, diffuse, specular colours in vectors
  *     64+i, 72+i, 80+i; position or direction 88+i; for an infinite light
  *     the half vector, for a local one the negated spot direction, 96+i;
- *     attenuation (quadratic, linear, constant) 104+i; scalars: spot
- *     exponent 8+i, spot cutoff (as a cosine) 16+i, range cutoff 32+i,
- *     1/constant attenuation 40+i. SE_TCL_PER_LIGHT_CTL_n holds two
- *     lights' flags, 16 bits apart: enable, ambient, specular, local,
- *     spot, range attenuation, constant-only attenuation;
- *   - the eye vector 124 (for a non-local viewer, w the normal rescale
- *     factor), the global ambient 122, the fog parameters 123 (y the
- *     constant, z the factor), the user clip planes 116..121;
+ *     attenuation (quadratic, linear, constant) 104+i; scalars: the
+ *     dual-cone factor 0+i (SS_LIGHT_DCD), spot exponent 8+i, spot cutoff
+ *     (as a cosine) 16+i, range cutoff 32+i, 1/constant attenuation 40+i.
+ *     SE_TCL_PER_LIGHT_CTL_n holds two lights' flags, 16 bits apart:
+ *     enable, ambient, specular, local, spot, dual cone, range
+ *     attenuation, constant-only attenuation;
+ *   - the eye vector 124 (the direction the viewer looks in, for a
+ *     non-local viewer; w the normal rescale factor), the global ambient
+ *     122, the fog parameters 123 (y the constant, z the factor), the user
+ *     clip planes 116..121, the guard band scalars 48..51
+ *     (RadeonR100_3D.cpp);
  *   - the material in the SE_TCL_MATERIAL_* registers and
  *     SE_TCL_SHININESS; SE_TCL_LIGHT_MODEL_CTL's source fields choose for
  *     emissive <17:16>, ambient <19:18>, diffuse <21:20>, specular
@@ -59,13 +62,17 @@
  * linear), with D negative as Mesa sets it: f = exp(D * c),
  * exp(D * c * c), or C + D * c, with c the eye distance
  * (|z| in eye space, or the range when RNG_BASED_FOG <10>); texture set n
- * from input set <19:16>+4n (0-3), or the texture matrix applied to the
+ * from input set <19:16>+4n (0-3), or computed (8-11): the
  * texture-generation input TEXTURE_PROC_CTL selects (texture coordinate,
- * object or eye position, eye normal, reflection vector).
+ * object or eye position, eye normal, reflection vector), through the
+ * texture matrix when TEXMAT_n_ENABLE; see tcl_vertex for the three
+ * coordinates a set has and which of them is Q.
  * Vertex blending and two-sided lighting: see tcl_vertex (the first an
  * inference from the register names alone).
- * Not modelled: DUAL_CONE spots, the specular threshold (no source says
- * what either computes).
+ * Not modelled: the specular threshold (scalars 24+i: no source says what
+ * it computes), LOCAL_LIGHT_VEC_GL <8> and LIGHT_NO_NORMAL_AMBIENT_ONLY
+ * <9> of SE_TCL_LIGHT_MODEL_CTL (Mesa sets the first always; nothing says
+ * what its clear state does), user clip planes in model space.
  **/
 
 #include "Radeon.hpp"
@@ -118,6 +125,7 @@ constexpr u32 LIGHT_ENABLE_AMBIENT = 1u << 1;
 constexpr u32 LIGHT_ENABLE_SPECULAR = 1u << 2;
 constexpr u32 LIGHT_IS_LOCAL = 1u << 3;
 constexpr u32 LIGHT_IS_SPOT = 1u << 4;
+constexpr u32 LIGHT_DUAL_CONE = 1u << 5;
 constexpr u32 LIGHT_RANGE_ATTEN = 1u << 6;
 constexpr u32 LIGHT_CONST_ATTEN = 1u << 7;
 } // namespace
@@ -256,14 +264,48 @@ void CRadeonR100_3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
   }
   out.spec_back[3] = out.spec[3];
 
-  // Texture coordinates.
+  // Texture coordinates. The unit carries three coordinates a set, not
+  // four, and the third is the divisor of a 2D texture (Q) or a cube
+  // map's R -- Mesa's radeonUploadTexMatrix: "on r100, only 3 tex coords
+  // can be submitted, so the vector looks like this probably: (s t r|q 0)
+  // (not sure if the last coord is hardwired to 0, could be 1 too)". What
+  // its uploads make of that, and what is modelled:
+  //   - a set enters the texture matrix as (s, t, third, 0), the third
+  //     being the vertex's (SE_VTX_FMT Qn) or, without one, 1: Mesa swaps
+  //     the matrix's third and fourth columns for a two-coordinate set
+  //     ("the q coord will get submitted in the wrong, i.e. 3rd, slot"),
+  //     so that GL's translation column meets it -- which only translates
+  //     if the slot holds 1. It is also Direct3D's rule for a
+  //     two-coordinate set, (s, t, 1, 0). [the fourth as 0: Mesa's
+  //     "probably"];
+  //   - a generated input (position, normal, reflection) has all four
+  //     ("it actually looks like texgen generates all 4 coords"): the
+  //     position its own w, the eye position, normal and reflection
+  //     vector 1 [inference: GL's q of an unset coordinate];
+  //   - of the matrix's four outputs the third is the set's third
+  //     coordinate: for a 2D texture Mesa moves GL's q row there ("we
+  //     swap the third and 4th row"), for a cube map it leaves r there.
+  //     The fourth output goes nowhere;
+  //   - the third coordinate leaves the unit only when
+  //     SE_TCL_OUTPUT_VTX_FMT has the set's Q bit (Mesa sets it for three
+  //     or more submitted coordinates and for generated R or Q;
+  //     radeon_maos_arrays.c, radeon_validate_texgen); without it Q is 1;
+  //   - the matrix multiplies when TEXMAT_n_ENABLE <4+n>;
+  //     TEXGEN_TEXMAT_n_ENABLE <n> alone is a generated coordinate as it
+  //     is (Mesa's GL_NORMAL_MAP with an identity texture matrix).
+  const u32 ofmt = c.R(SE_TCL_OUTPUT_VTX_FMT);
+  static const u32 q_bit[4] = {VTX_Q0, VTX_Q1, VTX_Q2, VTX_Q3};
+  auto input_set = [&](u32 i, float g[4]) {
+    g[0] = in.tex[i][0];
+    g[1] = in.tex[i][1];
+    g[2] = in.has_q[i] ? in.tex[i][3] : 1.0f;
+    g[3] = 0.0f;
+  };
   for (int t = 0; t < 4; t++) {
     const u32 src = (vsel >> (16 + 4 * t)) & 15;
-    float tc[4] = {0, 0, 0, 1};
+    float o[4] = {0, 0, 1, 0};
     if (src < 4) {
-      memcpy(tc, in.tex[src], sizeof(tc));
-      if (!in.has_q[src])
-        tc[3] = 1.0f;
+      input_set(src, o);
     } else if (src >= 8 && src < 12) {
       const int u = int(src - 8);
       // the texture-generation input
@@ -274,10 +316,7 @@ void CRadeonR100_3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
       case 1:
       case 2:
       case 3:
-        memcpy(g, in.tex[gin], sizeof(g));
-        if (!in.has_q[gin])
-          g[3] = 1.0f;
-        g[2] = in.has_q[gin] ? g[2] : 0.0f;
+        input_set(gin, g);
         break;
       case 4: // object position
         memcpy(g, pos, sizeof(g));
@@ -295,6 +334,12 @@ void CRadeonR100_3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
         if (gin == 8) {
           memcpy(g, u3, sizeof(u3));
         } else {
+          // GL's r = u - 2 n (n . u), which is also Direct3D's
+          // CAMERASPACEREFLECTIONVECTOR. Mesa multiplies the input by
+          // -1 for GL_REFLECTION_MAP ("TODO: unknown if this is
+          // needed/correct"; on the R200 "pretty weird, must only negate
+          // when lighting is enabled?"), which would make the chip's
+          // vector the opposite one: undecided without a card.
           const float dn = 2 * dot3(n, u3);
           for (int k = 0; k < 3; k++)
             g[k] = u3[k] - n[k] * dn;
@@ -304,12 +349,17 @@ void CRadeonR100_3D::tcl_vertex(const RadeonVertexIn &in, RadeonVertex &out) {
       default:
         break;
       }
-      if (tpc & (1u << u) || tpc & (1u << (4 + u)))
-        mat_vec(matrix((sel1 >> (16 + 4 * u)) & 15), g, tc);
+      if (tpc & (1u << (4 + u)))
+        mat_vec(matrix((sel1 >> (16 + 4 * u)) & 15), g, o);
       else
-        memcpy(tc, g, sizeof(tc));
+        memcpy(o, g, sizeof(o));
     }
-    memcpy(out.tex[t], tc, sizeof(tc));
+    // s, t, (unused), the third coordinate: the vertex's layout
+    // (RadeonR100_3D.cpp decode_vertex keeps the third in [3])
+    out.tex[t][0] = o[0];
+    out.tex[t][1] = o[1];
+    out.tex[t][2] = 0.0f;
+    out.tex[t][3] = (ofmt & q_bit[t]) ? o[2] : 1.0f;
   }
 }
 
@@ -351,7 +401,17 @@ void CRadeonR100_3D::tcl_light(const RadeonVertexIn &in, const float *P,
     for (int k = 0; k < 3; k++)
       dif[k] = me[k] + glt[k] * ma[k];
   }
-  // the view direction
+  // The direction to the viewer. Without LOCAL_VIEWER it is the opposite
+  // of the eye vector (VS_EYE_VECTOR, 124), which is the direction the
+  // viewer looks in: Mesa's update_light loads (_EyeZDir[0], _EyeZDir[1],
+  // -_EyeZDir[2]), that is (0, 0, -1) in GL's eye space, where the viewer
+  // looks down -z and GL's direction to it is (0, 0, 1); a Direct3D driver
+  // loads (0, 0, 1) for its camera space. [inference: only eye-space
+  // lighting pins it down, where x and y are 0. For lighting in model
+  // space Mesa's value has x and y with the sign of the direction to the
+  // viewer and z against it, which no single reading of the vector makes
+  // right; taken as a slip there.] Only a local light needs it: an
+  // infinite light's half vector is loaded.
   float V[3] = {0, 0, 1};
   if (lm & LOCAL_VIEWER) {
     V[0] = -P[0];
@@ -359,9 +419,9 @@ void CRadeonR100_3D::tcl_light(const RadeonVertexIn &in, const float *P,
     V[2] = -P[2];
     normalize3(V);
   } else {
-    V[0] = m_vec[124][0];
-    V[1] = m_vec[124][1];
-    V[2] = m_vec[124][2];
+    V[0] = -m_vec[124][0];
+    V[1] = -m_vec[124][1];
+    V[2] = -m_vec[124][2];
   }
   for (int l = 0; l < 8; l++) {
     const u32 flags =
@@ -384,14 +444,34 @@ void CRadeonR100_3D::tcl_light(const RadeonVertexIn &in, const float *P,
         if (flags & LIGHT_CONST_ATTEN)
           atten = m_scl[40 + l];
         else {
+          // 1 / (c + l d + q d^2), not held at 1: OpenGL's. Direct3D 7's
+          // own pipeline clamps the factor to 1; what the chip does when
+          // the sum is below 1 is not documented. Mesa's driver, written
+          // with ATI's documentation, loads the chip's reciprocal scalar
+          // with 1 / c for any c and with FLT_MAX for c = 0, which is
+          // what a factor used as it is asks for [inference]
           const float den = att[2] + att[1] * d + att[0] * d * d;
           atten = den > 0 ? 1.0f / den : 1.0f;
         }
       }
       if (flags & LIGHT_IS_SPOT) {
+        // OpenGL's spot light: nothing outside the cutoff cone (scalar
+        // 16+l, a cosine), cos^exponent inside it. With DUAL_CONE <5>
+        // Direct3D's: full intensity inside an inner cone, nothing
+        // outside the outer one, and between them
+        // ((cos - cos(outer)) / (cos(inner) - cos(outer)))^falloff. The
+        // cutoff scalar is then the outer cone's cosine, the exponent the
+        // falloff, and SS_LIGHT_DCD (scalar 0+l) 1 / (cos(inner) -
+        // cos(outer)) [inference: no driver programs the bit or the
+        // scalar; the reading is from the names -- "dual cone", and the
+        // R200's pair DCD and DCM -- and from Direct3D 7's spot light
+        // being what a chip of 2000 had to compute].
         const float cs = dot3(L, hv);
         if (cs < m_scl[16 + l])
           atten = 0;
+        else if (flags & LIGHT_DUAL_CONE)
+          atten *=
+              std::pow(clamp01((cs - m_scl[16 + l]) * m_scl[l]), m_scl[8 + l]);
         else
           atten *= std::pow(std::max(cs, 0.0f), m_scl[8 + l]);
       }

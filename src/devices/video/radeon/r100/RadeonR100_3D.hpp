@@ -175,6 +175,9 @@ private:
                 const RadeonVertex &c, const RadeonVertex &prov);
   /// 3D_CLEAR_ZMASK: the fast Z clear (HyperZ)
   void clear_zmask(u32 start, u32 count, u32 mask);
+  /// The TCL unit's clip planes (view volume, guard band, user planes).
+  size_t tcl_clip_planes(float pl[12][4]) const;
+  bool tcl_discard(const RadeonVertex *const *v, int n) const;
   void to_window(RadeonVertex &v) const;
   void bypass_to_window(RadeonVertex &v) const;
 
