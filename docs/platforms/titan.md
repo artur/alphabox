@@ -57,14 +57,52 @@ hose within the I/O space.
 - Board facts stay in `platforms/<board>/`: the interrupt table, the slots,
   the DPR contents, the flash parts, the `titan_layout`.
 
+## AGP
+
+The A-port of PA-chip 0 (hose 2) is an AGP bus on the board that wires it
+as one: `titan_layout::agp`, true for the ES45's Model 1 backplane
+(`platform = "es45m1";`, [es45.md](es45.md)) and for no other board. The
+chipset then reads APCTL<57> (AGP_PRESENT) as 1, and that bit is all the
+ES45 console asks (V7.3-2, `is_titan_agp` at 0x8abe0: hose 2 is APCTL<57>
+of PA-chip 0, hose 3 that of PA-chip 1).
+
+What the console does with the port, from its code:
+
+- `setup_io` (0x900f0) sets PCTL bits 0x4.c000.00c2 on all four ports,
+  then clears APCTL<63:58> and <55:52> on both A-ports -- the queue depths,
+  AGP_EN, sideband addressing and the rate (the mask is
+  0x030f.ffff.ffff.ffff). It never enables AGP transactions: the card in
+  the AGP slot is configured and run as a 66 MHz PCI device (configuration
+  space, BARs, its BIOS under the x86 emulator). It sets <57> only when it
+  runs in its own simulator (`platform()` = 1), never on hardware, and its
+  mask keeps the bit: a strap **[inferred]**.
+- Everything else is naming: the model (`build_dsrdb`), "PAchip 0" for
+  "PPchip 0" and "AGP" for "PCI" in the hose's heading (`show_core_system`
+  0x96e00, `show_pci_config` 0x97310), "Hose 2 - AGP bus" at probe time,
+  an AGP node in the FRU tree (`build_agp_fru` 0x99ac0), and the hot-plug
+  code leaving that hose alone (`cpqphpc_configure` 0x8dc50).
+
+So the model is the bit. The AGP fields of APCTL and AGPLASTWR hold what
+is written and nothing more: AGP transactions are not modelled, and no
+guest so far turns them on (OpenVMS 8.4 boots with the card there). Linux's
+`titan_agp_*` would, building the aperture from the port's scatter-gather
+window: untried.
+
+The DS25 and DS15 have no AGP. The DS25's console carries the same code
+(`is_titan_agp` at 0x952e0, called from its show config) and would print
+"PAchip 0" and "AGP" if the bit were set; the real DS25's listing says
+"PPchip 0" and "Hose 2, Bus 0, PCI - 66 MHz", and its hose 2 holds on-board
+devices. The DS15's console has the routine (0x89d50) and nothing calls
+it. Both rows say `agp = false`: the value they always had.
+
 ## Assumed, not established
 
 - CSC (but bit 51), the Dchips' DSC/STR/DSC2 and the AAR encoding: the
   Typhoon's values. The consoles' memory listings agree for one and two
   arrays.
 - PCTL<17> (66 MHz) and APCTL<57> (AGP present) read-only; SCTL<7:0>
-  read-only.
-- No AGP: hose 2 reports no AGP device (APCTL<57> = 0), so the console
-  chooses the PCI models.
+  read-only. The ES45 console writes neither on hardware.
+- APCTL<57> follows the backplane, not whether a card is in the slot: the
+  console names the machine "Model 1" from it alone (AGP, above).
 - Errors are never raised: the error registers read 0.
 - The scatter-gather TLB is not modelled (invalidates are ignored).

@@ -55,7 +55,7 @@ around the core, and that is where the model is thin:
 | DS25 AIC-7899: configuration space and ROM only, no SCSI | A1 |
 | Hot-plug controllers (ES45, DS25) | **H1**: with the IO7's hot-plug registers as the model |
 | Scatter-gather TLB: invalidates ignored | fidelity only: translations are read from the tables every time |
-| No AGP on hose 2 | **Q1**: check what the ES45 console does with `APCTL<57>` set and a card there |
+| AGP transactions on the A-port: AGP_EN, the rate and the request queues hold what is written and do nothing | the ES45 Model 1's AGP slot is there (`es45m1`, the Radeon 7500 as SRM console; OpenVMS boots), and the console turns AGP off and runs the card as a PCI device. Left until a guest turns it on: Linux's `titan_agp_*`, with **E2** |
 | CSC, Dchip and AAR encodings assumed the Typhoon's | what `memory.bits` can describe matches (ES45, DS25 to 8 GB: one array; DS15: one and two). Three and four arrays, and unequal ones, cannot be configured: **Q1**, a key for the arrays' sizes (Tsunami and Titan), then the check |
 | `show fru`, the ES45 model "B" | with M10's FRU work |
 
@@ -73,11 +73,12 @@ gate.
 
 1. **Q1, the cheap ones**. Done: the 82559ER (`i82559er`, on the DS25's
    board); DKA400's errors (the control mode page; the two left are the
-   guest's probe); network boot on the ES47 (`boot ewa0`: BOOTP and TFTP).
-   The loopback plug (`type = "loopback"` on any NIC: the console's
-   `nettest -mode ex` passes on the DS10 and the ES40).
-   Left: a key for a board's memory arrays, then
-   three and four arrays on the Titan; AGP on the ES45.
+   guest's probe); network boot on the ES47 (`boot ewa0`: BOOTP and TFTP);
+   the loopback plug (`type = "loopback"` on any NIC: the console's
+   `nettest` passes in every mode on the DS10 and the ES40); AGP on the
+   ES45 (the Model 1 backplane, `es45m1`).
+   Left: a key for a board's memory arrays, then three and four arrays on
+   the Titan.
 2. **E1, the PALcode audit**: a script lists every internal register and
    field both EV7 PALcodes touch; each is checked against the core. The
    result is a table in marvel.md and fixes for what differs.
