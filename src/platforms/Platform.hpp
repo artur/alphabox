@@ -83,6 +83,18 @@ struct rom_patch {
   u32 insn;
 };
 
+/**
+ * A device soldered to the board that is an ordinary device class: the
+ * configuration may describe it at its place (a network controller's
+ * backend), and when it says nothing about that place the device is added
+ * with `defaults`. A table ends with a null name.
+ */
+struct onboard_device {
+  const char *name;         ///< its place, e.g. "pci0.8"
+  const char *device_class; ///< e.g. "i82559er"
+  const char *defaults;     ///< its block's text, e.g. "type=\"null\";"
+};
+
 struct platform_config {
   const char *name;        ///< the `platform` value, e.g. "es40"
   const char *description; ///< for messages, e.g. "AlphaServer ES40"
@@ -158,6 +170,9 @@ struct platform_config {
   /// A Titan board's chipset facts: the Cchip's pass, how memory fills
   /// the arrays (chipsets/titan/Titan.hpp); nullptr elsewhere.
   const titan_layout *titan = nullptr;
+
+  /// The board's own devices of ordinary classes, or nullptr.
+  const onboard_device *onboard = nullptr;
 };
 
 /// The board named `name`, or nullptr.

@@ -41,6 +41,7 @@ static const u8 default_config[CFG_BYTES] = {
 
 // EEPROM words
 #define EE_ADDRESS 0    // words 0-2: station address, low byte first
+#define EE_BOARD 3      // words 3-12: a row's eeprom_words
 #define EE_CONTROLLER 5 // bits 15-8: controller type (1 82557 ... 3 82559)
 #define EE_PHY 6        // primary PHY: bits 13-8 type, 7-0 address
 #define EE_ID 10        // bits 15-14 = 01: valid signature
@@ -125,6 +126,9 @@ void CI8255x::build_eeprom() {
   w[EE_ID] = 0x4000;
   w[EE_SUBSYS_ID] = m_chip.subsys_id;
   w[EE_SUBSYS_VENDOR] = m_chip.subsys_vendor_id;
+  if (m_chip.eeprom_words)
+    for (int i = 0; i < I8255X_EEPROM_BOARD_WORDS; i++)
+      w[EE_BOARD + i] = m_chip.eeprom_words[i];
 
   u16 sum = 0;
   for (int i = 0; i < EE_WORDS - 1; i++)

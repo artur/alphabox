@@ -73,11 +73,12 @@ int ds25_pci_interrupt(int hose, int slot, int intx, int func) {
 /**
  * The six physical slots (owner's guide EK-DS250-UG, table 1-1: slots 1-6
  * are hose 1 devices 1 and 2, hose 3 devices 2 and 1, hose 0 devices 9 and
- * 10), and the places of the two on-board network controllers, which no
- * model here is (hose 0 device 8, an Intel 82559ER; hose 2 device 5, a
- * Broadcom 5703c: the guide's show config), so that a NIC may stand in
- * there. Hose 0 device 11 has a line in the console's table but no slot;
- * the hot-plug controllers' places and the AIC-7899's are the board's.
+ * 10), and the places of the two on-board network controllers (hose 0
+ * device 8, the Intel 82559ER of ds25_onboard; hose 2 device 5, a Broadcom
+ * 5703c, which no model here is, so that a NIC may stand in there: the
+ * guide's show config). Hose 0 device 11 has a line in the console's table
+ * but no slot; the hot-plug controllers' places and the AIC-7899's are the
+ * board's.
  **/
 const char *ds25_slot_refusal(int hose, int slot) {
   const ds25_slot *s = find_slot(hose, slot);
@@ -95,6 +96,18 @@ void ds25_board_devices(CConfigurator *cfg, CSystem *sys) {
   new CFlash(cfg, sys, 2);
   new CDs25Aic7899(cfg, sys, 2, 1);
 }
+
+/**
+ * The on-board Intel 82559ER at hose 0 device 8 (the owner's guide's show
+ * config: "8 Intel 82559ER Ethern eia0.0.0.8.0"), unconnected unless the
+ * configuration gives pci0.8 a backend. A configuration that names another
+ * device at pci0.8 gets that one in its place [not a real DS25; kept for
+ * the configurations that put a DE500 there].
+ **/
+const onboard_device ds25_onboard[] = {
+    {"pci0.8", "i82559er", "type=\"null\";"},
+    {nullptr, nullptr, nullptr},
+};
 
 /// Its Cchip is pass 18 (the owner's guide's show config).
 const titan_layout ds25_titan = {18, false};

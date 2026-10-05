@@ -710,6 +710,7 @@ classinfo classes[] = {
     {"i82557", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82558", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"i82559", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
+    {"i82559er", c_i8255x, IS_PCI | IS_NIC, kv_i8255x},
     {"isp1020", c_isp1040, IS_PCI | HAS_DISK, kv_none},
     {"isp1040", c_isp1040, IS_PCI | HAS_DISK, kv_none},
     {"isp1080", c_isp1040, IS_PCI | HAS_DISK, kv_none},
@@ -1185,6 +1186,30 @@ void CConfigurator::initialize() {
       char ftext[] = "";
       pChildren[iNumChildren++] =
           new CConfigurator(this, fname, fvalue, ftext, 0);
+    }
+
+    // The board's own devices of ordinary classes (the DS25's 82559ER):
+    // added with the board row's defaults where the configuration names
+    // nothing at their place.
+    for (const onboard_device *ob =
+             myClassId == c_tsunami ? ((CSystem *)myDevice)->platform().onboard
+                                    : nullptr;
+         ob && ob->name; ob++) {
+      bool have = false;
+      for (i = 0; i < iNumChildren; i++)
+        have |= !strcmp(pChildren[i]->get_myName(), ob->name);
+      if (have)
+        continue;
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE_1(Configuration, "No room to add the on-board %s", ob->name);
+      printf("%%SYS-I-ONBOARD: %s is not configured; adding the board's "
+             "%s (%s).\n",
+             ob->name, ob->device_class, ob->defaults);
+      char *otext = strdup(ob->defaults);
+      pChildren[iNumChildren++] =
+          new CConfigurator(this, strdup(ob->name), strdup(ob->device_class),
+                            otext, strlen(otext));
+      free(otext);
     }
 
     for (number = 0; number < 2; number++) {

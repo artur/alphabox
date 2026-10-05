@@ -80,6 +80,7 @@ int ds25_pci_interrupt(int hose, int slot, int intx, int func);
 const char *ds25_slot_refusal(int hose, int slot);
 void ds25_board_devices(CConfigurator *cfg, CSystem *sys);
 extern const titan_layout ds25_titan;
+extern const onboard_device ds25_onboard[];
 
 // AlphaServer DS15 (platforms/ds15/Ds15.cpp)
 int ds15_pci_interrupt(int hose, int slot, int intx, int func);

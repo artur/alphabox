@@ -19,7 +19,8 @@
  */
 
 /* Intel 8255x 10/100 Ethernet controller family (82557, 82558, 82559), the
- * chip on the DE600 and DE602 and on Intel's PRO/100 boards.
+ * chip on the DE600 and DE602 and on Intel's PRO/100 boards, and the
+ * 82559ER on the AlphaServer DS25's board.
  *
  * One controller model for every part; what differs (PCI identity,
  * extended TCBs and counters, the 82558+ registers) is data in an
@@ -57,6 +58,9 @@
 #include <condition_variable>
 #include <mutex>
 
+/// EEPROM words 3 to 12: what a board's EEPROM says besides its address.
+#define I8255X_EEPROM_BOARD_WORDS 10
+
 /**
  * \brief What distinguishes one 8255x part (and board) from another.
  **/
@@ -64,11 +68,16 @@ struct i8255x_chip_config {
   const char *name;     ///< config class and message name, e.g. "de600"
   const char *part;     ///< the controller, e.g. "82558"
   u16 pci_device_id;    ///< PCI config 0x02
-  u8 pci_revision;      ///< PCI config 0x08: 82557 1-3, 82558 4-5, 82559 8
+  u8 pci_revision;      ///< PCI config 0x08: 82557 1-3, 82558 4-5, 82559 8,
+                        ///< 82559ER 9
   u16 subsys_vendor_id; ///< PCI config 0x2c (0: none, as on early 82557s)
   u16 subsys_id;        ///< PCI config 0x2e
   u8 generation;        ///< 7 = 82557, 8 = 82558, 9 = 82559
   u16 pm_capabilities;  ///< PCI power management PMC (0: no capability)
+  /// EEPROM words 3-12 as the board ships (I8255X_EEPROM_BOARD_WORDS of
+  /// them), or nullptr for the family's: controller type, PHY, ID word and
+  /// the subsystem IDs above.
+  const u16 *eeprom_words = nullptr;
 };
 
 /**
