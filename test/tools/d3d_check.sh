@@ -157,10 +157,10 @@ import glob, sys
 fbdir, result = sys.argv[1], sys.argv[2]
 bars = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (0, 255, 0),
         (255, 0, 255), (255, 0, 0), (0, 0, 255), (0, 0, 0)]
-def check(px, x0, y0):
+def check(px, w, x0, y0):
     """0 when the 320x240 overlay at (x0,y0) shows the bars and the ramp."""
     def p(x, y):
-        s = (y * 640 + x) * 3
+        s = (y * w + x) * 3
         return px[s], px[s + 1], px[s + 2]
     bad = 0
     for i, c in enumerate(bars):
@@ -179,9 +179,14 @@ for name, x0, y0, shown in (('overlay-yuy2', 200, 150, 'overlay: shown 00000000'
         out.append('RESULT %-12s n/a   the program could not show one\n' % name)
         continue
     best = None
-    for f in sorted(glob.glob(fbdir + '/fb-*-640x480.ppm')):
-        px = open(f, 'rb').read().split(b'\n', 3)[3]
-        bad = check(px, x0, y0)
+    # Any frame large enough to hold the overlay, whatever the guest's mode.
+    for f in sorted(glob.glob(fbdir + '/fb-*.ppm')):
+        head = open(f, 'rb').read().split(b'\n', 3)
+        w, h = (int(v) for v in head[1].split())
+        if w < 640 or h < 480:
+            continue
+        px = head[3]
+        bad = check(px, w, x0, y0)
         if best is None or bad < best:
             best = bad
     verdict = 'same ' if best == 0 else 'DIFF '
