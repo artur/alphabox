@@ -54,6 +54,30 @@ hose within the I/O space.
   are populated alike, the rule the ES45's, DS25's and DS15's real
   listings all follow (ds15.md, Findings). The DS15 row fills arrays 0 and
   2 (`paired_arrays`); the others one array up to 8 GB.
+- `memory.arrays = "2048,512,2048,512";` gives the arrays' sizes instead
+  (MB, array 0 first, 0 for an empty one; the DS15 takes arrays 0 and 2
+  only). The encoding is the consoles' own: the size is
+  `2^(AARn<15:12> + 23)` bytes, 0 for an empty array, and the base is
+  `AARn<34:24>` (DS15 V7.3-2 console, 0x90540 and 0x905c0; the ES45's
+  0x957a0 and 0x95820 are the same code). Checked 2026-10-05
+  (`lab/mem-arrays/`) on the ES45, DS25 and DS15 consoles: three and four
+  equal arrays, descending and mixed sizes, an empty array between two
+  populated ones; `show memory`, the power-up listing and `show config`
+  give every array its size and base, with no error. Two real listings
+  come out line for line: the DS25's 512 + 1024 MB (`"512,0,1024"`: array
+  0 at 0x40000000, array 2 at 0, 1-Way) and the shape of the ES45's 10 GB
+  (`"2048,512,2048,512"`: arrays 0 and 2 first, then 1 and 3, 2-Way).
+  OpenVMS 8.4 on the ES45 with `"2048,2048,1024,1024"` boots to the SYSTEM
+  login and reports 6.00 GB (`lab/mem-arrays/vms-four/`).
+- What the consoles say and do not say about population: none of the
+  three refuses or warns about any layout, a smaller array 0 included;
+  they list the arrays in array order with the bases they find. The mode
+  column is one value for all arrays: "1-Way" when CSC<51> is set,
+  otherwise on the ES45 and DS25 "4-Way" when arrays 0 and 1 have one
+  size and "2-Way" when not (ES45 console, 0x96290-0x962c4), on the DS15
+  "2-Way" when arrays 0 and 2 have one size. So three equal arrays read
+  "4-Way" here; what a real machine's serial ROM leaves in CSC<51> for
+  three arrays is not known.
 - Board facts stay in `platforms/<board>/`: the interrupt table, the slots,
   the DPR contents, the flash parts, the `titan_layout`.
 
@@ -97,9 +121,20 @@ it. Both rows say `agp = false`: the value they always had.
 
 ## Assumed, not established
 
-- CSC (but bit 51), the Dchips' DSC/STR/DSC2 and the AAR encoding: the
-  Typhoon's values. The consoles' memory listings agree for one and two
-  arrays.
+- CSC (but bit 51) and the Dchips' DSC/STR/DSC2: the Typhoon's values.
+  (The AAR encoding is no longer assumed: it is read off the consoles'
+  code and checked for one to four arrays, above.)
+- Where the arrays' memory starts: the largest array at 0 and the others
+  above it in order of size, arrays of one size in array order. The
+  serial ROM, which is not emulated, decides this on a real machine; the
+  real listings agree as far as they go (two of them, above). The order
+  among four equal arrays (0, 1, 2, 3 here) is inferred.
+- CSC<51> for layouts no real listing shows (three arrays; four with
+  arrays 0 and 2 alike but 1 and 3 not): the rule above, extended.
+- With `memory.arrays` and a total that is not a power of two, the
+  addresses between the last array and the next power of two are backed
+  like memory; a real machine has nothing there. The consoles and OpenVMS
+  size memory from the arrays and do not go there.
 - PCTL<17> (66 MHz) and APCTL<57> (AGP present) read-only; SCTL<7:0>
   read-only. The ES45 console writes neither on hardware.
 - APCTL<57> follows the backplane, not whether a card is in the slot: the

@@ -56,7 +56,7 @@ around the core, and that is where the model is thin:
 | Hot-plug controllers (ES45, DS25) | **H1**: with the IO7's hot-plug registers as the model |
 | Scatter-gather TLB: invalidates ignored | fidelity only: translations are read from the tables every time |
 | AGP transactions on the A-port: AGP_EN, the rate and the request queues hold what is written and do nothing | the ES45 Model 1's AGP slot is there (`es45m1`, the Radeon 7500 as SRM console; OpenVMS boots), and the console turns AGP off and runs the card as a PCI device. Left until a guest turns it on: Linux's `titan_agp_*`, with **E2** |
-| CSC, Dchip and AAR encodings assumed the Typhoon's | what `memory.bits` can describe matches (ES45, DS25 to 8 GB: one array; DS15: one and two). Three and four arrays, and unequal ones, cannot be configured: **Q1**, a key for the arrays' sizes (Tsunami and Titan), then the check |
+| CSC (but bit 51) and the Dchips' DSC/STR/DSC2 assumed the Typhoon's | nothing reads them that the consoles or OpenVMS show. The AAR encoding is done: read from the consoles' code and checked with `memory.arrays` for one to four arrays, equal and unequal, on the ES45, DS25 and DS15, and OpenVMS 8.4 on four arrays (titan.md). Inferred, with no listing to settle it: the order of the bases among four equal arrays, CSC<51> for three arrays |
 | `show fru`, the ES45 model "B" | with M10's FRU work |
 
 ## Tsunami (ES40, DS20E, DS10, DS20L)
@@ -65,6 +65,7 @@ around the core, and that is where the model is thin:
 | --- | --- |
 | DS20, UP2000, XP1000 boards | **T1**: board rows; their firmware is on the CD |
 | No reference listings for the DS boards (no L3) | published listings if they turn up; otherwise stays |
+| The ES40 console prints "4-Way" for every `memory.arrays` layout, unequal arrays included | its own rule, not read; nothing else depends on it |
 
 ## The plan
 
@@ -76,9 +77,11 @@ gate.
    guest's probe); network boot on the ES47 (`boot ewa0`: BOOTP and TFTP);
    the loopback plug (`type = "loopback"` on any NIC: the console's
    `nettest` passes in every mode on the DS10 and the ES40); AGP on the
-   ES45 (the Model 1 backplane, `es45m1`).
-   Left: a key for a board's memory arrays, then three and four arrays on
-   the Titan.
+   ES45 (the Model 1 backplane, `es45m1`); the memory arrays
+   (`memory.arrays`, Tsunami and Titan; three and four arrays checked on
+   five consoles, which found the DS20E, DS10 and DS20L consoles reading
+   arrays to 1 GB only: their 2 and 4 GB are now two and four arrays, and
+   the DS20L row stops at 2 GB). Nothing left.
 2. **E1, the PALcode audit**: a script lists every internal register and
    field both EV7 PALcodes touch; each is checked against the core. The
    result is a table in marvel.md and fixes for what differs.
