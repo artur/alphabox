@@ -15,6 +15,8 @@
 - [Machines](platforms.md): how a CPU, a chipset and a board fit together,
   and the work packet a new machine is added with (pilot:
   [DS20E](platforms/ds20e.md)).
+- [Emulated hardware](hardware.md): every machine, chip and card, and
+  [known limitations](limitations.md): what is missing or known to differ.
 - [Peripherals](peripherals.md): the devices the ES40 firmware names, what
   is emulated, and what comes next.
 - [OpenVMS](openvms.md): installing and running OpenVMS 8.4, DECwindows.
@@ -37,5 +39,6 @@
 - [Processor fidelity](cpu-fidelity.md): where the emulated 21264 does not
   match the real one, what a guest can therefore not be used to test, and
   how to check the processor yourself.
+- [History and acknowledgements](acknowledgements.md).
 
 The sample [`es40.cfg`](../es40.cfg) documents every configuration value.
