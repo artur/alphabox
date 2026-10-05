@@ -105,7 +105,7 @@ Two NIC families are available, each in any free PCI slot:
   `pci0.8` whether the file names it or not (unconnected, `type = "null"`,
   when it does not).
 
-Either connects to the host through one of four backends, selected with
+Either connects to the host through one of five backends, selected with
 `type`:
 
 - `type = "pcap"` (default): captures on an existing host interface. Set
@@ -128,6 +128,13 @@ Either connects to the host through one of four backends, selected with
   `udp_remote = "127.0.0.1:5556";` (where its frames go). The peer can be a
   second Alphabox, a QEMU guest, or `test/tools/net_peer.py`, which answers
   ARP, BOOTP and TFTP so the console can network-boot. Needs no privileges.
+- `type = "loopback"`: a loopback plug on the port. Every frame the
+  controller transmits comes back on its own receiver; the link is up and
+  nothing reaches the host. With it the SRM console's wire-level loopback
+  tests pass -- `nettest ewa0 -mode ex`, `-mode nc`, and on the Intel NICs
+  plain `nettest eia0`, whose driver sends the default and the external
+  test to the wire -- which need the connector on a real machine too. The
+  controllers' own internal loopback does not need it. Needs no privileges.
 - `type = "null"`: the NIC is present but nothing is ever received and
   transmissions are discarded. Needs no privileges; useful for tests.
 

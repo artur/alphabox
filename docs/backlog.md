@@ -65,7 +65,6 @@ around the core, and that is where the model is thin:
 | --- | --- |
 | DS20, UP2000, XP1000 boards | **T1**: board rows; their firmware is on the CD |
 | No reference listings for the DS boards (no L3) | published listings if they turn up; otherwise stays |
-| DS10 `nettest -mode ex` needs a loopback plug | Q1: a `loopback` option on the NIC |
 
 ## The plan
 
@@ -75,7 +74,9 @@ gate.
 1. **Q1, the cheap ones**. Done: the 82559ER (`i82559er`, on the DS25's
    board); DKA400's errors (the control mode page; the two left are the
    guest's probe); network boot on the ES47 (`boot ewa0`: BOOTP and TFTP).
-   Left: the DS10 loopback option; a key for a board's memory arrays, then
+   The loopback plug (`type = "loopback"` on any NIC: the console's
+   `nettest -mode ex` passes on the DS10 and the ES40).
+   Left: a key for a board's memory arrays, then
    three and four arrays on the Titan; AGP on the ES45.
 2. **E1, the PALcode audit**: a script lists every internal register and
    field both EV7 PALcodes touch; each is checked against the core. The

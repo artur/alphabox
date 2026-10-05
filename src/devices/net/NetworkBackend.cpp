@@ -30,6 +30,7 @@
 #include "NetworkTap.hpp"
 #endif
 
+#include "NetworkLoopback.hpp"
 #include "NetworkNull.hpp"
 #include "NetworkUdp.hpp"
 
@@ -42,6 +43,10 @@ CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   // and a backend that cannot be created is fatal at device construction.
   if (type && strcasecmp(type, "null") == 0)
     return new CNetworkNull();
+
+  // A loopback plug on the port: what the controller transmits, it receives.
+  if (type && strcasecmp(type, "loopback") == 0)
+    return new CNetworkLoopback();
 
   // A point-to-point link over UDP to another program; no privileges.
   if (type && strcasecmp(type, "udp") == 0)
