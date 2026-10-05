@@ -184,6 +184,11 @@ int CSystem::parse_memory_arrays(const char *text) {
     if (const char *why = dimm_array_refusal((uint32_t)mb))
       FAILURE_3(Configuration, "memory.arrays: array %d of %lu MB %s", n, mb,
                 why);
+    if (m_platform->max_array_mb && mb > m_platform->max_array_mb)
+      FAILURE_4(Configuration,
+                "memory.arrays: array %d of %lu MB; the %s's console reads "
+                "arrays up to %d MB",
+                n, mb, m_platform->description, (int)m_platform->max_array_mb);
     if (mb && !(slots & (1u << n)))
       FAILURE_2(Configuration, "memory.arrays: the %s has no memory array %d",
                 m_platform->description, n);

@@ -176,8 +176,18 @@ struct platform_config {
 
   /// Which of the chipset's four memory arrays the board has slots for,
   /// a bit each (what `memory.arrays` may fill); 0 for all four. The DS15
-  /// has arrays 0 and 2 (its owner's guide, examples 2-5 and 2-7).
+  /// has arrays 0 and 2 (its owner's guide, examples 2-5 and 2-7); the
+  /// DS10's and DS20L's consoles list arrays 0 and 1 and no others, with
+  /// all four populated.
   u8 memory_arrays = 0;
+
+  /// The largest memory array the board's console can read, in MB; 0 for
+  /// 8192, the Typhoon's AARn<15:12>. The DS20E's console takes the size
+  /// from AARn<14:12> (V7.3-1, 0x86648: `sra 12; and 7`), the 21272's
+  /// field, so 1024 MB is its largest: it reads a 2 GB array as none and
+  /// a 4 GB one as 16 MB. The DS10's and DS20L's consoles answer the same
+  /// way [their code was not read]. More memory goes in more arrays.
+  u16 max_array_mb = 0;
 };
 
 /// The board named `name`, or nullptr.

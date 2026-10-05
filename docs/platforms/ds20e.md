@@ -17,7 +17,7 @@ listing
 | Family, code name | Tsunami family. "Goldrack" per a hardware listing (assumed); Linux's Tsunami variation table has DP264, Monet, Clipper (= ES40), Goldrush, Webbrick (= DS10), Shark (= DS20L) and no Goldrack. **Which variation this firmware reports, and therefore which board wiring it expects, is open question 1 below.** |
 | CPU | 1-2, EV6 500 MHz, EV67 667 MHz or EV68AL 833 MHz (assumed, from a hardware listing). Alphabox has EV68CB only, so this packet adds at least one CPU model row |
 | Chipset | Tsunami/Typhoon 21272, as the ES40 (known: same family; whether this board has one or two Pchips is open question 2) |
-| Memory | up to 4 GB (assumed) |
+| Memory | up to 4 GB in four arrays of 1 GB at most: the console takes an array's size from AARn<14:12> (V7.3-1, 0x86648), the 21272's three bits, not the Typhoon's four. Checked 2026-10-05 (`lab/mem-arrays/`): one 2 GB array read as no memory and one 4 GB array as 16 MB, so `memory.bits` 31 and 32 are now two and four arrays of 1 GB; `memory.arrays` with three and four arrays, equal, descending and mixed, lists as configured |
 | PCI | 6 slots (assumed); how they map to hoses and which interrupt bits they use is open question 2 |
 | South bridge | assumed an ALi M1543C as on the ES40; the original DS20 used a different part, so this must be confirmed from the firmware |
 | Console devices | serial console; VGA where fitted |

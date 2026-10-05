@@ -15,7 +15,7 @@ two processors); L3 not claimable without a reference listing
 | Family, code name | Tsunami family; Linux calls this board "Shark" and drives it with the ES40's interrupt table ("Sharks strongly resemble Clipper") |
 | CPU | up to two; the EV68CB row is used, and the console names it "Alpha 21264C-6 833 MHz (EV68CB pass 4.0)". Both processors are found and run OpenVMS |
 | Chipset | Tsunami/Typhoon 21272, two PCI buses |
-| Memory | up to 4 GB (assumed) |
+| Memory | up to 2 GB: the console lists arrays 0 and 1 only and reads an array's size from AARn<14:12>, 1 GB at most (checked 2026-10-05, `lab/mem-arrays/`; a 2 GB array read as no memory, a 4 GB one as 16 MB). `memory.bits = 31` is two arrays of 1 GB; `memory.arrays` takes arrays 0 and 1 |
 | PCI | the console gives interrupt lines to hose 0 devices 3 to 6 and hose 1 devices 3 to 5 (see Findings); it scans from device 3 and finds the ALi functions at the ES40's 7, 15 and 19 |
 | Board hardware | not investigated: the console runs without it |
 

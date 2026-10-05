@@ -39,7 +39,20 @@ CTsunami::CTsunami(CSystem *sys) : CChipset(sys) {
     m_dimms = model_dimm_arrays(arrays);
     attach_dimm_spd(m_mpd_bus, m_dimms);
   } else {
-    init_spd(static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20));
+    const uint32_t total_mb =
+        static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20);
+    const uint32_t max_mb = sys->platform().max_array_mb;
+    if (max_mb && total_mb > max_mb) {
+      // More than the board's console reads in one array (the DS20E, DS10
+      // and DS20L: 1 GB): equal arrays of that size.
+      uint32_t mb[4] = {0, 0, 0, 0};
+      for (uint32_t n = 0; n < total_mb / max_mb && n < 4; n++)
+        mb[n] = max_mb;
+      m_dimms = model_dimm_arrays(mb);
+      attach_dimm_spd(m_mpd_bus, m_dimms);
+    } else {
+      init_spd(total_mb);
+    }
   }
   power_on_state();
 }

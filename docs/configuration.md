@@ -109,7 +109,9 @@ array gets the lowest addresses and arrays of one size keep their order, as
 a real machine's serial ROM places them, so the console's `show memory`
 lists a 512 MB array 0 above a 1024 MB array 2. A layout the board cannot
 hold is refused at startup: an array it has no slots for (the DS15 has
-arrays 0 and 2 only), or a sum outside the board's limits. The EV7 machines
+arrays 0 and 2 only, the DS10 and DS20L arrays 0 and 1), an array larger
+than its console reads (1024 MB on the DS20E, DS10 and DS20L), or a sum
+outside the board's limits. The EV7 machines
 have memory per processor and take `memory.bits` only.
 
 ## Networking
