@@ -173,6 +173,11 @@ struct platform_config {
 
   /// The board's own devices of ordinary classes, or nullptr.
   const onboard_device *onboard = nullptr;
+
+  /// Which of the chipset's four memory arrays the board has slots for,
+  /// a bit each (what `memory.arrays` may fill); 0 for all four. The DS15
+  /// has arrays 0 and 2 (its owner's guide, examples 2-5 and 2-7).
+  u8 memory_arrays = 0;
 };
 
 /// The board named `name`, or nullptr.

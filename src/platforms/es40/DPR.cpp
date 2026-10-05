@@ -143,23 +143,26 @@ void CDPR::init() {
               "%s does not",
               cSystem->chipset()->name());
   const dimm_population &lay = *dimms;
-  const std::vector<uint8_t> &spd = lay.spd;
-  for (int a = 0; a < lay.n_arrays; a++) {
+  for (int a = 0; a < 4; a++) {
+    if (!lay.array[a].dimms)
+      continue;
     // 0x80+2a <7:4>: F = twice-split (8 DIMMs), 4 = lower set only;
     // <3:0> = array position. 0x81+2a: DIMM size in 64 MB units (the 16 and
     // 32 MB DIMMs of configurations below 256 MB report 1).
     state.ram[0x80 + 2 * a] =
-        (u8)(((lay.dimms_per_array == 8) ? 0xf0 : 0x40) | a);
-    const u8 size_units = (u8)(lay.dimm_mb / 64);
+        (u8)(((lay.array[a].dimms == 8) ? 0xf0 : 0x40) | a);
+    const u8 size_units = (u8)(lay.array[a].dimm_mb / 64);
     state.ram[0x81 + 2 * a] = size_units ? size_units : 1;
   }
 
   // RMC-cached SPD contents, one 256-byte region per installed DIMM: MMB m
   // slot Jd at 0x100 * (m * 8 + d), d = 1..8.
-  for (int a = 0; a < lay.n_arrays; a++)
-    for (int d = 1; d <= lay.dimms_per_array; d++)
+  for (int a = 0; a < 4; a++) {
+    const std::vector<uint8_t> &spd = lay.array[a].spd;
+    for (int d = 1; d <= lay.array[a].dimms; d++)
       memcpy(&state.ram[0x100 * (a * 8 + d)], spd.data(),
              spd.size() < 0x100 ? spd.size() : 0x100);
+  }
   // powerup failure bits
   state.ram[0x88] = 0;    // each bit is one DIMM on MMB0
   state.ram[0x89] = 0x00; // MMB1
@@ -197,9 +200,10 @@ void CDPR::init() {
   // RMC read failure DIMM bits, one byte per MMB (bit d-1 = slot Jd; set =
   // no SPD to read): MMB m carries array m's DIMMs.
   {
-    const u8 installed = (lay.dimms_per_array == 8) ? 0xff : 0x0f;
-    for (int m = 0; m < 4; m++)
-      state.ram[0xab + m] = (u8)((m < lay.n_arrays) ? ~installed : 0xff);
+    for (int m = 0; m < 4; m++) {
+      const u8 installed = (lay.array[m].dimms == 8) ? 0xff : 0x0f;
+      state.ram[0xab + m] = (u8)(lay.array[m].dimms ? ~installed : 0xff);
+    }
   }
   switch (cSystem->get_cpu_num()) {
   case 1:
@@ -345,7 +349,7 @@ void CDPR::init() {
   // Entry j of array a: slot J(j+1) on MMB a; status 1 = expected missing.
   for (int a = 0; a < 4; a++)
     for (int j = 0; j < 8; j++) {
-      const u8 status = (a < lay.n_arrays && j < lay.dimms_per_array) ? 0 : 1;
+      const u8 status = (j < lay.array[a].dimms) ? 0 : 1;
       state.ram[0x34a0 + a * 8 + j] = (u8)((status << 5) | (a << 3) | j);
     }
 

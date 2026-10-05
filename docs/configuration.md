@@ -90,6 +90,28 @@ machine's default is its usual file name). Images come from the firmware
 media you own; Alphabox reads both the update-bundle form and the raw form
 behind the standard Alpha ROM header.
 
+### Memory
+
+`memory.bits` gives the memory as a power of two (30 = 1 GB), and the
+chipset fills the board's memory arrays from it. On the Tsunami and Titan
+boards `memory.arrays` gives the arrays themselves instead, in MB, array 0
+first, 0 for an empty one:
+
+```
+  memory.arrays = "2048,1024,512,512";   // 4 GB in four arrays
+  memory.arrays = "1024,0,1024";         // a DS15: arrays 0 and 2
+```
+
+The memory is then the sum (it need not be a power of two) and
+`memory.bits` is not used. Each array is a power of two from 64 to 8192 MB,
+modelled as four identical DIMMs (eight of 1 GB for 8192). The largest
+array gets the lowest addresses and arrays of one size keep their order, as
+a real machine's serial ROM places them, so the console's `show memory`
+lists a 512 MB array 0 above a 1024 MB array 2. A layout the board cannot
+hold is refused at startup: an array it has no slots for (the DS15 has
+arrays 0 and 2 only), or a sum outside the board's limits. The EV7 machines
+have memory per processor and take `memory.bits` only.
+
 ## Networking
 
 Two NIC families are available, each in any free PCI slot:

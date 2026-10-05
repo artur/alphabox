@@ -107,7 +107,7 @@ static const platform_config platforms[] = {
     {"ds15", "AlphaServer DS15", CHIPSET_TITAN, "ev68cb", 1, 26, 32,
      "DS15_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds15_board_devices, ds15_pci_interrupt, ds15_slot_refusal, 0, nullptr,
-     0x710000, nullptr, &ds15_titan},
+     0x710000, nullptr, &ds15_titan, nullptr, 0x5},
 };
 
 const platform_config *find_platform(const char *name) {

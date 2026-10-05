@@ -35,7 +35,12 @@
 
 CTsunami::CTsunami(CSystem *sys) : CChipset(sys) {
   // The SPD EEPROMs on the MPD pins describe the configured memory.
-  init_spd(static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20));
+  if (const uint32_t *arrays = sys->memory_arrays()) {
+    m_dimms = model_dimm_arrays(arrays);
+    attach_dimm_spd(m_mpd_bus, m_dimms);
+  } else {
+    init_spd(static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20));
+  }
   power_on_state();
 }
 

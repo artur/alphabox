@@ -84,9 +84,12 @@ CSystem::CSystem(CConfigurator *cfg) try {
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
   // How much memory the board holds, from its descriptor: the ES40 takes
   // 64 MB (the smallest four-DIMM set the SPD model describes) to 32 GB
-  // (four Typhoon arrays of 8 GB each).
-  if (iNumMemoryBits < m_platform->min_memory_bits ||
-      iNumMemoryBits > m_platform->max_memory_bits)
+  // (four Typhoon arrays of 8 GB each). memory.arrays gives the arrays'
+  // sizes instead; the address bits then span their sum, rounded up.
+  if (const char *arrays = myCfg->get_text_value("memory.arrays"))
+    iNumMemoryBits = parse_memory_arrays(arrays);
+  else if (iNumMemoryBits < m_platform->min_memory_bits ||
+           iNumMemoryBits > m_platform->max_memory_bits)
     FAILURE_3(Configuration, "memory.bits must be between %d and %d on the %s",
               m_platform->min_memory_bits, m_platform->max_memory_bits,
               m_platform->description);
@@ -146,6 +149,60 @@ CSystem::~CSystem() {
 
   free(memory);
   delete m_chipset;
+}
+
+/**
+ * `memory.arrays`: the sizes of the board's memory arrays in megabytes,
+ * array 0 first, 0 for an empty one. Refuses what the chipset's array
+ * registers or the board cannot hold, and returns the address bits that
+ * span the total. The memory is contiguous from 0 (model_dimm_arrays), so
+ * when the total is not a power of two the space between it and the next
+ * one is backed like memory, though no array claims it: the consoles and
+ * OpenVMS take the size from the arrays and never go there.
+ **/
+int CSystem::parse_memory_arrays(const char *text) {
+  if (m_platform->chipset != CHIPSET_TSUNAMI &&
+      m_platform->chipset != CHIPSET_TITAN)
+    FAILURE_1(Configuration,
+              "memory.arrays is for the Tsunami and Titan boards; the %s "
+              "has memory per processor (memory.bits)",
+              m_platform->description);
+  const unsigned slots =
+      m_platform->memory_arrays ? m_platform->memory_arrays : 0xf;
+  int n = 0;
+  u64 total = 0;
+  for (const char *p = text; *p;) {
+    char *end;
+    const unsigned long mb = strtoul(p, &end, 10);
+    while (*end == ' ')
+      end++;
+    if (end == p || (*end && *end != ',') || n >= 4)
+      FAILURE_1(Configuration,
+                "memory.arrays = \"%s\": expected up to four sizes in MB, "
+                "array 0 first, separated by commas",
+                text);
+    if (const char *why = dimm_array_refusal((uint32_t)mb))
+      FAILURE_3(Configuration, "memory.arrays: array %d of %lu MB %s", n, mb,
+                why);
+    if (mb && !(slots & (1u << n)))
+      FAILURE_2(Configuration, "memory.arrays: the %s has no memory array %d",
+                m_platform->description, n);
+    m_memory_arrays[n++] = (uint32_t)mb;
+    total += mb;
+    p = *end ? end + 1 : end;
+  }
+  const u64 min_mb = U64(1) << (m_platform->min_memory_bits - 20);
+  const u64 max_mb = U64(1) << (m_platform->max_memory_bits - 20);
+  if (total < min_mb || total > max_mb)
+    FAILURE_4(Configuration,
+              "memory.arrays: %" PRIu64 " MB in all; the %s holds %" PRIu64
+              " to %" PRIu64 " MB",
+              total, m_platform->description, min_mb, max_mb);
+  m_has_memory_arrays = true;
+  int bits = 26;
+  while ((U64(1) << (bits - 20)) < total)
+    bits++;
+  return bits;
 }
 
 /**

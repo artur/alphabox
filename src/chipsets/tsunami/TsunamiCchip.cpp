@@ -64,15 +64,17 @@ u64 CTsunami::cchip_csr_read(u32 a, CSystemComponent *source) {
   case 0x180:
   case 0x1c0: {
     // AAR0-3: memory as up to 4 arrays of at most 8 GB each (ASIZ 1010 is
-    // the Typhoon maximum), array n based at n * 8 GB in ADDR<34:24>. Matches
-    // the DIMM model reported by the DPR (init_spd).
-    const int arr = (int)((a >> 6) & 3);
-    const unsigned int arr_bits =
-        (m_sys->get_memory_bits() > 33) ? 33 : m_sys->get_memory_bits();
-    const int n_arr = 1 << (m_sys->get_memory_bits() - arr_bits);
-    if (arr >= n_arr)
+    // the Typhoon maximum), the base in ADDR<34:24> and the size
+    // 2^(ASIZ + 23) bytes in <15:12>. From the DIMM model the DPR reports
+    // (init_spd): array n at n * 8 GB from memory.bits, or the arrays of
+    // memory.arrays.
+    const dimm_array &arr = m_dimms.array[(a >> 6) & 3];
+    if (!arr.dimms)
       return 0; // array not populated
-    return ((u64)arr << arr_bits) | ((u64)(arr_bits - 23) << 12);
+    unsigned int arr_bits = 0;
+    while ((U64(1) << arr_bits) < arr.bytes())
+      arr_bits++;
+    return arr.base | ((u64)(arr_bits - 23) << 12);
   }
 
   case 0x200:

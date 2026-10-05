@@ -30,8 +30,10 @@
 #include "System.hpp"
 
 CTitan::CTitan(CSystem *sys) : CChipset(sys) {
-  m_dimms = model_dimms(
-      static_cast<uint32_t>((1ULL << sys->get_memory_bits()) >> 20));
+  const uint32_t *arrays = sys->memory_arrays();
+  m_dimms = arrays ? model_dimm_arrays(arrays)
+                   : model_dimms(static_cast<uint32_t>(
+                         (1ULL << sys->get_memory_bits()) >> 20));
   attach_dimm_spd(m_mpd_bus, m_dimms);
 
   const titan_layout *board = sys->platform().titan;
@@ -40,7 +42,11 @@ CTitan::CTitan(CSystem *sys) : CChipset(sys) {
     m_agp = board->agp;
   }
   const unsigned bits = sys->get_memory_bits();
-  if (board && board->paired_arrays && bits > 30) {
+  if (arrays) {
+    // The arrays as the configuration gives them (memory.arrays).
+    for (int n = 0; n < 4; n++)
+      m_array[n] = {m_dimms.array[n].base, m_dimms.array[n].bytes()};
+  } else if (board && board->paired_arrays && bits > 30) {
     // Two equal arrays, 0 then 2, as the DS15's listing of 2048 MB shows
     // them: array 0 at 0, array 2 at half the memory.
     const u64 half = U64(1) << (bits - 1);

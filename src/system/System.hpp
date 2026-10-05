@@ -212,6 +212,12 @@ public:
   void DumpMemory(unsigned int filenum);
   char *PtrToMem(u64 address);
   unsigned int get_memory_bits();
+  /// The sizes of the board's four memory arrays in megabytes as
+  /// `memory.arrays` gives them, or nullptr when the configuration has no
+  /// such key and the chipset derives the arrays from memory.bits.
+  const uint32_t *memory_arrays() const {
+    return m_has_memory_arrays ? m_memory_arrays : nullptr;
+  }
   void RestoreState(const char *fn);
   void SaveState(const char *fn);
 
@@ -388,6 +394,9 @@ public:
 
   virtual ~CSystem();
   unsigned int iNumMemoryBits;
+  uint32_t m_memory_arrays[4] = {0, 0, 0, 0};
+  bool m_has_memory_arrays = false;
+  int parse_memory_arrays(const char *text);
 
   void panic(char *message, int flags);
 

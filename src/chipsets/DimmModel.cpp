@@ -103,19 +103,52 @@ std::vector<uint8_t> build_sdram_spd(uint32_t mb, bool registered_ecc) {
 
 dimm_population model_dimms(uint32_t total_mb) {
   dimm_population p;
-  p.dimm_mb = (total_mb / 4 > 1024) ? 1024 : total_mb / 4;
-  const uint32_t n_dimms = total_mb / p.dimm_mb;
-  p.n_arrays = (int)((n_dimms + 7) / 8);
-  p.dimms_per_array = (int)(n_dimms / p.n_arrays);
-  p.spd = build_sdram_spd(p.dimm_mb, /*registered_ecc*/ true);
+  const uint32_t dimm_mb = (total_mb / 4 > 1024) ? 1024 : total_mb / 4;
+  const uint32_t n_dimms = total_mb / dimm_mb;
+  const int n_arrays = (int)((n_dimms + 7) / 8);
+  for (int a = 0; a < n_arrays && a < 4; a++) {
+    p.array[a].dimms = (int)(n_dimms / n_arrays);
+    p.array[a].dimm_mb = dimm_mb;
+    p.array[a].base = a * p.array[a].bytes();
+    p.array[a].spd = build_sdram_spd(dimm_mb, /*registered_ecc*/ true);
+  }
+  return p;
+}
+
+const char *dimm_array_refusal(uint32_t mb) {
+  if (!mb)
+    return nullptr;
+  if (mb & (mb - 1))
+    return "is not a power of two";
+  if (mb < 64)
+    return "is less than 64 MB (four DIMMs of 16 MB)";
+  if (mb > 8192)
+    return "is more than 8192 MB, the largest array the Cchip describes";
+  return nullptr;
+}
+
+dimm_population model_dimm_arrays(const uint32_t mb[4]) {
+  dimm_population p;
+  uint64_t next = 0;
+  // Largest first; among equals, the lower array first.
+  for (uint32_t size = 8192; size >= 64; size >>= 1)
+    for (int a = 0; a < 4; a++) {
+      if (mb[a] != size)
+        continue;
+      p.array[a].dimms = (size > 4096) ? 8 : 4;
+      p.array[a].dimm_mb = size / p.array[a].dimms;
+      p.array[a].base = next;
+      p.array[a].spd = build_sdram_spd(p.array[a].dimm_mb, true);
+      next += p.array[a].bytes();
+    }
   return p;
 }
 
 void attach_dimm_spd(I2CBus &bus, const dimm_population &d) {
   // The I2C bus does not carry every DIMM (HRM 9.10): one representative
   // EEPROM per 4-DIMM set, at 0x50 + array * 2 + set.
-  for (int a = 0; a < d.n_arrays; a++)
-    for (int s = 0; s < d.dimms_per_array / 4; s++)
-      bus.attach(
-          std::make_shared<Eeprom24C02>(uint8_t(0x50 + a * 2 + s), d.spd));
+  for (int a = 0; a < 4; a++)
+    for (int s = 0; s < d.array[a].dimms / 4; s++)
+      bus.attach(std::make_shared<Eeprom24C02>(uint8_t(0x50 + a * 2 + s),
+                                               d.array[a].spd));
 }
