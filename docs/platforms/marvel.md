@@ -102,8 +102,8 @@ From [backlog.md](../backlog.md), where the order of work is:
 
 | Gap | Plan |
 | --- | --- |
-| The internal registers and fields the EV7 PALcodes use, `AMASK` and `IMPLVER` | E1, the PALcode audit |
-| The UNIX PALcode, never run | E2, Linux on the ES47 |
+| `AMASK` and `IMPLVER`: nothing executes them, so they stay the EV68's (the internal registers were checked in E1) | left: an inference |
+| The UNIX PALcode under an operating system (it runs from a boot image since E1) | E2, Linux on the ES47 |
 | The IO7's MSIs (`MSI_CTL`) and `INT_PND`/`INT_CLR`/`MISC_PND` | M8, with Linux |
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
 | The CMM's FRU EEPROMs, fans, power and VRMs (stubs); `get_cdl_error` answered with status 1 at `boot` | M10 |
