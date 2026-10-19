@@ -18,6 +18,16 @@ upstream changes", the base of the range is the tip of the last reviewed
 range -- check this file's history section (bottom) and
 `git -C /tmp/es40 log --oneline` to find it.
 
+**The owner's direction (October 2026): the inherited ES40 code is to be
+replaced over time, not extended.** So prefer writing a fix your own way,
+from the datasheets and the guest's behaviour, over taking ES40-Emu's code.
+When one of its changes points at a real bug, fix it in alphabox's own code
+and name the ES40-Emu commit and author in the commit message (ideas are
+not copyrighted, but the find deserves credit). Take code itself only when
+the user asks for it, and then credit it in the file as Step 4 says.
+ES40-Emu's newer files are BSD-1-Clause, which alphabox may use (keeping the
+notice); alphabox's code is GPL and cannot go into those files.
+
 **NEVER `git apply` / `git cherry-pick` upstream patches.** They never
 apply: alphabox is clang-formatted, renames headers `.h` → `.hpp`,
 rewrote threading to `std::`, merged the two upstream binaries into
@@ -62,8 +72,9 @@ Upstream keeps every source in a flat `src/`; alphabox does not (reorganized
   (PCIDevice, all four AliM1543C components — the bridge and its
   `_ide`/`_usb`/`_pmu` functions are all PCI functions — DEC21143,
   ES1370, Sym53C810/895, SCSIBus, SCSIDevice), `isa/` (only the legacy
-  devices behind the bridge: DMA, FloppyController, Keyboard, Serial,
-  MPU401), `storage/` (Disk, DiskController, DiskDevice, DiskFile,
+  devices behind the bridge: DMA, FloppyController, Keyboard, Serial;
+  ES40-Emu's MPU401 was removed for its GPL-2.0-only licence -- do not
+  bring it back), `storage/` (Disk, DiskController, DiskDevice, DiskFile,
   DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the MAME shims),
   `net/` (Ethernet, NetworkBackend/Pcap/Tap).
 - CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). System and
@@ -223,27 +234,57 @@ numbered by place -- keep that numbering), ramdisk model `"ES40RAMDISK"`, the MA
 references ("AlphaServer ES40" is the emulated machine — keep), state
 file magics, include guards.
 
-License headers state who wrote the code, so pick by lineage -- never
-stamp the fork-lineage header onto code nobody in that lineage wrote.
+License headers state who wrote the code. Copyright follows the code: a
+header names everyone whose code is in the file, and nobody else. Never
+stamp a lineage header onto code nobody in that lineage wrote -- that is
+how `jitengine.cpp` once credited "the ES40 Emulator Project 2007-2008" for
+gdwnldsKSC's 2026 JIT. The per-file record of who wrote what is
+`lab/credit-audit/AUDIT.md` (October 2026); keep it in mind, and
+`docs/acknowledgements.md` is the public summary.
 
-For a file PORTED from, or derived from, upstream ES40 / lenticularis
-alphabox, keep the lineage header its alphabox copy already carries:
+Three kinds of origin, often mixed in one file:
+
+- **es40 (2007-2010) and AXPbox (2020-2026)**: Camiel Vanderhoeven and the
+  ES40 Emulator Project; Tomáš Glozar, Remy van Elst and the AXPbox
+  contributors. Most of `src/` already carries these lines; keep them.
+- **ES40-Emu (2023-2026)**: gdwnldsKSC and the ES40-Emu contributors -- not
+  the 2007 project. Take the authors and years from ES40-Emu's own history
+  (`git -C /tmp/es40 log --format='%an %ad' -- <file>`, or `git blame` on
+  the lines you carry), and credit anyone else with a meaningful share by
+  name. If the ES40-Emu file carries a licence notice (BSD-1-Clause on its
+  newer files), keep that notice and its SPDX line in the alphabox file and
+  mark the file `SPDX-License-Identifier: GPL-2.0-or-later AND
+  BSD-1-Clause`. Never take a GPL-2.0-only file: it would make the whole
+  tree GPL-2.0-only.
+- **This fork**: `Copyright (C) <year> Artur Goulão` with the alphabox URL.
+
+Copyright is ADDED, never replaced: a file that already names holders keeps
+them, and you add a line for each new origin. A line comes out only when it
+is false, or when none of that holder's code is left in the file. The form
+the audit used for ES40-Emu code in a file of the older lineage (as in
+`src/devices/isa/DMA.cpp`):
 
 ```
 /* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
  * Copyright (C) 2007 by Camiel Vanderhoeven
+ *
+ * Contains code from ES40-Emu:
+ * Copyright (C) 2026 gdwnldsKSC and the ES40-Emu contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
  * ... (GPL v2 boilerplate as in existing files)
  */
 ```
 
-For a NEW file written for this fork, containing no upstream code, the
-copyright is this fork's and there is no "Forked from" line. GPL v2 is
-kept, since the file links into a GPL v2 program:
+For a NEW file written for this fork, containing no code from elsewhere,
+the copyright is this fork's alone and there is no "Forked from" line:
 
 ```
 /* Alphabox Alpha Emulator

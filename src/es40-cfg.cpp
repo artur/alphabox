@@ -40,8 +40,6 @@
 #include "banner.hpp"
 
 #ifdef _WIN32
-#pragma comment(lib, "winmm.lib")
-#include <mmsystem.h>
 #include <windows.h>
 #endif
 
@@ -1000,34 +998,6 @@ int main_cfg(int argc, char *argv[]) {
     os << "  }\n\n";
   }
 
-#ifdef _WIN32
-  MultipleChoiceQuestion mpu_q;
-  mpu_q.setQuestion("Would you like to emulate the MPU-401 MIDI device?");
-  mpu_q.addAnswer("no", "", "Disable the MPU-401");
-  mpu_q.addAnswer("yes", "yes", "Enable the MPU-401");
-  mpu_q.setDefault("no");
-  mpu_q.ask();
-
-  if (mpu_q.getAnswer() != "") {
-    MultipleChoiceQuestion midi_q;
-    midi_q.setQuestion(
-        "What MIDI out device should we connect to (answer ? for a list)?");
-    midi_q.setExplanation("Choose 'list' to get a list at run-time.");
-    midi_q.addAnswer("list", "", "Get a list at run-time");
-
-    MIDIOUTCAPSA caps;
-    for (UINT i = 0; i < midiOutGetNumDevs(); i++) {
-      midiOutGetDevCapsA(i, &caps, sizeof(caps));
-      midi_q.addAnswer(i2s(i + 1), i2s(i), string(caps.szPname));
-    }
-
-    os << "  mpu = mpu401\n";
-    os << "  {\n";
-    os << "     midi_out = " << midi_q.ask() << ";\n";
-    os << "  }\n\n";
-  }
-
-#endif
 
   MultipleChoiceQuestion vgacons_q;
   vgacons_q.setQuestion("Where would you like console output to go?");

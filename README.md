@@ -143,5 +143,4 @@ others: [docs/acknowledgements.md](docs/acknowledgements.md).
 
 GNU General Public License, version 2 or later: see [LICENSE](LICENSE).
 Third-party code keeps its original license, as noted in the source file
-headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md);
-one Windows-only file set (`src/devices/isa/MPU401.*`) is GPL-2.0-only.
+headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md).

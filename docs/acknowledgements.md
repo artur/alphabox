@@ -39,7 +39,7 @@ From ES40-Emu came:
   Bochs), BIN/CUE images (**GenSayer**), and Symbios 53C810 and disk fixes.
 - **Networking and sound**: DEC 21143 fixes (gdwnldsKSC, **Aleksander
   Czajczyński**), the Npcap loader, the ES1370 (Cacodemon345's port of
-  QEMU's model) and the Windows MPU-401 MIDI output (Cacodemon345).
+  QEMU's model).
 - **System**: the i2c SPD EEPROMs and DIMM layout, DPR and Flash/ARC
   changes, the configuration layer and `es40-cfg` (with Cacodemon345), and
   the startup banner.
@@ -49,11 +49,12 @@ Each source file that carries ES40-Emu code names its authors in its header.
 ## This repository
 
 This repository continued AXPbox as its own project (**Artur Goulão**) and
-was renamed Alphabox in 2026. Written here: the AArch64 JIT back end (an
-independent emitter that mirrors ES40-Emu's x86-64 one op for op) and the
-performance work behind it, idle pacing, SMP and memory fixes, the
-headless test tooling, the experimental Hypervisor.framework runtime, USB
-(OHCI, EHCI and the devices behind them), virtio, the machines beyond the
+was renamed Alphabox in 2026. Written here: the AArch64 JIT back end (its
+own emitter, written for Apple Silicon and other ARM hosts, which plugs into
+the JIT core that came from ES40-Emu) and the performance work behind it,
+idle pacing, SMP and memory fixes, the headless test tooling, the
+experimental Hypervisor.framework runtime, USB (OHCI, EHCI and the devices
+behind them), virtio, the machines beyond the
 ES40 (the Tsunami boards DS10, DS20E and DS20L, the Titan boards ES45, DS25
 and DS15, and the EV7 systems ES47, ES80 and GS1280), and most of the device
 families it emulates ([hardware](hardware.md)): the Symbios 53C8xx and QLogic
@@ -72,7 +73,7 @@ keeps its own notice in the header of the file that holds it:
 | --- | --- | --- | --- |
 | es40 | most of `src/` | Camiel Vanderhoeven and the ES40 Emulator Project | GPL-2.0-or-later |
 | AXPbox | most of `src/` | Tomáš Glozar, Remy van Elst and contributors | GPL-2.0-or-later |
-| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT, the SPD EEPROM and the MAME shims BSD-1-Clause; MPU-401 GPL-2.0-only |
+| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT, the SPD EEPROM and the MAME shims BSD-1-Clause |
 | MAME | `devices/video/`: `VGA.*`, `VGACard.cpp`, `s3/S3Trio64.*`, `ibm8514a.*`, `attotime`, `coretmpl`, `logmacro`, `xtal`, `address_map` | Nathan Woods, Peter Trauner, Angelo Salese, Barry Rodewald, Aaron Giles, Vas Crabb, Olivier Galibert | BSD-3-Clause |
 | Bochs | `gui/`, the CD-ROM commands in `storage/Disk.cpp`, `isa/Keyboard.*`, `video/Cirrus.cpp` | MandrakeSoft S.A. (and the plex86 developers in `gui/plugin.hpp`) | LGPL, version 2 or later |
 | GXemul | `common/es40_debug.*`, `net/Ethernet.*`, `pci/tulip/` | Anders Gavare | BSD-3-Clause style |
@@ -80,15 +81,10 @@ keeps its own notice in the header of the file that holds it:
 | SIMH and SoftFloat | `cpu/AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`, `cpu_defs.hpp` | Robert M Supnik; John R. Hauser | MIT-style; the SoftFloat terms |
 | QEMU | `pci/es137x/ES137x.cpp`, `ES137xRegs.hpp` | Vassili Karpov | MIT |
 | 86Box | `video/mach64/Mach64Engine.cpp` (ported) | Sarah Walker, Miran Grca, Connor Hyde | GPL-2.0-or-later |
-| VSBHDA / SBEMU, through ES40-Emu | `isa/MPU401.*` | Cacodemon345, gdwnldsKSC | GPL-2.0-only |
 
-**One file set is GPL-2.0-only.** `src/devices/isa/MPU401.*`, the MIDI
-output for Windows hosts, came from ES40-Emu, which marks it GPL-2.0-only as
-derived from VSBHDA. It is compiled only on Windows. Because it is in the
-tree, the source as a whole, and any Windows build, can in practice be
-passed on only under version 2 of the GPL; builds for other hosts do not
-contain it. Everything else is GPL-2.0-or-later or under a licence
-compatible with it.
+Everything in the source is GPL-2.0-or-later or under a licence compatible
+with it. (A Windows-only MPU-401 MIDI output that ES40-Emu marks
+GPL-2.0-only was removed in October 2026 for that reason.)
 
 Built with, not part of the source: **SDL3** and **asmjit** (zlib),
 **libpcap** (BSD-3-Clause), **libusb** (LGPL-2.1-or-later), and **Npcap**

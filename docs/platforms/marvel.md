@@ -1839,7 +1839,7 @@ What it does not give yet, and M1/M5/M6 must add:
   non-contiguous bases; that needs a memory map in `CSystem`, not the
   chipset, to keep RAM off the virtual-call path.
 - **ISA devices and a few others hard-code Tsunami hose-0 addresses**
-  (`0x801fc000xxx` in Serial, Keyboard, DMA, the floppy, MPU401, the ALi
+  (`0x801fc000xxx` in Serial, Keyboard, DMA, the floppy, the ALi
   bridge; the S3's legacy window; the vmspal's PIC reads). `CPCIDevice`
   asks the chipset (`pci_space_base`); those do not yet.
 - **The LL/SC I/O bit** (`CPU_LOCK_IO_MASK`, PA<43>) is the Tsunami's and

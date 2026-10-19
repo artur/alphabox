@@ -69,7 +69,6 @@
 #include "ES137x.hpp"
 #include "I8255x.hpp"
 #include "Isp1040.hpp"
-#include "MPU401.hpp"
 #include "PCIBridge.hpp"
 #include "Sym53C8xx.hpp"
 
@@ -675,7 +674,6 @@ static const char *const kv_gui_sdl[] = {
     "hotkey.scale_down",    0};
 static const char *const kv_gui_x11[] = {"keyboard.use_mapping", "keyboard.map",
                                          "private_colormap", 0};
-static const char *const kv_mpu401[] = {"midi_out", 0};
 
 classinfo classes[] = {
     {"tsunami", c_tsunami, N_P | IS_CS | HAS_PCI, kv_tsunami},
@@ -731,7 +729,6 @@ classinfo classes[] = {
     {"sdl", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"win32", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
-    {"mpu401", c_mpu401, ON_CS, kv_mpu401},
     {"ehci", c_ehci, IS_PCI | HAS_DISK, kv_ehci},
     {"uss344", c_ehci, IS_PCI | HAS_DISK, kv_uss344},
     {"virtio_blk", c_virtio_blk, IS_PCI | HAS_DISK, kv_none},
@@ -955,12 +952,6 @@ void CConfigurator::initialize() {
     myDevice =
         (CDiskController *)new CAliM1543C_usb(this, theSystem, pcibus, pcidev);
     break;
-
-#ifdef _WIN32
-  case c_mpu401:
-    myDevice = (void *)new CMPU401(this, theSystem);
-    break;
-#endif
 
   case c_ali_pmu:
     myDevice = new CAliM1543C_pmu(this, theSystem, pcibus, pcidev);
