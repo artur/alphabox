@@ -6,12 +6,19 @@ There are no binary packages of this project. The packages in
 built from [lenticularis39/axpbox](https://github.com/lenticularis39/axpbox),
 not from this repository.
 
-You need CMake and a C++17 compiler. Optional:
+## What you need
 
-- **pcap** for networking;
-- **SDL3** for the graphical console. It is bundled as a submodule and
-  linked statically when no system SDL3 is found;
-- **asmjit** for the JIT.
+CMake and a C++17 compiler. Everything else is optional:
+
+| Dependency | What it gives | Without it |
+| --- | --- | --- |
+| pcap | networking | no networking; `-DDISABLE_PCAP=yes` skips the search |
+| SDL3 | the graphical console | headless only; `-DDISABLE_SDL=yes` builds that on purpose |
+| libusb 1.0 | a host USB device passed through to the guest | no passthrough; `-DDISABLE_LIBUSB=yes` skips the search |
+| asmjit | the JIT | the interpreter only (see [JIT](#jit)) |
+
+SDL3 is bundled as a submodule and linked statically when no system SDL3
+is found:
 
 ```
 git clone --recurse-submodules https://github.com/artur/alphabox
@@ -79,9 +86,9 @@ The binary is `build\Release\alphabox.exe`.
 
 ## JIT
 
-The JIT translates Alpha basic blocks to host code with asmjit, and has
-emitters for **x86-64 and AArch64** (Apple Silicon, arm64 Linux). Clone asmjit
-at the pinned revision and enable the JIT:
+The JIT translates Alpha code to host code with asmjit, and has emitters
+for **x86-64 and AArch64** (Apple Silicon, arm64 Linux). Clone asmjit at
+the pinned revision and enable the JIT:
 
 ```
 git clone https://github.com/asmjit/asmjit third_party/asmjit
@@ -93,11 +100,23 @@ cmake --build build-jit -j$(nproc)
 Diagnostic JIT builds, used while developing:
 
 | Flag | Effect |
-|---|---|
-| `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` | Re-runs every compiled block in the interpreter and reports any difference; expect `0 mismatches`. Verify builds compile every block on its first run, for maximum coverage. With `ALPHABOX_JIT_FPTEST=1`, the build also self-tests the inline IEEE floating-point ops against the interpreter (about 8.5 M cases). |
+| --- | --- |
+| `-DCMAKE_CXX_FLAGS="-DJIT_VERIFY"` | Re-runs every compiled block in the interpreter and reports any difference; expect `0 mismatches`. |
+| the same, run with `ALPHABOX_JIT_FPTEST=1` | Also self-tests the inline IEEE floating-point ops against the interpreter (about 8.5 M cases). |
 | `-DCMAKE_CXX_FLAGS="-DJIT_STATS"` | Adds throughput, cold-path and bail counters. |
+| `-DCMAKE_CXX_FLAGS="-DJIT_STATS -DJIT_REGPROF"` | Adds the register and hot-path profile. |
+| `-DCMAKE_CXX_FLAGS="-DJIT_DISASM"` | Lists every compiled block. Very noisy. |
 
+Verify builds compile every block on its first run, for maximum coverage.
 `src/common/config_debug.hpp` lists the other debug flags.
+
+## The Hypervisor.framework runtime
+
+`-DALPHABOX_HVF=ON` (macOS on Apple silicon, with the JIT enabled) builds
+the experimental runtime that runs the processor's loop inside a VM, and
+the `alphabox hvtest` and `alphabox hvprobe` subcommands. The build signs
+the binary ad hoc with the hypervisor entitlement. See
+[hypervisor.md](hypervisor.md).
 
 ## Build configurations kept working
 
