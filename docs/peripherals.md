@@ -36,7 +36,7 @@ The names below were extracted from the decompressed image with
 | DECchip 21143-AA / DE500-BA | `dec21143` | network boot (Tulip driver) |
 | DECchip 21140-AA, 21041-AA, 21040-AA | `dec21140`, `dec21041`, `dec21040` | network boot (Tulip driver) |
 | DE600-AA (Intel 82559), Intel 8255x Ethernet | `de600`; `i82557`, `i82558`, `i82559` | network boot (`ei`), loopback self-test |
-| Intel 82559ER (8086:1209) | `i82559er` | network boot (`ei`) |
+| Intel 82559ER (8086:1209) | `i82559er` | names it (`ei` driver); the DS25's console lists it as `eia0` |
 | DE602-AA, DE602-B* (two 8255x behind a bridge) | `de602`, `de602b` | network boot on either port |
 | DECchip 21050-AA, 21052-AA, 21152-AA, 21153-AA, 21154-AA | `dec21050` ... `dec21154` | numbers and probes the buses behind them |
 | S3 Trio64/Trio32 | `s3` | console (`vga_bios`) |
