@@ -5,16 +5,22 @@
 **Alphabox brings DEC Alpha machines back from the dead.**
 
 It doesn't merely execute Alpha instructions. It recreates the machines
-around them -- the chipsets, the firmware, the buses and interrupt wiring,
-the SCSI adapters, network cards and graphics chips -- closely enough that
-software written for them a quarter of a century ago runs without noticing
-the hardware is gone.
+around them: the chipsets, the firmware, the buses and interrupt wiring,
+the SCSI adapters, network cards and graphics chips. It does so closely
+enough that software written for them a quarter of a century ago runs
+without noticing the hardware is gone.
 
 Boot DEC's own SRM console. Start AlphaBIOS from it. Install Windows 2000
 and let Microsoft's own ATI driver find an emulated 3D Rage Pro and draw
 Direct3D scenes on it. Boot OpenVMS on sixteen EV7 processors in a
 machine that once filled a cabinet. And on a modern laptop, the Alpha you are
 pretending to own runs faster than the real one ever did.
+
+Alphabox keeps the Alpha as it was, and also shows what it could have
+become. It gives the platform things it never had, such as USB 2.0 and
+virtio drivers for Alpha Windows and Direct3D with hardware transform and
+lighting on a Radeon, and holds each one to the same test as the real
+hardware: it has to work under a real Alpha operating system.
 
 [![Build](https://github.com/artur/alphabox/actions/workflows/build-test-and-artifact.yml/badge.svg)](https://github.com/artur/alphabox/actions/workflows/build-test-and-artifact.yml)
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
@@ -25,9 +31,9 @@ pretending to own runs faster than the real one ever did.
 
 ## What is this?
 
-Not a generic Alpha emulator. Alphabox emulates specific, real machines --
-the AlphaServer ES40 first, and now ten of them, from the DS10 to the
-GS1280 -- well enough that their original firmware, operating systems and
+Not a generic Alpha emulator. Alphabox emulates specific, real machines
+(the AlphaServer ES40 first, and now ten of them, from the DS10 to the
+GS1280) well enough that their original firmware, operating systems and
 device drivers take them for the real thing:
 
 - OpenVMS 8.4, Tru64 UNIX, NetBSD, Windows 2000, and the 64-bit Windows
@@ -37,12 +43,12 @@ device drivers take them for the real thing:
 - the cards' own VGA BIOSes, and Windows' own drivers for Symbios, QLogic,
   S3, Cirrus, ATI, 3Dlabs and DEC hardware
 - Direct3D on graphics chips from 1998, USB 2.0, SMP
-- about 3000 MIPS per emulated CPU on an Apple M3 Max -- two to three
+- about 3000 MIPS per emulated CPU on an Apple M3 Max, two to three
   times the ES40's own 667 MHz EV68 ([how it is measured](docs/performance.md))
 
 The Alpha outlived its maker; the machines mostly didn't. They are rare
-now, their disks are dying, and their software -- a whole branch of
-computing history -- is running out of places to run. Alphabox is one of
+now, their disks are dying, and their software, a whole branch of
+computing history, is running out of places to run. Alphabox is one of
 those places.
 
 ## How real is it?
@@ -130,12 +136,12 @@ Project, revived as [AXPbox](https://github.com/lenticularis39/axpbox) by
 **Tomáš Glozar** and **Remy van Elst**. Much of its CPU core, the x86-64
 JIT and several devices were written by **gdwnldsKSC** and the contributors
 of [ES40-Emu](https://github.com/ES40-Emu/es40), and ported in 2026. This
-repository continued AXPbox as its own project -- the AArch64 JIT, the
-machines beyond the ES40, USB and most of the device families -- and was
+repository continued AXPbox as its own project, adding the AArch64 JIT,
+the machines beyond the ES40, USB and most of the device families, and was
 renamed Alphabox in 2026. It builds on MAME, Bochs, QEMU, 86Box, Mesa and
 others: [docs/acknowledgements.md](docs/acknowledgements.md).
 
-GNU General Public License, version 2 or later — see [LICENSE](LICENSE).
+GNU General Public License, version 2 or later: see [LICENSE](LICENSE).
 Third-party code keeps its original license, as noted in the source file
 headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md);
 one Windows-only file set (`src/devices/isa/MPU401.*`) is GPL-2.0-only.

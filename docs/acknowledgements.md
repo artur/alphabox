@@ -3,8 +3,8 @@
 Alphabox began as **es40**, the emulator by **Camiel Vanderhoeven** and the
 ES40 Emulator Project (2007–2010), with later work by **Tim Stark**
 (fsword7). **Tomáš Glozar** revived it as
-[AXPbox](https://github.com/lenticularis39/axpbox) — CMake, a single binary,
-modern C++ threading and many crash fixes — with **Remy van Elst** and
+[AXPbox](https://github.com/lenticularis39/axpbox) (CMake, a single binary,
+modern C++ threading and many crash fixes) with **Remy van Elst** and
 contributors such as **Hendrik Volkmer** (the network back-end split and the
 TAP back end).
 
@@ -17,30 +17,30 @@ of 2023–2026 into AXPbox; in September 2026 this repository reviewed about
 250 later ES40-Emu commits and adopted, adapted or improved the ones it took.
 From ES40-Emu came:
 
-- **The x86-64 JIT** (`src/jit/jitengine.*`) — gdwnldsKSC's block-compiling
+- **The x86-64 JIT** (`src/jit/jitengine.*`): gdwnldsKSC's block-compiling
   translator on asmjit: the block cache, chaining, register pinning, inline
   data-page-cache loads, SSE floating point, the bail-out protocol and the
   `JIT_VERIFY` / `JIT_STATS` harnesses, with **Meowthink**'s calling-convention
   work; and the JIT dispatcher now in `cpu/AlphaCPU_jit.cpp`. ES40-Emu
   distributes the JIT under BSD-1-Clause, and its notice is kept.
-- **The CPU core rework** (gdwnldsKSC) — guest time pinned to the wall clock
+- **The CPU core rework** (gdwnldsKSC): guest time pinned to the wall clock
   (RPCC, the interval timer, the 8254), the data page cache, the CAS-based
   LL/SC model, and interpreter fixes: byte/word loads, `HW_LD`, the EV68
   translation-buffer masks, IEEE and VAX floating point (with **Yufeng Gao**),
   native VMS PALcode.
-- **Graphics** — the MAME-derived VGA core, the IBM 8514/A engine and the
+- **Graphics**: the MAME-derived VGA core, the IBM 8514/A engine and the
   reworked S3 Trio64 (gdwnldsKSC, with **WNT50**'s S3 and 8514/A fixes), the
   MAME shims, and the SDL3 GUI.
-- **The ALi M1543C and its devices** — the PIC/SuperIO rework, RTC and PIT
+- **The ALi M1543C and its devices**: the PIC/SuperIO rework, RTC and PIT
   timing, the PMU, serial ports, keyboard fixes, and the rewritten DMA and
   floppy controllers (gdwnldsKSC, with **BlueRain-debug** and WNT50 on the
   FDC).
-- **Storage** — ATAPI and SCSI CD-ROM commands (**Cacodemon345**, partly from
+- **Storage**: ATAPI and SCSI CD-ROM commands (**Cacodemon345**, partly from
   Bochs), BIN/CUE images (**GenSayer**), and Symbios 53C810 and disk fixes.
-- **Networking and sound** — DEC 21143 fixes (gdwnldsKSC, **Aleksander
+- **Networking and sound**: DEC 21143 fixes (gdwnldsKSC, **Aleksander
   Czajczyński**), the Npcap loader, the ES1370 (Cacodemon345's port of
   QEMU's model) and the Windows MPU-401 MIDI output (Cacodemon345).
-- **System** — the i2c SPD EEPROMs and DIMM layout, DPR and Flash/ARC
+- **System**: the i2c SPD EEPROMs and DIMM layout, DPR and Flash/ARC
   changes, the configuration layer and `es40-cfg` (with Cacodemon345), and
   the startup banner.
 
@@ -54,8 +54,8 @@ independent emitter that mirrors ES40-Emu's x86-64 one op for op) and the
 performance work behind it, idle pacing, SMP and memory fixes, the
 headless test tooling, the experimental Hypervisor.framework runtime, USB
 (OHCI, EHCI and the devices behind them), virtio, the machines beyond the
-ES40 — the Tsunami boards (DS10, DS20E, DS20L), the Titan boards (ES45, DS25,
-DS15) and the EV7 systems (ES47, ES80, GS1280) — and most of the device
+ES40 (the Tsunami boards DS10, DS20E and DS20L, the Titan boards ES45, DS25
+and DS15, and the EV7 systems ES47, ES80 and GS1280), and most of the device
 families it emulates ([hardware](hardware.md)): the Symbios 53C8xx and QLogic
 ISP SCSI adapters, the CMD649 IDE controller, the Tulip and Intel 8255x
 network cards, the PCI-PCI bridges and the multi-port boards built on them,
