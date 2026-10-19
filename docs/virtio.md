@@ -1,16 +1,22 @@
 # Paravirtual devices: virtio-blk and virtio-net
 
 Alphabox offers two paravirtual PCI devices for guests with a driver for
-them: a block device and an Ethernet NIC, both speaking the **legacy
-virtio-pci interface** -- the virtio 0.9.5 register layout, as the OASIS
-*Virtual I/O Device (VIRTIO) Version 1.0* specification describes it in its
-"Legacy Interface" sections (2.4.2 split virtqueue layout, 4.1.4.8 legacy
-PCI registers, 5.1 network device, 5.2 block device). No Alpha operating
-system ships a driver: this page is the reference for writing one. Windows
-2000 drivers for both exist, written from this page with the nada compiler
-(a separate project); see [Drivers](#drivers). Everything here is what the code in
-`src/devices/pci/virtio/` does; where it chose among what the specification
-allows, the choice is stated.
+them: a block device and an Ethernet NIC. Both speak the **legacy
+virtio-pci interface**: the virtio 0.9.5 register layout, as the OASIS
+*Virtual I/O Device (VIRTIO) Version 1.0* specification describes it in
+its "Legacy Interface" sections:
+
+- 2.4.2, the split virtqueue layout;
+- 4.1.4.8, the legacy PCI registers;
+- 5.1, the network device;
+- 5.2, the block device.
+
+No Alpha operating system ships a driver: this page is the reference for
+writing one. Windows 2000 drivers for both exist, written from this page
+with the nada compiler (a separate project); see [Drivers](#drivers).
+
+Everything here is what the code in `src/devices/pci/virtio/` does; where
+it chose among what the specification allows, the choice is stated.
 
 ## Drivers
 
@@ -45,9 +51,9 @@ pci0.3 = virtio_blk
 
 pci0.4 = virtio_net
 {
-  type = "udp";               // null, udp, tap (Linux) or pcap (default),
-  udp_local = "127.0.0.1:5001";  // with that backend's keys, exactly as
-  udp_remote = "127.0.0.1:5002"; // for the Tulip and Intel NICs
+  type = "udp";               // pcap (default), tap (Linux), udp, loopback
+  udp_local = "127.0.0.1:5001";  // or null, with that backend's keys,
+  udp_remote = "127.0.0.1:5002"; // exactly as for the Tulip and Intel NICs
   //mac = "08-00-2B-E5-40-10";   // default: the shared NIC default
 }
 ```
@@ -104,7 +110,7 @@ finish; it never interrupts one half-way.
 
 Writing a queue address resets that queue's indices (the device's next
 available entry and the used index both start at 0); writing 0 disables the
-queue. The device works on a queue whenever its address is non-zero -- it
+queue. The device works on a queue whenever its address is non-zero: it
 does not wait for DRIVER_OK (the network device's receive path does, see
 below).
 
@@ -124,8 +130,9 @@ bus sees them. Descriptors are `{u64 addr; u32 len; u16 flags; u16 next}`,
 flags NEXT 1, WRITE 2 (device writes this buffer), INDIRECT 4.
 
 **Addresses are PCI bus addresses.** The queue PFN and every descriptor
-address are what the device puts on the bus, through the Tsunami's DMA
-windows -- on Windows, the logical addresses the HAL gives
+address are what the device puts on the bus, through the chipset's DMA
+windows (the Pchips' on the ES40). On Windows they are the logical
+addresses the HAL gives
 (`HalGetAdapter`/`AllocateCommonBuffer`, `MapTransfer`, or a miniport's
 `ScsiPortGetPhysicalAddress`/`NdisMAllocateSharedMemory`), never raw
 physical addresses. They must lie below 4 GB (the device is a 32-bit PCI
@@ -145,7 +152,7 @@ What the device does with the rings:
 - After a batch it re-reads the available ring's `flags`: unless
   `VRING_AVAIL_F_NO_INTERRUPT` (1) is set, it sets ISR bit 0 and asserts
   INTA. `VIRTIO_RING_F_EVENT_IDX` is **not** offered: used_event/avail_event
-  are ignored, and the device never sets `VRING_USED_F_NO_NOTIFY` -- notify
+  are ignored, and the device never sets `VRING_USED_F_NO_NOTIFY`: notify
   on every submission (it costs one I/O write).
 - A malformed chain (head out of range, a loop, a descriptor out of reach, a
   bad indirect table) is reported once on the emulator console and
@@ -202,8 +209,12 @@ buffers must come before device-writable ones.
 | 0 IN | read | writable, a multiple of 512 | data + 1 |
 | 1 OUT | write | readable, a multiple of 512 | 1 |
 | 4 FLUSH | flush the image to the host | none | 1 |
-| 8 GET_ID | device ID | writable, 20 bytes: the disk's serial number (`serial_number`; default `ES40EM` and the controller's number, then `000` -- see configuration.md), NUL-padded, not terminated if it fills 20 | bytes written + 1 |
+| 8 GET_ID | device ID | writable, 20 bytes: the disk's serial number, NUL-padded, not terminated if it fills 20 | bytes written + 1 |
 | other | | | 1, status UNSUPP |
+
+GET_ID's serial number is the disk's `serial_number`, by default
+`ES40EM`, the controller's number and `000`
+([configuration.md](configuration.md#serial-numbers)).
 
 Status: 0 OK, 1 IOERR (out of range, not a multiple of 512, a read-only
 disk written, a host I/O error), 2 UNSUPP. Requests complete in order, one
@@ -217,7 +228,7 @@ else: no checksum or segmentation offload, no mergeable receive buffers, no
 control queue, no multiqueue.
 
 Configuration at 0x14 (8 bytes): `mac[6]`, then `u16 status` with bit 0
-LINK_UP -- always 1. The MAC is the configured `mac`, else the shared NIC
+LINK_UP, always 1. The MAC is the configured `mac`, else the shared NIC
 default `08-00-2B-E5-40-nn` (nn counts the NICs in configuration order). A
 driver may write the MAC bytes (legacy style); the host-side filter follows.
 
@@ -233,11 +244,12 @@ sends it zeroed, and the device writes it zeroed.
   10 + 1514 = 1524 bytes (a buffer may be several descriptors). The device
   writes the header and one frame, and puts `10 + frame length` in the used
   ring. A frame that does not fit the buffer is dropped (used length 0, one
-  console message). Frames are delivered only while DRIVER_OK is set and
-  queue 0 has an address; before that they are discarded. When the driver
-  has no buffer posted, one frame waits in the device and the rest in the
-  host backend; posting buffers and notifying queue 0 lets them in (the
-  device also looks every 2 ms).
+  console message).
+- **When frames arrive**: only while DRIVER_OK is set and queue 0 has an
+  address; before that they are discarded. When the driver has no buffer
+  posted, one frame waits in the device and the rest in the host backend;
+  posting buffers and notifying queue 0 lets them in (the device also
+  looks every 2 ms).
 - Filtering: with no control queue the device delivers its own address,
   broadcast and all multicast (the pcap backend filters to that; UDP and
   TAP deliver whatever arrives). The driver does its own multicast
@@ -246,14 +258,17 @@ sends it zeroed, and the device writes it zeroed.
 ## Self-test: a reference driver sequence
 
 `ALPHABOX_VIRTIO_SELFTEST=1` makes each configured virtio device drive
-itself through its own registers at start-up, as a minimal driver would,
-with its rings and buffers in 1 MB of guest RAM (16 to 32 MB below the top,
-one megabyte per device) addressed physically, before the console runs.
+itself through its own registers at start-up, as a minimal driver would.
+Its rings and buffers are in 1 MB of guest RAM (16 to 32 MB below the top,
+one megabyte per device), addressed physically, before the console runs.
+
 `ALPHABOX_VIRTIO_SELFTEST_DELAY=<s>` runs it `<s>` seconds later instead,
-through the PCI DMA window the console has set up by then (the test looks
-for a direct-mapped window reaching its megabyte and uses bus addresses, as
-a real driver must). Each check prints a `%VIRTIO-I-SELFTEST` line, and
-each device ends with PASS or FAIL. The code is `CVirtioBlk::selftest` and
+through the PCI DMA window the console has set up by then. The test looks
+for a direct-mapped window reaching its megabyte and uses bus addresses,
+as a real driver must.
+
+Each check prints a `%VIRTIO-I-SELFTEST` line, and each device ends with
+PASS or FAIL. The code is `CVirtioBlk::selftest` and
 `CVirtioNet::selftest`; the order it does things in is a working order for
 a driver:
 
@@ -271,13 +286,17 @@ a driver:
 8. On the interrupt: read ISR (clears it); for each queue, consume used
    entries from your last seen index up to the used `idx`.
 
-The blk test (it needs a disk whose sector 0 ends in 55 AA, e.g. an MBR
-image; it writes the **last** sector and puts it back -- still, run it on a
-copy): features, capacity, GET_ID, IN of sector 0 (used length 513, ISR bit
-0 and INTA, the ISR read clearing both), the same through an indirect
-table, IN/OUT/IN of the last sector (or OUT refused with IOERR on a
-read-only image), FLUSH, IN past the end (IOERR), an unknown type (UNSUPP),
-`NO_INTERRUPT` honoured, and reset clearing the queue address.
+The blk test needs a disk whose sector 0 ends in 55 AA, e.g. an MBR
+image. It writes the **last** sector and puts it back; still, run it on a
+copy. It checks:
+
+- features, capacity, GET_ID;
+- IN of sector 0 (used length 513, ISR bit 0 and INTA, the ISR read
+  clearing both), and the same through an indirect table;
+- IN/OUT/IN of the last sector (or OUT refused with IOERR on a read-only
+  image);
+- FLUSH, IN past the end (IOERR), an unknown type (UNSUPP);
+- `NO_INTERRUPT` honoured, and reset clearing the queue address.
 
 The net test transmits a broadcast frame (ethertype 88B5, local
 experimental) and waits for a frame to come back, so it needs a backend
@@ -307,8 +326,8 @@ CMDS="sleep 50|show config" CMD_TIMEOUT=90` (256 MB, so the test's
 megabytes are far from the console's own memory).
 
 `ALPHABOX_VIRTIO_TRACE=1` traces every register access, queue address,
-notify and interrupt level change (`VIRTIO` lines) -- the first thing to
-turn on when a driver and the device disagree.
+notify and interrupt level change (`VIRTIO` lines). It is the first thing
+to turn on when a driver and the device disagree.
 
 ## Not implemented
 
