@@ -14,19 +14,19 @@ the machine's packet, and the question is *not* carried as open work.
 ## Is the EV7 a real EV7?
 
 The 21364's core **is** the 21264's (EV68 generation): the same
-instruction set, PALcode instructions and Ibox/Mbox register numbers
-([marvel.md](platforms/marvel.md), "The EV7 core against the EV68"). Its
-PALcode's reset path runs on the core here without an unknown register.
-A second core would be a copy of the first. What makes an EV7 an EV7 is
-around the core, and that is where the model is thin:
+instruction set, PALcode instructions and internal registers
+([marvel.md](platforms/marvel.md), "The EV7 core against the EV68"). Both
+of its PALcodes use only 21264 registers, and the core here implements
+every one (E1). A second core would be a copy of the first. What makes an
+EV7 an EV7 is around the core, and that is where the model is thin:
 
 | Part | State | To close it |
 | --- | --- | --- |
-| Internal registers the EV7 PALcodes use | only what the VMS PALcode's paths touched has run | **E1**: scan both PALcode images (VMS V2.11-25, UNIX V2.08-19) for every `HW_MFPR`/`HW_MTPR` index and field, and check each against the core |
-| `AMASK`, `IMPLVER` | assumed the EV68's; no document lists them | E1: what the PALcode and the console test; otherwise stays an inference |
-| UNIX PALcode | never run: no UNIX guest on an EV7 | **E2**: Linux on the ES47 (below) |
+| Internal registers the EV7 PALcodes use | done (E1): 45 registers in the OpenVMS PALcode, 43 in the UNIX one, all 21264 registers, none EV7-only; the core implements each with the fields the code uses (marvel.md, "The EV7 PALcodes' internal registers") | nothing left. Index 0x2d (M_FIX), M_CTL<5:4> and VA_CTL<3> stay inferences |
+| `AMASK`, `IMPLVER` | the EV68's; neither PALcode nor the console executes either (E1), and no document lists them | left: an inference |
+| UNIX PALcode | runs from a boot image (`unix_pal_probe.py`, E1): SWPPAL, a dozen calls, TB misses, CFLUSH, the clock interrupt. Never under an operating system | **E2**: Linux on the ES47 (below) |
 | Native PALcode fast paths | off on EV7 (they mirror the ES40's VMS PALcode V1.98-104) | **E3**: measure OpenVMS MIPS on the ES47 against the ES40 first; write EV7 paths only if the gap is worth it |
-| Cbox, Bbox, Zbox, pads, OCLA registers | read back a configured state; writes kept, nothing acts on them | E1 shows which the console reads; nothing more without a guest that uses them |
+| Cbox, Bbox, Zbox, pads, OCLA registers | read back a configured state; writes kept, nothing acts on them. The PALcodes reach 55 registers, all modelled: at reset, in the whole-cache CFLUSH and in the error logout (E1) | nothing more without a guest that uses them |
 | Performance counters, ProfileMe | not modelled (as on the 21264 here) | left |
 | Machine checks, correctable errors, logout frames | never raised; error registers read clean | left: recorded in [cpu-fidelity.md](cpu-fidelity.md) |
 | Rbox router | route table as OpenVMS reads it; the I/O entries (0x100-0x113) empty; no packets, no port errors | with M9 |
@@ -115,9 +115,12 @@ gate.
      four arrays were checked on five consoles, which found the DS20E,
      DS10 and DS20L consoles reading arrays to 1 GB only: their 2 and 4 GB
      are now two and four arrays, and the DS20L row stops at 2 GB.
-2. **E1, the PALcode audit**: a script lists every internal register and
-   field both EV7 PALcodes touch; each is checked against the core. The
-   result is a table in marvel.md and fixes for what differs.
+2. **E1, the PALcode audit**. Done:
+   - `ev7_pal_iprs.py` lists every internal register and field both EV7
+     PALcodes touch. Each is a 21264 register the core implements, so the
+     core did not change; the table is in marvel.md.
+   - OpenVMS 8.4 boots to DCL on the ES47, and the UNIX PALcode runs from a
+     boot image (`unix_pal_probe.py`), neither with an unknown register.
 3. **E2 + M8, Linux on the ES47**: with no hardware, a second operating
    system is the best test there is. It runs the UNIX PALcode, a second
    interrupt path and the MSIs, and on the Radeon the real Mesa r100

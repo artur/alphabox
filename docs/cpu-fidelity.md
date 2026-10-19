@@ -353,7 +353,8 @@ Two more holes of the same shape were closed with it:
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
 | `FPCR[DNZ]` turns a denormal operand into zero for every IEEE instruction; the 21264 does so only for instructions with `/S` | `AlphaCPU_ieeefloat.cpp`, `ieee_unpack` | A program that sets `DNZ` and runs instructions without `/S` on denormals gets zeros where hardware would trap. Windows and OpenVMS leave `DNZ` clear |
-| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for every row so far: EV68CB, EV7 and EV7z all claim all four. It matters the day a row is added for a part that does not |
+| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
+| Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need
 not be coherent, and `IMB` works. But stale bytes live far longer here.
@@ -367,8 +368,9 @@ other code is a change no physically-keyed bookkeeping can see.
 FPCR[DNZ] is set, denormal input operand traps can be avoided for
 arithmetic operations that include the /S qualifier".
 
-**`AMASK`**: no document lists the 21364's AMASK, so the EV7 rows' value is
-an inference (`CpuModels.cpp` marks it as one).
+**`AMASK`**: no document lists the 21364's AMASK, and neither EV7 PALcode
+nor the ES47 console executes `AMASK` or `IMPLVER` (E1), so the EV7 rows'
+value is an inference (`CpuModels.cpp` marks it as one).
 
 ## What was checked and found correct
 
@@ -392,6 +394,15 @@ against the manuals, and most of it by running code.
   `CALL_PAL` entry PC assembly, the R23 linkage including its PALmode bit,
   PALRES gating, `HW_LD`/`HW_ST` type decoding, `HW_RET`, and PALshadow
   being R4–R7 and R20–R23 under SDE.
+- **The EV7 PALcodes' internal registers** (E1, 2026-10-19): every
+  `HW_MFPR` and `HW_MTPR` in the ES47 console's OpenVMS PALcode V2.11-25
+  and UNIX PALcode V2.08-19, found from all entry points by
+  `test/tools/ev7_pal_iprs.py`. They use 45 and 43 registers, all of them
+  21264 ones (the set the ES40's PALcodes use), each implemented with the
+  fields the code tests or sets, and every `HW_LD`/`HW_ST` type they use is
+  decoded. OpenVMS 8.4 to DCL on the ES47, and the UNIX PALcode under
+  `test/tools/unix_pal_probe.py`, ran with no unknown register. The table
+  is in [marvel.md](platforms/marvel.md).
 - **Floating point**: which rounding mode applies (the instruction's field,
   with FPCR consulted only for `/D`), the IEEE and VAX trap-mode tables
   being mirror images (a classic emulator bug, and we decode both), sticky

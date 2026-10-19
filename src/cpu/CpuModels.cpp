@@ -44,8 +44,9 @@ static const cpu_model models[] = {
          AMASK_PREFETCH,
      CPU_FAMILY_EV6, 64, 64, 0},
     // 21364 (EV7): the EV68 core, so the same IMPLVER and extensions
-    // [guess: no document lists the 21364's AMASK; Linux has no EV7 case]
-    // and 64 KB L1 caches. The chip ID is what the console's PALcode turns
+    // [inference: no document lists the 21364's AMASK, Linux has no EV7
+    // case, and neither the console nor its two PALcodes execute AMASK or
+    // IMPLVER (E1, docs/platforms/marvel.md)] and 64 KB L1 caches. The chip ID is what the console's PALcode turns
     // into the processor type and revision it reports (0x3ea94 in the
     // decompressed SRM V7.3-1): I_CTL<29:24>, plus bit 19 of CSR 0x28020 when
     // the chip ID is 2, indexes a table of (minor, 15) pairs, minor = index

@@ -168,13 +168,14 @@ PALcode reset path we ran uses EV6 IPR numbers throughout). In detail:
 
 - the ISA, including BWX/FIX/CIX/MVI;
 - the PALcode instructions (HW_MFPR/HW_MTPR/HW_LD/HW_ST/HW_REI);
-- the IPR numbering for the Ibox and Mbox: ITB/DTB, I_CTL at 0x11,
-  PAL_BASE at 0x10, IER_CM, SIRR, ISUM, EXC_ADDR, CC, VA, M_CTL, DC_CTL.
+- the internal processor registers: every index both EV7 PALcodes use is
+  a 21264 index, the same set the ES40's own PALcodes use (E1, the next
+  section). **known** (both images scanned whole).
 
-The console's PALcode V2.11-25 reset code ran on our EV68 core with **no
-unimplemented-IPR warning** up to the console's C entry. Linux has no
-EV7-specific AMASK or IMPLVER code **[guess: IMPLVER 2, AMASK as the
-EV68]**; checking them is part of E1 in [backlog.md](../backlog.md).
+Neither PALcode nor anything else in the console executes AMASK or
+IMPLVER, and Linux has no EV7 case for either, so nothing settles them
+**[inference: IMPLVER 2 and the EV68's AMASK; OpenVMS 8.4 runs with
+them]**; checked in E1, below.
 
 **What differs.** Each item below is something an EV7 model had to change
 or add.
@@ -226,8 +227,8 @@ or add.
   - The console prints 1.50 MB for rev 2.0 parts and 1.75 MB for rev 3.0
     (console listings).
   - There is no board-level Bcache, so the EV6 C_DATA/C_SHIFT serial
-    Bcache configuration does not apply. **[inference]** Our PAL run did
-    not touch them.
+    Bcache configuration does not apply. **[inference]** The PALcodes use
+    the pair only to read the Cbox error state on their error path (E1).
 - **Identification**:
   - The HWRPB CPU type is 15 for EV7 and 16 for EV79. These are set by
     the console, not read from the chip.
@@ -285,6 +286,135 @@ EV7z is a CPU row: chip ID 4, which the console calls "EV7 rev 3.0", type
 15 minor 5 (M6b). This console never reports type 16: its type table
 holds 15 throughout, and its "EV79 rev" strings are not referenced by the
 revision table it uses.
+
+### The EV7 PALcodes' internal registers
+
+`test/tools/ev7_pal_iprs.py` reads the decompressed console (the
+`rom.decompressed` cache) and lists every internal-register access in its
+two PALcode images. Each image is found by its header: the version at +8,
+with the PALcode type (1 OpenVMS, 2 UNIX) in its third byte, and the build
+at +0x21.
+
+| Image | Base in the console | Extent | Reached from the entry points |
+| --- | --- | --- | --- |
+| OpenVMS PALcode V2.11-25 | 0x30000 | 64 KB | 11168 of 16384 instructions |
+| Tru64 UNIX PALcode V2.08-19 | 0x40000 | 45 KB, to 0x4b700 | 7513 of 11712 |
+
+The script walks the branches from the 142 entry points (reset, the
+exception vectors, the CALL_PAL slots). Code no branch reaches but that
+decodes cleanly, such as a dispatch table entered by `hw_ret`, counts as
+reached indirectly.
+
+What it found (E1, 2026-10-19):
+
+- The OpenVMS PALcode has 438 HW_MFPR/HW_MTPR sites on 45 registers. The
+  UNIX PALcode has 375 sites on 43 registers: no M_FIX and no CC_CTL. Every
+  register is a 21264 one. The ES40's PALcodes (V1.98-104, V1.92-105) use
+  the same indexes, the write to 0x2d included. **No index is EV7-only.**
+- The core implements all of them with the fields the PALcode uses, so
+  nothing needed a change. The fields it keeps or drops without effect
+  configure what the emulator does not model: caches, performance
+  counters, error reporting.
+- The HW_LD/HW_ST types are physical, physical locked or conditional,
+  VPTE, virtual with write check, and alternate mode (PROBER/PROBEW). All
+  are types the core decodes. HW_RET appears with and without the stall
+  bit, always with displacement 0.
+- No IMPLVER or AMASK appears in either PALcode, nor anywhere in the
+  4.5 MB console image (nor in the ES40's).
+
+R is read and W is written. In the Core column, "yes" means implemented
+with the fields the PALcode uses. "Kept" means a write is held (and read
+back where the register is readable) but nothing acts on it. "Dropped"
+means a write is accepted and ignored.
+
+| IPR | VMS | UNIX | What the PALcode does with it | Core |
+| --- | --- | --- | --- | --- |
+| 0x00 ITB_TAG | W | W | the fill's VA | yes |
+| 0x01 ITB_PTE | W | W | PFN <43:13>, read enables <11:8>, ASM, GH | yes |
+| 0x02 ITB_IAP | W | W | invalidate | yes |
+| 0x03 ITB_IA | W | W | invalidate | yes |
+| 0x04 ITB_IS | W | W | the VA | yes |
+| 0x05 PMPC | R | R | MTPR_PERFMON: <1> cleared | yes |
+| 0x06 EXC_ADDR | R | R | <0> (PALmode) tested | yes |
+| 0x07 IVA_FORM | R | R | the ITB miss's PTE address | yes |
+| 0x09 CM | W | W | <4:3> | yes |
+| 0x0a IER | RW | W | enables from the IPL table; <15:13> cleared in one read-modify-write | yes |
+| 0x0b IER_CM | RW | RW | saved and restored; 0, or <3> set | yes |
+| 0x0c SIRR | RW | RW | <28:14> | yes |
+| 0x0d ISUM | R | R | the interrupt entry's decode: EI <38:33>, SL, CR, PC, SI, AST | yes |
+| 0x0e HW_INT_CLR | W | W | <28> on the error path, <30:29> PC, <31> CR, <32> SL; all five at reset | yes; <28> dropped (machine checks are never raised) |
+| 0x0f EXC_SUM | R | R | <0>, <7>, <12:8> (UNIX: compared with 31), <13>, <41>, <47:42> | yes |
+| 0x10 PAL_BASE | RW | RW | <43:15>: the scratch area's base; SWPPAL writes the new image's | yes |
+| 0x11 I_CTL | RW | RW | <29:24> chip ID (0, a rev 1.0 part, takes workarounds; 2 the EV7 identification); <7> SDE toggled around shadow-register use; <9:8> stream buffers off while C_DATA is read; <16:15> VA mode; <19:18> and <0> counter enables; <47:30> VPTB; <23> and <14> masked off before saving | yes; <23> and <14> read 0 |
+| 0x12 IC_FLUSH_ASM | W | W | flush | yes |
+| 0x13 IC_FLUSH | W | W | flush | yes |
+| 0x14 PCTR_CTL | RW | RW | counters <47:28> and <25:6>, selects <4:0>, <47> and <25> tested; 0xffff80000014 at reset (VMS) | kept: the counters do not count |
+| 0x16 I_STAT | RW | RW | <29> and <28> tested, <29> written to clear; <40:30> read by MTPR_PERFMON | yes (reads 0) |
+| 0x20 DTB_TAG0 | W | W | the fill's VA | yes |
+| 0x21 DTB_PTE0 | W | W | the memory PTE: PFN <63:32>, enables <15:8>, FOR/FOW, ASM, GH | yes |
+| 0x24 DTB_IS0 | W | W | the VA | yes |
+| 0x25 DTB_ASN0 | W | W | <63:56> | yes |
+| 0x26 DTB_ALTMODE | W | W | <1:0> | yes |
+| 0x27 MM_STAT | RW | RW | <0> WR, <1> ACV, <10:4>, the opcode <9:4> compared with 0x18; written with 0 as a no-op | yes; the write dropped |
+| 0x28 M_CTL | W | W | 0 at reset (VMS); 0x18 around the whole-cache CFLUSH: SPE<2> and <4> | yes; <5:4> kept, no effect |
+| 0x29 DC_CTL | W | W | 0xc3 at reset (VMS), 0x3 in DFAULT | kept |
+| 0x2a DC_STAT | RW | RW | <2> tested; 0x1f and 0xc written to clear | yes (reads 0) |
+| 0x2b C_DATA | R | R | 11 reads of <5:0>, the Cbox error state, on the error path | yes (reads 0: no error) |
+| 0x2c C_SHFT | W | W | 0 before each C_DATA read | dropped |
+| 0x2d M_FIX | W | | 2 on chip ID 0, otherwise 0, at reset and on restore | dropped |
+| 0x40-0x5f PCTX | RW | RW | ASN <46:39>, ASTRR <12:9>, ASTER <8:5>, FPE <2>, PPCE <1>; selects 0x41, 0x42, 0x44, 0x50, 0x5f | yes |
+| 0xa0 DTB_TAG1 | W | W | the fill's VA | yes |
+| 0xa1 DTB_PTE1 | W | W | as DTB_PTE0 | yes |
+| 0xa2 DTB_IAP | W | W | invalidate | yes |
+| 0xa3 DTB_IA | W | W | invalidate | yes |
+| 0xa4 DTB_IS1 | W | W | the VA | yes |
+| 0xa5 DTB_ASN1 | W | W | <63:56> | yes |
+| 0xc0 CC | W | W | <63:32> | yes |
+| 0xc1 CC_CTL | W | | 0x1_0000_0000 at reset: enabled, count 0 | yes |
+| 0xc2 VA | R | R | the fault address; <23:0> on one path | yes |
+| 0xc3 VA_FORM | R | R | the PTE address | yes |
+| 0xc4 VA_CTL | W | W | <2:1> VA mode (<1> set, <2> clear), <3> and <0> clear, <47:30> VPTB | yes; <3> and <0> dropped |
+
+**The EV7 registers behind physical HW_LD/HW_ST.** The script follows the
+address arithmetic across branches (known bits propagated over the control
+flow). It resolves 936 accesses to the 4 MB register window
+(PA<34:22> all ones) and finds 55 registers there. Every one is in the
+model's table (`chipsets/marvel/Ev7Csr.cpp`); none is unknown. By purpose:
+
+- interrupts and processors: RBOX_INT, IMASK, IREQ, INTQ, IT, SCRATCH1,
+  NSVC and CFG; RBOX_WHOAMI, only copied into error logs; GIO_CTL,
+  GIO_DAT and the GIO lock (the CMM);
+- the router ports: at reset, when the CMM's byte at 0x40004 reads 0x15,
+  bit 9 is cleared in N_CFG, S_CFG and E_CFG or W_CFG, and bit 3 in
+  IO_CFG; the logout reads the CFG and ERR registers; the interval-timer
+  path tests IO_CFG <0> and <2>; IO_ERR and L_ERR;
+- the whole-cache CFLUSH (`cflush` with a negative PFN; a PFN returns at
+  once). It tests CBOX_CTL<14> and steps BBOX_CTL<10:8> through the ways
+  (<13:8> cleared first). In each way it reads 256 KB of memory no
+  processor owns, PID 0xff's at PA 0x7ec_0000_0000, to displace the
+  cache. The model traces those reads as unknown and returns 0;
+- the error logout: the Cbox's CTL, STP_CTL, ACC_CTL, LCL_SET, GBL_SET
+  and DDP_ERR_STS; the Bbox's CTL, ERR_STS, ERR_IDX and DAT_RMP; both
+  Zboxes' error, timeout, mapper and FRC registers;
+- OCLA0_CTL and OCLA1_CTL at reset;
+- 0x28020 and 0x28040, the revision probe (M1).
+
+Outside the window, the error logout also reads IO7 registers through a
+base kept in the PALcode's scratch area (impure + 256). The script does
+not follow that base.
+
+**What stays inferred:**
+
+- AMASK and IMPLVER (above).
+- Index 0x2d is not in the 21264 manual's table; the original es40 code
+  calls it M_FIX. Both the ES40's and the EV7's PALcode write it at
+  reset, the EV7's with 2 only on a chip ID 0 part. The core drops the
+  write **[inference: a fix register with no visible effect]**.
+- M_CTL<5:4> and VA_CTL<3>. The EV7 PALcodes write values there that the
+  ES40's do not: M_CTL 0x18 where the ES40's write 0x20 or 0x28, and
+  VA_CTL<3> cleared where the ES40's keep <2:0>. Their function is not
+  known **[inference: nothing reads them back, and nothing they could
+  control is modelled]**.
 
 ### Marvel's address map
 
@@ -667,6 +797,37 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### E1: the EV7 PALcodes' internal registers (2026-10-19)
+
+The question: does the EV7 really use the EV68's internal registers, in
+both of its PALcodes? The answer, the table and what stays inferred are
+in "The EV7 PALcodes' internal registers" above. The core did not need a
+change. What ran (evidence in `lab/ev7-pal-audit/`, JIT lane):
+
+- **OpenVMS 8.4 on the ES47**: two EV7s, the M7 installed disk (a clone)
+  booted to DCL, then SHOW CPU/FULL, with `ALPHABOX_TRACE_UNKNOWN=1`. There
+  was no `%CPU-W-IPR`, no OPCDEC and no unknown EV7 register. The only
+  unknown accesses were the console's probes of empty PCI slots.
+- **The UNIX PALcode**, never run before. `test/tools/unix_pal_probe.py`
+  writes a boot image that switches to it with SWPPAL, as Linux's
+  bootstrap does. It then calls rdps, whami, swpipl, rdusp, wrval and
+  rdval, rdunique, imb, draina, tbi(-2), wrfen and cflush(-1), takes three
+  interrupts through wrent and rti, and halts. On the ES47 (`boot dka0`,
+  the image on the 53C895) every call returned what it should: PS 7,
+  WHAMI 0, the value written, three interrupts of type 1 (the clock).
+  There was no unknown IPR, and no unknown register besides CFLUSH's
+  displacement reads. The same image on the ES40 (`boot dva0`) gives the
+  same results through that console's UNIX PALcode V1.92-105.
+- **Without the SWPPAL**, the same calls run the OpenVMS PALcode, which
+  does not define them. That run ends in "kernel stack not valid halt",
+  so the results above did come from the UNIX PALcode.
+
+What could not be run: the error and machine-check paths (the model never
+raises them), MTPR_PERFMON and wrperfmon, and the UNIX PALcode under an
+operating system (E2). For those, the registers were checked only by
+reading the code.
+
 
 ### M7c: the open Marvel bugs: USB function 3, DQA1, the ES80/GS1280 I/O (2026-10-04)
 

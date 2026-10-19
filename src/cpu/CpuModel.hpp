@@ -57,7 +57,7 @@ enum cpu_family {
 struct cpu_model {
   const char *name; ///< configuration class, e.g. "ev68cb"
   const char *part; ///< the part, for messages, e.g. "21264CB (EV68CB)"
-  u8 chip_id;       ///< I_CTL<31:24>, which the console turns into a name
+  u8 chip_id;       ///< I_CTL<29:24>, which the console turns into a name
   u8 type_major;    ///< processor type reported to software [ARM D-1..3]
   u8 type_minor;    ///< revision within the type
   u8 implver;       ///< IMPLVER result: 2 = EV6 family
