@@ -400,7 +400,7 @@ Kept because a negative result is cheaper to read than to reproduce.
 | ARM64 recompiler | PCSX2 | closed unmerged; PCSX2 has no ARM64 EE/IOP/VU recompiler |
 | TLB resize keyed at flush time | Cota/Hong line | "resulted in a slowdown on average" |
 | Branch following | Dolphin | disabled per-game where invalidation dominated |
-| Traces preempting chaining | **Alphabox** | our own note in `jitengine.cpp`: a net loss |
+| Traces preempting chaining | **ES40-Emu** | gdwnldsKSC's note, kept in `jitengine.cpp`: a net loss |
 
 Two techniques that simply do not apply to us: **Apple's TSO bit** (Alpha's
 memory model is *weaker* than AArch64's -- we want plain loads, and turning

@@ -9,7 +9,7 @@ Source layout under `src/`:
 | Directory | Contents |
 | --- | --- |
 | `cpu/` | `AlphaCPU*`, the `cpu_*.hpp` opcode headers, vmspal, IEEE/VAX FP, `CpuModel`/`CpuModels` (the processor's identity and core family, a row per part: EV68CB, EV7, EV7z); `ev7/` (what the EV7 family changes: its 44-bit address map with the PID encoding, `Ev7.hpp`, and the registers the XSROM hands the console, `Ev7Reset.cpp`) |
-| `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` |
+| `jit/` | asmjit translator: `jitengine.cpp` (x86-64, from ES40-Emu), `jitemit_a64.hpp` (AArch64, written here) |
 | `system/` | generic machine plumbing: `System` (memory, device ranges, CPU threads, LL/SC, console loading, state files), `SystemComponent`, `Configurator`, `Port80`, `TraceEngine` |
 | `chipsets/` | the system logic behind `Chipset.hpp` (`CChipset`: non-memory decode, interrupts, interval timer, PCI hose spaces, DMA translation, reset/state), built by `Chipsets.cpp`; `tsunami/` (`CTsunami`, the 21272 of the ES40/DS20E/DS10/DS20L, split by chip: `Tsunami.cpp` decode + interrupts, `TsunamiCchip`, `TsunamiPchip`, `TsunamiTig`, `TsunamiMemory` (AARn arrays, SPD on the MPD pins)); `titan/` (`CTitan`,
 the 21274 of the ES45: `Titan.cpp` decode + interrupts, `TitanCchip`,
@@ -84,7 +84,8 @@ the Tsunami) at dispatch-batch boundaries, and the
 comments).
 
 JIT (`src/jit/jitengine.cpp`, `ES40_JIT` builds only): translates Alpha
-basic blocks to host code via asmjit -- x86-64 emitter in jitengine.cpp,
+basic blocks to host code via asmjit -- x86-64 emitter in jitengine.cpp
+(ported from ES40-Emu, BSD-1-Clause there),
 AArch64 emitter in `src/jit/jitemit_a64.hpp` (same bail/chain/frame protocol;
 `ALPHABOX_JIT_FPTEST=1` on a `JIT_VERIFY` build self-tests the inline IEEE FP
 ops against the interpreter), direct-mapped block cache keyed by

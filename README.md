@@ -127,12 +127,15 @@ card. The [documentation](docs/README.md) covers the rest:
 
 Alphabox began as **es40**, by **Camiel Vanderhoeven** and the ES40 Emulator
 Project, revived as [AXPbox](https://github.com/lenticularis39/axpbox) by
-**Tomáš Glozar** and **Remy van Elst**. This repository continued AXPbox as
-its own project -- the AArch64 JIT, the machines beyond the ES40, USB and
-most of the device families -- and was renamed Alphabox in 2026. It builds
-on MAME, Bochs, QEMU, 86Box, Mesa and others:
-[docs/acknowledgements.md](docs/acknowledgements.md).
+**Tomáš Glozar** and **Remy van Elst**. Much of its CPU core, the x86-64
+JIT and several devices were written by **gdwnldsKSC** and the contributors
+of [ES40-Emu](https://github.com/ES40-Emu/es40), and ported in 2026. This
+repository continued AXPbox as its own project -- the AArch64 JIT, the
+machines beyond the ES40, USB and most of the device families -- and was
+renamed Alphabox in 2026. It builds on MAME, Bochs, QEMU, 86Box, Mesa and
+others: [docs/acknowledgements.md](docs/acknowledgements.md).
 
 GNU General Public License, version 2 or later — see [LICENSE](LICENSE).
 Third-party code keeps its original license, as noted in the source file
-headers.
+headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md);
+one Windows-only file set (`src/devices/isa/MPU401.*`) is GPL-2.0-only.
