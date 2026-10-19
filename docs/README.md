@@ -66,9 +66,5 @@
 
 - [History and acknowledgements](acknowledgements.md): where the code came
   from, who wrote it, and the third-party code and its licences.
-- [papers/](papers/): published papers on the Alpha that never shipped,
-  kept for reference: Joel Emer's EV8 keynote (PACT 2001), Seznec et al.
-  on the EV8, the Tarantula vector extension, and Asim, Compaq's
-  performance model framework.
 
 The sample [`es40.cfg`](../es40.cfg) documents every configuration value.

@@ -36,7 +36,7 @@ static const platform_config platforms[] = {
      "cl67srmrom.exe", FW_LFU_BUNDLE, 2, SECONDARIES_BY_CONSOLE,
      es40_board_devices, es40_pci_interrupt, es40_slot_refusal, U64(0x8000),
      es40_console_patches},
-    // Under construction (docs/platforms/ds20e.md). The processor is the
+    // docs/platforms/ds20e.md. The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
     // until its row exists.
@@ -44,13 +44,13 @@ static const platform_config platforms[] = {
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr,
      0, nullptr, nullptr, nullptr, 0, 1024},
-    // Under construction (docs/platforms/ds10.md): one processor, one PCI
+    // docs/platforms/ds10.md: one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,
      "DS10SRM.ROM", FW_ROM_HEADER, 1, SECONDARIES_AFTER_ARBITRATION,
      ds10_board_devices, ds10_pci_interrupt, ds10_slot_refusal, 0, nullptr, 0,
      nullptr, nullptr, nullptr, 0x3, 1024},
-    // Under construction (docs/platforms/ds20l.md): its console image comes
+    // docs/platforms/ds20l.md: its console image comes
     // as an update file, with no header in front of it.
     // Memory: its console lists arrays 0 and 1 only, of up to 1 GB each
     // (Platform.hpp), so 2 GB is what it can report.
@@ -58,7 +58,7 @@ static const platform_config platforms[] = {
      "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, SECONDARIES_AFTER_ARBITRATION,
      es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, 0, nullptr,
      0, nullptr, nullptr, nullptr, 0x3, 1024},
-    // Under construction (docs/platforms/marvel.md): two EV7s, each with its
+    // docs/platforms/marvel.md: two EV7s, each with its
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
     // the ES40's that decompresses to 0x440000. One IO7, on PID 0: hoses
@@ -67,7 +67,7 @@ static const platform_config platforms[] = {
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      es47_board_devices, es47_pci_interrupt, es47_slot_refusal, 0, nullptr,
      0x480000, &es47_layout},
-    // Under construction (docs/platforms/marvel.md, M6c): up to four ES47
+    // docs/platforms/marvel.md, M6c: up to four ES47
     // drawers in one N/S ring, eight EV7s, an IO7 on each drawer's first
     // processor (PIDs 0, 8, 16, 24: hoses 0-3, 32-35, 64-67, 96-99). The
     // same console image; memory.bits is per processor. Each IO7 is a 2P
@@ -76,14 +76,14 @@ static const platform_config platforms[] = {
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 100, SECONDARIES_BY_CONSOLE,
      es80_board_devices, marvel_pci_interrupt, marvel_slot_refusal, 0, nullptr,
      0x480000, &es80_layout},
-    // Under construction (docs/platforms/marvel.md, M6c): 8P drawers in a
+    // docs/platforms/marvel.md, M6c: 8P drawers in a
     // torus, here up to two (sixteen EV7s, PIDs 0-15), one I/O drawer on
     // PID 0: a standard I/O drawer ("3.3V PCI-X I/O"), no slot remap (M7c).
     {"gs1280", "AlphaServer GS1280", CHIPSET_MARVEL, "ev7", 16, 29, 34,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      gs1280_board_devices, marvel_pci_interrupt, marvel_slot_refusal, 0,
      nullptr, 0x480000, &gs1280_layout},
-    // Under construction (docs/platforms/es45.md): the first Titan board.
+    // docs/platforms/es45.md: the first Titan board.
     // Its console comes as an update utility, which installs it into the
     // flash, and the utility runs up to 0x648000 (console_bytes). No
     // console patches: the ES40's are addresses in the ES40's
@@ -99,13 +99,13 @@ static const platform_config platforms[] = {
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45m1_slot_refusal, 0, nullptr,
      0x680000, nullptr, &es45m1_titan},
-    // Under construction (docs/platforms/ds25.md): the second Titan board,
+    // docs/platforms/ds25.md: the second Titan board,
     // its console from an update utility like the ES45's.
     {"ds25", "AlphaServer DS25", CHIPSET_TITAN, "ev68cb", 2, 26, 34,
      "DS25_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds25_board_devices, ds25_pci_interrupt, ds25_slot_refusal, 0, nullptr,
      0x680000, nullptr, &ds25_titan, ds25_onboard},
-    // Under construction (docs/platforms/ds15.md): the one-processor Titan
+    // docs/platforms/ds15.md: the one-processor Titan
     // board, its console from an update utility like the DS25's, which runs
     // up to 0x702000 (console_bytes). One PA-chip: the slot table uses
     // hoses 0 and 2 only.
