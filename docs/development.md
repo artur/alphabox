@@ -33,6 +33,8 @@ gives its usage and variables.
 | `srm_console.py` | Drives the console over its telnet port: waits for the prompt, runs commands, stops the emulator. |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. |
 | `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |
+| `ev7_pal_iprs.py` | Every internal-register access in a console's PALcodes: `HW_MFPR`/`HW_MTPR` with their entry point and the bits tested or set, `HW_LD`/`HW_ST` and the EV7 registers they reach, `IMPLVER`/`AMASK`; checked against the core and the Marvel register table. `--dis` disassembles. Written for the EV7 ([platforms/marvel.md](platforms/marvel.md)); works on the ES40's console too. |
+| `unix_pal_probe.py` | A boot image that switches to the console's UNIX PALcode with SWPPAL, calls a dozen of its routines (optionally clock interrupts and a cache flush) and halts: the UNIX PALcode without a UNIX guest. |
 
 Give each `srm_run.sh` its own `PORT` to run several builds at once.
 
