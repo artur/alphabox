@@ -1,8 +1,25 @@
 # Headless operation and debug hooks
 
 For automated or headless use (CI, scripted firmware navigation, driving the
-emulator over SSH), the SDL GUI reads a set of environment variables at
-startup; each one is off unless set.
+emulator over SSH), the emulator reads a set of environment variables at
+startup. Each one is off unless set. This file lists every `ALPHABOX_*`
+variable the binary reads.
+
+| Section | What is in it |
+| --- | --- |
+| [Running without a display](#running-without-a-display) | `SDL_VIDEO_DRIVER`, a fully headless run |
+| [Screen and keyboard](#screen-and-keyboard) | frame dumps, scripted keys, the key names and other tokens |
+| [Mouse](#mouse) | synthetic PS/2 motion, mouse tracing |
+| [Snapshots](#snapshots) | saving and resuming a running machine |
+| [Self-tests](#self-tests) | virtio, Radeon and EHCI checked without a guest driver |
+| [USB](#usb), [Storage](#storage), [Video](#video) | per-device switches and traces |
+| [Guest diagnostics](#guest-diagnostics) | where a guest is stuck, interrupts, arithmetic traps, the GUI lock |
+| [Timing and idle](#timing-and-idle) | idle pacing, delay loops, the rate report |
+| [JIT builds](#jit-builds) | the JIT's switches, self-tests and traces |
+| [Bring-up traces](#bring-up-traces) | what a firmware asked for and did not get |
+| [Hypervisor runtime](#hypervisor-runtime) | the `-DALPHABOX_HVF=ON` switches |
+
+## Running without a display
 
 To run the whole GUI stack without a window or a display server, set
 `SDL_VIDEO_DRIVER`:
@@ -11,78 +28,37 @@ To run the whole GUI stack without a window or a display server, set
 - `offscreen` works on Linux, but on macOS it fails to create the window
   ("Could not initialize OpenGL / GLES library") and nothing renders.
 
-## Environment variables
+A fully headless firmware run:
 
-**Screen and input**
+```
+SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb \
+ALPHABOX_KEYPIPE=keys.txt ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter" \
+alphabox run &
+# watch fb-*.ppm to see the screen; echo keys >> keys.txt to react
+```
+
+A `serial` section with a `port` waits for a telnet connection before the GUI
+comes up. For unattended runs, connect a client or use
+`null_attach = true`.
+
+## Screen and keyboard
 
 | Variable | Effect |
-|---|---|
-| `ALPHABOX_DUMP_FB=<prefix>` | Write the emulated screen as a PPM image (`<prefix>-NNN-WxH.ppm`) every ~2 seconds. This is how you "see" the VGA output on a headless run; `test/tools/ppm2png.py` converts a dump to PNG. |
-| `ALPHABOX_KEYSCRIPT="<sec>:<key>,..."` | Press named keys at fixed second offsets from GUI start, e.g. `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` + Enter at the SRM prompt 40 s in. |
-| `ALPHABOX_KEYPIPE=<file>` | Interactive variant: keys appended to `<file>` while the emulator runs are typed into the guest, one token per ~120 ms. Example: `echo "f2 down down enter" >> keys.txt`. Start with an empty file; the emulator remembers how far it has read. |
-| `dbg-dump` (a `KEYPIPE` token) | Every processor prints its state at its next dispatch batch (JIT builds): PC, SDE, mode, ASN, both register banks, the code around the PC and 512 bytes of stack, as `%DBG-I-DUMP`/`CODE`/`STACK` lines. For looking at a guest that has hung without changing how it runs until then. |
-| `tablet:X:Y[:B]` (a `KEYSCRIPT`/`KEYPIPE` token) | Put the USB tablet's pointer (`port1 = "tablet";` on `ali_usb`) at X,Y -- fractions of the screen when at most 1, else guest pixels -- with buttons B (bit 0 left, 1 right, 2 middle). |
-| `usb:<op>:<port>[:<ep>[:<n>]]` (a `KEYSCRIPT`/`KEYPIPE` token) | Inject a fault on a USB root hub port -- the `ehci` card's if there is one, else `ali_usb`'s -- for testing a guest's USB driver. `usb:detach:<p>` / `usb:attach:<p>` unplug and replug the device (connect change and interrupt as on hardware). `usb:stall:<p>:<ep>[:<n>]` halts endpoint `<ep>` (an address: `0x81` = IN 1, `0x02` = OUT 2): it answers STALL until the host sends CLEAR_FEATURE(ENDPOINT_HALT), and halts again on its next transfer, `n` times in all (default 1). `usb:phase:<p>`: the USB disk's next command ends with a phase-error CSW (status 2). `usb:nak:<p>:<ep>:<ms>`: the endpoint NAKs for `<ms>` milliseconds. `test/tools/usb_bench.sh` fires them with `FAULTS=`/`PRE_FAULTS=`. |
-| `ALPHABOX_VIRTIO_SELFTEST=1` | At start-up, drive every `virtio_blk` and `virtio_net` device through its legacy registers with a minimal driver (rings in 1 MB per device, 16-32 MB below the top of guest RAM, addressed physically): reset, features, queues, blk GET_ID, sector 0 (must end in 55 AA), a write of the last sector read back and restored, FLUSH, error statuses; net transmit and receive (needs a backend that returns frames: UDP with `udp_local` = `udp_remote`). Prints `%VIRTIO-I-SELFTEST` lines and PASS or FAIL per device ([virtio.md](virtio.md)). `ALPHABOX_VIRTIO_SELFTEST_DELAY=<s>` runs it `<s>` seconds later, through the DMA window the console set up. |
-| `ALPHABOX_VIRTIO_TRACE=1` | Trace virtio register accesses, queue addresses, notifies and interrupt changes (`VIRTIO` lines). |
-| `ALPHABOX_RADEON_SYNC=1` | The `radeon` card's engine as it was before its command FIFO: every engine command (and the CP's ring) runs inside the register write that starts it, and RBBM_STATUS always reads an empty FIFO and an idle engine. The default is the FIFO and an engine thread with a modelled busy time ([radeon.md](radeon.md)); the switch is for A/B runs. |
-| `ALPHABOX_RADEON_SELFTEST=1` | At the end of the `radeon` card's start-up, before the machine runs: drive the 2D engine, the command processor, the cursor and the 3D engine through the MMIO BAR and the CP ring, and compare each result with a software reference (91 checks, [radeon.md](radeon.md)); the card's registers and VRAM are put back afterwards. Prints `%RADEON-I-SELFTEST` lines and PASS or FAIL; `=exit` then ends the emulator, status 0 when every check passed. The 3D scenes are written as PNGs (frame and a frame/reference/difference comparison) to `ALPHABOX_RADEON_SELFTEST_DIR`, default `$ALPHABOX_WORK/radeon-3d`. |
-| `ALPHABOX_RADEON_ME_DUMP=<file>` | When a driver finishes loading the `radeon` card's CP microcode, write the micro-engine RAM to `<file>` in the linux-firmware layout (each entry DATAH then DATAL, big-endian), for `test/tools/radeon_me_dis.py`. The card logs the image's CRC-32 and, for a known image, its name ([radeon-microcode.md](radeon-microcode.md)). |
-| `ALPHABOX_EHCI_SELFTEST=1` | At start-up, drive the `ehci` card from inside the emulator with a minimal EHCI driver (structures in the top 16 MB of guest RAM, before any firmware runs): port reset, enumeration, SET_ADDRESS/SET_CONFIGURATION, and a Bulk-Only READ(10) of sector 0 from the USB disk on port 1, which must end in 55 AA; then a phase error and the host's reset recovery (class reset, CLEAR_FEATURE on both bulk endpoints) followed by a command that must succeed, and a class reset in a command's data stage. With companions (the default) also the port routing: CONFIGFLAG 0 and 1, and a full-speed device -- the tablet, or a probe plugged into a free port -- left disabled by the EHCI's port reset, handed to its companion with PORT_OWNER, and its device descriptor read from there. Then high-speed isochronous iTDs against a loopback device plugged into a free port for the test: OUT transactions read back IN with their data and lengths, IOC, and a transaction error for a missing device. Prints `%EHCI-I-SELFTEST` lines and PASS or FAIL. |
-| `ALPHABOX_USB_ASYNC_US=<us>` | USB storage and the USB speaker answer like devices behind libusb: bulk and interrupt transfers finish on another thread after `<us>` microseconds, NAKed until then; isochronous OUT packets reach the device `<us>` later (a full queue of 64: the controller's underrun status), and an isochronous IN endpoint is streamed from the device, each packet ready `<us>` after it was fetched (none ready: the controller's overrun status). The EHCI self-test's isochronous loopback goes behind it too. Tests and times the controller's passthrough path without a host device (`test/tools/usb_bench.sh`, `test/tools/usb_audio.sh`). |
-| `ALPHABOX_USBAUDIO_WAV=<file>` | The USB speaker (`port<n> = "audio";`) writes the PCM stream the guest sends it into `<file>` as a WAV (16-bit stereo, at the rate the guest chose; a rate change part way starts `<file>` with `-1`, `-2`... before the extension). The header is kept current every quarter second, so the file is whole even after a kill. Use it with `SDL_AUDIO_DRIVER=dummy` to keep a headless run off the host's speakers. |
-| `ALPHABOX_USBTRACE=1` | Trace OHCI register writes (with read counts in between), the root hub port status each time the driver reads it, every TD retired with an error (condition code), isochronous TDs retired late and packets not moved in time (`iso packet ... BufferOverrun/BufferUnderrun`), every control request a USB device serves, and each USB storage command and status wrapper (`USBT` lines). |
-| `ALPHABOX_USBTRACE=2` | As `1`, and every TD the OHCI retires (address, endpoint, length moved, condition code, delay interrupt) and every done-queue write-back. |
-| `ALPHABOX_OHCI_EARLY_CTL=1` | Let a done queue holding a control-endpoint TD go back at once, as bulk and interrupt TDs may; by default it waits until a millisecond after the TD ran and then for a frame end, as no real controller answers sooner ([usb.md](usb.md)). For A/B runs. |
+| --- | --- |
+| `ALPHABOX_DUMP_FB=<prefix>` | Write the emulated screen as a PPM image (`<prefix>-NNN-WxH.ppm`) every ~2 seconds. |
+| `ALPHABOX_KEYSCRIPT="<sec>:<key>,..."` | Press named keys at fixed second offsets from GUI start. |
+| `ALPHABOX_KEYPIPE=<file>` | Type the keys appended to `<file>` while the emulator runs, one token per ~120 ms. |
 | `ALPHABOX_AUTOKEY_ENTER=<sec>` | Press Enter every `<sec>` seconds (a blunt tool for firmware "press any key" prompts). |
-| `ALPHABOX_AUTOMOUSE=<sec>` | From `<sec>` seconds in, inject synthetic PS/2 mouse motion (a square pattern plus a periodic left click) straight into the guest, bypassing host input. As with a real PS/2 mouse, nothing is sent until the guest driver enables data reporting. |
-| `ALPHABOX_MOUSE_DEBUG=1` | Trace host mouse motion, grab/focus transitions, relative-mode failures, the guest's aux commands and any dropped mouse bytes (`MOUSEDBG` lines). |
 
-**Guest diagnostics**
+`ALPHABOX_DUMP_FB` is how you "see" the VGA output on a headless run;
+`test/tools/ppm2png.py` converts a dump to PNG.
 
-| Variable | Effect |
-|---|---|
-| `ALPHABOX_TRACE_GUILOCK=1\|<ms>` | Watch the gui lock (the display thread's redraw, the GUI's event handling and the CPUs' VGA register writes share it). `1` reports at 1000 ms, a larger number is the threshold in ms. A wait that long prints `%GUI-W-LOCKWAIT` with the waiter's thread and call site and the holder's thread, call site and hold time so far, again every threshold while it lasts -- a deadlock keeps naming its holder -- and once more when the lock is got; a hold that long prints `%GUI-W-LOCKHOLD` with the site that took it. `main` is the thread that created the GUI (the SDL pump on macOS). The lock has no timeout, so this only reports. A host that sleeps, or a stopped process, shows up as one long wait or hold. |
-| `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
-| `ALPHABOX_VMSPAL_OFF=<list>` | Interpreter builds, OpenVMS PALcode: hand single vmspal replacement routines (`src/cpu/AlphaCPU_vmspal.cpp`) back to the real PALcode while the rest stay native. Comma-separated `CALL_PAL` function numbers in hex (`92` = REI) and `int` (the interrupt entries). Bisecting with it is how a routine that diverges from the PALcode is found. |
-| `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates: CPU interrupt entries by source, Cchip interval-timer ticks, 8259 edges and acknowledges per ISA IRQ, and Cchip DRIR rises. Spots interrupt storms. |
-| `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
-| `ALPHABOX_IDETRACE=1` | Timestamped IDE timeline: commands, ATAPI packets (the opcode, and bytes 2-11 as words), bus-master starts and interrupts, and every ATAPI check condition with its sense key; on a `cmd649` also its own registers (configuration space from 0x40, bus-master bytes 1, 3, 9 and 11; `CMDT` lines, the first 400). `=2` adds every other register access of a `cmd649` but the data port (`CMDR`/`CMDW`, the first 200000). |
-| `ALPHABOX_DISK_LATENCY_US=<access>[,<command>[,<MB/s>]]` | Give every IDE hard disk a mechanical service time: `<command>` µs per command (default 300), `<access>` µs more when an access does not start where the last one ended, and a media rate (default 20 MB/s). Overrides the disks' `latency.*` keys; `=0` turns the model off. See es40.cfg and docs/cpu-fidelity.md (msdtctm.dll). |
-| `ALPHABOX_MEDIA_SWAP=<image1>:<image2>:<ms>` | Media-change stress test: alternate two images in the first CD drive every `<ms>` ms, forced past a guest lock, applied between guest commands. |
-| `ALPHABOX_BLIT_STATS=1` | Every 5 s, print what the 8514/A drawing engine has drawn: pixels, drawing commands and host-data transfers, with the host time the commands took. Says whether a sluggish-feeling guest is drawing-bound, and how the driver is drawing (a listing that scrolls a console draws ~900 million pixels, one transfer each). The timing is per command, not per pixel, so it does not swamp what it measures -- but it does slow a drawing-heavy guest noticeably, so leave it off when timing anything. |
+`ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` and Enter at the
+SRM prompt 40 s in. `ALPHABOX_KEYPIPE` is the interactive variant:
+`echo "f2 down down enter" >> keys.txt`. Start with an empty file; the
+emulator remembers how far it has read.
 
-**JIT builds**
-
-| Variable | Effect |
-|---|---|
-| `ALPHABOX_JIT_COMPILE_AFTER=<n>` | Interpret a block `n` times before compiling it. The default is 16 (1 on JIT_VERIFY builds). |
-| `ALPHABOX_JIT_FPTEST=1` | JIT_VERIFY builds only: self-test the inline IEEE FP ops against the interpreter at startup, then exit with the verdict. |
-| `ALPHABOX_NO_IDLE=1` | Disable idle pacing. |
-| `ALPHABOX_IDLESTATS=1` | Print idle-pacing counters every 2000 idle-loop visits. |
-| `ALPHABOX_STALL_SKIP=0` | Make a guest's `RPCC` delay loop wait in real time, as the hardware would, instead of being handed the cycles it is waiting for. Costs a Windows 2000 boot 35 seconds; see docs/cpu-fidelity.md for what the default buys and what it diverges on. |
-| `ALPHABOX_PORT61_PACE=0` | Spin on the ISA refresh-toggle bit of port 61h instead of sleeping to the next edge. The guest's timing is the same either way; this one only decides whether a host core burns for it. |
-| `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`, without asking whether anything was written to memory code was compiled from. `2`: flush anyway, but report any block whose source changed while the code-page map said nothing had (the audit; see test/tools/smc_test.sh). |
-| `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. AArch64 compiled code and the helpers; the x86-64 emitter never probes it. |
-| `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, whatever they hold, as before. See docs/cpu-fidelity.md, "Data translations outlive their TB entry". |
-| `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
-| `ALPHABOX_JIT_DPC_SLOTS=64\|128` | Use only that many of level 1's 256 page-cache slots a row (the index is masked), for a same-binary A/B of the slot count. |
-| `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe when it is on the same page (AArch64). |
-| `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms (longword arithmetic, logical immediates, byte manipulation): operands shuttled through x0/x1 as before. For a same-binary A/B. |
-| `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64 emitter). See docs/performance.md, "Sixteen pins, chosen by what runs". |
-| `ALPHABOX_JIT_PIN_SHADOW=1` | Let the adaptive pin set pick R4-R7 and R20-R23, the registers PALcode has shadow copies of; left out by default. See docs/performance.md, "Not the shadow bank". |
-| `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
-| `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |
-| `ALPHABOX_JIT_PINSET=1\|2` | Experiment: start from a different pin set of 14 (AArch64 emitter). `1` gives R17, R18 and R27's slots to R13-R15, the nada benchmark's hot registers; `2` gives R9-R11, R26, R27, R29 and R30's to R8, R4-R6 and R21-R23, those of Microsoft's `makecab`. Combine with `ALPHABOX_JIT_ADAPTPIN=0` to keep it. See docs/performance.md, "What a pinned register is worth". |
-| `ALPHABOX_JIT_CHAIN=0` | Compiled blocks never run on into one another: no link is patched and every computed jump returns to the dispatcher, as on a JIT_VERIFY build. With the next two, the production JIT minus what the verify lane cannot see -- for telling such a fault from anything else, not for speed. |
-| `ALPHABOX_JIT_INLMEM=0` | Every load and store from compiled code calls its helper, as on a JIT_VERIFY build: no inline page-cache probe, no probe reuse, no inline physical `HW_LD`/`HW_ST` (both emitters). |
-| `ALPHABOX_JIT_RPCC=0` | `RPCC` calls its helper instead of the generated stub, as on a JIT_VERIFY build. |
-| `ALPHABOX_JIT_RPCCTEST=1` | Check the generated `RPCC` stub against the helper it replaces, from six fixed starting states, and print the verdict. |
-| `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
-| `ALPHABOX_RATE=<sec>` | Every `<sec>` seconds (fractions allowed), print each processor's instruction rate, and what its `IMB`s, its cycle-counter reads and its delay loops are costing. Accurate enough to measure with -- it looks at the clock once every 256 batches -- and `cpu_bench.sh` reads it rather than timing runs from outside. |
-| `ALPHABOX_JIT_OFFSETS=1` | Print the field offsets compiled code addresses `this` by. For when a member has been added in the wrong place and the emitter's displacements no longer reach. |
-
-## Key names
+### Key names
 
 These names work for `ALPHABOX_KEYSCRIPT` and `ALPHABOX_KEYPIPE`:
 
@@ -98,111 +74,491 @@ For a chord, prefix a key with modifiers joined by `-`: `win-r`, `shift-5`
 (`%` on a US layout), `ctrl-alt-del`. `test/tools/keys_for.py "<text>"` turns
 a line of text into tokens for a US keyboard layout.
 
-## Example: a fully headless firmware run
+### Other tokens
 
-```
-SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb \
-ALPHABOX_KEYPIPE=keys.txt ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter" \
-alphabox run &
-# watch fb-*.ppm to see the screen; echo keys >> keys.txt to react
-```
+Besides keys, the two variables take these tokens:
 
-A `serial` section with a `port` waits for a telnet connection before the GUI
-comes up. For unattended runs, connect a client or use
-`null_attach = true`.
+- **`dbg-dump`** (`KEYPIPE` only, JIT builds): every processor prints its
+  state at its next dispatch batch, as `%DBG-I-DUMP`/`CODE`/`STACK` lines.
+  That is the PC, SDE, mode, ASN, both register banks, the code around the
+  PC and 512 bytes of stack. It is for looking at a guest that has hung
+  without changing how it runs until then.
+- **`tablet:X:Y[:B]`** puts the USB tablet's pointer (`port1 = "tablet";`
+  on `ali_usb`) at X,Y, with buttons B (bit 0 left, 1 right, 2 middle).
+  X and Y are fractions of the screen when at most 1, else guest pixels.
+- **`usb:<op>:<port>[:<ep>[:<n>]]`** injects a fault on a USB root hub port
+  (the `ehci` card's if there is one, else `ali_usb`'s), for testing a
+  guest's USB driver. `test/tools/usb_bench.sh` fires them with
+  `FAULTS=`/`PRE_FAULTS=`.
 
-## Tracing accesses no device claims
+The `usb:` operations:
 
-`ALPHABOX_TRACE_UNKNOWN=1` reports every read or write that no device
-answered -- the address, its width, and the instruction or device that made
-it:
+| Token | Fault |
+| --- | --- |
+| `usb:detach:<p>`, `usb:attach:<p>` | Unplug and replug the device, with the connect change and interrupt hardware gives. |
+| `usb:stall:<p>:<ep>[:<n>]` | Endpoint `<ep>` answers STALL until the host sends CLEAR_FEATURE(ENDPOINT_HALT), and halts again on its next transfer, `n` times in all (default 1). |
+| `usb:phase:<p>` | The USB disk's next command ends with a phase-error CSW (status 2). |
+| `usb:nak:<p>:<ep>:<ms>` | The endpoint NAKs for `<ms>` milliseconds. |
 
-```
-%SYS-T-UNKNOWN: read  32 bits at 803fe002800 (PCI configuration) from cpu0 pc=00000000001a1358
-```
+`<ep>` is an endpoint address: `0x81` is IN 1, `0x02` is OUT 2.
 
-The instruction is rarely the interesting one -- firmware reaches hardware
-through access helpers -- so the return address is reported with it.
+## Mouse
 
-`ALPHABOX_TRACE_I2C=1` does the same for the chipset's I2C bus, reporting
-every address the firmware puts on it and whether anything answered.
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_AUTOMOUSE=<sec>` | From `<sec>` seconds in, inject synthetic PS/2 mouse motion (a square pattern plus a periodic left click), bypassing host input. |
+| `ALPHABOX_MOUSE_DEBUG=1` | Trace host mouse motion, grab and focus transitions, relative-mode failures, the guest's aux commands and dropped mouse bytes (`MOUSEDBG` lines). |
 
-`ALPHABOX_TRACE_MP=1` reports the registers a console uses to start other
-processors and hand work to them -- how a machine brings its processors up
-differs from board to board.
+As with a real PS/2 mouse, `ALPHABOX_AUTOMOUSE` sends nothing until the
+guest driver enables data reporting.
 
-`ALPHABOX_TRACE_CALLS=1` reports the firmware's own calls, once per call
-site and routine, which is how a silent failure inside a console is read
-(it found the DS10's). Interpreter builds only.
+## Snapshots
 
-`ALPHABOX_TRACE_ARITH=<n>` reports the first `n` IEEE arithmetic traps
-(200 for `=1`): the trigger's address and instruction word, its two
-operands as they were, the FPCR, the trap summary's bits (`trap`: SWC 01,
-INV 02, DZE 04, OVF 08, UNF 10, INE 20, IOV 40 -- 00 when the trap only
-asks PALcode to set the status bits in `set`), `/S` when the instruction
-has it, and the processor's mode:
+`SIGUSR1` saves the whole machine at the next safe point, with every
+thread stopped, as the serial console's `<BREAK>` menu does.
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_SNAPSHOT=<file>` | Where `SIGUSR1` saves (default `autosave.axp`). |
+| `ALPHABOX_SNAPSHOT_EXIT=1` | Exit right after saving, so the disk images on exit are the ones the snapshot saw. |
+| `ALPHABOX_RESTORE=<file>` | Resume a saved machine instead of cold-booting. |
+
+The disk images in the working directory must be the ones the snapshot
+was taken against. `test/tools/nt_snap.sh` uses all three to skip a
+Windows boot.
+
+`SIGTERM` (or Ctrl-C) stops the emulator gracefully: threads stopped,
+flash and DPR saved.
+
+## Self-tests
+
+Three devices can be checked from inside the emulator, without a guest
+driver. Each prints its own lines and PASS or FAIL.
+
+### virtio (`ALPHABOX_VIRTIO_SELFTEST=1`)
+
+At start-up, a minimal driver drives every `virtio_blk` and `virtio_net`
+device through its legacy registers ([virtio.md](virtio.md)). Its rings
+are 1 MB per device, 16-32 MB below the top of guest RAM, addressed
+physically. It checks:
+
+- reset, features and queues;
+- blk: GET_ID, sector 0 (must end in 55 AA), a write of the last sector
+  read back and restored, FLUSH, the error statuses;
+- net: transmit and receive. This needs a back end that returns frames:
+  UDP with `udp_local` = `udp_remote`.
+
+It prints `%VIRTIO-I-SELFTEST` lines. `ALPHABOX_VIRTIO_SELFTEST_DELAY=<s>`
+runs it `<s>` seconds later, through the DMA window the console set up.
+
+`ALPHABOX_VIRTIO_TRACE=1`, with or without the self-test, traces virtio
+register accesses, queue addresses, notifies and interrupt changes
+(`VIRTIO` lines).
+
+### Radeon (`ALPHABOX_RADEON_SELFTEST=1`)
+
+At the end of the `radeon` card's start-up, before the machine runs, it
+drives the 2D engine, the command processor, the cursor and the 3D engine
+through the MMIO BAR and the CP ring. Each result is compared with a
+software reference (91 checks, [radeon.md](radeon.md)), and the card's
+registers and VRAM are put back afterwards.
+
+- It prints `%RADEON-I-SELFTEST` lines.
+- `=exit` ends the emulator afterwards, with status 0 when every check
+  passed.
+- The 3D scenes are written as PNGs (the frame, and a
+  frame/reference/difference comparison) to
+  `ALPHABOX_RADEON_SELFTEST_DIR`, default `$ALPHABOX_WORK/radeon-3d`.
+
+### EHCI (`ALPHABOX_EHCI_SELFTEST=1`)
+
+At start-up, before any firmware runs, a minimal EHCI driver drives the
+`ehci` card, with its structures in the top 16 MB of guest RAM. In order:
+
+1. Port reset, enumeration, SET_ADDRESS and SET_CONFIGURATION.
+2. A Bulk-Only READ(10) of sector 0 from the USB disk on port 1, which
+   must end in 55 AA.
+3. A phase error and the host's reset recovery (class reset,
+   CLEAR_FEATURE on both bulk endpoints), then a command that must
+   succeed; and a class reset in a command's data stage.
+4. With companions (the default), the port routing: CONFIGFLAG 0 and 1,
+   and a full-speed device (the tablet, or a probe plugged into a free
+   port) left disabled by the EHCI's port reset, handed to its companion
+   with PORT_OWNER, and its device descriptor read from there.
+5. High-speed isochronous iTDs against a loopback device plugged into a
+   free port: OUT transactions read back IN with their data and lengths,
+   IOC, and a transaction error for a missing device.
+
+It prints `%EHCI-I-SELFTEST` lines.
+
+## USB
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_USB_ASYNC_US=<us>` | USB storage and the USB speaker answer like devices behind libusb, `<us>` microseconds late. |
+| `ALPHABOX_USBAUDIO_WAV=<file>` | The USB speaker (`port<n> = "audio";`) writes the PCM stream the guest sends it into `<file>` as a WAV. |
+| `ALPHABOX_USBTRACE=1` | Trace the OHCI and the USB devices (`USBT` lines). |
+| `ALPHABOX_USBTRACE=2` | As `1`, and every TD the OHCI retires and every done-queue write-back. |
+| `ALPHABOX_OHCI_EARLY_CTL=1` | Let a done queue holding a control-endpoint TD go back at once. For A/B runs. |
+
+`ALPHABOX_USB_ASYNC_US` tests and times the controller's passthrough path
+without a host device (`test/tools/usb_bench.sh`, `test/tools/usb_audio.sh`):
+
+- Bulk and interrupt transfers finish on another thread after `<us>`
+  microseconds, NAKed until then.
+- Isochronous OUT packets reach the device `<us>` later. A full queue of
+  64 gives the controller's underrun status.
+- An isochronous IN endpoint is streamed from the device, each packet
+  ready `<us>` after it was fetched. None ready gives the controller's
+  overrun status.
+- The EHCI self-test's isochronous loopback goes behind it too.
+
+`ALPHABOX_USBAUDIO_WAV` writes 16-bit stereo at the rate the guest chose; a
+rate change part way starts a new file, with `-1`, `-2`... before the
+extension. The header is kept current every quarter second, so the file is
+whole even after a kill. Use it with `SDL_AUDIO_DRIVER=dummy` to keep a
+headless run off the host's speakers.
+
+`ALPHABOX_USBTRACE=1` traces:
+
+- OHCI register writes, with read counts in between;
+- the root hub port status each time the driver reads it;
+- every TD retired with an error (condition code);
+- isochronous TDs retired late and packets not moved in time
+  (`iso packet ... BufferOverrun/BufferUnderrun`);
+- every control request a USB device serves;
+- each USB storage command and status wrapper.
+
+`=2` adds every retired TD (address, endpoint, length moved, condition
+code, delay interrupt).
+
+By default a done queue holding a control TD waits until a millisecond
+after the TD ran and then for a frame end, as no real controller answers
+sooner ([usb.md](usb.md)). `ALPHABOX_OHCI_EARLY_CTL=1` lets it go back at
+once, as bulk and interrupt TDs may.
+
+## Storage
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_IDETRACE=1` | A timestamped IDE timeline: commands, packets, bus-master starts and interrupts, check conditions. |
+| `ALPHABOX_IDETRACE=2` | As `1`, and on a `cmd649` every other register access but the data port (`CMDR`/`CMDW`, the first 200000). |
+| `ALPHABOX_DISK_LATENCY_US=<access>[,<command>[,<MB/s>]]` | Give every IDE hard disk a mechanical service time; `=0` turns the model off. |
+| `ALPHABOX_MEDIA_SWAP=<image1>:<image2>:<ms>` | Alternate two images in the first CD drive every `<ms>` ms. |
+| `ALPHABOX_TRACE_INQUIRY=1` | Every SCSI INQUIRY a disk or CD gets. |
+| `ALPHABOX_TRACE_SCSI=1` | Every command a disk or CD is given, and the sense data of each CHECK CONDITION. |
+
+`ALPHABOX_IDETRACE=1` shows commands, ATAPI packets (the opcode, and bytes
+2-11 as words), bus-master starts and interrupts, and every ATAPI check
+condition with its sense key. On a `cmd649` it also shows the chip's own
+registers: configuration space from 0x40, and bus-master bytes 1, 3, 9
+and 11 (`CMDT` lines, the first 400).
+
+`ALPHABOX_DISK_LATENCY_US` charges `<command>` µs per command (default
+300), `<access>` µs more when an access does not start where the last one
+ended, and a media rate (default 20 MB/s). It overrides the disks'
+`latency.*` keys (see es40.cfg, and
+[cpu-fidelity.md](cpu-fidelity.md) for the guest that needs it).
+
+`ALPHABOX_MEDIA_SWAP` is a media-change stress test: the swap is forced
+past a guest lock and applied between guest commands.
+
+`ALPHABOX_TRACE_INQUIRY` covers a SCSI adapter, USB mass storage and ATAPI
+packets alike. It reports the page asked for and, for the unit serial
+number page, the serial answered: which guests read a disk's serial at
+all, and what they are told. `ALPHABOX_TRACE_SCSI` shows what a guest's
+"device error" count is made of.
+
+## Video
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_BLIT_STATS=1` | Every 5 s, print what the 8514/A drawing engine has drawn. |
+| `ALPHABOX_LFB_DIRECT=0` | Keep every linear-framebuffer access on the device path, instead of offering the VRAM to the CPUs' page caches. |
+| `ALPHABOX_TGA_DUMP=<prefix>` | A TGA that does not own the window writes its screen as `<prefix>-NNN-WxH.ppm` every two seconds. |
+| `ALPHABOX_RADEON_SYNC=1` | The `radeon` card's engine as it was before its command FIFO. For A/B runs. |
+| `ALPHABOX_RADEON_ME_DUMP=<file>` | Write the micro-engine RAM to `<file>` when a driver finishes loading the CP microcode. |
+| `ALPHABOX_TRACE_LFB=1` | The S3's linear framebuffer window as it is offered and withdrawn. |
+
+`ALPHABOX_BLIT_STATS` reports pixels, drawing commands and host-data
+transfers, with the host time the commands took. It says whether a
+sluggish-feeling guest is drawing-bound, and how the driver is drawing (a
+listing that scrolls a console draws ~900 million pixels, one transfer
+each). The timing is per command, not per pixel, so it does not swamp
+what it measures. It does slow a drawing-heavy guest noticeably, so leave
+it off when timing anything.
+
+`ALPHABOX_LFB_DIRECT=0` applies to the S3 Trio64, the ViRGE, the Mach64,
+the Permedia 2 and the Radeon.
+
+`ALPHABOX_RADEON_SYNC=1` runs every engine command (and the CP's ring)
+inside the register write that starts it, and RBBM_STATUS always reads an
+empty FIFO and an idle engine. The default is the FIFO and an engine
+thread with a modelled busy time ([radeon.md](radeon.md)).
+
+`ALPHABOX_RADEON_ME_DUMP` writes the linux-firmware layout (each entry
+DATAH then DATAL, big-endian), for `test/tools/radeon_me_dis.py`. The card
+logs the image's CRC-32 and, for a known image, its name
+([radeon-microcode.md](radeon-microcode.md)).
+
+### Card traces
+
+- **`ALPHABOX_TRACE_VIRGE`** traces the S3 ViRGE, as a comma-separated
+  list:
+  - `1`: every port, register and window access;
+  - `cmd`: each engine command, one line with its registers (named in
+    `src/devices/video/virge/S3VirgeRegs.hpp`);
+  - `mode`: each change of the extended display mode;
+  - `file:<path>`: every access, but only while `<path>` exists. It is
+    polled, so a trace can be switched on around the one step that
+    matters (`touch trace.on` ... `rm trace.on`).
+- **`ALPHABOX_TRACE_TGA`** traces the DEC TGA (`tga`):
+  - `1`: every register, alternate-ROM and RAMDAC access (frame buffer
+    writes are too many to list);
+  - `first`: each register and each graphics mode the first time it is
+    used, which is how to see what a driver uses;
+  - `file:<path>`: as `1`, but only while `<path>` exists (polled every
+    frame).
+- **`ALPHABOX_TRACE_RADEON`** traces the ATI Radeon 7500 (`radeon`):
+  - `1`: every register access, by the path it came (`io`, `mmio`, or `cp`
+    for a register written by a command-processor packet), every PLL
+    access and every type-3 packet with its first dwords. Capped at 200000
+    lines; `ALPHABOX_TRACE_RADEON_MAX` sets the cap. Frame buffer accesses
+    are not listed.
+  - `new`: only the first read and the first write of each register, which
+    is how to see what a BIOS or driver touches;
+  - `file:<path>`: as `1`, but only while `<path>` exists (polled every
+    10 ms).
+
+  Command-processor operations the model does not have are reported once
+  each, trace or not.
+- **`ALPHABOX_TRACE_MACH64`** traces the ATI Mach64 family: `1` every
+  register and configuration access (not the framebuffer); `new` only the
+  first read and the first write of each register; `trap` every register a
+  trapezoid is drawn from, for the first 64 of them.
+- **`ALPHABOX_TRACE_PERMEDIA2`** traces the Permedia 2: `1` every register
+  and port access; `gp` the graphics processor's input, a register a line.
+
+## Guest diagnostics
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
+| `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates. Spots interrupt storms. |
+| `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
+| `ALPHABOX_VMSPAL_OFF=<list>` | Interpreter builds, OpenVMS PALcode: hand single native routines back to the real PALcode. |
+| `ALPHABOX_TRACE_ARITH=<n>` | Report the first `n` IEEE arithmetic traps (200 for `=1`). |
+| `ALPHABOX_TRACE_GUILOCK=1\|<ms>` | Report long waits for, and long holds of, the GUI lock. |
+
+`ALPHABOX_IRQSTATS` counts CPU interrupt entries by source, Cchip
+interval-timer ticks, 8259 edges and acknowledges per ISA IRQ, and Cchip
+DRIR rises.
+
+`ALPHABOX_VMSPAL_OFF` takes comma-separated `CALL_PAL` function numbers in
+hex (`92` = REI) and `int` (the interrupt entries); the routines are in
+`src/cpu/AlphaCPU_vmspal.cpp`. Bisecting with it is how a routine that
+diverges from the PALcode is found.
+
+### Arithmetic traps
+
+`ALPHABOX_TRACE_ARITH` reports, for each trap:
+
+- the trigger's address and instruction word;
+- its two operands as they were;
+- the FPCR;
+- the trap summary's bits (`trap`: SWC 01, INV 02, DZE 04, OVF 08, UNF 10,
+  INE 20, IOV 40; 00 when the trap only asks PALcode to set the status
+  bits in `set`);
+- `/S` when the instruction has it, and the processor's mode.
 
 ```
 %CPU-I-ARITH: cpu0 pc 00000000701a2858 ins 594b104a fa 00000000a0000000 fb 0000000000000000 fpcr 8990000000000000 trap 02 set 02 cm 1
 ```
 
-With the address a guest reports for a floating-point exception this is
-the faulting instruction and what it was given (docs/cpu-fidelity.md has
-the case it was written for).
+With the address a guest reports for a floating-point exception, this is
+the faulting instruction and what it was given
+([cpu-fidelity.md](cpu-fidelity.md) has the case it was written for).
 
-`ALPHABOX_TRACE_FLASH=1` reports the commands firmware sends the flash,
-which tells "it never found the part" from "it read what it wanted".
+### The GUI lock
 
-`ALPHABOX_TRACE_INQUIRY=1` reports every SCSI INQUIRY a disk or CD gets --
-on a SCSI adapter, behind USB mass storage or as an ATAPI packet -- with
-the page asked for and, for the unit serial number page, the serial
-answered: which guests read a disk's serial at all, and what they are told.
+The display thread's redraw, the GUI's event handling and the CPUs' VGA
+register writes share one lock. `ALPHABOX_TRACE_GUILOCK=1` watches it with
+a threshold of 1000 ms; a larger number is the threshold in ms.
 
-`ALPHABOX_TRACE_SCSI=1` reports every command a disk or CD is given (the
-CDB) and the sense data of each one it answers with CHECK CONDITION: what
-a guest's "device error" count is made of.
+- A wait that long prints `%GUI-W-LOCKWAIT` with the waiter's thread and
+  call site, and the holder's thread, call site and hold time so far. It
+  repeats every threshold while it lasts, so a deadlock keeps naming its
+  holder, and once more when the lock is got.
+- A hold that long prints `%GUI-W-LOCKHOLD` with the site that took it.
+- `main` is the thread that created the GUI (the SDL pump on macOS).
 
-`ALPHABOX_TRACE_SERIAL=1`, `ALPHABOX_TRACE_KBC=1` and
-`ALPHABOX_TRACE_PORT61=1` report the UARTs, the keyboard controller and the
-ISA refresh-toggle port; `ALPHABOX_TRACE_LFB=1` reports the S3's linear
-framebuffer window as it is offered and withdrawn, and
-`ALPHABOX_TRACE_CODEWRITE=1` reports the guest writing to memory some block
-was compiled from, which is what decides whether an `IMB` has work.
+The lock has no timeout, so this only reports. A host that sleeps, or a
+stopped process, shows up as one long wait or hold.
 
-`ALPHABOX_TRACE_ICPROBE=1` (JIT builds) watches the physical address the
-dispatcher gives a block: `ICPROBE` when its instruction-cache probe meets
-a line the fetch would refuse (filled before the last flush) that names
-another page than the live translation, `ICPROBE-RECORD` when a block is
-recorded at a physical other than the one it was just fetched from, and
-`ICPROBE-CHAIN` when a computed jump enters code compiled from a physical
-other than the live one. The first 50 of each. `ICPROBE` lines are lines
-the probe refuses, as it must; the other two should never appear (see
-docs/performance.md, "Not the shadow bank").
+## Timing and idle
 
-`ALPHABOX_TRACE_VIRGE` traces the S3 ViRGE, as a comma-separated list: `1`
-every port, register and window access; `cmd` each engine command, one line
-with its registers (named in `src/devices/video/virge/S3VirgeRegs.hpp`);
-`mode` each change of the extended display mode; `file:<path>` every
-access, but only while `<path>` exists -- it is polled, so a trace can be
-switched on around the one step that matters (`touch trace.on` ...
-`rm trace.on`).
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_NO_IDLE=1` | JIT builds: disable idle pacing. |
+| `ALPHABOX_IDLESTATS=1` | JIT builds: print idle-pacing counters every 2000 idle-loop visits. |
+| `ALPHABOX_STALL_SKIP=0` | JIT builds: make a guest's `RPCC` delay loop wait in real time, as the hardware would, instead of handing it the cycles it is waiting for. |
+| `ALPHABOX_PORT61_PACE=0` | Spin on the ISA refresh-toggle bit of port 61h instead of sleeping to the next edge. |
+| `ALPHABOX_RATE=<sec>` | JIT builds: every `<sec>` seconds (fractions allowed), print each processor's instruction rate and what its `IMB`s, cycle-counter reads and delay loops cost. |
 
-`ALPHABOX_TRACE_TGA` traces the DEC TGA (`tga`): `1` every register, alternate-ROM and RAMDAC access (frame buffer writes are not listed, they are too many); `first` each register and each graphics mode the first time it is used, which is how to see what a driver uses; `file:<path>` as `1`, but only while `<path>` exists (polled every frame). `ALPHABOX_TGA_DUMP=<prefix>` makes a TGA that does not own the window -- one beside a VGA card -- write its screen as `<prefix>-NNN-WxH.ppm` every two seconds, like `ALPHABOX_DUMP_FB`.
+`ALPHABOX_STALL_SKIP=0` costs a Windows 2000 boot 35 seconds; see
+[cpu-fidelity.md](cpu-fidelity.md) for what the default buys and what it
+diverges on.
 
-`ALPHABOX_TRACE_RADEON` traces the ATI Radeon 7500 (`radeon`): `1` every
-register access (by the path it came: `io`, `mmio`, or `cp` for a register
-written by a command-processor packet), every PLL access and every type-3
-packet with its first dwords, capped at 200000 lines
-(`ALPHABOX_TRACE_RADEON_MAX` sets the cap; frame buffer accesses are not
-listed); `new` only the first read and the first write of each register,
-which is how to see what a BIOS or driver touches; `file:<path>` as `1`,
-but only while `<path>` exists (polled every 10 ms). Command-processor
-operations the model does not have are reported once each, trace or not.
+`ALPHABOX_PORT61_PACE=0` leaves the guest's timing the same; it only
+decides whether a host core burns while the guest waits.
 
-`ALPHABOX_DUMP_MEMORY=1` writes guest memory to `memory_000000000000.dmp`
-when the emulator is asked to stop, which is how to find what a firmware
-left in memory (and what it did not).
+`ALPHABOX_RATE` is accurate enough to measure with: it looks at the clock
+once every 256 batches. `cpu_bench.sh` and `sect_mips.sh` read it rather
+than timing runs from outside. Under `ALPHABOX_HV=1` it also reports the
+VM's exits and escapes.
 
-A firmware scanning empty configuration space produces these normally; the
-traces matter when a machine's firmware wants hardware that is not emulated
-yet (see [platforms.md](platforms.md)).
+## JIT builds
+
+The switches, each for a same-binary A/B or for isolating a fault:
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_JIT_COMPILE_AFTER=<n>` | Interpret a block `n` times before compiling it. The default is 16 (1 on JIT_VERIFY builds). |
+| `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
+| `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`. `2`: the audit, below. |
+| `ALPHABOX_JIT_NOPFLUSH_BREAK=1` | Do not report the processor's own stores to the code-page map, as though a write path had been forgotten. |
+| `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. |
+| `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, as before. |
+| `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
+| `ALPHABOX_JIT_DPC_SLOTS=64\|128` | Use only that many of level 1's 256 page-cache slots a row (the index is masked). |
+| `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe on the same page (AArch64). |
+| `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms: operands shuttled through x0/x1 as before. |
+| `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64). |
+| `ALPHABOX_JIT_PIN_SHADOW=1` | Let the adaptive pin set pick R4-R7 and R20-R23, the registers PALcode has shadow copies of. |
+| `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
+| `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |
+| `ALPHABOX_JIT_PINSET=1\|2` | Experiment: start from a different pin set of 14 (AArch64). |
+| `ALPHABOX_JIT_CHAIN=0` | Compiled blocks never run on into one another, as on a JIT_VERIFY build. |
+| `ALPHABOX_JIT_INLMEM=0` | Every load and store from compiled code calls its helper, as on a JIT_VERIFY build. |
+| `ALPHABOX_JIT_RPCC=0` | `RPCC` calls its helper instead of the generated stub, as on a JIT_VERIFY build. |
+
+Notes on some of them:
+
+- **`ALPHABOX_JIT_NOPFLUSH=2`** flushes anyway, but reports any block whose
+  source changed while the code-page map said nothing had.
+  `ALPHABOX_JIT_NOPFLUSH_BREAK=1` exists so that `test/tools/smc_test.sh`
+  can be shown to fail when the tracking is wrong.
+- **`ALPHABOX_JIT_DPC2=0`** affects AArch64 compiled code and the helpers;
+  the x86-64 emitter never probes level 2.
+- **`ALPHABOX_DPC_KEEP=0`**: see [cpu-fidelity.md](cpu-fidelity.md), "Data
+  translations outlive their TB entry".
+- **`ALPHABOX_JIT_PEEP=0`** removes longword arithmetic, logical
+  immediates and byte manipulation done in place.
+- **The pin switches** are explained in [performance.md](performance.md):
+  "Sixteen pins, chosen by what runs" (`ADAPTPIN`), "Not the shadow bank"
+  (`PIN_SHADOW`) and "What a pinned register is worth" (`PINSET`).
+  `PINSET=1` gives R17, R18 and R27's slots to R13-R15, the nada
+  benchmark's hot registers. `PINSET=2` gives R9-R11, R26, R27, R29 and
+  R30's to R8, R4-R6 and R21-R23, those of Microsoft's `makecab`. Combine
+  either with `ALPHABOX_JIT_ADAPTPIN=0` to keep it.
+- **`CHAIN=0`, `INLMEM=0` and `RPCC=0`** together give the production JIT
+  minus what the verify lane cannot see. They are for telling such a
+  fault from anything else, not for speed. `INLMEM=0` removes the inline
+  page-cache probe, probe reuse and inline physical `HW_LD`/`HW_ST` (both
+  emitters).
+
+Self-tests and diagnostics:
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_JIT_FPTEST=1` | JIT_VERIFY builds only: self-test the inline IEEE FP ops against the interpreter at startup, then exit with the verdict. |
+| `ALPHABOX_JIT_RPCCTEST=1` | Check the generated `RPCC` stub against the helper it replaces, from six fixed starting states, and print the verdict. |
+| `ALPHABOX_JIT_OFFSETS=1` | Print the field offsets compiled code addresses `this` by. |
+| `ALPHABOX_TRACE_CODEWRITE=1` | Report the guest writing to memory some block was compiled from. |
+| `ALPHABOX_TRACE_ICFLUSH=1` | At exit, a histogram of the PCs that issued instruction-cache flushes. |
+| `ALPHABOX_TRACE_ICPROBE=1` | Watch the physical address the dispatcher gives a block (below). |
+
+`ALPHABOX_JIT_OFFSETS` is for when a member has been added in the wrong
+place and the emitter's displacements no longer reach.
+`ALPHABOX_TRACE_CODEWRITE` is what decides whether an `IMB` has work.
+
+`ALPHABOX_TRACE_ICPROBE` prints the first 50 of each of:
+
+- `ICPROBE`: the dispatcher's instruction-cache probe meets a line the
+  fetch would refuse (filled before the last flush) that names another
+  page than the live translation. These are lines the probe refuses, as
+  it must.
+- `ICPROBE-RECORD`: a block is recorded at a physical address other than
+  the one it was just fetched from.
+- `ICPROBE-CHAIN`: a computed jump enters code compiled from a physical
+  address other than the live one.
+
+The last two should never appear (see [performance.md](performance.md),
+"Not the shadow bank").
+
+## Bring-up traces
+
+What a firmware asked for and did not get. A firmware scanning empty
+configuration space produces these normally; the traces matter when a
+machine's firmware wants hardware that is not emulated yet (see
+[platforms.md](platforms.md)).
+
+| Variable | Reports |
+| --- | --- |
+| `ALPHABOX_TRACE_UNKNOWN=1` | every read or write that no device answered |
+| `ALPHABOX_TRACE_I2C=1` | every address the firmware puts on the chipset's I2C bus, and whether anything answered |
+| `ALPHABOX_TRACE_MP=1` | the registers a console uses to start other processors and hand work to them |
+| `ALPHABOX_TRACE_CALLS=1` | the firmware's own calls, once per call site and routine (interpreter builds) |
+| `ALPHABOX_TRACE_FLASH=1` | the commands firmware sends the flash |
+| `ALPHABOX_TRACE_SERIAL=1` | the UARTs |
+| `ALPHABOX_TRACE_KBC=1` | the keyboard controller |
+| `ALPHABOX_TRACE_PORT61=1` | the ISA refresh-toggle port, as bursts of reads |
+| `ALPHABOX_DUMP_MEMORY=1` | guest memory, written to `memory_000000000000.dmp` when the emulator is asked to stop |
+
+`ALPHABOX_TRACE_UNKNOWN` gives the address, its width, and the instruction
+or device that made the access:
+
+```
+%SYS-T-UNKNOWN: read  32 bits at 803fe002800 (PCI configuration) from cpu0 pc=00000000001a1358
+```
+
+The instruction is rarely the interesting one, because firmware reaches
+hardware through access helpers, so the return address is reported with
+it.
+
+- `ALPHABOX_TRACE_MP` matters because how a machine brings its processors
+  up differs from board to board.
+- `ALPHABOX_TRACE_CALLS` is how a silent failure inside a console is read
+  (it found the DS10's).
+- `ALPHABOX_TRACE_FLASH` tells "it never found the part" from "it read what
+  it wanted".
+- `ALPHABOX_DUMP_MEMORY` finds what a firmware left in memory, and what it
+  did not.
+
+### The EV7 machines
+
+The Marvel chipset ([platforms/marvel.md](platforms/marvel.md)) has its own:
+
+| Variable | Reports |
+| --- | --- |
+| `ALPHABOX_TRACE_CSR=1` | every access to a modelled EV7 register, named, with the instruction that made it |
+| `ALPHABOX_TRACE_IO7=1` | every access to an IO7 register, named, with the instruction and its return address |
+| `ALPHABOX_TRACE_RBOX=<ms>` | any processor that leaves an enabled interrupt pending that long (default 200) |
+| `ALPHABOX_GIO_LOG=<file>` | the console's transactions with its management side (the CMM on the ES47), written to `<file>` |
+| `ALPHABOX_TRACE_CMM=1` | on the ES47, also each change of the PALcode's state word sent to the CMM |
+| `ALPHABOX_EV7_START_SECONDARIES=1` | a test hook: start the parked secondaries at once, as the console would |
+
+The CSR and IO7 traces print the first three of each repeated access, then
+every power of two. `ALPHABOX_TRACE_RBOX` tells a guest's `CPUSPINWAIT`
+caused by an interrupt not raised from one not taken.
+
+## Hypervisor runtime
+
+Builds with `-DALPHABOX_HVF=ON` only ([hypervisor.md](hypervisor.md)):
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_HV=1` | Every CPU thread runs its dispatch loop at EL1 inside a Hypervisor.framework VM. |
+| `ALPHABOX_HV_JIT=1` | With `ALPHABOX_HV=1`: run compiled code inside the VM too. The default there is the interpreter. |
+| `ALPHABOX_HV_TRACE=1` | Print every mapping, exit and proxied call. |
+| `ALPHABOX_HV_WATCHDOG=<s>` | Cancel a vCPU that never exits, and print where it was. |
