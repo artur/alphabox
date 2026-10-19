@@ -89,14 +89,14 @@ How the pieces meet:
   queue depth, ME RAM size, the clocks, whether its microcode has the
   R200 packets, the CP microcode family a driver loads on it
   (`cp_microcode`, which `RadeonMicrocode.cpp`'s known-image rows are
-  matched against) -- and its **generation**. The `radeon` class's `chip` key
-  names the row (`"rv200"`, the default); `model` (`agp`/`pci`) picks the
-  board's subsystem ID within it.
+  matched against), and its **generation**. The `radeon` class's `chip`
+  key names the row (`"rv200"`, the default); `model` (`agp`/`pci`) picks
+  the board's subsystem ID within it.
 - **The generation** (`radeon::Generation`, defined in its directory:
   `gen_r100`) holds what the generation's register map decides in common
-  code -- the range of registers that go through the command FIFO
-  (0x1400-0x3fff on the R100) and RBBM_STATUS's 2D and 3D busy bits --
-  and the factory that builds its 3D engine.
+  code (the range of registers that go through the command FIFO,
+  0x1400-0x3fff on the R100, and RBBM_STATUS's 2D and 3D busy bits), and
+  the factory that builds its 3D engine.
 - **The 3D engine** (`CRadeonEngine3D`) is called by the common code only:
   register writes and reads after the card's own registers have had their
   turn, type-3 packets the CP does not know, reset, its block of the state
@@ -138,7 +138,7 @@ with its facts and the generation's `Generation`; its name becomes a
    packets, `cp_microcode = "R200"`, `&gen_r200`. The generation's
    microcode images go into `RadeonMicrocode.cpp`'s table (CRC, word
    width, dispatch-table packet set; [radeon-microcode.md](radeon-microcode.md)
-   and `test/tools/radeon_me_dis.py --table` give them) -- the R200's and
+   and `test/tools/radeon_me_dis.py --table` give them). The R200's and
    R300's are already there.
 6. Its self-test scenes: `selftest_scenes()` in `r200/RadeonR200SelfTest.cpp`,
    using `radeon::SelfTest` and the helpers in `RadeonSelfTest.hpp`; the
@@ -146,154 +146,207 @@ with its facts and the generation's `Generation`; its name becomes a
 7. If the generation changes something the common code does (a register
    the R100 does not have, a different CP packet, a different 2D engine
    detail), the difference goes into the row or the `Generation` as a fact,
-   and the common code asks for it -- never a test of the part's name.
+   and the common code asks for it, never a test of the part's name.
 8. Document it here and in `es40.cfg`'s `chip` list, add the row's name to
    `docs/peripherals.md`, and run the self-test with `chip = "<it>"`.
 
 ## What is emulated
 
-**The command FIFO and the engine** (`RadeonQueue.cpp`). A CPU write to a
-rendering-engine register -- 0x1400 and up, the Rage 128 guide's "GUI
-registers (FIFOed)" -- goes into a 64-entry command FIFO (the part's
-row, `RadeonChips.cpp`; Linux's `r100_gui_wait_for_idle` waits for 64).
-One engine thread takes the entries in order and, when the FIFO is
-empty, reads the CP's ring a packet at a time. RBBM_STATUS shows the
-free entries (`CMDFIFO_AVAIL` <6:0>), `CP_CMDSTRM_BUSY` <16> while the
-ring has unread dwords, the 2D or 3D blocks' busy bits and `GUI_ACTIVE`
-<31> while anything is queued, executing or still running on the
-engine's timeline: every command is charged a clock and every pixel half
-a clock of the engine clock (180 MHz, from the card's BIOS PLL block; two
-pixel pipes), the next command starting when the last ended, so the
-engine reads busy for its modelled time however fast the host drew
-[inference: the R100's per-command costs are not documented]. With the
-FIFO full a write waits until an entry is free (the chip holds the bus
-write; nothing is dropped). A CPU read of a queued register waits for the
-writes queued before it (the chip takes a register write long before the
-next bus read; OpenVMS's server writes `DEFAULT_PITCH_OFFSET` and reads
-it straight back) [inference]; the status registers read at once.
-`WAIT_UNTIL` stalls the FIFO: the idle conditions hold by construction
-(one command at a time, the timeline orders the rest), the CRTC
-conditions wait for the next vertical blank [inference: no
-`CRTC_GUI_TRIG_VLINE`]. The destination caches
-(`RB2D_DSTCACHE_CTLSTAT`, `RB3D_DSTCACHE_CTLSTAT`, `RB3D_ZCACHE_CTLSTAT`,
-`DSTCACHE_CTLSTAT`): the engine writes memory directly, so a flush or a
-purge is a point in the FIFO, `DC_BUSY` <31> reading set from the write
-until the engine has reached it and the work before it is over.
-`GEN_INT_STATUS` `GUI_IDLE` <19> latches when the engine goes idle and
-interrupts with `GEN_INT_CNTL` <19>. `RBBM_SOFT_RESET`'s engine bits
-finish the command running, reset the blocks and hold the engine while
-set (the FIFO keeps its entries). The state file waits for the engine to
-drain. `ALPHABOX_RADEON_SYNC=1` brings back the synchronous engine (every
-command inside its register write, the engine always idle), for A/B
-runs.
+### The command FIFO and the engine
 
-**2D engine** (`RadeonEngine.cpp`): every ROP3; solid, 8x8 mono (with
-`BRUSH_Y_X`), 8x1/1x8 mono, 32x1 and 32x32 mono and 8x8 colour brushes;
-memory, mono-memory and host-data sources (colour, mono MSB/LSB first,
-FG/BG and FG/leave-alone, byte-aligned rows, big-endian host data);
-blits in all four directions; Bresenham lines with `DST_LAST_PEL` and dash
-patterns (`DST_LINE_PATCOUNT`); the scissor rectangle; the write mask;
-colour compare (source, destination or both; never, equal, not-equal and
-the flip function); 8, 16 and 32 bpp destinations; the side effects of a
-`DP_GUI_MASTER_CNTL` write (default pitch/offset and scissors, the
-directions in `DP_CNTL`, `GMC_WR_MSK_DIS` and `GMC_CLR_CMP_CNTL_DIS`
-loading `DP_WRITE_MSK`/`CLR_CMP_MSK` and clearing `CLR_CMP_CNTL`); the
-source scissor (`SRC_SC_RIGHT`/`BOTTOM`, `SRC_SC_BOTTOM_RIGHT`, loaded
-from `DEFAULT_SC_BOTTOM_RIGHT` unless `GMC_SRC_CLIPPING`, RRG 3-147 and
-3-165): a source pixel outside it is not read and its destination not
-written [inference: the guide names the scissor, not what it does].
+In `RadeonQueue.cpp`, a CPU write to a rendering-engine register (0x1400
+and up, the Rage 128 guide's "GUI registers (FIFOed)") goes into a
+64-entry command FIFO (the part's row, `RadeonChips.cpp`; Linux's
+`r100_gui_wait_for_idle` waits for 64). One engine thread takes the
+entries in order and, when the FIFO is empty, reads the CP's ring a
+packet at a time.
 
-**Command processor** (`RadeonCP.cpp`), on the engine's thread: the
-ring buffer -- read from `CP_RB_RPTR` towards `CP_RB_WPTR` after the
-write that publishes it has returned, the host's copy written back to
-`CP_RB_RPTR_ADDR` every 2^`RB_BLKSZ` quadwords and when the ring runs
-dry (unless `RB_NO_UPDATE`), `CP_RB_RPTR_WR` taking effect on the next
-`CP_RB_WPTR` write while `RB_RPTR_WR_ENA` (R5xx guide 5.8), `BUF_SWAP`
-for buffers in host memory --, indirect buffers, the primary PIO queue
-(`CP_CSQ_APER_PRIMARY`, 64 dwords [inference], its room in
-`CP_CSQ_CNTL` <7:0>), scratch registers written back to memory (with
-`SCRATCH_SWAP`); `CP_STAT`, `CP_CSQ_STAT` from the queues. Which streams
-run is the CSQ mode's (`CP_CSQ_CNTL` <31:28>, or `CP_CSQ_MODE`'s
-enables): the ring when the primary stream bus masters, the PIO queue
-when it is pushed, indirect buffers when the indirect stream bus
-masters. The micro-engine: ATI never documented its instruction set, so
-the packets are interpreted natively, but there is no CP without
-microcode -- until every one of the 256 ME RAM entries has been loaded
-(`CP_ME_RAM_ADDR`, then `DATAH` (8 bits) / `DATAL` pairs, R5xx guide
-5.12) with something other than zeros, neither the ring nor the PIO
-queue is read and the read pointer stays put. Any complete image is
-taken; its CRC-32 is looked up in the table of every CP microcode image
-the open sources published (`RadeonMicrocode.cpp`,
-[radeon-microcode.md](radeon-microcode.md)) and its name printed, or
-"unknown microcode". OpenVMS 8.4's DECwindows server loads `b86caa2a`,
-ATI's R100 image -- the one Linux loads from `radeon/R100_cp.bin`, which
-never changed from its first publication in 2001. A known image's
-dispatch table says which type-3 packets it handles: one it sends to
-NOP's handler is skipped. An image for another generation is accepted
-with a warning (`%RADEON-W-UCODE`). The image is in the state file. Packets: type-0
-(consecutive and one-register), type-1 and type-2; the type-3 2D
-packets PAINT, PAINT_MULTI, BITBLT, BITBLT_MULTI, TRANS_BITBLT,
-HOSTDATA_BLT, POLYLINE, POLYSCANLINES, NEXTCHAR, PLY_NEXTSCAN,
-SET_SCISSORS (with the settings block, every brush packet,
-`BRUSH_Y_X`); LOAD_PALETTE (R5xx guide 6.2.2.12; kept for the 2D
-scaler, which is not modelled); the 3D packets below. The R200
-microcode's packets -- the `_2` draws, `3D_CLEAR_HIZ`, `INDX_BUFFER` --
-do nothing on the RV200: the legacy DRM refuses them unless the R200
-microcode is loaded ("safe but r200 only", `radeon_state.c`), and the
-R100 image's dispatch table has no handler for them; they are
+- **RBBM_STATUS** shows the free entries (`CMDFIFO_AVAIL` <6:0>),
+  `CP_CMDSTRM_BUSY` <16> while the ring has unread dwords, and the 2D or
+  3D blocks' busy bits and `GUI_ACTIVE` <31> while anything is queued,
+  executing or still running on the engine's timeline.
+- **The timeline**: every command is charged a clock and every pixel half
+  a clock of the engine clock (180 MHz, from the card's BIOS PLL block;
+  two pixel pipes), the next command starting when the last ended. So the
+  engine reads busy for its modelled time however fast the host drew
+  [inference: the R100's per-command costs are not documented].
+- **A full FIFO**: a write waits until an entry is free (the chip holds
+  the bus write; nothing is dropped).
+- **Reads**: a CPU read of a queued register waits for the writes queued
+  before it (the chip takes a register write long before the next bus
+  read; OpenVMS's server writes `DEFAULT_PITCH_OFFSET` and reads it
+  straight back) [inference]. The status registers read at once.
+- **`WAIT_UNTIL`** stalls the FIFO. The idle conditions hold by
+  construction (one command at a time, the timeline orders the rest); the
+  CRTC conditions wait for the next vertical blank [inference: no
+  `CRTC_GUI_TRIG_VLINE`].
+- **The destination caches** (`RB2D_DSTCACHE_CTLSTAT`,
+  `RB3D_DSTCACHE_CTLSTAT`, `RB3D_ZCACHE_CTLSTAT`, `DSTCACHE_CTLSTAT`): the
+  engine writes memory directly, so a flush or a purge is a point in the
+  FIFO, `DC_BUSY` <31> reading set from the write until the engine has
+  reached it and the work before it is over.
+- **Idle interrupt**: `GEN_INT_STATUS` `GUI_IDLE` <19> latches when the
+  engine goes idle and interrupts with `GEN_INT_CNTL` <19>.
+- **Reset**: `RBBM_SOFT_RESET`'s engine bits finish the command running,
+  reset the blocks and hold the engine while set (the FIFO keeps its
+  entries).
+- **The state file** waits for the engine to drain.
+- `ALPHABOX_RADEON_SYNC=1` brings back the synchronous engine (every
+  command inside its register write, the engine always idle), for A/B
+  runs.
+
+### The 2D engine
+
+`RadeonEngine.cpp`:
+
+- every ROP3;
+- brushes: solid, 8x8 mono (with `BRUSH_Y_X`), 8x1/1x8 mono, 32x1 and
+  32x32 mono, and 8x8 colour;
+- sources: memory, mono-memory and host data (colour, mono MSB/LSB first,
+  FG/BG and FG/leave-alone, byte-aligned rows, big-endian host data);
+- blits in all four directions;
+- Bresenham lines with `DST_LAST_PEL` and dash patterns
+  (`DST_LINE_PATCOUNT`);
+- the scissor rectangle; the write mask;
+- colour compare: source, destination or both; never, equal, not-equal
+  and the flip function;
+- 8, 16 and 32 bpp destinations;
+- the side effects of a `DP_GUI_MASTER_CNTL` write: default pitch/offset
+  and scissors, the directions in `DP_CNTL`, `GMC_WR_MSK_DIS` and
+  `GMC_CLR_CMP_CNTL_DIS` loading `DP_WRITE_MSK`/`CLR_CMP_MSK` and clearing
+  `CLR_CMP_CNTL`;
+- the source scissor (`SRC_SC_RIGHT`/`BOTTOM`, `SRC_SC_BOTTOM_RIGHT`,
+  loaded from `DEFAULT_SC_BOTTOM_RIGHT` unless `GMC_SRC_CLIPPING`, RRG
+  3-147 and 3-165): a source pixel outside it is not read and its
+  destination not written [inference: the guide names the scissor, not
+  what it does].
+
+### The command processor
+
+`RadeonCP.cpp` runs on the engine's thread. Its streams:
+
+- **The ring buffer**: read from `CP_RB_RPTR` towards `CP_RB_WPTR` after
+  the write that publishes it has returned. The host's copy is written
+  back to `CP_RB_RPTR_ADDR` every 2^`RB_BLKSZ` quadwords and when the
+  ring runs dry (unless `RB_NO_UPDATE`). `CP_RB_RPTR_WR` takes effect on
+  the next `CP_RB_WPTR` write while `RB_RPTR_WR_ENA` (R5xx guide 5.8).
+  `BUF_SWAP` applies to buffers in host memory.
+- **Indirect buffers.**
+- **The primary PIO queue** (`CP_CSQ_APER_PRIMARY`, 64 dwords
+  [inference], its room in `CP_CSQ_CNTL` <7:0>).
+- **Scratch registers** written back to memory (with `SCRATCH_SWAP`);
+  `CP_STAT` and `CP_CSQ_STAT` from the queues.
+
+Which streams run is the CSQ mode's (`CP_CSQ_CNTL` <31:28>, or
+`CP_CSQ_MODE`'s enables): the ring when the primary stream bus masters,
+the PIO queue when it is pushed, indirect buffers when the indirect
+stream bus masters.
+
+**The micro-engine.** ATI never documented its instruction set, so the
+packets are interpreted natively, but there is no CP without microcode:
+
+- Until every one of the 256 ME RAM entries has been loaded
+  (`CP_ME_RAM_ADDR`, then `DATAH` (8 bits) / `DATAL` pairs, R5xx guide
+  5.12) with something other than zeros, neither the ring nor the PIO
+  queue is read and the read pointer stays put.
+- Any complete image is taken. Its CRC-32 is looked up in the table of
+  every CP microcode image the open sources published
+  (`RadeonMicrocode.cpp`, [radeon-microcode.md](radeon-microcode.md)) and
+  its name printed, or "unknown microcode".
+- OpenVMS 8.4's DECwindows server loads `b86caa2a`, ATI's R100 image: the
+  one Linux loads from `radeon/R100_cp.bin`, which never changed from its
+  first publication in 2001.
+- A known image's dispatch table says which type-3 packets it handles: one
+  it sends to NOP's handler is skipped.
+- An image for another generation is accepted with a warning
+  (`%RADEON-W-UCODE`).
+- The image is in the state file.
+
+**Packets**:
+
+- type-0 (consecutive and one-register), type-1 and type-2;
+- the type-3 2D packets PAINT, PAINT_MULTI, BITBLT, BITBLT_MULTI,
+  TRANS_BITBLT, HOSTDATA_BLT, POLYLINE, POLYSCANLINES, NEXTCHAR,
+  PLY_NEXTSCAN, SET_SCISSORS (with the settings block, every brush packet,
+  `BRUSH_Y_X`);
+- LOAD_PALETTE (R5xx guide 6.2.2.12; kept for the 2D scaler, which is not
+  modelled);
+- the 3D packets below.
+
+The R200 microcode's packets (the `_2` draws, `3D_CLEAR_HIZ`,
+`INDX_BUFFER`) do nothing on the RV200. The legacy DRM refuses them unless
+the R200 microcode is loaded ("safe but r200 only", `radeon_state.c`), and
+the R100 image's dispatch table has no handler for them. They are
 implemented for a part whose row says so, or when the R200 image is
 loaded.
 
-**The memory controller's view of the bus** (`RadeonGart.cpp`): an
-address the CP or the 3D engine fetches is the framebuffer
-(`MC_FB_LOCATION`), the AGP window (`MC_AGP_LOCATION`, reaching the bus
-at `AGP_BASE`), or the card's own PCI GART: `AIC_CNTL`
-`PCIGART_TRANSLATE_EN`, the range `AIC_LO_ADDR`..`AIC_HI_ADDR`, a page
-table at `AIC_PT_BASE` of one dword a 4 KB page holding its bus address,
-itself in the framebuffer or in host memory (Linux
-`r100_pci_gart_enable`, `r100_pci_gart_set_page`; the legacy DRM's
-`radeon_set_pcigart`). The AGP window's addresses are bus addresses in
-the host bridge's AGP aperture; on the Alpha machines that have an AGP
-port (the Titan's, the Marvel IO7's port 3) Linux builds the aperture
-from the port's scatter-gather window (`titan_agp_*`, `marvel_agp_*`),
-which the chipset model translates already. Every access is translated
-afresh (Linux notes the chip caches one translation with no way to
-flush it) [inference]; an address in none of the ranges is not decoded.
+### The memory controller's view of the bus
 
-**Clocks** (`RadeonTiming.cpp`): the pixel clock is the PPLL's, ref x
-FB_DIV / (REF_DIV x POST_DIV) (radeonfb: `PPLL_REF_DIV` <9:0>,
-`PPLL_DIV_n` <10:0> and the post divider code <18:16>, the set chosen by
-`CLOCK_CNTL_INDEX` <9:8>, the CRTC on the PPLL when `VCLK_ECP_CNTL` <1:0>
-is 3), with the 27 MHz reference from the card's BIOS PLL block. With
-`PPLL_CNTL` `ATOMIC_UPDATE_EN` new dividers reach the PLL only through
-`PPLL_REF_DIV`'s atomic update bit, which reads 1 until it completes, a
-microsecond later [inference: radeonfb says most chips "pass at the very
-first test"]. A VGA mode's clock is the divider set the VGA clock select
-names [inference]. The CRTC's frame lasts total pixels / pixel clock:
-the current line, `CRTC_STATUS`'s vertical blank, `CRTC_CRNT_FRAME`, the
-VBLANK and VLINE interrupts (`CRTC_VLINE_CRNT_VLINE` <11:0>) follow, and
-stay continuous across mode changes; a rate outside 10-400 Hz (no PLL
-set up yet) is taken as 60 Hz. `PLL_TEST_CNTL` <31:24>, the counter the
-BIOS times its microsecond delays with (0x7154: 27 counts, 0x715d: 135),
-counts reference clocks from what was written and stops at 255
-[inference]. `MC_STATUS` `MEM_PWRUP_COMPL_A/B` <1:0> clear for two
-microseconds after each `MEM_SDRAM_MODE_REG` write, which the BIOS polls
-for (0x6c94) [inference: the time]; `MC_IDLE` <2> is the engine's idle.
+In `RadeonGart.cpp`, an address the CP or the 3D engine fetches is one
+of:
 
-**Display** (`RadeonDisplay.cpp`): extended modes, the 8-bit palette,
-the hardware cursor (mono AND/XOR, and 64x64 ARGB blended as
-premultiplied alpha).
+- the framebuffer (`MC_FB_LOCATION`);
+- the AGP window (`MC_AGP_LOCATION`, reaching the bus at `AGP_BASE`);
+- the card's own PCI GART: `AIC_CNTL` `PCIGART_TRANSLATE_EN`, the range
+  `AIC_LO_ADDR`..`AIC_HI_ADDR`, a page table at `AIC_PT_BASE` of one dword
+  a 4 KB page holding its bus address, itself in the framebuffer or in
+  host memory (Linux `r100_pci_gart_enable`, `r100_pci_gart_set_page`; the
+  legacy DRM's `radeon_set_pcigart`).
 
-**The overlay scaler** (`RadeonOverlay.cpp`, common to the family: it is
-the Rage 128's back-end scaler). A window of the screen
-(`OV0_Y_X_START`/`END`) is filled from a video surface of its own and
-laid over the CRTC's picture, under the cursor, so the window and the
-frame dumps show it. No ATI register reference covers it; it is written
-from X.org's `radeon_video.c` (`RADEONDisplayVideo` and its neighbours)
-and from vidix's `radeon_vid.c`, whose `ComputeAccumInit`,
-`Calc_H_INC_STEP_BY`, `ComputeBorders` and `FilterSetup` are ATI's sample
-code, with the Rage 128 documents for the lock. The file's head has the
-registers one by one; in short:
+An address in none of the ranges is not decoded.
+
+The AGP window's addresses are bus addresses in the host bridge's AGP
+aperture. On the Alpha machines that have an AGP port (the Titan's, the
+Marvel IO7's port 3) Linux builds the aperture from the port's
+scatter-gather window (`titan_agp_*`, `marvel_agp_*`), which the chipset
+model translates already. Every access is translated afresh (Linux notes
+the chip caches one translation with no way to flush it) [inference].
+
+### Clocks
+
+`RadeonTiming.cpp`:
+
+- **The pixel clock** is the PPLL's, ref x FB_DIV / (REF_DIV x POST_DIV),
+  with the 27 MHz reference from the card's BIOS PLL block. The fields,
+  from radeonfb: `PPLL_REF_DIV` <9:0>, `PPLL_DIV_n` <10:0> and the post
+  divider code <18:16>, the set chosen by `CLOCK_CNTL_INDEX` <9:8>, the
+  CRTC on the PPLL when `VCLK_ECP_CNTL` <1:0> is 3.
+- **Atomic updates**: with `PPLL_CNTL` `ATOMIC_UPDATE_EN`, new dividers
+  reach the PLL only through `PPLL_REF_DIV`'s atomic update bit, which
+  reads 1 until it completes, a microsecond later [inference: radeonfb
+  says most chips "pass at the very first test"].
+- **A VGA mode's clock** is the divider set the VGA clock select names
+  [inference].
+- **The CRTC's frame** lasts total pixels / pixel clock. The current line,
+  `CRTC_STATUS`'s vertical blank, `CRTC_CRNT_FRAME`, the VBLANK and VLINE
+  interrupts (`CRTC_VLINE_CRNT_VLINE` <11:0>) follow, and stay continuous
+  across mode changes. A rate outside 10-400 Hz (no PLL set up yet) is
+  taken as 60 Hz.
+- **`PLL_TEST_CNTL` <31:24>**, the counter the BIOS times its microsecond
+  delays with (0x7154: 27 counts, 0x715d: 135), counts reference clocks
+  from what was written and stops at 255 [inference].
+- **`MC_STATUS`**: `MEM_PWRUP_COMPL_A/B` <1:0> clear for two microseconds
+  after each `MEM_SDRAM_MODE_REG` write, which the BIOS polls for
+  (0x6c94) [inference: the time]; `MC_IDLE` <2> is the engine's idle.
+
+### Display
+
+`RadeonDisplay.cpp`: extended modes, the 8-bit palette, the hardware
+cursor (mono AND/XOR, and 64x64 ARGB blended as premultiplied alpha).
+
+### The overlay scaler
+
+The overlay scaler (`RadeonOverlay.cpp`) is common to the family: it is
+the Rage 128's back-end scaler. A window of the screen (`OV0_Y_X_START`/`END`) is filled from a
+video surface of its own and laid over the CRTC's picture, under the
+cursor, so the window and the frame dumps show it.
+
+No ATI register reference covers it. It is written from X.org's
+`radeon_video.c` (`RADEONDisplayVideo` and its neighbours) and from
+vidix's `radeon_vid.c`, whose `ComputeAccumInit`, `Calc_H_INC_STEP_BY`,
+`ComputeBorders` and `FilterSetup` are ATI's sample code, with the Rage
+128 documents for the lock. The file's head has the registers one by one;
+in short:
 
 - **the lock**: the block 0x0400-0x04ff is double buffered. A write
   reaches the scaler at the next vertical blank, and not while
@@ -313,10 +366,10 @@ registers one by one; in short:
 - **scaling**: `OV0_H_INC` (2.12 a scaler clock, the chroma planes' in
   <29:16>), `OV0_STEP_BY`, `OV0_V_INC` (20 fractional bits); the scaler's
   clock is the pixel clock divided by `VCLK_ECP_CNTL`'s `ECP_DIV`; the
-  accumulators' starting values as ATI's code sets them -- 2.5 across and
+  accumulators' starting values as ATI's code sets them (2.5 across and
   1.5 down "puts the kernel 50% of the way between the source pixel that
   is off screen and the first on-screen source pixel", plus half a step
-  to the first destination pixel's centre -- so the first tap is at the
+  to the first destination pixel's centre), so the first tap is at the
   value less 3 (less 2 down); the source window (`OV0_Pn_X_START_END`,
   the lines in `OV0_Pn_BLANK_LINES_AT_TOP`), a tap beyond it taking the
   edge's pixel [inference];
@@ -345,18 +398,25 @@ registers one by one; in short:
   row (`ov0_x_shift`). Both ends of the window are inclusive [inference:
   ATI's set-up counts the destination width plus one].
 
-Not modelled: the gamma curves (`OV0_GAMMA_*`: taken as 1.0), the
-deinterlacer and its second set of buffers (`OV0_AUTO_FLIP_CNTL`,
-`OV0_DEINTERLACE_PATTERN`), the exclusive window, the capture port, the
-subpicture, blending several source lines when shrinking (lines are
-dropped), the blank lines at the top. X.org loads the vertical
-accumulator without the half step, so its picture sits half a line low:
-that is its programming, kept. The Mach64's and the ViRGE's overlays
-(`mach64/Mach64Display.cpp`, `virge/S3VirgeDisplay.cpp`) share nothing
-with it but the idea: fixed YUV equations there, a programmed transform
-and a programmed filter here.
+Not modelled:
 
-**3D engine**, the R100 generation's (`r100/`: `RadeonR100_3D.cpp`,
+- the gamma curves (`OV0_GAMMA_*`: taken as 1.0);
+- the deinterlacer and its second set of buffers (`OV0_AUTO_FLIP_CNTL`,
+  `OV0_DEINTERLACE_PATTERN`);
+- the exclusive window, the capture port, the subpicture;
+- blending several source lines when shrinking (lines are dropped);
+- the blank lines at the top.
+
+X.org loads the vertical accumulator without the half step, so its
+picture sits half a line low: that is its programming, kept.
+
+The Mach64's and the ViRGE's overlays (`mach64/Mach64Display.cpp`,
+`virge/S3VirgeDisplay.cpp`) share nothing with it but the idea: fixed YUV
+equations there, a programmed transform and a programmed filter here.
+
+### The 3D engine
+
+The R100 generation's 3D engine is in `r100/` (`RadeonR100_3D.cpp`,
 `RadeonR100Tcl.cpp`, `RadeonR100Raster.cpp`):
 
 - vertex input: `3D_DRAW_IMMD`, `3D_DRAW_VBUF`, `3D_DRAW_INDX` and their
@@ -379,7 +439,7 @@ and a programmed filter here.
   factors (exp, exp2, linear, from eye depth or range), texture
   coordinates from the inputs or through the texture matrices with
   texture generation (object, eye, normal, reflection). The unit is read
-  as Mesa programs it -- see [The TCL unit as Mesa programs
+  as Mesa programs it: see [The TCL unit as Mesa programs
   it](#the-tcl-unit-as-mesa-programs-it);
 - vertex blending (`SE_TCL_UCP_VERT_BLEND_CTL` BLEND_OP_COUNT,
   POSITION/NORMAL_BLEND_OP_ENABLE, WGT_MINUS_ONE: the weighted sum of the
@@ -413,7 +473,7 @@ and a programmed filter here.
   clamps into GL_CLAMP_TO_BORDER (Mesa's `radeonSetTexWrap`: `CLAMP_GL`
   + `BORDER_MODE_D3D`); cube maps (`CUBIC_MAP_ENABLE`: faces +X
   .. +Z at `PP_CUBIC_OFFSET_Tn_0..4`, -Z at `PP_TXOFFSET_n`, one level,
-  the third coordinate in the Q slot -- Mesa's `cube_emit_cs`,
+  the third coordinate in the Q slot: Mesa's `cube_emit_cs`,
   `radeon_swtcl.c`; OpenGL's face selection); micro-tiled textures and
   the texture endian swaps (`PP_TXOFFSET` <1:0>, `PP_TXFORMAT` <27:26>);
 - the combiners (`PP_TXCBLEND`/`PP_TXABLEND`, three stages): add,
@@ -424,7 +484,7 @@ and a programmed filter here.
   an alpha) [inference];
 - the alpha test, stencil (eight functions, six operations, masks), Z
   (16-, 24- with stencil and 32-bit integer; 24- and 32-bit floating-point
-  Z; 16-, 24- and 32-bit floating-point W -- stored as unsigned floats
+  Z; 16-, 24- and 32-bit floating-point W, stored as unsigned floats
   whose integer order is the value's [inference: the layouts are not
   documented]), blending (the GL factors, add and subtract), the logic
   op, the plane mask; colour buffers in ARGB8888, RGB565, ARGB1555,
@@ -432,42 +492,53 @@ and a programmed filter here.
   4x2, 8x2 or 8x4 pixels, Mesa's `radeon_tile.c`; the depth buffer's
   HyperZ tiling is taken to be the same [inference]), with the colour and
   depth endian swaps (`COLOR_ENDIAN`, `DEPTH_ENDIAN`); the colour's
-  quantisation as `RB3D_CNTL` says -- truncated, rounded (`ROUND_ENABLE`),
+  quantisation as `RB3D_CNTL` says: truncated, rounded (`ROUND_ENABLE`),
   dithered by horizontal error diffusion (`DITHER_ENABLE`, with
   `DITHER_INIT` restarting each line) or by an ordered pattern
-  (`SCALE_DITHER_ENABLE`); Mesa's driconf options name the modes, the
+  (`SCALE_DITHER_ENABLE`). Mesa's driconf options name the modes; the
   pattern (4x4 Bayer) and the error's arithmetic are inferences.
 
-**Rasterisation rules.** What the registers document is modelled as
-documented: every vertex of every primitive -- points' and lines' too --
-is snapped to `SE_CNTL`'s `ROUND_PREC` (1/16 to 1/2 pixel) by its
-`ROUND_MODE` (truncate, round, round with ties to even or to odd, read
-from radeon_reg.h's names), and `VTX_PIX_CENTER` puts pixel centres at
-+0.5 (OpenGL) or on the integers (Direct3D). The provoking vertex
-(`FLAT_SHADE_VTX` <7:6>) counts a primitive's vertices in the order they
-were sent: a strip's odd triangles are drawn with their winding swapped,
-but their vertex 0 is still v[i] -- Mesa sends GL strips and fans as the
-chip's strips and fans with `VTX_LAST` (GL's provoking vertex of strip
-triangle i is v[i+2]) and GL polygons as fans with `VTX_0`, and
-Direct3D flat shades strip triangle i with v[i]. A quad is one primitive
-and one colour, its last vertex with `VTX_LAST` [inference: Mesa never
-sends the chip quads]. Flat, solid and Gouraud shading apply to lines and
-points per attribute group as to triangles.
+### Rasterisation rules
 
-What no source documents -- the setup arithmetic after snapping, the fill
-convention, the line rasteriser, the Z interpolation precision, the
-texture-coordinate interpolator's precision, how the level of detail is
-estimated -- the model takes as exact: double precision, the top-left
-rule, attribute planes evaluated at pixel centres, texture coordinates
-sampled where they fall (a texel boundary exactly at a pixel centre goes
-to the texel after it), the level of detail from forward differences and
-the trilinear weight its fractional part (GL's definition). A one-pixel
-line runs between its snapped endpoints: along the major axis the pixels
-whose centres the segment passes (start in, end out), across it the one
-whose centre is nearest (GL's diamond-exit rule between diamonds), its
-attributes at the centre's projection onto the line. 4-bit and 5-bit
-texture channels widen by replicating their bits (0xF is 1.0), as
-GL's conversion c / (2^n - 1) has it and the other cards' models do.
+What the registers document is modelled as documented:
+
+- **Snapping**: every vertex of every primitive, points' and lines' too,
+  is snapped to `SE_CNTL`'s `ROUND_PREC` (1/16 to 1/2 pixel) by its
+  `ROUND_MODE` (truncate, round, round with ties to even or to odd, read
+  from radeon_reg.h's names).
+- **Pixel centres**: `VTX_PIX_CENTER` puts them at +0.5 (OpenGL) or on the
+  integers (Direct3D).
+- **The provoking vertex** (`FLAT_SHADE_VTX` <7:6>) counts a primitive's
+  vertices in the order they were sent: a strip's odd triangles are drawn
+  with their winding swapped, but their vertex 0 is still v[i]. Mesa sends
+  GL strips and fans as the chip's strips and fans with `VTX_LAST` (GL's
+  provoking vertex of strip triangle i is v[i+2]) and GL polygons as fans
+  with `VTX_0`, and Direct3D flat shades strip triangle i with v[i].
+- **A quad** is one primitive and one colour, its last vertex with
+  `VTX_LAST` [inference: Mesa never sends the chip quads].
+- **Shading**: flat, solid and Gouraud shading apply to lines and points
+  per attribute group as to triangles.
+
+What no source documents, the model takes as exact:
+
+- the setup arithmetic after snapping: double precision;
+- the fill convention: the top-left rule;
+- the attributes: planes evaluated at pixel centres;
+- the texture-coordinate interpolator's precision: coordinates sampled
+  where they fall (a texel boundary exactly at a pixel centre goes to the
+  texel after it);
+- the Z interpolation precision: exact;
+- the level of detail: from forward differences, and the trilinear weight
+  its fractional part (GL's definition);
+- the line rasteriser: a one-pixel line runs between its snapped
+  endpoints. Along the major axis it covers the pixels whose centres the
+  segment passes (start in, end out), across it the one whose centre is
+  nearest (GL's diamond-exit rule between diamonds), its attributes at the
+  centre's projection onto the line.
+
+4-bit and 5-bit texture channels widen by replicating their bits (0xF is
+1.0), as GL's conversion c / (2^n - 1) has it and the other cards' models
+do.
 
 ### The TCL unit as Mesa programs it
 
@@ -496,9 +567,9 @@ where the model had read the unit otherwise. Mesa's source decides each;
   2D texture's Q or a cube map's R (`radeonUploadTexMatrix`: "on r100,
   only 3 tex coords can be submitted, so the vector looks like this
   probably: (s t r|q 0)"). A set enters the texture matrix as (s, t,
-  third, 0), the third being 1 when the vertex has none -- Mesa swaps the
+  third, 0), the third being 1 when the vertex has none. Mesa swaps the
   matrix's third and fourth columns for a two-coordinate set so that GL's
-  translation meets it, and it is Direct3D's own rule; of the matrix's
+  translation meets it, and it is Direct3D's own rule. Of the matrix's
   outputs the third is Q (Mesa moves GL's q row there for 2D textures);
   it leaves the unit only with `SE_TCL_OUTPUT_VTX_FMT`'s Q bit. The model
   had (s, t, 0, 1) and divided by the fourth output: a translation was
@@ -515,8 +586,8 @@ where the model had read the unit otherwise. Mesa's source decides each;
   them unclipped: `radeon_tcl.c`). The model only projected a line's
   ends, so one with an end behind the eye crossed the screen.
 - **The dual-cone spot** (`LIGHT_n_DUAL_CONE` <5>, scalar
-  `SS_LIGHT_DCD`): ((cos - cutoff) x DCD) ^ exponent, clamped to 0..1 --
-  Direct3D's spot light, the cutoff the outer cone's cosine, DCD 1 /
+  `SS_LIGHT_DCD`): ((cos - cutoff) x DCD) ^ exponent, clamped to 0..1.
+  That is Direct3D's spot light, the cutoff the outer cone's cosine, DCD 1 /
   (cos(inner) - cos(outer)) [inference: no driver programs it; the R200
   has DCD and DCM by name and nothing more].
 - **Attenuation above 1** is left as OpenGL's, 1 / (c + l d + q d^2)
@@ -525,12 +596,139 @@ where the model had read the unit otherwise. Mesa's source decides each;
   for any c and `FLT_MAX` for c = 0, which a factor used as it is would
   need [undecided without a card].
 
-**Against Direct3D's own vertex pipeline.** nada's TCLTEST
-(`examples/alpha-nt/radeon/tcl_check.sh` in nada's tree, on the Windows
-2000 guest of `lab/radeon-d3d/guest2`) draws 43 scenes through the T&L
-HAL (this unit), the HAL behind Direct3D's software vertex pipeline (the
-same rasteriser) and the RGB device. With the readings above, the scenes
-that had differed between the first two (`lab/radeon-tcl/`):
+## How it is checked
+
+`ALPHABOX_RADEON_SELFTEST=1` (or `=exit` to end the emulator with the
+result) runs at the end of the card's `init()`, before the machine
+starts, and puts the card back as it found it.
+
+It drives the engines as a driver does (register writes through the MMIO
+BAR, packets through the CP ring in VRAM) and compares each result with a
+reference written independently in `RadeonSelfTest.cpp` and, for the 3D
+scenes, the generation's `r100/RadeonR100SelfTest.cpp`: its own ROP3
+truth table, line properties, bit expansion, a double-precision
+barycentric rasteriser, texture decoders, combiner equations, transform
+and lighting.
+
+```
+cd lab/radeon-selftest      # an ES40 config with pci0.2 = radeon and gui = sdl
+SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
+```
+
+It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
+or `FAIL`. 91 checks:
+
+| Checks | On | Where |
+| --- | --- | --- |
+| 11 | the command FIFO, the engine's busy time, the CP's streams and micro-engine, the GART and the clocks | `RadeonSelfTestQueue.cpp` |
+| 4 | the microcode lookups: the known-image table, synthetic images of each word width, the R100 and R200 packet sets, the self-test's own unknown image | `RadeonMicrocode.cpp` |
+| 26 | the 2D engine, the CP and the cursor | `RadeonSelfTest.cpp` |
+| 34 | the 3D engine: the generation's scenes, run between the 2D checks and the last two 2D/CP ones | `r100/RadeonR100SelfTest.cpp` |
+| 15 | the overlay scaler (below) | `RadeonSelfTestOverlay.cpp` |
+| 1 | that every wait for idle ended | |
+
+The self-test waits for the engine as a driver does (64 free FIFO
+entries, then `GUI_ACTIVE` clear) before it touches memory the engine
+draws in, and for the CP before it goes back to MMIO. With
+`ALPHABOX_RADEON_SYNC=1` the queue checks are left out (81 checks).
+
+The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR` (default
+`$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame, reference,
+differing pixels in white):
+
+| Frame | Proves |
+|---|---|
+| 01-gouraud | Gouraud triangle list, fan and strip; top-left coverage |
+| 02-flat-solid-cull | flat shading (provoking vertex), `RE_SOLID_COLOR`, back-face culling |
+| 03-texture-filter-wrap | nearest and bilinear; wrap, mirror, clamp-to-edge, clamp-to-border |
+| 04-texture-perspective | perspective-correct texture coordinates (W0 = 1/w) |
+| 05-texture-mipmap | mip level selection, nearest and linear between levels |
+| 06-texture-formats | the 14 texture formats, DXT included |
+| 07-combiners | modulate, add, add-signed, subtract, blend, dot3, x2 with the texture factor, two stages |
+| 08-blend-alphatest-fog | five blend modes, the alpha test, vertex fog, the specular sum |
+| 09-zbuffer, 10-stencil | 16- and 24-bit Z with LESS and writes; stencil REPLACE then EQUAL, plane mask 0 |
+| 11-primitives | quads, quad strips, polygons, lines, points, wide lines; the IMMD, VBUF (two arrays), INDX, RNDR_GEN_INDX_PRIM and register-port walks; an IMMD_2 (an R200 packet) that draws nothing |
+| 12-stipple-pattern | the polygon stipple with offsets, the line pattern |
+| 13-tcl-lit-cube | TCL: matrices, two lights (directional with specular; local with attenuation and a specular colour, the viewer at infinity by the eye vector as Mesa loads it), linear fog, Z, culling |
+| 14-tcl-texmatrix-ucp | TCL: the texture matrix, a translating one uploaded as Mesa's `radeonUploadTexMatrix` uploads it for a two-coordinate set; a user clip plane |
+| 15-tcl-near-clip | TCL: clipping at the near plane (a vertex behind the eye), with OpenGL's projection and Mesa's viewport: the plane is z = -w |
+| 16-render-composite | X.org's Render composite as `R100PrepareComposite` programs it: OVER, an A8 mask, non-power-of-two textures |
+| 17-misc-state | LOD bias, mirror-once and GL clamp, the logic op and plane mask, float colours, 32-bit indices, an indexed `RNDR_GEN_INDX_PRIM` |
+| 18-tiling-endian | a micro-tiled, dword-swapped colour buffer read back by the reference's own de-tiling; a micro-tiled, byte-swapped RGB565 texture drawn 1:1 |
+| 19-zbias-dither | polygon offset by the constant (coplanar quads) and by the slope factor (a sloped quad pushed behind its twin); RGB565 truncation, rounding and ordered dither and error diffusion are checked pixel by pixel beside it |
+| 20-cube-fogtable-aa | the six cube faces; table fog over a depth ramp; an anti-aliased triangle blended by its coverage |
+| 21-floatz-wbuffer-fastclear | crossing triangles in 24- and 32-bit float Z and the 24-bit W buffer (where the crossing moves); a `3D_CLEAR_ZMASK` fast clear deciding a later depth test |
+| 22-tcl-twoside-blend | TCL lighting of front and back faces without and with `LIGHT_TWOSIDE`; TCL back-face culling; vertex blending of two matrices |
+| 23-prims-r200-packets | `TRI_TYPE_2`, the 3-vertex point and line lists; `INDX_BUFFER` after an index-less `3D_DRAW_INDX` with the R200 packets switched on, and nothing without |
+| 24-flat-provoking | `FLAT_SHADE_VTX_0` and `_LAST` on a triangle strip (the odd triangles' vertices counted as sent, not as wound), `_LAST` and `_1` on quads (one colour each), flat lines |
+| 25-round-modes | the four `ROUND_MODE`s at half-pixel `ROUND_PREC` on ties that tell them apart, under both pixel-centre conventions; a point and a line snapped too |
+| 26-line-subpixel | one-pixel lines between sub-pixel endpoints, both majors, both directions |
+| 27-border-mode | `CLAMP_GL` with `BORDER_MODE_OGL` (GL_CLAMP: edge and border blended) and `_D3D` (border only) |
+| 28-tcl-texmatrix-q | TCL: the third coordinate as Q: three submitted coordinates through a matrix that moves r to q, and eye-linear texture generation with a q plane, both uploaded Mesa's way |
+| 29-tcl-gl-volume | TCL: OpenGL's view volume and depth range: quads in the near half (z/w < 0) drawn and Z-tested, one before the near plane and one beyond the far plane not |
+| 30-tcl-line-point-clip | TCL: a line cut at the near plane, one at a user clip plane, one behind the eye; points inside, in the near half, before the near plane, outside a user plane |
+| 31-tcl-spot-dualcone-eye | TCL: OpenGL's spot light; the dual-cone spot with falloff 1 and 2.5; a point light's highlight for a viewer at infinity |
+
+Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
+without a frame.
+
+The overlay's checks (`ov01.png` .. in the same directory) set a 256 x
+192 mode of the card's own CRTC over a patterned desktop, put a surface
+in off-screen memory, and program the scaler under its lock as ATI's
+sample code computes the set-up. They compare the frame the display path
+renders with a reference resampler written beside them:
+
+- YUY2 at 1:1 behind the graphics colour key;
+- UYVY doubled with the two-tap filter, and the same picture with
+  `ECP_DIV` 1;
+- a planar 4:2:0 surface doubled with the programmed four-tap filter
+  across, and both ways;
+- RGB565 and xRGB8888 surfaces;
+- the key functions (graphics not equal; video in range AND graphics
+  equal);
+- the global and per-pixel alpha modes;
+- that an update written under the lock does not show until the unlock
+  and the blank after it (`FLIP_READBACK`);
+- the scaler disabled;
+- the transform's power-on values against BT.601's equations.
+
+The scales are ones the accumulators' five fractional bits hold exactly;
+the reference's rounding is the model's.
+
+The references are written from the same sources as the model. So a
+scene that passes shows that the engine does what the drivers' reading of
+the hardware says, consistently, through the guest-visible interfaces; it
+does not show that the silicon does it.
+
+What guests drive:
+
+- **The 3D engine**: one guest, Windows 2000 with nada's nadarad (its
+  Direct3D 7 HAL and T&L HAL). `d3d_check.sh` and TCLTEST above compare it
+  with Direct3D's software, which is not the R100 either.
+- **2D only**: OpenVMS's DECwindows. Linux has not run on the Marvel
+  machines (E2 in [backlog.md](backlog.md#the-plan)).
+- **The overlay**: nothing yet (nadarad offers none; d3d_check's two
+  overlay scenes report n/a).
+
+Guest-verified:
+
+- OpenVMS 8.4 DECwindows: the CP ring, indirect buffers, solid and 8x8
+  mono pattern fills, mono host data in `HOSTDATA_BLT`, the mono cursor.
+  Its server loads the microcode, enables the CP and paces itself on
+  RBBM_STATUS and the scratch registers, and its login screen's last frame
+  is the same with the asynchronous engine as before it
+  (`lab/radeon-gaps/`).
+- nada's Windows 2000 driver (MMIO only, waiting on the FIFO and the cache
+  flush) runs its test unchanged.
+
+### Against Direct3D's own vertex pipeline
+
+nada's TCLTEST (`examples/alpha-nt/radeon/tcl_check.sh` in nada's tree,
+on the Windows 2000 guest of `lab/radeon-d3d/guest2`) draws 43 scenes
+through three devices: the T&L HAL (this unit), the HAL behind Direct3D's
+software vertex pipeline (the same rasteriser) and the RGB device. With
+the readings of [the TCL unit](#the-tcl-unit-as-mesa-programs-it), the
+scenes that had differed between the first two (`lab/radeon-tcl/`):
 
 | scene | before | after |
 |---|---|---|
@@ -545,7 +743,9 @@ scene and one draw of `strip` end in a floating-point exception inside
 Microsoft's `d3dim700.dll`; that is the DLL's own, on any Alpha
 ([cpu-fidelity.md](cpu-fidelity.md#a-guests-floating-point-exception-that-is-the-guests-own)).
 
-**Against Direct3D's software rasteriser.** `test/tools/d3d_check.sh`
+### Against Direct3D's software rasteriser
+
+`test/tools/d3d_check.sh`
 on a Windows 2000 guest with nada's nadarad DirectDraw/Direct3D 7 HAL
 (800x600x16; `lab/radeon-d3d/`) compares the HAL with d3dim700's RGB
 rasteriser. That rasteriser is not a reference for the R100; what the
@@ -585,117 +785,11 @@ scenes that differ show:
   model applies the top-left rule, the RGB rasteriser does not always.
 - clip (close): the clipped triangle's vertices are fractional and
   nadarad programs truncation (to 1/16, now 1/8, pixel), which moves
-  the clipped edge up across a row of pixel centres -- the R100
-  snapping as documented.
+  the clipped edge up across a row of pixel centres: the R100 snapping
+  as documented.
 - wireframe (close): the triangles' edges as lines through the vertices;
   the RGB rasteriser walks the edges its own way.
 - zbuffer (close, one pixel): a Z tie where the triangles cross.
-
-## How it is checked
-
-`ALPHABOX_RADEON_SELFTEST=1` (or `=exit` to end the emulator with the
-result) runs at the end of the card's `init()`, before the machine
-starts, and puts the card back as it found it. It drives the engines as a
-driver does -- register writes through the MMIO BAR, packets through the
-CP ring in VRAM -- and compares each result with a reference written
-independently in `RadeonSelfTest.cpp` and, for the 3D scenes, the
-generation's `r100/RadeonR100SelfTest.cpp` (its own ROP3 truth table,
-line properties, bit expansion, a double-precision barycentric
-rasteriser, texture decoders, combiner equations, transform and
-lighting):
-
-```
-cd lab/radeon-selftest      # an ES40 config with pci0.2 = radeon and gui = sdl
-SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
-```
-
-It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 91 checks: 11 on the command FIFO, the engine's busy time,
-the CP's streams and micro-engine, the GART and the clocks
-(`RadeonSelfTestQueue.cpp`), 4 on the microcode lookups (the known-image
-table, synthetic images of each word width, the R100 and R200 packet
-sets, the self-test's own unknown image; `RadeonMicrocode.cpp`), 26 on
-the 2D engine, the CP and the cursor,
-34 on the 3D engine (the generation's scenes, run between the 2D checks
-and the last two 2D/CP ones), 15 on the overlay scaler
-(`RadeonSelfTestOverlay.cpp`, below), and one that every wait for idle
-ended. The self-test
-waits for the engine as a driver does (64 free FIFO entries, then
-`GUI_ACTIVE` clear) before it touches memory the engine draws in, and
-for the CP before it goes back to MMIO. With `ALPHABOX_RADEON_SYNC=1`
-the queue checks are left out (81 checks). The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR`
-(default `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame,
-reference, differing pixels in white):
-
-| Frame | Proves |
-|---|---|
-| 01-gouraud | Gouraud triangle list, fan and strip; top-left coverage |
-| 02-flat-solid-cull | flat shading (provoking vertex), `RE_SOLID_COLOR`, back-face culling |
-| 03-texture-filter-wrap | nearest and bilinear; wrap, mirror, clamp-to-edge, clamp-to-border |
-| 04-texture-perspective | perspective-correct texture coordinates (W0 = 1/w) |
-| 05-texture-mipmap | mip level selection, nearest and linear between levels |
-| 06-texture-formats | the 14 texture formats, DXT included |
-| 07-combiners | modulate, add, add-signed, subtract, blend, dot3, x2 with the texture factor, two stages |
-| 08-blend-alphatest-fog | five blend modes, the alpha test, vertex fog, the specular sum |
-| 09-zbuffer, 10-stencil | 16- and 24-bit Z with LESS and writes; stencil REPLACE then EQUAL, plane mask 0 |
-| 11-primitives | quads, quad strips, polygons, lines, points, wide lines; the IMMD, VBUF (two arrays), INDX, RNDR_GEN_INDX_PRIM and register-port walks; an IMMD_2 (an R200 packet) that draws nothing |
-| 12-stipple-pattern | the polygon stipple with offsets, the line pattern |
-| 13-tcl-lit-cube | TCL: matrices, two lights (directional with specular; local with attenuation and a specular colour, the viewer at infinity by the eye vector as Mesa loads it), linear fog, Z, culling |
-| 14-tcl-texmatrix-ucp | TCL: the texture matrix, a translating one uploaded as Mesa's `radeonUploadTexMatrix` uploads it for a two-coordinate set; a user clip plane |
-| 15-tcl-near-clip | TCL: clipping at the near plane (a vertex behind the eye), with OpenGL's projection and Mesa's viewport: the plane is z = -w |
-| 16-render-composite | X.org's Render composite as `R100PrepareComposite` programs it: OVER, an A8 mask, non-power-of-two textures |
-| 17-misc-state | LOD bias, mirror-once and GL clamp, the logic op and plane mask, float colours, 32-bit indices, an indexed `RNDR_GEN_INDX_PRIM` |
-| 18-tiling-endian | a micro-tiled, dword-swapped colour buffer read back by the reference's own de-tiling; a micro-tiled, byte-swapped RGB565 texture drawn 1:1 |
-| 19-zbias-dither | polygon offset by the constant (coplanar quads) and by the slope factor (a sloped quad pushed behind its twin); RGB565 truncation, rounding and ordered dither and error diffusion are checked pixel by pixel beside it |
-| 20-cube-fogtable-aa | the six cube faces; table fog over a depth ramp; an anti-aliased triangle blended by its coverage |
-| 21-floatz-wbuffer-fastclear | crossing triangles in 24- and 32-bit float Z and the 24-bit W buffer (where the crossing moves); a `3D_CLEAR_ZMASK` fast clear deciding a later depth test |
-| 22-tcl-twoside-blend | TCL lighting of front and back faces without and with `LIGHT_TWOSIDE`; TCL back-face culling; vertex blending of two matrices |
-| 23-prims-r200-packets | `TRI_TYPE_2`, the 3-vertex point and line lists; `INDX_BUFFER` after an index-less `3D_DRAW_INDX` with the R200 packets switched on, and nothing without |
-| 24-flat-provoking | `FLAT_SHADE_VTX_0` and `_LAST` on a triangle strip (the odd triangles' vertices counted as sent, not as wound), `_LAST` and `_1` on quads (one colour each), flat lines |
-| 25-round-modes | the four `ROUND_MODE`s at half-pixel `ROUND_PREC` on ties that tell them apart, under both pixel-centre conventions; a point and a line snapped too |
-| 26-line-subpixel | one-pixel lines between sub-pixel endpoints, both majors, both directions |
-| 27-border-mode | `CLAMP_GL` with `BORDER_MODE_OGL` (GL_CLAMP: edge and border blended) and `_D3D` (border only) |
-| 28-tcl-texmatrix-q | TCL: the third coordinate as Q -- three submitted coordinates through a matrix that moves r to q, and eye-linear texture generation with a q plane, both uploaded Mesa's way |
-| 29-tcl-gl-volume | TCL: OpenGL's view volume and depth range: quads in the near half (z/w < 0) drawn and Z-tested, one before the near plane and one beyond the far plane not |
-| 30-tcl-line-point-clip | TCL: a line cut at the near plane, one at a user clip plane, one behind the eye; points inside, in the near half, before the near plane, outside a user plane |
-| 31-tcl-spot-dualcone-eye | TCL: OpenGL's spot light; the dual-cone spot with falloff 1 and 2.5; a point light's highlight for a viewer at infinity |
-
-Colour formats (565, 1555, 4444, 332, RGB8) are checked pixel by pixel
-without a frame.
-
-The overlay's checks (`ov01.png` .. in the same directory) set a 256 x
-192 mode of the card's own CRTC over a patterned desktop, put a surface
-in off-screen memory, program the scaler under its lock as ATI's sample
-code computes the set-up, and compare the frame the display path renders
-with a reference resampler written beside them: YUY2 at 1:1 behind the
-graphics colour key; UYVY doubled with the two-tap filter, and the same
-picture with `ECP_DIV` 1; a planar 4:2:0 surface doubled with the
-programmed four-tap filter across, and both ways; RGB565 and xRGB8888
-surfaces; the key functions (graphics not equal; video in range AND
-graphics equal); the global and per-pixel alpha modes; that an update
-written under the lock does not show until the unlock and the blank
-after it (`FLIP_READBACK`); the scaler disabled; the transform's
-power-on values against BT.601's equations. The scales are ones the
-accumulators' five fractional bits hold exactly; the reference's
-rounding is the model's.
-
-The references are written from the same sources as the model, so a
-scene that passes shows that the engine does what the drivers' reading of
-the hardware says, consistently, through the guest-visible interfaces --
-not that the silicon does it. One guest drives the 3D engine: Windows
-2000 with nada's nadarad (its Direct3D 7 HAL and T&L HAL; `d3d_check.sh`
-and TCLTEST above compare it with Direct3D's software, which is not the
-R100 either). OpenVMS's DECwindows uses only 2D, Linux does not run on
-Marvel, and nothing drives the overlay yet (nadarad offers none;
-d3d_check's two overlay scenes report n/a).
-
-Guest-verified: OpenVMS 8.4 DECwindows (the CP ring, indirect buffers,
-solid and 8x8 mono pattern fills, mono host data in `HOSTDATA_BLT`, the
-mono cursor) -- its server loads the microcode, enables the CP and paces
-itself on RBBM_STATUS and the scratch registers, and its login screen's
-last frame is the same with the asynchronous engine as before it
-(`lab/radeon-gaps/`); nada's Windows 2000 driver (MMIO only, waiting on
-the FIFO and the cache flush) runs its test unchanged.
 
 ## Where the documents disagree, and inferences
 
@@ -743,23 +837,30 @@ Said once at run time when a guest asks for them:
   gives their layout; the sprite primitive (`SPIRIT_LIST`);
 - `CNTL_SMALLTEXT` and `LOAD_MICROCODE`: no source gives their formats.
 
-Silently not modelled: the specular threshold (no source says what it
-computes), `LOCAL_LIGHT_VEC_GL` and `LIGHT_NO_NORMAL_AMBIENT_ONLY`, user
-clip planes in model space; the hierarchical Z RAM (it only lets
-the chip skip work); the destination caches' contents (the engine writes
-memory directly); the R5xx-only packets (PRED_EXEC, COND_EXEC,
-WAIT_SEMAPHORE, WAIT_MEM, MPEG_INDEX); the micro-engine's own program.
+Silently not modelled:
 
-Inferences a real card would have to confirm, besides those marked
-above: the engine's busy time, the CP's PIO queue depth, the PLL's
-update and the test counter's rate, the source scissor's effect, the
-float and W depth layouts, the dither pattern, table fog's table, the
-anti-aliasing coverage, vertex blending, the 3-vertex lists, the fast
-clear's block geometry; in the TCL unit the guard band, the eye vector
-outside eye space, the dual cone, whether attenuation is held at 1, the
-reflection vector's sign; in the overlay everything marked above -- the
-lock's timing, the window's inclusive end, the fetch groups, the mirrored
-filter phases, the chip's own coefficients, the rounding, the video key,
-the alpha modes, the transform's reset values. The self-test's references are written from the
-same sources as the model: a pass shows consistency, not the silicon's
-behaviour.
+- the specular threshold (no source says what it computes);
+- `LOCAL_LIGHT_VEC_GL` and `LIGHT_NO_NORMAL_AMBIENT_ONLY`;
+- user clip planes in model space;
+- the hierarchical Z RAM (it only lets the chip skip work);
+- the destination caches' contents (the engine writes memory directly);
+- the R5xx-only packets (PRED_EXEC, COND_EXEC, WAIT_SEMAPHORE, WAIT_MEM,
+  MPEG_INDEX);
+- the micro-engine's own program.
+
+Inferences a real card would have to confirm, besides those marked above:
+
+- the engine: its busy time, the CP's PIO queue depth, the PLL's update
+  and the test counter's rate, the source scissor's effect;
+- the 3D engine: the float and W depth layouts, the dither pattern, table
+  fog's table, the anti-aliasing coverage, vertex blending, the 3-vertex
+  lists, the fast clear's block geometry;
+- the TCL unit: the guard band, the eye vector outside eye space, the dual
+  cone, whether attenuation is held at 1, the reflection vector's sign;
+- the overlay: everything marked above, that is the lock's timing, the
+  window's inclusive end, the fetch groups, the mirrored filter phases,
+  the chip's own coefficients, the rounding, the video key, the alpha
+  modes, the transform's reset values.
+
+The self-test's references are written from the same sources as the
+model: a pass shows consistency, not the silicon's behaviour.
