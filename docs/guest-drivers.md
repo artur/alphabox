@@ -3,12 +3,13 @@
 Some of the hardware Alphabox emulates never had a driver on an Alpha
 operating system: no Windows for Alpha shipped a USB 2.0 stack, a Radeon
 driver or a virtio driver. Those drivers have since been written, for
-Windows 2000 RC2 (build 2128) on the Alpha, with **nada** -- a separate
-project: a C compiler that targets Alpha Windows, 32- and 64-bit, user mode
-and kernel mode (`-t alpha-windows -mdriver`). They are original code,
-written from the hardware specifications, Microsoft's public DDK
-documentation and the open register documents; no Microsoft or ReactOS code
-is in them.
+Windows 2000 RC2 (build 2128) on the Alpha, with **nada**.
+
+nada is a separate project: a C compiler that targets Alpha Windows, 32-
+and 64-bit, user mode and kernel mode (`-t alpha-windows -mdriver`). The
+drivers are original code, written from the hardware specifications,
+Microsoft's public DDK documentation and the open register documents; no
+Microsoft or ReactOS code is in them.
 
 The drivers live in nada's tree, not here, because nada builds them. Each
 has a `DESIGN.md` (what it does, how it was tested, what it leaves out), a
@@ -31,14 +32,17 @@ unattended.
 ## What the drivers are for here
 
 A real driver asks questions a test never thinks of. Each of these drivers
-was the first guest code to exercise part of an emulated device: the
-Radeon's blits, colour brushes and ARGB cursor were first used by
-`nadarad`, and its Direct3D runs exposed two model bugs no self-test had
-caught (the provoking vertex in triangle strips, and line rasterisation
-through sub-pixel endpoints). When a
-driver and the model disagree, the register documentation decides, not
-the driver: see the `d3d_check` notes in [radeon.md](radeon.md) for how a
-disagreement is classified.
+was the first guest code to exercise part of an emulated device:
+
+- the Radeon's blits, colour brushes and ARGB cursor were first used by
+  `nadarad`;
+- its Direct3D runs exposed two model bugs no self-test had caught: the
+  provoking vertex in triangle strips, and line rasterisation through
+  sub-pixel endpoints.
+
+When a driver and the model disagree, the register documentation decides,
+not the driver: see the `d3d_check` notes in [radeon.md](radeon.md) for
+how a disagreement is classified.
 
 ## Tests in this repository that use them
 
