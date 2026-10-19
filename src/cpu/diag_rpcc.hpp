@@ -1,4 +1,6 @@
 /* ES40 emulator -- per-thread accumulator for diagnostic-print RPCC exclusion.
+ * Copyright (C) 2026 gdwnldsKSC
+ * Website: https://github.com/ES40-Emu/es40
  */
 #ifndef DIAG_RPCC_H
 #define DIAG_RPCC_H

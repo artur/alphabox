@@ -1,5 +1,10 @@
 // license:BSD-3-Clause
 // copyright-holders:Barry Rodewald
+//
+// From MAME (https://www.mamedev.org/), adapted in ES40-Emu
+// (https://github.com/ES40-Emu/es40):
+// Copyright (C) 2026 gdwnldsKSC and the ES40-Emu contributors
+// Copyright (C) 2026 WNT50
 
 #ifndef MAME_VIDEO_IBM8514A_H
 #define MAME_VIDEO_IBM8514A_H

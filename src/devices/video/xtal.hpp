@@ -1,5 +1,7 @@
 // Adapted from MAME xtal.h (license:BSD-3-Clause, copyright-holders:Olivier
-// Galibert) just enough for S3 for now
+// Galibert) just enough for S3 for now, adapted
+// in ES40-Emu (https://github.com/ES40-Emu/es40):
+// Copyright (C) 2026 gdwnldsKSC
 
 // Usage:
 //   XTAL(25'174'800).value()           -> 25174800  (u32)

@@ -1,3 +1,27 @@
+/* Alphabox Alpha Emulator
+ * Copyright (C) 2026 Artur Goulão
+ * Website: https://github.com/artur/alphabox
+ *
+ * Contains code from ES40-Emu:
+ * Copyright (C) 2026 gdwnldsKSC and the ES40-Emu contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
+ * USA.
+ */
+
 /* AlphaCPU_jit.cpp -- the CPU side of the JIT: the dispatcher that runs
  * compiled blocks, the helpers compiled code calls back into, and the idle
  * pacing that belongs to that dispatcher.

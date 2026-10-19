@@ -1,3 +1,12 @@
+/* Alphabox Alpha Emulator -- debug configuration flags.
+ * Copyright (C) 2007-2008 by the ES40 Emulator Project
+ *
+ * Contains code from ES40-Emu:
+ * Copyright (C) 2026 gdwnldsKSC and the ES40-Emu contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
 // This is config_debug.h
 //
 // This file contains the debug configuration options.

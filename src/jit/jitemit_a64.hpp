@@ -20,7 +20,8 @@
  * Included from jitengine.cpp (JIT_HOST_A64) after the arch-neutral engine: it
  * shares classify()/SafeOp, g_zapnot_mask and the JitOffsets/HelperSet
  * contract, and provides emit_op / assemble_block / assemble_trace on asmjit's
- * a64 backend. It mirrors the x86-64 emitter op for op -- same bail protocol
+ * a64 backend. It was written for this fork; it mirrors the x86-64 emitter,
+ * which is ES40-Emu's (see jitengine.cpp), op for op -- same bail protocol
  * (state.pc = faulting instruction, return the chain's completed count), same
  * chaining (shared frame, poly-link, jit_indirect), same verify behaviour --
  * so the dispatcher, the helpers and the JIT_VERIFY harness are unchanged.

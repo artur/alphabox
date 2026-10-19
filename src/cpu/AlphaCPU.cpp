@@ -1,8 +1,10 @@
 ﻿/* ES40 emulator.
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
+ * Copyright (C) 2023-2026 gdwnldsKSC and the ES40-Emu contributors
  * Copyright (C) 2026 Artur Goulão
  *
  * WWW    : http://www.es40.org
+ *          https://github.com/ES40-Emu/es40
  *          https://github.com/artur/alphabox
  * E-mail : camiel@es40.org
  *

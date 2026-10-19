@@ -8,6 +8,11 @@
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
  * Copyright (C) 2007 by Camiel Vanderhoeven
  *
+ * Contains code from ES40-Emu:
+ * Copyright (C) 2025-2026 gdwnldsKSC and the ES40-Emu contributors
+ * Copyright (C) 2026 WNT50
+ * Website: https://github.com/ES40-Emu/es40
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2

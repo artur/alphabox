@@ -1,9 +1,37 @@
 /* Alphabox Alpha Emulator -- JIT engine.
  *
- * Forked from: ES40 emulator
- * Copyright (C) 2007-2008 by the ES40 Emulator Project
+ * Ported from: the x86-64 JIT of ES40-Emu
+ * Copyright (C) 2026 gdwnldsKSC and the ES40-Emu contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-1-Clause
+ *
+ * ES40-Emu distributes its JIT under the BSD 1-Clause licence; this notice
+ * applies to the code that comes from it:
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS AND CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ * This fork's changes, and the file as part of Alphabox, are distributed
+ * under the GNU General Public License:
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

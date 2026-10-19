@@ -2,6 +2,8 @@
 // copyright-holders:Vas Crabb
 // This file is part of the MAME project (https://www.mamedev.org/).
 // Adapted for ES40
+// in ES40-Emu (https://github.com/ES40-Emu/es40):
+// Copyright (C) 2026 gdwnldsKSC
 #if defined(MAME_EMU_LOGMACRO_H) || !defined(__EMU_H__)
 #ifndef _WIN32
 #error This file should only be included once per compilation unit after all other headers

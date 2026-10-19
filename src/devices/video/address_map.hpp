@@ -1,6 +1,10 @@
 /**
  * address_map for ES40 VGA register dispatch.
  * Adapted from MAME for code re-use compatibility in VGA/S3 Implementation
+ * MAME's address map: Copyright (C) 2010-2012 Aaron Giles,
+ * license BSD-3-Clause (https://www.mamedev.org/).
+ * Adapted in ES40-Emu (https://github.com/ES40-Emu/es40):
+ * Copyright (C) 2026 gdwnldsKSC
  *
  *     map(lo, hi).lrw8(NAME(read_lambda), NAME(write_lambda))
  *     map(lo, hi).lr8(NAME(read_lambda))

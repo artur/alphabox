@@ -2,6 +2,10 @@
  * Copyright (C) 2020 Tomáš Glozar
  * Website: https://github.com/lenticularis39/axpbox
  *
+ * Contains code from ES40-Emu:
+ * Copyright (C) 2026 Cacodemon345 and the ES40-Emu contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2

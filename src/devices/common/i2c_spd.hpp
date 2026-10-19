@@ -1,6 +1,7 @@
 /* ES40 emulator.
  * Copyright (C) 2026 by the ES40 Emulator Project
  * Copyright (C) 2025 by Kisara Development LLC.
+ * Copyright (C) 2025-2026 gdwnldsKSC
  * All rights reserved.
  *
  * WWW    : https://github.com/ES40-Emu/es40

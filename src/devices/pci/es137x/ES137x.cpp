@@ -21,6 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  *
+ * Modifications copyright (C) 2026 Cacodemon345 and the ES40-Emu
+ * contributors
+ * Website: https://github.com/ES40-Emu/es40
+ *
  * Modifications copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  */
