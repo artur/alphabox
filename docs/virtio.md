@@ -131,14 +131,17 @@ flags NEXT 1, WRITE 2 (device writes this buffer), INDIRECT 4.
 
 **Addresses are PCI bus addresses.** The queue PFN and every descriptor
 address are what the device puts on the bus, through the chipset's DMA
-windows (the Pchips' on the ES40). On Windows they are the logical
-addresses the HAL gives
-(`HalGetAdapter`/`AllocateCommonBuffer`, `MapTransfer`, or a miniport's
-`ScsiPortGetPhysicalAddress`/`NdisMAllocateSharedMemory`), never raw
-physical addresses. They must lie below 4 GB (the device is a 32-bit PCI
-master); a descriptor beyond reach fails its request. The ES40 SRM console
-leaves a direct-mapped window at bus 0x80000000 = memory 0 (see the late
-self-test below), but a driver must not assume it.
+windows (the Pchips' on the ES40):
+
+- On Windows they are the logical addresses the HAL gives
+  (`HalGetAdapter`/`AllocateCommonBuffer`, `MapTransfer`, or a miniport's
+  `ScsiPortGetPhysicalAddress`/`NdisMAllocateSharedMemory`), never raw
+  physical addresses.
+- They must lie below 4 GB (the device is a 32-bit PCI master); a
+  descriptor beyond reach fails its request.
+- The ES40 SRM console leaves a direct-mapped window at bus 0x80000000 =
+  memory 0 (see the late self-test below), but a driver must not assume
+  it.
 
 What the device does with the rings:
 
