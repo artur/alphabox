@@ -24,6 +24,10 @@
  * Although this is not required, the author would appreciate being notified of,
  * and receiving any modifications you may make to the source code that might
  * serve the general public.
+ *
+ * Parts of this file are based upon Bochs, which is Copyright (C) 2002
+ * MandrakeSoft S.A., distributed under the GNU Lesser General Public
+ * License, version 2 or later.
  */
 
 /**

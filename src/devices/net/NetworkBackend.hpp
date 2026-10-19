@@ -1,5 +1,6 @@
 /* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Hendrik Volkmer
  * Website: https://github.com/lenticularis39/axpbox
  *
  * This program is free software; you can redistribute it and/or

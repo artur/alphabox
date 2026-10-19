@@ -2,6 +2,11 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
+ * Ported from 86Box (https://86box.net/), GPL-2.0-or-later:
+ * Copyright (C) 2008-2019 Sarah Walker
+ * Copyright (C) 2016-2019 Miran Grca
+ * Copyright (C) 2026 Connor Hyde
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
