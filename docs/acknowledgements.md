@@ -49,19 +49,23 @@ Each source file that carries ES40-Emu code names its authors in its header.
 ## This repository
 
 This repository continued AXPbox as its own project (**Artur Goulão**) and
-was renamed Alphabox in 2026. Written here: the AArch64 JIT back end (its
-own emitter, written for Apple Silicon and other ARM hosts, which plugs into
-the JIT core that came from ES40-Emu) and the performance work behind it,
-idle pacing, SMP and memory fixes, the headless test tooling, the
-experimental Hypervisor.framework runtime, USB (OHCI, EHCI and the devices
-behind them), virtio, the machines beyond the
-ES40 (the Tsunami boards DS10, DS20E and DS20L, the Titan boards ES45, DS25
-and DS15, and the EV7 systems ES47, ES80 and GS1280), and most of the device
-families it emulates ([hardware](hardware.md)): the Symbios 53C8xx and QLogic
-ISP SCSI adapters, the CMD649 IDE controller, the Tulip and Intel 8255x
-network cards, the PCI-PCI bridges and the multi-port boards built on them,
-the Ensoniq ES1371, and the Cirrus Logic, ATI Mach64, S3 ViRGE, 3Dlabs
-Permedia 2, DEC TGA and ATI Radeon graphics cards with their drawing engines.
+was renamed Alphabox in September 2026. Written here:
+
+- the AArch64 JIT back end: its own emitter, written for Apple Silicon and
+  other ARM hosts, which plugs into the JIT core that came from ES40-Emu;
+  and the performance work behind it;
+- idle pacing, SMP and memory fixes, the headless test tooling, and the
+  experimental Hypervisor.framework runtime;
+- USB (OHCI, EHCI and the devices behind them) and virtio;
+- the machines beyond the ES40: the Tsunami boards DS10, DS20E and DS20L,
+  the Titan boards ES45, DS25 and DS15, and the EV7 systems ES47, ES80 and
+  GS1280;
+- most of the device families it emulates ([hardware](hardware.md)): the
+  Symbios 53C8xx and QLogic ISP SCSI adapters, the CMD649 IDE controller,
+  the Tulip and Intel 8255x network cards, the PCI-PCI bridges and the
+  multi-port boards built on them, and the Ensoniq ES1371;
+- the Cirrus Logic, ATI Mach64, S3 ViRGE, 3Dlabs Permedia 2, DEC TGA and
+  ATI Radeon graphics cards with their drawing engines.
 
 ## Third-party code and licences
 
@@ -89,17 +93,23 @@ GPL-2.0-only was removed in October 2026 for that reason.)
 Built with, not part of the source: **SDL3** and **asmjit** (zlib),
 **libpcap** (BSD-3-Clause), **libusb** (LGPL-2.1-or-later), and **Npcap**
 on Windows, which is loaded at run time and installed by the user. The VGA
-BIOS images come from 86Box's ROM set and are not distributed with Alphabox.
+BIOS images (most of them from 86Box's ROM set) are supplied by the user
+and not distributed with Alphabox.
 
-Used as references, with no code taken: QEMU's Cirrus model (the behavioural
-reference and test oracle for the Cirrus blitter), its ati-vga model
-(BALATON Zoltan) and its eepro100 and tulip models; 86Box's Cirrus, Mach64
-register and ViRGE models and MAME's ViRGE; **Mesa**, the **Linux** radeon,
-tgafb, e100 and qla1280 drivers and **X.org**'s radeon driver (the register
-semantics the Radeon 7500 follows, as AMD never published an R100 3D
-reference); NetBSD's isp, tga and i82557 drivers. **POCO**'s threading
-wrappers (Applied Informatics) were the original es40 base layer; they are
-gone, and only the names of the exception classes remain.
+Used as references, with no code taken:
+
+- QEMU's Cirrus model (the behavioural reference and test oracle for the
+  Cirrus blitter), its ati-vga model (BALATON Zoltan) and its eepro100 and
+  tulip models;
+- 86Box's Cirrus, Mach64 register and ViRGE models, and MAME's ViRGE;
+- **Mesa**, the **Linux** radeon, tgafb, e100 and qla1280 drivers and
+  **X.org**'s radeon driver: the register semantics the Radeon 7500
+  follows, as AMD never published an R100 3D reference;
+- NetBSD's isp, tga and i82557 drivers.
+
+**POCO**'s threading wrappers (Applied Informatics) were the original es40
+base layer. They are gone, and only the names of the exception classes
+remain.
 
 Guest-visible identifiers (disk serial numbers, the `es40.cfg` file name, the
 machine type) deliberately keep their ES40 names.
