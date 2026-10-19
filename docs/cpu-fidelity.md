@@ -1,15 +1,25 @@
 # How faithful the processor is
 
-Alphabox emulates an Alpha 21264 of the EV68CB kind. This file records where
-it does not match that processor, because a list of known divergences is
-worth more than a belief that there are none: it says what a guest can and
+Alphabox emulates an Alpha 21264 of the EV68CB kind; the EV7 (21364) rows
+of the Marvel machines run the same core. This file records where it does
+not match that processor, because a list of known divergences is worth
+more than a belief that there are none. It says what a guest can and
 cannot be used to test here, and it stops the same question being asked
 twice.
 
 Everything below was established against the *Alpha Architecture Reference
 Manual*, 4th edition (ARM) and the 21264/EV68CB *Hardware Reference Manual*
-(HRM), with section numbers, and — where it could be — demonstrated by
-running Alpha code inside the emulator rather than by reading alone.
+(HRM), with section numbers. Where it could be, it was also demonstrated by
+running Alpha code inside the emulator rather than by reading alone. The
+first audit was made on 2026-09-18; later entries carry their dates.
+
+| Section | What is in it |
+| --- | --- |
+| [How to check the processor yourself](#how-to-check-the-processor-yourself) | the verify lane, its blind spots, guest programs, trap tracing |
+| [Known divergences](#known-divergences) | where the processor differs, ranked by what a guest would notice |
+| [What was checked and found correct](#what-was-checked-and-found-correct) | so that it does not get re-litigated |
+| [A guest's floating-point exception that is the guest's own](#a-guests-floating-point-exception-that-is-the-guests-own) | Direct3D 7 on Windows 2000 RC2 |
+| [The rule this audit produced](#the-rule-this-audit-produced) | two references, not one |
 
 ## How to check the processor yourself
 
@@ -17,37 +27,39 @@ running Alpha code inside the emulator rather than by reading alone.
   and boot anything. Every compiled block is re-run by the interpreter and
   compared; a clean SRM boot is about 130 million blocks. This finds
   disagreements between the two engines, not disagreements with the
-  architecture — both can be wrong together. A block counts as a mismatch
-  for any difference: a GPR, an FP register, an IPR, the PC, a store, an
-  `STx_C`, the number of stores -- and, since 2026-10-03, a load from
-  another address or a different number of loads. The compiled pass is
-  handed the values the interpreter loaded, in order, so a compiled load
-  from the wrong address used to come back with the right value and pass;
-  it printed `LOAD ADDR MISMATCH` and counted nothing.
+  architecture: both can be wrong together.
+- **What counts as a mismatch**: any difference in a GPR, an FP register,
+  an IPR, the PC, a store, an `STx_C`, or the number of stores. Since
+  2026-10-03 also a load from another address or a different number of
+  loads. (The compiled pass is handed the values the interpreter loaded, in
+  order, so a compiled load from the wrong address used to come back with
+  the right value and pass; it printed `LOAD ADDR MISMATCH` and counted
+  nothing.)
 - **What the verify lane cannot see**: it runs every block from the
   dispatcher, through the memory helpers, with `RPCC` through its helper.
   The production JIT also chains blocks into one another, probes the data
   page cache inline (and reuses a probe for the next access on the same
-  page), and reads `RPCC` through a generated stub. `ALPHABOX_JIT_CHAIN=0`,
-  `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0` take those away from a
-  production build one at a time (docs/headless.md): a fault that goes with
-  one of them is in it, and one that survives all three is not the JIT's
-  compiled code.
-- **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a `JIT_VERIFY`
-  build checks the JIT's inline IEEE operations against the interpreter over
-  8.5 million cases at startup.
+  page), and reads `RPCC` through a generated stub.
+  `ALPHABOX_JIT_CHAIN=0`, `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0`
+  take those away from a production build one at a time
+  ([headless.md](headless.md)). A fault that goes with one of them is in
+  it, and one that survives all three is not the JIT's compiled code.
+- **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a
+  `JIT_VERIFY` build checks the JIT's inline IEEE operations against the
+  interpreter over 8.5 million cases at startup.
 - **Guest programs**: `test/tools/bench_image.py` writes a bootable image
   from a list of instruction words, and `srm_probe.sh` boots one
   (`FLOPPY=<image> EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit`). A
-  program ending in `CALL_PAL 0` halts the machine; leave `EXIT_ON_HALT`
+  program ending in `CALL_PAL 0` halts the machine. Leave `EXIT_ON_HALT`
   off and the console comes back, so results stored in memory can be read
   with `examine -p -q <address>`. This is how most of the findings below
   were shown rather than argued.
 - **Arithmetic traps**: `ALPHABOX_TRACE_ARITH=<n>` prints the first `n`
-  IEEE arithmetic traps (docs/headless.md): the trigger's address and
-  instruction word, both operands as they were, the FPCR and the summary.
-  With the address of an exception a guest reports, that is the faulting
-  instruction and what it was given, without a debugger in the guest.
+  IEEE arithmetic traps ([headless.md](headless.md)): the trigger's address
+  and instruction word, both operands as they were, the FPCR and the
+  summary. With the address of an exception a guest reports, that is the
+  faulting instruction and what it was given, without a debugger in the
+  guest.
 - **A guest that traps**: the SRM bootstrap has no operating system behind
   it, so an enabled trap ends in "kernel stack not valid halt". That makes a
   fine yes/no trap detector, but anything about what a *handler* sees needs
@@ -65,39 +77,46 @@ crosses the effective page boundary. This is deliberate and inherited from
 es40: the host does the access natively and, both machines being
 little-endian, the data is the same, which is why guests boot.
 
-What is lost is everything built on the trap. OpenVMS PALcode fixes an
-unaligned access up and the DAT bit decides whether the OS hears about it
-(ARM 14.3.3.1); Tru64 reports through `entUna` and offers `uac`; NetBSD
-counts them and panics for a kernel-mode one. Under Alphabox all of those
-report nothing, for ever — so **Alphabox cannot be used to find misaligned
-accesses in a guest**, and a clean bill of health from it means nothing.
+What is lost is everything built on the trap:
+
+- OpenVMS PALcode fixes an unaligned access up, and the DAT bit decides
+  whether the OS hears about it (ARM 14.3.3.1).
+- Tru64 reports through `entUna` and offers `uac`.
+- NetBSD counts them and panics for a kernel-mode one.
+
+Under Alphabox all of those report nothing, for ever. So **Alphabox cannot
+be used to find misaligned accesses in a guest**, and a clean bill of
+health from it means nothing.
 
 The page-crossing case that *is* implemented is worse than either
-alternative: it fires on a condition the architecture does not define, and
+alternative. It fires on a condition the architecture does not define, and
 whether it fires depends on what happens to be resident in the translation
-buffer (an 8 KB fallback, or a granularity-hint page's mask of up to 4 MB),
-so a loop over a misaligned buffer can run for a thousand iterations and
+buffer (an 8 KB fallback, or a granularity-hint page's mask of up to 4 MB).
+So a loop over a misaligned buffer can run for a thousand iterations and
 trap on the one that straddles a page. The byte-at-a-time page-crossing
 code in `READ_VIRT`/`WRITE_VIRT` and friends is unreachable: `pbc` is
-declared false and never assigned.
+declared false and never set.
 
-Deciding this properly means choosing one of: trap always (faithful, and a
-guest's fixup handler finally gets exercised), or keep the shortcut and drop
-the page-crossing special case (honest, fast, and consistently wrong in one
-direction).
+Deciding this properly means choosing one of:
 
-Two parts of this *are* fixed: a misaligned `LDx_L`/`STx_C` now takes the
-trap the architecture requires — it used to hand a misaligned address to a
-host atomic compare-and-swap, which is a bus error that killed the emulator
-— and the alignment trap no longer claims an access violation in `MM_STAT`.
+- trap always (faithful, and a guest's fixup handler finally gets
+  exercised);
+- keep the shortcut and drop the page-crossing special case (honest, fast,
+  and consistently wrong in one direction).
+
+Two parts of this *are* fixed. A misaligned `LDx_L`/`STx_C` now takes the
+trap the architecture requires; it used to hand a misaligned address to a
+host atomic compare-and-swap, which is a bus error that killed the
+emulator. And the alignment trap no longer claims an access violation in
+`MM_STAT`.
 
 ### FPCR[UNDZ] is never read
 
 An underflow with `UNFD` set is flushed to zero. The architecture wants a
 trap when `UNDZ` is clear, so that software can supply the denormal this
 implementation cannot produce (ARM 4.7.2; HRM Table 2-14, "trap to supply a
-possible denormal result"). A program that asked for gradual underflow —
-Tru64 `-fptm su`, OpenVMS `/IEEE_MODE=DENORM_RESULTS` — gets silent zeros
+possible denormal result"). A program that asked for gradual underflow
+(Tru64 `-fptm su`, OpenVMS `/IEEE_MODE=DENORM_RESULTS`) gets silent zeros,
 and its completion handler is never called.
 
 Honouring `UNDZ` makes underflows trap that do not trap today. Changing
@@ -115,48 +134,59 @@ guest's machine-check handling cannot be exercised in Alphabox at all.
 
 Windows' `KeStallExecutionProcessor` delays a driver by spinning on `RPCC`
 until the requested cycles have passed. On hardware the processor really is
-busy for that long; here the processor is asking *this emulator's* counter
-to advance, and spinning through it in real time was 62 of the 95 seconds of
-a Windows 2000 boot -- 70% of every instruction executed.
+busy for that long. Here the processor is asking *this emulator's* counter
+to advance, and spinning through it in real time was 62 of the 95 seconds
+of a Windows 2000 boot: 70% of every instruction executed.
 
-So the dispatcher recognises that loop by its instruction words (which pin
-its registers: the count asked for, and the counter when the wait began) and,
-when nothing else is pending, adds the remaining cycles to `state.cc` so the
-loop falls out on its next turn. A wait longer than a tenth of a second is
-left alone: that is not a delay, it is a guest waiting for something to
-happen. The block is kept out of the JIT, because compiled it chains to
-itself and spins a whole dispatch batch before the dispatcher is asked.
+So the dispatcher recognises that loop by its instruction words, which pin
+its registers: the count asked for, and the counter when the wait began.
+When nothing else is pending, it adds the remaining cycles to `state.cc` so
+the loop falls out on its next turn.
+
+- A wait longer than a tenth of a second is left alone: that is not a
+  delay, it is a guest waiting for something to happen.
+- The block is kept out of the JIT, because compiled it chains to itself
+  and spins a whole dispatch batch before the dispatcher is asked.
 
 **The divergence:** the guest's cycle counter runs ahead of real time by
-whatever it would have spent waiting -- during driver initialisation, up to
-about six times real time (`ALPHABOX_RATE` reports it). A guest that
-compares `RPCC` against the interval timer therefore measures a processor
-faster than the configured `speed`. Time of day is unaffected: that comes
-from the interval timer and the TOY clock, not from `RPCC`. On a
-multiprocessor guest each processor's counter jumps independently, which is
-architecturally allowed -- `PCC` has a per-processor offset on real hardware
-and software may not compare it across processors -- but it makes the skew
-much larger than hardware would.
+whatever it would have spent waiting. During driver initialisation that is
+up to about six times real time (`ALPHABOX_RATE` reports it).
+
+- A guest that compares `RPCC` against the interval timer therefore
+  measures a processor faster than the configured `speed`.
+- Time of day is unaffected: that comes from the interval timer and the
+  TOY clock, not from `RPCC`.
+- On a multiprocessor guest each processor's counter jumps independently.
+  That is architecturally allowed (`PCC` has a per-processor offset on real
+  hardware, and software may not compare it across processors), but it
+  makes the skew much larger than hardware would.
 
 `ALPHABOX_STALL_SKIP=0` restores the real-time wait. Measured, same binary:
 95 s to the desktop with it off, 60 s with it on, and a third fewer
-instructions executed (docs/performance.md).
+instructions executed ([performance.md](performance.md)).
 
 ### Windows 2000 RC2 setup loses a race of its own
 
-GUI setup of Windows 2000 Professional RC2 (build 2128) can stop at
-*Installing Components* with
+**What happens.** GUI setup of Windows 2000 Professional RC2 (build 2128)
+can stop at *Installing Components* with
 
     Exception c0000005 at address 65ABB3F0 with the following parameters: 00000000 65ABB3F0
 
 in `setuperr.log`, restart its GUI phase through AlphaBIOS, and stop there
-again. It is the guest's own race, not a translation error. COM+ setup
-registers `msdtctm.dll`: `LoadLibrary` runs its `DllMain`, which starts two
-worker threads per processor at 65ABB3F0, then `DllRegisterServer`, then
-`FreeLibrary`, which does not wait for the workers. A worker that has not
-reached its start routine when the image is unmapped takes an instruction
-access violation on its first instruction. Traced from one post-text-mode
-checkpoint, counting instructions from the `DllMain` attach:
+again.
+
+**It is the guest's own race**, not a translation error. COM+ setup
+registers `msdtctm.dll`:
+
+1. `LoadLibrary` runs its `DllMain`, which starts two worker threads per
+   processor at 65ABB3F0;
+2. then `DllRegisterServer`;
+3. then `FreeLibrary`, which does not wait for the workers.
+
+A worker that has not reached its start routine when the image is unmapped
+takes an instruction access violation on its first instruction. Traced
+from one post-text-mode checkpoint, counting instructions from the
+`DllMain` attach:
 
 | | workers enter 65ABB3F0 | `DllMain` detach | interval ticks, attach to detach |
 | --- | --- | --- | --- |
@@ -165,121 +195,149 @@ checkpoint, counting instructions from the `DllMain` attach:
 
 Who wins depends on how many interval ticks (7.8 ms: Windows 2000 programs
 the clock at 128 Hz here) the setup thread's ~10.6 million instructions
-span. `timer.max_instr_per_tick` moves the outcome within one binary: at
-1250000 setup crashed 3 of 3, at 500000 it got past the point 3 of 3
-(250000: 1 of 1). The interpreter usually wins, not always: four runs
-passed, one lost the race on both of its passes. The `JIT_VERIFY` build,
-slower, passed with 0 mismatches over 23 billion compiled-block executions.
-The fix for the
-icache probe (875b499) does not change it: the control build without it and
-current main crash alike, and `ALPHABOX_TRACE_ICPROBE=1` reports no
-`ICPROBE-RECORD` or `ICPROBE-CHAIN` in the crashing run.
+span:
 
-An 800 MHz EV68 has 6.2 million cycles per 7.8 ms tick; unless it averaged
-under about 0.1 instructions a cycle here it would sit nearer the JIT (3.5
-million instructions a tick) than the interpreter (0.7 million), so
-processor speed alone does not explain why the release installed on
-hardware. **Disk latency does.** `DllMain` creates the workers and then
-touches a page of `msdtctm.dll` that is not yet in memory: the setup thread
-takes a page fault, and the paging read (an IDE `READ MULTIPLE` of 5
-sectors) is the first thing it waits for. On a real disk that wait is
-milliseconds, the thread blocks, and the ready workers run. Here the image
-file answers in about 0.1 ms, and the workers do not get the processor
-until the setup thread is past `FreeLibrary`. With `ALPHABOX_IDETRACE=1`
-and a diagnostic address trace (not in the tree), same checkpoint, JIT:
+- `timer.max_instr_per_tick` moves the outcome within one binary: at
+  1250000 setup crashed 3 of 3, at 500000 it got past the point 3 of 3
+  (250000: 1 of 1).
+- The interpreter usually wins, not always: four runs passed, one lost the
+  race on both of its passes.
+- The `JIT_VERIFY` build, slower, passed with 0 mismatches over 23 billion
+  compiled-block executions.
+- The fix for the icache probe (875b499) does not change it: the control
+  build without it and current main crash alike, and
+  `ALPHABOX_TRACE_ICPROBE=1` reports no `ICPROBE-RECORD` or `ICPROBE-CHAIN`
+  in the crashing run.
+
+**Why it installed on hardware.** An 800 MHz EV68 has 6.2 million cycles
+per 7.8 ms tick. Unless it averaged under about 0.1 instructions a cycle
+here, it would sit nearer the JIT (3.5 million instructions a tick) than
+the interpreter (0.7 million), so processor speed alone does not explain
+why the release installed on hardware. **Disk latency does.**
+
+`DllMain` creates the workers and then touches a page of `msdtctm.dll`
+that is not yet in memory. The setup thread takes a page fault, and the
+paging read (an IDE `READ MULTIPLE` of 5 sectors) is the first thing it
+waits for. On a real disk that wait is milliseconds, the thread blocks,
+and the ready workers run. Here the image file answers in about 0.1 ms,
+and the workers do not get the processor until the setup thread is past
+`FreeLibrary`. With `ALPHABOX_IDETRACE=1` and a diagnostic address trace
+(not in the tree), same checkpoint, JIT:
 
 | | that read takes | workers enter 65ABB3F0 | `DllMain` detach |
 | --- | --- | --- | --- |
 | no latency model | 0.1 ms | +12.24 M, +124.3 M (after: crash) | +10.98 M |
 | 8 ms access time | 10 ms | +0.28 M, +0.29 M | +10.81 M |
 
-The disks can be given mechanical latency (es40.cfg, `latency.*` keys of a
-disk; `ALPHABOX_DISK_LATENCY_US` for every IDE hard disk, see
-docs/headless.md), off by default. GUI setup from the checkpoint, JIT at the
-default `timer.max_instr_per_tick`, outcome read from `setuperr.log` and
-the GUI-setup restarts in `setupact.log`; "finished" means setup completed,
-rebooted and showed the Network Identification Wizard; the last column is
-launch to the evaluation-copy notice at the end of GUI setup (one "off" and
-one 8 ms run were the diagnostic build that produced the trace above, not
-timed):
+**The latency model.** The disks can be given mechanical latency
+(es40.cfg, the `latency.*` keys of a disk; `ALPHABOX_DISK_LATENCY_US` for
+every IDE hard disk, see [headless.md](headless.md)), off by default. GUI
+setup from the checkpoint, JIT at the default `timer.max_instr_per_tick`:
+
+- the outcome is read from `setuperr.log` and the GUI-setup restarts in
+  `setupact.log`;
+- "finished" means setup completed, rebooted and showed the Network
+  Identification Wizard;
+- the last column is launch to the evaluation-copy notice at the end of
+  GUI setup. One "off" and one 8 ms run were the diagnostic build that
+  produced the trace above, not timed.
 
 | access time (+0.3 ms per command, 20 MB/s) | runs | crash at 65ABB3F0 | finished | clone to end of setup |
 | --- | --- | --- | --- | --- |
-| off | 4 | 4 (each restarted GUI setup, 1-5 times before it was stopped) | 0 | -- |
+| off | 4 | 4 (each restarted GUI setup, 1-5 times before it was stopped) | 0 | |
 | 0.5 ms | 2 | 0 | 2 | 556 s, 586 s |
 | 2 ms | 2 | 0 | 2 | 658 s, 673 s |
 | 8 ms | 3 | 0 | 2 (the third was stopped once past COM+) | 971 s, 974 s |
 | 15 ms | 2 | 0 | 2 | 1325 s, 1364 s |
 
-What it costs: the time from launch to the desktop of the installed RC2
-guest (2 CPUs, JIT, frame-dump resolution about 2 s, three interleaved
+**What it costs.** The time from launch to the desktop of the installed
+RC2 guest (2 CPUs, JIT, frame-dump resolution about 2 s, three interleaved
 boots each) went from 82-85 s with the model off to 95-98 s at 0.5 ms and
 128-130 s at 8 ms.
 
-It stays an option, off by default. It is the better way to install RC2
-with the JIT: `ALPHABOX_DISK_LATENCY_US=500` (or, on the system disk,
-`latency.access_us = 500; latency.command_us = 300; latency.mb_per_s = 20;`,
-the same model) for GUI setup costs about 15% more wall time at boot,
-where `timer.max_instr_per_tick = 500000;` holds
-the processor to about 64 million instructions a second throughout (and
-also gets past this point). A realistic default would make every boot of
-every guest a sixth to a half slower for a race that only this release is
-known to lose. The model covers ALi IDE hard disks only: the SCSI adapters,
-virtio-blk, USB storage and ATAPI CD-ROMs still complete at host speed.
+It stays an option, off by default:
+
+- It is the better way to install RC2 with the JIT:
+  `ALPHABOX_DISK_LATENCY_US=500` (or, on the system disk,
+  `latency.access_us = 500; latency.command_us = 300; latency.mb_per_s = 20;`,
+  the same model) for GUI setup costs about 15% more wall time at boot.
+- `timer.max_instr_per_tick = 500000;` also gets past this point, but holds
+  the processor to about 64 million instructions a second throughout.
+- A realistic default would make every boot of every guest a sixth to a
+  half slower, for a race that only this release is known to lose.
+- The model covers IDE hard disks only (the ALi's and the CMD 649's, which
+  share the IDE core). The SCSI adapters, virtio-blk, USB storage and
+  ATAPI CD-ROMs still complete at host speed.
 
 ### Data translations outlive their TB entry
 
 A real EV6 has 128 data-TB entries. Once one is evicted, the next access to
 its page takes a DTB miss, and PALcode reads the PTE again. Alphabox keeps
-the translation after eviction, in two places: the translation shadow
-(`m_tb_shadow`, 4096 entries), which refills the TB without the trap, and
-the data page cache (`data_page_cache` and its second level), which a TB
-fill no longer empties for the page it evicts.
+the translation after eviction, in two places:
+
+- the translation shadow (`m_tb_shadow`, 4096 entries), which refills the
+  TB without the trap;
+- the data page cache (`data_page_cache` and its second level), which a TB
+  fill no longer empties for the page it evicts.
 
 This is legal. The architecture lets a TB hold a translation for as long as
 it likes, so software must invalidate after changing a PTE (`TBIS`, `TBIA`,
 `TBIAP`, and the ASN rules), and each of those still empties the shadow and
-the page cache. **The divergence:** a guest that changes a valid PTE without
-invalidating, and happens to get the new one on real hardware because the
-old entry was evicted in the meantime, keeps the old translation here for
-much longer. A missing `TBIS` is a guest bug that hardware usually hides;
-Alphabox hides it less often. `ALPHABOX_DPC_KEEP=0` makes the page cache
-drop an evicted entry's page again. The shadow has no switch.
+the page cache.
 
-**Closed (2026-10-03): the page cache outlived the shadow too.** The page
-cache is only an invisible longer-lived TB while every page it maps is one
-the DTB still translates without PALcode -- in the TB, or in the shadow,
-from which `FindTBEntry` refills. It was not: the shadow is direct-mapped
-and a later fill overwrites its slot, so a page could leave the TB and the
-shadow and stay in the page cache. Compiled code's loads and stores probe
-the page cache and kept hitting such a page; the interpreter and the
-helpers ask the TB and took a DTB miss on it: more than two hundred in
-every DS20E boot of OpenVMS 8.4 (the diagnostic stopped counting there),
-none with the fix. Almost all are harmless -- PALcode refills the TB. One
-is fatal. The VMS PALcode (on the DS20E,
-the DS25) builds an exception frame by storing two quadwords to the
-kernel stack with the PALshadow registers on, clears `I_CTL[SDE]`, and
-stores the interrupted code's R4-R7 to the same 64 bytes -- a store that
-cannot miss on real hardware, since the first two just used the page. Here
-the first two ran compiled, the next ones interpreted, and the miss came
-with `SDE` clear: the miss handler ran on the interrupted code's registers,
-its double-miss path read a garbage impure pointer, found `VA_CTL`
-"corrupt" and entered the console -- "halt code = 5, PC = 0" on one
+**The divergence:** a guest that changes a valid PTE without invalidating,
+and happens to get the new one on real hardware because the old entry was
+evicted in the meantime, keeps the old translation here for much longer. A
+missing `TBIS` is a guest bug that hardware usually hides; Alphabox hides
+it less often. `ALPHABOX_DPC_KEEP=0` makes the page cache drop an evicted
+entry's page again. The shadow has no switch.
+
+#### Closed 2026-10-03: the page cache outlived the shadow too
+
+The page cache is only an invisible longer-lived TB while every page it
+maps is one the DTB still translates without PALcode: in the TB, or in the
+shadow, from which `FindTBEntry` refills. It was not. The shadow is
+direct-mapped and a later fill overwrites its slot, so a page could leave
+the TB and the shadow and stay in the page cache.
+
+Compiled code's loads and stores probe the page cache and kept hitting such
+a page; the interpreter and the helpers ask the TB and took a DTB miss on
+it. That was more than two hundred misses in every DS20E boot of OpenVMS
+8.4 (the diagnostic stopped counting there), and none with the fix. Almost
+all are harmless: PALcode refills the TB.
+
+One is fatal. The VMS PALcode (on the DS20E, the DS25) builds an exception
+frame like this:
+
+1. it stores two quadwords to the kernel stack with the PALshadow
+   registers on;
+2. it clears `I_CTL[SDE]`;
+3. it stores the interrupted code's R4-R7 to the same 64 bytes.
+
+That last store cannot miss on real hardware, since the first two just
+used the page. Here the first two ran compiled, the next ones interpreted,
+and the miss came with `SDE` clear. The miss handler ran on the interrupted
+code's registers, its double-miss path read a garbage impure pointer, found
+`VA_CTL` "corrupt" and entered the console: "halt code = 5, PC = 0" on one
 processor, `CPUSPINWAIT` on the other, in about one boot in twenty-five on
-two processors (lab/smp-flaky). Now a TB fill that evicts an entry, or
-pushes one out of the shadow, also drops that page from the page cache
-unless the TB or the shadow still has it (`dtb_still_maps`).
+two processors (lab/smp-flaky).
 
-Two more holes of the same shape were closed with it. The TB index
-(`m_tb_idx`, eight ways a set) drops the oldest way of a full set, and its
-own comment said a false negative "costs a refill from the shadow at
-worst" -- but the shadow may not have the page, and then a page the TB
-held took a DTB miss. A set that overflowed is now marked and a miss there
-scans the TB. And `flush_data_page_cache_range` compared a TB entry's
-address, which keeps VA<47:13> only, with the page cache's sign-extended
-one, so for a system-space page (`ffffffff8...`) it never matched: the
-`ALPHABOX_DPC_KEEP=0` eviction path and the per-entry pass of `tbis_d` did
-nothing there. It compares VA<47:13> now.
+Now a TB fill that evicts an entry, or pushes one out of the shadow, also
+drops that page from the page cache unless the TB or the shadow still has
+it (`dtb_still_maps`).
+
+Two more holes of the same shape were closed with it:
+
+- **The TB index** (`m_tb_idx`, eight ways a set) drops the oldest way of a
+  full set. Its own comment said a false negative "costs a refill from the
+  shadow at worst", but the shadow may not have the page, and then a page
+  the TB held took a DTB miss. A set that overflowed is now marked, and a
+  miss there scans the TB.
+- **`flush_data_page_cache_range`** compared a TB entry's address, which
+  keeps VA<47:13> only, with the page cache's sign-extended one. For a
+  system-space page (`ffffffff8...`) it never matched, so the
+  `ALPHABOX_DPC_KEEP=0` eviction path and the per-entry pass of `tbis_d`
+  did nothing there. It compares VA<47:13> now.
 
 ### Smaller ones
 
@@ -292,22 +350,40 @@ nothing there. It compares VA<47:13> now.
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | A VAX *dirty zero* operand does not raise invalid operation | `AlphaCPU_vaxfloat.cpp` | VMS code that plants dirty zeros to catch uninitialised data |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
-| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Architecturally legal — a virtual I-cache need not be coherent, and `IMB` works — but a guest that gets away with a missing `IMB` on real hardware can fail here, because stale bytes live far longer. Its lines carry the flush generation they were filled in, so an `IMB` invalidates every one of them with a single store instead of a walk -- and it must invalidate them, whatever else a flush decides to skip: the lines are tagged by virtual address, so code mapped at an address that has held other code is a change no physically-keyed bookkeeping can see |
+| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
-| `FPCR[DNZ]` turns a denormal operand into zero for every IEEE instruction; the 21264 does so only for instructions with `/S` ("when FPCR[DNZ] is set, denormal input operand traps can be avoided for arithmetic operations that include the /S qualifier", 21264/21364 Compiler Writer's Guide C) | `AlphaCPU_ieeefloat.cpp`, `ieee_unpack` | A program that sets `DNZ` and runs instructions without `/S` on denormals gets zeros where hardware would trap. Windows and OpenVMS leave `DNZ` clear |
-| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the only row that exists (EV68CB implements all of them). It matters the day a row is added for a part that does not |
+| `FPCR[DNZ]` turns a denormal operand into zero for every IEEE instruction; the 21264 does so only for instructions with `/S` | `AlphaCPU_ieeefloat.cpp`, `ieee_unpack` | A program that sets `DNZ` and runs instructions without `/S` on denormals gets zeros where hardware would trap. Windows and OpenVMS leave `DNZ` clear |
+| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for every row so far: EV68CB, EV7 and EV7z all claim all four. It matters the day a row is added for a part that does not |
+
+**The instruction cache** is architecturally legal: a virtual I-cache need
+not be coherent, and `IMB` works. But stale bytes live far longer here.
+Its lines carry the flush generation they were filled in, so an `IMB`
+invalidates every one of them with a single store instead of a walk. It
+must invalidate them, whatever else a flush decides to skip: the lines are
+tagged by virtual address, so code mapped at an address that has held
+other code is a change no physically-keyed bookkeeping can see.
+
+**`DNZ`**: the 21264/21364 Compiler Writer's Guide, appendix C, says "when
+FPCR[DNZ] is set, denormal input operand traps can be avoided for
+arithmetic operations that include the /S qualifier".
+
+**`AMASK`**: no document lists the 21364's AMASK, so the EV7 rows' value is
+an inference (`CpuModels.cpp` marks it as one).
 
 ## What was checked and found correct
 
 Recorded so that it does not get re-litigated. All of this was verified
-against the manuals, and most of it by running code:
+against the manuals, and most of it by running code.
+
+### Integer, branch and PALcode
 
 - **Integer arithmetic, logic and bit manipulation** (opcodes 0x10–0x13,
-  0x1C): every function code, against handbook pseudocode, over ~3.5 million
-  operand combinations including all six `/V` overflow forms, the byte
-  extract/insert/mask family's mod-64 shift edge, the literal form, and
-  destination aliasing. Zero disagreements, and `JIT_VERIFY` runs of 144
-  million blocks on AArch64 and 117.5 million on x86-64 found none either.
+  0x1C): every function code, against handbook pseudocode, over ~3.5
+  million operand combinations. That includes all six `/V` overflow forms,
+  the byte extract/insert/mask family's mod-64 shift edge, the literal
+  form, and destination aliasing. Zero disagreements, and `JIT_VERIFY` runs
+  of 144 million blocks on AArch64 and 117.5 million on x86-64 found none
+  either.
 - **Branch and jump**: displacements at both extremes (+1048575 and
   −1048576, checked by landing them), `JMP` with `Ra == Rb`, hint bits
   correctly ignored, FP branches treating `0x8000000000000000` as zero.
@@ -316,86 +392,104 @@ against the manuals, and most of it by running code:
   `CALL_PAL` entry PC assembly, the R23 linkage including its PALmode bit,
   PALRES gating, `HW_LD`/`HW_ST` type decoding, `HW_RET`, and PALshadow
   being R4–R7 and R20–R23 under SDE.
-- **The exception path**: `EXC_ADDR` is the faulting instruction for a
-  *fault*, which is what a fault needs — PALcode restarts it. `EXC_SUM` and
-  `MM_STAT` bit layouts, AST delivery only below IPL 2, interrupts blocked
-  in PALmode, `lock_flag` cleared on every exception except the transparent
-  TB fills, OPCDEC coverage.
-
-  The same PC is used for an *arithmetic trap*, and that is worth the
-  paragraph it took to settle. The architecture reads the other way: "the
-  trap PC is an arbitrary number of instructions past the one triggering
-  the trap" (ARM 4.7.6.1), and the trap-shadow rules exist so a handler can
-  "find the trigger instruction via a linear scan backwards from the trap
-  PC" (ARM 4.7.6). An audit flagged this file for saying otherwise, and the
-  reading is correct — so it was changed to save the instruction after the
-  trigger, and **Windows 2000 stopped booting**: `STOP 0x00000012
-  TRAP_CAUSE_UNKNOWN`, on one processor and on two, reproducibly, where the
-  unchanged build reaches the desktop.
-
-  What that says is that the PALcode image we run makes the adjustment
-  itself, which is what the line above always claimed. The architecture
-  describes the PC the *operating system's* handler is entitled to; between
-  the hardware and that handler sits PALcode, and this one expects the
-  trigger's own PC from the processor. Anyone revisiting this needs a guest
-  boot, not a reading of the handbook: the handbook is not wrong, and
-  neither is the code, and only running one of them tells you which layer
-  you are looking at.
-- **The native OpenVMS `REI`** (`vmspal_call_rei`, interpreter builds
-  only; JIT builds always run the real PALcode). Checked against the
-  console's OpenVMS PALcode V1.98-104 by running both on every `REI` of an
-  OpenVMS 8.4 boot and login: the native routine first, its result kept and
-  undone, then the PALcode, compared at the PALcode's `HW_RET` (registers,
-  PS, PC, mode, IER fields, AST state). That found, and these are now
-  fixed: (1) from a non-kernel mode, a DTB miss on the first frame load ran
-  the fill routine, which uses p4-p7 as scratch, after the old mode had
-  been put in p7 -- the outgoing stack pointer was then saved to PCB+0 (the
-  kernel stack slot) and the incoming one loaded from a slot never updated;
-  OpenVMS 8.4 startup hung after `%STDRV-I-STARTUP`. The PALcode reads the
-  old mode only after its loads. (2) That same branch (non-kernel to
-  non-kernel, e.g. exec to user) did not re-evaluate interrupts, where the
-  PALcode's `HW_MTPR CM` does: an AST for the mode entered waited for the
-  next interrupt. (3) The IER table's rows for IPL 30 and 31 enabled
-  performance-counter and corrected-read interrupts that the PALcode's
-  table at 0xD00 does not (unobservable, neither is ever raised). After the
-  fixes ~480000 compared `REI`s differed only where an external interrupt
-  arrived while the PALcode ran. A spurious master-PIC interrupt (vector
-  7) stopped the emulator in the native interrupt entry; it is now
-  dismissed after reading the in-service register, as the PALcode does.
-  The other native routines have
-  not been compared this way; `ALPHABOX_VMSPAL_OFF` hands any `CALL_PAL`
-  routine back to the PALcode for such a check.
-- **The JIT's bail protocol**: every fault-capable helper probes without
-  side effects and returns before touching memory, a register or the lock
-  flag, so a fault is taken once, by the interpreter, with the instruction
-  not half-executed.
-- **The JIT against the interpreter on the main guests** (2026-10-03,
-  AArch64, the verifier counting every kind of difference, loads
-  included): no mismatch in any of them. Compiled blocks executed and
-  compared, both processors together:
-
-  | guest | machine, CPUs | blocks | mismatches |
-  | --- | --- | --- | --- |
-  | OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW SYSTEM`, a DCL loop, a MACRO-32 program | ES40, 1 | 1.44 billion | 0 |
-  | the same | ES40, 2 | 1.85 billion | 0 |
-  | OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW DEVICE`, `SHOW MEMORY/PHYSICAL` | DS20E, 2 | 5.5 billion | 0 |
-  | the same | ES45, 2 | 1.8 billion | 0 |
-  | OpenVMS 8.4 to DCL with USB devices (M7b's runs, before loads were counted) | ES47, 1 and 2 | 0.55 billion each | 0 |
-  | Windows 2000 RC2 to the desktop, then ten `dir /s c:\winnt` | ES40, 1 | 1.26 billion | 0 |
-  | the same | ES40, 2 | 1.69 billion | 0 |
-  | Whistler (Windows XP 64-bit, build 2210) to the desktop | ES40, 1 | 1.60 billion | 0 |
-  | SRM to `P00>>>` (`srm_run.sh`) | ES40, 1 | 112 million | 0 |
-
-  The x86-64 emitter was not run: this host has no Rosetta. The verify
-  lane cannot see compiled code's chaining, inline memory paths or the
-  `RPCC` stub (above); for those, run a production build with
-  `ALPHABOX_JIT_CHAIN=0`, `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0`
-  against one without.
 - **Floating point**: which rounding mode applies (the instruction's field,
   with FPCR consulted only for `/D`), the IEEE and VAX trap-mode tables
   being mirror images (a classic emulator bug, and we decode both), sticky
   bits set independently of trap enables, NaN propagation and quieting,
   `CMPTxx` signalling rules, `DNZ`, and the S-format load/store mapping.
+
+### The exception path
+
+`EXC_ADDR` is the faulting instruction for a *fault*, which is what a fault
+needs: PALcode restarts it. `EXC_SUM` and `MM_STAT` bit layouts, AST
+delivery only below IPL 2, interrupts blocked in PALmode, `lock_flag`
+cleared on every exception except the transparent TB fills, and OPCDEC
+coverage are all as the manuals say.
+
+The same PC is used for an *arithmetic trap*, and that is worth the
+paragraphs it took to settle. The architecture reads the other way: "the
+trap PC is an arbitrary number of instructions past the one triggering the
+trap" (ARM 4.7.6.1), and the trap-shadow rules exist so a handler can "find
+the trigger instruction via a linear scan backwards from the trap PC" (ARM
+4.7.6).
+
+An audit flagged this file for saying otherwise, and the reading is
+correct. So it was changed to save the instruction after the trigger, and
+**Windows 2000 stopped booting**: `STOP 0x00000012 TRAP_CAUSE_UNKNOWN`, on
+one processor and on two, reproducibly, where the unchanged build reaches
+the desktop.
+
+What that says is that the PALcode image we run makes the adjustment
+itself, which is what the line above always claimed. The architecture
+describes the PC the *operating system's* handler is entitled to. Between
+the hardware and that handler sits PALcode, and this one expects the
+trigger's own PC from the processor. Anyone revisiting this needs a guest
+boot, not a reading of the handbook: the handbook is not wrong, and neither
+is the code, and only running one of them tells you which layer you are
+looking at.
+
+### The native OpenVMS `REI`
+
+`vmspal_call_rei` runs in interpreter builds only; JIT builds always run
+the real PALcode. It was checked against the console's OpenVMS PALcode
+V1.98-104 by running both on every `REI` of an OpenVMS 8.4 boot and login:
+the native routine first, its result kept and undone, then the PALcode,
+compared at the PALcode's `HW_RET` (registers, PS, PC, mode, IER fields,
+AST state).
+
+That found these, all now fixed:
+
+1. From a non-kernel mode, a DTB miss on the first frame load ran the fill
+   routine, which uses p4-p7 as scratch, after the old mode had been put in
+   p7. The outgoing stack pointer was then saved to PCB+0 (the kernel stack
+   slot) and the incoming one loaded from a slot never updated; OpenVMS 8.4
+   startup hung after `%STDRV-I-STARTUP`. The PALcode reads the old mode
+   only after its loads.
+2. That same branch (non-kernel to non-kernel, e.g. exec to user) did not
+   re-evaluate interrupts, where the PALcode's `HW_MTPR CM` does: an AST
+   for the mode entered waited for the next interrupt.
+3. The IER table's rows for IPL 30 and 31 enabled performance-counter and
+   corrected-read interrupts that the PALcode's table at 0xD00 does not
+   (unobservable, neither is ever raised).
+
+After the fixes, ~480000 compared `REI`s differed only where an external
+interrupt arrived while the PALcode ran. A spurious master-PIC interrupt
+(vector 7) stopped the emulator in the native interrupt entry; it is now
+dismissed after reading the in-service register, as the PALcode does.
+
+The other native routines have not been compared this way;
+`ALPHABOX_VMSPAL_OFF` hands any `CALL_PAL` routine back to the PALcode for
+such a check.
+
+### The JIT
+
+**The bail protocol**: every fault-capable helper probes without side
+effects and returns before touching memory, a register or the lock flag.
+So a fault is taken once, by the interpreter, with the instruction not
+half-executed.
+
+**Against the interpreter on the main guests** (2026-10-03, AArch64, the
+verifier counting every kind of difference, loads included): no mismatch in
+any of them. Compiled blocks executed and compared, both processors
+together:
+
+| guest | machine, CPUs | blocks | mismatches |
+| --- | --- | --- | --- |
+| OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW SYSTEM`, a DCL loop, a MACRO-32 program | ES40, 1 | 1.44 billion | 0 |
+| the same | ES40, 2 | 1.85 billion | 0 |
+| OpenVMS 8.4 to DCL, `SHOW CPU`, `SHOW DEVICE`, `SHOW MEMORY/PHYSICAL` | DS20E, 2 | 5.5 billion | 0 |
+| the same | ES45, 2 | 1.8 billion | 0 |
+| OpenVMS 8.4 to DCL with USB devices (M7b's runs, before loads were counted) | ES47, 1 and 2 | 0.55 billion each | 0 |
+| Windows 2000 RC2 to the desktop, then ten `dir /s c:\winnt` | ES40, 1 | 1.26 billion | 0 |
+| the same | ES40, 2 | 1.69 billion | 0 |
+| Whistler (Windows XP 64-bit, build 2210) to the desktop | ES40, 1 | 1.60 billion | 0 |
+| SRM to `P00>>>` (`srm_run.sh`) | ES40, 1 | 112 million | 0 |
+
+The x86-64 emitter was not run in that round: the host had no Rosetta
+then. The verify lane cannot see compiled code's chaining, inline memory
+paths or the `RPCC` stub (above); for those, run a production build with
+`ALPHABOX_JIT_CHAIN=0`, `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0`
+against one without.
 
 ## A guest's floating-point exception that is the guest's own
 
@@ -404,66 +498,82 @@ Recorded because it looks exactly like an emulator fault and is not one
 
 Direct3D 7's software vertex pipeline in Windows 2000 RC2 for Alpha
 (`d3dim700.dll`, build 2128) ends a program with
-`STATUS_FLOAT_INVALID_OPERATION` (c0000090) in two places: every time a
-texture stage asks for `D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR` (the
-exception at `d3dim700 + 0x3285c`), and once a run in a scene that draws
-vertices without normals after scenes with them (`+ 0x34114`). Both were
-followed to the instruction with `ALPHABOX_TRACE_ARITH`:
+`STATUS_FLOAT_INVALID_OPERATION` (c0000090) in two places:
+
+- every time a texture stage asks for
+  `D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR` (the exception at
+  `d3dim700 + 0x3285c`);
+- once a run, in a scene that draws vertices without normals after scenes
+  with them (`+ 0x34114`).
+
+Both were followed to the instruction with `ALPHABOX_TRACE_ARITH`:
 
 | | `+ 0x32858` | `+ 0x34110` |
 | --- | --- | --- |
 | instruction | `MULS f10, f11, f10` (`594b104a`), no `/S` | `MULS f12, f25, f12` (`5999104c`), no `/S` |
-| operands | f10 = `00000000a0000000`, then `0000200000000000`: the words 5 and 0x10000 loaded by `LDS` -- denormals; f11 = 0 | f12 = `fff0101000000000`: the word `ff808080` loaded by `LDS` -- a signalling NaN; f25 = 1.0 |
+| operands | f10 = `00000000a0000000`, then `0000200000000000`: the words 5 and 0x10000 loaded by `LDS`, denormals; f11 = 0 | f12 = `fff0101000000000`: the word `ff808080` loaded by `LDS`, a signalling NaN; f25 = 1.0 |
 | FPCR | `8990000000000000`: no `DNZ`, no trap disabled | the same |
 | where the operand comes from | 12 bytes past a three-float temporary on the stack | the colour of a vertex (`ARGB ff808080`), read as its normal |
 
-The first is a loop in the DLL that is wrong as built. The reflection
+**The first is a loop in the DLL that is wrong as built.** The reflection
 vectors are computed by a loop at `+ 0x53020` whose counter and both of
 its pointers step *backwards* (`SUBL r13, #1`; `LDA r9, -12(r9)`;
 `LDA r10, -68(r10)`) under an unsigned `CMPULT r13, count`, so it runs
-once; the texture transform that follows (`+ 0x32830`) then walks `count`
+once. The texture transform that follows (`+ 0x32830`) then walks `count`
 vectors of 12 bytes from that one result into whatever the stack holds.
-On x86 the same slip costs nothing -- the wrong values are multiplied,
-overwritten on the next call and never trap. The second reads a normal
-from a vertex format that has none because a flag (bit 30 of the word at
-`+ 5532` of the device) was left set by an earlier draw.
+On x86 the same slip costs nothing: the wrong values are multiplied,
+overwritten on the next call and never trap.
 
-Whether hardware does the same is not in doubt. A denormal or a
+**The second** reads a normal from a vertex format that has none, because
+a flag (bit 30 of the word at `+ 5532` of the device) was left set by an
+earlier draw.
+
+**Whether hardware does the same is not in doubt.** A denormal or a
 signalling NaN as the operand of an IEEE arithmetic instruction is an
-invalid-operation trap that nothing masks ("the 21264/21364 traps on a
-Denormal input operand for all arithmetic operations unless FPCR[DNZ] =
-1"; "SNaN operand ... Invalid Op", 21264/21364 Compiler Writer's Guide,
-appendix C; the Alpha Architecture Handbook 4.7.6: "This trap is always
-enabled"), and without `/S` there is nothing for the operating system to
-complete: Windows raises the exception with the destination register's
-mask as its argument (`00000400` and `00001000` here: F10 and F12). The
-operands are words the guest's own integer code put there. The emulator's
-part was checked three ways: the interpreter (`ALPHABOX_INTERP=1`) takes
-the same traps at the same addresses with the same operands; a
-`JIT_VERIFY` build ran the whole test (2.7 billion compiled blocks) with
-0 mismatches and the same traps; and the stack words are the same on
-every run. So it is Microsoft's pre-release code, compiled without IEEE
-mode for a processor that -- unlike the x86 it was written on -- traps on
-operands that are not numbers.
+invalid-operation trap that nothing masks:
 
-One related question came up with it. An FP instruction that traps has
-its destination written first here (the result the operation gives with
-the trap masked), so a handler that completes an `/S` instruction whose
-destination is also an operand finds the operand gone. That is within
-the architecture -- "if this trap occurs, an UNPREDICTABLE value is
-stored in the result register", and software completion requires that no
-instruction in the trap shadow modify a register the trigger reads
-(Handbook 4.7.6, conditions 1 and 3) -- so code generated for software
-completion keeps the destination apart from the operands (GCC's `-mieee`
-patterns are early-clobber for this reason). A compiler that does not is
-relying on what no Alpha promised.
+- "the 21264/21364 traps on a Denormal input operand for all arithmetic
+  operations unless FPCR[DNZ] = 1"; "SNaN operand ... Invalid Op"
+  (21264/21364 Compiler Writer's Guide, appendix C);
+- "This trap is always enabled" (the Alpha Architecture Handbook 4.7.6).
+
+Without `/S` there is nothing for the operating system to complete:
+Windows raises the exception with the destination register's mask as its
+argument (`00000400` and `00001000` here: F10 and F12). The operands are
+words the guest's own integer code put there.
+
+The emulator's part was checked three ways:
+
+- the interpreter (`ALPHABOX_INTERP=1`) takes the same traps at the same
+  addresses with the same operands;
+- a `JIT_VERIFY` build ran the whole test (2.7 billion compiled blocks)
+  with 0 mismatches and the same traps;
+- the stack words are the same on every run.
+
+So it is Microsoft's pre-release code, compiled without IEEE mode for a
+processor that, unlike the x86 it was written on, traps on operands that
+are not numbers.
+
+**A related question.** An FP instruction that traps has its destination
+written first here (the result the operation gives with the trap masked),
+so a handler that completes an `/S` instruction whose destination is also
+an operand finds the operand gone.
+
+That is within the architecture: "if this trap occurs, an UNPREDICTABLE
+value is stored in the result register", and software completion requires
+that no instruction in the trap shadow modify a register the trigger reads
+(Handbook 4.7.6, conditions 1 and 3). So code generated for software
+completion keeps the
+destination apart from the operands (GCC's `-mieee` patterns are
+early-clobber for this reason). A compiler that does not is relying on
+what no Alpha promised.
 
 ## The rule this audit produced
 
 Two references are needed, not one. The handbook says what should happen;
-a guest says whether the emulator can still run. Today's round found three
-bugs that a guest would never have shown (a NaN returned for an overflow
-under chopped rounding, denormals worth half their value, memory barriers
-compiled to nothing) and one change that the handbook endorses but a guest
-must approve before it ships (`UNDZ`). Neither reference alone would have
-been enough.
+a guest says whether the emulator can still run. The first audit's round
+(2026-09-18) found three bugs that a guest would never have shown (a NaN
+returned for an overflow under chopped rounding, denormals worth half
+their value, memory barriers compiled to nothing) and one change that the
+handbook endorses but a guest must approve before it ships (`UNDZ`).
+Neither reference alone would have been enough.
