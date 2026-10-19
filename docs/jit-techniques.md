@@ -7,14 +7,18 @@ makes a technique implementable and the detail is what gets lost.
 
 [performance.md](performance.md) has what *we* measured and what it means
 for Alphabox. This file is the outside evidence: what each system does,
-where its code is, what it measured, and -- the part worth as much as the
-rest -- what it tried and abandoned.
+where its code is, what it measured, and what it tried and abandoned (the
+part worth as much as the rest).
 
 Two standing cautions. Percentage gains from different systems do not
 compose; and several of the numbers below are from workloads with nothing
 in common with ours, so they indicate direction and rough size, not what we
 would get. Where a claim is someone's inference rather than a measurement,
 it says so.
+
+What this file says about Alphabox itself is as of the survey. Notes in
+parentheses, and [Where to start](#where-to-start), say what has been
+built, measured or dropped since.
 
 ## The three places every one of them disagrees with us
 
@@ -27,6 +31,12 @@ Independently, from different architectures and decades:
    branch into the compiled code.
 3. **Nobody uses a per-site inline cache for indirect branches.** They use
    either the host's own return predictor or one large hashed table.
+
+(On the third point, our own computed-jump cache is in fact one table of
+1024 entries indexed by the target PC, `m_ind_cache`, which the AArch64
+emitter probes inline. What differs from QEMU's is its size and hit rate,
+and making it 16 times larger measured as no change: see performance.md,
+"Changes that did not pay off".)
 
 ## Block linking
 
@@ -47,13 +57,16 @@ end the block** (`mtmsr`/`rfi` are `FL_ENDBLOCK`).
 chaining is restricted to targets on the same guest page
 (`translator_use_goto_tb()` in `accel/tcg/translator.c`). Same page means
 the target's physical address is pinned by the source's own physical page,
-so the chain cannot be invalidated by any MMU change -- only by the code
+so the chain cannot be invalidated by any MMU change, only by the code
 itself changing. Note QEMU still throws its *software TLB* away on an
 address-space change (`target/alpha/sys_helper.c`: `helper_tbia` →
 `tlb_flush`); it solves the chaining half only.
 
 Alphabox already keys blocks by `(virtual PC, ASN, mode)`, which is
-Dolphin's shape. What we lack is the reverse index below.
+Dolphin's shape. What we lacked is the reverse index below. (One was later
+built behind a switch and removed: the link misses it would save happen
+while booting, and CPU-bound code takes about a thousand per 100M
+instructions. See performance.md, "What the JIT is actually doing".)
 
 ### The reverse index that replaces the epoch
 
@@ -92,7 +105,7 @@ Every system here patches. The shapes differ only in the mechanics:
   }
   ```
 
-  A taken link costs **one conditional branch** -- no load, no compare, no
+  A taken link costs **one conditional branch**: no load, no compare, no
   indirect jump. Destroying a block writes `BRK` over the entry point only
   ("we might still be within this block") and defers freeing the code range
   to the next codegen. `JitArm64/JitArm64Cache.cpp`.
@@ -109,7 +122,7 @@ Practical constraints for us: AArch64's `B` reaches ±128 MB, which caps how
 large a code arena can be before links stop being one instruction (Dolphin
 handles the out-of-range case by inverting the condition and using a full
 branch). On Apple Silicon every patch needs
-`pthread_jit_write_protect_np` around it plus an icache flush -- Dolphin
+`pthread_jit_write_protect_np` around it plus an icache flush; Dolphin
 wraps each one in `ScopedJITPageWriteAndNoExecute`.
 
 ## Indirect branches and returns
@@ -174,8 +187,8 @@ calls, never for ordinary block-to-block jumps, because that "breaks the
 return-address-stack prediction on every block-to-block jump, which is not
 worth it".
 
-**Alpha makes the classification free.** Opcode `0x1A` encodes the kind in
-`disp<15:14>` -- JMP, JSR, RET, JSR_COROUTINE -- because a real 21264 has a
+**Alpha makes the classification free.** Opcode `0x1A` encodes the kind
+(JMP, JSR, RET, JSR_COROUTINE) in `disp<15:14>`, because a real 21264 has a
 hardware return stack driven by exactly those bits. No heuristic is needed.
 There is also a 14-bit hint field carrying a static prediction of the
 target's low bits; DEC compilers and PALcode set it, but the Microsoft
@@ -184,7 +197,7 @@ compiler leaves it zero, so measure coverage per guest before relying on it.
 ### Everything else indirect: one big hashed table, probed inline
 
 QEMU's 2026 series (Matt Turner) is the most directly relevant measurement
-in this document, because **its benchmark is an Alpha guest** -- `qemu-alpha`
+in this document, because **its benchmark is an Alpha guest**: `qemu-alpha`
 running an emulated Alpha gcc compiling SQLite. Its thesis matches ours:
 most of what a JIT executes is fixed overhead around blocks.
 
@@ -203,15 +216,19 @@ inlined probe of a global PC-hashed table:
 Each exit emits **its own** final jump rather than branching to a shared
 stub, to avoid a temp being spilled and reloaded on every dispatch.
 
-Measured for that patch alone: **−34.67% instructions, −25.94% wall clock**,
-hit rate **95.8%**, the lookup helper falling from **31.01% of profile
-samples to 0.35%**, and L1-icache load misses **−39.0%**. Enlarging the
-table from 4 K to 64 K entries was separately worth **−5.92% instructions,
-−8.71% wall**. Cumulative for the nine-patch series: instructions −50.26%,
-wall −41.96%.
+Measured for that patch alone:
+
+- **−34.67% instructions, −25.94% wall clock**;
+- hit rate **95.8%**;
+- the lookup helper falling from **31.01% of profile samples to 0.35%**;
+- L1-icache load misses **−39.0%**.
+
+Enlarging the table from 4 K to 64 K entries was separately worth **−5.92%
+instructions, −8.71% wall**. Cumulative for the nine-patch series:
+instructions −50.26%, wall −41.96%.
 
 dynarmic does the same with a 2^20-entry × 16-byte table hashed by CRC32
-over its "location descriptor" -- the exact analogue of our
+over its "location descriptor". That is the exact analogue of our
 `(PC, ASN, mode)` key, and one 64-bit compare covers all three if packed.
 It writes the entry *before* the lookup and fills in the code pointer after,
 so there is no separate insert path.
@@ -226,10 +243,12 @@ Multicores"* (TACO 2016), is the paper written for our situation: a
 full-system DBT whose guest has software-managed address spaces. Keying the
 indirect-branch table on guest virtual address alone forces a flush at every
 guest context switch, which both costs time and caps the table size worth
-affording. Their fix stores the guest *physical* page alongside the virtual
-one in a small instruction-side TLB, and both addresses in the table. A
-context switch then flushes only the little iTLB; the big table survives,
-because a cross-page transfer cannot be taken until the iTLB revalidates it.
+affording.
+
+Their fix stores the guest *physical* page alongside the virtual one in a
+small instruction-side TLB, and both addresses in the table. A context
+switch then flushes only the little iTLB; the big table survives, because a
+cross-page transfer cannot be taken until the iTLB revalidates it.
 
 That is what let them go from 2^13 to 2^16 entries, with measured hit rates
 of 94.33% (worst, mcf) to 99.99%, and 95.62% on an Android boot.
@@ -239,11 +258,12 @@ of 94.33% (worst, mcf) to 99.99%, and 95.62% on an Android boot.
 Our compiler truncates a block at the 8 KB guest page boundary
 (`src/jit/jitengine.cpp`, the `page_end` test), for the correct reason: past
 it the next instruction's physical address need not be `phys + 4`. QEMU
-refuses to chain across a page for the same reason. Hong et al. instead
-*guard* the crossing, and the guard is three instructions -- load the page
-number from the iTLB, compare it with the target's page, conditional branch
--- with no index computation, because the target address is known at
-translation time.
+refuses to chain across a page for the same reason.
+
+Hong et al. instead *guard* the crossing, and the guard is three
+instructions: load the page number from the iTLB, compare it with the
+target's page, conditional branch. There is no index computation, because
+the target address is known at translation time.
 
 They also measured **lazy** checking (the guard at the end of the source
 block, only on edges that actually cross) against **proactive** checking
@@ -255,10 +275,15 @@ guard hit rates of 97.9-99.98%. QEMU's user-mode version of the same idea
 measured −4.84% wall.
 
 Alpha's software TLB is what makes this legitimate for us and not for QEMU's
-hardware-MMU guests: the guest is architecturally obliged to execute
+hardware-MMU guests. The guest is architecturally obliged to execute
 `TBIS`/`TBIA` PALcode whenever a mapping changes, and an address-space
-switch needs no TBI at all -- which is the entire point of ASNs. That gives
+switch needs no TBI at all, which is the entire point of ASNs. That gives
 us a single invalidation funnel QEMU has only in user mode.
+
+(Our static exits do link across pages now, as epoch-guarded data links:
+the link stays valid while the epoch it was cached in is current, and any
+flush, ITB invalidate or ASN change bumps the epoch. Blocks themselves
+still end at the page.)
 
 ## The memory path
 
@@ -270,19 +295,20 @@ of its ideas are worth taking whatever else we do.
 permission check, because a read-only page simply never matches
 `addr_write`; disabling a permission is `address = -1`, with no branch
 anywhere. `addend = host_ram_ptr + xlat - guest_page_addr`, so the access is
-`host = guest_vaddr + addend` with no masking -- the same bias we adopted.
+`host = guest_vaddr + addend` with no masking: the same bias we adopted.
 `mask` is pre-shifted so the index computation yields a byte offset, and
 `mask` and `table` are an aligned pair so the backend loads both with one
 `LDP`.
 
 **One compare rejects everything.** Bits [9:6] of the stored comparator are
-free -- above the largest alignment, below the smallest page -- and hold
+free (above the largest alignment, below the smallest page) and hold
 flags: invalid, MMIO, not-dirty, watchpoint, byte-swap, discard-write. The
 stored tag is `page_vaddr | flags`; the generated code computes
 `addr & (TARGET_PAGE_MASK | a_mask)`. A single `CMP` therefore settles wrong
 page, wrong permission, MMIO, dirty-tracking **and misalignment** at once.
+
 For an access whose alignment requirement is smaller than its size, the
-compared value is `addr + (size_mask - align_mask)` -- the last byte -- so
+compared value is `addr + (size_mask - align_mask)`, the last byte, so
 page-crossing is caught by that same compare.
 
 The whole AArch64 fast path is 8 instructions plus the access:
@@ -303,18 +329,20 @@ on a miss, scan them before the expensive refill and three-way swap a hit
 back into the main slot. Measured in QEMU system mode at **+10.7% average
 and +25.4% peak on SPECINT2006** with no regression on any benchmark (Xin
 Tong, 2014); a later measurement of the same idea reports +11.9%/+26.2%.
-It costs nothing in emitted code -- it lives entirely in the refill helper.
+It costs nothing in emitted code: it lives entirely in the refill helper.
+(Ours took a different shape: a second way behind the data page cache,
+since replaced by a second level; see performance.md.)
 
 **Dynamic resizing.** Track peak occupancy over a ~100 ms window; above a
 70% use rate, double; below 30% at window end, shrink. Cota and Carloni,
 CGO 2017. Note the *negative* result attached to it: keying the decision on
-the use rate measured at flush time "resulted in a slowdown on average" --
-the recent-past window is what works.
+the use rate measured at flush time "resulted in a slowdown on average".
+The recent-past window is what works.
 
 **PCSX2's bias-plus-sign-bit encoding** is a neat trick with a caveat. Its
 table entry is `host_ptr - vaddr` for RAM and `(handler_id | 1<<63) + paddr
 - vaddr` for MMIO, so one `add` reconstructs both cases and the *sign* of
-the result discriminates -- no tag compare, no separate MMIO test. It works
+the result discriminates: no tag compare, no separate MMIO test. It works
 only because the table is a complete map of a 4 GB space and because the
 guest has no misaligned accesses. Ours is a cache, not a map, so we keep the
 tag compare; the bias half we already have.
@@ -323,8 +351,8 @@ tag compare; the bias half we already have.
 
 Mapping guest memory into the host address space so an access is one
 instruction, with a SIGSEGV handler backpatching the sites that turn out to
-be MMIO. Dolphin's handler is the clean version -- no instruction decoding,
-just an ordered map from code range to handler:
+be MMIO. Dolphin's handler is the clean version, with no instruction
+decoding, just an ordered map from code range to handler:
 
 ```cpp
 auto it = m_fault_to_handler.upper_bound(pc);   // keyed by END of each fast region
@@ -337,19 +365,28 @@ if (pc < it->second.fast_access_code) return false;
 Dolphin extended this to page-table-mapped memory in February 2026 by
 noticing that the guest *must* announce every page-table change (`tlbie`),
 then diffing the guest page table against a shadow copy and issuing
-`mmap`/`mprotect`. Their own ledger is mixed: Rogue Squadron III doubled,
-Spider-Man 2 *lost* performance to the tracking overhead, an early
-implementation was slower than doing nothing, and the accuracy cost is
-explicit -- "the TLB is now effectively infinitely large".
+`mmap`/`mprotect`. Their own ledger is mixed:
+
+- Rogue Squadron III doubled;
+- Spider-Man 2 *lost* performance to the tracking overhead;
+- an early implementation was slower than doing nothing;
+- the accuracy cost is explicit: "the TLB is now effectively infinitely
+  large".
 
 For Alphabox the general case is a bad trade, for four independent reasons:
-our software page cache already costs ~4 instructions rather than the
-~1000-instruction page walk Dolphin was escaping; ASNs mean several address
-spaces are live at once, so one host view is not enough; the backpatch is
-one-shot, so a site pessimised by one process's layout stays slow forever;
-and 8 KB Alpha pages against 16 KB Apple Silicon host pages is a hard
-mismatch. PCSX2 documents the last problem precisely -- it only maps a page
-when all four consecutive guest pages are contiguous and aligned.
+
+- our software page cache already costs ~4 instructions rather than the
+  ~1000-instruction page walk Dolphin was escaping (the survey's figure;
+  the emitted listings later showed 12 host instructions for a load, see
+  performance.md, "The hot path, by what it is made of", which is still
+  nowhere near a page walk);
+- ASNs mean several address spaces are live at once, so one host view is
+  not enough;
+- the backpatch is one-shot, so a site pessimised by one process's layout
+  stays slow forever;
+- 8 KB Alpha pages against 16 KB Apple Silicon host pages is a hard
+  mismatch. PCSX2 documents this problem precisely: it only maps a page
+  when all four consecutive guest pages are contiguous and aligned.
 
 **The subset that does fit**: Alpha's superpage/KSEG addresses translate to
 physical by masking, never change, and are never per-process. A single
@@ -359,26 +396,30 @@ and no accuracy loss.
 
 ## Code layout and block length
 
-**Farcode.** Two arenas; everything cold -- slow memory paths, exception
-exits, deopt stubs, the "budget expired" half of every link -- is emitted
+**Farcode.** Two arenas: everything cold (slow memory paths, exception
+exits, deopt stubs, the "budget expired" half of every link) is emitted
 into a far arena so the hot arena stays dense. Dolphin's measurement is
 striking because the cause was not what they expected: MMU emulation was
 slow not from the MMU work but because "the quantity of this code was so
-enormous that it overflowed CPU caches". Result: Rogue Leader up to **twice
-as fast**, other MMU titles **30% or more**, and **~6% even on non-MMU
-titles**. Low risk, and it matters more the shorter the chains are.
+enormous that it overflowed CPU caches".
+
+Result: Rogue Leader up to **twice as fast**, other MMU titles **30% or
+more**, and **~6% even on non-MMU titles**. Low risk, and it matters more
+the shorter the chains are.
 
 **Branch following.** Dolphin extends a block past an unconditional branch
 at analysis time, capped at `BRANCH_FOLLOWING_THRESHOLD = 2`, and follows a
 return only when the matching call was itself followed. Enabled by default
-in 5.0-2178 -- and **disabled per-game nine years later** for Rogue Squadron
+in 5.0-2178, and **disabled per-game nine years later** for Rogue Squadron
 II, because bigger blocks made invalidation and re-JIT stalls worse. box64
 has the aggressive version (`BIGBLOCK`, `FORWARD=128`, plus `SEP` for
 secondary entry points into an existing block).
 
 Worth noting how little of Dolphin's chain length comes from this: it
 follows at most two branches. Its chains are long because **linking works**,
-not because blocks are long.
+not because blocks are long. (We later took the related step of running a
+block on through a conditional branch it does not take: "Extended blocks"
+in performance.md, -2.0%.)
 
 ## Tried and abandoned
 
@@ -402,16 +443,18 @@ Kept because a negative result is cheaper to read than to reproduce.
 | Branch following | Dolphin | disabled per-game where invalidation dominated |
 | Traces preempting chaining | **ES40-Emu** | gdwnldsKSC's note, kept in `jitengine.cpp`: a net loss |
 
-Two techniques that simply do not apply to us: **Apple's TSO bit** (Alpha's
-memory model is *weaker* than AArch64's -- we want plain loads, and turning
-TSO on would only cost us), and **host-MMU shadow mapping** of guest virtual
-space (page-size mismatch, per-ASN multiplication, and MMIO still needs a
-trap).
+Two techniques that simply do not apply to us:
+
+- **Apple's TSO bit**: Alpha's memory model is *weaker* than AArch64's, so
+  we want plain loads, and turning TSO on would only cost us.
+- **Host-MMU shadow mapping** of guest virtual space: page-size mismatch,
+  per-ASN multiplication, and MMIO still needs a trap. ([hypervisor.md](hypervisor.md)
+  is the variant that sidesteps the page size.)
 
 ## Where to start
 
-Ordered by measured gain over effort, for our measurements
-(see [performance.md](performance.md)):
+The survey's list, ordered by measured gain over effort for our
+measurements of September 2026 (see [performance.md](performance.md)):
 
 1. **Inline the block-lookup probe at exits**, backed by a large hashed
    table keyed on `(PC, ASN, mode)`. Closest measured analogue: −25.94% wall
@@ -424,7 +467,18 @@ Ordered by measured gain over effort, for our measurements
    link misses.
 4. **Cross-page linking** with the three-instruction guard, if chain length
    still looks short on the workloads we care about.
-5. **Victim buffer** behind the data page cache -- no emitter work at all.
+5. **Victim buffer** behind the data page cache, with no emitter work at
+   all.
+
+What became of them, from performance.md:
+
+| Item | Since |
+| --- | --- |
+| 1. Inline lookup probe | Already there in a small form: the AArch64 emitter probes a 1024-entry computed-jump table inline. 16384 entries measured as no change. |
+| 2. Return stack | Not built. |
+| 3. Patched branches | Not built. The epoch's link misses turned out to come from booting, not from CPU-bound code; the reverse index that was built was removed. |
+| 4. Cross-page linking | Static exits link across pages as epoch-guarded data links. |
+| 5. Victim buffer | Built as a second way, then replaced by a second level of the page cache. A victim way behind the TB index was tried and dropped. |
 
 ## Sources
 
