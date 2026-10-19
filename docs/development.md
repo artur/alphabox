@@ -1,22 +1,17 @@
 # Development and testing
 
-## Layout
+## Where things are
 
 | Directory | Contents |
-|---|---|
-| `src/cpu/` | the Alpha CPU interpreter, PALcode fast paths, IEEE/VAX floating point |
-| `src/jit/` | the asmjit translator (x86-64 and AArch64 emitters) |
-| `src/system/` | the machine, the Tsunami/Typhoon chipset, configuration, NVRAM |
-| `src/devices/isa/` | devices behind the ISA bridge |
-| `src/devices/pci/` | PCI devices, grouped by bus rather than by chip |
-| `src/devices/storage/` | disk and image back ends |
-| `src/devices/video/` | the MAME-derived VGA core, the shared card base, and one directory per card family (`s3/`, `cirrus/`) |
-| `src/devices/net/` | network back ends |
-| `src/gui/` | the GUI layer; SDL3 is the maintained back end |
-| `test/` | firmware regression data and the test tools |
+| --- | --- |
+| `src/` | the emulator; [source-layout.md](source-layout.md) maps it |
+| `test/rom/` | the ES40 firmware regression test and its reference console log |
+| `test/tools/` | the test tools below |
+| `test/arc/`, `test/vms/`, `test/nt/` | configurations and firmware for the ARC, OpenVMS and Windows NT runs |
+| `test/platforms/` | real machines' console output, for platform bring-ups |
 | `docs/` | this documentation |
 
-Threading uses `std::thread`/`std::mutex`/`std::chrono`; the Poco-style
+Threading uses `std::thread`, `std::mutex` and `std::chrono`; the Poco-style
 wrappers inherited from es40 are gone and stay gone. Format changed lines
 with the repository's `.clang-format` (`git clang-format`).
 
@@ -24,27 +19,152 @@ with the repository's `.clang-format` (`git clang-format`).
 
 The scripts in `test/tools/` find the repository from their own location and
 write their output to `$ALPHABOX_WORK` (default `lab/`, which git ignores).
-They stop only the emulator processes they started.
+They stop only the emulator processes they started. Each script's header
+gives its usage and variables.
+
+### SRM firmware
 
 | Tool | Purpose |
-|---|---|
-| `srm_run.sh` | SRM firmware boot to `P00>>>` for one build, with a console-log diff against `test/rom/axp_correct.log` and the JIT_VERIFY mismatch count. Give each build its own `PORT` to run several at once. |
-| `srm_probe.sh` | SRM probes: CPU count, `memory.bits`, SCSI/IDE/floppy drives, a NIC (`NIC=<class>`, optionally on a UDP link to `net_peer.py` with `NET_PEER=<nic port>:<peer port>`), any extra configuration (`EXTRA_CFG=<file>`: bridges, more devices), console commands, and the SIGTERM, disconnect and halt exit paths. |
-| `JIT_VERIFY` + `ALPHABOX_JIT_FPTEST=1` | Every compiled block re-run by the interpreter and compared (a clean SRM boot is ~130 million blocks), and the JIT's inline IEEE operations checked over 8.5 million cases. Finds JIT/interpreter disagreements -- not disagreements with the architecture, for which see [cpu-fidelity.md](cpu-fidelity.md). |
-| Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `ALPHABOX_TRACE_CALLS`, `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP`, `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get. See [headless.md](headless.md). |
-| `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image, so `boot eia0`/`boot ewa0` exercises a full network boot. |
-| `vga_boot.sh` | SRM on the S3 or Cirrus VGA console (`CARD=s3\|cirrus`, `CHIP=gd5430\|gd5434`), window-less; reports the hashes of the frames the screen settles on. The known sets are in the script header. |
-| `cpu_bench.sh`, `bench_image.py` | How fast the emulator executes Alpha code (see [performance.md](performance.md) for what each workload is actually bounded by): a boot block of known instruction count, run at two sizes so the console's boot subtracts out. `BODY=` sets the loop length -- long measures the translated code, short measures leaving one block for the next. Do not use a `JIT_STATS` build: its counters are part of what would be measured. |
-| `win_bench.sh` | Headless guest boot on a throwaway clone of an installed guest: final screenshot, host CPU use, per-CPU MIPS. **The MIPS are only meaningful if the guest is busy**: at an idle desktop the number is the guest's idle loop (and the host will sit near 1% CPU, which is the tell). |
-| `win_workload.sh` | Times a CPU-bound command inside a booted Windows guest (a real-workload benchmark). Narrow: the `cmd` loop it usually runs is integer-only over a handful of code pages, so it cannot show the FP path, the address path or call overhead. Prefer `nt_bench.sh` for those. |
-| `perf_ab.py` | The only way a performance claim gets made: two binaries (or one binary with `--env-base K=V` on the base arm -- a runtime switch in one binary is how anything under ~10% per section is measured, since code layout alone moves a section by that much between builds), N >= 2 interleaved rounds of `nt_bench.sh` or, with `--snapshot`, of `nt_snap.sh run`; per-section medians with ranges and an overlap flag; identical computed results checked; hashes, HEAD and the method recorded; `--expect section:pct` predictions marked hit or miss; waits for a quiet host between rounds. Appends to `lab/results/ledger.md`. |
-| `nt_snap.sh` | `make`: boot the install once and snapshot the logged-in desktop (`SIGUSR1` saves with all threads stopped; `ALPHABOX_SNAPSHOT`, `ALPHABOX_SNAPSHOT_EXIT`). `run`: resume it (`ALPHABOX_RESTORE`), type the run command into Start > Run and run a benchmark section: DONE ~16 s after launch instead of a two-minute boot. The S3 card's registers, VRAM and mode decode are in the file since 2026-09-19, so the resumed desktop draws and takes input. `perf_ab.py --snapshot` drives it. |
-| `nt_bench.sh`, `ntbench/axpbench.c` | A real NT application benchmark, per JIT datapath (`alu branch call ldst stride fp byte div sort`), plus JScript under `cscript` and `makecab` LZX. The guest times itself and writes the numbers to `C:\NADA\OUT.TXT`, which the harness reads back with mtools -- no keyboard injection and no framebuffer timing. Needs [nada](https://github.com/artur/nada) for `-t alpha-windows` (`NADA=<dir>`, default `~/Documents/proj/nada`) and `mtools`. The disk staging, Startup hook, shutdown helper and end-detection are from nada's own `tests/run-ntalpha.sh`. |
-| `s3_bench.sh` | Graphics workload: boots an installed Windows guest, opens a command prompt and times a directory listing scrolling in it -- what a guest feels as a slow or fast card. With `ALPHABOX_BLIT_STATS=1` the drawing engine reports its pixels, commands and transfers. Writes the emulator's pid to `emulator.pid`: profile *that* pid, since other emulators may be running on the host. |
-| `win_storage.sh` | Adds a storage controller (`CTRL=<class>`) with a FAT16 test disk to a clone of an installed Windows guest, has Windows copy a file on it, and checks the copy on the host; `BRIDGE=<class>` puts the controller behind a PCI-PCI bridge. |
-| `build_lanes.sh`, `build_revs.sh` | Build every configured build directory, or every commit of a series in a worktree. |
-| `alphabox hvprobe` | Not a script: a subcommand built with `-DALPHABOX_HVF=ON` (macOS on Apple silicon, JIT lane) that measures Hypervisor.framework's mechanics on the host -- ID registers, exit round trips, a stage-1 fault handled inside the VM -- for [hypervisor.md](hypervisor.md). The build signs the binary ad hoc with the hypervisor entitlement. |
-| `ppm2png.py`, `keys_for.py`, `mips_summary.py`, `fat_disk.py` | Helpers: frame-dump conversion, key tokens for a line of text, MIPS summaries, FAT16 test disks. |
+| --- | --- |
+| `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
+| `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
+| `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
+| `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above use it. |
+| `srm_console.py` | Drives the console over its telnet port: waits for the prompt, runs commands, stops the emulator. |
+| `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. |
+| `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |
+
+Give each `srm_run.sh` its own `PORT` to run several builds at once.
+
+`srm_probe.sh` takes its variants from the environment:
+
+- `CPUS=`, `MEMBITS=`, `PLATFORM=` and `ROM=` pick the machine and firmware.
+- `SCSI=<class>`, `IDE_CFG=<file>` and `FLOPPY=<image>|halt` add drives.
+- `NIC=<class>` adds a NIC; `NET_PEER=<nic port>:<peer port>` puts it on a
+  UDP link to `net_peer.py`, so `boot eia0`/`boot ewa0` runs a full network
+  boot.
+- `EXTRA_CFG=<file>` adds any configuration: bridges, more devices.
+
+### CPU and JIT correctness
+
+| Tool | Purpose |
+| --- | --- |
+| `JIT_VERIFY` build | Every compiled block re-run by the interpreter and compared. A clean SRM boot is ~130 million blocks. |
+| `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
+| `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
+| `bench_image.py` | A bootable image from a list of instruction words. |
+| Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `_CALLS`, `_I2C`, `_MP`, `_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get ([headless.md](headless.md)). |
+
+`JIT_VERIFY` finds disagreements between the JIT and the interpreter, not
+disagreements with the architecture; for those see
+[cpu-fidelity.md](cpu-fidelity.md).
+
+### Performance
+
+| Tool | Purpose |
+| --- | --- |
+| `perf_ab.py` | The only way a performance claim gets made (below). |
+| `nt_bench.sh`, `ntbench/` | A real NT application benchmark, one section per JIT datapath, timed by the guest itself. |
+| `nt_snap.sh` | The same benchmark resumed from a desktop snapshot instead of a cold boot. |
+| `sect_mips.sh` | The guest's MIPS on one benchmark section, from the snapshot. |
+| `cpu_bench.sh`, `bench_image.py` | How fast the emulator executes a loop of Alpha code, with no OS. |
+| `boot_rate.sh` | How much guest code a Windows boot gets through, and when the desktop arrives; two arms of one binary. |
+| `jit_profile.sh`, `jit_profile.py` | A host sampling profile of compiled code, mapped back to guest blocks and instructions. |
+| `win_bench.sh` | Headless guest boot on a throwaway clone: final screenshot, host CPU use, per-CPU MIPS. |
+| `win_workload.sh`, `win_workload.py` | Times a CPU-bound command inside a booted Windows guest. |
+| `mips_summary.py` | Percentiles of the `JIT_STATS` throughput lines in emulator logs. |
+
+[performance.md](performance.md) says what bounds each workload. What each
+tool needs to be read correctly:
+
+- **`perf_ab.py`** runs two binaries, or one binary with
+  `--env-base K=V` on the base arm. A runtime switch in one binary is how
+  anything under ~10% per section is measured, since code layout alone
+  moves a section by that much between builds.
+  - N >= 2 interleaved rounds of `nt_bench.sh`, or with `--snapshot` of
+    `nt_snap.sh run`.
+  - Per-section medians with ranges and an overlap flag; identical computed
+    results checked; hashes, HEAD and the method recorded.
+  - `--expect section:pct` predictions are marked hit or miss.
+  - It waits for a quiet host before each round (`--busy-ok` times anyway,
+    and the ledger says so).
+  - Results are appended to `lab/results/ledger.md`.
+- **`nt_bench.sh`** runs `ntbench/axpbench.c` (sections `alu branch call
+  ldst stride fp byte div sort`), JScript under `cscript` and `makecab`
+  LZX. The guest writes its numbers to `C:\NADA\OUT.TXT`, which the
+  harness reads back with mtools: no keyboard injection and no framebuffer
+  timing. It needs [nada](https://github.com/artur/nada) for
+  `-t alpha-windows` (`NADA=<dir>`, default `~/Documents/proj/nada`) and
+  `mtools`. The disk staging, Startup hook, shutdown helper and
+  end-detection come from nada's own `run-ntalpha.sh` test script.
+- **`nt_snap.sh`** `make` boots the install once and snapshots the
+  logged-in desktop (`SIGUSR1` saves with all threads stopped;
+  `ALPHABOX_SNAPSHOT`, `ALPHABOX_SNAPSHOT_EXIT`). `run` resumes it
+  (`ALPHABOX_RESTORE`), types the run command into Start > Run and runs a
+  benchmark section: DONE ~16 s after launch instead of a two-minute
+  boot. The S3 card's registers, VRAM and mode decode have been in the
+  file since 2026-09-19, so the resumed desktop draws and takes input.
+- **`cpu_bench.sh`** reads the rate the processor reports for itself
+  (`ALPHABOX_RATE`) over the loop's steady stretch. `BODY=` sets the loop
+  length: long measures the translated code, short measures leaving one
+  block for the next. Do not use a `JIT_STATS` build: its counters are
+  part of what would be measured.
+- **`win_bench.sh`**: the MIPS are only meaningful if the guest is busy. At
+  an idle desktop the number is the guest's idle loop, and the host sits
+  near 1% CPU, which is the tell.
+- **`win_workload.sh`** is narrow: the `cmd` loop it usually runs is
+  integer-only over a handful of code pages, so it cannot show the FP
+  path, the address path or call overhead. Prefer `nt_bench.sh` for those.
+- **`jit_profile.sh`** needs the `JIT_DISASM` lane and macOS `sample`.
+
+### Graphics
+
+| Tool | Purpose |
+| --- | --- |
+| `vga_boot.sh` | SRM on a VGA console, window-less; reports the hashes of the frames the screen settles on. |
+| `s3_bench.sh` | Times a directory listing scrolling in a Windows command prompt. |
+| `d3d_check.sh`, `d3dcheck/` | Direct3D conformance on a Windows 2000 guest: the card's HAL against Microsoft's software rasteriser. |
+| `radeon_me_dis.py` | An annotated listing of a Radeon CP micro-engine image ([radeon-microcode.md](radeon-microcode.md)). |
+| `ppm2png.py` | Converts a frame dump to PNG. |
+
+`vga_boot.sh` takes `CARD=s3|cirrus|mach64|permedia2|s3virge|radeon|tga`
+and a `CHIP=` for the families with several parts; the known frame sets
+are in the script header.
+
+`s3_bench.sh` measures what a guest feels as a slow or fast card. With
+`ALPHABOX_BLIT_STATS=1` the drawing engine reports its pixels, commands
+and transfers. It writes the emulator's pid to `emulator.pid`: profile
+*that* pid, since other emulators may be running on the host.
+
+### USB, storage and sound
+
+| Tool | Purpose |
+| --- | --- |
+| `usb_bench.sh` | USB storage throughput in Windows 2000, by the guest's clock; `FAULTS=` fires `usb:` fault tokens. |
+| `usb_audio.sh` | The USB speaker in Windows 2000: plays a sound, captures the stream and compares it with the file. |
+| `usb_snap.sh` | USB devices across a snapshot and a restore of a running Windows 2000. |
+| `wav_compare.py` | Compares a captured WAV with its reference. |
+| `win_storage.sh` | A storage controller (`CTRL=<class>`) with a FAT16 disk added to a Windows guest, which copies a file on it. |
+| `fat_disk.py` | Builds and inspects small FAT16 test disks. |
+
+`win_storage.sh` checks the copy on the host; `BRIDGE=<class>` puts the
+controller behind a PCI-PCI bridge.
+
+### Builds and helpers
+
+| Tool | Purpose |
+| --- | --- |
+| `build_lanes.sh` | Builds every configured build directory. |
+| `build_revs.sh` | Builds every commit of a series in a worktree. |
+| `keys_for.py` | Key tokens for a line of text. |
+| `alphabox hvprobe` | Hypervisor.framework's mechanics measured on the host. |
+
+`alphabox hvprobe` is not a script but a subcommand, built with
+`-DALPHABOX_HVF=ON` (macOS on Apple silicon, JIT lane). It measures ID
+registers, exit round trips and a stage-1 fault handled inside the VM, for
+[hypervisor.md](hypervisor.md).
+
+### The original regression test
 
 On Linux, `cd test/rom && bash test.sh` is the original firmware regression
 test; it cannot pass on macOS (BSD `sed`). It deletes the tracked ROM files at
@@ -65,14 +185,16 @@ A change is ready when:
    driver that uses it, not only against a reference model. The Cirrus
    blitter, for example, matched QEMU's model exactly and still dropped a
    blit that the Windows 2000 driver depends on.
-5. **Speed:** a change made for speed is measured, on a workload that the
-   change could actually affect, with the runs interleaved between the two
-   builds -- under 10% on a single pair of runs is noise on a shared host.
-   [performance.md](performance.md) says what bounds each workload; several
+5. **Speed:** a change made for speed is measured with `perf_ab.py`, on a
+   workload that the change could actually affect. Under 10% on a single
+   pair of runs is noise on a shared host.
+   [performance.md](performance.md) says what bounds each workload. Several
    plausible optimizations have measured as no change at all, and saying so
    in the commit message is part of the job.
 
-## Peripherals
+## Peripherals and open work
 
 [peripherals.md](peripherals.md) lists the PCI devices the ES40 firmware
-knows, what Alphabox emulates, and the order in which more are being added.
+knows, what Alphabox emulates, and a suggested order for more.
+[backlog.md](backlog.md) is the plan for what the machines' processors and
+chipsets do not model yet.
