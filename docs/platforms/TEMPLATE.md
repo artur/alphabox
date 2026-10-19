@@ -1,12 +1,15 @@
 # <Machine> work packet
 
 > Copy this file to `docs/platforms/<name>.md` and fill it in. Anything you
-> could not establish stays in the file as an open question with the
-> evidence you have; do not delete a question by guessing. See
+> could not establish stays in the file with the evidence you have; do not
+> delete a question by guessing. A question only a real machine could
+> settle is marked **[inferred]** or **[assumed]** and is not carried as
+> open work ([backlog.md](../backlog.md)). See
 > [platforms.md](../platforms.md) for how the layers fit together.
 
 **Branch**: `platform/<name>` (own worktree) · **Config**: `platform = "<name>";`
-· **Status**: not started / L0 ... L6
+· **Status**: not started / L0 ... L6 (keep it true: the highest level
+reached, and what it rests on)
 
 ## The machine
 
@@ -50,7 +53,8 @@ where each came from (a manual, a real machine, a recorded session).
 ## Plan
 
 Work items, smallest first, each with the level it reaches. Keep this list
-current: it is the progress report.
+current: it is the progress report. An item that moves to the shared plan
+says so ("planned: A1 in backlog.md") rather than staying "open" here.
 
 | # | Item | Level | Status |
 | --- | --- | --- | --- |
@@ -60,7 +64,9 @@ current: it is the progress report.
 
 Append as you go: what the firmware asked for, what it turned out to be, what
 was wrong in the assumptions above. This is the part of the packet that is
-worth keeping afterwards.
+worth keeping afterwards. Date each finding, so that it reads as the state
+of its day; when a later one changes it, say so in the old one ("fixed
+since: ...") rather than leaving it to read as current.
 
 ## Rules
 

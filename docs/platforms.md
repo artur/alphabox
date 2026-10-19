@@ -1,13 +1,18 @@
 # Machines: adding CPUs, chipsets and boards
 
-Alphabox emulates one machine, the AlphaServer ES40: an EV68CB on the
-Tsunami/Typhoon chipset. This document is the plan for emulating more of
-them, and the contract a piece of that work is handed over with -- to a
-person or to an agent.
+Alphabox began as an emulator of one machine, the AlphaServer ES40: an
+EV68CB on the Tsunami/Typhoon chipset. It now runs ten machines on three
+chipsets. This document says how a machine is made of layers, which
+machines run and how far, what their consoles taught us, and the contract
+a piece of work on another machine is handed over with (to a person or to
+an agent).
 
 The firmware decides what "done" means. A machine is finished when its own
 console firmware runs on it and agrees with a real one about what the
 machine is. Everything below serves that.
+
+What is still missing on every machine, and the order it is planned in,
+is in [backlog.md](backlog.md).
 
 ## What a machine is made of
 
@@ -15,18 +20,19 @@ Three layers, each added in a different way:
 
 | Layer | What it is | Adding one |
 | --- | --- | --- |
-| CPU model | the processor's identity and features: version code, feature bits (BWX, FIX, CIX, MVI), chip revision, translation buffer and cache sizes | a table row, when the core family already exists (EV6, EV67, EV68AL/CB/DC); a new module for a new family (EV4, EV5, EV7), since the processor-state and PALcode interfaces differ |
-| Chipset | memory and I/O decoding, the PCI hoses and their DMA translation, the interrupt controller, the interval timer, multiprocessor support | a module: Tsunami/Typhoon today, Titan (ES45, DS25) or Pyxis (EV5 workstations) next |
+| CPU model | the processor's identity and features: version code, feature bits (BWX, FIX, CIX, MVI), chip revision, translation buffer and cache sizes | a table row, when the core family exists (EV6 or EV7); a new module for a new family (EV4, EV5), since the processor-state and PALcode interfaces differ |
+| Chipset | memory and I/O decoding, the PCI hoses and their DMA translation, the interrupt controller, the interval timer, multiprocessor support | a module: Tsunami/Typhoon, Titan and Marvel exist; Pyxis (EV5 workstations) would be the next |
 | Board | the machine around the chipset: which CPUs and how many, memory limits, the PCI slots and how their interrupts are wired, the on-board devices, the console firmware image and how it loads, the machine's own registers (flash, management processor, memory serial-presence data) | mostly a data descriptor plus a few hooks, selected with `platform = "<name>";` in the machine block |
 
 ### What exists today
 
-- **Processor**: a row per part in `cpu/CpuModel.hpp` and `cpu/CpuModels.cpp`,
-  chosen by the configuration class, with its core family (EV6 or EV7). The
-  EV68CB, whose values are established, and the EV7 and EV7z
-  (`cpu/ev7/` holds what that family changes: the physical address map and
-  the state the XSROM hands the console); the JIT emits them per processor.
-  A board takes processors of one family and refuses the other.
+- **Processor**: a row per part in `cpu/CpuModel.hpp` and
+  `cpu/CpuModels.cpp`, chosen by the configuration class, with its core
+  family (EV6 or EV7). The rows are the EV68CB, whose values are
+  established, and the EV7 and EV7z. `cpu/ev7/` holds what that family
+  changes: the physical address map and the state the XSROM hands the
+  console. The JIT emits code per processor. A board takes processors of
+  one family and refuses the other.
 - **Board**: a row per machine in `platforms/Platform.hpp` and
   `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
   `es40`). It carries the chipset, the processor and CPU count, the memory
@@ -35,55 +41,112 @@ Three layers, each added in a different way:
   secondary processors start, where the native PALcode routines apply, the
   console patches, and a function that builds the board's own hardware. The
   functions and hardware live in `platforms/<board>/`.
-- **Chipset**: `chipsets/Chipset.hpp` (`CChipset`), with the Tsunami in
-  `chipsets/tsunami/`, the Titan (four hoses on two PA-chips) in
-  `chipsets/titan/` ([notes](platforms/titan.md)), and Marvel -- the EV7's
-  on-chip registers and its GIO port, memory per PID -- in
-  `chipsets/marvel/`; the board row picks it (`CHIPSET_TSUNAMI`,
-  `CHIPSET_TITAN`, `CHIPSET_MARVEL`). What the Tsunami and the Titan share
-  is in `chipsets/PciWindows.hpp` (DMA windows) and `chipsets/DimmModel.*`
-  (the DIMM model and its SPD parts).
+- **Chipset**: `chipsets/Chipset.hpp` (`CChipset`); the board row picks
+  one (`CHIPSET_TSUNAMI`, `CHIPSET_TITAN`, `CHIPSET_MARVEL`):
+  - the Tsunami in `chipsets/tsunami/`;
+  - the Titan, four hoses on two PA-chips, in `chipsets/titan/`
+    ([notes](platforms/titan.md));
+  - Marvel, the EV7's on-chip registers and its GIO port with memory per
+    PID, in `chipsets/marvel/`.
+
+  What the Tsunami and the Titan share is in `chipsets/PciWindows.hpp`
+  (DMA windows) and `chipsets/DimmModel.*` (the DIMM model and its SPD
+  parts).
 - **The traces**: `ALPHABOX_TRACE_UNKNOWN=1` reports every access no device
   claimed, with the instruction that made it, and `ALPHABOX_TRACE_CALLS=1`
   reports the firmware's own subroutine calls, each site-to-routine pair
   once. The second answers "which of its routines ran", which is the
-  question a console that fails silently leaves you with.
+  question a console that fails silently leaves you with. More, all off by
+  default: `ALPHABOX_TRACE_I2C`, `ALPHABOX_TRACE_MP` (how a console starts
+  other processors), `ALPHABOX_TRACE_FLASH`, `ALPHABOX_DUMP_MEMORY`.
 - **The tools**: `PLATFORM=` and `ROM=` select the machine and its firmware
   in `srm_probe.sh`, and the `onboard-platform` skill carries the process.
 
 ### Which machines run
 
-| Machine | State |
-| --- | --- |
-| AlphaServer ES40 | emulated: the machine this project is about |
-| AlphaServer DS20E | L5: OpenVMS 8.4 boots from its CD and an installed disk on one and two processors; the interrupt map is the console's own, checked with OpenVMS; the console reaches its prompt in 80 of 80 boots (interpreter and JIT, one and two processors), its power-up memory test taking 2 minutes on the interpreter ([packet](platforms/ds20e.md)) |
-| AlphaServer DS10 | L5: OpenVMS 8.4 boots from its CD and an installed disk; network boot works, and the power-up network test passes ([packet](platforms/ds10.md)) |
-| AlphaServer DS20L | L5: its own update utility installs its console (V6.6-10); OpenVMS 8.4 boots an installed disk to login on one and two processors ([packet](platforms/ds20l.md)) |
-| AlphaServer ES45 (Titan) | L5: its own update utility installs its console (V7.3-2) in a two-part flash; `show config` matches a real ES45's core logic, on-board devices and slots; network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one, two and four processors, with NIC interrupts checked on all four hoses; `es45m1` is the Model 1 backplane, whose hose 2 is an AGP slot: the Radeon 7500 there is the SRM graphics console, and OpenVMS boots ([packet](platforms/es45.md)) |
-| AlphaServer DS25 (Titan) | L5: its update utility installs its console (V7.3-2) in the flash, with the on-board AIC-7899 present as far as the console needs it (configuration space and expansion ROM, no SCSI) and the on-board Intel 82559ER (`eia0`, OpenVMS `EIA0`); network boot; OpenVMS 8.4 boots its CD and an installed disk to login on one and two processors, with NIC interrupts checked on all four hoses; `show config` matches a real DS25's (owner's guide) in name, core logic, on-board places and slot numbering, and `show memory` its one-array listing; two-processor OpenVMS boots 20 of 20 to login on main ([packet](platforms/ds25.md)) |
-| AlphaServer DS15 (Titan) | L5: its update utility installs its console (V7.3-2); its RMC is reached through a different mailbox and its halt register does not halt the processor (both found in the console's code); one PA-chip, so hoses 0 and 2; network boot; OpenVMS 8.4 boots its CD and an installed disk to login, with NIC interrupts checked on both hoses; `show config` matches a real DS15's (owner's guide) in name, one PA-chip, core logic, memory arrays and interleave (1 and 2 GB), on-board places and slot numbering ([packet](platforms/ds15.md)) |
-| AlphaServer ES47 / ES80 / GS1280 (Marvel, EV7) | L5 on emulated EV7s (`es47`, `es80` and `gs1280` rows, packets M0-M6): the console reaches `P00>>>` on the telnet console that the emulated CMMs carry (GIO); `show config` lists the IO7s with their four buses and the devices behind them -- on the ES47 the I/O expander's CMD 649 IDE (`cmd649`, the CD as `dqa0`) and four-function USB (`uss344`) as the real listing has them, a 53C895 and a DE500-BA standing in for the AIC-7892 and the gigabit card; OpenVMS 8.4 boots from its CD to DCL on every processor: the ES47 with two (`ev7`, or `ev7z` at 1300 MHz, which the console names "EV7 rev 3.0" as a real 7/1300 does), the ES80 with eight and four IO7s, the GS1280 with sixteen. Installed to a SCSI disk (M7b) it boots to login on the ES47 and the ES80, and DECwindows draws its login box on the Radeon 7500 AGP with a USB keyboard and pointer. The staged plan is in the [packet](platforms/marvel.md) |
+| Machine | Row | Chipset | Reached | Packet |
+| --- | --- | --- | --- | --- |
+| AlphaServer ES40 | `es40` | Tsunami | the machine this project is about | |
+| AlphaServer DS20E | `ds20e` | Tsunami | L5 | [ds20e.md](platforms/ds20e.md) |
+| AlphaServer DS10 | `ds10` | Tsunami | L5 | [ds10.md](platforms/ds10.md) |
+| AlphaServer DS20L | `ds20l` | Tsunami | L5 | [ds20l.md](platforms/ds20l.md) |
+| AlphaServer ES45 Model 2 | `es45` | Titan | L5, L3 structural | [es45.md](platforms/es45.md) |
+| AlphaServer ES45 Model 1 | `es45m1` | Titan | L5 | [es45.md](platforms/es45.md) |
+| AlphaServer DS25 | `ds25` | Titan | L5, L3 structural | [ds25.md](platforms/ds25.md) |
+| AlphaServer DS15 | `ds15` | Titan | L5, L3 structural | [ds15.md](platforms/ds15.md) |
+| AlphaServer ES47 | `es47` | Marvel (EV7) | L5 | [marvel.md](platforms/marvel.md) |
+| AlphaServer ES80 | `es80` | Marvel (EV7) | L5 | [marvel.md](platforms/marvel.md) |
+| AlphaServer GS1280 | `gs1280` | Marvel (EV7) | L5 | [marvel.md](platforms/marvel.md) |
+
+OpenVMS 8.4 boots on every one. What each has shown, in short:
+
+- **DS20E**: OpenVMS from its CD and an installed disk, on one and two
+  processors. The interrupt map is the console's own, checked with
+  OpenVMS. The console reaches its prompt in 80 of 80 boots (interpreter
+  and JIT, one and two processors), its power-up memory test taking 2
+  minutes on the interpreter.
+- **DS10**: OpenVMS from its CD and an installed disk; network boot works,
+  and the power-up network test passes.
+- **DS20L**: its own update utility installs its console (V6.6-10);
+  OpenVMS boots an installed disk to login on one and two processors.
+- **ES45**: its own update utility installs its console (V7.3-2) in a
+  two-part flash. `show config` matches a real ES45's core logic, on-board
+  devices and slots; network boot. OpenVMS boots its CD and an installed
+  disk to login on one, two and four processors, with NIC interrupts
+  checked on all four hoses.
+- **ES45 Model 1** (`es45m1`): hose 2 is an AGP slot. The Radeon 7500 there
+  is the SRM graphics console, and OpenVMS boots.
+- **DS25**: its update utility installs its console (V7.3-2). The on-board
+  AIC-7899 is present as far as the console needs it (configuration space
+  and expansion ROM, no SCSI), and the on-board Intel 82559ER is modelled
+  (`eia0`, OpenVMS `EIA0`). Network boot. OpenVMS boots its CD and an
+  installed disk to login on one and two processors, with NIC interrupts
+  checked on all four hoses; two-processor OpenVMS boots 20 of 20 to
+  login. `show config` matches a real DS25's (owner's guide) in name, core
+  logic, on-board places and slot numbering, and `show memory` its
+  listings.
+- **DS15**: its update utility installs its console (V7.3-2). Its RMC is
+  reached through a different mailbox and its halt register does not halt
+  the processor (both found in the console's code). One PA-chip, so hoses
+  0 and 2; network boot. OpenVMS boots its CD and an installed disk to
+  login, with NIC interrupts checked on both hoses. `show config` matches a
+  real DS15's (owner's guide) in name, one PA-chip, core logic, memory
+  arrays and interleave (1 and 2 GB), on-board places and slot numbering.
+- **ES47, ES80, GS1280** (packets M0-M7): the console reaches `P00>>>` on
+  the telnet console that the emulated CMMs carry (GIO). `show config`
+  lists the IO7s with their four buses and the devices behind them; on the
+  ES47 the I/O expander's CMD 649 IDE (`cmd649`, the CD as `dqa0`) and
+  four-function USB (`uss344`) as the real listing has them, with a 53C895
+  and a DE500-BA standing in for the AIC-7892 and the gigabit card.
+- **OpenVMS on the EV7s**: it boots from its CD to DCL on every processor:
+  the ES47 with two (`ev7`, or `ev7z` at 1300 MHz, which the console names
+  "EV7 rev 3.0" as a real 7/1300 does), the ES80 with eight and four IO7s,
+  the GS1280 with sixteen. Installed to a SCSI disk (M7b) it boots to
+  login on the ES47 and the ES80, and DECwindows draws its login box on the
+  Radeon 7500 AGP with a USB keyboard and pointer.
 
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
 `CSystem` used to be the Tsunami chipset, with ES40 board hardware (DPR,
 flash) and board hooks mixed in. The chipset split (packet M0 in
-[marvel.md](platforms/marvel.md)) moved the code to this layout; `cpu/ev7/`
-and `chipsets/marvel/` came with packets M1-M3, `titan/` comes with its own.
-What M0 left where it was, and why, is in that packet's notes.
+[marvel.md](platforms/marvel.md)) moved the code to this layout;
+`cpu/ev7/` and `chipsets/marvel/` came with packets M1-M3, `titan/` with
+the ES45 packet. What M0 left where it was, and why, is in that packet's
+notes. The full map of `src/` is [source-layout.md](source-layout.md).
 
 ```
 src/
   cpu/                 the Alpha core, common to every family
-    CpuModels.cpp      rows: EV6, EV67, EV68AL/CB/DC, EV7, EV7z
+    CpuModels.cpp      rows: EV68CB, EV7, EV7z
     ev7/               only what EV7 changes: 44-bit physical addresses,
-                       PID, interrupts from the on-chip router
+                       PID, the state the XSROM leaves
   chipsets/
     Chipset.hpp        the interface: non-memory decode, interrupt delivery,
                        interval timer, PCI hose access, DMA translation
     tsunami/           Cchip, Dchip, Pchip, TIG (out of System.cpp)
     titan/             ES45, DS25, DS15
-    marvel/            IO7, the EV7's on-chip CSR window (Rbox, Zbox), GIO
+    marvel/            IO7, the EV7's on-chip CSR window (Rbox, Zbox), GIO,
+                       the processors' topology
   platforms/
     Platforms.cpp      board rows: chipset, CPU row and count, slots,
                        interrupt wiring, firmware
@@ -114,110 +177,128 @@ The rules:
 ## Where the firmware comes from
 
 The Alpha firmware update CD V7.3 carries the console images for DS10, DS15,
-DS20/DS20E, DS20L, DS25, ES40, ES45, GS140, GS320, GS1280 and the
-AlphaServer 4x00. Images are never downloaded by us or by an agent: they are
-copied from media you own into the git-ignored `roms/` directory, and a
-packet names the file it needs.
+DS20/DS20E, DS20L, DS25, ES40, ES45, GS140, GS320, GS1280 (which serves the
+ES47 and ES80 too) and the AlphaServer 4x00. Images are never downloaded by
+us or by an agent: they are copied from media you own into the git-ignored
+`roms/` directory, and a packet names the file it needs.
 
 Three forms appear, and the board's descriptor says which one its firmware
 takes:
 
 - **a console image behind the standard Alpha ROM header** (`c3c3 5a5a 3c3c
-  a5a5`, header size and load address in the header): `PC264SRM.ROM`
-  (DS20/DS20E) and `DS10SRM.ROM`;
-- **a console image behind a fixed wrapper**: the ES40's `cl67srmrom.exe`;
-- **a firmware update utility with no header at all**, starting directly
-  with its self-decompressor: the CD's `*_V7_3.EXE` and `*_V6_6.EXE` files,
-  which is how most machines ship.
+  a5a5`, header size and load address in the header, `FW_ROM_HEADER`):
+  `PC264SRM.ROM` (DS20/DS20E) and `DS10SRM.ROM`;
+- **a console image behind a fixed wrapper** (`FW_LFU_BUNDLE`): the ES40's
+  `cl67srmrom.exe`, and the EV7 machines' `SRM_V7_3.EXE`;
+- **a firmware update utility with no header at all** (`FW_RAW_IMAGE`),
+  starting directly with its self-decompressor: the CD's `*_V7_3.EXE` and
+  `*_V6_6.EXE` files, which is how most machines ship.
 
 The third form is not a console: it is the utility a real machine runs to
 **install** its console into the flash. Run it once, answer its questions,
 stop the emulator so the flash is saved, and boot again without naming a
 firmware image: Alphabox searches the flash for a console image and starts
-it. That is how the DS20L was brought up
-([its packet](platforms/ds20l.md) has the exact steps), and it is the way
-in for every machine on the CD that ships only an update file.
+it.
+
+That is how the DS20L was brought up ([its packet](platforms/ds20l.md) has
+the exact steps), then the ES45, DS25 and DS15, and it is the way in for
+every machine on the CD that ships only an update file.
 
 ## What these consoles have taught us
 
-Facts that cost time to find and apply to the next machine:
+Facts that cost time to find and apply to the next machine.
 
-- **The console is the specification, and it disagrees with documents.**
-  Every board fact below was settled by watching what the firmware did, not
-  by reading a table: the DS20E's interrupt map was confirmed by the
-  interrupt numbers its console assigned, and a guess about its flash was
-  disproved by disassembling the code that wrote it.
-- **Machines differ in how they start their other processors.** The ES40's
-  console starts them itself through the management processor, so they wait
-  for it; the DS20E has none and expects every processor to be running
-  already, asserting a halt line and waiting for an answer. Getting this
-  wrong looks exactly like "the console only sees one processor". The EV7
-  machines do it a third way: each parked processor polls a register of its
-  own (RBOX_SCRATCH1) for an address the console writes there in two
-  halves, with an echo between them.
-- **The registers at entry can be part of the interface.** The Marvel
-  console's PALcode takes its processor ID from r28 and picks a cold start
-  or a restart by r19 and r18; starting it with zeroed registers sent it
-  down the restart path, reading a pointer from r21 (docs/platforms/
-  marvel.md, M3). Read what the firmware does with its registers before
-  deciding they do not matter.
-- **Machines differ in which PCI device numbers they look at.** The DS20E's
-  console scans devices 0 to 10 and no further, so devices at 15 and 19 --
-  where the ES40 keeps its own -- are invisible on it. A device the console
-  does not list may be a numbering difference, not a broken device.
-- **Consoles carry their interrupt map as data.** The DS20E's and the
-  DS10's consoles each hold a table of the line every pin of every device
-  gets; reading it out of the image settled maps that Linux's tables had
-  slightly wrong. Where a console has none, the lines it writes into
-  configuration space for cards at each device number are the answer.
-- **Native shortcuts belong to one firmware.** The interpreter's native
-  OpenVMS PALcode routines were written against the ES40 console's PALcode;
-  the DS20E's and DS20L's consoles put their own builds at the same address,
-  and OpenVMS hung or bugchecked until those boards were given the real
-  PALcode (`vmspal_pal_base` in the board row, 0 for them).
-- **Who becomes primary is a race unless the board decides.** Where every
-  processor runs from reset, the first through the PALcode reset wins the
-  console's election; the emulator lets processor 0 go first.
-- **A wrong interrupt map is quiet.** The console polls its own devices, so
-  it reaches its prompt and lists a controller with the wiring wrong; what
-  fails is the disk behind it. Test interrupts with a guest driver, or with
-  a console operation that waits for one.
-- **One firmware serves many machines.** The DS20/DS20E console carries a
-  table of machine names and codes and picks by a code it reads from the
-  board; without it, it falls back to the first entry and calls itself
-  something else. The name a console prints is a machine fact, not proof
-  that the emulation is right.
-- **Speed patches are addresses in one console.** The ES40's console
-  patches, applied to the ES45's console, replaced words in its scheduler
-  and it hung silently in its idle loop; applied to the DS10's, one of
-  them removed a routine's stack-frame allocation and its power-up network
-  test halted. A board row has its own patch table or none.
-- **A console can carry its own answers.** The Marvel console checks a
-  magic word in low memory (0xcafebeef at 0xfc: its developers'
-  simulator) and then builds every reply its management processors would
-  send -- partition database, MBM configuration, memory assignment --
-  itself. Those built-in replies are the best documentation of each
-  message's layout; the console's symbol table (procedure descriptor and
-  name pairs) names every routine that builds or reads them
-  (docs/platforms/marvel.md, M4).
-- **A clock's register may not be the chip's.** The Marvel TOY lives in the
-  CMM's memory laid out like an MC146818, but OpenVMS waits for byte 10 to
-  read zero, where an MC146818 keeps its divider bits (0x26); the console
-  only ever tested <7>. A guest that hangs after its banner with no device
-  access left is worth a PC sample and a memory dump: the loop it is in
-  names what it waits for (docs/platforms/marvel.md, M5).
-- **A console can gate its own probe on hot plug.** The Marvel console
-  configures only the PCI slots it has powered and connected through the
-  IO7's hot-plug registers, so with none modelled it probed nothing and
-  reported no error at all.
-- **A management processor's state bytes steer the processors.** Each EV7
-  reads a byte the CMM keeps for it: zero makes its PALcode build its PAL
-  area from scratch (right for the primary), non-zero keeps what the
-  console copied there (a secondary). With zero for both, the secondary
-  mapped the console's addresses onto its own empty memory and halted.
-- **Consoles are tolerant.** All three machines run with hardware they
-  cannot find, printing a complaint and continuing. A trace of unclaimed
-  accesses (below) shows what they wanted; most of it does not matter.
+**The console is the specification, and it disagrees with documents.**
+Every board fact below was settled by watching what the firmware did, not
+by reading a table. The DS20E's interrupt map was confirmed by the
+interrupt numbers its console assigned, and a guess about its flash was
+disproved by disassembling the code that wrote it.
+
+**Machines differ in how they start their other processors:**
+
+- The ES40's console starts them itself through the management processor,
+  so they wait for it.
+- The DS20E has none and expects every processor to be running already,
+  asserting a halt line and waiting for an answer. Getting this wrong
+  looks exactly like "the console only sees one processor".
+- The EV7 machines do it a third way: each parked processor polls a
+  register of its own (RBOX_SCRATCH1) for an address the console writes
+  there in two halves, with an echo between them.
+
+**Who becomes primary is a race unless the board decides.** Where every
+processor runs from reset, the first through the PALcode reset wins the
+console's election; the emulator lets processor 0 go first.
+
+**The registers at entry can be part of the interface.** The Marvel
+console's PALcode takes its processor ID from r28 and picks a cold start or
+a restart by r19 and r18. Starting it with zeroed registers sent it down the
+restart path, reading a pointer from r21 ([marvel.md](platforms/marvel.md),
+M1-M3). Read what the firmware does with its registers before deciding they
+do not matter.
+
+**Machines differ in which PCI device numbers they look at.** The DS20E's
+console scans devices 0 to 10 and no further, so devices at 15 and 19,
+where the ES40 keeps its own, are invisible on it. A device the console
+does not list may be a numbering difference, not a broken device.
+
+**Consoles carry their interrupt map as data.** The DS20E's and the DS10's
+consoles each hold a table of the line every pin of every device gets;
+reading it out of the image settled maps that Linux's tables had slightly
+wrong. Where a console has none, the lines it writes into configuration
+space for cards at each device number are the answer.
+
+**A wrong interrupt map is quiet.** The console polls its own devices, so
+it reaches its prompt and lists a controller with the wiring wrong; what
+fails is the disk behind it. Test interrupts with a guest driver, or with a
+console operation that waits for one.
+
+**One firmware serves many machines.** The DS20/DS20E console carries a
+table of machine names and codes and picks by a code it reads from the
+board; without it, it falls back to the first entry and calls itself
+something else. The name a console prints is a machine fact, not proof
+that the emulation is right.
+
+**Native shortcuts belong to one firmware.** The interpreter's native
+OpenVMS PALcode routines were written against the ES40 console's PALcode.
+The DS20E's and DS20L's consoles put their own builds at the same address,
+and OpenVMS hung or bugchecked until those boards were given the real
+PALcode (`vmspal_pal_base` in the board row, 0 for them).
+
+**Speed patches are addresses in one console.** The ES40's console
+patches, applied to the ES45's console, replaced words in its scheduler,
+and it hung silently in its idle loop. Applied to the DS10's, one of them
+removed a routine's stack-frame allocation and its power-up network test
+halted. A board row has its own patch table or none.
+
+**A console can carry its own answers.** The Marvel console checks a magic
+word in low memory (0xcafebeef at 0xfc: its developers' simulator) and then
+builds every reply its management processors would send (partition
+database, MBM configuration, memory assignment) itself. Those built-in
+replies are the best documentation of each message's layout. The console's
+symbol table (procedure descriptor and name pairs) names every routine that
+builds or reads them ([marvel.md](platforms/marvel.md), M4).
+
+**A clock's register may not be the chip's.** The Marvel TOY lives in the
+CMM's memory laid out like an MC146818, but OpenVMS waits for byte 10 to
+read zero, where an MC146818 keeps its divider bits (0x26); the console
+only ever tested <7>. A guest that hangs after its banner with no device
+access left is worth a PC sample and a memory dump: the loop it is in names
+what it waits for ([marvel.md](platforms/marvel.md), M5).
+
+**A console can gate its own probe on hot plug.** The Marvel console
+configures only the PCI slots it has powered and connected through the
+IO7's hot-plug registers, so with none modelled it probed nothing and
+reported no error at all.
+
+**A management processor's state bytes steer the processors.** Each EV7
+reads a byte the CMM keeps for it. Zero makes its PALcode build its PAL
+area from scratch (right for the primary); non-zero keeps what the console
+copied there (a secondary). With zero for both, the secondary mapped the
+console's addresses onto its own empty memory and halted.
+
+**Consoles are tolerant.** Every console so far runs with hardware it
+cannot find, printing a complaint and continuing. A trace of unclaimed
+accesses (below) shows what it wanted; most of it does not matter.
 
 ## The work packet
 
@@ -253,36 +334,41 @@ partial work is reported as the highest level reached.
 
 L3 is the level that catches wrong guesses: the console prints what it
 believes the hardware is, and a mistake shows up as a wrong slot, a missing
-device or an absent CPU.
+device or an absent CPU. No real listing was found for the DS20E, DS10 and
+DS20L, so L3 is not claimed for them; the Titan boards' and the ES47's are
+structural matches against listings of other configurations.
 
 ### Tools a packet relies on
 
 - `srm_probe.sh` and `srm_run.sh` with a `PLATFORM=` selector and per-machine
   reference logs.
-- An unknown-access trace: every read or write that no device claims,
-  reported with the program counter that made it. Bringing up new firmware is
-  mostly the loop "the firmware wants register X; find out what X is", and
-  this is the tool for it.
+- An unknown-access trace (`ALPHABOX_TRACE_UNKNOWN=1`): every read or write
+  that no device claims, reported with the program counter that made it.
+  Bringing up new firmware is mostly the loop "the firmware wants register
+  X; find out what X is", and this is the tool for it.
 - `net_peer.py` for console network boot, and the Windows and VGA checks
   where they apply.
 
 ## Order of work
 
+What was done, in order, and what is left. The plan for what is left is
+[backlog.md](backlog.md); its letters (T1, E1, M8 ...) are used here.
+
 1. ~~**Make the layers explicit**~~ (done, no behaviour change): CPU model
    rows, a board descriptor for the ES40, the trace, the `PLATFORM=`
-   selector, the template and the skill. Separating the chipset is left for
-   the first machine that needs a different one.
+   selector, the template and the skill. Separating the chipset was left
+   for the first machine that needed a different one: Marvel's packet M0
+   did it.
 2. ~~**Pilot: DS20E**~~ ([packet](platforms/ds20e.md)): at L5. No real
    machine's listing was found, so L3 is not claimed.
-3. **The rest of the Tsunami family**: the DS10 and DS20L are at L5; the
-   DS20 and the UP2000 and XP1000 boards are not started.
-4. **Titan**: the ES45 ([packet](platforms/es45.md)), the DS25
+3. **The rest of the Tsunami family**: the DS10 and DS20L are at L5. The
+   DS20 and the UP2000 and XP1000 boards are not started (T1).
+4. ~~**Titan**~~: the ES45 ([packet](platforms/es45.md)), the DS25
    ([packet](platforms/ds25.md)) and the DS15 ([packet](platforms/ds15.md))
    are at L5, with L3 checked structurally against owner's guide listings.
-5. **Separate projects**, each large enough to be its own plan: the EV5 core
-   with an EV5 machine (the AlphaServer 4x00 firmware is on the CD), and EV7
-   with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)). The EV7 plan,
-   in packets:
+   What the Titan boards still lack (A1, N1, H1) is in the backlog.
+5. **EV7**, with the ES47/ES80/GS1280 ([packet](platforms/marvel.md)), in
+   packets:
    - **M0** (done): separate the chipset from `CSystem`, with no behaviour
      change. This is shared with Titan, and everything below depends on it.
    - **M1** (done): an EV7 processor model, kept apart from the EV6 code
@@ -304,15 +390,18 @@ device or an absent CPU.
      rows for the ES80 (eight processors, four IO7s) and the GS1280
      (sixteen), from a processor topology (`chipsets/marvel/Topology.*`)
      and a CMM per module.
-   - **M7** (OpenVMS done): OpenVMS 8.4 installed to disk and booted to
+   - **M7** (done for OpenVMS): OpenVMS 8.4 installed to disk and booted to
      login, DECwindows on the Radeon with USB input; fixes to the embedded
      slots' interrupt lines, shared lines, the EV7 clock rendezvous, and a
-     USB keyboard. Linux is open.
+     USB keyboard.
+   - **Planned** (backlog): the PALcode audit (E1), Linux on the ES40 and
+     then the ES47 with the IO7's MSIs (E2, M8), EV7 performance (E3), the
+     CMM's FRU and environment answers (M10), partitions, I/O drawers and
+     more processors (M9).
+6. **An EV5 machine** (the AlphaServer 4x00 firmware is on the CD): a
+   separate project, with an EV5 core. Not started, and not in the plan.
 
-What is missing on every machine, and the order it is planned in, is in
-[backlog.md](backlog.md).
-
-The EV7 machines are the far end of this: the processor carries its own
+The EV7 machines were the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its
 console depends on the system's management hardware. The first contact
 confirmed both: the console's first access is to the processor's own
