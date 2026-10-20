@@ -98,9 +98,6 @@ void CKeyboard::init() {
 
   resetinternals(true);
 
-  state.kbd_internal_buffer.led_status = 0;
-  state.kbd_internal_buffer.scanning_enabled = 1;
-
   state.status.pare = 0;
   state.status.tim = 0;
   state.status.auxb = 0;
@@ -370,10 +367,11 @@ void CKeyboard::gen_scancode(u32 key) {
  * Reset keyboard internals to the defaults that Set Default (F6) and Default
  * Disable (F5) restore: an empty buffer, the typematic rate and delay, and
  * the scan code set 3 key types. With powerup, also what only power-on and
- * Reset (FF) do: scan code set 2. F5 and F6 keep the scan code set, and SRM
- * relies on it: it selects set 3 and then sends F6. Source: IBM 84F9735,
- * PS/2 Hardware Interface Technical Reference, Common Interfaces (Oct 1990),
- * Keyboards (Sep 1991) pp. 1, 12-14.
+ * Reset (FF) do: scan code set 2, the LEDs off, and scanning on. F5 and F6
+ * keep the scan code set, and SRM relies on it: it selects set 3 and then
+ * sends F6. Source: IBM 84F9735, PS/2 Hardware Interface Technical
+ * Reference, Common Interfaces (Oct 1990), Keyboards (Sep 1991) pp. 1,
+ * 11-15.
  **/
 void CKeyboard::resetinternals(bool powerup) {
   // The keyboard discards the keystrokes it has not sent yet, including the
@@ -395,8 +393,14 @@ void CKeyboard::resetinternals(bool powerup) {
 
   // current_scancodes_set indexes scancodes[][3]: 0, 1, 2 are sets 1, 2, 3.
   // The 8042 translates set 2 to set 1 while the command byte says so.
-  if (powerup)
+  // After its self-test the keyboard has its LEDs off and scans, even if
+  // Default Disable (F5) had stopped it (Keyboards p. 11); F5 and F6 leave
+  // the LEDs as they were (p. 15).
+  if (powerup) {
     state.current_scancodes_set = 1;
+    state.kbd_internal_buffer.led_status = 0;
+    state.kbd_internal_buffer.scanning_enabled = 1;
+  }
 }
 
 /**

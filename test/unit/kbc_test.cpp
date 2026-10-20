@@ -286,6 +286,19 @@ static void test_inhibit_and_overrun() {
         "1c 32 21 23 24 2b 34 33 43 3b 42 4b 3a 31 44 4d 00");
 }
 
+/// KBD-07: FF re-enables scanning after F5.
+static void test_reset_enables_scanning() {
+  fresh();
+  out60(0xF5);
+  check("F5", drain(), "fa");
+  tap(BX_KEY_A);
+  check("F5: no scanning", drain(), "");
+  out60(0xFF);
+  check("FF", drain(), "fa aa");
+  tap(BX_KEY_A);
+  check("FF: scanning again", drain(), "1e 9e");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -295,6 +308,7 @@ int main() {
   test_mouse_basics();
   test_inhibit_and_overrun();
   test_scan_set_default();
+  test_reset_enables_scanning();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }
