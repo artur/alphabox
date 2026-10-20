@@ -102,7 +102,7 @@ static Item items[] = {
      "a VAX overflow writes the largest number of the format, not the "
      "rounded fraction under a clamped exponent (the result is "
      "UNPREDICTABLE, ARM 4.7.7.1)"},
-    {"FP-11", false,
+    {"FP-11", true,
      "IEEE underflow is decided on the result rounded to the destination "
      "format: a true result that rounds to MIN is not an underflow (ARM "
      "4.7.5, p. 4-67)"},

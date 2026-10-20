@@ -461,6 +461,16 @@ and FPCR disable. These were settled in that round.
   whatever `DNZ` says (until 2026-10-20 it was a zero here). `CVTST`,
   which converts an S denormal exactly and without a trap, does so without
   `/S` whatever `DNZ` says.
+- **Where an IEEE underflow begins**: the true result is rounded to the
+  destination format, denormals' grid included, before the range check.
+  ARM 4.7.5 maps to an underflow only "non-zero true results < MIN - 1/2
+  LSB" under normal rounding, those "<= +MIN - 1 LSB" under plus infinity,
+  and so on, so a true result that rounds to MIN is MIN, inexact. Until
+  2026-10-20 the interpreter rounded at full precision with an unbounded
+  exponent and flushed some of these to zero (under normal rounding, those
+  from MIN - 1/2 LSB up to MIN - 1/4 LSB), while the JIT, which computes on the host's IEEE format,
+  returned MIN: `ALPHABOX_JIT_FPTEST` with those operands added showed 185
+  disagreements, and shows none now.
 
 ### The exception path
 

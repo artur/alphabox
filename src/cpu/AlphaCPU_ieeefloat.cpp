@@ -930,13 +930,33 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
   u64 rndbits;
   u64 res;
   u64 rndm;
+  bool tiny;
 
   if (r->frac == 0)
     return (((u64)r->sign) << FPR_V_SIGN); /* result 0? */
   rndm = I_GETFRND(ins);                   /* inst round mode */
   if (rndm == I_FRND_D)
     rndm = FPCR_GETFRND(state.fpcr); /* dynamic? use FPCR */
-  rndbits = r->frac & infrnd[dp];    /* isolate round bits */
+  /* A true result below MIN is rounded where the format's denormals have
+     their last bit, as the architecture rounds it before it checks the
+     range: normal rounding maps to an underflow only "non-zero true results
+     < MIN - 1/2 LSB", plus infinity those "<= +MIN - 1 LSB", chopped those
+     "< MIN" (ARM 4.7.5). Rounding at full precision with an unbounded
+     exponent, as this did, also flushed the true results between MIN - 1/2
+     LSB and MIN - 1/4 LSB that round to MIN, and the JIT, which computes on
+     the host's format, did not. Shift the fraction to MIN's exponent, the
+     bits that fall off kept as a sticky bit; the round bits then sit where
+     they are for a denormal. */
+  tiny = r->exp <= expmin[dp];
+  if (tiny) {
+    const s32 sh = expmin[dp] + 1 - r->exp; /* 1 or more */
+    if (sh > 63)
+      r->frac = 1; /* sticky only */
+    else
+      r->frac = (r->frac >> sh) | (((r->frac << (64 - sh)) & X64_QUAD) ? 1 : 0);
+    r->exp = expmin[dp] + 1;
+  }
+  rndbits = r->frac & infrnd[dp]; /* isolate round bits */
   if (rndm == I_FRND_N)
     rndadd = stdrnd[dp];                       /* round to nearest? */
   else if (((rndm == I_FRND_P) && !r->sign)    /* round to inf and */
@@ -945,8 +965,10 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
   else
     rndadd = 0;
   r->frac = (r->frac + rndadd) & X64_QUAD; /* round */
-  if ((r->frac & UF_NM) == 0) {            /* carry out? */
-    r->frac = (r->frac >> 1) | UF_NM;      /* renormalize */
+  if (tiny)
+    tiny = (r->frac & UF_NM) == 0;    /* rounded up to MIN: no underflow */
+  else if ((r->frac & UF_NM) == 0) {  /* carry out? */
+    r->frac = (r->frac >> 1) | UF_NM; /* renormalize */
     r->exp = r->exp + 1;
   }
 
@@ -962,7 +984,7 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
     return (((u64)r->sign) << FPR_V_SIGN) | (dp == DT_S ? FPMAX_S : FPMAX_T);
   } /* no, return max */
 
-  if (r->exp <= expmin[dp]) { /* underflow? */
+  if (tiny) { /* underflow? */
     /* KNOWN DIVERGENCE, deliberately not changed yet (docs/cpu-fidelity.md).
        FPCR[UNDZ] is read nowhere in this emulator, so UNFD alone silences an
        underflow and the result is flushed to zero. The architecture says

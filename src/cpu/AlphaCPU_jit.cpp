@@ -2929,6 +2929,11 @@ void CAlphaCPU::jit_fp_selftest() {
                             dbits(1.00000000001),
                             fbits(0.1f),
                             fbits(-7.25f),
+                            // MIN - 1/2 LSB as a product (with MIN) and as
+                            // a T value below the S range: rounds to MIN
+                            U64(0x3FEFFFFFFFFFFFFF),
+                            fbits(0.99999994f),
+                            U64(0x380FFFFFE0000000),
                             U64(1),
                             U64(2),
                             U64(0xFFFFFFFFFFFFFFFF),
