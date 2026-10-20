@@ -8,7 +8,8 @@ Every performance claim in this project goes through here, because the ways
 it has gone wrong are all mechanical and a script can refuse each of them:
 
   - a build or another guest running during a timed round (refused up front,
-    and re-checked before every boot);
+    re-checked before every boot, and watched for during it: a round that
+    overlapped one is thrown away and timed again);
   - a delta quoted from a single pair (fewer than 2 interleaved rounds is a
     hard error, not a warning);
   - phases mixed up (the guest times each section itself; nothing here reads
@@ -25,7 +26,7 @@ it has gone wrong are all mechanical and a script can refuse each of them:
 Output: a table, lab/results/<label>.json (everything), and one line appended
 to lab/results/ledger.md. Quote the ledger, not memory.
 """
-import argparse, hashlib, json, os, re, statistics, subprocess, sys, time, datetime
+import argparse, hashlib, json, os, re, statistics, subprocess, sys, threading, time, datetime
 
 R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 WORK = os.environ.get('ALPHABOX_WORK', os.path.join(R, 'lab'))
@@ -53,7 +54,8 @@ def busy_host():
     """Anything that would perturb a timed round: a compiler actually running,
     or another guest. Judged by the EXECUTABLE, not by command text -- a shell
     whose script mentions `cmake --build` is not a build, and the wrapper this
-    tool is launched from usually mentions it. Our own ancestry is excluded."""
+    tool is launched from usually mentions it. Our own ancestry is excluded,
+    and so is everything we started: the round's own guest runs under a script."""
     procs = sh("ps -Ao pid,ppid,args")
     table = {}
     for ln in procs.splitlines()[1:]:
@@ -62,9 +64,14 @@ def busy_host():
     mine = set(); p = str(os.getpid())
     while p in table and p not in mine:
         mine.add(p); p = table[p][0]
+    ours = {str(os.getpid())}
+    grew = True
+    while grew:
+        more = {pid for pid, (ppid, _) in table.items() if ppid in ours} - ours
+        ours |= more; grew = bool(more)
     reasons = []
     for pid, (ppid, args) in table.items():
-        if pid in mine or ppid in mine: continue
+        if pid in mine or ppid in mine or pid in ours: continue
         exe = os.path.basename(args.split()[0]) if args.split() else ''
         if exe in ('clang', 'clang++', 'cc1plus', 'cc', 'c++', 'ld', 'ld64.lld', 'ninja', 'make', 'gmake') \
            or (exe == 'cmake' and '--build' in args):
@@ -105,6 +112,20 @@ def refuse_if_busy(when, wait_s=4 * 3600):
     if free_gb < 6:
         sys.exit(f"perf_ab: refusing ({when}): only {free_gb:.1f} GB free under {WORK}; "
                  "old run clones (lab/work-*, lab/bench-*, lab/ntbench-*) are the usual cause")
+
+def run_watched(*args, **kw):
+    """run_one, polling busy_host while it runs: returns (run_one's result, what
+    else ran). The check before a round cannot see another session's build that
+    starts during it, and one such round has made a verdict "resolved"."""
+    seen, done = [], threading.Event()
+    def watch():
+        while not done.wait(2):
+            seen.extend(x for x in busy_host() if x not in seen)
+    t = threading.Thread(target=watch, daemon=True); t.start()
+    try:
+        return run_one(*args, **kw), seen
+    finally:
+        done.set(); t.join()
 
 RATE_S = 0.1  # ALPHABOX_RATE window in snapshot runs: the MIPS column's resolution
 
@@ -247,9 +268,21 @@ def main():
     runs = {'base': [], 'head': []}
     for r in range(1, a.rounds + 1):
         for arm, binary in (('base', base), ('head', head)):
-            refuse_if_busy(f'{arm} round {r}')
-            print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)
-            ms, res, total, log, mips = run_one(f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale, a.snapshot, env_arm[arm])
+            for _ in range(8):
+                refuse_if_busy(f'{arm} round {r}')
+                print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)
+                (ms, res, total, log, mips), during = run_watched(
+                    f'{a.label}-{arm}-{r}', binary, a.workload, a.section, a.scale, a.snapshot, env_arm[arm])
+                if not during: break
+                if BUSY_OK:
+                    BUSY_SEEN.extend(x for x in during if x not in BUSY_SEEN)
+                    break
+                print(f"perf_ab: {arm} round {r} overlapped other work ({total} ms); timing it again:\n  "
+                      + "\n  ".join(during), flush=True)
+            else:
+                # Another session that never stays quiet for one round: no
+                # amount of waiting gets a clean round out of it.
+                sys.exit(f"perf_ab: gave up ({arm} round {r}): other work overlapped it 8 times")
             if total is None:
                 sys.exit(f"perf_ab: {arm} round {r} produced no result:\n{log[-800:]}")
             runs[arm].append({'ms': ms, 'result': res, 'total': total, 'mips': mips})

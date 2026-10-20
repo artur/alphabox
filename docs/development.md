@@ -88,8 +88,9 @@ tool needs to be read correctly:
   - Per-section medians with ranges and an overlap flag; identical computed
     results checked; hashes, HEAD and the method recorded.
   - `--expect section:pct` predictions are marked hit or miss.
-  - It waits for a quiet host before each round (`--busy-ok` times anyway,
-    and the ledger says so).
+  - It waits for a quiet host before each round and times a round again
+    if anything else ran during it (`--busy-ok` times anyway, and the
+    ledger says so).
   - Results are appended to `lab/results/ledger.md`.
 - **`nt_bench.sh`** runs `ntbench/axpbench.c` (sections `alu branch call
   ldst stride fp byte div sort`), JScript under `cscript` and `makecab`

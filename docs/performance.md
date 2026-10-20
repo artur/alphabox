@@ -63,8 +63,9 @@ All of these live in `test/tools/` and are described in
 - `--expect section:pct` predictions are written down before the run and
   marked hit or miss after it.
 - It waits for a quiet host (no build, no other guest) before each round,
-  for up to four hours; `--busy-ok` times anyway and says so in the
-  ledger.
+  for up to four hours, and watches the host while the round runs: a round
+  that anything else overlapped is thrown away and timed again, up to eight
+  times. `--busy-ok` times anyway and says so in the ledger.
 - Everything it measures is appended to `lab/results/ledger.md`; quote that
   file, not memory.
 
@@ -154,7 +155,11 @@ about 7 minutes.
   10% on a single pair of runs is noise on a shared host.
 - **Measure on an otherwise-quiet host.** It matters by about a per cent
   (see [The numbers](#the-numbers)); `uptime` before a measurement is
-  cheap.
+  cheap. A build that starts in the middle of a round matters far more:
+  on 2026-10-20 another session's builds made two rounds of one binary
+  take 16968 and 21632 ms against 10968, and the A/B read as "resolved"
+  (ledger `alignfold-axp2`, since marked void). Checking before each round
+  did not see them; `perf_ab.py` now watches during the round too.
 
 ### The switch names in the record
 
@@ -1186,6 +1191,27 @@ uses them most (ledger `noshadow-cab`: +2.5% with them left out,
 inconclusive; 1464 against 1496 MIPS), and a PAL block cannot use such a
 pin.
 
+*2026-10-19.* The question came back from a survey of ES40-Emu's JIT,
+whose fixed set pins R22 and R23, holding the main bank as this one's pins
+do. Measured again in one binary with `ALPHABOX_JIT_PIN_SHADOW=1` as the
+head arm, no total resolved:
+
+| ledger | workload | base ms | head ms | median |
+| --- | --- | --- | --- | --- |
+| `pinshadow-axp` | benchmark | 10750, 10695 | 11742, 10210 | +2.4% |
+| `pinshadow-cab` | makecab | 10000, 7710, 7770 | 7140, 7260, 10720 | -6.6% |
+| `pinshadow-cab2` | makecab | 7420, 7330, 7890 | 7100, 7900, 7250 | -2.3% |
+| `pinshadow-js` | jsbench | 18673, 15569 | 16171, 15515 | -7.5% |
+
+Inside the benchmark `div` (-18.3%) and `byte` (-11.9%) resolved faster and
+`alu` (+1.8%) resolved slower, and the total does not move. These runs
+shared the host with another session's builds, before `perf_ab.py`
+watched during a round; the outlying rounds (`makecab`'s 10000 and 10720
+ms, jsbench's 18673) are most likely theirs, and a second jsbench run
+(`pinshadow-js2`) is void for it. What is left is a lean of a few per cent
+on `makecab`, which a quiet host could resolve or not. Until one does, the
+exclusion stays.
+
 ### Real code misses the page cache: makecab
 
 *2026-09-25.* The benchmark hardly calls the memory helpers any more;
@@ -1666,6 +1692,17 @@ full set parked for one more lookup.
 - Measured: **+0.8%** (21046-21250 ms against 21257-21398, two builds),
   inside the layout band two builds differ by. With three false negatives
   in 6.3M probes there was almost nothing for it to catch. Dropped.
+
+**The alignment test folded into the page-cache compare** (from the
+ES40-Emu survey): an aligned access keeps its low address bits in the
+masked address it compares with the slot's tag, so a misaligned one misses
+the cache and goes to the helper, and the separate TST and branch go.
+
+- Expected: one test and one branch fewer on every aligned load and store.
+- Measured: nothing usable. One run inconclusive (`alignfold-axp`, +16.4%
+  on a round another session's build slowed), the second void for the same
+  reason (`alignfold-axp2`); the host was never quiet long enough for a
+  third. It passed a Windows boot. Not merged.
 
 ### And some that did, for contrast
 
