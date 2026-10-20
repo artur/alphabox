@@ -39,6 +39,7 @@
  * Contains the code for the emulated Ali M1543C chipset devices.
  **/
 #include "AliM1543C.hpp"
+#include <cerrno>
 #include <cstdlib>
 #include "StdAfx.hpp"
 #include "System.hpp"
@@ -222,9 +223,9 @@ void CAliM1543C::init() {
   } else {
     // Alphabox 'timezone' option: seed the TOY offset so the guest clock
     // shows host local time by default ("local"), UTC ("utc"), or either
-    // with a POSIX-style offset appended: "+<n>s|m|h|d|M|y"
-    // (e.g. "local+2h", "utc+20y"). Guest TOY writes and the sys0 'time'
-    // override still take precedence over this initial seed.
+    // with an offset appended: "+<n>" or "-<n>", then s|m|h|d|M|y
+    // (e.g. "local+2h", "local-20M", "utc+20y"). Guest TOY writes and the
+    // sys0 'time' override still take precedence over this initial seed.
     std::string timezone{myCfg->get_text_value("timezone", "local")};
     std::string timebase;
     bool offset_present = false;
@@ -237,15 +238,17 @@ void CAliM1543C::init() {
     else
       FAILURE_1(Configuration, "Invalid timezone %s", timezone.c_str());
 
-    int remaining_chars = (int)(timezone.length() - timebase.length());
-    if (remaining_chars > 0 && timezone.at(timebase.length()) == '+') {
-      offset_present = true;
-      sscanf(timezone.c_str() + timebase.length() + 1, "%ld", &offset);
-      remaining_chars -= (int)std::to_string(offset).length() + 1;
-      if (remaining_chars != 1)
+    // The offset: a sign, digits and one unit letter, nothing else.
+    const char *rest = timezone.c_str() + timebase.length();
+    if (*rest) {
+      char *end = nullptr;
+      errno = 0;
+      if (*rest == '+' || *rest == '-')
+        offset = strtol(rest, &end, 10);
+      if (!end || end == rest + 1 || errno || !end[0] || end[1])
         FAILURE_1(Configuration, "Invalid timezone %s", timezone.c_str());
-    } else if (remaining_chars > 0)
-      FAILURE_1(Configuration, "Invalid timezone %s", timezone.c_str());
+      offset_present = true;
+    }
 
     time_t host_now;
     time(&host_now);
