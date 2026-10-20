@@ -37,8 +37,23 @@ name = class { statements }
 - A file may start with a UTF-8 byte order mark. Line ends may be LF or
   CRLF.
 - A value named twice in one section keeps its first value; the later one
-  is ignored. A section named twice makes two devices
-  (`%SYS-W-DUPSECTION`).
+  is ignored, with a warning (`%SYS-W-DUPVALUE`). A section named twice
+  makes two devices (`%SYS-W-DUPSECTION`). A value outside any section
+  belongs to no device and is ignored, with a warning.
+- The numbers in a section's name are decimal, without leading zeros:
+  `pci<hose>.<device>` (device 0 to 31), `pci.<device>` inside a bridge
+  (0 to 15), `disk<bus>.<unit>`, `fdc0` or `fdc1`, `serial0` or
+  `serial1`.
+- The sections may come in any order: the `gui` section is set up first.
+
+Values are read by the devices, which refuse what they cannot use:
+
+- **Numbers**: groups of digits, each but the last ending in `K`, `M`,
+  `G` or `T` (powers of 1024, of 1000 for a few values such as `speed`),
+  added up: `512`, `100K`, `2G512M`. An empty value, a suffix alone, a
+  lowercase suffix or a number past 64 bits is refused.
+- **Booleans**: `true`, `yes`, `on`, `1` (or `t`, `y`), and `false`,
+  `no`, `off`, `0` (or `f`, `n`), in any case.
 
 Anything else is refused with the file, the line and the column, and what
 was expected there:

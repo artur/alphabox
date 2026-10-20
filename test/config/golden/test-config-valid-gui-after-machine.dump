@@ -1,0 +1,27 @@
+# exit 0
+sys0 = tsunami
+{
+  rom.srm = "cl67srmrom.exe";
+  cpu0 = ev68cb
+  {
+  }
+  pci0.1 = s3
+  {
+    rom = "86c764x1.bin";
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial0 = serial // added
+  {
+    null_attach = "true";
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}
+
+gui = sdl
+{
+}

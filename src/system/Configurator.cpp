@@ -112,6 +112,8 @@ static void cfg_msg(bool warning, const char *fmt, ...) {
 /// The configuration file's name, for messages: one per process.
 static std::string s_source;
 
+static bool gui_class(const char *name);
+
 /// "file:line:col: ", or "" for what has no place in the file (line 0).
 static std::string place_of(int line, int col) {
   if (!line)
@@ -373,6 +375,23 @@ void CConfigurator::parse(CConfigLexer &lex, int depth) {
 
     const CConfigToken after = lex.next();
     if (after.kind == CConfigToken::SEMICOLON) {
+      // Named twice: the first value is the one used, which
+      // test/tools/srm_cfg.py relies on to override a base configuration.
+      for (const SCfg_Value &w : pValues) {
+        if (!strcmp(w.name, t.text.c_str())) {
+          cfg_msg(true,
+                  "%%SYS-W-DUPVALUE: %s%s(%s): \"%s\" is set more than once; "
+                  "the first value (line %d) is used.\n",
+                  place_of(t.line, t.col).c_str(), pParent ? myName : "file",
+                  pParent ? myValue : "top level", t.text.c_str(), w.line);
+          break;
+        }
+      }
+      if (!pParent)
+        cfg_msg(true,
+                "%%SYS-W-UNKNOWNCFG: %s\"%s\" is outside any section; no "
+                "device reads it, so it has been ignored.\n",
+                place_of(t.line, t.col).c_str(), t.text.c_str());
       add_value(strdup(t.text.c_str()), strdup(v.text.c_str()), t.line, t.col);
       continue;
     }
@@ -424,8 +443,12 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
   parse(lex, 0);
 
   if (parent == 0) {
-    for (size_t i = 0; i < pChildren.size(); i++)
-      initialize_child(pChildren[i]);
+    // The graphics cards need the GUI, so its section goes first wherever
+    // it is in the file.
+    for (int gui = 1; gui >= 0; gui--)
+      for (size_t i = 0; i < pChildren.size(); i++)
+        if (gui_class(pChildren[i]->myValue) == (gui != 0))
+          initialize_child(pChildren[i]);
   }
 }
 
@@ -563,16 +586,11 @@ u64 CConfigurator::get_num_value(const char *n, bool decimal, u64 def) {
 }
 
 // THIS IS WHERE THINGS GET COMPLICATED...
-#define NO_FLAGS 0
-
 #define IS_CS 1
 #define ON_CS 2
 
 #define HAS_PCI 4
 #define IS_PCI 8
-
-#define HAS_ISA 16
-#define IS_ISA 32
 
 #define HAS_DISK 64
 #define IS_DISK 128
@@ -688,7 +706,7 @@ classinfo classes[] = {
     // differs.
     {"ev7", c_ev68cb, ON_CS, kv_ev68cb},
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
-    {"ali", c_ali, IS_PCI | HAS_ISA, kv_ali},
+    {"ali", c_ali, IS_PCI, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
     {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_ali_ide},
     {"ali_usb", c_ali_usb, IS_PCI | HAS_DISK, kv_ali_usb},
@@ -743,6 +761,13 @@ classinfo classes[] = {
     {"es1371", c_es137x, IS_PCI, kv_none},
     {0, c_none, 0, 0}};
 
+static bool gui_class(const char *name) {
+  for (int i = 0; classes[i].id != c_none; i++)
+    if (!strcmp(name, classes[i].name))
+      return (classes[i].flags & IS_GUI) != 0;
+  return false;
+}
+
 // The part a class's `chip` or `model` value names. A name the family does
 // not have is refused, in check mode as when the device is built.
 static bool cirrus_is_gd5430(CConfigurator *cfg) {
@@ -787,8 +812,9 @@ static const tga_model_config &tga_model(CConfigurator *cfg) {
  * The numbers in a section's name, which say where its device is:
  * `prefix` followed by one number (`fdc0`, `serial1`, `pci.3`), or by two
  * separated by a '.' when `b` is given (`pci0.7`, `disk1.0`). Decimal
- * digits only, each at most its maximum, and nothing after them: whether
- * the board or the controller has that place is for them to say.
+ * digits only, no leading zero (one place, one name), each at most its
+ * maximum, and nothing after them: whether the board or the controller has
+ * that place is for them to say.
  **/
 static bool place_numbers(const char *name, const char *prefix, int *a,
                           int amax, int *b = nullptr, int bmax = 0) {
@@ -801,7 +827,7 @@ static bool place_numbers(const char *name, const char *prefix, int *a,
     const int max = k ? bmax : amax;
     if (k && *p++ != '.')
       return false;
-    if (*p < '0' || *p > '9')
+    if (*p < '0' || *p > '9' || (p[0] == '0' && p[1] >= '0' && p[1] <= '9'))
       return false;
     long v = 0;
     while (*p >= '0' && *p <= '9') {
@@ -887,8 +913,10 @@ void CConfigurator::initialize_section() {
 
   if (myFlags & N_P) {
     if (pParent->get_flags())
-      FAILURE_2(Configuration, "Class %s for %s needs a parent", myValue,
-                myName);
+      FAILURE_2(Configuration,
+                "Class %s for %s belongs at the top of the file, not inside "
+                "another section",
+                myValue, myName);
   }
 
   if (myFlags & ON_CS) {
@@ -900,7 +928,9 @@ void CConfigurator::initialize_section() {
   const bool have_gui = s_check ? s_check_gui : bx_gui != nullptr;
   if (myFlags & ON_GUI) {
     if (!have_gui)
-      FAILURE_2(Configuration, "Class %s for %s needs a GUI", myValue, myName);
+      FAILURE_2(Configuration,
+                "Class %s for %s needs a GUI: a gui = sdl section", myValue,
+                myName);
   }
 
   if (myFlags & IS_GUI) {

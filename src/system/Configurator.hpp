@@ -83,9 +83,8 @@ typedef enum {
   c_device,
   c_ramdisk,
 
-  // gui's
+  // gui's ("win32" is the SDL GUI too)
   c_sdl,
-  c_win32,
   c_x11
 } classid;
 
