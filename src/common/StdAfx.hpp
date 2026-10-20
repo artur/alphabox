@@ -128,11 +128,18 @@
 #include <ctype.h>
 #endif
 
+// The fallbacks fill the caller's buffer through the reentrant POSIX calls:
+// gmtime() and localtime() return one static buffer, which another thread
+// (a second processor reading the TOY clock) can overwrite mid-copy.
 #if !defined(HAVE_GMTIME_S)
 inline void gmtime_s(struct tm *t1, time_t *t2) {
+#if defined(_WIN32)
   struct tm *t3;
   t3 = gmtime(t2);
   memcpy(t1, t3, sizeof(struct tm));
+#else
+  gmtime_r(t2, t1);
+#endif
 }
 #endif
 
@@ -143,9 +150,13 @@ inline struct tm *localtime_s(struct tm *buf, time_t *timer)
 inline struct tm *localtime_s(time_t *timer, struct tm *buf)
 #endif
 {
+#if defined(_WIN32)
   struct tm *tmp;
   tmp = localtime(timer);
   return (struct tm *)memcpy(buf, tmp, sizeof(struct tm));
+#else
+  return localtime_r(timer, buf);
+#endif
 }
 #endif
 
