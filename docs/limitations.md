@@ -22,8 +22,16 @@
 
 ## Storage and network
 
-- Some SCSI and IDE commands are missing. A SCSI disk has the vital
-  product data pages 0x00 and 0x80, not 0x83.
+- Some SCSI and IDE commands are missing. INQUIRY, MODE SENSE, READ TOC
+  and REQUEST SENSE pad their reply with zeros up to the allocation
+  length, where SPC-3 stops at the data, and INQUIRY sends at least 36
+  bytes. MODE SELECT acts on a block descriptor's block length only and
+  ignores mode pages.
+- The 53C8xx arbitrates as SCSI id 7 whatever SCID holds. It never
+  raises Bus Fault, parity, SCSI gross error or handshake time-out
+  interrupts (a DMA to an address nothing claims carries on), has no
+  target mode, reselection or disconnect, and aborts a Memory Move of
+  zero bytes, which the manual leaves undefined.
 - The ES47's on-board Adaptec AIC-7892 is stood in for by a Symbios
   53C895.
 - Not modelled: the DS25's AIC-7899 (configuration space and ROM only, no

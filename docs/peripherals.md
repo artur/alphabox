@@ -214,6 +214,36 @@ can rely on:
   serial) and, on disks, 0xB0.
 - READ TOC's MSF addresses are the LBA plus 150 frames, in binary;
   BIN/CUE images with one file per track are laid out track after track.
+- Selected without ATN, a drive asks for the command first, as a SCSI-2
+  target that takes SCSI-1 initiators does, and the LUN comes from the
+  CDB.
+
+The 53C8xx SCRIPTS processor follows the Symbios data manuals (the 895's
+v3.0 is the reference; `cdb_test.sh` runs SCRIPTS programs against it):
+
+- A reserved Transfer Control opcode, a Memory Move with a reserved bit
+  set or with source and destination of different alignment are an
+  illegal instruction (DSTAT IID), never a stop of the emulator. A
+  selection of the chip's own id or of an empty one is a selection
+  time-out, reported by the next instruction that needs the target, as
+  the manual describes for SELECT.
+- A Memory Move takes its whole 24-bit count (up to 16 MB) and leaves
+  TEMP alone.
+- A table-indirect SELECT loads SCNTL3 and SXFER from the table with the
+  ID. SELECT passes its ATN bit to the target.
+- The general purpose timer (STIME1 GEN) runs in host time: 125 us for
+  GEN 1, doubling per step, 16 times that with GENSF.
+- SFBR takes the first byte received in STATUS, DATA IN and MESSAGE IN,
+  never a byte sent. SBCL shows the bus control lines (REQ, ACK, BSY,
+  SEL, ATN and the phase); ATN is SOCL bit 3, dropped at the end of a
+  MESSAGE OUT move, and a MESSAGE IN move leaves ACK asserted until a
+  Clear ACK. SSTAT1's phase bits change only when a target has a phase
+  up.
+- A PCI reset resets the cores, a running SCRIPTS program included. A
+  WAIT RESELECT ends when an interrupt halts SCRIPTS or the driver starts
+  another program, so a later SIGP cannot redirect it.
+- The chip arbitrates as id 7 whatever SCID says (a disk cannot be
+  configured at 7).
 
 ### Network and bridges
 

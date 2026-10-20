@@ -174,7 +174,7 @@ and transfers. It writes the emulator's pid to `emulator.pid`: profile
 | `usb_audio.sh` | The USB speaker in Windows 2000: plays a sound, captures the stream and compares it with the file. |
 | `usb_snap.sh` | USB devices across a snapshot and a restore of a running Windows 2000. |
 | `wav_compare.py` | Compares a captured WAV with its reference. |
-| `cdb_test.sh` | The SCSI disk's conformance test (`alphabox cdbtest`): status, sense, data and lengths of each command, with no guest. |
+| `cdb_test.sh` | The SCSI disk's and the 53C8xx's conformance test (`alphabox cdbtest`): status, sense, data and lengths of each command, and SCRIPTS programs, with no guest. |
 | `win_storage.sh` | A storage controller (`CTRL=<class>`) with a FAT16 disk added to a Windows guest, which copies a file on it. |
 | `fat_disk.py` | Builds and inspects small FAT16 test disks. |
 | `aboot_disk.py` | A sparse disk SRM boots Linux from: boot block, BSD disklabel, aboot's `bootlx`, a `/boot` and a root partition ([linux.md](linux.md)). |
@@ -188,8 +188,13 @@ way a host adapter does: arbitration, selection, IDENTIFY, the CDB, the
 data, the status and COMMAND COMPLETE, plus the ATAPI form with no message
 phases that the IDE and USB paths use. Each check compares the answer
 with the standards (SCSI-2, SPC-3, SBC-3, MMC-3); a command that would stop
-the emulator fails its check. It takes a second, needs no firmware, and
-is the first thing to run after a change to `CDisk` or the SCSI bus.
+the emulator fails its check. A second part builds an ES40 from a
+configuration with a 53C875 and a disk on its bus, writes SCRIPTS programs
+to memory, starts them through the chip's registers and checks what the
+Symbios data manual says they leave (selection, interrupts, SFBR, SBCL,
+the timer, Memory Move). It takes a few seconds, needs no firmware, and is
+the first thing to run after a change to `CDisk`, the SCSI bus or the
+53C8xx.
 
 ### Builds and helpers
 
@@ -231,8 +236,8 @@ A change is ready when:
    JIT, headless; see [building.md](building.md)).
 2. **SRM:** `srm_run.sh` gives `diff clean` on each build, with
    `0 mismatches` on a JIT_VERIFY build.
-3. **Storage:** for changes to the disks or the SCSI bus, `cdb_test.sh`
-   passes.
+3. **Storage:** for changes to the disks, the SCSI bus or the 53C8xx,
+   `cdb_test.sh` passes.
 4. **Graphics:** for graphics changes, `vga_boot.sh` reproduces the known
    settled frames. Run it alone: on a busy host the cursor phase can hide
    one of the two frames.
