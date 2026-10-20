@@ -270,7 +270,10 @@ CSerial::~CSerial() { stop_threads(); }
 // ALPHABOX_TRACE_SERIAL=<port number>: every register write on that port,
 // with how many times the guest read IIR since the previous write and what
 // the first of those reads returned -- a routine spinning on IIR shows as
-// one write followed by millions of reads of one value.
+// one write followed by millions of reads of one value -- and each change
+// of MCR with the modem status it gives. (MCR changes used to be printed
+// for every port, always: Linux and Windows toggle DTR and RTS on every
+// open and close.)
 static const int s_trace_serial = getenv("ALPHABOX_TRACE_SERIAL")
                                       ? atoi(getenv("ALPHABOX_TRACE_SERIAL"))
                                       : -1;
@@ -308,7 +311,7 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
   const u8 prev_mcr = state.bMCR;
   uart.write((u32)address, d);
   const u8 mcr = state.bMCR;
-  if (address == 4 && prev_mcr != mcr)
+  if (s_trace_serial == state.iNumber && address == 4 && prev_mcr != mcr)
     printf("SRL%d: MCR %02x -> %02x (LOOP=%d DTR=%d RTS=%d OUT1=%d OUT2=%d), "
            "MSR now %02x\n",
            state.iNumber, prev_mcr, mcr, (mcr >> 4) & 1, mcr & 1,

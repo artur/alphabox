@@ -548,7 +548,7 @@ machine's firmware wants hardware that is not emulated yet (see
 | `ALPHABOX_TRACE_MP=1` | the registers a console uses to start other processors and hand work to them |
 | `ALPHABOX_TRACE_CALLS=1` | the firmware's own calls, once per call site and routine (interpreter builds) |
 | `ALPHABOX_TRACE_FLASH=1` | the commands firmware sends the flash |
-| `ALPHABOX_TRACE_SERIAL=1` | the UARTs |
+| `ALPHABOX_TRACE_SERIAL=<n>` | serial port n (0 for `serial0`): each register write, the IIR reads between writes, each change of MCR |
 | `ALPHABOX_TRACE_KBC=1` | the keyboard controller |
 | `ALPHABOX_TRACE_PORT61=1` | the ISA refresh-toggle port, as bursts of reads |
 | `ALPHABOX_DUMP_MEMORY=1` | guest memory, written to `memory_000000000000.dmp` when the emulator is asked to stop |
