@@ -364,6 +364,11 @@ void CES137x::write_reg(void *opaque, u64 addr, uint64_t val, unsigned size) {
 
   addr = fixup(s, addr);
 
+  static const bool trace = getenv("ALPHABOX_ES137X_TRACE") != nullptr;
+  if (trace && addr != ES_REG_MEMPAGE)
+    printf("%s: ES137X write %03x <- %08x\n", devid_string, (unsigned)addr,
+           (unsigned)val);
+
   switch (addr) {
   case ES_REG_CONTROL:
     update_voices(s, val, s->sctl);
@@ -642,6 +647,15 @@ void CES137x::transfer_audio(ES137xState *s, struct chan *d, int loop_sel,
         do_pci_write(addr, tmpbuf, 1, copied);
       } else {
         do_pci_read(addr, tmpbuf, 1, to_copy);
+        static const bool trace = getenv("ALPHABOX_ES137X_TRACE") != nullptr;
+        static unsigned nth = 0;
+        if (trace && (nth++ % 200) == 0) {
+          int peak = 0;
+          for (int i = 0; i < to_copy; i++)
+            peak = std::max(peak, (int)tmpbuf[i]);
+          printf("%s: ES137X dac%d reads %d bytes at %08x, max byte %d\n",
+                 devid_string, index, to_copy, addr, peak);
+        }
         copied =
             SDL_PutAudioStreamData(s->dac_voice[index], tmpbuf, to_copy)
                 ? to_copy
