@@ -275,7 +275,8 @@ u64 CAlphaCPU::ieee_cvtst(u64 op, u32 ins) {
      (which would unconditionally raise INV on denormals) and normalize
      directly. Per HRM 4.8.4, finite S inputs (including denormals) do
      not raise invalid-operation on CVTST. */
-  if (FPR_GETEXP(op) == 0 && FPR_GETFRAC(op) != 0 && !(state.fpcr & FPCR_DNZ)) {
+  if (FPR_GETEXP(op) == 0 && FPR_GETFRAC(op) != 0 &&
+      !((state.fpcr & FPCR_DNZ) && (ins & I_FTRP_S))) {
     b.sign = FPR_GETSIGN(op);
     b.exp = 1; /* the exponent of a denormal, once it has a hidden bit */
     b.frac = FPR_GETFRAC(op) << FPR_GUARD;
@@ -814,8 +815,10 @@ int CAlphaCPU::ieee_unpack(u64 op, UFP *r, u32 ins) {
   if (r->exp == 0)           /* exponent = 0? */
   {
     if (r->frac == 0)
-      return UFT_ZERO;         /* frac = 0? then true 0 */
-    if (state.fpcr & FPCR_DNZ) /* denorms to 0? */
+      return UFT_ZERO; /* frac = 0? then true 0 */
+    /* FPCR<DNZ> makes a denormal operand a signed zero, but only for an
+       instruction with /S (ARM 4.7.7.11; HRM A.8). */
+    if ((state.fpcr & FPCR_DNZ) && (ins & I_FTRP_S)) /* denorms to 0? */
     {
       r->frac = 0; /* clear fraction */
       return UFT_ZERO;

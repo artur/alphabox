@@ -376,7 +376,6 @@ still faults with the FPU disabled: the architecture says any of them may.
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
-| `FPCR[DNZ]` turns a denormal operand into zero for every IEEE instruction; the 21264 does so only for instructions with `/S` | `AlphaCPU_ieeefloat.cpp`, `ieee_unpack` | A program that sets `DNZ` and runs instructions without `/S` on denormals gets zeros where hardware would trap. Windows and OpenVMS leave `DNZ` clear |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
@@ -387,10 +386,6 @@ invalidates every one of them with a single store instead of a walk. It
 must invalidate them, whatever else a flush decides to skip: the lines are
 tagged by virtual address, so code mapped at an address that has held
 other code is a change no physically-keyed bookkeeping can see.
-
-**`DNZ`**: the 21264/21364 Compiler Writer's Guide, appendix C, says "when
-FPCR[DNZ] is set, denormal input operand traps can be avoided for
-arithmetic operations that include the /S qualifier".
 
 **`AMASK`**: no document lists the 21364's AMASK, and neither EV7 PALcode
 nor the ES47 console executes `AMASK` or `IMPLVER` (E1), so the EV7 rows'
@@ -456,6 +451,16 @@ and FPCR disable. These were settled in that round.
   handlers of Linux (`arch/alpha/math-emu`) and NetBSD (`fp_complete.c`)
   raise the invalid operation themselves. Until 2026-10-20 every form
   raised it here.
+- **`FPCR<DNZ>`** makes a denormal operand a signed zero only for an
+  instruction with `/S`: "these denormal control bits only affect denormal
+  handling by IEEE instructions that are modified by any valid qualifier
+  combination that includes the /S (exception completion) qualifier" (ARM
+  4.7.7.11), and the HRM, A.8: "when FPCR[DNZ] is set, denormal input
+  operand traps can be avoided for arithmetic operations that include the
+  /S qualifier". Without `/S` a denormal operand takes the unmaskable trap
+  whatever `DNZ` says (until 2026-10-20 it was a zero here). `CVTST`,
+  which converts an S denormal exactly and without a trap, does so without
+  `/S` whatever `DNZ` says.
 
 ### The exception path
 

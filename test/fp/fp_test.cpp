@@ -96,7 +96,7 @@ static Item items[] = {
      "CVTTQ overflow is an invalid operation only with /S (HRM Table A-11, "
      "p. A-17); without /S it is an integer overflow only (ARM 4.7.7.2, "
      "p. 4-72; 4.7.7.9, p. 4-79)"},
-    {"FP-06", false,
+    {"FP-06", true,
      "FPCR[DNZ] acts only for instructions with /S (ARM 4.7.7.11, p. 4-79)"},
     {"FP-10", true,
      "a VAX overflow writes the largest number of the format, not the "
