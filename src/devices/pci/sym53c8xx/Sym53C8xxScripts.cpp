@@ -582,6 +582,16 @@ void CSym53C8xx::CChannel::execute_io_op() {
     u32 io_struc;
     dev.do_pci_read(io_addr, &io_struc, 4, 1);
     destination = (io_struc >> 16) & 0x0f;
+    // The table holds SCNTL3 (bits 31-24), the ID and SXFER (bits 15-8),
+    // and the chip loads all three: "The SCNTL3 value, SCSI ID,
+    // synchronous offset and synchronous period are loaded from this
+    // address" (SYM53C895 data manual v3.0, I/O instructions, bit 25 Table
+    // Indirect Mode, pdf p. 160; and SXFER: "When using Table Indirect I/O
+    // commands, bits 7-0 of this register will be loaded from the I/O data
+    // structure"). Only the ID used to be taken, so SCNTL3 and SXFER never
+    // showed what the driver negotiated.
+    write_b_scntl3((u8)(io_struc >> 24));
+    R8(SXFER) = (u8)(io_struc >> 8);
 #if defined(DEBUG_SYM_SCRIPTS)
     printf("SYM: table indirect. io_struct = %08x, new dest = %d.\n", io_struc,
            destination);

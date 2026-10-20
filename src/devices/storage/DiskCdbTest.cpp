@@ -1428,6 +1428,28 @@ void t_sym_reserved(SymRig &s) {
   }
 }
 
+/// SYM-05: a table-indirect SELECT loads SCNTL3 and SXFER with the ID.
+void t_sym_table_select(SymRig &s) {
+  group("SYM-05 table-indirect SELECT");
+  std::string err;
+  s.reset();
+  const u32 table = 0x210000;
+  // SCNTL3 0x33, id 0, SXFER 0x2c (period and offset), byte 0 unused.
+  s.mw(table, 0x33002c00);
+  s.w32(R_DSA, table);
+  s.w8(R_SCNTL3, 0);
+  s.w8(R_SXFER, 0);
+  const u32 q = s.program({0x43000000, 0, kInt, 0x2});
+  const u8 istat = s.run(q, err);
+  const u8 dstat = s.r8(R_DSTAT);
+  check(err.empty() && (istat & 0x01) && (dstat & 0x04),
+        "the table SELECT runs to the INT", "istat %02x dstat %02x %s", istat,
+        dstat, err.c_str());
+  check(s.r8(R_SCNTL3) == 0x33 && s.r8(R_SXFER) == 0x2c,
+        "SCNTL3 and SXFER come from the table", "scntl3 %02x sxfer %02x",
+        s.r8(R_SCNTL3), s.r8(R_SXFER));
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1523,6 +1545,7 @@ int main_cdbtest(int argc, char **argv) {
   if (sr.sym) {
     t_sym_basic(sr);
     t_sym_reserved(sr);
+    t_sym_table_select(sr);
   } else
     check(false, "the 53C875 of the test machine");
 
