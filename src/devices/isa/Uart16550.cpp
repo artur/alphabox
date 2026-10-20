@@ -207,9 +207,14 @@ void CUart16550::write(u32 reg, u8 value) {
   }
 }
 
-/// Bytes from the line. Returns how many fit in the FIFO.
+/// Bytes from the line. Returns how many fit in the FIFO; the caller keeps
+/// the rest. In loopback the receiver's input is disconnected (PC16550D
+/// 8.8, p. 18; ALi M1543C p. 263) and nothing is taken: a key typed during
+/// a driver's loopback test waits instead of being read as the test's byte.
 int CUart16550::receive(const u8 *data, int len) {
   std::lock_guard<std::mutex> g(lock);
+  if (s.bMCR & MCR_LOOP)
+    return 0;
   int taken = 0;
   while (taken < len && push_rx(data[taken])) {
     taken++;

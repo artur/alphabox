@@ -239,8 +239,16 @@ static void test_loopback() {
   CHECK_EQ(r.sent.size(), 0); // not on the line
   CHECK_EQ(r.rd(LSR) & 0x01, 0x01);
   CHECK_EQ(r.rd(RBR), 0x55);
+  // The receiver's input is disconnected: the line's bytes are not taken
+  // (the host side keeps them) and do not mix with the looped ones.
+  CHECK_EQ(r.uart.receive((const u8 *)"typed", 5), 0);
+  r.wr(THR, 0x56);
+  CHECK_EQ(r.rd(RBR), 0x56);
+  CHECK_EQ(r.rd(LSR) & 0x01, 0x00);
   r.wr(MCR, 0x0b);
   CHECK_EQ(r.rd(MSR) & 0xf0, 0x30); // back to the idle terminal
+  CHECK_EQ(r.uart.receive((const u8 *)"k", 1), 1);
+  CHECK_EQ(r.rd(RBR), 'k');
   r.wr(THR, 0x66);
   CHECK_EQ(r.sent.size(), 1);
   CHECK_EQ(r.rd(LSR) & 0x01, 0x00);
