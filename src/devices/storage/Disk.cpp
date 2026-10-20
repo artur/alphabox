@@ -847,6 +847,49 @@ static inline bool cmd_needs_media(u8 op) {
   }
 }
 
+static inline u32 get_be32(const u8 *p) {
+  return (u32(p[0]) << 24) | (u32(p[1]) << 16) | (u32(p[2]) << 8) | p[3];
+}
+
+/**
+ * The logical block address and the transfer length, in blocks, of a READ,
+ * WRITE or VERIFY command: the 6-, 10- and 12-byte forms, READ CD (a 24-bit
+ * length) and READ LONG (one block). Returns false for any other opcode.
+ * Both come back in 64 bits, so no value a CDB can carry wraps around when
+ * the two are added.
+ **/
+static bool cdb_lba_length(const u8 *c, u64 &lba, u64 &blocks) {
+  switch (c[0]) {
+  case SCSICMD_READ:
+  case SCSICMD_WRITE:
+    // A 21-bit address; a length of 0 means 256 blocks.
+    lba = (u64(c[1] & 0x1f) << 16) | (u64(c[2]) << 8) | c[3];
+    blocks = c[4] ? c[4] : 256;
+    return true;
+  case SCSICMD_READ_10:
+  case SCSICMD_WRITE_10:
+  case SCSICMD_VERIFY_10:
+    lba = get_be32(c + 2);
+    blocks = (u64(c[7]) << 8) | c[8];
+    return true;
+  case SCSICMD_READ_12:
+  case SCSICMD_WRITE_12:
+    lba = get_be32(c + 2);
+    blocks = get_be32(c + 6);
+    return true;
+  case SCSICMD_READ_CD:
+    lba = get_be32(c + 2);
+    blocks = (u64(c[6]) << 16) | (u64(c[7]) << 8) | c[8];
+    return true;
+  case SCSICMD_READ_LONG:
+    lba = get_be32(c + 2);
+    blocks = 1;
+    return true;
+  default:
+    return false;
+  }
+}
+
 static inline void put_be16(u8 *p, u16 v) {
   p[0] = u8(v >> 8);
   p[1] = u8(v);
@@ -1045,7 +1088,8 @@ int CDisk::do_scsi_command() {
   unsigned int retlen = 0;
   int q;
   int pagecode;
-  u32 ofs = 0;
+  u64 lba = 0;    // READ, WRITE, VERIFY: cdb_lba_length()
+  u64 blocks = 0; // and how many blocks
 
 #if defined(DEBUG_SCSI)
   printf("%s: %d-byte command ", devid_string, state.scsi.cmd.written);
@@ -2130,9 +2174,10 @@ int CDisk::do_scsi_command() {
   }
 
   case SCSIBLOCKCMD_SEEK: {
-    auto ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-               (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-    if (ofs >= get_lba_size() || !seek_block(ofs)) {
+    // An unsigned 32-bit address: as a signed int, 0x80000000 and up
+    // passed the range check as negative numbers.
+    const u64 seek_lba = get_be32(state.scsi.cmd.data + 2);
+    if (seek_lba >= (u64)get_lba_size() || !seek_block(seek_lba)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
@@ -2187,13 +2232,8 @@ int CDisk::do_scsi_command() {
       break;
     }
 
-    off_t_large verify_ofs = ((off_t_large)state.scsi.cmd.data[2] << 24) |
-                             ((off_t_large)state.scsi.cmd.data[3] << 16) |
-                             ((off_t_large)state.scsi.cmd.data[4] << 8) |
-                             ((off_t_large)state.scsi.cmd.data[5] << 0);
-    retlen = (state.scsi.cmd.data[7] << 8) | state.scsi.cmd.data[8];
-
-    if ((verify_ofs + retlen) > get_lba_size()) {
+    cdb_lba_length(state.scsi.cmd.data, lba, blocks);
+    if (!lba_range_ok(lba, blocks)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
@@ -2215,35 +2255,7 @@ int CDisk::do_scsi_command() {
     //   //printf("%s: Will disconnect before returning read data.\n",
     //   devid_string); state.scsi.will_disconnect = true;
     // }
-    if (state.scsi.cmd.data[0] == SCSICMD_READ) {
-
-      //  bits 4..0 of cmd[1], and cmd[2] and cmd[3]
-      //  hold the logical block address.
-      //
-      //  cmd[4] holds the number of logical blocks
-      //  to transfer. (Special case if the value is
-      //  0, actually means 256.)
-      ofs = ((state.scsi.cmd.data[1] & 0x1f) << 16) +
-            (state.scsi.cmd.data[2] << 8) + state.scsi.cmd.data[3];
-      retlen = state.scsi.cmd.data[4];
-      if (retlen == 0)
-        retlen = 256;
-    } else if (state.scsi.cmd.data[0] == SCSICMD_READ_10) {
-
-      //  cmd[2..5] hold the logical block address.
-      //  cmd[7..8] holds the number of logical
-      ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-            (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-      retlen = (state.scsi.cmd.data[7] << 8) + state.scsi.cmd.data[8];
-    } else if (state.scsi.cmd.data[0] == SCSICMD_READ_12) {
-
-      //  cmd[2..5] hold the logical block address.
-      //  cmd[6..9] holds the number of logical
-      ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-            (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-      retlen = (state.scsi.cmd.data[6] << 24) + (state.scsi.cmd.data[7] << 16) +
-               (state.scsi.cmd.data[8] << 8) + state.scsi.cmd.data[9];
-    } else if (state.scsi.cmd.data[0] == SCSICMD_READ_CD) {
+    if (state.scsi.cmd.data[0] == SCSICMD_READ_CD) {
       // MMC READ CD (0xBE) byte 9 selects which sector subfields to return:
       //   bit 7    SYNC          (12-byte sync)
       //   bits 6:5 HEADER CODE   (00=none, 01=Hdr, 10=SubHdr, 11=both)
@@ -2265,44 +2277,39 @@ int CDisk::do_scsi_command() {
         do_scsi_error(SCSI_INVALID_FIELD);
         return 0;
       }
-
-      //  cmd[2..5] hold the logical block address.
-      //  cmd[6..8] holds the number of logical blocks to transfer.
-      ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-            (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-      retlen = (state.scsi.cmd.data[6] << 16) + (state.scsi.cmd.data[7] << 8) +
-               state.scsi.cmd.data[8];
     }
 
     // Within bounds?
-    if ((ofs + retlen) > get_lba_size()) {
+    cdb_lba_length(state.scsi.cmd.data, lba, blocks);
+    if (!lba_range_ok(lba, blocks)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
 
     // Would exceed buffer?
-    if (retlen * get_block_size() > DATI_BUFSZ) {
-      printf("%s: read too big (%d)\n", devid_string, retlen);
+    if (blocks * get_block_size() > DATI_BUFSZ) {
+      printf("%s: read too big (%" PRIu64 ")\n", devid_string, blocks);
       do_scsi_error(SCSI_TOO_BIG);
       break;
     }
 
     //  Return data:
-    if (retlen > 0) {
-      if (!seek_block(ofs)) {
+    if (blocks > 0) {
+      if (!seek_block(lba)) {
         do_scsi_error(SCSI_LBA_RANGE);
         break;
       }
-      if (read_blocks(state.scsi.dati.data, retlen) != retlen) {
-        do_scsi_error(SCSI_READ_ERROR, ofs);
+      if (read_blocks(state.scsi.dati.data, blocks) != blocks) {
+        do_scsi_error(SCSI_READ_ERROR, (int)lba);
         break;
       }
     }
     state.scsi.dati.read = 0;
-    state.scsi.dati.available = retlen * get_block_size();
+    state.scsi.dati.available = (unsigned int)(blocks * get_block_size());
 
 #if defined(DEBUG_SCSI)
-    printf("%s: READ  ofs=%d size=%d\n", devid_string, ofs, retlen);
+    printf("%s: READ  ofs=%" PRIu64 " size=%" PRIu64 "\n", devid_string, lba,
+           blocks);
 #endif
     do_scsi_error(SCSI_OK);
     break;
@@ -2320,8 +2327,7 @@ int CDisk::do_scsi_command() {
     // long commands to 514 bytes (the first value OpenVMS tries).
     //  cmd[2..5] hold the logical block address.
     //  cmd[7..8] holds the number of bytes to transfer
-    ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-          (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
+    cdb_lba_length(state.scsi.cmd.data, lba, blocks);
     retlen = (state.scsi.cmd.data[7] << 8) + state.scsi.cmd.data[8];
 
     state.scsi.stat.available = 1;
@@ -2338,7 +2344,7 @@ int CDisk::do_scsi_command() {
     }
 
     // Within bounds?
-    if ((ofs + 1) > get_lba_size()) {
+    if (!lba_range_ok(lba, 1)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
@@ -2351,12 +2357,12 @@ int CDisk::do_scsi_command() {
     }
 
     //  Return data:
-    if (!seek_block(ofs)) {
+    if (!seek_block(lba)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
     if (read_blocks(state.scsi.dati.data, 1) != 1) {
-      do_scsi_error(SCSI_READ_ERROR, ofs);
+      do_scsi_error(SCSI_READ_ERROR, (int)lba);
       break;
     }
     for (unsigned int x1 = get_block_size(); x1 < retlen; x1++)
@@ -2372,66 +2378,36 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: WRITE.\n", devid_string);
 #endif
-    if (state.scsi.cmd.data[0] == SCSICMD_WRITE) {
-
-      //  bits 4..0 of cmd[1], and cmd[2] and cmd[3]
-      //  hold the logical block address.
-      //
-      //  cmd[4] holds the number of logical blocks
-      //  to transfer. (Special case if the value is
-      //  0, actually means 256.)
-      ofs = ((state.scsi.cmd.data[1] & 0x1f) << 16) +
-            (state.scsi.cmd.data[2] << 8) + state.scsi.cmd.data[3];
-      retlen = state.scsi.cmd.data[4];
-      if (retlen == 0)
-        retlen = 256;
-    } else if (state.scsi.cmd.data[0] == SCSICMD_WRITE_10) {
-
-      //  cmd[2..5] hold the logical block address.
-      //  cmd[7..8] holds the number of logical blocks
-      //  to transfer.
-      ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-            (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-      retlen = (state.scsi.cmd.data[7] << 8) + state.scsi.cmd.data[8];
-    } else {
-      //  WRITE_12:
-      //  cmd[2..5] hold the logical block address.
-      //  cmd[6..9] holds the number of logical blocks
-      //  to transfer.
-      ofs = (state.scsi.cmd.data[2] << 24) + (state.scsi.cmd.data[3] << 16) +
-            (state.scsi.cmd.data[4] << 8) + state.scsi.cmd.data[5];
-      retlen = (state.scsi.cmd.data[6] << 24) + (state.scsi.cmd.data[7] << 16) +
-               (state.scsi.cmd.data[8] << 8) + state.scsi.cmd.data[9];
-    }
-
     // Within bounds?
-    if (((ofs + retlen)) > get_lba_size()) {
+    cdb_lba_length(state.scsi.cmd.data, lba, blocks);
+    if (!lba_range_ok(lba, blocks)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
 
     // Would exceed buffer?
-    if (retlen * get_block_size() > DATO_BUFSZ) {
-      printf("%s: write too big (%d)\n", devid_string,
-             (int)(retlen * get_block_size()));
+    if (blocks * get_block_size() > DATO_BUFSZ) {
+      printf("%s: write too big (%" PRIu64 ")\n", devid_string,
+             blocks * get_block_size());
       do_scsi_error(SCSI_TOO_BIG);
       break;
     }
 
-    state.scsi.dato.expected = retlen * get_block_size();
+    state.scsi.dato.expected = (unsigned int)(blocks * get_block_size());
 
     if (state.scsi.dato.written < state.scsi.dato.expected)
       return 2;
 
     //  Write data
-    if (retlen > 0 && !seek_block(ofs)) {
+    if (blocks > 0 && !seek_block(lba)) {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
-    write_blocks(state.scsi.dato.data, retlen);
+    write_blocks(state.scsi.dato.data, blocks);
 
 #if defined(DEBUG_SCSI)
-    printf("%s: WRITE  ofs=%d size=%d\n", devid_string, ofs, retlen);
+    printf("%s: WRITE  ofs=%" PRIu64 " size=%" PRIu64 "\n", devid_string, lba,
+           blocks);
 #endif
     do_scsi_error(SCSI_OK);
     break;

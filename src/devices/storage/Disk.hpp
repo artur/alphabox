@@ -111,6 +111,12 @@ public:
   void determine_layout();
 
   off_t_large get_lba_size() { return byte_size / state.block_size; };
+  /// Do \a blocks blocks from \a lba lie on the medium? Computed so that no
+  /// address or length wraps.
+  bool lba_range_ok(u64 lba, u64 blocks) {
+    const u64 n = (u64)get_lba_size();
+    return lba <= n && blocks <= n - lba;
+  };
   off_t_large get_byte_size() { return byte_size; };
   off_t_large get_chs_size() { return cylinders * heads * sectors; };
   off_t_large get_cylinders() { return cylinders; };

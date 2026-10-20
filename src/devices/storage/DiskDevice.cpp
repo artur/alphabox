@@ -129,10 +129,13 @@ CDiskDevice::~CDiskDevice(void) {
 #endif
 }
 
+/**
+ * Returns false, as CDiskFile does, for a position outside the device: the
+ * caller reports that to the guest instead of stopping the machine.
+ **/
 bool CDiskDevice::seek_byte(off_t_large byte) {
-  if (byte >= byte_size) {
-    FAILURE_1(InvalidArgument, "%s: Seek beyond end of file!\n", devid_string);
-  }
+  if (byte < 0 || byte >= byte_size)
+    return false;
 
 #if defined(_WIN32)
   state.byte_pos = byte;

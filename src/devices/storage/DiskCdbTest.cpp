@@ -633,6 +633,36 @@ void t_bad_messages(Rig &r) {
   }
 }
 
+/// DISK-02: the LBA range check in 64 bits.
+void t_lba_wrap(Rig &r) {
+  group("DISK-02 LBA wrap");
+  CCdbTestAdapter *a = r.a;
+  for (int id : {0, 2}) {
+    for (u16 len : {1, 2, 3}) {
+      char name[80];
+      snprintf(name, sizeof(name), "READ(10) at 0xFFFFFFFF, %u blocks, id %d",
+               len, id);
+      expect_cc(r, id, a->run(id, cdb10(0x28, 0xffffffff, len)), name, 5, 0x21,
+                0);
+      snprintf(name, sizeof(name), "WRITE(10) at 0xFFFFFFFF, %u blocks, id %d",
+               len, id);
+      expect_cc(
+          r, id,
+          a->run(id, cdb10(0x2a, 0xffffffff, len), std::vector<u8>(len * 512)),
+          name, 5, 0x21, 0);
+    }
+    char name[80];
+    snprintf(name, sizeof(name), "READ(12) at 0xFFFFFFFF, 3 blocks, id %d", id);
+    expect_cc(r, id, a->run(id, cdb12(0xa8, 0xffffffff, 3)), name, 5, 0x21, 0);
+    snprintf(name, sizeof(name), "READ(12) of 0xFFFFFFFF blocks, id %d", id);
+    expect_cc(r, id, a->run(id, cdb12(0xa8, 1, 0xffffffff)), name, 5, 0x21, 0);
+    snprintf(name, sizeof(name), "SEEK(10) to 0x80000000, id %d", id);
+    expect_cc(r, id, a->run(id, cdb10(0x2b, 0x80000000, 0)), name, 5, 0x21, 0);
+    snprintf(name, sizeof(name), "VERIFY(10) at 0xFFFFFFFF, id %d", id);
+    expect_cc(r, id, a->run(id, cdb10(0x2f, 0xffffffff, 2)), name, 5, 0x21, 0);
+  }
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -683,6 +713,7 @@ int main_cdbtest(int argc, char **argv) {
   t_atapi(sys, root);
   t_selection(r);
   t_bad_messages(r);
+  t_lba_wrap(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

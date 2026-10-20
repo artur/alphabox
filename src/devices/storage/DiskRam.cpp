@@ -86,10 +86,14 @@ CDiskRam::~CDiskRam(void) {
   }
 }
 
+/**
+ * Returns false, as CDiskFile does, for a position outside the disk: the
+ * caller turns that into a SCSI or ATA error for the guest, which reached
+ * it, rather than a stop of the machine.
+ **/
 bool CDiskRam::seek_byte(off_t_large byte) {
-  if (byte < 0 || byte >= byte_size) {
-    FAILURE_1(InvalidArgument, "%s: Seek outside disk image!\n", devid_string);
-  }
+  if (byte < 0 || byte >= byte_size)
+    return false;
 
   state.byte_pos = byte;
   return true;
