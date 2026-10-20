@@ -109,7 +109,7 @@ static Item items[] = {
     {"FP-12", true,
      "VAX CVTGQ of exactly -2**63 is in range, not an integer overflow (ARM "
      "4.7.7.9, p. 4-79)"},
-    {"DENORM", false,
+    {"DENORM", true,
      "with /S, FPCR[UNFD] set and [UNDZ] clear, an underflow gives the IEEE "
      "denormal result instead of a true zero (ARM 4.7.7.10 and 4.7.7.11, "
      "p. 4-79; Table 4-11 bit 61)"},

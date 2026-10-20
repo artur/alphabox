@@ -2984,6 +2984,7 @@ void CAlphaCPU::jit_fp_selftest() {
                               N | (U64(0x3f) << 52),     // all sticky bits set
                               N | INE | (U64(1) << 48),  // DNZ
                               N | INE | (U64(7) << 60),  // UNDZ | UNFD | INED
+                              N | INE | (U64(1) << 61),  // UNFD: denormals
                               N | INE | (U64(7) << 49)}; // INVD | DZED | OVFD
 
   const u8 *dram = (const u8 *)dram_ptr;

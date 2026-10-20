@@ -115,18 +115,51 @@ host atomic compare-and-swap, which is a bus error that killed the
 emulator. And the alignment trap no longer claims an access violation in
 `MM_STAT`.
 
-### FPCR[UNDZ] is never read
+### An underflow with UNFD set and UNDZ clear gives the denormal
 
-An underflow with `UNFD` set is flushed to zero. The architecture wants a
-trap when `UNDZ` is clear, so that software can supply the denormal this
-implementation cannot produce (ARM 4.7.2; HRM Table 2-14, "trap to supply a
-possible denormal result"). A program that asked for gradual underflow
-(Tru64 `-fptm su`, OpenVMS `/IEEE_MODE=DENORM_RESULTS`) gets silent zeros,
-and its completion handler is never called.
+A 21264 cannot produce a denormal result. With FPCR `UNFD` set and `UNDZ`
+clear, an IEEE instruction with `/S` that underflows traps "to supply a
+possible denormal result" (HRM Table 2-14), and the operating system's
+completion handler computes the denormal and carries on (ARM Appendix
+B.2). Alphabox computes the denormal itself and does not trap.
 
-Honouring `UNDZ` makes underflows trap that do not trap today. Changing
-trap delivery needs a guest to prove it, which is why this one is written
-down rather than fixed.
+That is what the architecture asks of a processor that can: with a trap
+disable bit set, "the hardware implementation sets the result of the
+operation to the nontrapping result value as specified in the IEEE
+standard ... If the implementation is unable to calculate the required
+result, it ignores the trap disable bit and signals a trap as usual" (ARM
+4.7.7.10); `UNDZ` clear makes that result "the non-trapping result
+(denorm, +0 or -0) specified in the IEEE standard" (ARM Table 4-11); and
+"a system that includes these bits may choose to complete computations
+involving non-finite values without the assistance of software
+completion" (ARM B.2).
+
+What a guest sees:
+
+- Linux runs programs with `UNFD` set and `UNDZ` clear unless a program
+  asks for underflows mapped to zero (`IEEE_MAP_UMZ`, the only thing that
+  sets `UNDZ`); NetBSD does the same once a program's first underflow has
+  set its sticky flag. A program built with `-mieee` gets gradual
+  underflow, as on hardware, without a trap and an emulated instruction
+  per underflow. Windows programs run with `UNFD` clear (FPCR
+  `8990000000000000` in the Direct3D investigation below) and never reach
+  this path.
+- The result is rounded on the format's own grid, denormals included, in
+  the instruction's rounding mode; it can be a denormal, a signed zero or
+  MIN. An S result is an S denormal in register format (exponent field
+  0, fraction in `<51:29>`).
+- `FPCR<UNF>` follows the architecture's definition of underflow, which
+  "does not depend on whether the result is inexact" (ARM 4.7.7.7), so an
+  exact denormal result sets it. IEEE's flag would not, and on hardware
+  Linux's completion handler clears it again. `FPCR<INE>` is set only when
+  the denormal is inexact, and an `/SUI` instruction traps for it unless
+  `INED` is set.
+- Without `/S`, with `UNFD` clear, or with `UNDZ` set as well, an underflow
+  is a true zero, with the trap the instruction and the FPCR enable, as on
+  the 21264.
+
+The JIT completes no underflow: a denormal result or a zero from nonzero
+operands sends the instruction to the interpreter.
 
 ### Machine checks are never raised
 
@@ -649,5 +682,6 @@ a guest says whether the emulator can still run. The first audit's round
 (2026-09-18) found three bugs that a guest would never have shown (a NaN
 returned for an overflow under chopped rounding, denormals worth half
 their value, memory barriers compiled to nothing) and one change that the
-handbook endorses but a guest must approve before it ships (`UNDZ`).
+handbook endorses but a guest must approve before it ships (`UNDZ`;
+settled on 2026-10-20 by computing the denormal, above).
 Neither reference alone would have been enough.
