@@ -122,7 +122,11 @@ These are Linux's own, and a real ES40 would show them too:
   is off), so the ALi USB controller has no driver.
 - **No network** in this configuration: no NIC is configured, and the
   emulator has no user-mode network back end. The kernel has the Tulip
-  driver built in.
+  driver built in. With a `dec21143` added on the UDP back end and
+  `test/tools/net_peer.py` at the other end, the driver comes up as
+  `enp0s4`, OpenRC's dhcpcd takes the peer's BOOTP answer (10.0.2.15),
+  and the guest pings the peer. The driver loads perfect filter tables,
+  and a hash table once more than 14 multicast groups are joined.
 
 ## What was fixed
 
@@ -255,8 +259,9 @@ sees 1.3 GB used of 3.8 GB.
 
 - Four processors, and why two parallel jobs were slower than they
   should be (above).
-- A NIC (Tulip or Intel) on a back end, and a full Gentoo install from
-  the network.
+- A full Gentoo install from the network. The Tulip works on the UDP
+  back end (above); what is missing is a way out to the Internet without
+  host privileges, a user-mode NAT back end.
 - A kernel built for the machine (Gentoo's `sys-kernel/gentoo-kernel`
   or a hand-built one); the installed system runs the CD's.
 - The VGA console and a graphics card's framebuffer driver (the kernel

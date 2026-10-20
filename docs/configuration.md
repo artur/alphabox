@@ -372,7 +372,10 @@ that is no type, is refused at startup and by `--check`.
 
 Every NIC takes `mac` (default `08-00-2B-E5-40-<n>`, `n` counting the NICs
 in the machine). The Tulips also take `queue` (receive queue depth,
-default 1024), `crc` and `trace_packets`.
+default 1024; a frame that finds it full is lost and counted in CSR8, as
+a chip's FIFO overflow), `crc` and `trace_packets` (every frame, each
+setup frame's filtering type and addresses, and the frames the address
+filter refused).
 
 ## PCI-PCI bridges and multi-port boards
 

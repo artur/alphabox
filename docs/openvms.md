@@ -175,9 +175,14 @@ console's driver sets the same bit. So:
   ("Packets received", "Unrecognized unicast/multicast destination" while
   no protocol claims them).
 
-The DE500 has no such bit in use: its driver counts the broadcasts as
-unrecognised multicast. `lab/vscsi-evidence/frame_tx3.py` sends all three
-kinds.
+The DE500's driver asks for the same through its setup frame: a perfect
+table of the station address and AB-00-00-01-00-00, without broadcast
+(`trace_packets` prints it). The chip filters on that table, so broadcast,
+other multicast and foreign unicast never reach the driver, and the
+counters show only frames to those two addresses: under a flood of all
+five kinds from `net_peer.py --flood`, "Packets received" and
+"Unrecognized unicast destination" count the station address's share and
+nothing else. `lab/vscsi-evidence/frame_tx3.py` sends all three kinds.
 
 "Unavailable station buffers" on `EIA0` counts the frames that arrived
 while the receive unit was idle (between the driver's initialisation at

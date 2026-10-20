@@ -247,6 +247,26 @@ v3.0 is the reference; `cdb_test.sh` runs SCRIPTS programs against it):
 
 ### Network and bridges
 
+- **The Tulips' receive path** is the chip's on every back end. The NIC
+  filters addresses itself: the setup frame's filtering type (perfect,
+  hash, inverse or hash only, shown in CSR6's read-only HP, HO and IF) and
+  CSR6's PR, PM and RA decide which frames reach the ring, and pcap's
+  host filter is only a coarser first cut. SRM V7.3-1 loads a perfect
+  table of its own address and nothing else, so it hears no broadcast.
+  Short frames are padded to 60 bytes in both directions (unless the
+  transmit descriptor sets DPD); while the receiver is stopped, frames are
+  read and dropped; a frame that finds the receive queue full counts in
+  CSR8's FIFO overflow counter, one that finds no descriptor in the
+  missed-frame counter. `trace_packets` shows each setup frame and marks
+  the frames the filter refused. Seen from the guests: Linux's `tulip`
+  driver loads perfect tables, and a hash table past 14 multicast
+  groups; OpenVMS 8.4's EW driver, with MOP enabled, loads its station
+  address and AB-00-00-01-00-00; Windows 2000 installs the device and
+  its driver sends DHCP requests.
+- **Tulip threads**: the CPU's CSR accesses and the NIC's own thread share
+  one lock, never held across DMA, the interrupt line or the back end
+  ("Threads and locking" in `Tulip.cpp`). Two Tulips, each under a flood
+  of a few thousand frames a second, network-boot side by side.
 - **21140**: no SIA, media through the general purpose port. The board
   described has nothing wired to those pins and no MII PHY.
 - **21041**: 10 Mb SIA, the older serial ROM format. The console drives it
