@@ -1,15 +1,51 @@
 # Running and configuring Alphabox
 
 ```
-alphabox configure     # interactive generator, writes es40.cfg
-alphabox run           # start the machine (reads es40.cfg)
-alphabox run my.cfg    # ... or another configuration file
-alphabox --version     # version, commit and compiled-in features
+alphabox configure                 # interactive generator, writes es40.cfg
+alphabox run                       # start the machine (reads es40.cfg)
+alphabox run my.cfg                # ... or another configuration file
+alphabox run --check my.cfg        # check it without starting anything
+alphabox run --dump-config my.cfg  # ... and print what it resolves to
+alphabox --version                 # version, commit and compiled-in features
 ```
 
 The sample [es40.cfg](../es40.cfg) documents every configuration value; the
 generator covers the common ones. If a section contains a value that its
 device doesn't use, Alphabox warns at startup (`%SYS-W-UNKNOWNCFG`).
+
+## Checking a configuration
+
+`alphabox run --check my.cfg` reads the file and applies every rule the
+emulator applies when it starts, but builds no device: it opens no image,
+ROM or port. It checks:
+
+- the syntax;
+- each section's class, its name (`pci<hose>.<slot>`, `disk<bus>.<unit>`)
+  and its parent;
+- the board (`platform`): its slots, how many processors it takes and of
+  which family;
+- the values a device does not read (`%SYS-W-UNKNOWNCFG`), and the chip
+  and model names of the graphics cards.
+
+What only a device itself checks is left to the run: whether a disk's
+`file` exists, or whether a size suits the device.
+
+Each error ends its section and the check goes on with the next one, so
+one run lists them all. Messages go to stderr and end with a count. The
+exit status is 0 when there was no error and 1 otherwise; `alphabox run`
+itself also exits with 1 when it stops on an error.
+
+`alphabox run --dump-config my.cfg` does the same and writes the resolved
+configuration to stdout, in the file's own syntax:
+
+- every value is quoted;
+- a value named twice in a section is commented out after the first,
+  which is the one used;
+- the sections the emulator adds by itself are marked `// added`: `fdc0`,
+  the serial ports, a board's own devices, the ports of a multi-port
+  board.
+
+The dump is itself a valid configuration.
 
 ## Machines
 

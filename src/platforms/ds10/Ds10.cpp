@@ -56,7 +56,7 @@ int ds10_pci_interrupt(int hose, int slot, int intx, int func) {
 }
 
 /// DS10 slots: the board wires 9, 11 and 14 to 17, with the ISA bridge at 7.
-const char *ds10_slot_refusal(int hose, int slot) {
+const char *ds10_slot_refusal(const platform_config &, int hose, int slot) {
   if (hose != 0)
     return "this machine has one PCI bus";
   if (ds10_pci_interrupt(hose, slot, 0, 0) < 0)

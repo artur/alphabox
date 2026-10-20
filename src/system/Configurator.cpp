@@ -73,6 +73,43 @@
 #include "Sym53C8xx.hpp"
 
 /**
+ * Check mode (Configurator.hpp): what initialize() keeps in place of the
+ * devices it does not construct.
+ **/
+static bool s_check = false;
+static int s_check_errors = 0;
+static int s_check_warnings = 0;
+static bool s_check_gui = false; ///< a gui section was seen
+static int s_check_cpus = 0;     ///< processors in the machine section
+static const platform_config *s_check_platform = nullptr;
+
+void CConfigurator::set_check_mode(bool on) {
+  s_check = on;
+  s_check_errors = 0;
+  s_check_warnings = 0;
+  s_check_gui = false;
+  s_check_cpus = 0;
+  s_check_platform = nullptr;
+}
+
+int CConfigurator::check_errors() { return s_check_errors; }
+int CConfigurator::check_warnings() { return s_check_warnings; }
+bool CConfigurator::check_found_system() { return s_check_platform != nullptr; }
+
+/**
+ * One of the configurator's messages: on stdout, or in check mode on
+ * stderr, where stdout is the dump. Check mode counts the warnings.
+ **/
+static void cfg_msg(bool warning, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(s_check ? stderr : stdout, fmt, ap);
+  va_end(ap);
+  if (s_check && warning)
+    s_check_warnings++;
+}
+
+/**
  * Constructor.
  *
  * The portion of the configuration file that corresponds with the device we are
@@ -233,12 +270,12 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
     *p++ = 0;
 
     if (state != 0 && state != 1) {
-      printf("%%SYS-E-PARSE: unclosed %s.  Started on line %d.\n",
-             state == STATE_C_COMMENT ? "comment" : "string", state_start);
+      cfg_msg(false, "%%SYS-E-PARSE: unclosed %s.  Started on line %d.\n",
+              state == STATE_C_COMMENT ? "comment" : "string", state_start);
     }
 
     if (cbrace != 0) {
-      printf("%%SYS-E-PARSE: unclosed brace in file.\n");
+      cfg_msg(false, "%%SYS-E-PARSE: unclosed brace in file.\n");
     }
 
     textlen = strlen(dst);
@@ -284,6 +321,10 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
   iNumValues = 0;
   myName = name;
   myValue = value;
+  myDevice = nullptr;
+  myClassId = c_none;
+  myFlags = 0;
+  myAdded = false;
 
   for (size_t curtext = 0; curtext < textlen; curtext++) {
     switch (state) {
@@ -368,12 +409,13 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
 
           for (int dup = 0; dup < iNumChildren; dup++) {
             if (!strcmp(pChildren[dup]->get_myName(), cur_name)) {
-              printf("%%SYS-W-DUPSECTION: \"%s\" is defined more than once "
-                     "in the configuration file. Each definition creates its "
-                     "own device (a later telnet serial section overrides an "
-                     "earlier null_attach one, etc.) -- remove the "
-                     "duplicate.\n",
-                     cur_name);
+              cfg_msg(true,
+                      "%%SYS-W-DUPSECTION: \"%s\" is defined more than once "
+                      "in the configuration file. Each definition creates its "
+                      "own device (a later telnet serial section overrides an "
+                      "earlier null_attach one, etc.) -- remove the "
+                      "duplicate.\n",
+                      cur_name);
               break;
             }
           }
@@ -388,12 +430,9 @@ CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
     }
   }
 
-  int i;
   if (parent == 0) {
-    myFlags = 0;
-    for (i = 0; i < iNumChildren; i++) {
-      pChildren[i]->initialize();
-    }
+    for (int i = 0; i < iNumChildren; i++)
+      initialize_child(pChildren[i]);
   }
 }
 
@@ -742,9 +781,62 @@ classinfo classes[] = {
     {"es1371", c_es137x, IS_PCI, kv_none},
     {0, c_none, 0, 0}};
 
+// The part a class's `chip` or `model` value names. A name the family does
+// not have is refused, in check mode as when the device is built.
+static bool cirrus_is_gd5430(CConfigurator *cfg) {
+  const std::string chip = cfg->get_text_value("chip", "gd5434");
+  if (chip != "gd5434" && chip != "gd5430")
+    FAILURE_1(Configuration, "cirrus: unknown chip \"%s\" (gd5430, gd5434)",
+              chip.c_str());
+  return chip == "gd5430";
+}
+
+static const mach64_chip_config &mach64_chip(CConfigurator *cfg) {
+  const char *chip = cfg->get_text_value("chip", "ct");
+  const mach64_chip_config *c = mach64_chip_by_name(chip);
+  if (!c)
+    FAILURE_1(Configuration,
+              "mach64: unknown chip \"%s\" (ct, vt2, vt3, rage2p, ragepro)",
+              chip);
+  return *c;
+}
+
+static const virge_chip_config &virge_chip(CConfigurator *cfg) {
+  const char *chip = cfg->get_text_value("chip", "dx");
+  const virge_chip_config *c = virge_chip_by_name(chip);
+  if (!c)
+    FAILURE_1(Configuration,
+              "s3virge: unknown chip \"%s\" (virge, vx, dx, gx, gx2)", chip);
+  return *c;
+}
+
+static const tga_model_config &tga_model(CConfigurator *cfg) {
+  const char *model = cfg->get_text_value("model", "e1");
+  const tga_model_config *m = tga_model_by_name(model);
+  if (!m)
+    FAILURE_1(Configuration,
+              "tga: unknown model \"%s\" (e1, 3d30, 4d20; the 24-plane "
+              "e2/e3 are not modelled yet)",
+              model);
+  return *m;
+}
+
+/**
+ * The machine the configuration describes: the system's, or in check mode
+ * the one its machine section names.
+ **/
+const platform_config &CConfigurator::board() {
+  if (!s_check)
+    return theSystem->platform();
+  if (!s_check_platform)
+    FAILURE(Configuration, "no machine section");
+  return *s_check_platform;
+}
+
 /**
  * Determine what device this configurator represents, and instantiate it;
- * then call initialize for our children.
+ * then call initialize for our children. In check mode the device is not
+ * instantiated (check_device()).
  **/
 void CConfigurator::initialize() {
   myClassId = c_none;
@@ -782,10 +874,11 @@ void CConfigurator::initialize() {
       }
 
       if (!recognized)
-        printf("%%SYS-W-UNKNOWNCFG: %s(%s): \"%s\" is not a recognized "
-               "configuration value for this device; it has been ignored "
-               "and should be removed from the configuration file.\n",
-               myName, myValue, pValues[v].name);
+        cfg_msg(true,
+                "%%SYS-W-UNKNOWNCFG: %s(%s): \"%s\" is not a recognized "
+                "configuration value for this device; it has been ignored "
+                "and should be removed from the configuration file.\n",
+                myName, myValue, pValues[v].name);
     }
   }
 
@@ -801,17 +894,29 @@ void CConfigurator::initialize() {
                 myValue, myName);
   }
 
+  const bool have_gui = s_check ? s_check_gui : bx_gui != nullptr;
   if (myFlags & ON_GUI) {
-    if (!bx_gui)
+    if (!have_gui)
       FAILURE_2(Configuration, "Class %s for %s needs a GUI", myValue, myName);
   }
 
   if (myFlags & IS_GUI) {
-    if (bx_gui)
+    if (have_gui)
       FAILURE_2(Configuration, "Class %s for %s already found a gui", myValue,
                 myName);
   }
 
+#if !defined(HAVE_SDL)
+  if (myClassId == c_sdl || myClassId == c_es137x)
+    FAILURE_2(Configuration,
+              "Class %s for %s needs compilation with SDL support", myValue,
+              myName);
+#endif
+#if !defined(HAVE_X11)
+  if (myClassId == c_x11)
+    FAILURE_2(Configuration, "Class %s for %s needs an X11 platform", myValue,
+              myName);
+#endif
 #if !defined(HAVE_PCAP) && !defined(__linux__)
   if (myFlags & IS_NIC)
     FAILURE_2(Configuration,
@@ -843,7 +948,11 @@ void CConfigurator::initialize() {
 
     if (behind_bridge) {
       // The secondary bus: same hose, devices 0-15 (IDSEL on AD16-AD31).
-      pcibus = ((CPCIDevice *)(CPCIBridge *)pParent->get_device())->pci_bus();
+      // In check mode there is no bridge to number it.
+      pcibus =
+          s_check
+              ? 0
+              : ((CPCIDevice *)(CPCIBridge *)pParent->get_device())->pci_bus();
       if (pcidev < 0 || pcidev > 15)
         FAILURE_2(Configuration,
                   "%s (%s): a device behind a bridge must be pci.0 to pci.15",
@@ -870,7 +979,7 @@ void CConfigurator::initialize() {
         (myClassId == c_ali || myClassId == c_ali_ide ||
          myClassId == c_ali_usb || myClassId == c_ali_pmu);
     if (!behind_bridge && !is_system_device) {
-      const char *refusal = theSystem->platform().slot_refusal(pcibus, pcidev);
+      const char *refusal = board().slot_refusal(board(), pcibus, pcidev);
       if (refusal)
         FAILURE_3(Configuration, "%s (%s): %s", myName, myValue, refusal);
     }
@@ -906,6 +1015,213 @@ void CConfigurator::initialize() {
     pt++;
     idedev = atoi(pt);
   }
+
+  if (s_check)
+    check_device();
+  else
+    create_device(pcibus, pcidev, idebus, idedev, fdcbus);
+
+  // Synthesize mandatory system hardware omitted from the configuration.
+  // The ES40 hardware always has two serial ports; SRM and guest OSes
+  // expect both UARTs to exist, so a missing port becomes a null_attach
+  // (bit-bucket) port.  The floppy controller is integrated in the M1543C
+  // south bridge and always exists, even with no drives attached.
+  if (myFlags & IS_CS) {
+    bool have_serial[2] = {false, false};
+    bool have_fdc0 = false;
+    for (i = 0; i < iNumChildren; i++) {
+      if (!strcmp(pChildren[i]->get_myValue(), "serial")) {
+        number = 0;
+        if (!strncmp(pChildren[i]->get_myName(), "serial", 6))
+          number = atoi(&pChildren[i]->get_myName()[6]);
+        if (number >= 0 && number < 2)
+          have_serial[number] = true;
+      } else if (!strcmp(pChildren[i]->get_myValue(), "floppy") &&
+                 !strncmp(pChildren[i]->get_myName(), "fdc", 3) &&
+                 atoi(&pChildren[i]->get_myName()[3]) == 0) {
+        have_fdc0 = true;
+      }
+    }
+
+    if (!have_fdc0) {
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE(Configuration, "No room to add default configuration for fdc0");
+
+      cfg_msg(false, "%%SYS-I-DEFAULTFDC: fdc0 is not configured; "
+                     "adding the built-in floppy controller.\n");
+
+      char *fname = (char *)malloc(5);
+      strcpy(fname, "fdc0");
+      char *fvalue = (char *)malloc(7);
+      strcpy(fvalue, "floppy");
+      char ftext[] = "";
+      pChildren[iNumChildren] =
+          new CConfigurator(this, fname, fvalue, ftext, 0);
+      pChildren[iNumChildren++]->myAdded = true;
+    }
+
+    // The board's own devices of ordinary classes (the DS25's 82559ER):
+    // added with the board row's defaults where the configuration names
+    // nothing at their place.
+    for (const onboard_device *ob = myClassId == c_tsunami ? board().onboard
+                                                           : nullptr;
+         ob && ob->name; ob++) {
+      bool have = false;
+      for (i = 0; i < iNumChildren; i++)
+        have |= !strcmp(pChildren[i]->get_myName(), ob->name);
+      if (have)
+        continue;
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE_1(Configuration, "No room to add the on-board %s", ob->name);
+      cfg_msg(false,
+              "%%SYS-I-ONBOARD: %s is not configured; adding the board's "
+              "%s (%s).\n",
+              ob->name, ob->device_class, ob->defaults);
+      char *otext = strdup(ob->defaults);
+      pChildren[iNumChildren] =
+          new CConfigurator(this, strdup(ob->name), strdup(ob->device_class),
+                            otext, strlen(otext));
+      pChildren[iNumChildren++]->myAdded = true;
+      free(otext);
+    }
+
+    for (number = 0; number < 2; number++) {
+      if (have_serial[number])
+        continue;
+
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE_1(Configuration,
+                  "No room to add default configuration for serial%d", number);
+
+      cfg_msg(true,
+              "%%SYS-W-NOSERIAL: serial%d is not configured; "
+              "defaulting to null_attach mode.\n",
+              number);
+
+      char *sname = (char *)malloc(8);
+      sprintf(sname, "serial%d", number);
+      char *svalue = (char *)malloc(7);
+      strcpy(svalue, "serial");
+      char stext[] = "null_attach=true;";
+      pChildren[iNumChildren] =
+          new CConfigurator(this, sname, svalue, stext, strlen(stext));
+      pChildren[iNumChildren++]->myAdded = true;
+    }
+  }
+
+  // A multi-port board always carries its ports; the ones the
+  // configuration leaves out are added unconnected.
+  if (myClassId == c_pci_bridge) {
+    const pci_bridge_config *board = CPCIBridge::find_chip(myValue);
+    for (number = 0; board && number < board->ports; number++) {
+      char name[16];
+      snprintf(name, sizeof(name), "pci.%d", number);
+      bool have = false;
+      for (i = 0; i < iNumChildren; i++)
+        have |= !strcmp(pChildren[i]->get_myName(), name);
+      if (have)
+        continue;
+      if (iNumChildren >= CFG_MAX_CHILDREN)
+        FAILURE_2(Configuration, "No room to add %s to %s", name, myName);
+      cfg_msg(false,
+              "%%SYS-I-DEFAULTPORT: %s(%s): port %s is not configured; "
+              "adding it unconnected (type = \"null\").\n",
+              myName, myValue, name);
+      char ptext[] = "type=\"null\";";
+      pChildren[iNumChildren] = new CConfigurator(
+          this, strdup(name), strdup(board->port_class), ptext, strlen(ptext));
+      pChildren[iNumChildren++]->myAdded = true;
+    }
+  }
+
+  for (i = 0; i < iNumChildren; i++)
+    initialize_child(pChildren[i]);
+
+  if (!s_check && (myFlags & IS_CS))
+    ((CSystem *)myDevice)->init();
+}
+
+/**
+ * Initialize a child section. In check mode an error ends that section
+ * only: it is reported and counted, and the walk goes on.
+ **/
+void CConfigurator::initialize_child(CConfigurator *child) {
+  if (!s_check) {
+    child->initialize();
+    return;
+  }
+  try {
+    child->initialize();
+  } catch (CException &e) {
+    s_check_errors++;
+    fprintf(stderr, "%%SYS-E-CONFIG: %s\n", e.text().c_str());
+  }
+}
+
+/**
+ * Check mode: what constructing the device would refuse that the class
+ * table does not already say. The rest of a device's values are read, and
+ * refused, only by the device itself.
+ **/
+void CConfigurator::check_device() {
+  switch (myClassId) {
+  case c_tsunami: {
+    // As CSystem's constructor.
+    if (s_check_platform)
+      FAILURE(Configuration, "More than one system");
+    const char *name = get_text_value("platform", DEFAULT_PLATFORM);
+    s_check_platform = find_platform(name);
+    if (!s_check_platform)
+      FAILURE_1(Configuration, "Unknown platform %s", name);
+    break;
+  }
+
+  case c_ev68cb: {
+    // As CAlphaCPU's constructor and CSystem::RegisterCPU.
+    const cpu_model *cpu = find_cpu_model(myValue);
+    const cpu_model *takes = find_cpu_model(board().cpu_model);
+    if (cpu && takes && takes->family != cpu->family)
+      FAILURE_2(Configuration, "the %s takes %s processors",
+                board().description, takes->part);
+    if (++s_check_cpus > board().max_cpus)
+      FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
+                board().max_cpus, board().description);
+    break;
+  }
+
+  case c_cirrus:
+    cirrus_is_gd5430(this);
+    break;
+
+  case c_mach64:
+    mach64_chip(this);
+    break;
+
+  case c_s3virge:
+    virge_chip(this);
+    break;
+
+  case c_tga:
+    tga_model(this);
+    break;
+
+  case c_sdl:
+  case c_x11:
+    s_check_gui = true;
+    break;
+
+  default:
+    break;
+  }
+}
+
+/**
+ * Construct the device this configurator describes, at its place.
+ **/
+void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
+                                  int idedev, int fdcbus) {
+  int number;
+  char *pt;
 
   switch (myClassId) {
   case c_tsunami:
@@ -966,28 +1282,16 @@ void CConfigurator::initialize() {
     myDevice = new CS3Trio64(this, theSystem, pcibus, pcidev);
     break;
 
-  case c_cirrus: {
-    const std::string chip = get_text_value("chip", "gd5434");
-    if (chip == "gd5434")
-      myDevice = new CCirrusGD5434(this, theSystem, pcibus, pcidev);
-    else if (chip == "gd5430")
+  case c_cirrus:
+    if (cirrus_is_gd5430(this))
       myDevice = new CCirrusGD5430(this, theSystem, pcibus, pcidev);
     else
-      FAILURE_1(Configuration, "cirrus: unknown chip \"%s\" (gd5430, gd5434)",
-                chip.c_str());
+      myDevice = new CCirrusGD5434(this, theSystem, pcibus, pcidev);
     break;
-  }
 
-  case c_mach64: {
-    const char *chip = get_text_value("chip", "ct");
-    const mach64_chip_config *c = mach64_chip_by_name(chip);
-    if (!c)
-      FAILURE_1(Configuration,
-                "mach64: unknown chip \"%s\" (ct, vt2, vt3, rage2p, ragepro)",
-                chip);
-    myDevice = new CMach64(this, theSystem, pcibus, pcidev, *c);
+  case c_mach64:
+    myDevice = new CMach64(this, theSystem, pcibus, pcidev, mach64_chip(this));
     break;
-  }
 
   case c_permedia2:
     myDevice = new CPermedia2(this, theSystem, pcibus, pcidev);
@@ -997,27 +1301,13 @@ void CConfigurator::initialize() {
     myDevice = new CRadeon(this, theSystem, pcibus, pcidev);
     break;
 
-  case c_s3virge: {
-    const char *chip = get_text_value("chip", "dx");
-    const virge_chip_config *c = virge_chip_by_name(chip);
-    if (!c)
-      FAILURE_1(Configuration,
-                "s3virge: unknown chip \"%s\" (virge, vx, dx, gx, gx2)", chip);
-    myDevice = new CS3Virge(this, theSystem, pcibus, pcidev, *c);
+  case c_s3virge:
+    myDevice = new CS3Virge(this, theSystem, pcibus, pcidev, virge_chip(this));
     break;
-  }
 
-  case c_tga: {
-    const char *model = get_text_value("model", "e1");
-    const tga_model_config *m = tga_model_by_name(model);
-    if (!m)
-      FAILURE_1(Configuration,
-                "tga: unknown model \"%s\" (e1, 3d30, 4d20; the 24-plane "
-                "e2/e3 are not modelled yet)",
-                model);
-    myDevice = new CTga(this, theSystem, pcibus, pcidev, *m);
+  case c_tga:
+    myDevice = new CTga(this, theSystem, pcibus, pcidev, tga_model(this));
     break;
-  }
 
   case c_ehci:
     // A disk controller too (USB mass storage): see c_ali_ide. The class
@@ -1036,17 +1326,13 @@ void CConfigurator::initialize() {
     myDevice = new CVirtioNet(this, theSystem, pcibus, pcidev);
     break;
 
-  case c_es137x:
 #if defined(HAVE_SDL)
+  case c_es137x:
     // The class name ("es1370", "es1371") names the part.
     myDevice = new CES137x(this, theSystem, pcibus, pcidev,
                            *CES137x::find_chip(myValue));
-#else
-    FAILURE_2(Configuration,
-              "Class %s for %s needs compilation with SDL support", myValue,
-              myName);
-#endif
     break;
+#endif
 
 #if defined(HAVE_PCAP) || defined(__linux__)
 
@@ -1117,149 +1403,54 @@ void CConfigurator::initialize() {
   case c_sdl:
 #if defined(HAVE_SDL)
     PLUG_load_plugin(this, sdl);
-#else
-    FAILURE_2(Configuration,
-              "Class %s for %s needs compilation with SDL support", myValue,
-              myName);
-#endif
-    break;
-
-  case c_win32:
-#if defined(_WIN32)
-    PLUG_load_plugin(this, win32);
-#else
-    FAILURE_2(Configuration, "Class %s for %s needs a Win32 platform", myValue,
-              myName);
 #endif
     break;
 
   case c_x11:
 #if defined(HAVE_X11)
     PLUG_load_plugin(this, x11);
-#else
-    FAILURE_2(Configuration, "Class %s for %s needs an X11 platform", myValue,
-              myName);
 #endif
-    break;
-
-  case c_none:
     break;
 
   default:
     FAILURE_1(Configuration, "Enum case not handled: %i", myClassId);
     break;
   }
+}
 
-  // Synthesize mandatory system hardware omitted from the configuration.
-  // The ES40 hardware always has two serial ports; SRM and guest OSes
-  // expect both UARTs to exist, so a missing port becomes a null_attach
-  // (bit-bucket) port.  The floppy controller is integrated in the M1543C
-  // south bridge and always exists, even with no drives attached.
-  if (myFlags & IS_CS) {
-    bool have_serial[2] = {false, false};
-    bool have_fdc0 = false;
-    for (i = 0; i < iNumChildren; i++) {
-      if (!strcmp(pChildren[i]->get_myValue(), "serial")) {
-        number = 0;
-        if (!strncmp(pChildren[i]->get_myName(), "serial", 6))
-          number = atoi(&pChildren[i]->get_myName()[6]);
-        if (number >= 0 && number < 2)
-          have_serial[number] = true;
-      } else if (!strcmp(pChildren[i]->get_myValue(), "floppy") &&
-                 !strncmp(pChildren[i]->get_myName(), "fdc", 3) &&
-                 atoi(&pChildren[i]->get_myName()[3]) == 0) {
-        have_fdc0 = true;
-      }
-    }
-
-    if (!have_fdc0) {
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE(Configuration, "No room to add default configuration for fdc0");
-
-      printf("%%SYS-I-DEFAULTFDC: fdc0 is not configured; "
-             "adding the built-in floppy controller.\n");
-
-      char *fname = (char *)malloc(5);
-      strcpy(fname, "fdc0");
-      char *fvalue = (char *)malloc(7);
-      strcpy(fvalue, "floppy");
-      char ftext[] = "";
-      pChildren[iNumChildren++] =
-          new CConfigurator(this, fname, fvalue, ftext, 0);
-    }
-
-    // The board's own devices of ordinary classes (the DS25's 82559ER):
-    // added with the board row's defaults where the configuration names
-    // nothing at their place.
-    for (const onboard_device *ob =
-             myClassId == c_tsunami ? ((CSystem *)myDevice)->platform().onboard
-                                    : nullptr;
-         ob && ob->name; ob++) {
-      bool have = false;
-      for (i = 0; i < iNumChildren; i++)
-        have |= !strcmp(pChildren[i]->get_myName(), ob->name);
-      if (have)
-        continue;
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_1(Configuration, "No room to add the on-board %s", ob->name);
-      printf("%%SYS-I-ONBOARD: %s is not configured; adding the board's "
-             "%s (%s).\n",
-             ob->name, ob->device_class, ob->defaults);
-      char *otext = strdup(ob->defaults);
-      pChildren[iNumChildren++] =
-          new CConfigurator(this, strdup(ob->name), strdup(ob->device_class),
-                            otext, strlen(otext));
-      free(otext);
-    }
-
-    for (number = 0; number < 2; number++) {
-      if (have_serial[number])
-        continue;
-
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_1(Configuration,
-                  "No room to add default configuration for serial%d", number);
-
-      printf("%%SYS-W-NOSERIAL: serial%d is not configured; "
-             "defaulting to null_attach mode.\n",
-             number);
-
-      char *sname = (char *)malloc(8);
-      sprintf(sname, "serial%d", number);
-      char *svalue = (char *)malloc(7);
-      strcpy(svalue, "serial");
-      char stext[] = "null_attach=true;";
-      pChildren[iNumChildren++] =
-          new CConfigurator(this, sname, svalue, stext, strlen(stext));
-    }
+static void dump_quoted(FILE *f, const char *s) {
+  fputc('"', f);
+  for (; *s; s++) {
+    if (*s == '"')
+      fputc('"', f);
+    fputc(*s, f);
   }
+  fputc('"', f);
+}
 
-  // A multi-port board always carries its ports; the ones the
-  // configuration leaves out are added unconnected.
-  if (myClassId == c_pci_bridge) {
-    const pci_bridge_config *board = CPCIBridge::find_chip(myValue);
-    for (number = 0; board && number < board->ports; number++) {
-      char name[16];
-      snprintf(name, sizeof(name), "pci.%d", number);
-      bool have = false;
-      for (i = 0; i < iNumChildren; i++)
-        have |= !strcmp(pChildren[i]->get_myName(), name);
-      if (have)
-        continue;
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_2(Configuration, "No room to add %s to %s", name, myName);
-      printf("%%SYS-I-DEFAULTPORT: %s(%s): port %s is not configured; "
-             "adding it unconnected (type = \"null\").\n",
-             myName, myValue, name);
-      char ptext[] = "type=\"null\";";
-      pChildren[iNumChildren++] = new CConfigurator(
-          this, strdup(name), strdup(board->port_class), ptext, strlen(ptext));
-    }
+/**
+ * Write this section's body, and its children's, in the configuration
+ * syntax: every value quoted, a value named twice commented out (the first
+ * one is the one used), and a section the emulator added marked as such.
+ * The master configurator (depth 0) writes the whole file.
+ **/
+void CConfigurator::dump(FILE *f, int depth) {
+  const int in = 2 * depth;
+  for (int v = 0; v < iNumValues; v++) {
+    bool again = false;
+    for (int w = 0; w < v && !again; w++)
+      again = !strcmp(pValues[w].name, pValues[v].name);
+    fprintf(f, "%*s%s%s = ", in, "", again ? "// " : "", pValues[v].name);
+    dump_quoted(f, pValues[v].value);
+    fprintf(f, ";%s\n", again ? " (named twice: the first one is used)" : "");
   }
-
-  for (i = 0; i < iNumChildren; i++)
-    pChildren[i]->initialize();
-
-  if (myFlags & IS_CS)
-    ((CSystem *)myDevice)->init();
+  for (int c = 0; c < iNumChildren; c++) {
+    CConfigurator *k = pChildren[c];
+    if (!pParent && (c > 0 || iNumValues))
+      fputc('\n', f);
+    fprintf(f, "%*s%s = %s%s\n%*s{\n", in, "", k->myName, k->myValue,
+            k->myAdded ? " // added" : "", in, "");
+    k->dump(f, depth + 1);
+    fprintf(f, "%*s}\n", in, "");
+  }
 }

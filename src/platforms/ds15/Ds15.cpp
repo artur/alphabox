@@ -72,7 +72,7 @@ int ds15_pci_interrupt(int hose, int slot, int intx, int func) {
 }
 
 /// Add-in devices go where the console gives interrupts.
-const char *ds15_slot_refusal(int hose, int slot) {
+const char *ds15_slot_refusal(const platform_config &, int hose, int slot) {
   if (!find_slot(hose, slot))
     return "the DS15's places are hose 0 devices 8 to 10 (on-board devices) "
            "and hose 2 devices 7 to 10";

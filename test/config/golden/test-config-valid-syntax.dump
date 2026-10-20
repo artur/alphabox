@@ -1,0 +1,50 @@
+# exit 0
+gui = sdl
+{
+  keyboard.use_mapping = "false";
+}
+
+sys0 = tsunami
+{
+  memory.bits = "27";
+  rom.srm = "cl67srmrom.exe";
+  rom.flash = "flash.rom";
+  rom.dpr = "with ""quotes"" and ; and = in it";
+  time = "2000-01-01 12:00:00";
+  exit_on_pal_halt = "false";
+  cpu0 = ev68cb
+  {
+    speed = "2G512M";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+    address = "127.0.0.1";
+  }
+  pci0.7 = ali
+  {
+    vga_console = "false";
+  }
+  pci0.15 = ali_ide
+  {
+  }
+  pci0.19 = ali_usb
+  {
+  }
+  pci0.1 = sym53c810
+  {
+    disk0.0 = file
+    {
+      file = "a_b.c";
+      model_number = "Model ""X"" 2";
+      read_only = "no";
+    }
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

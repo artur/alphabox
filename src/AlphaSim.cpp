@@ -89,6 +89,68 @@ void segv_handler(int signum) {
 #endif
 
 /**
+ * Read the configuration file and build the configuration tree (and, unless
+ * in check mode, the machine it describes).
+ **/
+static CConfigurator *load_configuration(const char *filename) {
+  char *ch1;
+  size_t ll1;
+  FILE *f = fopen(filename, "rb");
+  if (f == NULL)
+    FAILURE(File, "configuration file");
+  fseek(f, 0, SEEK_END);
+  ll1 = ftell(f);
+  ch1 = (char *)calloc(ll1, 1);
+  fseek(f, 0, SEEK_SET);
+  ll1 = fread(ch1, 1, ll1, f);
+  CConfigurator *cfg = new CConfigurator(0, 0, 0, ch1, ll1);
+  fclose(f);
+  free(ch1);
+  return cfg;
+}
+
+/**
+ * `alphabox run --check` and `--dump-config`: build the configuration tree
+ * with every rule applied but no device constructed (Configurator.hpp),
+ * report what is wrong on stderr, and for --dump-config write the resolved
+ * tree to stdout. The exit status is 0 when there was no error.
+ **/
+static int check_configuration(const char *filename, bool dump) {
+  CConfigurator::set_check_mode(true);
+  CConfigurator *cfg = nullptr;
+  int errors = 0;
+  try {
+    cfg = load_configuration(filename);
+    errors = CConfigurator::check_errors();
+    if (!CConfigurator::check_found_system()) {
+      fprintf(stderr, "%%SYS-E-CONFIG: no system initialized\n");
+      errors++;
+    }
+  } catch (CException &e) {
+    fprintf(stderr, "%%SYS-E-CONFIG: %s\n", e.text().c_str());
+    errors = CConfigurator::check_errors() + 1;
+  }
+  if (dump && cfg)
+    cfg->dump(stdout);
+  const int warnings = CConfigurator::check_warnings();
+  fprintf(stderr, "%%SYS-I-CHECK: %s: %d error%s, %d warning%s\n", filename,
+          errors, errors == 1 ? "" : "s", warnings, warnings == 1 ? "" : "s");
+  return errors ? 1 : 0;
+}
+
+static void run_usage() {
+  fprintf(stderr,
+          "usage: alphabox run [--check | --dump-config] [file]\n"
+          "  file           the configuration (default: es40.cfg here, then "
+          "in /etc,\n"
+          "                 /usr/etc and /usr/local/etc)\n"
+          "  --check        validate the configuration without starting the "
+          "machine\n"
+          "  --dump-config  as --check, and write the resolved configuration "
+          "to stdout\n");
+}
+
+/**
  * Entry point for simulation.
  *
  * Does the following:
@@ -98,12 +160,42 @@ void segv_handler(int signum) {
  *  - Runs the emulator.
  *  - Cleans up.
  *  .
+ * Returns 0 when the run ended gracefully (or a check found no error), 1
+ * after a failure, 2 for a wrong command line.
  **/
 int main_sim(int argc, char *argv[]) {
   const char *filename = 0;
   FILE *f;
+  bool check = false;
+  bool dump = false;
 
-  print_alphabox_banner("Alphabox Alpha Emulator");
+  // Options come before the file name.
+  int argi = 1;
+  for (; argi < argc && !strncmp(argv[argi], "--", 2); argi++) {
+    if (!strcmp(argv[argi], "--check"))
+      check = true;
+    else if (!strcmp(argv[argi], "--dump-config"))
+      check = dump = true;
+    else if (!strcmp(argv[argi], "--help")) {
+      run_usage();
+      return 0;
+    } else {
+      fprintf(stderr, "alphabox run: unknown option %s\n", argv[argi]);
+      run_usage();
+      return 2;
+    }
+  }
+  // What follows: the file name.
+  const int nargs = argc - argi;
+  char **args = argv + argi;
+  if (nargs > 1) {
+    fprintf(stderr, "alphabox run: more than one configuration file given\n");
+    run_usage();
+    return 2;
+  }
+
+  if (!check)
+    print_alphabox_banner("Alphabox Alpha Emulator");
 
 #if !defined(_WIN32)
   // A telnet client that goes away must not take the emulator with it: the
@@ -124,7 +216,7 @@ int main_sim(int argc, char *argv[]) {
   // a printf from inside writes through a private copy of stdio's state,
   // so each one must reach the file descriptor on its own.
   if (const char *e = getenv("ALPHABOX_HV")) {
-    if (atoi(e) != 0 && hv::init()) {
+    if (!check && atoi(e) != 0 && hv::init()) {
       hv::enable();
       setvbuf(stdout, nullptr, _IONBF, 0);
       printf("%%HV-I-ENABLED: CPU threads run at EL1 under "
@@ -142,8 +234,8 @@ int main_sim(int argc, char *argv[]) {
   }
 #endif
   try {
-    if (argc == 2) {
-      filename = argv[1];
+    if (nargs == 1) {
+      filename = args[0];
     } else {
       for (int i = 0; path[i]; i++) {
         filename = path[i];
@@ -159,19 +251,10 @@ int main_sim(int argc, char *argv[]) {
       if (filename == NULL)
         FAILURE(FileNotFound, "configuration file");
     }
-    char *ch1;
-    size_t ll1;
-    f = fopen(filename, "rb");
-    if (f == NULL)
-      FAILURE(File, "configuration file");
-    fseek(f, 0, SEEK_END);
-    ll1 = ftell(f);
-    ch1 = (char *)calloc(ll1, 1);
-    fseek(f, 0, SEEK_SET);
-    ll1 = fread(ch1, 1, ll1, f);
-    new CConfigurator(0, 0, 0, ch1, ll1);
-    fclose(f);
-    free(ch1);
+    if (check)
+      return check_configuration(filename, dump);
+
+    load_configuration(filename);
 
     if (!theSystem)
       FAILURE(Configuration, "no system initialized");
@@ -240,6 +323,7 @@ int main_sim(int argc, char *argv[]) {
       theSystem->stop_threads();
       delete theSystem;
     }
+    return 1;
   }
   return 0;
 }

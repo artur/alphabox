@@ -74,7 +74,7 @@ int es45_pci_interrupt(int hose, int slot, int intx, int func) {
 /// Add-in devices go where the console gives interrupts: the slots of the
 /// table above, except the hot-plug controllers' places, which are the
 /// board's own (and are not modelled).
-const char *es45_slot_refusal(int hose, int slot) {
+const char *es45_slot_refusal(const platform_config &, int hose, int slot) {
   const es45_slot *s = find_slot(hose, slot);
   if (!s || s->pins == 1)
     return "the ES45's slots are hose 0 devices 8 to 11, hoses 1 and 3 "
@@ -87,7 +87,7 @@ const char *es45_slot_refusal(int hose, int slot) {
  * 4-15): six PCI slots and, alone on hose 2, the AGP slot at device 5.
  * The interrupt table above is the console's for every backplane.
  **/
-const char *es45m1_slot_refusal(int hose, int slot) {
+const char *es45m1_slot_refusal(const platform_config &, int hose, int slot) {
   const bool ok = (hose == 0 && (slot == 10 || slot == 11)) ||
                   ((hose == 1 || hose == 3) && (slot == 1 || slot == 2)) ||
                   (hose == 2 && slot == 5);

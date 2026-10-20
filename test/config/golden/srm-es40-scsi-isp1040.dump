@@ -1,0 +1,46 @@
+# exit 0
+sys0 = tsunami
+{
+  memory.bits = "26";
+  rom.srm = "cl67srmrom.exe";
+  rom.decompressed = "decompressed.rom";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  serial0 = serial
+  {
+    address = "127.0.0.1";
+    port = "21000";
+  }
+  pci0.15 = ali_ide
+  {
+  }
+  pci0.7 = ali
+  {
+  }
+  pci0.19 = ali_usb
+  {
+  }
+  pci0.3 = isp1040
+  {
+    disk0.0 = file
+    {
+      file = "dka0.img";
+      read_only = "false";
+    }
+    disk0.5 = ramdisk
+    {
+      size = "10M";
+    }
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

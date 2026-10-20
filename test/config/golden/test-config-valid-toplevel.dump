@@ -1,0 +1,22 @@
+# exit 0
+memory.bits = "30";
+
+sys0 = tsunami
+{
+  rom.srm = "cl67srmrom.exe";
+  unknown.key = "1";
+  cpu0 = ev68cb
+  {
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial0 = serial // added
+  {
+    null_attach = "true";
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

@@ -59,7 +59,7 @@ int es40_pci_interrupt(int hose, int slot, int intx, int func) {
  * M1543C's places fails in obscure ways (SCSI disks going missing, device
  * conflicts). So everything else is refused.
  */
-const char *es40_slot_refusal(int hose, int slot) {
+const char *es40_slot_refusal(const platform_config &, int hose, int slot) {
   if (hose == 0 && (slot == 7 || slot == 15 || slot == 17 || slot == 19))
     return "that PCI slot is reserved for a system-internal device. The "
            "ES40's PCI slots are pci0.1 to pci0.4 and pci1.1 to pci1.6";

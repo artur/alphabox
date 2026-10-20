@@ -113,7 +113,31 @@ public:
 
   void initialize();
 
+  /**
+   * Check mode (`alphabox run --check`, `--dump-config`): initialize()
+   * applies every rule of its own (classes, places, parents, the board's
+   * slots, values a device does not read) and adds the sections the
+   * machine always has, but constructs no device. An error ends the section
+   * it is in and is counted; the walk goes on with the next one. Messages go
+   * to stderr, so that a dump on stdout is a configuration file. Set before
+   * the master configurator is constructed.
+   **/
+  static void set_check_mode(bool on);
+  static int check_errors();
+  static int check_warnings();
+  /// Check mode: whether a machine section was found.
+  static bool check_found_system();
+
+  /// The resolved tree in the configuration syntax, values quoted.
+  void dump(FILE *f, int depth = 0);
+
 private:
+  void check_device();
+  void create_device(int pcibus, int pcidev, int idebus, int idedev,
+                     int fdcbus);
+  void initialize_child(CConfigurator *child);
+  const struct platform_config &board();
+
   class CConfigurator *pParent;
   class CConfigurator *pChildren[CFG_MAX_CHILDREN];
   int iNumChildren;
@@ -122,6 +146,7 @@ private:
   void *myDevice;
   classid myClassId;
   int myFlags;
+  bool myAdded; ///< added by initialize(), not named in the file
   int iNumValues;
   struct SCfg_Value {
     char *name;

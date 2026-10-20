@@ -80,7 +80,7 @@ int ds25_pci_interrupt(int hose, int slot, int intx, int func) {
  * but no slot; the hot-plug controllers' places and the AIC-7899's are the
  * board's.
  **/
-const char *ds25_slot_refusal(int hose, int slot) {
+const char *ds25_slot_refusal(const platform_config &, int hose, int slot) {
   const ds25_slot *s = find_slot(hose, slot);
   if (!s || s->pins == 1 || (hose == 2 && slot == 1) ||
       (hose == 0 && slot == 11))

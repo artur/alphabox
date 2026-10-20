@@ -1,0 +1,109 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "es80";
+  memory.bits = "29";
+  rom.srm = "SRM_V7_3.EXE";
+  rom.decompressed = "SRM_V7_3.EXE-decompressed.rom";
+  cpu0 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu1 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu2 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu3 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu4 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu5 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu6 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu7 = ev7
+  {
+    speed = "1000M";
+  }
+  pci2.1 = sym53c895
+  {
+    disk0.0 = file
+    {
+      file = "disk.img";
+    }
+  }
+  pci2.2 = cmd649
+  {
+    disk0.0 = file
+    {
+      file = "ALPHA084.ISO";
+      read_only = "true";
+      cdrom = "true";
+    }
+  }
+  pci2.3 = uss344
+  {
+    port1 = "tablet";
+    port2 = "keyboard";
+  }
+  pci1.1 = dec21143
+  {
+    type = "udp";
+    udp_local = "127.0.0.1:21901";
+    udp_remote = "127.0.0.1:22901";
+  }
+  pci32.1 = dec21143
+  {
+    type = "udp";
+    udp_local = "127.0.0.1:21902";
+    udp_remote = "127.0.0.1:22902";
+  }
+  pci33.2 = dec21143
+  {
+    type = "udp";
+    udp_local = "127.0.0.1:21903";
+    udp_remote = "127.0.0.1:22903";
+  }
+  pci66.3 = i82559
+  {
+    type = "loopback";
+  }
+  pci96.1 = virtio_net
+  {
+    type = "null";
+  }
+  pci97.1 = dec21152
+  {
+    pci.2 = dec21143
+    {
+      type = "null";
+    }
+    pci.3 = de600
+    {
+      type = "null";
+    }
+  }
+  serial0 = serial
+  {
+    port = "21815";
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

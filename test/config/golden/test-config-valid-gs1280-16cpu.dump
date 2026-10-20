@@ -1,0 +1,107 @@
+# exit 1
+sys0 = tsunami
+{
+  platform = "gs1280";
+  memory.bits = "29";
+  rom.srm = "SRM_V7_3.EXE";
+  cpu0 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu1 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu2 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu3 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu4 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu5 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu6 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu7 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu8 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu9 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu10 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu11 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu12 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu13 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu14 = ev7
+  {
+    speed = "1150M";
+  }
+  cpu15 = ev7
+  {
+    speed = "1150M";
+  }
+  pci0.1 = dec21143
+  {
+    type = "null";
+  }
+  pci0.2 = dec21143
+  {
+    type = "null";
+  }
+  pci1.1 = dec21143
+  {
+    type = "null";
+  }
+  pci1.2 = dec21143
+  {
+    type = "null";
+  }
+  pci2.1 = dec21143
+  {
+    type = "null";
+  }
+  pci2.2 = dec21143
+  {
+    type = "null";
+  }
+  pci3.1 = dec21143
+  {
+    type = "null";
+  }
+  pci3.2 = dec21143
+  {
+    type = "null";
+  }
+  serial0 = serial
+  {
+    port = "21814";
+  }
+}

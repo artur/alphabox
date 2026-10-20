@@ -66,7 +66,7 @@ int ds20e_pci_interrupt(int hose, int slot, int intx, int func) {
  * wires hose 0 devices 6 to 9 and hose 1 devices 7 to 10 (the ISA bridge
  * belongs at hose 0 device 5). A card anywhere else would get no interrupt.
  */
-const char *ds20e_slot_refusal(int hose, int slot) {
+const char *ds20e_slot_refusal(const platform_config &, int hose, int slot) {
   if (slot > 10)
     return "this machine's console does not look beyond PCI device 10";
   if (ds20e_pci_interrupt(hose, slot, 0, 0) < 0)

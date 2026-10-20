@@ -36,8 +36,10 @@
  **/
 class CException : public std::exception {
 public:
-  explicit CException(const std::string &msg = std::string()) : m_msg(msg) {}
-  CException(const std::string &msg, const std::string &arg) : m_msg(msg) {
+  explicit CException(const std::string &msg = std::string())
+      : m_msg(msg), m_text(msg) {}
+  CException(const std::string &msg, const std::string &arg)
+      : m_msg(msg), m_text(msg) {
     if (!arg.empty()) {
       m_msg.append(": ");
       m_msg.append(arg);
@@ -48,6 +50,9 @@ public:
   virtual const char *name() const noexcept { return "Exception"; }
   const char *what() const noexcept override { return name(); }
   const std::string &message() const { return m_msg; }
+  /// The message without where it was thrown (FAILURE's source location):
+  /// what a user is shown when the source location means nothing to them.
+  const std::string &text() const { return m_text; }
 
   /// "name: message", or the name alone when there is no message.
   std::string displayText() const {
@@ -61,6 +66,7 @@ public:
 
 private:
   std::string m_msg;
+  std::string m_text;
 };
 
 #define ALPHABOX_EXCEPTION(CLS, BASE, NAME)                                    \

@@ -135,13 +135,16 @@ int marvel_pci_interrupt(int hose, int slot, int intx, int func) {
 }
 
 /// A hose exists where the board has an IO7 (hose PID * 4 + port), and an
-/// LSI names the slot in three bits, so a slot is 1 to 7.
-const char *marvel_slot_refusal(int hose, int slot) {
-  CMarvel *marvel = marvel_of(theSystem);
+/// LSI names the slot in three bits, so a slot is 1 to 7. Which processors
+/// have an IO7 is the row's layout: the chipset builds its topology from
+/// the same two fields, and a configuration check has no chipset.
+const char *marvel_slot_refusal(const platform_config &board, int hose,
+                                int slot) {
+  CMarvelTopology topology;
+  topology.build(board.marvel, board.max_cpus);
   const u32 pid = (u32)hose / 4;
-  if (hose < 0 || !marvel ||
-      !marvel->topology().by_pid(pid, marvel->topology().count()) ||
-      !marvel->topology().has_io7(pid))
+  if (hose < 0 || !topology.by_pid(pid, topology.count()) ||
+      !topology.has_io7(pid))
     return "there is no IO7 for that hose: hose n is IO7 port n % 4 of the "
            "processor with PID n / 4 (show config lists the IO7s)";
   if (slot < 1 || slot > 7)
@@ -158,8 +161,9 @@ int es47_pci_interrupt(int hose, int slot, int intx, int func) {
   return marvel_pci_interrupt(hose, slot, intx, func);
 }
 
-const char *es47_slot_refusal(int hose, int slot) {
+const char *es47_slot_refusal(const platform_config &board, int hose,
+                              int slot) {
   if (hose < 0 || hose > 3)
     return "the ES47's IO7 has hoses 0-3 (PCI-X 0-2, AGP 3)";
-  return marvel_slot_refusal(hose, slot);
+  return marvel_slot_refusal(board, hose, slot);
 }

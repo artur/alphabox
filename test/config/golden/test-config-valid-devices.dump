@@ -1,0 +1,278 @@
+# exit 0
+gui = sdl
+{
+  keyboard.use_mapping = "false";
+  keyboard.map = "keys.map";
+  mouse.speed = "2";
+  mouse.invert_x = "no";
+  video.linear = "true";
+  video.scale_ratio = "2";
+  video.scale_change_enable = "1";
+  hotkey.ctrl_alt_delete = "GUI+Shift+D";
+}
+
+sys0 = tsunami
+{
+  platform = "es40";
+  memory.bits = "30";
+  rom.srm = "cl67srmrom.exe";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  rom.decompressed = "decompressed.rom";
+  time = "2000-01-01 12:00:00";
+  arc_year_compat = "true";
+  exit_on_pal_halt = "yes";
+  cpu0 = ev68cb
+  {
+    speed = "667M";
+    palcode.vms.nohle = "true";
+    skip_memtest_hack = "false";
+  }
+  cpu1 = ev68cb
+  {
+    speed = "667M";
+    timer.max_instr_per_tick = "1000";
+  }
+  pci0.7 = ali
+  {
+    vga_console = "true";
+    lpt.outfile = "lpt.out";
+    timezone = "utc";
+  }
+  pci0.15 = ali_ide
+  {
+    dma = "true";
+    disk0.0 = file
+    {
+      file = "disk0.img";
+      autocreate_size = "600M";
+      model_number = "OpenVMS8.3";
+      serial_number = "VMS";
+      rev_number = "8.3";
+      latency.access_us = "100";
+    }
+    disk0.1 = device
+    {
+      device = "/dev/null";
+      read_only = "true";
+    }
+    disk1.0 = ramdisk
+    {
+      size = "2G512M";
+    }
+    disk1.1 = file
+    {
+      file = "cd.cue";
+      cdrom = "true";
+      allow_guest_eject = "false";
+    }
+  }
+  pci0.17 = ali_pmu
+  {
+  }
+  pci0.19 = ali_usb
+  {
+    port1 = "tablet";
+    port2 = "keyboard";
+  }
+  fdc0 = floppy
+  {
+    disk0.0 = file
+    {
+      file = "floppy.img";
+      read_only = "false";
+    }
+  }
+  serial0 = serial
+  {
+    port = "21264";
+    address = "127.0.0.1";
+    action = "xterm -T ""serial 0"" -e telnet localhost 21264";
+    raw_mode = "true";
+  }
+  serial1 = serial
+  {
+    disabled = "true";
+  }
+  pci0.1 = s3
+  {
+    rom = "86c764x1.bin";
+  }
+  pci0.2 = dec21154
+  {
+    pci.0 = cirrus
+    {
+      chip = "gd5430";
+      rom = "pci.bin";
+    }
+    pci.1 = mach64
+    {
+      chip = "vt2";
+      memory = "4M";
+    }
+    pci.2 = permedia2
+    {
+      memory = "8M";
+    }
+    pci.3 = s3virge
+    {
+      chip = "gx2";
+    }
+    pci.4 = tga
+    {
+      model = "4d20";
+    }
+    pci.5 = radeon
+    {
+      rom = "radeon7500.rom";
+    }
+    pci.6 = es1370
+    {
+    }
+    pci.7 = dec21040
+    {
+      type = "null";
+    }
+    pci.8 = dec21041
+    {
+      type = "loopback";
+    }
+    pci.9 = dec21140
+    {
+      type = "null";
+      mac = "08-00-2B-00-00-01";
+      queue = "64";
+      crc = "true";
+      trace_packets = "false";
+    }
+    pci.10 = i82557
+    {
+      type = "null";
+    }
+    pci.11 = i82558
+    {
+      type = "null";
+    }
+    pci.12 = i82559er
+    {
+      type = "null";
+    }
+    pci.13 = dec21050
+    {
+      pci.0 = dec21052
+      {
+        pci.0 = dec21153
+        {
+          pci.0 = isp1020
+          {
+            disk0.0 = ramdisk
+            {
+              size = "1M";
+            }
+          }
+        }
+      }
+    }
+    pci.14 = virtio_blk
+    {
+      disk0.0 = file
+      {
+        file = "virtio.img";
+      }
+    }
+    pci.15 = de602b
+    {
+      pci.0 = de602b_port
+      {
+        type = "null";
+      }
+      pci.1 = de602b_port // added
+      {
+        type = "null";
+      }
+    }
+  }
+  pci0.3 = sym53c896
+  {
+    disk0.0 = file
+    {
+      file = "dka0.img";
+    }
+    disk1.15 = file
+    {
+      file = "dkb1500.img";
+    }
+  }
+  pci0.4 = isp1240
+  {
+    disk1.3 = ramdisk
+    {
+      size = "10M";
+    }
+  }
+  pci1.1 = es1371
+  {
+  }
+  pci1.2 = ehci
+  {
+    port1 = "tablet";
+    companions = "true";
+  }
+  pci1.3 = uss344
+  {
+    port1 = "keyboard";
+  }
+  pci1.4 = virtio_net
+  {
+    type = "udp";
+    udp_local = "127.0.0.1:5555";
+    udp_remote = "127.0.0.1:5556";
+    mac = "08-00-2B-00-00-02";
+  }
+  pci1.5 = dec21152
+  {
+    pci.0 = sym53c810
+    {
+      disk0.0 = ramdisk
+      {
+        size = "10M";
+      }
+    }
+    pci.1 = sym53c825
+    {
+    }
+    pci.2 = sym53c875
+    {
+    }
+    pci.3 = sym53c895
+    {
+    }
+    pci.4 = isp1040
+    {
+    }
+    pci.5 = isp1080
+    {
+    }
+    pci.6 = de600
+    {
+      type = "udp";
+      udp_local = "127.0.0.1:21511";
+      udp_remote = "127.0.0.1:21512";
+    }
+    pci.7 = i82559
+    {
+      type = "null";
+    }
+  }
+  pci1.6 = de602
+  {
+    pci.0 = de602_port // added
+    {
+      type = "null";
+    }
+    pci.1 = de602_port // added
+    {
+      type = "null";
+    }
+  }
+}

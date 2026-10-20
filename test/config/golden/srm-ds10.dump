@@ -1,0 +1,35 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "ds10";
+  memory.bits = "26";
+  rom.srm = "cl67srmrom.exe";
+  rom.decompressed = "decompressed.rom";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  serial0 = serial
+  {
+    address = "127.0.0.1";
+    port = "21000";
+  }
+  pci0.13 = ali_ide
+  {
+  }
+  pci0.7 = ali
+  {
+  }
+  pci0.1 = ali_usb
+  {
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

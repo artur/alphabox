@@ -1,0 +1,98 @@
+# exit 0
+gui = sdl
+{
+  keyboard.use_mapping = "false";
+  keyboard.map = "keys.map";
+}
+
+sys0 = tsunami
+{
+  rom.srm = "rom\cl67srmrom.exe";
+  rom.flash = "rom\flash.rom";
+  rom.dpr = "rom\dpr.rom";
+  rom.decompressed = "rom\decompressed.rom";
+  memory.bits = "30";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  cpu1 = ev68cb
+  {
+    speed = "800M";
+  }
+  pci0.7 = ali
+  {
+    lpt.outfile = "lpt.out";
+    vga_console = "true";
+  }
+  pci0.15 = ali_ide
+  {
+    disk0.0 = file
+    {
+      file = "img\disk0.img";
+      serial_number = "VMS";
+      rev_number = "8.3";
+      model_number = "OpenVMS8.3";
+      read_only = "false";
+      cdrom = "false";
+      autocreate_size = "600M";
+    }
+    disk1.0 = file
+    {
+      file = "img\vms83.iso";
+      read_only = "true";
+      cdrom = "true";
+    }
+    disk1.1 = ramdisk
+    {
+      size = "10M";
+    }
+  }
+  pci0.19 = ali_usb
+  {
+  }
+  pci0.17 = ali_pmu
+  {
+  }
+  pci0.2 = s3
+  {
+    rom = "86c764x1.bin";
+  }
+  pci0.3 = sym53c810
+  {
+    disk0.0 = file
+    {
+      file = "img\dka0.img";
+      read_only = "false";
+      cdrom = "false";
+    }
+    disk0.4 = file
+    {
+      file = "img\scsi_cd.iso";
+      read_only = "true";
+      cdrom = "true";
+    }
+    disk0.5 = ramdisk
+    {
+      size = "10M";
+    }
+  }
+  pci0.4 = dec21143
+  {
+    adapter = "eth0";
+  }
+  serial0 = serial
+  {
+    null_attach = "true";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  pci1.1 = es1371
+  {
+  }
+  fdc0 = floppy // added
+  {
+  }
+}

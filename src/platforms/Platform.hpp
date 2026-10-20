@@ -140,7 +140,7 @@ struct platform_config {
    * firmware that finds something unexpected there misbehaves in ways that
    * are hard to recognise.
    */
-  const char *(*slot_refusal)(int hose, int slot);
+  const char *(*slot_refusal)(const platform_config &board, int hose, int slot);
 
   /**
    * Where the PALcode lives that the interpreter may replace with its

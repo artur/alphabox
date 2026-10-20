@@ -39,6 +39,19 @@ gives its usage and variables.
 
 Give each `srm_run.sh` its own `PORT` to run several builds at once.
 
+### Configuration
+
+| Tool | Purpose |
+| --- | --- |
+| `cfg_corpus.py` | The configuration parser and rules, without starting a machine: every `.cfg` in the repository, the cases in `test/config/valid/` and the `srm_cfg.py` machines of every board, against their resolved trees in `test/config/golden/`; and the malformed files in `test/config/malformed/` (plus generated ones), each of which must be refused with an error naming its file, line and column. |
+
+`cfg_corpus.py build/alphabox` prints PASS or FAIL per case. It uses
+`alphabox run --dump-config` ([configuration.md](configuration.md)), so it
+needs no ROM and takes seconds. A change to a golden file is a change of
+behaviour: regenerate them with `--update` only when that is the intent,
+and say why in the commit. The golden exit statuses are those of a build
+with SDL; on a headless build only the trees are compared.
+
 `srm_probe.sh` takes its variants from the environment:
 
 - `CPUS=`, `MEMBITS=`, `PLATFORM=` and `ROM=` pick the machine and firmware.
