@@ -446,6 +446,9 @@ char *CConfigurator::strip_string(char *c) {
  * Add a value to our list of values.
  **/
 void CConfigurator::add_value(char *n, char *v) {
+  if (iNumValues >= CFG_MAX_VALUES)
+    FAILURE_2(Configuration, "%s: more than %d values",
+              myName ? myName : "configuration", CFG_MAX_VALUES);
   pValues[iNumValues].name = n;
   pValues[iNumValues].value = v;
   iNumValues++;
