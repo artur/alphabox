@@ -567,8 +567,8 @@ bool CSerial::send_output() {
         out_dropped = 0;
       }
       if (dropped)
-        printf("%%SRL-W-BEHIND: %s: the client is not reading; %zu bytes of "
-               "output dropped.\n",
+        printf("%%SRL-W-DROPPED: %s: %zu bytes of output dropped, with no "
+               "client reading them.\n",
                devid_string, dropped);
       if (out_sending.empty())
         return true;
@@ -610,6 +610,29 @@ void CSerial::flush_output(int ms) {
       std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
   while (!send_output() && std::chrono::steady_clock::now() < end)
     wait_writable(end);
+}
+
+/**
+ * The client went away. Its socket is closed (it used to be left open, one
+ * leaked descriptor per reconnect), and what it had not received yet is
+ * kept for the next client, with what the guest prints meanwhile -- except
+ * in raw_mode, where a new debugger session must not start with the old
+ * one's packets.
+ **/
+void CSerial::drop_client() {
+#if defined(_WIN32)
+  closesocket(connectSocket);
+#else
+  close((int)connectSocket);
+#endif
+  connectSocket = INVALID_SOCKET;
+  std::lock_guard<std::mutex> g(out_lock);
+  if (raw_mode)
+    out_queue.clear();
+  else
+    out_queue.insert(0, out_sending, out_sent, std::string::npos);
+  out_sending.clear();
+  out_sent = 0;
 }
 
 void CSerial::write_cstr(const char *s) { write(s, (int)strlen(s)); }
@@ -849,13 +872,19 @@ void CSerial::execute() {
       size = read(connectSocket, recv_buf, FIFO_SIZE);
 #endif
 
+      // End of file, or an error other than an interrupted or empty read
+      // (EINTR and EAGAIN used to count as a hang-up, abandoning a client
+      // that was still there).
       extern volatile sig_atomic_t got_sigint;
-      if (size <= 0 && !got_sigint) {
+      const bool gone = size == 0 || (size < 0 && errno != EINTR &&
+                                      errno != EAGAIN && errno != EWOULDBLOCK);
+      if (gone && !got_sigint) {
         printf("%%SRL-W-DISCONNECT: Write socket closed on other end for "
                "serial port %d.\n",
                state.iNumber);
         printf("-SRL-I-WAITFOR: Waiting for a new connection on port %d.\n",
                listenPort);
+        drop_client();
         WaitForConnection();
         return;
       }
@@ -1174,9 +1203,7 @@ bool CSerial::launch_action(std::string &why) {
 void CSerial::WaitForConnection() {
   struct sockaddr_in Address;
   socklen_t nAddressSize = sizeof(struct sockaddr_in);
-  const char *telnet_options = "%c%c%c";
-  char buffer[8];
-  char s[1000];
+  char s[100];
 
   std::string why;
   if (!launch_action(why)) {
@@ -1215,14 +1242,6 @@ void CSerial::WaitForConnection() {
         (int)accept(listenSocket, (struct sockaddr *)&Address, &nAddressSize);
   }
   configure_client_socket();
-  {
-    // What the guest printed while nobody was connected is not kept.
-    std::lock_guard<std::mutex> g(out_lock);
-    out_queue.clear();
-    out_dropped = 0;
-  }
-  out_sending.clear();
-  out_sent = 0;
 
   iac_carry_len = 0;
   in_subneg = false;
@@ -1230,36 +1249,24 @@ void CSerial::WaitForConnection() {
 
   state.serial_cycles = 0;
 
-  if (state.iNumber != 1 &&
-      !raw_mode) // skip for kgdb-default port and any raw-mode port
-  {
-    // Send some control characters to the telnet client to handle
-    // character-at-a-time mode.
-    sprintf(buffer, telnet_options, IAC, DO, TELOPT_ECHO);
-    write_cstr(buffer);
-
-    sprintf(buffer, telnet_options, IAC, DO, TELOPT_NAWS);
-    write_cstr(buffer);
-
-    sprintf(buffer, telnet_options, IAC, DO, TELOPT_LFLOW);
-    write_cstr(buffer);
-
-    sprintf(buffer, telnet_options, IAC, WILL, TELOPT_ECHO);
-    write_cstr(buffer);
-
-    sprintf(buffer, telnet_options, IAC, WILL, TELOPT_SGA);
-    write_cstr(buffer);
-
-    // we do these two to avoid a weird character spam in the client
-    unsigned char opt_do_binary[3] = {IAC, DO,
-                                      TELOPT_BINARY}; // tell client to send raw
-    unsigned char opt_will_binary[3] = {
-        IAC, WILL, TELOPT_BINARY}; // tell client to receive raw
-    write((const char *)opt_do_binary, 3);
-    write((const char *)opt_will_binary, 3);
-
-    sprintf(s, "This is serial port #%d on Alphabox Alpha Emulator\r\n",
-            state.iNumber);
-    write_cstr(s);
+  // The greeting goes before anything the guest printed while no client
+  // was connected (drop_client keeps that). Not on serial1 (es40 kept it
+  // clean for kgdb) and not in raw_mode.
+  std::string greeting;
+  if (state.iNumber != 1 && !raw_mode) {
+    // Character-at-a-time mode, 8-bit clean both ways.
+    static const unsigned char options[] = {
+        IAC, DO,   TELOPT_ECHO,  IAC, DO,   TELOPT_NAWS, IAC, DO, TELOPT_LFLOW,
+        IAC, WILL, TELOPT_ECHO,  IAC, WILL, TELOPT_SGA,  IAC, DO, TELOPT_BINARY,
+        IAC, WILL, TELOPT_BINARY};
+    greeting.assign((const char *)options, sizeof(options));
+    snprintf(s, sizeof(s),
+             "This is serial port #%d on Alphabox Alpha Emulator\r\n",
+             state.iNumber);
+    greeting += s;
   }
+  std::lock_guard<std::mutex> g(out_lock);
+  out_queue.insert(0, greeting);
+  if (!out_queue.empty())
+    out_kick = true;
 }

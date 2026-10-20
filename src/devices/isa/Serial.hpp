@@ -77,6 +77,7 @@ private:
   void wait_writable(std::chrono::steady_clock::time_point until);
   void flush_output(int ms);
   void menu_say(const char *s);
+  void drop_client();
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
@@ -101,7 +102,8 @@ private:
   size_t out_dropped = 0;  ///< oldest bytes discarded, not yet reported
   std::string out_sending; ///< the thread's: taken from the queue, unsent
   size_t out_sent = 0;     ///< how much of out_sending the socket took
-  bool breakHit = false;
+  std::atomic_bool breakHit{
+      false}; ///< set by the port's thread, read by check_state
   const char *listenAddress = nullptr;
   bool threads_started = false; ///< past init: a failing `action` only warns
 #if !defined(_WIN32)
