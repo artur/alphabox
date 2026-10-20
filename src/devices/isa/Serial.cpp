@@ -85,6 +85,13 @@ static const int SEND_FLAGS = MSG_NOSIGNAL;
 static const int SEND_FLAGS = 0;
 #endif
 
+/// The port's descriptors are not for the programs it starts (`action`).
+static void set_cloexec(int64_t fd) {
+#if !defined(_WIN32)
+  fcntl((int)fd, F_SETFD, fcntl((int)fd, F_GETFD) | FD_CLOEXEC);
+#endif
+}
+
 /// Wait up to `ms` for `fd` to be readable (or, for the listener, to have a
 /// connection waiting). poll rather than select, whose fd_set cannot hold
 /// a descriptor at or above FD_SETSIZE. Returns poll's result.
@@ -168,6 +175,7 @@ void CSerial::init() {
     if (!log_file)
       FAILURE_3(Configuration, "%s: cannot open the log file %s: %s",
                 devid_string, log_name, strerror(errno));
+    set_cloexec(fileno(log_file));
     printf("%s: output logged to %s.\n", devid_string, log_name);
   }
 
@@ -228,6 +236,7 @@ void CSerial::init() {
   listenSocket = (int)socket(AF_INET, SOCK_STREAM, 0);
   if (listenSocket == INVALID_SOCKET)
     FAILURE_1(Runtime, "Serial: can't create a socket: %s\n", strerror(errno));
+  set_cloexec(listenSocket);
 
   int optval = 1;
   setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, (char *)&optval,
@@ -939,6 +948,7 @@ int CSerial::RestoreState(FILE *f) {
  * line until the client's delayed ACK.
  **/
 void CSerial::configure_client_socket() {
+  set_cloexec(connectSocket);
   int one = 1;
   setsockopt(connectSocket, IPPROTO_TCP, TCP_NODELAY, (char *)&one,
              sizeof(one));
@@ -1043,9 +1053,28 @@ bool CSerial::launch_action(std::string &why) {
   for (const std::string &w : words)
     argv.push_back(const_cast<char *>(w.c_str()));
   argv.push_back(nullptr);
+  // The child gets standard input, output and error, and none of the
+  // emulator's other descriptors: holding the listening socket, it kept
+  // the port bound after the emulator had exited ("Address already in
+  // use" on the next start). macOS closes everything else at exec; where
+  // that is not available the port's own sockets and log are close-on-exec
+  // (set_cloexec), and glibc 2.34 closes the rest.
+  posix_spawnattr_t attr;
+  posix_spawn_file_actions_t fa;
+  posix_spawnattr_init(&attr);
+  posix_spawn_file_actions_init(&fa);
+#if defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+  for (int fd = 0; fd < 3; fd++)
+    posix_spawn_file_actions_addinherit_np(&fa, fd);
+#elif defined(__GLIBC__) &&                                                    \
+    (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+  posix_spawn_file_actions_addclosefrom_np(&fa, 3);
+#endif
   pid_t pid;
-  const int err =
-      posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), environ);
+  const int err = posix_spawnp(&pid, argv[0], &fa, &attr, argv.data(), environ);
+  posix_spawn_file_actions_destroy(&fa);
+  posix_spawnattr_destroy(&attr);
   if (err) {
     why = strerror(err);
     return false;
