@@ -267,7 +267,7 @@ bool CTulip::receive_process() {
         packet_data = padded;
         packet_len = ETH_MIN_PACKET_RAW;
       }
-      bool taken = false;
+      const char *fate = "RX filtered";
       {
         std::lock_guard<std::mutex> lock(m_lock);
         // The address filter (HRM 4.3.5.2): a frame it fails is dropped
@@ -277,10 +277,15 @@ bool CTulip::receive_process() {
             (state.reg[CSR_OPMODE / 8] & OPMODE_RA)) {
           // The queue stands for the receive FIFO: a frame that finds it
           // full is lost and counted in CSR8 (HRM Table 3-79, FOC).
-          if (rx_queue->count() >= rx_queue->max)
+          if (rx_queue->count() >= rx_queue->max) {
             count_fifo_overflow(state.reg[CSR_MISSED / 8]);
-          else
-            taken = rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
+            fate = "RX lost, FIFO full";
+          } else if (rx_queue->add_tail(packet_data, packet_len, calc_crc,
+                                        true)) {
+            fate = "RX";
+          } else {
+            fate = "RX too long";
+          }
         }
         // Set 10bT activity -- but only where CSR12 is the SIA status. On
         // the 21140 that register is eight general purpose pins, and this
@@ -289,7 +294,7 @@ bool CTulip::receive_process() {
           state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
       }
       if (trace_packets)
-        trace_packet(taken ? "RX" : "RX filtered", packet_data, packet_len);
+        trace_packet(fate, packet_data, packet_len);
     }
   }
 
