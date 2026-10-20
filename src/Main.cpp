@@ -30,6 +30,7 @@
 
 int main_sim(int argc, char *argv[]);
 int main_cfg(int argc, char *argv[]);
+int main_cdbtest(int argc, char **argv);
 #ifdef ALPHABOX_HVF
 int main_hvprobe(int argc, char **argv);
 int main_hvtest(int argc, char **argv);
@@ -92,6 +93,8 @@ int main(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "hvtest") == 0)
     return main_hvtest(argc - 1, ++argv);
 #endif
+  if (argc >= 2 && strcmp(argv[1], "cdbtest") == 0)
+    return main_cdbtest(argc - 1, ++argv);
   if (argc <= 1 || (strcmp(argv[1], "run") && strcmp(argv[1], "configure"))) {
     std::cerr << "Alphabox Alpha Emulator";
 #ifdef PACKAGE_GITSHA
@@ -103,6 +106,9 @@ int main(int argc, char **argv) {
     std::cerr << "       " << argv[0] << " hvprobe   (Hypervisor.framework mechanics on this host)" << std::endl;
     std::cerr << "       " << argv[0] << " hvtest    (the process's own code at EL1: the VM runtime's self-test)" << std::endl;
 #endif
+    std::cerr << "       " << argv[0]
+              << " cdbtest <dir>   (the SCSI disk's conformance test)"
+              << std::endl;
     std::cerr << "       " << argv[0] << " --version" << std::endl;
     return 0;
   }
