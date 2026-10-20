@@ -106,8 +106,10 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   documents for it are not public. A resolution other than 0-3 or a
   sample rate other than 10, 20, 40, 60, 80, 100 or 200 gets Resend (`FE`)
   and the mouse waits for the value again. Enable (`F4`) turns reporting
-  on in whichever mode the mouse is in, and does not touch the
-  controller's command byte. After its reset the mouse is in stream mode.
+  on in whichever mode the mouse is in. It also releases the controller's
+  aux interface, as it always has here: SRM leaves the interface disabled
+  (`A8`, `D4 F4`, `A7`), OpenVMS's driver never enables it again, and its
+  mouse works. After its reset the mouse is in stream mode.
   2:1 scaling (`E7`) applies to stream packets and not to Read Data
   (`EB`); the resolution (`E8`) is reported back but not applied.
 - The mouse is an IntelliMouse Explorer: the sample rates 200, 100, 80 in

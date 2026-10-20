@@ -1398,10 +1398,16 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
 
     case 0xf4: // Enable Data Reporting
       // Reporting matters in stream mode only; a mouse in remote mode stays
-      // there (Chapweske, Command Set, F4h). The interface clock is the
-      // controller's: only A7, A8 and its command byte change it (IBM
-      // 84F9735, Keyboard/Auxiliary Device Controller pp. 10-12).
+      // there (Chapweske, Command Set, F4h).
       state.mouse.enable = 1;
+      // It also releases the controller's aux interface, as it always has
+      // here. OpenVMS depends on that: SRM leaves the interface disabled
+      // (A8, D4 F4, A7) and OpenVMS's mouse driver never sends A8 or a
+      // command byte, only D4 FF ... D4 F4. IBM's controller reference does
+      // not say what sending to a disabled device does, and the ALi's
+      // controller firmware is undocumented, so the behaviour that works
+      // with the real console and driver stays.
+      set_aux_clock_enable(1);
       discard_mouse_motion();
       controller_enQ(0xFA, KBC_SRC_AUX); // ACK
       break;

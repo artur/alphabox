@@ -429,7 +429,9 @@ static void test_mouse_bad_parameters() {
   check("F3 then a command aborts it", aux({0xF2}), "mfa m00");
 }
 
-/// KBD-05: F4 neither leaves remote mode nor changes the command byte.
+/// KBD-05: F4 does not leave remote mode. It does release the aux
+/// interface: SRM leaves it disabled and OpenVMS's driver sends only D4 FF
+/// ... D4 F4 (ALPHABOX_TRACE_KBC), and its mouse works.
 static void test_mouse_enable_keeps_mode() {
   fresh();
   out64(0xA8);
@@ -437,13 +439,16 @@ static void test_mouse_enable_keeps_mode() {
   check("E9 status: remote, enabled", aux({0xE9}).substr(0, 7), "mfa m60");
   check("remote mode: no stream packet", motion(4, 0, 0, 0), "");
   check("remote mode: EB reads it", aux({0xEB}), "mfa m08 m04 m00");
+  // SRM, then OpenVMS
   fresh();
-  out64(0xA7);
+  out64(0x60);
+  out60(0x03);
+  out64(0xA8);
   aux({0xF4});
-  out64(0x20);
-  const std::string ccb = drain();
-  check_true("A7, D4 F4: the command byte keeps the aux disable bit",
-             ccb.size() == 2 && (strtoul(ccb.c_str(), 0, 16) & 0x20) != 0);
+  out64(0xA7);
+  check("OpenVMS: reset", aux({0xFF}), "mfa maa m00");
+  check("OpenVMS: enable", aux({0xF4}), "mfa");
+  check("OpenVMS: the mouse streams", motion(2, 0, 0, 0), "m08 m02 m00");
 }
 
 /// KBD-06: 2:1 scaling applies to stream packets.
