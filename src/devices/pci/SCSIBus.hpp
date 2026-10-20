@@ -54,7 +54,10 @@ public:
   void scsi_unregister(CSCSIDevice *dev, int target);
 
   bool arbitrate(int initiator);
-  bool select(int initiator, int target);
+  bool select(int initiator, int target, bool atn = true);
+  /// Did the initiator assert ATN during the selection in progress? A
+  /// target asks from scsi_select_me (SCSI-2 6.2.1 e).
+  bool select_atn() const { return selecting_atn; }
   void set_phase(int target, int phase);
   int get_phase() { return state.phase; };
 
@@ -81,6 +84,11 @@ public:
     /// has the same size and layout as int, so the state file is unchanged.
     std::atomic<int> phase;
   } state;
+
+private:
+  /// ATN during the current selection; not in the state file, as it only
+  /// lives for the select() call.
+  bool selecting_atn = true;
 };
 
 #define SCSI_PHASE_FREE -2

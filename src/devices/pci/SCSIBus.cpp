@@ -109,8 +109,14 @@ bool CSCSIBus::arbitrate(int initiator) {
  * a target byte from its request queue, the 53C8xx a 4-bit SELECT field),
  * the initiator's own id, or a device that is not a target. The bus stays
  * in arbitration for the initiator to release.
+ *
+ * \a atn: the initiator asserts ATN during the selection, asking for a
+ * MESSAGE OUT phase to follow it (SCSI-2 6.1.3, 6.2.1 e). A target enters
+ * MESSAGE OUT only "in response to the attention condition" (6.1.9.2), so
+ * without ATN it asks for the command instead, as a SCSI-2 target that
+ * supports SCSI-1 initiators does (6.1.3, note 21).
  **/
-bool CSCSIBus::select(int initiator, int target) {
+bool CSCSIBus::select(int initiator, int target, bool atn) {
   if (state.phase != SCSI_PHASE_ARBITRATION || state.initiator != initiator)
     FAILURE(IllegalState,
             "Attempt to select while the device has not won SCSI arbitration");
@@ -119,7 +125,9 @@ bool CSCSIBus::select(int initiator, int target) {
     return false;
 
   state.target = target;
+  selecting_atn = atn;
   targets[target]->scsi_select_me(target_bus_no[target]);
+  selecting_atn = true;
   if (state.phase >= 0)
     return true;
   state.target = -1;

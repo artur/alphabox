@@ -75,8 +75,8 @@ bool CSCSIDevice::scsi_arbitrate(int bus) {
  *
  * See CSCSIBus::select for a description.
  **/
-bool CSCSIDevice::scsi_select(int bus, int target) {
-  return scsi_bus[bus]->select(scsi_initiator_id[bus], target);
+bool CSCSIDevice::scsi_select(int bus, int target, bool atn) {
+  return scsi_bus[bus]->select(scsi_initiator_id[bus], target, atn);
 }
 
 /**

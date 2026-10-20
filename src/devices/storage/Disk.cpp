@@ -165,8 +165,11 @@ void CDisk::calc_cylinders() {
 /**
  * \brief Called when this device is selected.
  *
- * Set status fields up to begin a new SCSI command sequence
- * and set the SCSI bus phase to Message Out.
+ * Set status fields up to begin a new SCSI command sequence and set the
+ * SCSI bus phase to Message Out, or to Command when the initiator selected
+ * without ATN (SCSI-2 6.1.9.2: MESSAGE OUT only answers the attention
+ * condition) or when there are no messages (ATAPI). Without an IDENTIFY
+ * the LUN comes from the CDB.
  **/
 void CDisk::scsi_select_me(int bus) {
   state.scsi.msgo.written = 0;
@@ -186,7 +189,7 @@ void CDisk::scsi_select_me(int bus) {
   // state.scsi.disconnect_priv = false;
   // state.scsi.will_disconnect = false;
   // state.scsi.disconnected = false;
-  if (atapi_mode)
+  if (atapi_mode || !scsi_bus[bus]->select_atn())
     scsi_set_phase(bus, SCSI_PHASE_COMMAND);
   else
     scsi_set_phase(bus, SCSI_PHASE_MSG_OUT);

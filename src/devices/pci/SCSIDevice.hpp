@@ -49,7 +49,7 @@ public:
   void scsi_register(int busno, class CSCSIBus *with, int target);
 
   bool scsi_arbitrate(int bus);
-  bool scsi_select(int bus, int target);
+  bool scsi_select(int bus, int target, bool atn = true);
   virtual void scsi_select_me(int bus);
   /// The bus was reset (RST): a target drops what it was doing and resets
   /// itself. Nothing to do for a device that is not a target.

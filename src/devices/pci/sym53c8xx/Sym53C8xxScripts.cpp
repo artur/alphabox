@@ -681,7 +681,11 @@ void CSym53C8xx::CChannel::execute_io_op() {
     SB_R8(SSTAT0, WOA, true);
     SB_R8(SCNTL1, IARB, false);
 
-    state.select_timeout = !dev.scsi_select(index, destination);
+    // Bit 24, Select with ATN/, "specifies whether SATN/ will be asserted
+    // during the selection phase" (SYM53C895 data manual v3.0, I/O
+    // instructions, pdf p. 160): the target sees it, and goes to MESSAGE
+    // OUT only when it is set.
+    state.select_timeout = !dev.scsi_select(index, destination, atn);
 
     if (!state.select_timeout) // select ok
     {
@@ -692,8 +696,8 @@ void CSym53C8xx::CChannel::execute_io_op() {
       if (atn)
         SB_R8(SOCL, ATN, true);
 
-      // Set phase to MSG OUT after successful select
-      R8(SSTAT1) = (R8(SSTAT1) & ~R_SSTAT1_PHASE) | SCSI_PHASE_MSG_OUT;
+      // The phase the target asked for: MSG OUT, or COMMAND without ATN.
+      latch_phase(dev.scsi_get_phase(index));
 
       SB_R8(SCNTL2, SDU, true); // don't expect a disconnect
     }

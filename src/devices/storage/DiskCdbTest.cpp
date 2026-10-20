@@ -85,6 +85,7 @@ struct Res {
   std::vector<u8> in;     ///< DATA IN bytes
   size_t out_taken = 0;   ///< DATA OUT bytes the target took
   std::vector<u8> msg_in; ///< MESSAGE IN bytes
+  int first_phase = -9;   ///< the phase the target asked for first
   bool data_before_status = false;
   std::string error; ///< what would have stopped the machine
 
@@ -122,6 +123,8 @@ public:
   int SaveState(FILE *) override { return 0; }
   int RestoreState(FILE *) override { return 0; }
 
+  bool atn = true; ///< select with ATN
+
   /// Run one command. \a msgs is what the initiator sends in MESSAGE OUT
   /// (IDENTIFY for LUN 0 by default); \a out the DATA OUT bytes.
   Res run(int target, const std::vector<u8> &cdb,
@@ -135,12 +138,13 @@ public:
         r.error = "arbitration lost";
         return r;
       }
-      if (!scsi_select(0, target)) {
+      if (!scsi_select(0, target, atn)) {
         if (scsi_get_phase(0) == SCSI_PHASE_ARBITRATION)
           scsi_free(0);
         return r;
       }
       r.selected = true;
+      r.first_phase = scsi_get_phase(0);
       size_t out_pos = 0;
       bool msgs_sent = false;
       for (int guard = 0; guard < 100000; guard++) {
@@ -615,6 +619,22 @@ void t_selection(Rig &r) {
     check(!t.selected && t.error.empty(), name, "%s", t.why().c_str());
   }
   expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "the bus works afterwards");
+
+  // SYM-14: without ATN the target asks for the command, not a message,
+  // and takes the LUN from the CDB.
+  Res w = a->run(0, {0, 0, 0, 0, 0, 0});
+  check(w.first_phase == SCSI_PHASE_MSG_OUT, "selected with ATN: MESSAGE OUT",
+        "phase %d", w.first_phase);
+  a->atn = false;
+  Res n = a->run(0, {0, 0, 0, 0, 0, 0});
+  Res l = a->run(0, {0x12, 0x20, 0, 0, 36, 0}); // INQUIRY, CDB LUN 1
+  a->atn = true;
+  check(n.good() && n.first_phase == SCSI_PHASE_COMMAND,
+        "selected without ATN: COMMAND, then GOOD", "phase %d %s",
+        n.first_phase, n.why().c_str());
+  check(l.good() && l.in.size() >= 1 && l.in[0] == 0x7f,
+        "without IDENTIFY the CDB's LUN counts", "%s byte 0 %02x",
+        l.why().c_str(), l.in.empty() ? 0 : l.in[0]);
 }
 
 /// DISK-11: malformed messages.
@@ -1634,6 +1654,38 @@ void t_sym_sbcl(SymRig &s) {
         "before %u after %u", before, after);
 }
 
+/// SYM-14: a SELECT without ATN goes straight to the COMMAND phase.
+void t_sym_select_no_atn(SymRig &s) {
+  group("SYM-14 SELECT without ATN");
+  std::string err;
+  s.reset();
+  const u32 data = 0x240000;
+  s.mw(data + 0x10, 0x00000000); // TEST UNIT READY
+  s.mw(data + 0x14, 0x00000000);
+  s.mw(data + 0x20, 0xffffffff);
+  s.mw(data + 0x24, 0xffffffff);
+  std::vector<u32> w = {sel(0, false), 0, kInt, 0x1};
+  w.insert(w.end(), {move_when(SCSI_PHASE_COMMAND, 6), data + 0x10,
+                     move_when(SCSI_PHASE_STATUS, 1), data + 0x20,
+                     move_when(SCSI_PHASE_MSG_IN, 1), data + 0x24, kClearAck, 0,
+                     kWaitDisconnect, 0, kInt, 0x2});
+  const u32 p = s.program(w);
+  u8 istat = s.run(p, err);
+  s.r8(R_DSTAT);
+  const u8 sbcl = s.r8(R_SBCL), sstat1 = s.r8(R_SSTAT1) & 7;
+  check(err.empty() && (istat & 0x01) && sbcl == 0xa2 && sstat1 == 2,
+        "after SELECT without ATN: REQ BSY, COMMAND, no ATN",
+        "istat %02x sbcl %02x sstat1 phase %u %s", istat, sbcl, sstat1,
+        err.c_str());
+  istat = s.run(s.r32(R_DSP), err);
+  const u8 dstat = s.r8(R_DSTAT);
+  check(err.empty() && (istat & 0x01) && (dstat & 0x04) && s.r32(0x30) == 0x2 &&
+            (s.mr(data + 0x20) & 0xff) == 0 && (s.mr(data + 0x24) & 0xff) == 0,
+        "the command runs: GOOD, COMMAND COMPLETE",
+        "istat %02x dstat %02x dsps %08x status %08x msg %08x %s", istat, dstat,
+        s.r32(0x30), s.mr(data + 0x20), s.mr(data + 0x24), err.c_str());
+}
+
 /// SYM-06: a Memory Move takes the whole 24-bit count, keeps TEMP, and
 /// refuses misaligned addresses and reserved bits.
 void t_sym_memory_move(SymRig &s) {
@@ -1773,6 +1825,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_sfbr(sr);
     t_sym_sbcl(sr);
     t_sym_memory_move(sr);
+    t_sym_select_no_atn(sr);
   } else
     check(false, "the 53C875 of the test machine");
 
