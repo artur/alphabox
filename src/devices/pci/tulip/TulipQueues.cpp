@@ -396,6 +396,7 @@ int CTulip::dec21143_rx() {
   u32 addr;
   u32 epoch;
   bool dbo;
+  bool polling = false;
   int len;
   int used;
 
@@ -403,10 +404,18 @@ int CTulip::dec21143_rx() {
     std::lock_guard<std::mutex> lock(m_lock);
     if (!(state.reg[CSR_OPMODE / 8] & OPMODE_SR))
       return 0;
+    const bool poll = m_rx_poll;
+    m_rx_poll = false;
     /*  Is current packet finished? Then check for new ones.  */
     if (state.rx.current.used >= state.rx.current.len &&
-        !rx_queue->get_head(state.rx.current))
-      return 0; // nothing to receive
+        !rx_queue->get_head(state.rx.current)) {
+      // Nothing to receive. A poll demand still makes a suspended process
+      // look at its descriptor again (below).
+      if (!poll ||
+          (state.reg[CSR_STATUS / 8] & STATUS_RS) != STATUS_RS_SUSPENDED)
+        return 0;
+      polling = true;
+    }
     addr = state.rx.cur_addr;
     epoch = m_rx_epoch;
     dbo = (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO) != 0;
@@ -424,6 +433,20 @@ int CTulip::dec21143_rx() {
   const u32 rdes1 = descr[1];
   const u32 rdes2 = descr[2];
   const u32 rdes3 = descr[3];
+
+  if (polling) {
+    // HRM Table 3-58 (RPD): an available descriptor resumes the process,
+    // none leaves it suspended with RU set.
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (epoch == m_rx_epoch && (state.reg[CSR_OPMODE / 8] & OPMODE_SR) &&
+        (state.reg[CSR_STATUS / 8] & STATUS_RS) == STATUS_RS_SUSPENDED) {
+      if (descr[0] & TDSTAT_OWN)
+        set_rx_state(STATUS_RS_WAIT);
+      else
+        state.reg[CSR_STATUS / 8] |= STATUS_RU;
+    }
+    return 0;
+  }
 
   /*  Only use descriptors owned by the 21143:  */
   if (!(descr[0] & TDSTAT_OWN)) {
@@ -498,8 +521,10 @@ int CTulip::dec21143_rx() {
   // set receive interrupt once the frame is in memory
   if (last)
     state.reg[CSR_STATUS / 8] |= STATUS_RI;
+  // Running: waiting for the next frame once this one is in memory, still
+  // queueing it into buffers otherwise (HRM Table 3-69).
   if (state.reg[CSR_OPMODE / 8] & OPMODE_SR)
-    set_rx_state(STATUS_RS_CLOSE);
+    set_rx_state(last ? STATUS_RS_WAIT : STATUS_RS_QUEUE);
 
   // move to next descriptor
   if (rdes1 & TDCTL_ER) // end-of-ring, return to base
@@ -563,12 +588,16 @@ int CTulip::dec21143_tx() {
     if (epoch != m_tx_epoch)
       return 0;
     const bool running = (state.reg[CSR_OPMODE / 8] & OPMODE_ST) != 0;
+    const bool poll = m_tx_poll;
+    m_tx_poll = false;
     /*  Only process packets owned by the 21143:  */
     if (!(tdes0 & TDSTAT_OWN)) {
-      /* HRM 4.3.6.2: on fetching an unowned descriptor, the chip raises
-       * STATUS_TU and moves to suspended state. Do this immediately, no
-       * idle threshold. */
-      state.reg[CSR_STATUS / 8] |= STATUS_TU;
+      /* HRM 4.3.6.2 and Table 4-14: on fetching an unowned descriptor, the
+       * chip raises STATUS_TU and moves to suspended state. Do this
+       * immediately, no idle threshold. A poll demand that finds the ring
+       * still empty returns to suspended without it (Table 3-46). */
+      if (!poll)
+        state.reg[CSR_STATUS / 8] |= STATUS_TU;
       if (running)
         set_tx_state(STATUS_TS_SUSPENDED);
       state.tx.suspend = true;
@@ -734,6 +763,7 @@ int CTulip::dec21143_tx() {
   // TI follows the status in memory (HRM 4.3.6.1).
   if (ti)
     state.reg[CSR_STATUS / 8] |= STATUS_TI;
+  // Running: the descriptor is closed; the next fetch follows at once.
   if (state.reg[CSR_OPMODE / 8] & OPMODE_ST)
     set_tx_state(STATUS_TS_CLOSE);
 

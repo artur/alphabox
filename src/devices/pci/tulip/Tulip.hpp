@@ -210,6 +210,11 @@ private:
   bool m_filter_dirty = false;
   /// (L) A setup frame has been loaded since the last reset.
   bool m_setup_loaded = false;
+  /// (L) A transmit poll demand found the process suspended: if the ring
+  /// is still empty it goes back without raising TU (HRM Table 3-46).
+  bool m_tx_poll = false;
+  /// (L) A receive poll demand to act on (HRM Table 3-58).
+  bool m_rx_poll = false;
 
   void reset_locked();
   bool nic_write_locked(u32 address, u32 data);

@@ -318,13 +318,14 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
     oldreg = state.reg[regnr];
     switch (regnr) {
     case CSR_STATUS / 8: /*  CSR5: Write-1-to-clear */
-      /* Clear all write-1-to-clear events like QEMU. */
+      /* Bits 0 to 16, 26 and 27 clear when written with 1; the process
+         states and the error bits are read only (HRM Table 3-70). */
       state.reg[regnr] &=
           ~((u32)data &
             (STATUS_TI | STATUS_TPS | STATUS_TU | STATUS_TJT | STATUS_LNPANC |
              STATUS_UNF | STATUS_RI | STATUS_RU | STATUS_RPS | STATUS_RWT |
-             STATUS_ETI | STATUS_LNF | STATUS_SE | STATUS_ER | STATUS_AIS |
-             STATUS_NIS | STATUS_GPPI | STATUS_LC));
+             STATUS_ETI | STATUS_TM | STATUS_LNF | STATUS_SE | STATUS_ER |
+             STATUS_AIS | STATUS_NIS | STATUS_GPPI | STATUS_LC));
 #if defined(DEBUG_NIC_IRQ)
       printf("21143: CSR5 W1C=%08x -> CSR5=%08x CSR7=%08x\n", data,
              state.reg[CSR_STATUS / 8], state.reg[CSR_INTEN / 8]);
@@ -353,13 +354,17 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
     break;
 
   case CSR_TXPOLL: /*  csr1  */
-    /* CaVa interpretation... */
-    state.reg[CSR_STATUS / 8] &= ~STATUS_TU;
+    /* A poll demand resumes a suspended transmitter. TU is the driver's to
+       clear (HRM Table 3-70), and a ring that is still empty sends the
+       process back to suspended without raising it again (Table 3-46). */
+    if (state.tx.suspend)
+      m_tx_poll = true;
     state.tx.suspend = false;
     wake = true;
     break;
 
   case CSR_RXPOLL: /*  csr2  */
+    m_rx_poll = true;
     wake = true;
     break;
 
@@ -378,6 +383,7 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
       printf("[ dec21143: WARNING! TXLIST not aligned? (0x%x) ]\n", data);
     data &= ~0x3;
     state.tx.cur_addr = data;
+    state.tx.suspend = false; // a new list is polled afresh at the start
     m_tx_epoch++;
     break;
 
@@ -430,7 +436,12 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
     // Did Start/Stop Transmission change state ?
     if ((data ^ oldreg) & OPMODE_ST) {
       if (data & OPMODE_ST) { // ST went high
-        set_tx_state(STATUS_TS_SUSPENDED);
+        /* The process runs and fetches from the current position; an
+           empty ring then suspends it with TU (HRM Table 3-71, ST, and
+           Table 4-14). */
+        set_tx_state(STATUS_TS_FETCH);
+        state.tx.suspend = false;
+        m_tx_poll = false;
         /* transmitter running -> clear 'process stopped' */
         state.reg[CSR_STATUS / 8] &= ~STATUS_TPS;
         wake = true;
@@ -601,6 +612,8 @@ void CTulip::reset_locked() {
   state.rx.cur_buf_len = 0;
   state.tx.cur_buf_len = 0;
   state.tx.suspend = false;
+  m_tx_poll = false;
+  m_rx_poll = false;
 
   // Drop any partially assembled RX buffer.
   if (state.rx.cur_buf != NULL)
