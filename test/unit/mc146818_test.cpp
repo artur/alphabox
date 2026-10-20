@@ -270,6 +270,30 @@ static void test_uip() {
   CHECK_EQ(r.rd(0x0a) & 0x80, 0);
 }
 
+/// Registers C and D, UIP and the seconds' high bit are read only (data
+/// sheet p.11); a time byte written with SET clear sets the running clock.
+static void test_read_only_and_running_writes() {
+  Rig r;
+  r.wr(0x0c, 0xff);
+  CHECK_EQ(r.rd(0x0c) & 0x30, 0); // no alarm or update flag from a write
+  r.wr(0x0d, 0x00);
+  CHECK_EQ(r.rd(0x0d), 0x80);
+  r.at(2026, 10, 20, 12, 34, 56, 100000000);
+  r.wr(0x0a, 0xa6); // UIP written as 1: not stored
+  CHECK_EQ(r.rd(0x0a), 0x26);
+  r.wr(0x00, 0x85); // seconds 5, bit 7 set
+  CHECK_EQ(r.rd(0x00), 5);
+  r.wr(0x02, 10); // minutes, SET clear
+  CHECK_EQ(r.rd(0x02), 10);
+  CHECK_EQ(r.rd(0x04), 12);
+  r.ns(3000000000ull);
+  CHECK_EQ(r.rd(0x00), 8); // the clock runs on from the time written
+  CHECK_EQ(r.rd(0x02), 10);
+  r.wr(0x09, 27); // the year
+  CHECK_EQ(r.rd(0x09), 27);
+  CHECK_EQ(r.rd(0x08), 10);
+}
+
 int main() {
   test_read_time();
   test_set_time();
@@ -279,6 +303,7 @@ int main() {
   test_12_hour();
   test_live_reads();
   test_uip();
+  test_read_only_and_running_writes();
   printf("mc146818_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

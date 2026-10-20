@@ -137,6 +137,14 @@ void CMc146818::write(u32 port, u8 data) {
   switch (port) {
   case 1: {
     const u8 index = ports[0] & 0x7f;
+    // "All 64 bytes are directly readable and writable by the processor
+    // program except for the following: 1) Registers C and D are read only,
+    // 2) bit 7 of Register A is read only, and 3) the high-order bit of the
+    // seconds byte is read only" (data sheet p.11).
+    if (index == 0x0c || index == 0x0d)
+      break;
+    if (index == 0x0a || index == 0x00)
+      data &= 0x7f;
     if (index == 0x0b && (data & 0x40)) // If we're writing to register B, we
                                         // make register C look like it fired.
       ram[0x0c] = 0xf0;
@@ -150,6 +158,20 @@ void CMc146818::write(u32 port, u8 data) {
     // and then clears the UIP status bit" (data sheet p.15).
     if (index == 0x0b && (data & 0x80))
       ram[0x0a] &= ~0x80;
+    // A time or date byte written while SET is clear changes the running
+    // clock: the chip's next update counts on from it (data sheet p.11, p.14;
+    // SET only keeps an update from happening in the middle of a setting).
+    // The others are taken as they read now, and the clock is set from the
+    // lot. The day of the week is not kept apart from the date here, so a
+    // write of it alone does not stick.
+    if (!(ram[0x0b] & 0x80) &&
+        (index == 0x00 || index == 0x02 || index == 0x04 || index == 0x07 ||
+         index == 0x08 || index == 0x09)) {
+      generate_time_locked();
+      ram[index] = data;
+      set_time_from_registers(ram[0x0b]);
+      break;
+    }
     ram[index] = data;
     break;
   }
