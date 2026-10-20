@@ -61,6 +61,7 @@
 
 #include "StdAfx.hpp"
 
+#define ETH_MIN_PACKET_RAW 60 // 64 on the wire with the CRC
 #define ETH_MAX_PACKET_RAW 1514
 #define ETH_MAX_PACKET_CRC 1518
 

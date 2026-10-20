@@ -215,6 +215,9 @@ private:
   bool m_tx_poll = false;
   /// (L) A receive poll demand to act on (HRM Table 3-58).
   bool m_rx_poll = false;
+  /// TDES1 of the frame's first descriptor, whose AC and DPD apply to the
+  /// whole frame. The NIC thread's own.
+  u32 m_tx_first_ctl = 0;
 
   void reset_locked();
   bool nic_write_locked(u32 address, u32 data);

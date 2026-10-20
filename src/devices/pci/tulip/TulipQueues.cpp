@@ -223,15 +223,28 @@ void CTulip::receive_process() {
   if (listening) {
     const u8 *packet_data = NULL;
     int packet_len = 0;
+    u8 padded[ETH_MIN_PACKET_RAW];
     while (net_backend->receive(&packet_data, &packet_len) > 0) {
+      if (packet_len < 14)
+        continue; // not even a header
+      // On the wire a frame is at least 64 bytes with its CRC: the sender
+      // pads it (HRM Table 4-7, DPD), and a shorter one is a runt the
+      // receiver discards (4.3.5.2). A host stack hands the back end its
+      // frames unpadded, so pad them as the sending NIC would have.
+      if (packet_len < ETH_MIN_PACKET_RAW) {
+        memcpy(padded, packet_data, packet_len);
+        memset(padded + packet_len, 0, ETH_MIN_PACKET_RAW - packet_len);
+        packet_data = padded;
+        packet_len = ETH_MIN_PACKET_RAW;
+      }
       bool taken = false;
       {
         std::lock_guard<std::mutex> lock(m_lock);
         // The address filter (HRM 4.3.5.2): a frame it fails is dropped
         // unless CSR6 RA takes everything, and then it is marked (RDES0
         // FF).
-        if (packet_len >= 6 && (filter_match_locked(packet_data) ||
-                                (state.reg[CSR_OPMODE / 8] & OPMODE_RA))) {
+        if (filter_match_locked(packet_data) ||
+            (state.reg[CSR_OPMODE / 8] & OPMODE_RA)) {
           rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
           taken = true;
         }
@@ -672,8 +685,10 @@ int CTulip::dec21143_tx() {
      *  Data Packet. The first segment starts a new frame in the 2 KB
      *  scratch buffer; only this thread touches its bytes.
      */
-    if (tdes1 & TDCTL_Tx_FS)
+    if (tdes1 & TDCTL_Tx_FS) {
       buf_len = 0;
+      m_tx_first_ctl = tdes1;
+    }
 
     /* Safely DMA data from guest memory, without exceeding TX scratch capacity.
      */
@@ -711,6 +726,16 @@ int CTulip::dec21143_tx() {
        * bytes). */
       bool frame_too_long = (buf_len > ETH_MAX_PACKET_RAW);
 
+      /* A frame shorter than 64 bytes with its CRC is padded with zeros,
+       * unless the first descriptor set DPD, and then gets a CRC whatever
+       * AC says (HRM Table 4-7, TDES1 DPD and AC). */
+      bool add_crc = !(m_tx_first_ctl & TDCTL_Tx_AC);
+      if (buf_len < ETH_MIN_PACKET_RAW && !(m_tx_first_ctl & TDCTL_Tx_DPD)) {
+        memset(state.tx.cur_buf + buf_len, 0, ETH_MIN_PACKET_RAW - buf_len);
+        buf_len = ETH_MIN_PACKET_RAW;
+        add_crc = true;
+      }
+
       /* Only transmit to wire if no loopback is active and frame size is legal.
        */
       if (!frame_too_long && !(opmode & OPMODE_OM)) {
@@ -722,9 +747,8 @@ int CTulip::dec21143_tx() {
       /* In internal or external loopback, inject into RX queue iff RX is
        * running and size ok. */
       if (!frame_too_long && (opmode & OPMODE_OM) && (opmode & OPMODE_SR)) {
-        bool crc = !(tdes1 & TDCTL_Tx_AC);
         std::lock_guard<std::mutex> lock(m_lock);
-        (void)rx_queue->add_tail(state.tx.cur_buf, buf_len, calc_crc, crc);
+        (void)rx_queue->add_tail(state.tx.cur_buf, buf_len, calc_crc, add_crc);
       }
 
       /* Oversize frames: signal jabber and error summary, and do not deliver.
