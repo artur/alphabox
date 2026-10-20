@@ -309,6 +309,10 @@ A client that stops reading costs no more than that: the guest never waits
 for it. With `raw_mode = true;` (a debugger's byte stream) nothing is kept
 for the next client.
 
+`log = "serial0.log";` appends everything the guest sends on the port to
+that file, as it is sent, with or without a client (`null_attach` too):
+a record of a console nobody watched.
+
 Sending a telnet BREAK opens a small menu: continue, exit, abort, save the
 machine state to `autosave.axp`, or load it back.
 

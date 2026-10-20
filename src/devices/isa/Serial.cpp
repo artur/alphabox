@@ -112,6 +112,8 @@ CSerial::CSerial(CConfigurator *cfg, CSystem *c, u16 number)
               theAli->pic_set_line(0, 4 - state.iNumber, active);
           },
           [this](u8 byte) {
+            if (log_file)
+              fputc(byte, log_file);
             // Telnet doubles a data byte 0xff (IAC), or the client takes it
             // for the start of a command (RFC 854). Not in raw_mode.
             if (byte == IAC && !raw_mode)
@@ -154,6 +156,17 @@ void CSerial::init() {
     printf("%s: disabled - guest will see no UART at this address.\n",
            devid_string);
     return;
+  }
+
+  // log = "<file>": everything the guest sends on this port, appended as
+  // sent (the guest's own bytes, whatever the client), also with
+  // null_attach and while no client is connected. Flushed by check_state.
+  if (const char *log_name = myCfg->get_text_value("log")) {
+    log_file = fopen(log_name, "ab");
+    if (!log_file)
+      FAILURE_3(Configuration, "%s: cannot open the log file %s: %s",
+                devid_string, log_name, strerror(errno));
+    printf("%s: output logged to %s.\n", devid_string, log_name);
   }
 
   if (null_attach) {
@@ -283,7 +296,11 @@ void CSerial::stop_threads() {
 /**
  * Destructor.
  **/
-CSerial::~CSerial() { stop_threads(); }
+CSerial::~CSerial() {
+  stop_threads();
+  if (log_file)
+    fclose(log_file);
+}
 
 // ALPHABOX_TRACE_SERIAL=<port number>: every register write on that port,
 // with how many times the guest read IIR since the previous write and what
@@ -547,6 +564,8 @@ void CSerial::run() {
  * Enter serial port menu if <break> was received.
  **/
 void CSerial::check_state() {
+  if (log_file)
+    fflush(log_file); // every ~100 ms, from the main loop
   if (disabled || null_attach)
     return;
   if (breakHit)

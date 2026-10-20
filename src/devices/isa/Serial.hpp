@@ -96,6 +96,7 @@ private:
   /// check_state.
   std::atomic_bool breakHit{false};
   const char *listenAddress = nullptr;
+  FILE *log_file = nullptr; ///< `log`: what the guest sends, appended
 #if !defined(_WIN32)
   pid_t action_pid = -1; ///< the last `action` program started
 #endif

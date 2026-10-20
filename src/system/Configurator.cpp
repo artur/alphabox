@@ -623,7 +623,7 @@ static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "timer.max_instr_per_tick", 0};
 static const char *const kv_serial[] = {"port",     "action",   "address",
                                         "disabled", "raw_mode", "null_attach",
-                                        "wait",     0};
+                                        "wait",     "log",      0};
 static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
                                      0};
 static const char *const kv_ali_ide[] = {"dma", 0};
