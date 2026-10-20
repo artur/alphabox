@@ -85,18 +85,18 @@ std::string CDiskController::default_serial(int bus, int dev) const {
 }
 
 void CDiskController::register_disk(class CDisk *dsk, int bus, int dev) {
-  if (bus >= num_bus)
+  if (bus < 0 || bus >= num_bus)
     FAILURE(Configuration, "Can't register disk: bus number out of range");
-  if (dev >= num_dev)
+  if (dev < 0 || dev >= num_dev)
     FAILURE(Configuration, "Can't register disk: device number out of range");
 
   disks[bus * num_dev + dev] = dsk;
 }
 
 class CDisk *CDiskController::get_disk(int bus, int dev) {
-  if (bus >= num_bus)
+  if (bus < 0 || bus >= num_bus)
     return 0;
-  if (dev >= num_dev)
+  if (dev < 0 || dev >= num_dev)
     return 0;
 
   return disks[bus * num_dev + dev];

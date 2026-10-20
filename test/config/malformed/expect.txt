@@ -3,8 +3,12 @@
 # file  line:col  text the error must contain (case does not matter)
 bad-platform.cfg 1:1 Unknown platform es99
 bad-slot.cfg 7:3 no such PCI slot
+bridge-device-range.cfg 9:5 0 to 15
 chained-equals.cfg 4:12 expected ';'
+disk-index-wrap.cfg 9:5 should be disk<bus>.<device>
+disk-junk.cfg 9:5 should be disk<bus>.<device>
 extra-brace.cfg 8:1 '}' closes no section
+fdc-number.cfg 7:3 should be fdc0 or fdc1
 file-ends-after-name.cfg 8:5 found the end of the file
 illegal-char.cfg 10:26 Illegal character ':'
 lone-slash.cfg 4:16 Illegal character '/'
@@ -13,7 +17,12 @@ missing-semicolon-before-brace.cfg 11:3 expected ';' after the value of lpt.outf
 missing-semicolon.cfg 5:3 expected ';' after the value of time
 missing-value.cfg 4:21 expected a value
 name-missing.cfg 7:3 expected a name, found '{'
+pci-device-range.cfg 7:3 the device 0 to 31
+pci-junk.cfg 7:3 should be pci<hose>.<device>
+pci-no-hose.cfg 7:3 should be pci<hose>.<device>
 quoted-name.cfg 4:3 expected a name
+serial-name.cfg 7:3 should be serial0 or serial1
+serial-number.cfg 7:3 should be serial0 or serial1
 unclosed-brace.cfg 1:1 sys0 (tsunami) is not closed
 unclosed-comment.cfg 8:1 comment opened here is not closed
 unclosed-string-eof.cfg 8:5 quoted value opened here is not closed

@@ -780,6 +780,37 @@ static const tga_model_config &tga_model(CConfigurator *cfg) {
 }
 
 /**
+ * The numbers in a section's name, which say where its device is:
+ * `prefix` followed by one number (`fdc0`, `serial1`, `pci.3`), or by two
+ * separated by a '.' when `b` is given (`pci0.7`, `disk1.0`). Decimal
+ * digits only, each at most its maximum, and nothing after them: whether
+ * the board or the controller has that place is for them to say.
+ **/
+static bool place_numbers(const char *name, const char *prefix, int *a,
+                          int amax, int *b = nullptr, int bmax = 0) {
+  const size_t n = strlen(prefix);
+  if (strncmp(name, prefix, n))
+    return false;
+  const char *p = name + n;
+  for (int k = 0; k < (b ? 2 : 1); k++) {
+    int *out = k ? b : a;
+    const int max = k ? bmax : amax;
+    if (k && *p++ != '.')
+      return false;
+    if (*p < '0' || *p > '9')
+      return false;
+    long v = 0;
+    while (*p >= '0' && *p <= '9') {
+      v = v * 10 + (*p++ - '0');
+      if (v > max)
+        return false;
+    }
+    *out = (int)v;
+  }
+  return *p == 0;
+}
+
+/**
  * The machine the configuration describes: the system's, or in check mode
  * the one its machine section names.
  **/
@@ -816,8 +847,7 @@ void CConfigurator::initialize_section() {
   int idedev = 0;
   int idebus = 0;
   int fdcbus = 0;
-  int number;
-  char *pt;
+  int number = 0;
 
   for (i = 0; classes[i].id != c_none; i++) {
     if (!strcmp(myValue, classes[i].name)) {
@@ -893,10 +923,6 @@ void CConfigurator::initialize_section() {
               myValue, myName);
 #endif
   if (myFlags & IS_PCI) {
-    if (strncmp(myName, "pci", 3))
-      FAILURE_2(Configuration,
-                "Name %s for class %s should be pci<bus>.<device>", myName,
-                myValue);
     if (!(pParent->get_flags() & HAS_PCI)) {
       FAILURE_2(Configuration,
                 "Class %s for %s should have a pci-bus capable parent device",
@@ -904,29 +930,23 @@ void CConfigurator::initialize_section() {
     }
 
     const bool behind_bridge = pParent->get_class_id() == c_pci_bridge;
-    pt = &myName[3];
-    pcibus = atoi(pt);
-    pt = strchr(pt, '.');
-    if (!pt || (behind_bridge && pt != &myName[3]))
-      FAILURE_3(Configuration, "Name %s for class %s should be %s", myName,
-                myValue,
-                behind_bridge ? "pci.<device> (inside a bridge)"
-                              : "pci<bus>.<device>");
-    pt++;
-    pcidev = atoi(pt);
-
     if (behind_bridge) {
       // The secondary bus: same hose, devices 0-15 (IDSEL on AD16-AD31).
       // In check mode there is no bridge to number it.
+      if (!place_numbers(myName, "pci.", &pcidev, 15))
+        FAILURE_2(Configuration,
+                  "Name %s for class %s should be pci.<device>, 0 to 15 "
+                  "(inside a bridge)",
+                  myName, myValue);
       pcibus =
           s_check
               ? 0
               : ((CPCIDevice *)(CPCIBridge *)pParent->get_device())->pci_bus();
-      if (pcidev < 0 || pcidev > 15)
-        FAILURE_2(Configuration,
-                  "%s (%s): a device behind a bridge must be pci.0 to pci.15",
-                  myName, myValue);
-    }
+    } else if (!place_numbers(myName, "pci", &pcibus, 999, &pcidev, 31))
+      FAILURE_2(Configuration,
+                "Name %s for class %s should be pci<hose>.<device>, the "
+                "device 0 to 31",
+                myName, myValue);
     if (myFlags & ON_BOARD) {
       const pci_bridge_config *board =
           behind_bridge ? CPCIBridge::find_chip(pParent->get_myValue())
@@ -954,35 +974,26 @@ void CConfigurator::initialize_section() {
     }
   }
 
-  if (myClassId == c_floppy) {
-    if (strncmp(myName, "fdc", 3))
-      FAILURE_2(Configuration, "Name %s for class %s should be fdc<bus>",
-                myName, myValue);
-
-    pt = &myName[3];
-    fdcbus = atoi(pt);
-  }
+  // The two floppy controllers and the two UARTs of the ISA bridge.
+  if (myClassId == c_floppy && !place_numbers(myName, "fdc", &fdcbus, 1))
+    FAILURE_2(Configuration, "Name %s for class %s should be fdc0 or fdc1",
+              myName, myValue);
+  if (myClassId == c_serial && !place_numbers(myName, "serial", &number, 1))
+    FAILURE_2(Configuration,
+              "Name %s for class %s should be serial0 or serial1", myName,
+              myValue);
 
   if (myFlags & IS_DISK) {
-    if (strncmp(myName, "disk", 4))
-      FAILURE_2(Configuration,
-                "Name %s for class %s should be disk<bus>.<device>", myName,
-                myValue);
     if (!(pParent->get_flags() & HAS_DISK)) {
       FAILURE_2(Configuration,
                 "Class %s for %s should have a disk-controller parent device",
                 myValue, myName);
     }
 
-    pt = &myName[4];
-    idebus = atoi(pt);
-    pt = strchr(pt, '.');
-    if (!pt)
+    if (!place_numbers(myName, "disk", &idebus, 99, &idedev, 99))
       FAILURE_2(Configuration,
                 "Name %s for class %s should be disk<bus>.<device>", myName,
                 myValue);
-    pt++;
-    idedev = atoi(pt);
   }
 
   if (s_check)
@@ -999,17 +1010,13 @@ void CConfigurator::initialize_section() {
     bool have_serial[2] = {false, false};
     bool have_fdc0 = false;
     for (i = 0; i < (int)pChildren.size(); i++) {
-      if (!strcmp(pChildren[i]->get_myValue(), "serial")) {
-        number = 0;
-        if (!strncmp(pChildren[i]->get_myName(), "serial", 6))
-          number = atoi(&pChildren[i]->get_myName()[6]);
-        if (number >= 0 && number < 2)
-          have_serial[number] = true;
-      } else if (!strcmp(pChildren[i]->get_myValue(), "floppy") &&
-                 !strncmp(pChildren[i]->get_myName(), "fdc", 3) &&
-                 atoi(&pChildren[i]->get_myName()[3]) == 0) {
+      // A section misnamed is refused when its turn comes.
+      if (!strcmp(pChildren[i]->get_myValue(), "serial") &&
+          place_numbers(pChildren[i]->get_myName(), "serial", &number, 1))
+        have_serial[number] = true;
+      else if (!strcmp(pChildren[i]->get_myValue(), "floppy") &&
+               !strcmp(pChildren[i]->get_myName(), "fdc0"))
         have_fdc0 = true;
-      }
     }
 
     if (!have_fdc0) {
@@ -1165,8 +1172,7 @@ void CConfigurator::check_device() {
  **/
 void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
                                   int idedev, int fdcbus) {
-  int number;
-  char *pt;
+  int number = 0;
 
   switch (myClassId) {
   case c_tsunami:
@@ -1336,12 +1342,8 @@ void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
     break;
 
   case c_serial:
-    number = 0;
-    if (!strncmp(myName, "serial", 6)) {
-      pt = &myName[6];
-      number = atoi(pt);
-    }
-
+    // serial0 or serial1 (initialize_section()).
+    place_numbers(myName, "serial", &number, 1);
     myDevice = new CSerial(this, (CSystem *)pParent->get_device(), number);
     break;
 
