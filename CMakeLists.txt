@@ -27,6 +27,7 @@ file(GLOB srcs
     src/*.cpp
     src/cpu/*.cpp
     src/cpu/ev7/*.cpp
+    src/debug/*.cpp
     src/hv/*.cpp
     src/system/*.cpp
     src/chipsets/*.cpp
@@ -74,7 +75,7 @@ add_executable(alphabox ${srcs} src/Main.cpp)
 # Headers are included unqualified ("System.hpp"), so every source directory
 # is on the include path and a moved file needs no include changes.
 target_include_directories(alphabox PRIVATE
-    src src/cpu src/cpu/ev7 src/hv src/system src/common
+    src src/cpu src/cpu/ev7 src/debug src/hv src/system src/common
     src/chipsets src/chipsets/tsunami src/chipsets/marvel src/chipsets/titan
     src/devices/isa src/devices/pci src/devices/pci/sym53c8xx
     src/devices/common src/devices/pci/i8255x src/devices/pci/bridge

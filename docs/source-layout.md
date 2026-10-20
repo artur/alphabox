@@ -10,6 +10,7 @@ and how the CPU, the JIT, configuration and threading fit together.
 | --- | --- |
 | [`cpu/`](#cpu) | the processor: interpreter, PALcode fast paths, floating point, the processor rows |
 | [`jit/`](#jit) | the translator from Alpha code to host code |
+| [`debug/`](#debug) | the gdb stub: run control, breakpoints, guest state for a debugger |
 | [`hv/`](#hv) | the experimental Hypervisor.framework runtime (macOS) |
 | [`system/`](#system) | generic machine plumbing: memory, devices, CPU threads, configuration |
 | [`chipsets/`](#chipsets) | the system logic: Tsunami, Titan, Marvel |
@@ -45,6 +46,18 @@ changes. A new directory must be added to the CMake glob list and to
 - `jitengine.cpp`, `jitengine.hpp`: the block cache, chaining, register
   pinning and the x86-64 emitter. Ported from ES40-Emu.
 - `jitemit_a64.hpp`: the AArch64 emitter, written here.
+
+## debug/
+
+The guest debugger ([debugging.md](debugging.md)):
+
+- `GdbStub`: `CGdbStub`, the gdb remote serial protocol server on its own
+  thread (`gdb` and `gdb.wait` in `sys0`, or `ALPHABOX_GDB`).
+- `DebugTarget`: `CDebugTarget`, all-stop run control. Each processor parks
+  itself at a dispatch boundary (`CAlphaCPU::jit_run`, or `run_loop` in the
+  interpreter-only build), where it also learns how far it may run before a
+  breakpoint. Registers, side-effect-free address translation and memory.
+- `DebugMonitor.cpp`: the `monitor` commands.
 
 ## hv/
 

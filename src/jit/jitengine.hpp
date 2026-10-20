@@ -393,6 +393,16 @@ public:
   // a few times, so one-shot code (driver init, setup loaders) stays cheap.
   uint32_t compile_after() const { return m_compile_after; }
 
+  /// For the guest debugger's `monitor jit` (src/debug): every block in
+  /// use (a scan of the whole cache), and the flush generation a block must
+  /// carry for lookup() to answer it.
+  template <class F> void for_each_block(F f) const {
+    for (const JitBlock &b : m_blocks)
+      if (b.valid)
+        f(b);
+  }
+  uint64_t flush_gen() const { return m_flush_gen; }
+
   // Why the dispatcher interpreted instead of running compiled code
   // (JIT_STATS cold-path accounting, see note_cold()).
   enum ColdReason {

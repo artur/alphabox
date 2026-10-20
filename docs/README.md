@@ -9,6 +9,9 @@
   mouse and hotkeys, disk and CD images, and guest installation guides.
 - [Headless operation and debug hooks](headless.md): window-less runs,
   screen dumps, scripted keyboard and mouse input, and trace switches.
+- [Debugging a guest with gdb](debugging.md): the gdb stub, breakpoints
+  and stepping in compiled code, SMP, the `monitor` commands, and the
+  guest's clock while it is stopped.
 
 ## Machines and devices
 

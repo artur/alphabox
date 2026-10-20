@@ -29,7 +29,8 @@ gives its usage and variables.
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
-| `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above use it. |
+| `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
+| `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
 | `srm_console.py` | Drives the console over its telnet port: waits for the prompt, runs commands, stops the emulator. |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. |
 | `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |

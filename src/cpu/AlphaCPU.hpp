@@ -53,7 +53,8 @@
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
 #endif
-class CJitEngine; // JIT block-cache engine (ES40_JIT builds)
+class CJitEngine;   // JIT block-cache engine (ES40_JIT builds)
+class CDebugTarget; // the guest debugger's run control (src/debug)
 
 /// The processor executing on this thread, or nullptr on a device thread.
 /// Diagnostics only (the unknown-access trace): never a control path.
@@ -186,6 +187,9 @@ public:
   void ResetForSystemReset();
 
 private:
+  // The guest debugger parks and steps the processor, reads its TBs and
+  // moves its clock on after a stop (src/debug/DebugTarget.cpp).
+  friend class CDebugTarget;
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   WakeSemaphore mySemaphore;
@@ -1346,6 +1350,13 @@ public:
   /// class, away from what compiled code addresses.
   u32 get_pid() const { return m_pid; }
   void set_pid(u32 pid) { m_pid = pid; }
+
+  /// The guest debugger (src/debug, docs/debugging.md). While a gdb is
+  /// attached m_debug_on is set and the dispatcher asks m_debug, before
+  /// every block, whether to park, to step or how far it may run before a
+  /// breakpoint. With none attached this flag is all it looks at.
+  std::atomic<bool> m_debug_on{false};
+  CDebugTarget *m_debug = nullptr;
 
 private:
   u32 m_pid = 0;

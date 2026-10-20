@@ -13,7 +13,7 @@ variable the binary reads.
 | [Snapshots](#snapshots) | saving and resuming a running machine |
 | [Self-tests](#self-tests) | virtio, Radeon and EHCI checked without a guest driver |
 | [USB](#usb), [Storage](#storage), [Video](#video) | per-device switches and traces |
-| [Guest diagnostics](#guest-diagnostics) | where a guest is stuck, interrupts, arithmetic traps, the GUI lock |
+| [Guest diagnostics](#guest-diagnostics) | where a guest is stuck, interrupts, [the gdb stub](#the-gdb-stub), arithmetic traps, the GUI lock |
 | [Timing and idle](#timing-and-idle) | idle pacing, delay loops, the rate report |
 | [JIT builds](#jit-builds) | the JIT's switches, self-tests and traces |
 | [Bring-up traces](#bring-up-traces) | what a firmware asked for and did not get |
@@ -361,6 +361,17 @@ DRIR rises.
 hex (`92` = REI) and `int` (the interrupt entries); the routines are in
 `src/cpu/AlphaCPU_vmspal.cpp`. Bisecting with it is how a routine that
 diverges from the PALcode is found.
+
+### The gdb stub
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_GDB=<port>` | Listen for gdb on 127.0.0.1:`<port>`, as the `gdb` key of `sys0` does; overrides it. |
+| `ALPHABOX_GDB_WAIT=1` | Hold every processor before its first instruction until a gdb attaches and continues (`gdb.wait`); `0` overrides the key. |
+
+A stopped guest, its breakpoints, single steps, registers and memory, and
+the `monitor` commands for the Alpha state gdb cannot show are in
+[debugging.md](debugging.md).
 
 ### Arithmetic traps
 

@@ -46,6 +46,7 @@
 #include "jit/jitengine.hpp"
 #endif
 #include "AliM1543C.hpp"
+#include "DebugTarget.hpp"
 #include "cpu_debug.hpp"
 #include "cpu_memory.hpp"
 #include "cpu_misc.hpp"
@@ -434,6 +435,10 @@ void CAlphaCPU::jit_run(int budget) {
   // batches internally), so the budget loop belongs here, above the
   // per-batch housekeeping's cost rather than below it.
   if (m_interp_only) {
+    if (m_debug_on.load(std::memory_order_relaxed)) {
+      m_debug->interp_run(this, budget); // a boundary before every instruction
+      return;
+    }
     while (budget-- > 0) {
       if (StopThread || state.pc < m_stop_below)
         return;
@@ -443,6 +448,20 @@ void CAlphaCPU::jit_run(int budget) {
   }
 
   while (budget > 0) {
+    // The guest debugger (src/debug): while one is attached, park or step
+    // here, at a boundary with no compiled frame live, and run no further
+    // than the next breakpoint -- interpreted up to it, and compiled only a
+    // block that does not hold one. With none attached, this branch is the
+    // whole cost.
+    int run_max = budget;  // the longest block that may run compiled
+    int span_max = budget; // the longest span that may run interpreted
+    if (m_debug_on.load(std::memory_order_relaxed)) {
+      int span, whole;
+      if (!m_debug->boundary(this, &span, &whole))
+        return;
+      run_max = std::min(budget, whole);
+      span_max = std::min(budget, span);
+    }
     const u64 start_virt = state.pc;
     const u32 start_asn = (u32)state.asn;
 
@@ -651,7 +670,7 @@ void CAlphaCPU::jit_run(int budget) {
       CJitEngine::TraceFragment *t = m_jit->trace_lookup(start_virt, start_asn);
       if (t && (int)t->n_instr <= budget && (!(t->head_tag & 1) || state.sde) &&
           m_jit->trace_ok(t, start_phys, (const uint8_t *)dram_ptr) &&
-          trace_segs_live(t)) {
+          trace_segs_live(t) && !m_debug_on.load(std::memory_order_relaxed)) {
         m_jit_budget = budget; // ceiling for the trace (its loads/bails honor
                                // it like a block)
 #ifdef JIT_STATS
@@ -711,8 +730,9 @@ void CAlphaCPU::jit_run(int budget) {
     // Run the compiled safe prefix natively when available -- but not while an
     // interrupt or delayed timer is pending. Compiled blocks don't run the
     // per-instruction polls, so run the interpreter.
-    if (b && b->code && b->phys == start_phys && (int)b->prefix_len <= budget &&
-        !state.check_int && !state.check_timers &&
+    if (b && b->code && b->phys == start_phys &&
+        (int)b->prefix_len <= run_max && !state.check_int &&
+        !state.check_timers &&
         (!(b->tag & 1) ||
          state.sde)) // PALmode block: its shadow-register remap assumes SDE
     {
@@ -1406,14 +1426,14 @@ void CAlphaCPU::jit_run(int budget) {
 #ifdef JIT_STATS
     const uint64_t _interp_t0 = jit_rdtsc();
 #endif
-    while (budget > 0) {
+    for (int left = span_max; left > 0; --left) {
       execute();
-      --budget;
       ++n;
       expected += 4;
       if (state.pc != expected)
         break;
     }
+    budget -= (int)n;
 #ifdef JIT_STATS
     cc_last_sync += ns_to_host_ticks(m_jit->note_exec(
         0, n, 0, jit_rdtsc() - _interp_t0)); // don't bill the stats-print stall
@@ -2627,6 +2647,11 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   CJitEngine::JitBlock *b =
       cpu->m_jit->lookup(target, (u32)cpu->state.asn, (uint8_t)cpu->state.cm);
   if (!b || !b->jit_body)
+    return nullptr;
+  // A block holding a guest debugger's breakpoint is entered only from the
+  // dispatcher, which runs it interpreted (jit_run).
+  if (cpu->m_debug_on.load(std::memory_order_relaxed) &&
+      !cpu->m_debug->may_enter(cpu, target, b->prefix_len))
     return nullptr;
   // Idle pacing only sees passes through an idle/parked loop head that come
   // back to the dispatcher (a beta 2 HAL's HalProcessorIdle returns into the

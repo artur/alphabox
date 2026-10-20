@@ -36,6 +36,7 @@
 #include "AlphaCPU.hpp"
 #include "DPR.hpp"
 #include "Flash.hpp"
+#include "GdbStub.hpp"
 #include "StdAfx.hpp"
 #include "Tsunami.hpp"
 #if defined(__APPLE__) && defined(HAVE_SDL)
@@ -130,6 +131,8 @@ CSystem::CSystem(CConfigurator *cfg) try {
  **/
 CSystem::~CSystem() {
   int i;
+
+  m_gdb.reset(); // before the processors it watches go
 
   printf("Freeing memory in use by system...\n");
 
@@ -678,6 +681,27 @@ void sigusr1_handler(int signum) { got_sigusr1 = 1; }
 // SIGUSR2: the keypipe's dbg-dump for a run without a GUI (docs/headless.md).
 void sigusr2_handler(int signum) { g_dbg_dump_req.fetch_add(1); }
 
+void CSystem::start_debugger() {
+  u64 port = myCfg->get_num_value("gdb", false, 0);
+  bool wait = myCfg->get_bool_value("gdb.wait", false);
+  if (const char *e = getenv("ALPHABOX_GDB"))
+    port = strtoull(e, nullptr, 10);
+  if (const char *e = getenv("ALPHABOX_GDB_WAIT"))
+    wait = atoi(e) != 0;
+  if (!port)
+    return;
+  if (port > 65535)
+    FAILURE_1(Configuration, "gdb = %llu is not a TCP port",
+              (unsigned long long)port);
+#ifdef ALPHABOX_HVF
+  if (hv::enabled()) {
+    printf("%%GDB-W-HV: no gdb stub under ALPHABOX_HV=1\n");
+    return;
+  }
+#endif
+  m_gdb = std::make_unique<CGdbStub>(this, (int)port, wait);
+}
+
 /**
  * Run the system by clocking the CPU(s) and devices.
  **/
@@ -715,6 +739,7 @@ void CSystem::Run() {
     RestoreState(snap);
   }
 
+  start_debugger();
   start_threads();
 
   for (k = 0;; k++) {

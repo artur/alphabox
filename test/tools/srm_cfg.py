@@ -33,6 +33,9 @@ change it for the SRM probes:
   --ide-cfg FILE        body of the pci0.15 ali_ide block (drives)
   --floppy IMAGE        fdc0 with disk0.0 = IMAGE
   --exit-on-halt        sys0 exit_on_pal_halt = true
+  --gdb PORT            sys0 gdb = PORT and gdb.wait = true: the processors
+                        wait at their first instruction for a gdb to attach
+                        on 127.0.0.1:PORT (docs/debugging.md)
   --gui                 a gui = sdl block, for devices that need one (the
                         graphics cards); run it with SDL_VIDEO_DRIVER=dummy
 """
@@ -90,6 +93,7 @@ def main():
     ap.add_argument("--ide-cfg")
     ap.add_argument("--floppy")
     ap.add_argument("--exit-on-halt", action="store_true")
+    ap.add_argument("--gdb", type=int)
     ap.add_argument("--gui", action="store_true")
     args = ap.parse_args()
     out_dir = args.dir or os.path.dirname(os.path.abspath(args.out))
@@ -126,6 +130,12 @@ def main():
 
     if args.exit_on_halt:
         t, n = re.subn(r"(sys0\s*=\s*tsunami\s*\{)", r"\1\n  exit_on_pal_halt = true;", t)
+        if n != 1:
+            sys.exit("srm_cfg: sys0 block not found in base config")
+
+    if args.gdb:
+        t, n = re.subn(r"(sys0\s*=\s*tsunami\s*\{)",
+                       r"\1\n  gdb = %d;\n  gdb.wait = true;" % args.gdb, t)
         if n != 1:
             sys.exit("srm_cfg: sys0 block not found in base config")
 

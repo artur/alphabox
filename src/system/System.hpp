@@ -32,6 +32,7 @@
 #include "SystemComponent.hpp"
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 
 #if !defined(INCLUDED_SYSTEM_H)
@@ -130,6 +131,7 @@ struct SConfig {
 /// shares one map, so a write by one processor invalidates another's blocks
 /// and DMA into a code page counts like a store.
 class CSystem;
+class CGdbStub; // the guest debugger's gdb server (src/debug)
 
 class CCodePageMap {
 public:
@@ -258,6 +260,10 @@ public:
   u64 ReadMem(u64 address, int dsize, CSystemComponent *source);
   void WriteMem(u64 address, int dsize, u64 data, CSystemComponent *source);
   void Run();
+  /// The gdb stub, when `gdb` (or ALPHABOX_GDB) names a port: started just
+  /// before the processors' threads, so that `gdb.wait` holds them at their
+  /// first instruction (docs/debugging.md).
+  void start_debugger();
 
   void init();
   void start_threads();
@@ -467,6 +473,7 @@ private:
 
   bool m_native_pal = false;                // see request_native_pal()
   bool m_exit_on_pal_halt = false;          // sys0 exit_on_pal_halt
+  std::unique_ptr<CGdbStub> m_gdb;          // sys0 gdb, or ALPHABOX_GDB
   std::atomic<bool> m_pal_halt_exit{false}; // set by a CPU on CALL_PAL HALT
 
   std::atomic<u32> m_tick_seq{0}; // interval-tick sequence

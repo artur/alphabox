@@ -131,6 +131,12 @@ With `exit_on_pal_halt = true` in the `sys0` section, a guest halt (an OS
 shutting down to the console) ends the run the same way, which is handy for
 scripted use.
 
+## Debugging the guest
+
+`gdb = <port>;` in the `sys0` section (or `ALPHABOX_GDB=<port>`) starts a
+gdb stub on 127.0.0.1, and `gdb.wait = true;` holds the processors until
+gdb attaches. [debugging.md](debugging.md) describes it.
+
 ## Serial consoles
 
 The sample configuration attaches both UARTs as `null_attach`: present but

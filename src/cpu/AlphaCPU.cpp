@@ -40,6 +40,7 @@
 #include "jit/jitengine.hpp"
 #endif
 #include "AliM1543C.hpp"
+#include "DebugTarget.hpp"
 #include "cpu_arith.hpp"
 #include "cpu_bwx.hpp"
 #include "cpu_control.hpp"
@@ -362,8 +363,12 @@ void CAlphaCPU::run_loop() {
 #else
       // execute() runs a 512-instruction batch itself; calling it 2000 times
       // here made one scheduler turn ~1M instructions, starving the other CPUs
-      // and device threads.
-      execute();
+      // and device threads. With a guest debugger attached (src/debug) the
+      // batch is taken down to one instruction while a breakpoint is set.
+      if (m_debug_on.load(std::memory_order_relaxed))
+        m_debug->interp_run(this, 512);
+      else
+        execute();
       std::this_thread::yield();
 #endif
       if (cSystem && cSystem->IsSystemResetRequested()) {
