@@ -332,11 +332,13 @@ static inline void count_missed_frame(u32 &csr8) {
  *  last time, then continue on that packet.)
  **/
 int CTulip::dec21143_rx() {
-  static u32 descr[4];
-  static u32 &rdes0 = descr[0];
-  static u32 &rdes1 = descr[1];
-  static u32 &rdes2 = descr[2];
-  static u32 &rdes3 = descr[3];
+  // The descriptor is this call's own: every Tulip runs this on its own
+  // thread, so nothing here may be shared between them.
+  u32 descr[4];
+  u32 rdes0;
+  u32 rdes1;
+  u32 rdes2;
+  u32 rdes3;
 
   u32 addr = state.rx.cur_addr;
   u32 bufaddr;
