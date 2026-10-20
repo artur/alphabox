@@ -144,6 +144,7 @@ public:
   virtual void init();
   virtual void start_threads();
   virtual void stop_threads();
+  virtual void ResetPCI();
 
   virtual void WriteMem_Bar(int func, int bar, u32 address, int dsize,
                             u32 data);
@@ -192,6 +193,8 @@ private:
     void init();
     void start_thread();
     void stop_thread();
+    /// The PCI bus was reset (RST#): the whole core is.
+    void pci_reset();
 
     u32 bar_read(int bar, u32 address, int dsize);
     void bar_write(int bar, u32 address, int dsize, u32 data);
@@ -333,5 +336,7 @@ private:
   };
 
   std::unique_ptr<CChannel> channels[SYM_MAX_CHANNELS];
+  /// The channels' state is set up (init() ran): a PCI reset resets them.
+  bool m_channels_ready = false;
 };
 #endif // !defined(INCLUDED_SYM53C8XX_H_)

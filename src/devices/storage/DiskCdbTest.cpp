@@ -1485,6 +1485,25 @@ void t_sym_gen_timer(SymRig &s) {
   check(!(s.r8(R_SIST1) & 0x02), "GEN = 0: no interrupt");
 }
 
+/// SYM-08: a PCI reset resets the chip, a running SCRIPTS program included.
+void t_sym_pci_reset(SymRig &s) {
+  group("SYM-08 PCI reset");
+  s.reset();
+  s.w32(R_SCRATCHA, 0x12345678);
+  const u32 loop = s.next;
+  s.program({kJump, loop}); // a polling loop: jumps to itself
+  s.w32(R_DSP, loop);
+  usleep(5000);
+  const u32 dsp_running = s.r32(R_DSP);
+  s.sym->ResetPCI();
+  usleep(10000);
+  check((dsp_running & ~7u) == loop, "the loop was running", "dsp %08x",
+        dsp_running);
+  check(s.r32(R_SCRATCHA) == 0 && s.r32(R_DSP) == 0,
+        "after a PCI reset the registers are cleared and SCRIPTS stopped",
+        "scratcha %08x dsp %08x", s.r32(R_SCRATCHA), s.r32(R_DSP));
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1582,6 +1601,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_reserved(sr);
     t_sym_table_select(sr);
     t_sym_gen_timer(sr);
+    t_sym_pci_reset(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

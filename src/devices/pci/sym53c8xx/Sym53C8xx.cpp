@@ -192,6 +192,7 @@ void CSym53C8xx::init() {
 
   for (int i = 0; i < m_chip.channels; i++)
     channels[i]->init();
+  m_channels_ready = true;
 
   if (m_chip.channels > 1)
     printf("%s: Symbios %s, %d channels\n", devid_string, m_chip.name,
@@ -207,6 +208,29 @@ void CSym53C8xx::CChannel::init() {
   chip_reset();
 
   myThread = nullptr;
+}
+
+/**
+ * The PCI bus was reset: the configuration header returns to its power-on
+ * values (CPCIDevice) and so does every core. The PCI specification leaves
+ * what RST# does beyond the PCI registers to the device (2.2, 2.2.1, pdf
+ * p. 29); the 895's says "Reset forces the PCI sequencer of each device to
+ * a known state. All T/S and S/T/S signals are forced to a high impedance
+ * state, and all internal logic is reset" (SYM53C895 data manual v3.0,
+ * signal descriptions, RST/, pdf p. 81). Only the header used to be reset:
+ * a SCRIPTS program kept running (a polling one went on burning its naps)
+ * and a raised interrupt stayed up while the chipset had just been reset.
+ **/
+void CSym53C8xx::ResetPCI() {
+  CPCIDevice::ResetPCI();
+  if (m_channels_ready)
+    for (int i = 0; i < m_chip.channels; i++)
+      channels[i]->pci_reset();
+}
+
+void CSym53C8xx::CChannel::pci_reset() {
+  std::lock_guard<std::recursive_mutex> lock(myRegLock);
+  chip_reset();
 }
 
 /**
