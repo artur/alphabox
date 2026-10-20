@@ -944,6 +944,29 @@ void CSerial::configure_client_socket() {
   setsockopt(connectSocket, SOL_SOCKET, SO_NOSIGPIPE, (char *)&one,
              sizeof(one));
 #endif
+  // A client that vanishes without closing (a network cut, a sleeping
+  // laptop) is noticed after about 90 s of silence instead of never: the
+  // probes fail, recv reports the error, and the port is free again for
+  // the next client, which gets the output kept meanwhile.
+  setsockopt(connectSocket, SOL_SOCKET, SO_KEEPALIVE, (char *)&one,
+             sizeof(one));
+  int idle = 60, interval = 10, probes = 3;
+#if defined(TCP_KEEPIDLE)
+  setsockopt(connectSocket, IPPROTO_TCP, TCP_KEEPIDLE, (char *)&idle,
+             sizeof(idle));
+#elif defined(TCP_KEEPALIVE) // macOS
+  setsockopt(connectSocket, IPPROTO_TCP, TCP_KEEPALIVE, (char *)&idle,
+             sizeof(idle));
+#endif
+#if defined(TCP_KEEPINTVL)
+  setsockopt(connectSocket, IPPROTO_TCP, TCP_KEEPINTVL, (char *)&interval,
+             sizeof(interval));
+#endif
+#if defined(TCP_KEEPCNT)
+  setsockopt(connectSocket, IPPROTO_TCP, TCP_KEEPCNT, (char *)&probes,
+             sizeof(probes));
+#endif
+  (void)idle, (void)interval, (void)probes;
 #if defined(_WIN32)
   u_long nb = 1;
   ioctlsocket(connectSocket, FIONBIO, &nb);
