@@ -124,6 +124,44 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   what a real Explorer does with that order. Until a guest switches the
   wheel on, wheel turns send nothing.
 
+### The serial ports
+
+`serial0` and `serial1` are the M1543C's COM1 (0x3f8, IRQ 4) and COM2
+(0x2f8, IRQ 3): a 16550 with FIFOs (`Uart16550.cpp`) behind a host side
+(`Serial.cpp`), a telnet listener, `null_attach` or `disabled`
+([configuration.md](configuration.md#serial-consoles)). The ES40's
+console, OpenVMS, Windows 2000 and Linux drive them; on the ES47 the CMM
+reads `serial0` for the console terminal. `uart16550_test`
+([development.md](development.md#unit-tests)) checks the model against
+the data sheets: the National PC16550D (TL/C/8652, June 1995) and the ALi
+M1543C's own (v1.10, 1543DSC2.doc).
+
+Where the port knowingly differs from the chip:
+
+| What | Consequence |
+| --- | --- |
+| The receive FIFO holds 1023 bytes, not 16, and typed input is offered a character at a time, once the guest has read the previous one | Typed or pasted input is never overrun; an overrun (LSR.OE) happens only in loopback |
+| RDA is raised at one byte whatever FCR's trigger level, and the character-timeout indication (IIR 0x0c) is never given | Drivers read until LSR.DR clears either way |
+| Transmission is instantaneous: THRE and TEMT always read 1; the divisor, word length, parity, stop bits and LCR's break bit have no effect | A guest cannot time anything by the line |
+| The interrupt is driven whatever MCR bit 3 says. On the M1543C that bit "enables the interrupt" (its data sheet, p. 263), as OUT2 gates IRQ on a PC | The ES40 console and OpenVMS set it before using interrupts; Windows 2000's serial.sys clears it at times with IER=0f and would be interrupted here where the chip would stay quiet. Not changed until Windows, Tru64 and Linux have been checked against it |
+| The modem inputs read CTS and DSR asserted, DCD and RI clear, client or not; they change only in loopback | A guest cannot see a hang-up |
+| A telnet BREAK opens the emulator's menu instead of sending a line break (LSR.BI) | The guest never sees a break |
+
+Changed in October 2026, each from the data sheets:
+
+- IER bits 7:4 and MCR bits 7:5 read 0 (PC16550D 8.7, 8.8; M1543C
+  pp. 262-263). Linux took a writable IER bit 6 for an XScale UART.
+- Writes to LSR and MSR change nothing (PC16550D 8.4; M1543C p. 260);
+  they used to land in the scratch register.
+- In loopback the receiver takes nothing from the line (PC16550D 8.8);
+  host input waits until loopback ends.
+- MSR's delta bits and the modem-status interrupt (PC16550D 8.9 and
+  Table IV; M1543C p. 264).
+- An overrun sets LSR.OE and raises the receiver-line-status interrupt
+  (PC16550D 8.4 and Table IV).
+- Turning the FIFOs on or off empties them, and FCR's other bits act only
+  with bit 0 set (PC16550D 8.5).
+
 ### SCSI
 
 - **53C825, 875, 895**: wide, 4 KB SCRIPTS RAM; the 875 Ultra-Wide, the
