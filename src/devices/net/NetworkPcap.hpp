@@ -61,6 +61,7 @@ extern char *(*f_pcap_geterr)(pcap_t *);
 extern int (*f_pcap_compile)(pcap_t *, struct bpf_program *, const char *, int,
                              bpf_u_int32);
 extern int (*f_pcap_setfilter)(pcap_t *, struct bpf_program *);
+extern void (*f_pcap_freecode)(struct bpf_program *);
 extern void (*f_pcap_close)(pcap_t *);
 
 #define pcap_findalldevs f_pcap_findalldevs
@@ -72,6 +73,7 @@ extern void (*f_pcap_close)(pcap_t *);
 #define pcap_geterr f_pcap_geterr
 #define pcap_compile f_pcap_compile
 #define pcap_setfilter f_pcap_setfilter
+#define pcap_freecode f_pcap_freecode
 #define pcap_close f_pcap_close
 #endif // _WIN32
 
@@ -90,6 +92,10 @@ private:
   pcap_t *fp;
   struct bpf_program fcode;
   bool opened;
+  /// The capture already leaves out the frames sent through it (Windows'
+  /// NOCAPTURE_LOCAL, pcap_setdirection elsewhere); otherwise the filter
+  /// has to.
+  bool sees_only_input = false;
 };
 
 #endif // !defined(INCLUDED_NETWORK_PCAP_H)

@@ -29,6 +29,8 @@
 #include "Configurator.hpp"
 #include "NetworkPcap.hpp"
 
+#include <string>
+
 #if defined(_WIN32)
 int (*f_pcap_findalldevs)(pcap_if_t **, char *);
 void (*f_pcap_freealldevs)(pcap_if_t *);
@@ -41,6 +43,7 @@ char *(*f_pcap_geterr)(pcap_t *);
 int (*f_pcap_compile)(pcap_t *, struct bpf_program *, const char *, int,
                       bpf_u_int32);
 int (*f_pcap_setfilter)(pcap_t *, struct bpf_program *);
+void (*f_pcap_freecode)(struct bpf_program *);
 void (*f_pcap_close)(pcap_t *);
 
 bool load_wpcap() {
@@ -70,12 +73,14 @@ bool load_wpcap() {
   LOAD_PCAP_FN(pcap_geterr);
   LOAD_PCAP_FN(pcap_compile);
   LOAD_PCAP_FN(pcap_setfilter);
+  LOAD_PCAP_FN(pcap_freecode);
   LOAD_PCAP_FN(pcap_close);
 #undef LOAD_PCAP_FN
 
   return f_pcap_findalldevs && f_pcap_freealldevs && f_pcap_open &&
          f_pcap_setnonblock && f_pcap_sendpacket && f_pcap_next_ex &&
-         f_pcap_geterr && f_pcap_compile && f_pcap_setfilter && f_pcap_close;
+         f_pcap_geterr && f_pcap_compile && f_pcap_setfilter &&
+         f_pcap_freecode && f_pcap_close;
 }
 #endif // _WIN32
 
@@ -182,6 +187,20 @@ bool CNetworkPcap::init(const char *devid_string, CConfigurator *cfg) {
     return false;
   }
 
+  // A NIC on a wire does not receive what it sends, and DECnet Phase IV
+  // stops when it sees its own address (see above). Ask the capture to
+  // leave out the frames sent through it; where it cannot, set_filter adds
+  // a term for the NIC's own source addresses.
+#if defined(WIN32)
+  sees_only_input = true; // PCAP_OPENFLAG_NOCAPTURE_LOCAL
+#else
+  sees_only_input = pcap_setdirection(fp, PCAP_D_IN) == 0;
+  if (!sees_only_input)
+    printf("%s: pcap cannot capture input only on %s (%s); the filter leaves "
+           "out the NIC's own frames\n",
+           devid_string, adapter, pcap_geterr(fp));
+#endif
+
   opened = true;
   printf("%s: Using pcap adapter %s\n", devid_string, adapter);
   return true;
@@ -284,13 +303,32 @@ void CNetworkPcap::set_filter(const NetworkFilter &f) {
     }
   }
 
-  if (pcap_compile(fp, &fcode, filter, 1, 0xffffffff) < 0) {
-    printf("Unable to compile the packet filter (%s)\n", filter);
+  std::string expr = filter;
+  if (!sees_only_input) {
+    // The frames this NIC sent come back: leave out its own unicast
+    // sources, the station address and any the guest put in its table.
+    std::string own;
+    char self[20];
+    snprintf(self, sizeof(self), "%02x:%02x:%02x:%02x:%02x:%02x", f.own_mac[0],
+             f.own_mac[1], f.own_mac[2], f.own_mac[3], f.own_mac[4],
+             f.own_mac[5]);
+    own = std::string("ether src ") + self;
+    for (j = 0; j < numUnique; j++)
+      if (!(f.mac_list[unique[j]][0] & 1))
+        own += std::string(" or ether src ") + mac_txt[j];
+    expr = expr.empty() ? "not (" + own + ")"
+                        : "(" + expr + ") and not (" + own + ")";
+  }
+
+  if (pcap_compile(fp, &fcode, expr.c_str(), 1, 0xffffffff) < 0) {
+    printf("Unable to compile the packet filter (%s)\n", expr.c_str());
     return;
   }
 
   if (pcap_setfilter(fp, &fcode) < 0)
     printf("Error setting the filter.\n");
+  // The handle keeps its own copy of the program; each compile allocates.
+  pcap_freecode(&fcode);
 }
 
 void CNetworkPcap::close() {
