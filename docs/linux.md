@@ -90,6 +90,12 @@ The kernel's view, from its log:
 platform string AlphaServer ES40", cycle frequency 800000000, timer 1024
 Hz.
 
+**The VGA console**, with an S3 card on the PCI bus: the kernel's
+`vgacon` takes it ("colour VGA+ 80x25") when the kernel line has
+`console=tty0`. The installed disk's `aboot.conf` has only
+`console=ttyS0`, so the line is typed at aboot's prompt (`boot dqa0
+-flags i`). The README's Linux screenshot is that console.
+
 **Two processors** (a `cpu1` block added, the installed disk booted):
 "SMP: 2 CPUs probed", "Brought up 1 node, 2 CPUs", both in
 `/proc/cpuinfo`'s active mask, and IPIs counted on both in
@@ -275,7 +281,7 @@ sees 1.3 GB used of 3.8 GB.
   host privileges, a user-mode NAT back end.
 - A kernel built for the machine (Gentoo's `sys-kernel/gentoo-kernel`
   or a hand-built one); the installed system runs the CD's.
-- The VGA console and a graphics card's framebuffer driver (the kernel
-  has `tgafb`, `radeonfb`, `pm2fb`).
+- A graphics card's framebuffer driver (the kernel has `tgafb`,
+  `radeonfb`, `pm2fb`); the text console works (above).
 - SCSI: the kernel has the Symbios driver as a module.
 - Linux on the ES47 (E2's second half), with the MSIs (M8).

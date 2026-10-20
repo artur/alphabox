@@ -36,7 +36,7 @@ Not a generic Alpha emulator. Alphabox emulates specific, real machines
 GS1280) well enough that their original firmware, operating systems and
 device drivers take them for the real thing:
 
-- OpenVMS 8.4, Tru64 UNIX, NetBSD, Windows 2000, and the 64-bit Windows
+- OpenVMS 8.4, Tru64 UNIX, Linux, NetBSD, Windows 2000, and the 64-bit Windows
   Microsoft built on the Alpha and never shipped
 - the EV68 (21264) on the Tsunami and Titan chipsets, and the EV7 (21364)
   with its on-chip router, up to sixteen of them
@@ -71,6 +71,10 @@ that depend on them.
 |---|---|---|
 | ![The CDE login box, "Welcome to ES47"](screenshots/es47-openvms-radeon.png) | ![dxdiag reporting DirectDraw and Direct3D enabled on the 3D Rage Pro](screenshots/win2000-dxdiag-ragepro.png) | ![A file copied to a USB disk and compared byte for byte](screenshots/win2000-usb-disk.png) |
 
+| The 64-bit Windows that never shipped: Whistler build 2210 for AXP64 | A 64-bit command prompt on a 21264 | The same Windows on two Alpha processors |
+|---|---|---|
+| ![The Whistler desktop, "Whistler Windows 2001 Professional, Build 2210", installed in D:\WINNT64](screenshots/xp64-desktop.png) | ![cmd.exe: ver, then set PROCESSOR showing PROCESSOR_ARCHITECTURE=ALPHA64 and DEC-221264](screenshots/xp64-alpha64.png) | ![Task Manager's Performance tab with two CPU usage graphs](screenshots/xp64-smp.png) |
+
 - **Direct3D on Windows for Alpha.** The ATI 3D Rage Pro, 3Dlabs Permedia 2
   and S3 ViRGE are emulated well enough that the Direct3D drivers on the
   Windows 2000 CD draw lit, textured scenes, checked pixel by pixel against
@@ -80,20 +84,29 @@ that depend on them.
   so were virtio drivers and a Radeon 7500 driver with a Direct3D 7 HAL
   ([guest drivers](docs/guest-drivers.md)).
 - **The 64-bit Windows Microsoft never shipped.** Windows "Whistler" build
-  2210 for AXP64 installs through AlphaBIOS and runs native 64-bit programs.
+  2210 for AXP64 installs through AlphaBIOS and runs native 64-bit programs,
+  on one processor or two.
 - **Sixteen EV7s booting OpenVMS.** The ES47 (two EV7s), ES80 (eight) and
   GS1280 (sixteen) boot OpenVMS 8.4 from an installed disk, through a
   management-processor protocol HP never documented.
 
 ## What runs
 
+| Linux 7.0 on the ES40 | The NetBSD 10.2 installer | A Japanese Windows 2000 beta, build 1877 |
+|---|---|---|
+| ![uname -a and /proc/cpuinfo on the VGA console: Linux 7.0.1, EV68CB, Tsunami, Clipper](screenshots/linux-es40.png) | ![NetBSD/alpha 10.2's sysinst, its language menu](screenshots/netbsd-installer.png) | ![The Japanese Windows 2000 desktop with its input method bar](screenshots/win2000-beta-japanese.png) |
+
+Every guest below with media in the lab is booted and checked by
+`test/tools/guests_check.sh` ([development.md](docs/development.md)).
+
 | Guest | Status |
 |---|---|
 | OpenVMS 8.4 | Installs from its CD and boots to login on every emulated machine, with up to sixteen CPUs; DECwindows on the Permedia 2 and the Radeon 7500 ([notes](docs/openvms.md), [installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Windows NT / 2000 | Installs and runs through AlphaBIOS, on up to two CPUs, with each graphics card's own driver from the installation media ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
-| Windows "Whistler" 64-bit (AXP64, build 2210) | Installs and runs through AlphaBIOS |
+| Windows "Whistler" 64-bit (AXP64, build 2210) | Installs and runs through AlphaBIOS, on up to two CPUs |
+| Linux | Gentoo's install CD boots to a shell, and a system installed from it boots from disk to a login on one or two CPUs, where gcc works; serial or VGA console ([notes](docs/linux.md)) |
 | Tru64 UNIX | Boots |
-| NetBSD | Boots ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
+| NetBSD | Boots; the 10.2 install CD boots to its installer ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
 
 ## Emulated hardware
 
