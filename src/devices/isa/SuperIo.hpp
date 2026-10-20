@@ -73,6 +73,9 @@ public:
   /// The two ports: 0 index (370h), 1 data (371h).
   u8 read(u32 address);
   void write(u32 address, u8 data);
+  /// After a restore: map the logical devices' ranges again, as the guest's
+  /// writes did when it set them up.
+  void restored();
 
 private:
   u8 current_reg() const;
@@ -120,9 +123,14 @@ public:
   void addr_write(u8 data);
   void data_write(u8 data);
   u8 data_read();
+  /// After a restore: place the READ_DATA port again, if the OS had.
+  void restored();
 
 private:
   static const u8 init_key[32];
+  static bool valid_read_port(u16 port) {
+    return port >= 0x203 && port <= 0x3ff;
+  }
 
   SIsaPnp_state &s;
   MapReadPort map;

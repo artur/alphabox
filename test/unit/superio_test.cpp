@@ -151,10 +151,55 @@ static void test_pnp_read_port() {
   CHECK_EQ(r.pst.state, CIsaPnp::PNP_WAIT_FOR_KEY);
 }
 
+/// The READ_DATA port is relocatable within 0x203-0x3FF only (ISA PnP 1.0a,
+/// section 3.1, Table 1): a value below 0x80 would put it on 0x003-0x1FF,
+/// over the DMA controller, the PICs (0x23 is the PIC backdoor) and the
+/// timer. It is ignored.
+static void test_pnp_read_port_range() {
+  Rig r;
+  r.key();
+  r.pnp_reg(0x00, 0x08); // 0x23
+  r.pnp_reg(0x00, 0x10); // 0x43, the timer's control word
+  check_str(__LINE__, r.maps, "");
+  CHECK_EQ(r.pst.rd_port, 0);
+  r.pnp_reg(0x00, 0x80); // 0x203, the lowest
+  r.pnp_reg(0x00, 0xff); // 0x3ff, the highest
+  check_str(__LINE__, r.maps, "rd@203 rd@3ff");
+  r.pnp_reg(0x00, 0x7f); // 0x1ff: ignored, the port stays at 0x3ff
+  CHECK_EQ(r.pst.rd_port, 0x3ff);
+}
+
+/// A restore brings back the registers but not the ranges the guest's
+/// writes mapped: restored() maps them again. A READ_DATA port outside the
+/// range in an old file is not mapped.
+static void test_restore_maps() {
+  Rig a;
+  a.unlock();
+  a.cfg(0x07, 3);
+  a.cfg(0x30, 1); // LPT on at 0x378
+  a.key();
+  a.pnp_reg(0x00, 0x82); // READ_DATA at 0x20b
+
+  Rig b;
+  b.sst = a.sst;
+  b.pst = a.pst;
+  b.sio.restored();
+  b.pnp.restored();
+  check_str(__LINE__, b.maps, "ldn3@378 rd@20b");
+
+  Rig c; // LPT off, a READ_DATA port an older build let through
+  c.pst.rd_port = 0x23;
+  c.sio.restored();
+  c.pnp.restored();
+  check_str(__LINE__, c.maps, "");
+}
+
 int main() {
   test_config_mode();
   test_lpt_map();
   test_pnp_read_port();
+  test_pnp_read_port_range();
+  test_restore_maps();
   printf("superio_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -118,6 +118,11 @@ void CSuperIo::reset() {
   s.ldn_regs[0xc][0xf4] = 0x42;
 }
 
+void CSuperIo::restored() {
+  for (int ldn = 0; ldn < 16; ldn++)
+    apply_ldn(ldn);
+}
+
 u8 CSuperIo::current_reg() const {
   if (s.index == 0x07)
     return s.ldn;
@@ -317,6 +322,11 @@ void CIsaPnp::reset() {
   s.wake_csn = 0;
 }
 
+void CIsaPnp::restored() {
+  if (valid_read_port(s.rd_port))
+    map(s.rd_port);
+}
+
 void CIsaPnp::addr_write(u8 data) {
 #ifdef DEBUG_ISAPNP
   printf("%%PNP-I-ADDR: write 0x%02x to 0x279 (state=%d, key_pos=%d)\n", data,
@@ -366,6 +376,12 @@ void CIsaPnp::data_write(u8 data) {
   case 0x00: // Set RD_DATA Port — actual port = (data << 2) | 0x0003
   {
     u16 new_port = ((u16)data << 2) | 0x0003;
+    // The READ_DATA port is relocatable within 0x203-0x3FF (ISA PnP 1.0a,
+    // section 3.1, Table 1). No card here answers anywhere else: placing
+    // the hook lower would shadow the DMA controller, the PICs and the
+    // timer.
+    if (!valid_read_port(new_port))
+      break;
     s.rd_port = new_port;
     // Re-register our READ_DATA hook at the OS-chosen port.  The
     // system memory map updates id 52 in place, so successive

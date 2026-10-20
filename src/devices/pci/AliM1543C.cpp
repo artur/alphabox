@@ -1704,6 +1704,11 @@ int CAliM1543C::RestoreState(FILE *f) {
   // then each counter goes on from its saved count.
   pit.load_gate(2, (state.reg_61 & 0x01) != 0);
   pit.restored();
+  // The ranges the guest placed: the parallel port and the PnP READ_DATA
+  // port are mapped when it writes their registers, which a restore does
+  // not do.
+  superio.restored();
+  isapnp.restored();
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   return 0;
