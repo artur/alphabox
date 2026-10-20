@@ -1194,10 +1194,14 @@ int CDisk::do_scsi_command() {
       int ret_len = read_sub_channel(state.scsi.dati.data, sub_q, msf,
                                      track_number, data_format, alloc_length);
       if (ret_len == 0) {
-        do_scsi_error(SCSI_ILL_CMD);
+        // A reserved Sub-channel Parameter List code (MMC-3 5.22, table
+        // 217) is a reserved code value in a CDB field: INVALID FIELD IN
+        // CDB (SPC-3 4.3.1), not an unknown operation code.
+        do_scsi_error(SCSI_INVALID_FIELD);
         break;
       }
-      state.scsi.dati.available = ret_len;
+      // No more than the allocation length (SPC-3 4.3.4.6).
+      state.scsi.dati.available = std::min<unsigned int>(ret_len, alloc_length);
       state.scsi.dati.read = 0;
       do_scsi_error(SCSI_OK);
     }
@@ -1232,19 +1236,26 @@ int CDisk::do_scsi_command() {
             (tray_open ? (1 << 0) : 0); //               bit 0 = Door Open
         state.scsi.dati.data[6] = 0;
         state.scsi.dati.data[7] = 0;
-        event_length = (alloc_length <= 4) ? 4 : 8;
-        // The event is consumed once it has actually been returned.
-        if (event && event_length == 8)
+        event_length = 8;
+        // MMC-3 5.6: with an allocation length of 4 or less only the
+        // header goes and the event stays; it counts as reported once a
+        // byte of the event descriptor has been transferred.
+        if (event && alloc_length > 4)
           state.scsi.media_changed &= ~MEDIA_GESN_EVENT;
       } else {
+        // None of the requested classes is supported: the header alone,
+        // NEA set and a class of 000b (MMC-3 5.6, tables 80 and 81). The
+        // class field held the request mask.
         state.scsi.dati.data[0] = 0;
         state.scsi.dati.data[1] = 0;
-        state.scsi.dati.data[2] = (1 << 7) | (uint8_t)request;
+        state.scsi.dati.data[2] = 0x80;
         state.scsi.dati.data[3] =
             (1 << 4); // we only support the MEDIA event (bit 4)
         event_length = 4;
       }
-      state.scsi.dati.available = event_length;
+      // No more than the allocation length (SPC-3 4.3.4.6).
+      state.scsi.dati.available =
+          std::min<unsigned int>(event_length, alloc_length);
       state.scsi.dati.read = 0;
       do_scsi_error(SCSI_OK);
     } else {
@@ -1462,7 +1473,7 @@ int CDisk::do_scsi_command() {
     // bytes. Therefore, we just build the return as if requested all bytes,
     //  then only return up to 'alloc_length' bytes.
 
-    if (alloc_length >= 8) {
+    {
       // create a header (page 287)
       // state.scsi.dati.data[0] = 0;  // length is calculated below
       // state.scsi.dati.data[1] = 0;
@@ -1604,12 +1615,15 @@ int CDisk::do_scsi_command() {
       state.scsi.dati.data[2] = (return_length >> 8);
       state.scsi.dati.data[3] = (return_length & 0xFF);
 
-      /* Bochs used this because of ReactOS boot problems, but this should be in
-       * fact correct. */
-      state.scsi.dati.available = return_length + 4;
+      // What the initiator has room for: an allocation length below the
+      // 8-byte header, zero included, is not an error, the data is cut
+      // short (MMC-3 5.5; SPC-3 4.3.4.6). And the command ends with GOOD
+      // status: it used to end without a status byte at all, which the
+      // IDE path read as 0 and a SCSI adapter's status phase found empty.
+      state.scsi.dati.available =
+          std::min<unsigned int>(return_length + 4, alloc_length);
       state.scsi.dati.read = 0;
-    } else {
-      do_scsi_error(SCSI_INVALID_FIELD);
+      do_scsi_error(SCSI_OK);
     }
   } break;
 

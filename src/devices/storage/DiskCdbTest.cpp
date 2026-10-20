@@ -781,6 +781,40 @@ void t_sense_cleared(Rig &r) {
   a->sense(0);
 }
 
+/// DISK-07 and DISK-31: allocation lengths, and no data with CHECK CONDITION.
+void t_alloc(Rig &r) {
+  group("DISK-07 allocation length");
+  CCdbTestAdapter *a = r.a;
+  Res full = a->run(3, {0x46, 0, 0, 0, 0, 0, 0, 0x10, 0, 0});
+  check(full.good() && full.in.size() > 8 &&
+            be32(full.in, 0) + 4 == full.in.size(),
+        "GET CONFIGURATION: the whole feature list, with status", "%s",
+        full.why().c_str());
+  for (u16 al : {0, 1, 4, 5, 8, 36, 255}) {
+    char name[64];
+    Res g = a->run(3, {0x46, 0, 0, 0, 0, 0, 0, u8(al >> 8), u8(al), 0});
+    snprintf(name, sizeof(name), "GET CONFIGURATION, allocation %u", al);
+    check(g.good() && g.in.size() == std::min<size_t>(al, full.in.size()) &&
+              (al < 4 || be32(g.in, 0) == be32(full.in, 0)),
+          name, "%s", g.why().c_str());
+    Res sc =
+        a->run(3, {0x42, 0x02, 0x40, 0x01, 0, 0, 0, u8(al >> 8), u8(al), 0});
+    snprintf(name, sizeof(name), "READ SUB-CHANNEL, allocation %u", al);
+    check(sc.good() && sc.in.size() == std::min<size_t>(al, 16), name, "%s",
+          sc.why().c_str());
+    Res ge = a->run(3, {0x4a, 1, 0, 0, 0x10, 0, 0, u8(al >> 8), u8(al), 0});
+    snprintf(name, sizeof(name), "GET EVENT STATUS NOTIFICATION, allocation %u",
+             al);
+    check(ge.good() && ge.in.size() == std::min<size_t>(al, 8), name, "%s",
+          ge.why().c_str());
+  }
+  Res ne = a->run(3, {0x4a, 1, 0, 0, 0x04, 0, 0, 0, 8, 0});
+  check(ne.good() && ne.in.size() == 4 && ne.in[2] == 0x80,
+        "GESN for a class the drive lacks: NEA, class 0");
+  expect_cc(r, 3, a->run(3, {0x42, 0x02, 0x40, 0x07, 0, 0, 0, 0, 16, 0}),
+            "READ SUB-CHANNEL of a reserved format", 5, 0x24, 0);
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -836,6 +870,7 @@ int main_cdbtest(int argc, char **argv) {
   t_mode_sense_pc(r);
   t_capacity_pmi(r);
   t_sense_cleared(r);
+  t_alloc(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
