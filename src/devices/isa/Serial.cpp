@@ -453,19 +453,26 @@ void CSerial::drain_staging() {
   if (stageLen == 0)
     return;
 
-  // Only deliver when the guest has consumed the previous character.
-  // This self-clocks to the emulated CPU speed, just like a real
-  // UART where the next character doesn't arrive until the baud
-  // rate shifts it in — and the CPU is always fast enough to read
-  // it before then.
-  if (!uart.rx_empty())
-    return; // previous character not yet read
-
-  // Deliver exactly one character
-  receive(stageBuf, 1);
-  stageLen--;
+  int taken;
+  if (raw_mode) {
+    // A debugger's byte stream: as much as the FIFO takes, at once. What
+    // does not fit waits here, and the socket is not read until it has
+    // gone (execute), so TCP holds the rest back instead of it being lost.
+    taken = receive(stageBuf, stageLen);
+  } else {
+    // Typed input: one character, once the guest has read the previous
+    // one. This self-clocks to the emulated CPU speed, as on a real line
+    // where the next character arrives only after the baud rate has
+    // shifted it in, and the CPU reads it before then.
+    if (!uart.rx_empty())
+      return; // previous character not yet read
+    taken = receive(stageBuf, 1);
+  }
+  if (taken <= 0)
+    return;
+  stageLen -= taken;
   if (stageLen > 0)
-    memmove(stageBuf, stageBuf + 1, stageLen);
+    memmove(stageBuf, stageBuf + taken, stageLen);
 }
 
 /**
@@ -628,8 +635,10 @@ void CSerial::execute() {
   // ------------------------------------------------------------------
   // Every RECV_TICKS cycles: read from the socket and cook telnet out
   // ------------------------------------------------------------------
+  // raw_mode reads the socket every tick: a debugger waits for each
+  // packet's acknowledgement, and ten ticks were ~50 ms per round trip.
   state.serial_cycles++;
-  if (state.serial_cycles >= RECV_TICKS) {
+  if (state.serial_cycles >= (raw_mode ? 1 : RECV_TICKS)) {
     // If staging buffer still has data, don't pull more off the socket.
     // TCP backpressure holds the rest at the OS level.
     if (stageLen > 0) {
@@ -681,16 +690,16 @@ void CSerial::execute() {
         iac_carry_len = 0;
       }
 
-      // raw_mode: skip telnet IAC cooking AND the staging buffer's baud-rate
-      // drip-feed.  The byte stream must stay 8-bit clean and flow at line
-      // rate for windbg/kgdb, which sends arbitrary binary (including 0xff)
-      // in KD packets and times out if delivery is throttled.
+      // raw_mode: no telnet IAC cooking and no one-character drip. The
+      // byte stream must stay 8-bit clean and flow at line rate for
+      // windbg/kgdb, which send arbitrary binary (0xff included) and time
+      // out when delivery is throttled. It goes through the staging buffer
+      // (empty whenever the socket is read) so that what the FIFO cannot
+      // take yet is kept: it used to be dropped (%SRL-W-RAWFULL).
       if (raw_mode) {
-        int delivered = receive((const char *)raw, (int)size);
-        if (delivered < (int)size)
-          printf("%%SRL-W-RAWFULL: raw_mode FIFO full on port %d, dropped %d "
-                 "byte(s)\n",
-                 state.iNumber, (int)size - delivered);
+        memcpy(stageBuf, raw, (size_t)size);
+        stageLen = (int)size;
+        drain_staging();
         state.serial_cycles = 0;
         eval_interrupts();
         return;
