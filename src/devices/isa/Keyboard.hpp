@@ -121,7 +121,7 @@ private:
   void set_aux_clock_enable(u8 value);
   void ctrl_to_kbd(u8 value);
   void ctrl_to_mouse(u8 value);
-  int build_mouse_packet(u8 *packet);
+  int build_mouse_packet(u8 *packet, bool stream);
   bool mouse_enQ_packet(const u8 *packet, int bytes);
   void kbd_update_irq();
   void kbd_service();

@@ -1432,7 +1432,7 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       // the ACK and carries (and consumes) the motion accumulated so far.
       controller_enQ(0xFA, KBC_SRC_AUX); // ACK
       u8 packet[4];
-      int bytes = build_mouse_packet(packet);
+      int bytes = build_mouse_packet(packet, false);
       for (int i = 0; i < bytes; i++)
         controller_enQ(packet[i], KBC_SRC_AUX);
       discard_mouse_motion(); // resets the movement counters
@@ -1538,17 +1538,33 @@ void CKeyboard::mouse_motion(int delta_x, int delta_y, int delta_z,
  * motion and consume the part of it the packet carries; motion beyond the
  * 9-bit range stays for the following packets.
  **/
-int CKeyboard::build_mouse_packet(u8 *packet) {
+int CKeyboard::build_mouse_packet(u8 *packet, bool stream) {
   auto clamp = [](int v, int lo, int hi) {
     return v < lo ? lo : v > hi ? hi : v;
   };
+  // 2:1 scaling (E7) changes what a stream packet reports, not the counters:
+  // 1, 2, 3, 4, 5 counts are reported as 1, 1, 3, 6, 9, and more as twice
+  // as many. It does not apply to Read Data (EB). Source: Chapweske, "The
+  // PS/2 Mouse Interface" (2003), "Inputs, Resolution, and Scaling" and
+  // footnote 1. The resolution (E8) is the host's to choose and is not
+  // applied: a host mouse has no counts per millimetre.
+  auto scale = [](int v) {
+    static const int table[6] = {0, 1, 1, 3, 6, 9};
+    const int m = v < 0 ? -v : v;
+    const int r = m < 6 ? table[m] : 2 * m;
+    return v < 0 ? -r : r;
+  };
 
-  const int dx = clamp(state.mouse.delayed_dx, -256, 255);
-  const int dy = clamp(state.mouse.delayed_dy, -256, 255);
+  int dx = clamp(state.mouse.delayed_dx, -256, 255);
+  int dy = clamp(state.mouse.delayed_dy, -256, 255);
   const int dz = clamp(state.mouse.delayed_dz, -127, 127);
   state.mouse.delayed_dx -= dx;
   state.mouse.delayed_dy -= dy;
   state.mouse.delayed_dz = 0;
+  if (stream && state.mouse.scaling == 2) {
+    dx = clamp(scale(dx), -256, 255);
+    dy = clamp(scale(dy), -256, 255);
+  }
 
   // The oldest button state not yet reported goes first.
   u8 buttons = state.mouse.button_status;
@@ -1594,7 +1610,7 @@ void CKeyboard::create_mouse_packet() {
     return;
 
   u8 packet[4];
-  int bytes = build_mouse_packet(packet);
+  int bytes = build_mouse_packet(packet, true);
   mouse_enQ_packet(packet, bytes);
 }
 

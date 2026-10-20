@@ -446,6 +446,24 @@ static void test_mouse_enable_keeps_mode() {
              ccb.size() == 2 && (strtoul(ccb.c_str(), 0, 16) & 0x20) != 0);
 }
 
+/// KBD-06: 2:1 scaling applies to stream packets.
+static void test_mouse_scaling() {
+  fresh();
+  mouse_streaming();
+  check("E7", aux({0xE7}), "mfa");
+  check("dx 5 with 2:1", motion(5, 0, 0, 0), "m08 m09 m00");
+  check("dx -3 with 2:1", motion(-3, 0, 0, 0), "m18 mfd m00");
+  check("dx 40 with 2:1", motion(40, 0, 0, 0), "m08 m50 m00");
+  check("dx 2, dy 4 with 2:1", motion(2, 4, 0, 0), "m08 m01 m06");
+  // not in what Read Data reports
+  check("remote mode", aux({0xF0}), "mfa");
+  kb->mouse_motion(5, 0, 0, 0);
+  check("EB is not scaled", aux({0xEB}), "mfa m08 m05 m00");
+  check("E9 shows 2:1", aux({0xE9}).substr(0, 7), "mfa m70");
+  check("E6, stream mode", aux({0xE6, 0xEA}), "mfa mfa");
+  check("dx 5 with 1:1", motion(5, 0, 0, 0), "m08 m05 m00");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -462,6 +480,7 @@ int main() {
   test_mouse_status_buttons();
   test_mouse_bad_parameters();
   test_mouse_enable_keeps_mode();
+  test_mouse_scaling();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

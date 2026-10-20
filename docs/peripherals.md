@@ -108,6 +108,8 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   and the mouse waits for the value again. Enable (`F4`) turns reporting
   on in whichever mode the mouse is in, and does not touch the
   controller's command byte. After its reset the mouse is in stream mode.
+  2:1 scaling (`E7`) applies to stream packets and not to Read Data
+  (`EB`); the resolution (`E8`) is reported back but not applied.
 
 ### SCSI
 
