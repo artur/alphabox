@@ -38,6 +38,7 @@
 #define INCLUDED_ALIM1543C_H_
 
 #include "I8254.hpp"
+#include "I8259.hpp"
 #include "PCIDevice.hpp"
 #include "SuperIo.hpp"
 
@@ -104,12 +105,6 @@ private:
   void io_byte_write(int index, u32 offset, u8 data);
   void note_wide_access(int index, u32 address, int dsize, bool write);
 
-  std::mutex picLock;
-  // Unlocked inner helpers — called only while picLock is held.
-  void pic_interrupt_inner(int index, int intno);
-  void pic_deassert_inner(int index, int intno);
-  void pic_set_line_inner(int index, int intno, bool active);
-
   // REGISTER 61 (NMI)
   u8 reg_61_read();
   void reg_61_write(u8 data);
@@ -133,18 +128,10 @@ public:
   u64 get_interval_period_ns() const;
 
 private:
-  // interrupt controller
-  u8 pic_read(int index, u32 address);
-  void pic_write(int index, u32 address, u8 data);
-  u8 pic_read_vector();
-  u8 pic_read_edge_level(int index);
-  void pic_write_edge_level(int index, u8 data);
+  // interrupt controller: the 0x22/0x23 index/data backdoor (the 8259s
+  // themselves are CI8259)
   u8 pic_control_read(u32 address);
   void pic_control_write(u32 address, u8 data);
-  int pic_get_irq(int index);
-  void pic_update_output(int index);
-  void pic_intack(int index, int irq);
-  void pic_init_reset(int index);
 
   // LPT controller
   u8 lpt_read(u32 address);
@@ -166,26 +153,8 @@ private:
     // Timer/Counter (the 8254, CI8254)
     SPit_state pit;
 
-    // interrupt controller  IRR (request) and ISR (in-service) are kept
-    // separate so an edge that arrives while a higher-priority IRQ is in
-    // service is still latched and re-fires after EOI.
-    u8 pic_irr[2];             // raw interrupt request register
-    u8 pic_imr[2];             // interrupt mask register (1 = masked)
-    u8 pic_isr[2];             // in-service register
-    u8 pic_last_irr[2];        // line history for edge detection
-    u8 pic_irq_base[2];        // ICW2 vector base (was pic_intvec)
-    u8 pic_priority_add[2];    // priority rotation offset
-    u8 pic_read_reg_select[2]; // OCW3 bit 0: 0=IRR, 1=ISR readback
-    u8 pic_poll[2];            // OCW3 poll-mode pending
-    u8 pic_special_mask[2];    // OCW3 special mask mode
-    u8 pic_init_state[2];      // 0=normal, 1=ICW2, 2=ICW3, 3=ICW4
-    u8 pic_auto_eoi[2];        // ICW4 AEOI bit
-    u8 pic_rotate_on_aeoi[2];  // OCW2 rotate-on-AEOI
-    u8 pic_special_fnm[2];     // ICW4 special fully nested mode
-    u8 pic_init4[2];           // ICW1 bit 0: ICW4 needed
-    u8 pic_single_mode[2];     // ICW1 bit 1: single PIC, no slave
-    u8 pic_elcr[2];            // edge/level control register (ELCR)
-    u8 pic_ltim[2];            // ICW1 bit 3: level-trigger global mode
+    // interrupt controller (the 8259s, CI8259)
+    SPic_state pic;
     u8 pic_control_index;      // latched index for 0x22/0x23 backdoor
     u8 pic_control_regs[6]{};  // currently unused
 
@@ -207,6 +176,8 @@ private:
 
   /// The 8254 timer, over state.pit.
   CI8254 pit;
+  /// The two 8259 interrupt controllers, over state.pic.
+  CI8259 pic;
   /// The Super I/O configuration ports (370h-371h), over state.superio.
   CSuperIo superio;
   /// The ISA Plug and Play ports, over state.isapnp.
