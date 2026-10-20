@@ -454,11 +454,16 @@ target_include_directories(kbc_test PRIVATE
 target_link_libraries(kbc_test Threads::Threads)
 add_test(NAME kbc COMMAND kbc_test)
 
-# The ALi M1543C's ISA core as separate models, each on a clock the test
-# moves: the 8254 timer.
+# The ALi M1543C's ISA core as separate models, driven through their ports
+# (the clocked ones on a clock the test moves): the 8254 timer, the Super
+# I/O and ISA PnP ports.
 add_executable(i8254_test test/unit/i8254_test.cpp src/devices/isa/I8254.cpp)
 target_include_directories(i8254_test PRIVATE src/common src/devices/isa)
 add_test(NAME i8254 COMMAND i8254_test)
+add_executable(superio_test test/unit/superio_test.cpp
+    src/devices/isa/SuperIo.cpp)
+target_include_directories(superio_test PRIVATE src/common src/devices/isa)
+add_test(NAME superio COMMAND superio_test)
 
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
