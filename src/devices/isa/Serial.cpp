@@ -411,8 +411,10 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
     } else {
       // Interrupt Enable Register.  Enabling the THRE interrupt while the
       // (instantly-drained) holding register is empty arms one THRE edge.
+      // Only bits 3:0 exist; 7:4 read back zero [PC16550D datasheet].
+      // Linux's 8250 probe takes a writable bit 6 (UUE) for an XScale UART.
       u8 prev_ier = state.bIER;
-      state.bIER = d;
+      state.bIER = d & 0x0f;
       if ((d & 0x02) && !(prev_ier & 0x02))
         state.thre_pending = true;
       eval_interrupts();

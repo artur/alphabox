@@ -687,6 +687,8 @@ volatile sig_atomic_t got_sigusr1 = 0;
  **/
 void sigint_handler(int signum) { got_sigint = 1; }
 void sigusr1_handler(int signum) { got_sigusr1 = 1; }
+// SIGUSR2: the keypipe's dbg-dump for a run without a GUI (docs/headless.md).
+void sigusr2_handler(int signum) { g_dbg_dump_req.fetch_add(1); }
 
 /**
  * Run the system by clocking the CPU(s) and devices.
@@ -711,6 +713,9 @@ void CSystem::Run() {
   signal(SIGINT, &sigint_handler);
   signal(SIGTERM, &sigint_handler);
   signal(SIGUSR1, &sigusr1_handler);
+#ifdef SIGUSR2
+  signal(SIGUSR2, &sigusr2_handler);
+#endif
 
   // ALPHABOX_RESTORE=<file>: resume a saved machine instead of cold-booting.
   // Every component has been constructed and initialised by now and no

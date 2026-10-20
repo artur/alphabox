@@ -125,7 +125,10 @@ gate.
 3. **E2 + M8, Linux on the ES47**: with no hardware, a second operating
    system is the best test there is. It runs the UNIX PALcode, a second
    interrupt path and the MSIs, and on the Radeon the real Mesa r100
-   driver. Linux on the ES40 first (the easy half), then Marvel.
+   driver. Linux on the ES40 first (the easy half), then Marvel. The
+   ES40 half runs ([linux.md](linux.md), 2026-10-20): Gentoo's CD to a
+   shell, an install that boots from disk, and four emulator bugs fixed
+   on the way.
 4. **E3**: OpenVMS MIPS on the EV7 against the ES40, and native PALcode
    paths if the gap is large.
 5. **M10, the CMM's FRU and environment answers**. Done (2026-10-20):

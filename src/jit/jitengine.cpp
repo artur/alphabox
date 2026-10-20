@@ -479,6 +479,8 @@ SafeOp classify(uint32_t ins, bool pal_block) {
   case 0x17: { // FLTL: all non-arithmetic (FPCR moves, sign-copies, FCMOVs,
                // CVTLQ/QL) via
     // jit_fltl; only the /V trap variants of CVTQL stay interpreted.
+    if (ins == 0x5fff041f)
+      return OP_NOP; // FNOP: no effect and no FEN fault (DO_CPYS)
     const uint32_t f17 = (ins >> 5) & 0x7ff;
     const bool ok = f17 == 0x010 || (f17 >= 0x020 && f17 <= 0x022) ||
                     f17 == 0x024 || f17 == 0x025 ||

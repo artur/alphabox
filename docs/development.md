@@ -149,6 +149,7 @@ and transfers. It writes the emulator's pid to `emulator.pid`: profile
 | `wav_compare.py` | Compares a captured WAV with its reference. |
 | `win_storage.sh` | A storage controller (`CTRL=<class>`) with a FAT16 disk added to a Windows guest, which copies a file on it. |
 | `fat_disk.py` | Builds and inspects small FAT16 test disks. |
+| `aboot_disk.py` | A sparse disk SRM boots Linux from: boot block, BSD disklabel, aboot's `bootlx`, a `/boot` and a root partition ([linux.md](linux.md)). |
 
 `win_storage.sh` checks the copy on the host; `BRIDGE=<class>` puts the
 controller behind a PCI-PCI bridge.

@@ -247,11 +247,24 @@ void CAlphaCPU::dbg_dump_state() {
          (int)state.iProcNum, (unsigned long long)state.pc, (int)state.sde,
          (int)state.cm, (int)state.asn, (unsigned long long)state.pal_base,
          (unsigned long long)state.instruction_count);
+  printf("%%DBG-I-DUMP: exc_addr=%016llx exc_sum=%llx va=%016llx "
+         "mm_stat=%llx\n",
+         (unsigned long long)state.exc_addr, (unsigned long long)state.exc_sum,
+         (unsigned long long)state.fault_va, (unsigned long long)state.mm_stat);
   for (int r = 0; r < 64; r += 4)
     printf("%%DBG-I-DUMP: r%-2d %016llx %016llx %016llx %016llx\n", r,
            (unsigned long long)state.r[r], (unsigned long long)state.r[r + 1],
            (unsigned long long)state.r[r + 2],
            (unsigned long long)state.r[r + 3]);
+  // PALcode runs from physical addresses: read the code around a PAL-mode
+  // PC without translating it.
+  const bool pal_pc = state.pc & 1;
+  auto peek_phys = [&](u64 pa, u64 *out) -> bool {
+    if (pa + 8 > dram_size)
+      return false;
+    memcpy(out, (const u8 *)dram_ptr + pa, 8);
+    return true;
+  };
   auto peek = [&](u64 va, u64 *out) -> bool {
     u64 pa;
     bool asmb;
@@ -265,7 +278,7 @@ void CAlphaCPU::dbg_dump_state() {
   const u64 pc = state.pc & ~U64(3);
   for (u64 va = pc - 0x100; va < pc + 0x80; va += 8) {
     u64 v;
-    if (peek(va, &v))
+    if (pal_pc ? peek_phys(va, &v) : peek(va, &v))
       printf("%%DBG-I-CODE: %016llx %08x %08x\n", (unsigned long long)va,
              (unsigned)(v & 0xffffffff), (unsigned)(v >> 32));
   }

@@ -638,6 +638,13 @@ void CIdeController::ide_command_write(int index, u32 address, int dsize,
 #endif
     SEL_COMMAND(index).command_cycle = 0;
     SEL_STATUS(index).drq = false;
+    // A new command clears the last one's error bit (ERR, CHK for a packet
+    // device). Behind BSY nobody sees it, but a PACKET command shows its
+    // status with BSY clear while it waits for the CDB, and a stale ERR
+    // there is "DRQ=1 with device error" to Linux: the REQUEST SENSE after
+    // a refused command failed, and the port was reset (docs/linux.md).
+    SEL_STATUS(index).err = false;
+    SEL_STATUS(index).CHK = false;
     UPDATE_ALT_STATUS(index);
     CONTROLLER(index).data_ptr = 0;
 

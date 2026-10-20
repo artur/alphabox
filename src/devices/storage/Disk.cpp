@@ -2448,18 +2448,42 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: CDROM READ TOC.\n", devid_string);
 #endif
-    // We support format field == 0 only (standard TOC).
-    if (state.scsi.cmd.data[2] & 0x0f) {
-      FAILURE_2(NotImplemented,
-                "%s: I don't understand READ TOC/PMA/ATIP with format %01x.\n",
-                devid_string, state.scsi.cmd.data[2] & 0x0f);
-    }
-
     const bool msf_flag = (state.scsi.cmd.data[1] & 0x02) != 0;
     const u8 start_track_req = state.scsi.cmd.data[6];
+    const u8 toc_format = state.scsi.cmd.data[2] & 0x0f;
 
     retlen =
         (unsigned int)state.scsi.cmd.data[7] * 256 + state.scsi.cmd.data[8];
+
+    // Format 1, the session information (MMC): one complete session, whose
+    // first track is track 1 at the start of the medium. Linux's udev
+    // (cdrom_id) asks for it on every CD it sees. The full TOC, PMA, ATIP
+    // and CD-Text (2 to 5) are a recorder's or an audio player's, and a
+    // drive without them refuses the field, as it does a format it does
+    // not know.
+    if (toc_format == 1) {
+      u8 *s = state.scsi.dati.data;
+      memset(s, 0, 12);
+      s[1] = 10;   // TOC data length
+      s[2] = 1;    // first complete session
+      s[3] = 1;    // last complete session
+      s[5] = 0x14; // ADR/Control of the last session's first track: data
+      s[6] = 1;    // its track number
+      if (msf_flag) {
+        u32 x = lba2msf(0);
+        s[9] = (x >> 16) & 0xff;
+        s[10] = (x >> 8) & 0xff;
+        s[11] = x & 0xff;
+      }
+      state.scsi.dati.available = retlen < 12 ? retlen : 12;
+      state.scsi.dati.read = 0;
+      do_scsi_error(SCSI_OK);
+      break;
+    }
+    if (toc_format != 0) {
+      do_scsi_error(SCSI_INVALID_FIELD);
+      break;
+    }
 
     state.scsi.dati.available = retlen;
     state.scsi.dati.read = 0;
@@ -2589,9 +2613,12 @@ int CDisk::do_scsi_command() {
   // -----------------------------------------------------------------
   single_track_toc:
 
+    // A starting track the medium does not have: ILLEGAL REQUEST, INVALID
+    // FIELD IN CDB (MMC), not a reason to stop the machine.
     if (start_track_req > 1 && start_track_req != 0xAA) {
-      FAILURE_2(InvalidArgument, "%s: I don't know CD-ROM track 0x%02x.\n",
-                devid_string, start_track_req);
+      state.scsi.dati.available = 0;
+      do_scsi_error(SCSI_INVALID_FIELD);
+      break;
     }
 
     {

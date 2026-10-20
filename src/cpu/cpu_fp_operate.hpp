@@ -38,11 +38,18 @@
 #define FP_IS_ZERO(val) (((val) & ~FPR_SIGN) == 0)
 #define FP_IS_NEGATIVE(val) (((val)&FPR_SIGN) != 0)
 
-/* copy sign */
+/* copy sign. CPYS F31,F31,F31 is FNOP, which "generates no exceptions"
+   [Alpha Architecture Handbook, appendix A, "Stylized Code Forms"] and which
+   the 21264 discards early in the pipeline [21264 Compiler Writer's Guide,
+   3.2]: no FEN fault with the FPU disabled. GNU as pads code alignment with
+   it, and Linux runs such padding before it has a trap vector to take the
+   fault on (docs/linux.md). */
 #define DO_CPYS                                                                \
-  FPSTART;                                                                     \
-  state.f[FREG_3] =                                                            \
-      (state.f[FREG_1] & FPR_SIGN) | (state.f[FREG_2] & ~FPR_SIGN);
+  if (ins != 0x5fff041f) {                                                     \
+    FPSTART;                                                                   \
+    state.f[FREG_3] =                                                          \
+        (state.f[FREG_1] & FPR_SIGN) | (state.f[FREG_2] & ~FPR_SIGN);          \
+  }
 
 #define DO_CPYSN                                                               \
   FPSTART;                                                                     \

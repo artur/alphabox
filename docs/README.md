@@ -39,6 +39,8 @@
 
 - [OpenVMS](openvms.md): installing and running OpenVMS 8.4 on the ES40,
   the SCSI and network drivers, DECwindows.
+- [Linux](linux.md): Gentoo's install CD on the ES40, an install to disk
+  without a network, and the emulator bugs Linux found.
 - [Guest drivers](guest-drivers.md): the Windows drivers written with nada
   for hardware no Alpha Windows had a driver for (USB 2.0, virtio, the
   Radeon 7500 with Direct3D).

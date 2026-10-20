@@ -80,9 +80,12 @@ Besides keys, the two variables take these tokens:
 
 - **`dbg-dump`** (`KEYPIPE` only, JIT builds): every processor prints its
   state at its next dispatch batch, as `%DBG-I-DUMP`/`CODE`/`STACK` lines.
-  That is the PC, SDE, mode, ASN, both register banks, the code around the
-  PC and 512 bytes of stack. It is for looking at a guest that has hung
-  without changing how it runs until then.
+  That is the PC, SDE, mode, ASN, PAL base, `EXC_ADDR`, `EXC_SUM`, `VA`,
+  `MM_STAT`, both register banks, the code around the PC (read physically
+  when the PC is in PALcode) and 512 bytes of stack. It is for looking at
+  a guest that has hung without changing how it runs until then. A run
+  without a GUI, which has no key pipe, gets the same dump from
+  `kill -USR2 <pid>`.
 - **`tablet:X:Y[:B]`** puts the USB tablet's pointer (`port1 = "tablet";`
   on `ali_usb`) at X,Y, with buttons B (bit 0 left, 1 right, 2 middle).
   X and Y are fractions of the screen when at most 1, else guest pixels.

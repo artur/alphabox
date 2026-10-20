@@ -339,6 +339,26 @@ Two more holes of the same shape were closed with it:
   `ALPHABOX_DPC_KEEP=0` eviction path and the per-entry pass of `tbis_d`
   did nothing there. It compares VA<47:13> now.
 
+### Closed 2026-10-20: `FNOP` took a floating-point disabled fault
+
+Every floating-point operate instruction checked the FPU enable first, so
+`FNOP` (`CPYS F31,F31,F31`, `5FFF041F`) took a FEN fault while the FPU was
+disabled. The *Alpha Architecture Handbook* (1992), appendix A, "Stylized
+Code Forms", says of the standard `NOP` and `FNOP`: "These generate no
+exceptions". The 21264/21364 Compiler Writer's Guide, 3.2, says the
+processor "discards NOP instructions early in the pipeline".
+
+GNU as pads code alignment with `nop; fnop; unop`. Linux's `memmove` runs
+such padding from the first `printk`, before `trap_init` has set any trap
+vector, with the FPU disabled. The fault went to a vector of 0, the fetch
+from 0 faulted again, and the frames pushed for each fault walked down
+over the kernel and the PALcode. Linux never printed a line
+([linux.md](linux.md)).
+
+Now the exact `FNOP` encoding does nothing in the interpreter and is a NOP
+to the JIT. Any other floating-point instruction, `F31` operands or not,
+still faults with the FPU disabled: the architecture says any of them may.
+
 ### Smaller ones
 
 | What | Where | Consequence |
