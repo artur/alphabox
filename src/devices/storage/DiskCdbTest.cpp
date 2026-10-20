@@ -913,6 +913,56 @@ void t_write_protect(Rig &r) {
         "MODE SENSE(6): WP clear on a writable disk");
 }
 
+/// DISK-15: transfers above 256 KiB.
+void t_big(Rig &r) {
+  group("DISK-15 large transfers");
+  CCdbTestAdapter *a = r.a;
+  for (u16 n : {512, 513, 1024, 2048, 8192}) {
+    char name[64];
+    Res rd = a->run(0, cdb10(0x28, 1000, n));
+    snprintf(name, sizeof(name), "READ(10) of %u blocks", n);
+    check(rd.good() && blocks_ok(rd.in, 1000, n, 512), name, "%s",
+          rd.why().c_str());
+  }
+  std::vector<u8> w(2048 * 512);
+  for (int i = 0; i < 2048; i++)
+    fill_block(&w[i * 512], 1000 + i, 512);
+  Res wr = a->run(0, cdb10(0x2a, 4000, 2048), w);
+  check(wr.good() && wr.out_taken == w.size(), "WRITE(10) of 2048 blocks", "%s",
+        wr.why().c_str());
+  Res back = a->run(0, cdb10(0x28, 4000, 2048));
+  check(back.good() && back.in == w, "it reads back");
+  r.disk->flush();
+  check(read_file(path("disk.img"), 4000 * 512, w.size()) == w,
+        "it reached the image");
+
+  // A state file written before the transfer state was appended (24 bytes
+  // shorter) still restores.
+  FILE *f = fopen(path("disk.state").c_str(), "wb+");
+  r.disk->SaveState(f);
+  fseek(f, 0, SEEK_END);
+  std::vector<u8> st((size_t)ftell(f));
+  fseek(f, 0, SEEK_SET);
+  st.resize(fread(st.data(), 1, st.size(), f));
+  fclose(f);
+  long ss = 0;
+  memcpy(&ss, &st[4], sizeof(long));
+  const size_t data_at = 4 + sizeof(long);
+  std::vector<u8> old(st.begin(), st.begin() + data_at + ss - 24);
+  old.insert(old.end(), st.end() - 4, st.end());
+  ss -= 24;
+  memcpy(&old[4], &ss, sizeof(long));
+  f = fopen(path("disk.state").c_str(), "wb+");
+  fwrite(old.data(), 1, old.size(), f);
+  fseek(f, 0, SEEK_SET);
+  const int rc = r.disk->RestoreState(f);
+  fclose(f);
+  remove(path("disk.state").c_str());
+  Res after = a->run(0, cdb10(0x28, 1000, 600));
+  check(rc == 0 && after.good() && blocks_ok(after.in, 1000, 600, 512),
+        "a state file from before the transfer state restores");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -973,6 +1023,7 @@ int main_cdbtest(int argc, char **argv) {
   t_inquiry_len(r);
   t_lun(r);
   t_write_protect(r);
+  t_big(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

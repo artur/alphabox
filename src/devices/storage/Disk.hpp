@@ -278,6 +278,25 @@ protected:
       // **/ int disconnect_phase;       /**< After we reconnect, we should go
       // to this SCSI phase. **/
     } scsi;
+
+    /// A READ or WRITE moves through the data buffers a piece at a time:
+    /// what is left of it after the piece in the buffer now. Appended to
+    /// the state (2026-10); a state file from before has no such field,
+    /// which RestoreState() accepts and reads as "nothing left".
+    struct SDisk_stream {
+      u64 lba;    /**< The next block to read or write. **/
+      u64 blocks; /**< Blocks still to move after the buffer's piece. **/
+      u32 write;  /**< 1: a WRITE takes DATA OUT pieces; 0: a READ. **/
+      u32 active; /**< A transfer is in flight. **/
+    } stream;
   } state;
+
+  bool stream_read_next();
+  int stream_write_piece();
+  /// Blocks per piece: as many as the data buffers hold.
+  u64 stream_piece_blocks() const {
+    return (u64)(DATI_BUFSZ < DATO_BUFSZ ? DATI_BUFSZ : DATO_BUFSZ) /
+           state.block_size;
+  }
 };
 #endif //! defined(__DISK_H__)

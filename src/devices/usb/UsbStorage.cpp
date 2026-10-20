@@ -335,17 +335,24 @@ CUsbDevice::Result CUsbStorage::data_out(int ep, const u8 *buf, int len) {
     return USB_ACK;
   // The host's data is all here: hand the disk what it asked for. The
   // residue counts what the command did not take.
+  // A long WRITE takes its data a buffer's piece at a time, so the disk
+  // stays in DATA OUT until it has had all of it.
   u32 taken = 0;
   if (scsi_get_phase(0) == SCSI_PHASE_DATA_OUT) {
-    const size_t want = scsi_expected_xfer(0);
-    if (m_buf.size() >= want) {
-      memcpy(scsi_xfer_ptr(0, want), m_buf.data(), want);
+    while (scsi_get_phase(0) == SCSI_PHASE_DATA_OUT) {
+      const size_t want = scsi_expected_xfer(0);
+      if (m_buf.size() - taken < want)
+        break;
+      memcpy(scsi_xfer_ptr(0, want), m_buf.data() + taken, want);
       scsi_xfer_done(0);
-      finish();
-      taken = (u32)want;
-    } else {
+      taken += (u32)want;
+    }
+    if (scsi_get_phase(0) == SCSI_PHASE_DATA_OUT) {
       scsi_bus[0]->reset_bus(); // too little data: the command cannot run
       m_status = CSW_PHASE_ERROR;
+      taken = 0;
+    } else {
+      finish();
     }
   }
   m_moved = taken;

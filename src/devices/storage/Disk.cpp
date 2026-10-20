@@ -104,6 +104,7 @@ CDisk::CDisk(CConfigurator *cfg, CSystem *sys, CDiskController *ctrl,
   state.block_size = is_cdrom ? 2048 : 512;
   state.scsi.sense.available = false;
   state.scsi.media_changed = 0;
+  memset(&state.stream, 0, sizeof(state.stream));
   set_locked(false);
 
   myCtrl->register_disk(this, myBus, myDev);
@@ -180,6 +181,7 @@ void CDisk::scsi_select_me(int bus) {
   state.scsi.stat.read = 0;
   state.scsi.lun_selected = false;
   identify_received = false;
+  memset(&state.stream, 0, sizeof(state.stream));
 
   // state.scsi.disconnect_priv = false;
   // state.scsi.will_disconnect = false;
@@ -233,12 +235,16 @@ int CDisk::RestoreState(FILE *f) {
     return -1;
   }
 
-  if (ss != sizeof(state)) {
+  // A state file from before state.stream was appended holds everything up
+  // to it: no transfer is left over from it.
+  const long before_stream = (long)offsetof(SDisk_state, stream);
+  if (ss != sizeof(state) && ss != before_stream) {
     printf("%s: STRUCT SIZE does not match!\n", devid_string);
     return -1;
   }
+  memset(&state.stream, 0, sizeof(state.stream));
 
-  r = fread(&state, sizeof(state), 1, f);
+  r = fread(&state, ss, 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
@@ -422,6 +428,12 @@ void CDisk::scsi_xfer_done_me(int bus) {
     if (state.scsi.dato.written < state.scsi.dato.expected)
       break;
 
+    // A WRITE writes each piece as it arrives and asks for the next one.
+    if (state.stream.active && state.stream.write) {
+      newphase = stream_write_piece();
+      break;
+    }
+
     res = do_scsi_command();
     if (res == 2)
       FAILURE(IllegalState, "do_command returned 2 after DATA OUT phase");
@@ -434,6 +446,12 @@ void CDisk::scsi_xfer_done_me(int bus) {
 
   case SCSI_PHASE_DATA_IN:
     if (state.scsi.dati.read < state.scsi.dati.available)
+      break;
+
+    // A READ longer than the buffer refills it and stays in DATA IN; the
+    // initiator reads on with the next scsi_expected_xfer().
+    if (state.stream.active && !state.stream.write && state.stream.blocks &&
+        stream_read_next())
       break;
 
     newphase = SCSI_PHASE_STATUS;
@@ -1112,6 +1130,67 @@ int CDisk::mode_sense_page(int page, bool changeable, int q) {
   }
 
   return q + len + 2;
+}
+
+/**
+ * \brief The next piece of a READ longer than the data buffer.
+ *
+ * Reads the blocks after the piece the initiator has just taken into
+ * dati.data. Returns false, with CHECK CONDITION set up, if the medium
+ * cannot be read there.
+ **/
+bool CDisk::stream_read_next() {
+  const u64 n = std::min(state.stream.blocks, stream_piece_blocks());
+  const u64 at = state.stream.lba;
+  if (!seek_block(at) || read_blocks(state.scsi.dati.data, n) != n) {
+    memset(&state.stream, 0, sizeof(state.stream));
+    do_scsi_error(SCSI_READ_ERROR, (int)at);
+    return false;
+  }
+  state.stream.lba += n;
+  state.stream.blocks -= n;
+  state.scsi.dati.available = (unsigned int)(n * state.block_size);
+  state.scsi.dati.read = 0;
+  return true;
+}
+
+/**
+ * \brief Write the piece of a WRITE that DATA OUT has just delivered.
+ *
+ * state.stream.lba is the block after that piece. Returns the next phase:
+ * DATA OUT for the next piece, or STATUS when the command is done or has
+ * failed.
+ **/
+int CDisk::stream_write_piece() {
+  const u64 n = state.scsi.dato.written / state.block_size;
+  const u64 at = state.stream.lba - n;
+  if (!seek_block(at)) {
+    memset(&state.stream, 0, sizeof(state.stream));
+    do_scsi_error(SCSI_LBA_RANGE);
+    return SCSI_PHASE_STATUS;
+  }
+  // A write the host could not complete (its disk full, an I/O error) is
+  // an error the guest hears about, not a GOOD over lost data: HARDWARE
+  // ERROR, PERIPHERAL DEVICE WRITE FAULT (03h/00h, a direct-access code in
+  // SCSI-2 table 71 and SPC-3 table 28), with the LBA it was writing.
+  if (write_blocks(state.scsi.dato.data, n) != n) {
+    printf("%s: write of %" PRIu64 " blocks at %" PRIu64 " failed.\n",
+           devid_string, n, at);
+    memset(&state.stream, 0, sizeof(state.stream));
+    do_scsi_error(SCSI_WRITE_FAULT, (int)at);
+    return SCSI_PHASE_STATUS;
+  }
+  if (state.stream.blocks) {
+    const u64 next = std::min(state.stream.blocks, stream_piece_blocks());
+    state.stream.lba += next;
+    state.stream.blocks -= next;
+    state.scsi.dato.expected = (unsigned int)(next * state.block_size);
+    state.scsi.dato.written = 0;
+    return SCSI_PHASE_DATA_OUT;
+  }
+  memset(&state.stream, 0, sizeof(state.stream));
+  do_scsi_error(SCSI_OK);
+  return SCSI_PHASE_STATUS;
 }
 
 /**
@@ -2434,26 +2513,29 @@ int CDisk::do_scsi_command() {
       break;
     }
 
-    // Would exceed buffer?
-    if (blocks * get_block_size() > DATI_BUFSZ) {
-      printf("%s: read too big (%" PRIu64 ")\n", devid_string, blocks);
-      do_scsi_error(SCSI_TOO_BIG);
-      break;
-    }
-
-    //  Return data:
-    if (blocks > 0) {
-      if (!seek_block(lba)) {
-        do_scsi_error(SCSI_LBA_RANGE);
-        break;
+    //  Return data: the first piece now, the rest as the initiator takes
+    //  it (stream_read_next). The length is limited only by the CDB and
+    //  the capacity (SBC-3 5.11); it used to be refused above the 256 KiB
+    //  buffer with SYSTEM RESOURCE FAILURE.
+    {
+      const u64 n = std::min(blocks, stream_piece_blocks());
+      if (n > 0) {
+        if (!seek_block(lba)) {
+          do_scsi_error(SCSI_LBA_RANGE);
+          break;
+        }
+        if (read_blocks(state.scsi.dati.data, n) != n) {
+          do_scsi_error(SCSI_READ_ERROR, (int)lba);
+          break;
+        }
       }
-      if (read_blocks(state.scsi.dati.data, blocks) != blocks) {
-        do_scsi_error(SCSI_READ_ERROR, (int)lba);
-        break;
-      }
+      state.scsi.dati.read = 0;
+      state.scsi.dati.available = (unsigned int)(n * get_block_size());
+      state.stream.lba = lba + n;
+      state.stream.blocks = blocks - n;
+      state.stream.write = 0;
+      state.stream.active = state.stream.blocks != 0;
     }
-    state.scsi.dati.read = 0;
-    state.scsi.dati.available = (unsigned int)(blocks * get_block_size());
 
 #if defined(DEBUG_SCSI)
     printf("%s: READ  ofs=%" PRIu64 " size=%" PRIu64 "\n", devid_string, lba,
@@ -2550,41 +2632,28 @@ int CDisk::do_scsi_command() {
       break;
     }
 
-    // Would exceed buffer?
-    if (blocks * get_block_size() > DATO_BUFSZ) {
-      printf("%s: write too big (%" PRIu64 ")\n", devid_string,
-             blocks * get_block_size());
-      do_scsi_error(SCSI_TOO_BIG);
-      break;
-    }
-
-    state.scsi.dato.expected = (unsigned int)(blocks * get_block_size());
-
-    if (state.scsi.dato.written < state.scsi.dato.expected)
-      return 2;
-
-    //  Write data
-    if (blocks > 0 && !seek_block(lba)) {
-      do_scsi_error(SCSI_LBA_RANGE);
-      break;
-    }
-    // A write the host could not complete (its disk full, an I/O error) is
-    // an error the guest hears about, not a GOOD over lost data: HARDWARE
-    // ERROR, PERIPHERAL DEVICE WRITE FAULT (03h/00h, a direct-access code in
-    // SCSI-2 table 71 and SPC-3 table 28), with the LBA it was writing.
-    if (write_blocks(state.scsi.dato.data, blocks) != blocks) {
-      printf("%s: write of %" PRIu64 " blocks at %" PRIu64 " failed.\n",
-             devid_string, blocks, lba);
-      do_scsi_error(SCSI_WRITE_FAULT, (int)lba);
-      break;
-    }
-
 #if defined(DEBUG_SCSI)
     printf("%s: WRITE  ofs=%" PRIu64 " size=%" PRIu64 "\n", devid_string, lba,
            blocks);
 #endif
-    do_scsi_error(SCSI_OK);
-    break;
+    if (blocks == 0) {
+      do_scsi_error(SCSI_OK); // nothing to write (SBC-3 5.32)
+      break;
+    }
+
+    //  Write data: DATA OUT one buffer's piece at a time, each written as
+    //  it arrives (stream_write_piece); the length is limited only by the
+    //  CDB and the capacity, where it used to be refused above 256 KiB.
+    {
+      const u64 n = std::min(blocks, stream_piece_blocks());
+      state.scsi.dato.expected = (unsigned int)(n * get_block_size());
+      state.scsi.dato.written = 0;
+      state.stream.lba = lba + n;
+      state.stream.blocks = blocks - n;
+      state.stream.write = 1;
+      state.stream.active = 1;
+    }
+    return 2;
 
   case SCSICMD_SYNCHRONIZE_CACHE:
 #if defined(DEBUG_SCSI)
