@@ -1020,6 +1020,49 @@ void t_lba64(Rig &r) {
   remove(path("big.img").c_str());
 }
 
+/// Feature: VPD pages 0x83 and 0xB0.
+void t_vpd(Rig &r) {
+  group("VPD pages");
+  CCdbTestAdapter *a = r.a;
+  Res v0 = a->run(0, {0x12, 1, 0x00, 0, 255, 0});
+  bool has83 = false, hasb0 = false;
+  for (size_t i = 4; i < v0.in.size() && i < 4u + v0.in[3]; i++) {
+    has83 |= v0.in[i] == 0x83;
+    hasb0 |= v0.in[i] == 0xb0;
+  }
+  check(has83 && hasb0 && v0.in[3] == 4 && v0.in[4] == 0 && v0.in[5] == 0x80 &&
+            v0.in[6] == 0x83 && v0.in[7] == 0xb0,
+        "page 0 lists 0x00, 0x80, 0x83 and 0xB0, in order");
+  Res v83 = a->run(0, {0x12, 1, 0x83, 0, 255, 0});
+  const std::string id =
+      std::string("DEC     RZ58     (C) DEC") + r.disk->get_serial();
+  check(v83.good() && v83.in.size() >= 8 + id.size() && v83.in[1] == 0x83 &&
+            v83.in[3] == 4 + id.size() && v83.in[4] == 0x02 &&
+            v83.in[5] == 0x01 && v83.in[7] == id.size() &&
+            memcmp(&v83.in[8], id.data(), id.size()) == 0,
+        "page 0x83: one T10 vendor ID designator, vendor, product, serial",
+        "%s", v83.why().c_str());
+  Res vb0 = a->run(0, {0x12, 1, 0xb0, 0, 255, 0});
+  bool zeros = vb0.in.size() >= 64;
+  for (size_t i = 4; zeros && i < 64; i++)
+    zeros = vb0.in[i] == 0;
+  check(vb0.good() && vb0.in[1] == 0xb0 && be16(vb0.in, 2) == 0x3c && zeros,
+        "page 0xB0: length 3Ch, no limits reported", "%s", vb0.why().c_str());
+  Res c0 = a->run(3, {0x12, 1, 0x00, 0, 255, 0});
+  check(c0.good() && c0.in.size() > 6 && c0.in[3] == 3 && c0.in[6] == 0x83,
+        "a CD-ROM lists 0x00, 0x80, 0x83");
+  Res c83 = a->run(3, {0x12, 1, 0x83, 0, 255, 0});
+  check(c83.good() && c83.in.size() > 32 &&
+            memcmp(&c83.in[8], "DEC     RRD42   (C) DEC ", 24) == 0,
+        "a CD-ROM's page 0x83");
+  expect_cc(r, 3, a->run(3, {0x12, 1, 0xb0, 0, 255, 0}),
+            "no block limits page on a CD-ROM", 5, 0x24, 0);
+  Res u83 = a->run(5, {0x12, 1, 0x83, 0, 255, 0});
+  check(u83.good() && std::string(r.emptycd->get_serial()) !=
+                          std::string(r.cd->get_serial()),
+        "every drive its own identifier");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1083,6 +1126,7 @@ int main_cdbtest(int argc, char **argv) {
   t_write_protect(r);
   t_big(r);
   t_lba64(r);
+  t_vpd(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

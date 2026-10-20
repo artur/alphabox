@@ -1458,16 +1458,17 @@ int CDisk::do_scsi_command() {
 #endif
     // EVPD is the only bit of byte 1 there is (bit 1, CmdDt, came and went
     // with SPC-2); a page code without EVPD asks for nothing; and the vital
-    // product data pages we have are 0x00 and 0x80 (not 0x83, device
-    // identification: page 0 does not list it). Anything else is ILLEGAL
-    // REQUEST, INVALID FIELD IN CDB -- not something to stop the machine
-    // for, which an unknown page used to do.
+    // product data pages we have are 0x00, 0x80, 0x83 and, on a disk, 0xB0.
+    // Anything else is ILLEGAL REQUEST, INVALID FIELD IN CDB -- not
+    // something to stop the machine for, which an unknown page used to do.
     const bool evpd = (state.scsi.cmd.data[1] & 0x01) != 0;
     const u8 vpd_page = state.scsi.cmd.data[2];
+    const bool vpd_known = vpd_page == 0x00 || vpd_page == 0x80 ||
+                           vpd_page == 0x83 || (vpd_page == 0xb0 && !cdrom());
     // ALPHABOX_TRACE_INQUIRY=1: what each guest asks a disk about itself.
     static const bool trace_inquiry = getenv("ALPHABOX_TRACE_INQUIRY") != 0;
     if ((state.scsi.cmd.data[1] & 0x1e) != 0x00 ||
-        (evpd ? (vpd_page != 0x00 && vpd_page != 0x80) : vpd_page != 0)) {
+        (evpd ? !vpd_known : vpd_page != 0)) {
       if (trace_inquiry)
         printf("%s: INQUIRY cdb %02x %02x %02x %02x %02x: refused (invalid "
                "field).\n",
@@ -1482,12 +1483,12 @@ int CDisk::do_scsi_command() {
         printf("%s: INQUIRY, %d bytes%s.\n", devid_string,
                state.scsi.cmd.data[4],
                state.scsi.lun_selected ? " (a LUN we do not have)" : "");
-      else if (vpd_page == 0x80)
-        printf("%s: INQUIRY page 0x80, %d bytes: serial number \"%s\".\n",
-               devid_string, state.scsi.cmd.data[4], get_serial());
+      else if (vpd_page == 0x80 || vpd_page == 0x83)
+        printf("%s: INQUIRY page 0x%02x, %d bytes: serial number \"%s\".\n",
+               devid_string, vpd_page, state.scsi.cmd.data[4], get_serial());
       else
-        printf("%s: INQUIRY page 0x00, %d bytes: pages 0x00, 0x80.\n",
-               devid_string, state.scsi.cmd.data[4]);
+        printf("%s: INQUIRY page 0x%02x, %d bytes.\n", devid_string, vpd_page,
+               state.scsi.cmd.data[4]);
     }
 
     u8 qual_dev = state.scsi.lun_selected ? 0x7F : (cdrom() ? 0x05 : 0x00);
@@ -1501,41 +1502,83 @@ int CDisk::do_scsi_command() {
     // The data phase is as long as the initiator allows, as it always was
     // here (no controller model takes a short one in its stride); what lies
     // past the page is zeros, not what the last command left behind.
-    memset(state.scsi.dati.data, 0, std::max<size_t>(retlen, 36));
+    memset(state.scsi.dati.data, 0, std::max<size_t>(retlen, 64));
     state.scsi.dati.data[0] = qual_dev; // device type
     if (evpd) {
+      // The serial number pages 0x80 and 0x83 show: the disk's own
+      // (get_serial), cut to 32 ASCII graphic characters.
+      std::string serial = get_serial();
+      if (serial.size() > 32)
+        serial.resize(32);
+      for (char &ch : serial)
+        if (ch < 0x20 || ch > 0x7e)
+          ch = ' ';
 
       // Vital Product Data
+      u8 *d = state.scsi.dati.data;
       switch (vpd_page) {
       case 0x00:
 
         // Page 0 is basically a list of page codes supported, so if
         // any others are added, make sure to insert them in the proper
         // place (ascending order) and increase the page length.
-        state.scsi.dati.data[1] = 0x00; // page code 0
-        state.scsi.dati.data[2] = 0x00; // reserved
-        state.scsi.dati.data[3] = 0x02; // page length
-        state.scsi.dati.data[4] = 0x00; // page 0 is supported.
-        state.scsi.dati.data[5] = 0x80; // page 0x80 is supported.
+        d[1] = 0x00;            // page code 0
+        d[2] = 0x00;            // reserved
+        d[3] = cdrom() ? 3 : 4; // page length
+        d[4] = 0x00;            // page 0 is supported.
+        d[5] = 0x80;            // unit serial number
+        d[6] = 0x83;            // device identification
+        d[7] = 0xb0; // block limits (disks only; the length leaves it out)
+        if (cdrom())
+          d[7] = 0x00;
         break;
 
-      case 0x80: {
+      case 0x80:
         // Unit serial number page: the disk's own serial (get_serial), the
         // one an IDE drive shows in IDENTIFY. It was "SRL" and the SCSI id
         // twice ("SRL0101"): the same disk on every adapter of the machine,
-        // and "SRL0000" for every USB disk. ASCII graphic characters only.
-        std::string serial = get_serial();
-        if (serial.size() > 32)
-          serial.resize(32);
-        for (char &ch : serial)
-          if (ch < 0x20 || ch > 0x7e)
-            ch = ' ';
-        state.scsi.dati.data[1] = 0x80; // page code: 0x80
-        state.scsi.dati.data[2] = 0x00; // reserved
-        state.scsi.dati.data[3] = (u8)serial.size();
-        memcpy(&state.scsi.dati.data[4], serial.data(), serial.size());
+        // and "SRL0000" for every USB disk.
+        d[1] = 0x80; // page code: 0x80
+        d[2] = 0x00; // reserved
+        d[3] = (u8)serial.size();
+        memcpy(&d[4], serial.data(), serial.size());
+        break;
+
+      case 0x83: {
+        // Device identification (SPC-3 7.6.3): one designator naming the
+        // logical unit, which 7.6.3.2.1 requires -- association 00b, type
+        // 1h, T10 vendor ID based, in ASCII (code set 2h). Its vendor
+        // specific part is "the PRODUCT IDENTIFICATION field from the
+        // standard INQUIRY data and the PRODUCT SERIAL NUMBER field from
+        // the Unit Serial Number VPD page", the construction 7.6.3.4
+        // recommends; the serial is unique in the machine, so the whole
+        // designator is.
+        const char *product = cdrom() ? "RRD42   (C) DEC " : "RZ58     (C) DEC";
+        const size_t idlen = 8 + 16 + serial.size();
+        d[1] = 0x83;
+        d[2] = 0;
+        d[3] = (u8)(4 + idlen); // page length: the one descriptor
+        d[4] = 0x02;            // protocol identifier 0, code set: ASCII
+        d[5] = 0x01;            // PIV 0, association 00b, type 1h
+        d[6] = 0;
+        d[7] = (u8)idlen;
+        memcpy(&d[8], "DEC     ", 8);
+        memcpy(&d[16], product, 16);
+        memcpy(&d[32], serial.data(), serial.size());
         break;
       }
+
+      case 0xb0:
+        // Block limits (SBC-3 6.5.3), page length 3Ch, every field 0: no
+        // COMPARE AND WRITE, no reported transfer length granularity, "If
+        // the device server sets the MAXIMUM TRANSFER LENGTH field to zero,
+        // then there is no reported limit on the transfer length" (a READ
+        // or WRITE moves in buffer pieces whatever its length), no optimal
+        // length, no UNMAP.
+        d[1] = 0xb0;
+        d[2] = 0;
+        d[3] = 0x3c;
+        break;
       }
     } else {
 
