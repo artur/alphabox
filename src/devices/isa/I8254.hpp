@@ -60,7 +60,8 @@
 struct SPit_state {
   /// [c] the count as clock() decrements it; [c + PIT_OFFSET_LATCH] the
   /// latch word (count, flags, a latched status byte; see I8254.cpp);
-  /// [c + PIT_OFFSET_MAX] the initial count, 1..65536.
+  /// [c + PIT_OFFSET_MAX] the initial count, 1..65536, and in its top
+  /// byte the LSB of a two-byte count whose MSB is still to come.
   u32 counter[9];
   /// [c] the status byte a read-back returns: OUT (bit 7), NULL COUNT
   /// (bit 6), read/write mode, mode, BCD.
@@ -123,6 +124,10 @@ private:
   u16 count_now_locked(int c, u64 now);
   void freeze_locked(int c, u64 now, SPit_state &into);
   u64 phase_locked(int c) const;
+  void schedule_locked(int c, u32 count, u64 now);
+  void settle_locked(int c, u64 now);
+  /// The initial count, without the waiting LSB above it.
+  u32 initial(int c) const { return s.counter[c + PIT_OFFSET_MAX] & 0x1ffffU; }
   /// Input clocks from `from` to `to` (0 if `to` is earlier).
   static u64 clocks_between(u64 from, u64 to);
   static u64 ns_for_clocks(u64 clocks);
@@ -140,6 +145,12 @@ private:
   /// The GATE inputs. Not in the state file: the owner sets counter 2's
   /// from port 61h after a restore.
   bool gate[3] = {true, true, false};
+  /// A count written to a running mode 2 or 3 counter, waiting for the end
+  /// of the cycle (0: none); when it takes over, and the phase reference it
+  /// brings. Not in the state file: save() writes it as loaded.
+  u32 next_n[3] = {};
+  u64 next_at[3] = {};
+  u64 next_epoch[3] = {};
 };
 
 #endif // !defined(INCLUDED_I8254_H)

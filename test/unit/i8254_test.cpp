@@ -280,6 +280,101 @@ static void test_restore_old_file() {
   CHECK(b.pit.out(2));
 }
 
+/// Reads and writes of one counter may interleave (data sheet p.8): read
+/// LSB, write new LSB, read MSB, write new MSB. The MSB read belongs to the
+/// count whose LSB was read; and a latched count survives the first byte of
+/// a new count.
+static void test_interleave() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 2, 0x1234);
+  const u8 lo = r.in(2); // count now, 0x1234 (no time passed)
+  r.outb(2, 0x00);       // new count LSB
+  const u8 hi = r.in(2);
+  r.outb(2, 0x20); // new count MSB: 0x2000
+  CHECK_EQ(lo | (hi << 8), 0x1234);
+
+  Rig q;
+  q.pit.load_gate(2, true);
+  q.program(2, 0, 0x4000);
+  q.clocks(0x100);
+  q.outb(3, 0x80); // latch counter 2: 0x3f00
+  q.outb(2, 0x55); // first byte of a new count
+  const u8 l2 = q.in(2);
+  CHECK_EQ(l2 | (q.in(2) << 8), 0x3f00);
+  q.outb(2, 0x01); // the new count is 0x0155, loaded now (mode 0)
+  CHECK_EQ(q.latch_count(2), 0x0155);
+}
+
+/// Mode 2: a count written while counting takes over at the end of the
+/// current period; NULL COUNT shows until then (data sheet p.9-10).
+static void test_mode2_new_count() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 2, 1000);
+  r.clocks(300);
+  r.outb(2, 500 & 0xff);
+  r.outb(2, 500 >> 8);
+  CHECK_EQ(r.status(2) & 0x40, 0x40);
+  r.clocks(600); // 900: still the old count
+  const u16 a = r.latch_count(2);
+  CHECK(a >= 99 && a <= 101);
+  r.clocks(200); // 1100: the new count, 100 clocks in
+  const u16 b = r.latch_count(2);
+  CHECK(b >= 399 && b <= 401);
+  CHECK_EQ(r.status(2) & 0x40, 0);
+}
+
+/// Mode 3: a count written while counting takes over at the end of the
+/// current half-cycle (data sheet p.12-13).
+static void test_mode3_new_count() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 3, 1000);
+  r.clocks(200); // high half of the old count
+  r.outb(2, 600 & 0xff);
+  r.outb(2, 600 >> 8);
+  r.clocks(290); // 490
+  CHECK(r.pit.out(2));
+  r.clocks(20); // 510: the new count's low half (300 clocks) from 500
+  CHECK(!r.pit.out(2));
+  r.clocks(280); // 790
+  CHECK(!r.pit.out(2));
+  r.clocks(20); // 810: high half of the new count
+  CHECK(r.pit.out(2));
+  r.clocks(300); // 1110: low again (high 800-1100)
+  CHECK(!r.pit.out(2));
+}
+
+/// A trigger on GATE loads a waiting count at once; a control word drops it.
+static void test_new_count_trigger() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 2, 1000);
+  r.clocks(300);
+  r.outb(2, 500 & 0xff);
+  r.outb(2, 500 >> 8);
+  r.pit.set_gate(2, false);
+  r.pit.set_gate(2, true);
+  r.clocks(100);
+  const u16 a = r.latch_count(2);
+  CHECK(a >= 399 && a <= 401);
+
+  Rig q;
+  q.pit.load_gate(2, true);
+  q.program(2, 2, 1000);
+  q.clocks(300);
+  q.outb(2, 500 & 0xff);
+  q.outb(2, 500 >> 8);
+  q.outb(3, 0xb4); // control word, counter 2 mode 2: the waiting count goes
+  CHECK_EQ(q.status(2) & 0x40, 0x40);
+  q.outb(2, 0x00);
+  q.outb(2, 0x08); // 0x800, loaded at once: no count was running
+  q.clocks(0x100);
+  const u16 b = q.latch_count(2);
+  CHECK(b >= 0x6ff && b <= 0x701);
+}
+
 int main() {
   test_mode3_wave();
   test_mode3_irq0();
@@ -291,6 +386,10 @@ int main() {
   test_gate();
   test_save_restore();
   test_restore_old_file();
+  test_interleave();
+  test_mode2_new_count();
+  test_mode3_new_count();
+  test_new_count_trigger();
   printf("i8254_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

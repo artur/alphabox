@@ -135,7 +135,8 @@ u8 CI8254::read(u32 port) {
  * count -- delay-calibration loops do -- sees it move between clock() steps.
  **/
 u16 CI8254::count_now_locked(int c, u64 now) {
-  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  settle_locked(c, now);
+  const u32 n = initial(c);
   if ((s.status[c] & 0x40) || !n || !gate[c]) // unloaded, or gated off
     return (u16)s.counter[c];
   const u64 clocks = clocks_between(epoch[c], now);
@@ -167,8 +168,9 @@ void CI8254::write(u32 port, u8 data) {
           continue;
         u32 &latch = s.counter[c + PIT_OFFSET_LATCH];
         if (!(data & 0x10) && !(latch & PIT_LATCH_STATUS)) {
-          const u8 st =
-              (u8)((out_locked(c, now) ? 0x80 : 0) | (s.status[c] & 0x7f));
+          // NULL COUNT also while a written count waits to be loaded (p.9)
+          const u8 st = (u8)((out_locked(c, now) ? 0x80 : 0) |
+                             (next_n[c] ? 0x40 : 0) | (s.status[c] & 0x7f));
           latch |= PIT_LATCH_STATUS | ((u32)st << PIT_LATCH_STATUS_SHIFT);
         }
         if (!(data & 0x20) && !(latch & PIT_LATCH_VALID))
@@ -195,11 +197,15 @@ void CI8254::write(u32 port, u8 data) {
       s.status[counter] |= 0x80;
     s.mode[counter] = (u8)access; // write sequencing state
     s.counter[counter + PIT_OFFSET_LATCH] = 0;
+    s.counter[counter + PIT_OFFSET_MAX] &= 0x1ffffU; // no LSB waiting
+    next_n[counter] = 0;
     return;
   }
 
   if (port < 3) { // count register
-    const int access = (s.status[port] & 0x30) >> 4;
+    const int c = (int)port;
+    const int access = (s.status[c] & 0x30) >> 4;
+    u32 &init = s.counter[c + PIT_OFFSET_MAX];
     u32 count = 0;
     switch (access) {
     case 1: // LSB only
@@ -208,30 +214,81 @@ void CI8254::write(u32 port, u8 data) {
     case 2: // MSB only
       count = (u32)data << 8;
       break;
-    case 3: // LSB then MSB: stash the LSB until the MSB arrives
-      if (s.mode[port] == 3) {
-        s.counter[port + PIT_OFFSET_LATCH] = data;
-        s.mode[port] = 2;
+    case 3: // LSB then MSB
+      // The LSB waits for its MSB in the top byte of the initial count's
+      // word, apart from the latch: reads and writes of one counter may
+      // interleave (p.8), and a latch must not lose it.
+      if (s.mode[c] == 3) {
+        init = (init & 0x1ffffU) | ((u32)data << 24);
+        s.mode[c] = 2;
         return;
       }
-      count = (s.counter[port + PIT_OFFSET_LATCH] & 0xFFU) | ((u32)data << 8);
-      s.mode[port] = 3;
+      count = (init >> 24) | ((u32)data << 8);
+      init &= 0x1ffffU;
+      s.mode[c] = 3;
       break;
     default:
       return;
     }
     if (count == 0)
       count = 65536; // a zero count means 2^16
-    s.counter[port] = count;
-    s.counter[port + PIT_OFFSET_MAX] = count;
-    s.counter[port + PIT_OFFSET_LATCH] = 0;
-    s.status[port] &= ~0x40; // count loaded
-    if (mode_of((int)port) == 0)
-      s.status[port] &= ~0x80; // mode 0: OUT low while counting
+    settle_locked(c, now);
+    const int mode = mode_of(c);
+    if ((mode == 2 || mode == 3) && !(s.status[c] & 0x40) && gate[c] &&
+        initial(c)) {
+      // A new count while counting does not affect the current cycle: it is
+      // loaded at the end of the period in mode 2, of the half-cycle in
+      // mode 3 (p.10, p.12-13).
+      schedule_locked(c, count, now);
+      return;
+    }
+    next_n[c] = 0;
+    s.counter[c] = count;
+    init = count;
+    s.counter[c + PIT_OFFSET_LATCH] = 0;
+    s.status[c] &= ~0x40; // count loaded
+    if (mode == 0)
+      s.status[c] &= ~0x80; // mode 0: OUT low while counting
     else
-      s.status[port] |= 0x80;
-    epoch[port] = now; // phase reference
+      s.status[c] |= 0x80;
+    epoch[c] = now; // phase reference
   }
+}
+
+/**
+ * Hold a count written to a running mode 2 or 3 counter until the end of
+ * the current period (mode 2) or half-cycle (mode 3), with the phase
+ * reference it brings: in mode 3 a count taking over at the end of the high
+ * half starts with its own low half.
+ **/
+void CI8254::schedule_locked(int c, u32 count, u64 now) {
+  const u32 n = initial(c);
+  const u64 clocks = clocks_between(epoch[c], now);
+  const u64 start = clocks - clocks % n; // this period's first clock
+  if (mode_of(c) == 2) {
+    next_at[c] = epoch[c] + ns_for_clocks(start + n);
+    next_epoch[c] = next_at[c];
+  } else {
+    const u32 first = (n + 1) / 2;
+    if (clocks - start < first) {
+      next_at[c] = epoch[c] + ns_for_clocks(start + first);
+      next_epoch[c] = next_at[c] - ns_for_clocks((count + 1) / 2);
+    } else {
+      next_at[c] = epoch[c] + ns_for_clocks(start + n);
+      next_epoch[c] = next_at[c];
+    }
+  }
+  next_n[c] = count;
+}
+
+/// Load a waiting count once its time has come.
+void CI8254::settle_locked(int c, u64 now) {
+  if (!next_n[c] || now < next_at[c])
+    return;
+  u32 &init = s.counter[c + PIT_OFFSET_MAX];
+  init = (init & 0xff000000U) | next_n[c];
+  epoch[c] = next_epoch[c];
+  next_n[c] = 0;
 }
 
 bool CI8254::out(int c) {
@@ -245,12 +302,13 @@ bool CI8254::out(int c) {
  * edges quantized to the owner thread's wakeup cadence.
  **/
 bool CI8254::out_locked(int c, u64 now) {
+  settle_locked(c, now);
   const int mode = mode_of(c);
   if (s.status[c] & 0x40) // control word written, no count loaded yet
     return mode != 0;     // mode 0 starts low, the others high
   if (!gate[c])           // a low GATE inhibits the counter
     return mode == 0 ? (s.status[c] & 0x80) != 0 : true;
-  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  const u32 n = initial(c);
   if (!n)
     return true;
 
@@ -273,7 +331,8 @@ bool CI8254::out_locked(int c, u64 now) {
  * phase_locked() finds the same point of the count again.
  **/
 void CI8254::freeze_locked(int c, u64 now, SPit_state &into) {
-  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  settle_locked(c, now);
+  const u32 n = initial(c);
   if ((s.status[c] & 0x40) || !n || !gate[c]) // not counting: already held
     return;
   const u64 clocks = clocks_between(epoch[c], now);
@@ -310,7 +369,7 @@ void CI8254::freeze_locked(int c, u64 now, SPit_state &into) {
  * counter: the inverse of freeze_locked().
  **/
 u64 CI8254::phase_locked(int c) const {
-  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  const u32 n = initial(c);
   const u32 count = s.counter[c];
   if ((s.status[c] & 0x40) || !n)
     return 0;
@@ -333,8 +392,17 @@ u64 CI8254::phase_locked(int c) const {
 void CI8254::save(SPit_state &into) {
   std::lock_guard<std::mutex> guard(lock);
   const u64 now = now_ns();
-  for (int c = 0; c < 3; c++)
+  for (int c = 0; c < 3; c++) {
     freeze_locked(c, now, into);
+    if (next_n[c]) {
+      // A count still waiting for the end of the cycle is not in the file:
+      // the restored counter starts it, a cycle early at most.
+      u32 &init = into.counter[c + PIT_OFFSET_MAX];
+      init = (init & 0xff000000U) | next_n[c];
+      into.counter[c] = next_n[c];
+      into.status[c] |= 0x80;
+    }
+  }
 }
 
 void CI8254::restored() {
@@ -342,8 +410,18 @@ void CI8254::restored() {
   const u64 now = now_ns();
   last = now;
   acc = 0;
-  for (int c = 0; c < 3; c++)
+  for (int c = 0; c < 3; c++) {
+    next_n[c] = 0;
+    // A file from before the LSB of a two-byte count had a word of its own
+    // kept it in the latch word: move it.
+    u32 &latch = s.counter[c + PIT_OFFSET_LATCH];
+    u32 &init = s.counter[c + PIT_OFFSET_MAX];
+    if (s.mode[c] == 2 && !(init & 0xff000000U) && !(latch & 0xffffff00U)) {
+      init |= latch << 24;
+      latch = 0;
+    }
     epoch[c] = now - ns_for_clocks(phase_locked(c));
+  }
 }
 
 void CI8254::set_gate(int c, bool high) {
@@ -351,6 +429,7 @@ void CI8254::set_gate(int c, bool high) {
   const bool was_high = gate[c];
   const int mode = mode_of(c);
   const u64 now = now_ns();
+  settle_locked(c, now);
   if (was_high && !high) {
     if (mode == 0) // counting stops where it is; OUT keeps its level
       freeze_locked(c, now, s);
@@ -360,7 +439,12 @@ void CI8254::set_gate(int c, bool high) {
   gate[c] = high;
   if (!was_high && high) {
     if (mode == 2 || mode == 3) { // rising gate restarts the count
-      s.counter[c] = s.counter[c + PIT_OFFSET_MAX];
+      if (next_n[c]) {            // with a count written since, if there is one
+        u32 &init = s.counter[c + PIT_OFFSET_MAX];
+        init = (init & 0xff000000U) | next_n[c];
+        next_n[c] = 0;
+      }
+      s.counter[c] = initial(c);
       s.status[c] |= 0x80;
       epoch[c] = now;
     } else if (mode == 0) {
@@ -397,6 +481,7 @@ int CI8254::clock() {
 
   int irq0 = 0;
   for (int i = 0; i < 3; i++) {
+    settle_locked(i, now);
     if (s.status[i] & 0x40)
       continue;
     if (!gate[i]) // a low GATE holds the counter
@@ -417,7 +502,7 @@ int CI8254::clock() {
             // value
     {
       u64 dec = clocks * 2;
-      const u32 reload = s.counter[i + PIT_OFFSET_MAX];
+      const u32 reload = initial(i);
       while (dec >= s.counter[i]) {
         if (!reload) { // half-programmed counter: don't spin on a zero reload
           s.counter[i] = 0;
