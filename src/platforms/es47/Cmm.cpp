@@ -33,6 +33,8 @@
 #include "System.hpp"
 #include "Topology.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdarg>
 #include <ctime>
@@ -808,6 +810,209 @@ int CEs47Cmm::sensor_readings(u32 ip, bool volts, u8 *r) {
   return n;
 }
 
+// --- FRU EEPROMs and the environment (docs/platforms/marvel.md, M10) ---------
+
+u32 CEs47Cmm::systype() const {
+  return marvel()->topology().cmm_systype() & 0xff;
+}
+
+/// The system serial number the console takes as sys_serial_num when its
+/// NVRAM holds none: the board's name and "EM", as the disks' "ES40EM"
+/// serials (an invented identity; `set sys_serial_num` replaces it).
+std::string CEs47Cmm::system_serial() const {
+  std::string s;
+  for (const char *p = m_sys->platform().name; p && *p; p++)
+    s += (char)toupper((unsigned char)*p);
+  s += "EM";
+  s.resize(12, '0');
+  return s;
+}
+
+/**
+ * The FRU EEPROM `index` of the micro at `ip` (get_eerom_data, SMLAN 0x0a01),
+ * 256 bytes, false for one that is not there. build_fru_desc (0x2fe790)
+ * reads 0x90 bytes from offset 0 and makes the FRU's descriptor of four
+ * strings, `show fru` printing the third and fourth:
+ *
+ *   <0x40> 8 bytes, kept and not printed; the layout below needs <0x40> not
+ *          'J', which selects another one (part at <0x49>, serial <0x63>);
+ *   <0x63> the part number, 16 bytes; <0x73> the serial number, 10 bytes.
+ *
+ * Except a RIMM's (a FRU of type 0x21): its part number is the console's
+ * own, from a table (0x3b0848) keyed by the size the presence-detect bytes
+ * give (<4> row and column bits, <5><2:0> bank bits, <0x63> devices, times
+ * 16 bytes) and by bytes <0x0c> and <0x25>; its serial number is <0x80>,
+ * 16 bytes. And an ES47/ES80 MBM's EEPROMs 3 and 4, the drawer's power
+ * supplies: part <0x3e> 10 bytes, '.', <0x49> 2 bytes; serial <0x4c>, 14.
+ *
+ * Which EEPROM is which, from the console's builders:
+ *
+ *   a module's CMM: 0 the CMM (build_cmm_fru), 1 the dual processor module
+ *     (build_cpu_module_fru; and the system serial number, read_system_serial
+ *     0x2e2360: offset 0x80, 12 bytes), 2 + n RIMM n of the module's first
+ *     processor and 12 + n of its second (build_rimm_fru), 0x16 + n VRM n
+ *     (build_vrm_fru);
+ *   a drawer's MBM: the drawer's control panel, 0 on an ES47/ES80 and 1 on
+ *     a GS1280 (build_drawer_ocp_fru); its own, 1 and 2 (build_mbm_fru); 2
+ *     the 2P drawer's I/O expander (build_io_exp_fru); 3 + n power supply n
+ *     (build_ps_fru).
+ *
+ * The contents are invented [guess: no real EEPROM image was at hand]:
+ * part numbers "EM-" and the FRU's kind, serial numbers "EM" and the
+ * micro's address and the index in hexadecimal (unique, stable). The
+ * RIMMs' presence detect describes 256 Mbit RDRAM devices (9 row bits, 7
+ * column bits, 32 banks) [inference: the console's size arithmetic, and
+ * its table's 128 MB RIMM having 4 devices], as many as the RIMM size the
+ * MBM configuration implies takes, and the first of the table's two
+ * variants (<0x0c> 0x0a, <0x25> 0x90). The 8 bytes at <0x40> are zero.
+ */
+bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
+  memset(image, 0, 0x100);
+  char serial[17];
+  snprintf(serial, sizeof(serial), "EM%02X%02X%02X%02X", (ip >> 8) & 0xff,
+           (ip >> 16) & 0xff, ip >> 24, index & 0xff);
+  auto fru = [&](const char *part) {
+    strncpy((char *)image + 0x63, part, 16);
+    memcpy(image + 0x73, serial, 10);
+    return true;
+  };
+  if (is_pbm(ip))
+    return false;
+  if (is_mbm(ip)) {
+    const bool two_p = systype() == 0x11;
+    if (index == (two_p ? 0u : 1u))
+      return fru("EM-DOCP");
+    if (index == (two_p ? 1u : 2u))
+      return fru("EM-MBM");
+    if (two_p && index == 2)
+      return fru("EM-IOEXP");
+    if (two_p && (index == 3 || index == 4)) {
+      memcpy(image + 0x3e, "EM-PS-2P00", 10);
+      memcpy(image + 0x49, "01", 2);
+      memcpy(image + 0x4c, "EM", 2);
+      memcpy(image + 0x4e, serial + 2, 8);
+      return true;
+    }
+    return false;
+  }
+  // A CMM: 10.<cabinet * 16 + drawer>.<module + 1>.0 (pid2ip).
+  const u32 x = (ip >> 8) & 0xff, module = ((ip >> 16) & 0xff) - 1;
+  const u32 pid0 = ((x >> 4) & 7) << 5 | (x & 3) << 3 | (module & 3) << 1;
+  CMarvel *mv = marvel();
+  switch (index) {
+  case 0:
+    return fru("EM-CMM");
+  case 1: {
+    fru("EM-DUO");
+    const std::string s = system_serial();
+    memcpy(image + 0x80, s.data(), std::min<size_t>(s.size(), 12));
+    return true;
+  }
+  default:
+    break;
+  }
+  if (index >= 2 && index < 22) {
+    // RIMM r of processor pid0 + place: the MBM configuration lists RIMMs
+    // 0-4 of each processor (mbm_configuration).
+    const u32 place = index >= 12, r = (index - 2) % 10;
+    if (r >= 5 || !mv->topology().by_pid(pid0 + place, present()))
+      return false;
+    const u64 rimm = mv->memory_per_pid() / 4;
+    image[0x04] = 0x97; // 9 row bits, 7 column bits
+    image[0x05] = 0x05; // 32 banks
+    image[0x0c] = 0x0a;
+    image[0x25] = 0x90;
+    image[0x63] = (u8)std::min<u64>(rimm >> 25, 0x7f); // 32 MB devices
+    memcpy(image + 0x80, serial, 10);
+    return true;
+  }
+  if (index >= 0x16 && index < 0x16 + 12)
+    return fru("EM-VRM");
+  return false;
+}
+
+/**
+ * get_eerom_data (0x30bd50): the request's data is u16 the EEPROM's index,
+ * u16 the offset, u16 the length; the answer u16 the length and the bytes
+ * (0x100 at most). Status 3 is "not there", which the console takes
+ * quietly and shows as "-".
+ */
+void CEs47Cmm::eerom_answer(u32 pid, const u8 *req) {
+  const u32 ip = get32(req + M_DEST);
+  const u32 index = get16(req + M_DATA);
+  u32 offset = get16(req + M_DATA + 2), len = get16(req + M_DATA + 4);
+  u8 image[0x100];
+  const bool there = eerom(ip, index, image);
+  note("PID %u: SMLAN 0a01 (EEPROM %u of %s %08x, %u bytes at %x) id %u%s", pid,
+       index, micro_name(ip), ip, len, offset, get32(req + M_ID),
+       there ? "" : ": not there");
+  if (!there) {
+    respond(pid, req, 3, nullptr, 0);
+    return;
+  }
+  if (offset > sizeof(image))
+    offset = sizeof(image);
+  len = std::min<u32>(len, (u32)sizeof(image) - offset);
+  u8 d[2 + sizeof(image)];
+  put16(d, (u16)len);
+  memcpy(d + 2, image + offset, len);
+  respond(pid, req, 0, d, 2 + len);
+}
+
+/**
+ * Fan speeds (SMLAN 0x0903, get_fan_rpm_readings 0x30aa00), of a drawer's
+ * MBM: u32 the count, then records of 0x10 bytes: <0> s16 the fan's index,
+ * <2> s16 the reading (<15> set: none), <4> 12 bytes the console copies
+ * into the fan's GCT entry (build_fan_hw, 0x2fc060; locate_fan_data).
+ * build_fan_hw makes room for 7 fans in an ES47/ES80 drawer and 2 in a
+ * GS1280's, and a FRU for each fan the count names. A 2P drawer's are
+ * seven, the console's own names for them (its table of the drawer's FRUs
+ * at 0x3aeb6c: FAN0-FAN3, FAN.PCI, FAN.PS0, FAN.PS1), a GS1280's two
+ * [inference: the console's room for them]; readings in RPM [guess] and
+ * the 12 bytes zero [unknown]. Returns the count; an I/O drawer's PBM
+ * reports none.
+ */
+int CEs47Cmm::fan_readings(u32 ip, u8 *r) {
+  memset(r, 0, 0x74);
+  if (!is_mbm(ip))
+    return 0;
+  const int n = systype() == 0x11 ? 7 : 2;
+  put32(r, (u32)n);
+  for (int i = 0; i < n; i++) {
+    u8 *rec = r + 4 + i * 0x10;
+    put16(rec, (u16)i);
+    put16(rec + 2, 3000);
+  }
+  return n;
+}
+
+/**
+ * Power supplies (SMLAN 0x0908, get_power_supply_state 0x30ac40), of an
+ * ES47/ES80 drawer's MBM: u32 the count, then records of 0x10 bytes: <0>
+ * s16 the index, <2> s16 the state (<15> set: not there; the rest is
+ * copied into the GCT [inference: 0 is a good supply]), <4> s8 a
+ * GS1280-only field of the FRU's name, <5> s8 the cabinet, <6> s8 the
+ * drawer (build_rosta_hw 0x2fb560, build_ps_hw 0x2fb340, locate_ps_data).
+ * Two supplies per 2P drawer (the User Information: "Two power supplies").
+ * A GS1280's power comes through the power subrack's tray (0x090e, not
+ * modelled), so an MBM there, like a PBM, reports none.
+ */
+int CEs47Cmm::power_supply_state(u32 ip, u8 *r) {
+  memset(r, 0, 0x124);
+  if (!is_mbm(ip) || systype() != 0x11)
+    return 0;
+  const u32 x = (ip >> 8) & 0xff; // cabinet * 16 + drawer
+  const int n = 2;
+  put32(r, (u32)n);
+  for (int i = 0; i < n; i++) {
+    u8 *rec = r + 4 + i * 0x10;
+    put16(rec, (u16)i);
+    rec[5] = (u8)(x >> 4);
+    rec[6] = (u8)(x & 0xf);
+  }
+  return n;
+}
+
 /// The SMLAN commands the console sends (docs/platforms/marvel.md, M4).
 void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
   // `n` is the asking processor's PID.
@@ -842,11 +1047,8 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
   }
   case 0x0a01:
     // get_eerom_data: a FRU's EEPROM by the IP address of the micro that
-    // holds it (request <4>). Status 3, which the console takes quietly as
-    // "not there": [stub] no FRU contents are modelled.
-    note("PID %u: SMLAN %04x (EEPROM of micro %08x) id %u: none [stub]", n, cmd,
-         get32(req + M_DEST), id);
-    respond(n, req, 3, nullptr, 0);
+    // holds it (request <4>) and its index there.
+    eerom_answer(n, req);
     return;
   case 0x0901:
   case 0x0902: {
@@ -861,16 +1063,58 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
     respond(n, req, 0, r.data(), (u32)r.size());
     return;
   }
-  case 0x0903: // get_fan_rpm_readings
-  case 0x0908: // get_power_supply_state
+  case 0x0903: {
+    std::vector<u8> r(0x74);
+    const int count = fan_readings(get32(req + M_DEST), r.data());
+    note("PID %u: SMLAN %04x (fans of %s) id %u: %d fans", n, cmd,
+         micro_name(get32(req + M_DEST)), id, count);
+    respond(n, req, 0, r.data(), (u32)r.size());
+    return;
+  }
+  case 0x0908: {
+    std::vector<u8> r(0x124);
+    const int count = power_supply_state(get32(req + M_DEST), r.data());
+    note("PID %u: SMLAN %04x (power supplies of %s) id %u: %d supplies", n, cmd,
+         micro_name(get32(req + M_DEST)), id, count);
+    respond(n, req, 0, r.data(), (u32)r.size());
+    return;
+  }
+  case 0x090f: {
+    // get_vrm_status (0x30c6a0), of the module's CMM: 8 bytes, <0> u16 the
+    // VRMs there and <6> u16 those that are good, one bit each (VRM 11 is
+    // good only with bit 12 as well), as build_vrm_hw (0x2f8990) reads them
+    // for the module's 12 VRM slots (the User Information: "12 slots for
+    // voltage regulator modules"). All twelve there and good [inference:
+    // a full module; bit 12's own meaning is not known].
+    u8 d[8] = {};
+    put16(d, 0x0fff);
+    put16(d + 6, 0x1fff);
+    note("PID %u: SMLAN %04x (VRMs of %s) id %u: 12, all good", n, cmd,
+         micro_name(get32(req + M_DEST)), id);
+    respond(n, req, 0, d, sizeof(d));
+    return;
+  }
   case 0x090e: // get_ps_tray
-  case 0x090f: // get_vrm_status
     // [stub] none reported: the answer the console builds itself on its
-    // simulator (a zeroed buffer and success).
-    note("PID %u: SMLAN %04x (environment) id %u: nothing to report [stub]", n,
-         cmd, id);
+    // simulator (a zeroed buffer and success). Only a GS1280 asks
+    // (build_power_hw takes the 2P drawer's supplies from 0x0908).
+    note("PID %u: SMLAN %04x (power supply tray) id %u: nothing to report "
+         "[stub]",
+         n, cmd, id);
     respond(n, req, 0, nullptr, 0);
     return;
+  case 0x0b05: {
+    // get_cdl_error (0x30c000), at `boot` (build_halt_log): the console data
+    // log in parts, each answer <0> u64 the position to ask for next, <8>
+    // u32 the part's length and the part; a part of length 0 ends it. The
+    // log is empty: the first answer has length 0 [inference: what an MBM
+    // with no logged errors answers], and the console passes the operating
+    // system no log.
+    const u8 d[12] = {};
+    note("PID %u: SMLAN %04x (console data log) id %u: empty", n, cmd, id);
+    respond(n, req, 0, d, sizeof(d));
+    return;
+  }
   case 0x041c:
     // fetch_sm_nvram: hard and soft partition in the request's data bytes
     // 0 and 1; the answer is the 2 KB image.

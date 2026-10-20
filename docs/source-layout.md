@@ -119,7 +119,7 @@ them):
 | `es45/` | the console's interrupt table; `Es45Dpr`, the ES40's DPR with the ES45's backplane FRU and RMC; a two-part `CFlash`; the Model 1 backplane with its AGP slot (`es45m1`) |
 | `ds25/` | `Ds25Dpr`; `Ds25Aic7899`, a stand-in for the on-board SCSI; the on-board 82559ER |
 | `ds15/` | `Ds15Dpr` (its RMC mailbox), `Ds15Tig` |
-| `es47/` | the CMM model `Cmm.cpp` on GIO: one memory per module, one port per PID, the MBM answered per drawer, the console terminal on `serial0`, NVRAM in `rom.nvram` |
+| `es47/` | the CMM model `Cmm.cpp` on GIO: one memory per module, one port per PID, the MBM answered per drawer, the console terminal on `serial0`, NVRAM in `rom.nvram`, the FRU EEPROMs, VRMs, power supplies and fans |
 | `es80/`, `gs1280/` | their processor and I/O layouts on the same model (the board row's `marvel_layout`) |
 
 OpenVMS 8.4 boots on every board, from the ES40 to the GS1280 with 16 EV7s.

@@ -38,6 +38,11 @@
  * of the drawer's modules), and one partition holding every processor and
  * IO7 the topology has (chipsets/marvel/Topology.hpp). The ES80 and the
  * GS1280 use it as the ES47 does.
+ *
+ * Also the CMM's and MBM's environment: the FRU EEPROMs (part and serial
+ * numbers, the RIMMs' presence detect, the system serial number), the
+ * VRMs, power supplies and fans, and an empty console data log; their
+ * layouts are the console's decoders' (marvel.md, "M10").
  **/
 #if !defined(INCLUDED_ES47_CMM_H_)
 #define INCLUDED_ES47_CMM_H_
@@ -107,6 +112,12 @@ private:
   static bool is_pbm(u32 ip);
   static const char *micro_name(u32 ip);
   int sensor_readings(u32 ip, bool volts, u8 *r);
+  bool eerom(u32 ip, u32 index, u8 *image);
+  void eerom_answer(u32 pid, const u8 *req);
+  int fan_readings(u32 ip, u8 *r);
+  int power_supply_state(u32 ip, u8 *r);
+  u32 systype() const; ///< the system type's low byte: 0x11, or 1
+  std::string system_serial() const;
   void nvram_load();
   void nvram_save();
   void refresh_toy(u32 pid);

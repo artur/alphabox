@@ -38,7 +38,8 @@ EV7 an EV7 is around the core, and that is where the model is thin:
 | --- | --- |
 | IO7: MSIs (`MSI_CTL`), `INT_PND`/`INT_CLR`/`MISC_PND` | **M8**, driven by Linux, whose `sys_marvel.c` uses them |
 | IO7: data mover, error reporting | left (no guest uses them; errors are never raised) |
-| CMM: FRU EEPROMs, fans, power, VRM are stubs; `get_cdl_error` answers status 1, which the console prints at `boot` | **M10**: answers built from the console's own decoders, until `show fru`, `show power` and `boot` are clean |
+| CMM: FRU EEPROMs, fans, power, VRMs, the console data log | done by **M10** (2026-10-20): answers built from the console's own decoders; `show fru`, `show power` and `boot` are clean on the ES47. The EEPROMs' contents are invented ([marvel.md](platforms/marvel.md), M10) |
+| CMM: a GS1280's power supply tray (0x090e), cabinet control panel and PBM EEPROMs | left: only the GS1280 asks; its FRUs print "-" |
 | One partition only | M9 |
 | One I/O layout per machine: no expansion or high-performance drawers, one IO7 on the GS1280 | M9 |
 | ES80 drawer numbers and backplane revision, the GS1280's hose speeds | inference; a published listing would settle it |
@@ -70,7 +71,7 @@ calls work (checked 2026-10-05).
 | Scatter-gather TLB: invalidates ignored | fidelity only: translations are read from the tables every time |
 | AGP transactions on the A-port: AGP_EN, the rate and the request queues hold what is written and do nothing | left until a guest turns AGP on: Linux's `titan_agp_*`, with **E2** ([below](#agp-on-the-titan)) |
 | CSC (but bit 51) and the Dchips' DSC/STR/DSC2 assumed the Typhoon's | none: nothing reads them that the consoles or OpenVMS show ([below](#the-titans-memory-arrays)) |
-| `show fru`, the ES45 model "B" | with M10's FRU work |
+| `show fru`, the ES45 model "B" | its own item: the ES45's FRU images are the RMC's, in the DPR; M10 was Marvel's CMM only |
 
 ### AGP on the Titan
 
@@ -127,7 +128,14 @@ gate.
    driver. Linux on the ES40 first (the easy half), then Marvel.
 4. **E3**: OpenVMS MIPS on the EV7 against the ES40, and native PALcode
    paths if the gap is large.
-5. **M10**: the CMM's FRU and environment answers.
+5. **M10, the CMM's FRU and environment answers**. Done (2026-10-20):
+   - `show fru` lists every ES47 FRU that has an EEPROM with part and
+     serial numbers (the RIMMs' part numbers are the console's own, from
+     their presence detect); VRMs, power supplies and fans are reported;
+   - `boot` prints no management-interface error, and the system serial
+     number is set (it cannot be set from the prompt);
+   - `show power` prints nothing, as on a real ES47: it is a null routine
+     in this console.
 6. **M9**: partitions, I/O drawers, several IO7s on the GS1280, 32
    processors, the route table's I/O entries.
 7. **T1**, DS20, UP2000, XP1000. Done as far as the media goes:

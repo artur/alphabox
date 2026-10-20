@@ -60,7 +60,10 @@ On the ES47 in particular:
   2026-10-05, `lab/es47-q1/net-console.log`);
 - OpenVMS's `SHOW TIME` and `SET TIME` work through the TOY calls, and
   after a restart the clock is the host's again, as on every board
-  (2026-10-05, `lab/es47-q1/console-run1.log`, `console-run2.log`).
+  (2026-10-05, `lab/es47-q1/console-run1.log`, `console-run2.log`);
+- `show fru` lists every FRU with part and serial numbers, including the
+  VRMs, power supplies and fans, the system serial number is set, and
+  `boot` prints no management-interface error (M10, 2026-10-20).
 
 ## Where the code is
 
@@ -106,7 +109,6 @@ From [backlog.md](../backlog.md), where the order of work is:
 | The UNIX PALcode under an operating system (it runs from a boot image since E1) | E2, Linux on the ES47 |
 | The IO7's MSIs (`MSI_CTL`) and `INT_PND`/`INT_CLR`/`MISC_PND` | M8, with Linux |
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
-| The CMM's FRU EEPROMs, fans, power and VRMs (stubs); `get_cdl_error` answered with status 1 at `boot` | M10 |
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
 
@@ -118,7 +120,10 @@ Left, by choice or because only a real machine could settle them:
   speeds: inferences no listing settles;
 - which Marvel I/O has the ALi M1543C the console has a driver for;
 - DKA400's two errors under OpenVMS booted from the CD: the guest's probe
-  for recordable media, which a real RRD42 rejects too (M5).
+  for recordable media, which a real RRD42 rejects too (M5);
+- the GS1280's power supply tray (SMLAN 0x090e), its cabinet control
+  panel and its I/O drawers' PBM EEPROMs, which only a GS1280 asks for, and
+  the FRU EEPROMs' real contents (M10 invents them).
 
 **[guess]** marks reasoning without a source, and **[inference]** marks
 something derived from sources but not stated in them. The working files
@@ -739,7 +744,7 @@ or moved lines of code, **[guess]**.
 | M7 | Guests | ? | L5 | OpenVMS done 2026-10-03 (M7a, M7b) and 10-04 (M7c) |
 | M8 | IO7 MSIs and pending registers, driven by Linux | | | planned ([backlog.md](../backlog.md), with E2) |
 | M9 | Partitions, I/O drawers, several IO7s on the GS1280, 32 processors, the route table's I/O entries | | | planned |
-| M10 | The CMM's FRU and environment answers | | | planned |
+| M10 | The CMM's FRU and environment answers | ~250 | L3 | done 2026-10-20: `show fru`, `show power`, `boot` clean on the ES47 |
 
 What each packet was to contain:
 
@@ -797,6 +802,200 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### M10: the CMM's FRU and environment answers (2026-10-20)
+
+**Result**: on the ES47, `show fru`, `show power` and `boot` print what a
+real machine's console would, as far as the console's own code tells:
+
+- `show fru` lists 41 FRUs: the drawer, its control panel, backplane, MBM,
+  I/O expander, two power supplies and seven fans; the dual processor
+  module, its CMM, twelve VRMs, two CPUs and ten RIMMs; and the PCI card
+  in hose 0 slot 1. Every FRU with an EEPROM shows a part and a serial
+  number; the ones the console builds without an EEPROM (drawer, SBB,
+  CPUs, fans) show "-", as in the listing in the SRM reference (p. 58).
+  `show fru -e`, which lists only FRUs with an error byte set, lists none.
+- `show power` prints nothing, and that is the console: its `show` calls
+  the routine at 0x3a0980 for "power", and that routine is a bare `ret`
+  in this build (checked in the running image: `e -l pmem:3a0980` reads
+  6BFA8001). No CMM answer reaches it. (`show error` is the same, 0x3a0970.)
+- `boot` no longer prints "*** CPU 0: Server Management Interface
+  responded to command 0b05 with status 0001": the console data log is
+  answered, empty.
+- The start no longer prints "*** system serial number not set. use set
+  sys_serial_num command.": `sys_serial_num` is ES47EM000000, from the
+  CMM's EEPROM.
+
+OpenVMS 8.4 boots the M7 installed disk (a clone) to the DCL prompt in 53 s
+on the JIT lane, and SHOW CPU/FULL reports "Serial Number = (virt.)
+ES47EM000000". The CD boots to its date prompt on the interpreter lane.
+The ES80 (two drawers, four processors) and the GS1280 (four processors)
+reach their prompts and list their FRUs with no error line.
+
+```
+P00>>>show fru
+Fru Name                  E Part #             Serial #         Model/Other
+CAB0.DRW0                00 -                  -                -
+CAB0.DRW0.DOCP           00 EM-DOCP            EM00000100       -
+CAB0.DRW0.SBB            00 -                  -                -
+CAB0.DRW0.DUO0.DUO       00 EM-DUO             EM00010001       -
+CAB0.DRW0.DUO0.CMM       00 EM-CMM             EM00010000       -
+CAB0.DRW0.DUO0.VRM0.CPU  00 EM-VRM             EM00010016       -
+  ... VRM1-5.CPU, VRM0-4.RIMM, VRM0.TERM
+CAB0.DRW0.DUO0.CPU0      00 -                  -                -
+CAB0.DRW0.DUO0.RIMM00    00 20-1D872-01        EM00010002       -
+  ... RIMM10-40, CPU1, RIMM01-41
+CAB0.DRW0.MBM            00 EM-MBM             EM00000101       -
+CAB0.DRW0.PCI0.SLOT1     00 DE500-BA Network Co-                -
+CAB0.DRW0.PS0            00 EM-PS-2P00.01      EM00000103       -
+CAB0.DRW0.PS1            00 EM-PS-2P00.01      EM00000104       -
+CAB0.DRW0.FAN0           00 -                  -                -
+  ... FAN1-3, FAN.PCI, FAN.PS0, FAN.PS1
+CAB0.DRW0.PCI            00 EM-IOEXP           EM00000102       -
+```
+
+**How the console reads its FRUs.** Every FRU node the GCT builder makes
+starts with five "-" strings (`blank_tlv`, 0x2fe1e0). For a FRU with an
+EEPROM, `build_fru_desc` (0x2fe790) asks the micro that holds it for 0x90
+bytes from offset 0 and replaces the first four:
+
+| String | From the EEPROM | `show fru` |
+| --- | --- | --- |
+| 1 | <0x40>, 8 bytes | not printed |
+| 2 | always "-" | Model/Other |
+| 3 | <0x63>, 16 bytes | Part # |
+| 4 | <0x73>, 10 bytes | Serial # |
+
+with three exceptions:
+
+- byte <0x40> = 'J' selects another layout: part number <0x49>, 18
+  bytes, serial number <0x63>, 16;
+- a RIMM (FRU type 0x21): the EEPROM is its presence detect, and the part
+  number is the console's own, from a table at 0x3b0848 keyed by the
+  RIMM's size and two of its bytes. The size is 2^(<4><7:4> + <4><3:0>)
+  (row and column bits) x 2^(<5><2:0>) (banks) x <0x63> (devices) x 16
+  bytes; the keys are <0x0c> (0x0a or 0x08) and <0x25> (0x90 or 0x15).
+  The table holds 128 MB to 1 GB RIMMs ("20-1C872-01" to "20-1F18B-01");
+  any other prints "Undefined". The serial number is <0x80>, 16 bytes;
+- an ES47/ES80 MBM's EEPROMs 3 and 4 (its power supplies): the part
+  number is <0x3e>, 10 bytes, a '.', and <0x49>, 2 bytes; the serial
+  number <0x4c>, 14 bytes.
+
+**SMLAN 0x0a01, `get_eerom_data`** (0x30bd50): the request's data is u16
+the EEPROM's index on that micro, u16 the offset, u16 the length; the
+answer u16 the length and the bytes, 0x100 at most. Status 3 means "not
+there" and is taken quietly (the FRU keeps its "-"); any other non-zero
+status prints "Server Management Interface responded to command 0a01 with
+status ... ip: ... loc: ...".
+
+**Which EEPROM is which**, from the builders' calls:
+
+| Micro | Index | FRU | Builder |
+| --- | --- | --- | --- |
+| the module's CMM | 0 | CMM | `build_cmm_fru` |
+| | 1 | dual processor module; also the system serial number at <0x80>, 12 bytes | `build_cpu_module_fru`, `read_system_serial` (0x2e2360) |
+| | 2 + n, 12 + n | RIMM n of the module's first, second processor | `build_rimm_fru` |
+| | 0x16 + n | VRM n | `build_vrm_fru` |
+| the drawer's MBM | 0 (GS1280: 1) | drawer control panel (DOCP) | `build_drawer_ocp_fru` |
+| | 1 (GS1280: 2) | MBM | `build_mbm_fru` |
+| | 2 | the 2P drawer's I/O expander ("PCI") | `build_io_exp_fru` |
+| | 3 + n | power supply n | `build_ps_fru` |
+
+The console names the twelve VRMs by place: VRM0-5.CPU, VRM0-4.RIMM and
+VRM0.TERM, which matches the CMM firmware's own names (CPU VRM 0-5, RIMM
+VRM 0-4, TERM VRM).
+
+**The EEPROMs' contents are invented [guess]**: no real ES47 EEPROM image
+or `show fru` listing was at hand. Part numbers are "EM-" and the FRU's
+kind; serial numbers "EM" and the micro's address bytes and the index in
+hexadecimal, so each is unique and stays the same from start to start.
+The RIMMs' presence detect describes 256 Mbit (32 MB) RDRAM devices, 9 row
+bits, 7 column bits and 32 banks, as many as the RIMM size takes (the
+memory per processor over four RIMMs, as the MBM configuration has it)
+**[inference]**: the console's arithmetic, and its table, whose RIMM
+sizes go with 4, 8, 16 and 32 devices. With 1 GB per processor that is a
+256 MB RIMM, "20-1D872-01". The first of the table's two key variants is
+used. The 8 bytes at <0x40> are zero **[unknown]**: by the layout of a
+JEDEC presence detect they would be a manufacturer's code.
+
+**The system serial number.** `sys_serial_num` takes its value from the
+CMM's EEPROM 1 at <0x80> (`ev_sys_serial_init` calls `read_system_serial`),
+and `gct` prints "system serial number not set" when it is empty. The
+variable is write-protected from the console prompt: its attributes
+(0x34, entry at 0x3a2444) have <4> set, so `ev_write` refuses `set
+sys_serial_num` with "sys_serial_num protected from attempted operation".
+That was so before M10 too (checked on the M7 interpreter binary), so the
+console's advice could never be followed. The model's value is the board
+name and "EM", padded to 12 with zeros: ES47EM000000, ES80EM000000,
+GS1280EM0000 **[guess]**. There is no configuration key for it.
+
+**VRMs, SMLAN 0x090f** (`get_vrm_status` 0x30c6a0, read by `build_vrm_hw`
+0x2f8990), of the module's CMM: 8 bytes, <0> u16 the VRMs there and <6>
+u16 the VRMs that are good, a bit per VRM. VRM 11 is good only with bit 12
+set as well. Status 3 and status 5 are taken quietly. The module has 12
+VRM slots (User Information: "12 slots for voltage regulator modules");
+the model reports all twelve there and good, 0x0fff and 0x1fff
+**[inference: a full module; what bit 12 stands for is not known]**.
+
+**Power supplies, SMLAN 0x0908** (`get_power_supply_state` 0x30ac40), of
+the drawer's MBM: 0x124 bytes, u32 the count and records of 0x10 bytes:
+
+| Offset | Field | Read by |
+| --- | --- | --- |
+| <0> | s16 the supply's index | `locate_ps_data` (0x2fda50) |
+| <2> | s16 the state: <15> set means not there; the rest goes into the GCT | `build_ps_hw` (0x2fb340) |
+| <4> | s8, a field of the FRU's name on a GS1280 only | `build_ps_fru` |
+| <5>, <6> | s8 the cabinet and the drawer | `build_ps_hw`, `build_ps_fru` |
+
+On system type 0x11 `build_power_hw` (0x2fb190) takes this path
+(`build_rosta_hw`); a GS1280 asks for the power subrack's tray, 0x090e,
+instead. The model answers two supplies per 2P drawer (User Information:
+"Two power supplies"), state 0 **[inference: 0 is a good supply]**; an
+MBM of a GS1280 and an I/O drawer's PBM report none.
+
+**Fans, SMLAN 0x0903** (`get_fan_rpm_readings` 0x30aa00), of the drawer's
+MBM: 0x74 bytes, u32 the count and records of 0x10 bytes: <0> s16 the
+index, <2> s16 the reading (<15> set: none), <4> 12 bytes that
+`build_fan_hw` (0x2fc060) copies into the fan's GCT entry. `build_fan_hw`
+has room for 7 fans in a 2P drawer and 2 in a GS1280's, and makes a FRU
+for each fan counted. The console's table of a 2P drawer's FRU names
+(0x3aeb6c: .MBM, .SBB, .DOCP, .FAN0-.FAN3, .FAN.PCI, .PS0, .PS1, .FAN.PS0,
+.FAN.PS1) has seven fans, so the model reports seven; a GS1280 drawer two
+**[inference: the console's room for them]**. Readings are 3000
+**[guess: RPM]**, and the 12 bytes are zero **[unknown]**. (The MBM
+firmware's names, Fan 0-2, PS0 Fan, PS1 Fan and PCI Fan, count six; the
+console's names were preferred, being the decoder.)
+
+**The console data log, SMLAN 0x0b05** (`get_cdl_error` 0x30c000), at
+`boot`: `init_cpu_state_all_cpus` calls `build_halt_log`, which reads the
+log and hands it to the operating system. The request goes to 10.253.0.1
+with 8 bytes, the position to read from. Each answer carries <0> u64 the
+position to ask for next, <8> u32 the length of this part, then the part;
+the console asks again until a part of length 0, or until 64 KB. The
+model's log is empty: the first answer has length 0, and the operating
+system gets no log **[inference: what a micro with nothing logged
+answers]**.
+
+**Left**:
+
+- SMLAN 0x090e (`get_ps_tray`), which only a GS1280 asks: still answered
+  with nothing, so a GS1280 lists no power supplies; its format
+  (`locate_tray_data`: records of 0xc bytes) is not decoded.
+- A GS1280's cabinet control panel (`build_cab_ocp_fru` reads the MBM's
+  EEPROM 0, 0x80 bytes, directly) and the I/O drawers' PBM EEPROMs: not
+  there, so those FRUs print "-".
+- The 'J' layout, the 8 bytes at <0x40>, bit 12 of the VRM word, the
+  meaning of a supply's state and of a fan's 12 bytes, and real part
+  numbers: unknown, and only a real machine would settle them.
+
+Evidence in `lab/m10/` (git-ignored): `es47-console-int.log` (the console:
+`show fru`, `show fru -e`, `show power`, `boot dka400` to the date prompt,
+interpreter lane), `es47-cmm-int.log` (every SMLAN request of that run),
+`es47-vms-login-jit.log` (OpenVMS from the installed disk, SHOW CPU/FULL),
+`runs/es80/` and `runs/gs1280/` (`show fru` on the other rows),
+`runs/base*/` (before M10: `show fru`, `boot`, the refused `set
+sys_serial_num`), `srm-interp.txt` and `srm-jit.txt` (the ES40 check), and
+the console routines disassembled (`*.dis`, with the M4 tools).
 
 ### E1: the EV7 PALcodes' internal registers (2026-10-19)
 
@@ -1794,7 +1993,8 @@ lookup):
   and errors are left;
 - `get_pbm_configuration` (0x0322) is never asked on the embedded I/O;
   "Backplane rev" is IO_SYS_REV<3:0> (M7a);
-- SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1: M10;
+- SMLAN 0x0b05 (`get_cdl_error`) at `boot` is answered with status 1: M10
+  (answered with an empty log since);
 - OpenVMS printed "mvcpu_get_numa_distances: bad route IPR for self" per
   CPU: fixed by M6a (the route table in the CMM);
 - the AIC-7892, CMD 649 and USB of the real embedded I/O: the CMD 649 and
@@ -2026,12 +2226,12 @@ responded to command %04x with status %04x".
 | 0x0330 | `get_system_topology` | | | not seen |
 | 0x0901 | `get_voltage_readings` | none (to a micro) | count, 0x1c-byte records | CMM 6, MBM 13 |
 | 0x0902 | `get_temperature_readings` | | idem | CMM 2, MBM 4 |
-| 0x0903, 0x0908, 0x090e, 0x090f | fans, power supplies, PS tray, VRM status | | | success, nothing **[stub; M10]** |
-| 0x0a01 | `get_eerom_data` | offset, length (to a micro) | u16 length, the FRU EEPROM bytes | status 3, not there **[stub; M10]** |
+| 0x0903, 0x0908, 0x090e, 0x090f | fans, power supplies, PS tray, VRM status | | | success, nothing **[stub]**; M10 answers all but 0x090e |
+| 0x0a01 | `get_eerom_data` | offset, length (to a micro) | u16 length, the FRU EEPROM bytes | status 3, not there **[stub]**; answered by M10 |
 | 0x0801 | `get_fw_rev` | | | not seen |
 | 0x0407, 0x0409, 0x0415 | reset/power off partition, power on/off | | | not seen |
 | 0x0b01, 0x0b06 | IPMI SEL log, CDL error clear | | | not seen |
-| 0x0b05 | `get_cdl_error` (0x30c000), at `boot` | 8 bytes, to 10.253.0.1 [guess: the MBM] | a reply in parts | not modelled: status 1, and the console prints "Server Management Interface responded to command 0b05 with status 0001"; harmless **[M10]** |
+| 0x0b05 | `get_cdl_error` (0x30c000), at `boot` | 8 bytes, to 10.253.0.1 [guess: the MBM] | a reply in parts | not modelled: status 1, and the console prints "Server Management Interface responded to command 0b05 with status 0001"; harmless. M10 answers an empty log |
 
 An unknown command is logged and answered with status 1.
 
@@ -2133,9 +2333,12 @@ tested, so the ALi boards take the same paths as before.
   partition database lists. Done with M5; `get_pbm_configuration`, 0x0322,
   was not asked after all;
 - FRU EEPROM contents (0x0a01): `show fru` lists the FRUs with no part or
-  serial numbers; `set sys_serial_num` is asked for at every start (M10);
+  serial numbers; `set sys_serial_num` is asked for at every start. Done
+  by M10, which also found that the variable cannot be set from the
+  prompt;
 - fans, power supplies and VRMs (0x0903/0x0908/0x090e/0x090f) report
-  nothing, so `show power` is empty (M10);
+  nothing, so `show power` is empty (M10: answered, except the GS1280's
+  0x090e; `show power` stays empty, being a null routine in this console);
 - the TOY's interplay with the operating system: settled by M5 and the
   2026-10-05 check (above);
 - the CMM-side register addresses, and the meaning of the unknown fields
@@ -2502,7 +2705,7 @@ The risks as listed at phase 0 (2026-10-01):
    it: reverse-engineered from the console, whose simulator mode builds
    every answer itself, with the CMM firmware (Intel 386EX) and the XSROM
    as witnesses. What is left unknown is marked there; the FRU EEPROM
-   contents and the fan/power answers are stubs (M10).
+   contents and the fan/power answers were stubs until M10.
 2. **The XSROM handoff state**: which registers and CSRs the console
    relies on being set. Disassembling the XSROM's final jump was
    tractable (64 KB of Alpha code), and M3 did it.
