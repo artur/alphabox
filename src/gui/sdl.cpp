@@ -1051,6 +1051,28 @@ static bool sdl_debug_tablet(const char *token, bool press, bool &handled) {
   return t != nullptr;
 }
 
+// "mouse:DX:DY[:B[:Z]]" moves the PS/2 mouse by DX, DY counts (DY positive
+// is down the screen), with buttons B held (bit 0 left, 1 right, 2 middle,
+// 3 and 4 the Explorer's fourth and fifth) and Z wheel notches (positive
+// away from the user). Relative, as the PS/2 mouse is: a large negative
+// move parks the pointer in the top left corner. Returns false when the
+// token is not a mouse one or is malformed; with press false it only checks
+// the token.
+static bool sdl_debug_mouse(const char *token, bool press, bool &handled) {
+  handled = strncmp(token, "mouse:", 6) == 0;
+  if (!handled)
+    return false;
+  int dx, dy, z = 0;
+  unsigned b = 0;
+  char tail;
+  const int n = sscanf(token + 6, "%d:%d:%u:%d%c", &dx, &dy, &b, &z, &tail);
+  if (n < 2 || n > 4 || b > 0x1f)
+    return false;
+  if (press && theKeyboard)
+    theKeyboard->mouse_motion(dx, -dy, z, b);
+  return theKeyboard != nullptr;
+}
+
 // "usb:<op>:<port>[:<ep>[:<n>]]" injects a fault on a USB port for a test
 // (CUsbPortFaults): detach, attach, stall <ep> [n], phase, nak <ep> <ms>.
 // The endpoint is an address: 0x81 = IN 1, 0x02 = OUT 2. It goes to the
@@ -1094,6 +1116,10 @@ static bool sdl_debug_press(const char *token, bool press) {
   const bool tablet_ok = sdl_debug_tablet(token, press, tablet);
   if (tablet)
     return tablet_ok;
+  bool mouse;
+  const bool mouse_ok = sdl_debug_mouse(token, press, mouse);
+  if (mouse)
+    return mouse_ok;
   bool usb;
   const bool usb_ok = sdl_debug_usb(token, press, usb);
   if (usb)

@@ -89,6 +89,17 @@ Besides keys, the two variables take these tokens:
 - **`tablet:X:Y[:B]`** puts the USB tablet's pointer (`port1 = "tablet";`
   on `ali_usb`) at X,Y, with buttons B (bit 0 left, 1 right, 2 middle).
   X and Y are fractions of the screen when at most 1, else guest pixels.
+- **`mouse:DX:DY[:B[:Z]]`** moves the PS/2 mouse by DX, DY counts (DY
+  positive is down the screen) with buttons B held (bit 0 left, 1 right,
+  2 middle, 3 and 4 the fourth and fifth buttons), and turns the wheel by
+  Z notches (positive away from the user). B is the state the buttons are
+  left in, so a click is two tokens: `mouse:0:0:1 mouse:0:0:0`. The moves
+  are relative and the guest applies its own acceleration, so to reach a
+  place, park the pointer in a corner with a large move first
+  (`mouse:-3000:3000` is the bottom left corner) and move from there in
+  small steps. As with a real mouse, nothing arrives until the guest's driver has
+  enabled the mouse, and the wheel and buttons 4 and 5 only once it has
+  switched the mouse to a mode that has them.
 - **`usb:<op>:<port>[:<ep>[:<n>]]`** injects a fault on a USB root hub port
   (the `ehci` card's if there is one, else `ali_usb`'s), for testing a
   guest's USB driver. `test/tools/usb_bench.sh` fires them with
@@ -113,7 +124,9 @@ The `usb:` operations:
 | `ALPHABOX_MOUSE_DEBUG=1` | Trace host mouse motion, grab and focus transitions, relative-mode failures, the guest's aux commands and dropped mouse bytes (`MOUSEDBG` lines). |
 
 As with a real PS/2 mouse, `ALPHABOX_AUTOMOUSE` sends nothing until the
-guest driver enables data reporting.
+guest driver enables data reporting. For moves and clicks at chosen times,
+use the `mouse:` token in `ALPHABOX_KEYSCRIPT` or `ALPHABOX_KEYPIPE`
+([Other tokens](#other-tokens)).
 
 ## Snapshots
 
