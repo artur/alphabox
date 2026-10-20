@@ -271,6 +271,48 @@ static void test_reserved_bits() {
   CHECK_EQ(r.rd(MSR) & 0xf0, 0x30); // bit 4 (loop) was not set
 }
 
+/// Modem status: the delta bits and the modem-status interrupt, driven in
+/// loopback by MCR's low four bits (PC16550D 8.8 and 8.9, Table IV).
+static void test_modem_status() {
+  Rig r;
+  CHECK_EQ(r.rd(MSR), 0x30); // the idle terminal: no change to report
+  r.wr(FCR, 0x01);
+  r.wr(IER, 0x08); // modem-status interrupt only
+  CHECK_EQ(r.line, false);
+  r.wr(MCR, 0x10); // loopback, all outputs off: CTS and DSR drop
+  CHECK_EQ(r.line, true);
+  CHECK_EQ(r.rd(IIR), 0xc0); // modem status, FIFOs on
+  CHECK_EQ(r.rd(MSR), 0x03); // DCTS, DDSR
+  CHECK_EQ(r.line, false);   // reading MSR cleared it
+  CHECK_EQ(r.rd(IIR), 0xc1);
+  CHECK_EQ(r.rd(MSR), 0x00);
+  r.wr(MCR, 0x14); // OUT1 -> RI rises: not a trailing edge
+  CHECK_EQ(r.line, false);
+  CHECK_EQ(r.rd(MSR), 0x40);
+  r.wr(MCR, 0x10); // RI falls: TERI
+  CHECK_EQ(r.line, true);
+  CHECK_EQ(r.rd(MSR), 0x04);
+  r.wr(MCR, 0x18); // OUT2 -> DCD
+  CHECK_EQ(r.rd(MSR), 0x88);
+  r.wr(MCR, 0x13); // RTS, DTR on, OUT2 off: CTS, DSR, DCD change together
+  CHECK_EQ(r.rd(MSR), 0x3b);
+  // Lowest priority: THRE is reported first.
+  r.wr(MCR, 0x10);
+  r.wr(IER, 0x0a);
+  CHECK_EQ(r.rd(IIR), 0xc2);
+  CHECK_EQ(r.rd(IIR), 0xc0);
+  CHECK_EQ(r.rd(MSR), 0x03);
+  // Leaving loopback: the idle terminal's CTS and DSR come back.
+  r.wr(MCR, 0x00);
+  CHECK_EQ(r.rd(MSR), 0x33);
+  CHECK_EQ(r.rd(IIR), 0xc1);
+  // Without loopback nothing changes, however MCR is written.
+  r.wr(MCR, 0x0f);
+  r.wr(MCR, 0x00);
+  CHECK_EQ(r.rd(MSR), 0x30);
+  CHECK_EQ(r.line, false);
+}
+
 /// The scratch register keeps what is written, and only that: writes to
 /// the read-only LSR and MSR change neither them nor it.
 static void test_scratch() {
@@ -294,6 +336,7 @@ int main() {
   test_priority();
   test_fifo();
   test_loopback();
+  test_modem_status();
   test_reserved_bits();
   test_scratch();
   printf("uart16550_test: %d checks, %d failed\n", checks, failures);

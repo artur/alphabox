@@ -43,13 +43,15 @@ enum : u32 {
 };
 
 static const u8 LCR_DLAB = 0x80;
-static const u8 IER_RDA = 0x01, IER_THRE = 0x02;
-static const u8 IIR_NONE = 0x01, IIR_THRE = 0x02, IIR_RDA = 0x04,
+static const u8 IER_RDA = 0x01, IER_THRE = 0x02, IER_MS = 0x08;
+static const u8 IIR_NONE = 0x01, IIR_MS = 0x00, IIR_THRE = 0x02, IIR_RDA = 0x04,
                 IIR_FIFO = 0xc0;
 static const u8 FCR_ENABLE = 0x01, FCR_RX_RESET = 0x02;
 static const u8 MCR_DTR = 0x01, MCR_RTS = 0x02, MCR_OUT1 = 0x04,
                 MCR_OUT2 = 0x08, MCR_LOOP = 0x10;
 static const u8 LSR_DR = 0x01, LSR_THRE = 0x20, LSR_TEMT = 0x40;
+static const u8 MSR_DCTS = 0x01, MSR_DDSR = 0x02, MSR_TERI = 0x04,
+                MSR_DDCD = 0x08, MSR_DELTAS = 0x0f;
 static const u8 MSR_CTS = 0x10, MSR_DSR = 0x20, MSR_RI = 0x40, MSR_DCD = 0x80;
 
 /// Power-on values: nothing pending, the transmitter empty, and the modem
@@ -110,8 +112,14 @@ u8 CUart16550::read(u32 reg) {
     s.bLSR = LSR_THRE | LSR_TEMT | (rx_empty_locked() ? 0 : LSR_DR);
     return s.bLSR;
 
-  case REG_MSR:
-    return s.bMSR;
+  case REG_MSR: {
+    // Reading MSR clears its delta bits, and with them the modem-status
+    // interrupt (PC16550D 8.9 and Table IV).
+    const u8 msr = s.bMSR;
+    s.bMSR &= ~MSR_DELTAS;
+    update_locked();
+    return msr;
+  }
 
   default:
     return s.bSPR;
@@ -179,19 +187,19 @@ void CUart16550::write(u32 reg, u8 value) {
       // Loopback: the modem outputs drive the modem inputs, DTR->DSR,
       // RTS->CTS, OUT1->RI, OUT2->DCD (Windows 2000's SERIAL.SYS toggles
       // OUT1 and watches RI follow it).
-      u8 status = 0;
+      u8 inputs = 0;
       if (value & MCR_DTR)
-        status |= MSR_DSR;
+        inputs |= MSR_DSR;
       if (value & MCR_RTS)
-        status |= MSR_CTS;
+        inputs |= MSR_CTS;
       if (value & MCR_OUT1)
-        status |= MSR_RI;
+        inputs |= MSR_RI;
       if (value & MCR_OUT2)
-        status |= MSR_DCD;
-      s.bMSR = status | (s.bMSR & 0x0f);
+        inputs |= MSR_DCD;
+      set_modem_inputs(inputs);
     } else {
       // Loopback released: the inputs read as the idle terminal again.
-      s.bMSR = (s.bMSR & 0x0f) | MSR_CTS | MSR_DSR;
+      set_modem_inputs(MSR_CTS | MSR_DSR);
     }
     break;
 
@@ -234,6 +242,31 @@ void CUart16550::update() {
   update_locked();
 }
 
+/**
+ * The modem inputs (MSR bits 7:4) take new levels. The delta bits record
+ * what changed since MSR was last read -- DCTS, DDSR and DDCD any change,
+ * TERI the end of a ring (RI going from 1 to 0) -- and raise the
+ * modem-status interrupt when it is enabled (PC16550D 8.9, pp. 18-19;
+ * ALi M1543C p. 264). In loopback the inputs are MCR's low four bits
+ * (PC16550D 8.8), so a driver toggling them sees the changes a real port
+ * reports; outside it they only change when loopback ends.
+ **/
+void CUart16550::set_modem_inputs(u8 inputs) {
+  const u8 old = s.bMSR & 0xf0;
+  const u8 changed = old ^ inputs;
+  u8 deltas = s.bMSR & MSR_DELTAS;
+  if (changed & MSR_CTS)
+    deltas |= MSR_DCTS;
+  if (changed & MSR_DSR)
+    deltas |= MSR_DDSR;
+  if ((old & MSR_RI) && !(inputs & MSR_RI))
+    deltas |= MSR_TERI;
+  if (changed & MSR_DCD)
+    deltas |= MSR_DDCD;
+  s.bMSR = inputs | deltas;
+  update_locked();
+}
+
 /// Into the receive FIFO; false when it is full.
 bool CUart16550::push_rx(u8 byte) {
   const int next = (s.rcvW + 1) % UART_FIFO_SIZE;
@@ -255,6 +288,8 @@ void CUart16550::update_locked() {
     iir = IIR_RDA;
   else if ((s.bIER & IER_THRE) && s.thre_pending)
     iir = IIR_THRE;
+  else if ((s.bIER & IER_MS) && (s.bMSR & MSR_DELTAS))
+    iir = IIR_MS;
   const bool pending = !(iir & IIR_NONE);
   if (s.bFCR & FCR_ENABLE)
     iir |= IIR_FIFO;

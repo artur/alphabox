@@ -110,6 +110,7 @@ private:
   void update_locked();
   bool rx_empty_locked() const { return s.rcvR == s.rcvW; }
   bool push_rx(u8 byte);
+  void set_modem_inputs(u8 inputs);
 
   std::mutex lock;
   SSrl_state &s;
