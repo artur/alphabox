@@ -1,8 +1,8 @@
 #!/bin/bash
 # The SCSI disk's conformance test: `alphabox cdbtest` drives file, RAM and
 # CD-ROM disks on a bus of their own, with no guest and no controller
-# model, and checks status, sense, data and lengths against SPC-3, SBC-2
-# and MMC-3 (src/devices/storage/DiskCdbTest.cpp).
+# model, and checks status, sense, data and lengths against SCSI-2, SPC-3,
+# SBC-3 and MMC-3 (src/devices/storage/DiskCdbTest.cpp).
 #
 # usage: cdb_test.sh <alphabox-binary> [-v]
 #   Runs in $ALPHABOX_WORK/cdbtest (ALPHABOX_WORK defaults to <repo>/lab);

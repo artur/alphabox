@@ -187,7 +187,7 @@ CD-ROM drives (one empty) on a SCSI bus of their own and drives them the
 way a host adapter does: arbitration, selection, IDENTIFY, the CDB, the
 data, the status and COMMAND COMPLETE, plus the ATAPI form with no message
 phases that the IDE and USB paths use. Each check compares the answer
-with the T10 standards (SPC-3, SBC-2, MMC-3); a command that would stop
+with the standards (SCSI-2, SPC-3, SBC-3, MMC-3); a command that would stop
 the emulator fails its check. It takes a second, needs no firmware, and
 is the first thing to run after a change to `CDisk` or the SCSI bus.
 

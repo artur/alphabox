@@ -189,6 +189,32 @@ Every disk and CD has its own serial number, and the control mode page
 (0x0A) that OpenVMS reads on every mount
 ([configuration.md](configuration.md#serial-numbers)).
 
+The disks and CDs on every SCSI adapter (and, through the same code, the
+IDE and USB CD paths) are a DEC RZ58 and RRD42 that report SCSI-2 and
+follow it, and SPC-3, SBC-3 and MMC-3 where SCSI-2 has nothing to say;
+`test/tools/cdb_test.sh` checks them command by command
+([development.md](development.md#usb-storage-and-sound)). What a guest
+can rely on:
+
+- READ and WRITE of any length (6, 10, 12 and 16-byte forms), moved
+  through the drive's buffers a piece at a time; READ CAPACITY(16), and
+  READ CAPACITY(10) answering FFFFFFFFh on a disk past 2 TiB.
+- A read-only image, BIN/CUE or RAM disk is write protected: WP in MODE
+  SENSE, DATA PROTECT on a write. A CD has no WRITE command. A write the
+  host cannot complete (its disk full) is a HARDWARE ERROR, not a GOOD.
+- An LBA or length past the end, a mode page, a page control, a TOC
+  format or a block length the drive lacks are CHECK CONDITION with the
+  standard sense, never a stop of the emulator. Sense data lasts until
+  the next command; a logical unit other than 0 is LOGICAL UNIT NOT
+  SUPPORTED.
+- A SCSI bus reset or BUS DEVICE RESET resets the drive: a locked tray
+  unlocks, a MODE SELECT block length returns to its power-on value, and
+  the next command gets a unit attention (06/29/00).
+- VPD pages 0x00, 0x80 (the serial), 0x83 (an identifier built from the
+  serial) and, on disks, 0xB0.
+- READ TOC's MSF addresses are the LBA plus 150 frames, in binary;
+  BIN/CUE images with one file per track are laid out track after track.
+
 ### Network and bridges
 
 - **21140**: no SIA, media through the general purpose port. The board
