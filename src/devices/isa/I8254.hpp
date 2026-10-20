@@ -110,6 +110,8 @@ public:
 private:
   bool out_locked(int c, u64 now);
   u16 count_now_locked(int c, u64 now);
+  void freeze_locked(int c, u64 now, SPit_state &into);
+  u64 phase_locked(int c) const;
   /// Input clocks from `from` to `to` (0 if `to` is earlier).
   static u64 clocks_between(u64 from, u64 to);
   static u64 ns_for_clocks(u64 clocks);

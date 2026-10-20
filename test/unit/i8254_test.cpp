@@ -123,6 +123,55 @@ static void test_mode0_out() {
   CHECK(r.pit.out(2));
 }
 
+/// Mode 0 after terminal count: OUT stays high until the counter is
+/// written again (data sheet p.10), however late it is looked at and after
+/// the timer thread has stepped past it; the count wraps to FFFF and counts
+/// on (p.17), and NULL COUNT stays clear (p.9).
+static void test_mode0_terminal() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 0, 100);
+  for (int ms = 0; ms < 5; ms++) { // 5 ms: the thread steps past terminal
+    r.ns(1000000);
+    r.pit.clock();
+  }
+  CHECK(r.pit.out(2));
+  CHECK_EQ(r.status(2) & 0xc0, 0x80); // OUT high, NULL COUNT clear
+  const u16 c = r.latch_count(2);     // 100 - 5965 clocks, wrapped: 0xe917
+  CHECK(c >= 0xe915 && c <= 0xe918);
+  r.ns(50000000);
+  r.pit.clock();
+  CHECK(r.pit.out(2));
+  // a new count lowers OUT again until it expires
+  r.outb(2, 50);
+  r.outb(2, 0);
+  CHECK(!r.pit.out(2));
+  r.clocks(51);
+  CHECK(r.pit.out(2));
+}
+
+/// GATE low suspends a mode 0 count and leaves OUT as it is; GATE high
+/// resumes it from where it stopped (data sheet p.10, Figure 21).
+static void test_mode0_gate() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 0, 1000);
+  r.clocks(400);
+  r.pit.set_gate(2, false);
+  r.ns(20000000); // 20 ms suspended
+  r.pit.clock();
+  CHECK(!r.pit.out(2));
+  r.pit.set_gate(2, true);
+  r.clocks(550);
+  CHECK(!r.pit.out(2)); // 950 of 1000 counted
+  r.clocks(60);
+  CHECK(r.pit.out(2));
+  // a gate drop right after terminal count, before the thread has looked:
+  // OUT stays high
+  r.pit.set_gate(2, false);
+  CHECK(r.pit.out(2));
+}
+
 /// A counter latch command holds the count until both bytes are read; a
 /// second latch before that is ignored (data sheet p.8).
 static void test_latch() {
@@ -172,6 +221,8 @@ int main() {
   test_mode3_wave();
   test_mode3_irq0();
   test_mode0_out();
+  test_mode0_terminal();
+  test_mode0_gate();
   test_latch();
   test_readback_status();
   test_gate();

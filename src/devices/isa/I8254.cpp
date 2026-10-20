@@ -267,24 +267,89 @@ bool CI8254::out_locked(int c, u64 now) {
   }
 }
 
+/**
+ * Write a counter's analytic state at `now` -- its count and OUT -- into
+ * the words clock() keeps (`into` is the state or a copy of it), so that
+ * phase_locked() finds the same point of the count again.
+ **/
+void CI8254::freeze_locked(int c, u64 now, SPit_state &into) {
+  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  if ((s.status[c] & 0x40) || !n || !gate[c]) // not counting: already held
+    return;
+  const u64 clocks = clocks_between(epoch[c], now);
+  u32 count;
+  bool high;
+  switch (mode_of(c)) {
+  case 0: // counts down from n, wrapping past zero; OUT high from terminal
+    count = (u32)(((u64)n - clocks) & 0xffffu);
+    high = clocks >= n;
+    break;
+  case 2: // n .. 1
+    count = n - (u32)(clocks % n);
+    high = true;
+    break;
+  case 3: { // down by two from n in each half; OUT high in the first
+    const u32 p = (u32)(clocks % n);
+    const u32 first = (n + 1) / 2;
+    high = p < first;
+    count = n - 2 * (high ? p : p - first);
+    break;
+  }
+  default:
+    return;
+  }
+  into.counter[c] = count;
+  if (high)
+    into.status[c] |= 0x80;
+  else
+    into.status[c] &= ~0x80;
+}
+
+/**
+ * How many input clocks into its count the words clock() keeps put a
+ * counter: the inverse of freeze_locked().
+ **/
+u64 CI8254::phase_locked(int c) const {
+  const u32 n = s.counter[c + PIT_OFFSET_MAX];
+  const u32 count = s.counter[c];
+  if ((s.status[c] & 0x40) || !n)
+    return 0;
+  switch (mode_of(c)) {
+  case 0:
+    if (!(s.status[c] & 0x80)) // still counting down from n
+      return count <= n ? n - count : 0;
+    return (u64)n + ((0x10000u - count) & 0xffffu); // wrapped past zero
+  case 2:
+    return count >= 1 && count <= n ? n - count : 0;
+  case 3: {
+    const u32 half = count <= n ? (n - count) / 2 : 0;
+    return (s.status[c] & 0x80) ? half : (n + 1) / 2 + half;
+  }
+  default:
+    return 0;
+  }
+}
+
 void CI8254::set_gate(int c, bool high) {
   std::lock_guard<std::mutex> guard(lock);
   const bool was_high = gate[c];
-  gate[c] = high;
   const int mode = mode_of(c);
-  if (was_high && !high && mode != 0)
-    s.status[c] |= 0x80; // gate low forces OUT high in modes 1-5
+  const u64 now = now_ns();
+  if (was_high && !high) {
+    if (mode == 0) // counting stops where it is; OUT keeps its level
+      freeze_locked(c, now, s);
+    else
+      s.status[c] |= 0x80; // gate low forces OUT high in modes 1-5
+  }
+  gate[c] = high;
   if (!was_high && high) {
-    const u64 now = now_ns();
     if (mode == 2 || mode == 3) { // rising gate restarts the count
       s.counter[c] = s.counter[c + PIT_OFFSET_MAX];
       s.status[c] |= 0x80;
       epoch[c] = now;
-    } else if (mode == 0 && s.counter[c] != 0) {
+    } else if (mode == 0) {
       // mode 0 resumes where it was suspended: rebase the phase reference
-      const u32 reload = s.counter[c + PIT_OFFSET_MAX];
-      const u32 elapsed = reload > s.counter[c] ? reload - s.counter[c] : 0;
-      epoch[c] = now - ns_for_clocks(elapsed);
+      epoch[c] = now - ns_for_clocks(phase_locked(c));
     }
   }
 }
@@ -321,12 +386,14 @@ int CI8254::clock() {
     if (!gate[i]) // a low GATE holds the counter
       continue;
     switch (mode_of(i)) {
-    case 0: // interrupt at terminal
-      if (s.counter[i] <= clocks) {
-        s.counter[i] = 0;
-        s.status[i] |= 0xc0; // out pin high, no count set.
-      } else
-        s.counter[i] -= (u32)clocks;
+    case 0: // interrupt on terminal count
+      // OUT goes high at terminal count and stays high until a new count or
+      // control word (data sheet p.10); the counter does not stop, it wraps
+      // to FFFF and counts on (p.17). NULL COUNT is not touched: it only
+      // reports a written count not yet loaded (p.9).
+      if (s.counter[i] <= clocks)
+        s.status[i] |= 0x80;
+      s.counter[i] = (u32)(((u64)s.counter[i] - clocks) & 0xffffu);
       break;
 
     case 3: // square wave generator: counts down by two per input clock,
