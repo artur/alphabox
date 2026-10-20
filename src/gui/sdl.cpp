@@ -142,6 +142,8 @@ private:
   sdl_hotkey_binding hotkey_scale_down;
   std::string window_title;
   std::string window_title_grabbed;
+  std::string led_title; // " [Num Caps Scroll]": the guest's keyboard LEDs
+  void show_leds();
   // Guest key sent for each host scancode that is still down (so its release
   // matches the press), and host releases to swallow after a hotkey fired.
   u32 guest_key_by_scancode[SDL_SCANCODE_COUNT] = {};
@@ -1018,6 +1020,9 @@ static u32 sdl_debug_key_lookup(const char *name) {
       {"ctrl", BX_KEY_CTRL_L},
       {"shift", BX_KEY_SHIFT_L},
       {"alt", BX_KEY_ALT_L},
+      {"capslock", BX_KEY_CAPS_LOCK},
+      {"numlock", BX_KEY_NUM_LOCK},
+      {"scrolllock", BX_KEY_SCRL_LOCK},
   };
   for (const auto &m : ks_map)
     if (!strcmp(name, m.name))
@@ -1204,9 +1209,42 @@ static void sdl_select_media_file(bool force) {
                          SDL_arraysize(sdl_media_filters), nullptr, false);
 }
 
+// The keyboard LEDs the guest has on (command ED), after the window title,
+// and a console line whenever they change, so that a headless script sees
+// Caps Lock too.
+void bx_sdl_gui_c::show_leds() {
+  static int shown = 0; // the keyboard powers up with them off
+  if (!theKeyboard)
+    return;
+  const int leds = theKeyboard->leds() & 0x07;
+  if (leds == shown)
+    return;
+  shown = leds;
+  led_title.clear();
+  if (leds) {
+    led_title = " [";
+    if (leds & 0x02)
+      led_title += "Num ";
+    if (leds & 0x04)
+      led_title += "Caps ";
+    if (leds & 0x01)
+      led_title += "Scroll ";
+    led_title.back() = ']';
+  }
+  printf("%%KBC-I-LEDS: Num Lock %s, Caps Lock %s, Scroll Lock %s\n",
+         (leds & 0x02) ? "on" : "off", (leds & 0x04) ? "on" : "off",
+         (leds & 0x01) ? "on" : "off");
+  if (sdl_window)
+    SDL_SetWindowTitle(
+        sdl_window,
+        ((sdl_grab ? window_title_grabbed : window_title) + led_title).c_str());
+}
+
 void bx_sdl_gui_c::handle_events(void) {
   if (sdl_deferred())
     return; // macOS: events are pumped by main_thread_pump()
+
+  show_leds();
 
   // Debug aid: ALPHABOX_AUTOKEY_ENTER=<seconds> presses Enter once every
   // <seconds> (drives firmware prompts on headless/scripted runs).
@@ -1730,14 +1768,15 @@ void bx_sdl_gui_c::mouse_enabled_changed_specific(bool val) {
         fprintf(stderr, "MOUSEDBG relative-mode enable failed: %s\n",
                 SDL_GetError());
       SDL_SetWindowKeyboardGrab(sdl_window, true);
-      SDL_SetWindowTitle(sdl_window, window_title_grabbed.c_str());
+      SDL_SetWindowTitle(sdl_window,
+                         (window_title_grabbed + led_title).c_str());
     }
   } else {
     SDL_ShowCursor();
     if (sdl_window) {
       SDL_SetWindowKeyboardGrab(sdl_window, false);
       SDL_SetWindowRelativeMouseMode(sdl_window, false);
-      SDL_SetWindowTitle(sdl_window, window_title.c_str());
+      SDL_SetWindowTitle(sdl_window, (window_title + led_title).c_str());
     }
   }
 

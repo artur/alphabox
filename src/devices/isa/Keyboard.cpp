@@ -404,6 +404,7 @@ void CKeyboard::resetinternals(bool powerup) {
   if (powerup) {
     state.current_scancodes_set = 1;
     state.kbd_internal_buffer.led_status = 0;
+    led_mirror = 0;
     state.kbd_internal_buffer.scanning_enabled = 1;
   }
 }
@@ -1071,6 +1072,7 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
   if (state.kbd_internal_buffer.expecting_led_write) {
     state.kbd_internal_buffer.expecting_led_write = 0;
     state.kbd_internal_buffer.led_status = value;
+    led_mirror = value;
     kbd_response_enQ(0xFA); // send ACK
     return;
   }
@@ -1836,6 +1838,7 @@ int CKeyboard::RestoreState(FILE *f) {
   {
     std::lock_guard<std::mutex> guard(kbdLock);
     state = restored;
+    led_mirror = state.kbd_internal_buffer.led_status;
   }
   printf("kbc: %d bytes restored.\n", (int)ss);
   return 0;

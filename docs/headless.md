@@ -53,6 +53,11 @@ comes up. For unattended runs, connect a client or use
 `ALPHABOX_DUMP_FB` is how you "see" the VGA output on a headless run;
 `test/tools/ppm2png.py` converts a dump to PNG.
 
+Whenever the guest changes the PS/2 keyboard's LEDs, the console gets a
+`%KBC-I-LEDS: Num Lock on, Caps Lock off, Scroll Lock off` line, and the
+window title shows the ones that are on (`[Num Caps]`). A script that
+types through `ALPHABOX_KEYPIPE` can tell from it whether Caps Lock is on.
+
 `ALPHABOX_KEYSCRIPT="40:a,41:r,42:c,43:enter"` types `arc` and Enter at the
 SRM prompt 40 s in. `ALPHABOX_KEYPIPE` is the interactive variant:
 `echo "f2 down down enter" >> keys.txt`. Start with an empty file; the
@@ -68,7 +73,8 @@ These names work for `ALPHABOX_KEYSCRIPT` and `ALPHABOX_KEYPIPE`:
 - punctuation: `bslash`, `dot`, `minus`, `equals`, `comma`, `slash`,
   `semicolon`, `quote`, `lbracket`, `rbracket`, `grave`;
 - function keys: `f1`–`f12`;
-- modifiers and system keys: `ctrl`, `shift`, `alt`, `win`, `menu`.
+- modifiers and system keys: `ctrl`, `shift`, `alt`, `win`, `menu`;
+- locks: `capslock`, `numlock`, `scrolllock`.
 
 For a chord, prefix a key with modifiers joined by `-`: `win-r`, `shift-5`
 (`%` on a US layout), `ctrl-alt-del`. `test/tools/keys_for.py "<text>"` turns
@@ -97,7 +103,12 @@ Besides keys, the two variables take these tokens:
   are relative and the guest applies its own acceleration, so to reach a
   place, park the pointer in a corner with a large move first
   (`mouse:-3000:3000` is the bottom left corner) and move from there in
-  small steps. As with a real mouse, nothing arrives until the guest's driver has
+  small steps. A large move reaches the guest over several packets (at
+  most 255 counts each, 50 a second): give it that long before the next
+  token, or a click lands on the way and a small move is lost against
+  the screen edge. Windows 2000's Start button is `mouse:12:-8` from that
+  corner; a click on the corner itself does not open it. As with a real
+  mouse, nothing arrives until the guest's driver has
   enabled the mouse, and the wheel and buttons 4 and 5 only once it has
   switched the mouse to a mode that has them.
 - **`usb:<op>:<port>[:<ep>[:<n>]]`** injects a fault on a USB root hub port

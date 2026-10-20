@@ -532,6 +532,23 @@ static void test_wheel_without_wheel_mode() {
   check("wheel in ID 3 mode", motion(0, 0, 1, 0), "m08 m00 m00 mff");
 }
 
+/// The LEDs the guest sets reach the GUI; Reset turns them off, Set Default
+/// leaves them (IBM 84F9735, Keyboards pp. 11 and 15).
+static void test_leds() {
+  fresh();
+  check_true("LEDs off at power-up", kb->leds() == 0);
+  out60(0xED);
+  out60(0x04);
+  check("ED 04", drain(), "fa fa");
+  check_true("Caps Lock on", kb->leds() == 0x04);
+  out60(0xF6);
+  drain();
+  check_true("F6 leaves the LEDs", kb->leds() == 0x04);
+  out60(0xFF);
+  drain();
+  check_true("FF turns them off", kb->leds() == 0);
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -545,6 +562,7 @@ int main() {
   test_reset_enables_scanning();
   test_restore_validation();
   test_key_range();
+  test_leds();
   test_mouse_status_buttons();
   test_mouse_bad_parameters();
   test_mouse_enable_keeps_mode();

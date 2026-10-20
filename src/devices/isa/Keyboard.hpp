@@ -82,6 +82,9 @@ public:
   void mouse_motion(int delta_x, int delta_y, int delta_z,
                     unsigned button_state);
   void set_mouse_capture(bool val);
+  /// The keyboard LEDs as the guest last set them (command ED): bit 0
+  /// Scroll Lock, 1 Num Lock, 2 Caps Lock. For the GUI, from any thread.
+  u8 leds() const { return led_mirror.load(); }
 
   virtual void init();
   virtual void start_threads();
@@ -91,6 +94,8 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   std::atomic_bool StopThread{false};
+  /// state.kbd_internal_buffer.led_status, readable without kbdLock
+  std::atomic<u8> led_mirror{0};
 
   std::mutex kbdLock;
 
