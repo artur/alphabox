@@ -96,10 +96,21 @@ const bool g_a64_reuse = [] {
 // -- 6-8 instructions instead of 12-14. If not, it probes as usual. Only the
 // ops known to leave x3 and x16 alone may come between: integer operates,
 // LDA/LDAH, integer branches (their taken side leaves the block) and integer
-// loads and stores. A producer's cold stub leaves x16 = 1, which no aligned
-// address matches (the test includes bit 0), so only accesses known to be
-// aligned consume: all but byte loads and stores. Bits per op: 1 consume,
-// 2 keep, 4 alignment implied by the previous op's.
+// loads and stores. Only accesses of two bytes or more consume; the test
+// includes bit 0. A producer's cold stub leaves x16 = kA64NoPage, which no
+// consumer that can run matches. Bits per op: 1 consume, 2 keep, 4 alignment
+// implied by the previous op's.
+//
+// Why kA64NoPage and not just any odd value: a consumer whose alignment is
+// implied skips its own alignment test. After an odd, misaligned producer
+// that succeeded (the helper does in-page unaligned accesses), such a
+// consumer is odd too, so with x16 = 1 it matched whenever its page was page
+// 0 -- and went through a stale x3. A consumer that matches kA64NoPage is in
+// a page no translation accepts (bit 63 set, bit 47 clear: malformed in both
+// VA modes, see alpha_valid_va_form), and so is its producer, 8 KB away at
+// most: that producer's helper failed and the block ended before the
+// consumer ran.
+constexpr uint64_t kA64NoPage = 0x8000000000000001ull;
 void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
   int prev = -1, prev_rb = -1, prev_size = 0;
   bool prev_write = false, prev_u = false;
@@ -953,14 +964,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         Label miss = a.new_label();
         if (dpc_probe_way1(false, size_bits, miss)) {
           load_from(a64::ptr(x10, x2));
-          if (rp & 2)
-            a.mov(a64::x16, imm(1)); // no probe kept: no later op reuses it
+          if (rp & 2) // no probe kept: no later op reuses it
+            a.mov(a64::x16, imm(kA64NoPage));
           a.b(Label(m_cold_back[cold_idx]));
           a.bind(miss);
         }
         emit_helper();
         if (rp & 2)
-          a.mov(a64::x16, imm(1));
+          a.mov(a64::x16, imm(kA64NoPage));
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }
@@ -1068,14 +1079,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         Label miss = a.new_label();
         if (dpc_probe_way1(true, size_bits, miss)) {
           store_to(a64::ptr(x10, x2));
-          if (rp & 2)
-            a.mov(a64::x16, imm(1)); // no probe kept: no later op reuses it
+          if (rp & 2) // no probe kept: no later op reuses it
+            a.mov(a64::x16, imm(kA64NoPage));
           a.b(Label(m_cold_back[cold_idx]));
           a.bind(miss);
         }
         emit_helper();
         if (rp & 2)
-          a.mov(a64::x16, imm(1));
+          a.mov(a64::x16, imm(kA64NoPage));
         a.b(Label(m_cold_back[cold_idx]));
         continue;
       }

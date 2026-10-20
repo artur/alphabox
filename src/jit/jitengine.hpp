@@ -767,7 +767,8 @@ public:
   // m_ind_cache). Non-global blocks are safe too: the entry comes from a
   // lookup under the current ASN, and an ASN change bumps the epoch
   // (jit_note_asn_change), so it can't be hit from another address space.
-  // Superpage kernel code is never ASM, so excluding it would gut the cache.
+  // Only global code (ASM pages, and the superpage, which virt2phys reports
+  // as global) would be left otherwise: all user-mode code would miss.
   inline void ind_cache_fill(uint64_t target, JitBlock *b) {
     if (!b->jit_body || (target & 1))
       return;
