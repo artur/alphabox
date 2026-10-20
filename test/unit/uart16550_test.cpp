@@ -219,6 +219,19 @@ static void test_fifo() {
   r.wr(FCR, 0x03); // receive FIFO reset
   CHECK_EQ(r.rd(LSR) & 0x01, 0);
   CHECK_EQ(r.uart.rx_empty(), true);
+  // Turning the FIFOs off empties them (PC16550D 8.5)...
+  r.line_in("de");
+  r.wr(FCR, 0x00);
+  CHECK_EQ(r.uart.rx_empty(), true);
+  CHECK_EQ(r.rd(IIR) & 0xc0, 0x00);
+  // ...and with bit 0 clear the other bits are not programmed.
+  r.line_in("fg");
+  r.wr(FCR, 0x02);
+  CHECK_EQ(r.rd(RBR), 'f');
+  // Turning them on empties them too.
+  r.wr(FCR, 0x01);
+  CHECK_EQ(r.uart.rx_empty(), true);
+  CHECK_EQ(r.rd(IIR) & 0xc0, 0xc0);
 }
 
 /// Overrun: a byte that finds the receive FIFO full is lost and sets

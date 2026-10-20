@@ -172,17 +172,21 @@ void CUart16550::write(u32 reg, u8 value) {
     update_locked();
     break;
 
-  case REG_IIR_FCR:
+  case REG_IIR_FCR: {
     // FCR. Bit 0 is what a driver reads back in IIR bits 7:6 to know it has
     // a 16550 with FIFOs: without it, every OS's probe concludes "16450, no
     // FIFO" and takes an interrupt and two register reads per character.
-    // Bit 1 empties the receive FIFO; bit 2 has nothing to empty
-    // (transmission is immediate).
-    s.bFCR = value;
-    if (value & FCR_RX_RESET)
+    // Turning the FIFOs on or off empties them, and the other bits are
+    // programmed only with bit 0 set (PC16550D 8.5, p. 17, and Table I's
+    // reset conditions; ALi M1543C p. 262): bit 1 then empties the receive
+    // FIFO, bit 2 has nothing to empty (transmission is immediate).
+    const bool was_on = s.bFCR & FCR_ENABLE, on = value & FCR_ENABLE;
+    if (was_on != on || (on && (value & FCR_RX_RESET)))
       s.rcvR = s.rcvW;
+    s.bFCR = on ? value : 0;
     update_locked();
     break;
+  }
 
   case REG_LCR:
     s.bLCR = value;
