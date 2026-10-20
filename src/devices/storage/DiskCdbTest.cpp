@@ -1149,6 +1149,24 @@ void t_rsoc(Rig &r) {
         "a CD-ROM lists READ TOC and not WRITE(10)");
 }
 
+/// DISK-18: a RAM disk's contents in the state file.
+void t_ram_state(Rig &r) {
+  group("DISK-18 RAM disk state");
+  CCdbTestAdapter *a = r.a;
+  a->sense(2); // a unit attention from the bus resets above
+  std::vector<u8> w(512, 0x3c);
+  expect_good(a->run(2, cdb10(0x2a, 123, 1), w), "write a pattern");
+  FILE *f = fopen(path("ram.state").c_str(), "wb+");
+  r.ram->SaveState(f);
+  a->run(2, cdb10(0x2a, 123, 1), std::vector<u8>(512, 0));
+  fseek(f, 0, SEEK_SET);
+  int rc = r.ram->RestoreState(f);
+  fclose(f);
+  remove(path("ram.state").c_str());
+  Res rd = a->run(2, cdb10(0x28, 123, 1));
+  check(rc == 0 && rd.good() && rd.in == w, "contents survive a restore");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1215,6 +1233,7 @@ int main_cdbtest(int argc, char **argv) {
   t_vpd(r);
   t_bus_reset(r);
   t_rsoc(r);
+  t_ram_state(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

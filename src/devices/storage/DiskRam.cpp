@@ -115,6 +115,74 @@ size_t CDiskRam::read_bytes(void *dest, size_t bytes) {
   return bytes;
 }
 
+static const u32 ramdisk_magic = 0x5241D15C;
+static const size_t ramdisk_chunk = 64 * 1024;
+
+/**
+ * The disk's state, then its contents: a RAM disk has no image to come
+ * back from, so a snapshot without them restored whatever malloc gave.
+ * The contents go in 64 KiB chunks, each a flag byte and, unless the chunk
+ * is all zeros, its bytes: an idle RAM disk costs a few bytes per chunk.
+ **/
+int CDiskRam::SaveState(FILE *f) {
+  if (CDisk::SaveState(f))
+    return -1;
+  const u64 size = (u64)byte_size;
+  fwrite(&ramdisk_magic, sizeof(u32), 1, f);
+  fwrite(&size, sizeof(u64), 1, f);
+  static const char zero[ramdisk_chunk] = {0};
+  for (u64 at = 0; at < size; at += ramdisk_chunk) {
+    const size_t n = (size_t)std::min<u64>(ramdisk_chunk, size - at);
+    const char *p = (const char *)ramdisk + at;
+    const u8 has_data = memcmp(p, zero, n) != 0;
+    fwrite(&has_data, 1, 1, f);
+    if (has_data)
+      fwrite(p, 1, n, f);
+  }
+  fwrite(&ramdisk_magic, sizeof(u32), 1, f);
+  return 0;
+}
+
+int CDiskRam::RestoreState(FILE *f) {
+  if (CDisk::RestoreState(f))
+    return -1;
+  // A state file from before the contents were saved has the next
+  // component's record here: leave the disk as it is, and say so.
+  u32 m = 0;
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != ramdisk_magic) {
+    fseek(f, -(long)sizeof(u32), SEEK_CUR);
+    printf("%s: the state file has no RAM disk contents; the disk keeps "
+           "its current ones.\n",
+           devid_string);
+    return 0;
+  }
+  u64 size = 0;
+  if (fread(&size, sizeof(u64), 1, f) != 1 || size != (u64)byte_size) {
+    printf("%s: the saved RAM disk is %" PRIu64 " bytes, this one %" PRId64
+           ".\n",
+           devid_string, size, (s64)byte_size);
+    return -1;
+  }
+  for (u64 at = 0; at < size; at += ramdisk_chunk) {
+    const size_t n = (size_t)std::min<u64>(ramdisk_chunk, size - at);
+    char *p = (char *)ramdisk + at;
+    u8 has_data = 0;
+    if (fread(&has_data, 1, 1, f) != 1 ||
+        (has_data && fread(p, 1, n, f) != n)) {
+      printf("%s: unexpected end of file!\n", devid_string);
+      return -1;
+    }
+    if (!has_data)
+      memset(p, 0, n);
+  }
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != ramdisk_magic) {
+    printf("%s: RAM disk contents end in the wrong place!\n", devid_string);
+    return -1;
+  }
+  printf("%s: %" PRIu64 " bytes of RAM disk restored.\n", devid_string, size);
+  return 0;
+}
+
 size_t CDiskRam::write_bytes(void *src, size_t bytes) {
   // A read-only RAM disk is not written, whoever asks: the SCSI path
   // refuses first, and any other caller gets the short count.

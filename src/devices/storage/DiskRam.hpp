@@ -43,6 +43,8 @@ public:
   virtual bool seek_byte(off_t_large byte);
   virtual size_t read_bytes(void *dest, size_t bytes);
   virtual size_t write_bytes(void *src, size_t bytes);
+  virtual int SaveState(FILE *f);
+  virtual int RestoreState(FILE *f);
 
 protected:
   void *ramdisk;
