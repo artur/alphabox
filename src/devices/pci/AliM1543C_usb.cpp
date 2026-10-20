@@ -1170,6 +1170,11 @@ void COhci::usb_hci_write(u64 address, int dsize, u64 data) {
       m_frame = 0;
       m_done_head = 0;
       m_done_delay = 7;
+      // The done queue is gone, and so is the wait for the control TD that
+      // was in it: left set, it would be stale and expired when the next
+      // control TD retires, and that TD's completion would go back within
+      // microseconds (see write_back_early).
+      m_done_hold = false;
     }
     if (data & OHCI_CMD_OCR) {
       // Ownership change: no SMM firmware owns the controller, so the handoff
