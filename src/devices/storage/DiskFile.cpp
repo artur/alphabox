@@ -221,42 +221,51 @@ static bool parse_cue(const std::string &cue_path,
     return false;
   }
 
-  for (size_t i = 0; i + 1 < tracks.size(); i++)
-    tracks[i].endLBA = tracks[i + 1].startLBA;
-
-  // Single-bin layout: every track lives in one file at startLBA*sectorSize.
-  // Multi-bin layout: each track's data starts at byte 0 of its own file.
-  bool single_bin = true;
-  for (size_t i = 1; i < tracks.size(); i++)
-    if (strcmp(tracks[0].filename, tracks[i].filename) != 0)
-      single_bin = false;
-
-  for (size_t i = 0; i < tracks.size(); i++) {
-    CueTrack &trk = tracks[i];
-    if (!trk.filename[0]) {
+  // An INDEX time "is an offset relative to the beginning of the file
+  // specified by the current FILE command context" (the CUE sheet format,
+  // GNU ccd2cue manual C.11), so startLBA holds a position in its own
+  // file until here. Each FILE's data follows the previous file's on the
+  // disc: its tracks' LBAs are its own offsets plus the sectors of every
+  // file before it, and a track ends where the next track in its file
+  // starts, or where its file ends. A cue sheet with one FILE per track
+  // used to give every track LBA 0, and all but the last no sectors.
+  long file_base = 0;
+  for (size_t i = 0; i < tracks.size();) {
+    if (!tracks[i].filename[0]) {
       error = "track without a FILE entry in " + cue_path;
       return false;
     }
-    trk.fileHandle = fopen_large(trk.filename, "rb");
-    if (!trk.fileHandle) {
-      error = std::string("cannot open BIN file ") + trk.filename + ": " +
-              strerror(errno);
-      return false;
+    // Tracks i .. j-1 share one file.
+    size_t j = i + 1;
+    while (j < tracks.size() &&
+           strcmp(tracks[i].filename, tracks[j].filename) == 0)
+      j++;
+    long file_sectors = 0;
+    for (size_t k = i; k < j; k++) {
+      CueTrack &trk = tracks[k];
+      trk.fileHandle = fopen_large(trk.filename, "rb");
+      if (!trk.fileHandle) {
+        error = std::string("cannot open BIN file ") + trk.filename + ": " +
+                strerror(errno);
+        return false;
+      }
+      if (k == i) {
+        fseek_large(trk.fileHandle, 0, SEEK_END);
+        file_sectors = (long)(ftell_large(trk.fileHandle) / trk.sectorSize);
+      }
+      trk.fileOffset = (off_t_large)trk.startLBA * trk.sectorSize;
     }
-    trk.fileOffset =
-        single_bin ? (off_t_large)trk.startLBA * trk.sectorSize : 0;
-
-    if (i == tracks.size() - 1 && trk.endLBA == 0) {
-      fseek_large(trk.fileHandle, 0, SEEK_END);
-      off_t_large bin_bytes = ftell_large(trk.fileHandle);
-      if (single_bin)
-        bin_bytes -= (off_t_large)trk.startLBA * trk.sectorSize;
-      trk.endLBA = trk.startLBA + (long)(bin_bytes / trk.sectorSize);
+    for (size_t k = i; k < j; k++) {
+      CueTrack &trk = tracks[k];
+      const long next = k + 1 < j ? tracks[k + 1].startLBA : file_sectors;
+      trk.endLBA = file_base + std::max(next, trk.startLBA);
+      trk.startLBA += file_base;
+      printf("%s:   Track %02d  LBA %ld..%ld  file=%s  offset=%" PRId64 "\n",
+             devid, trk.number, trk.startLBA, trk.endLBA, trk.filename,
+             trk.fileOffset);
     }
-
-    printf("%s:   Track %02d  LBA %ld..%ld  file=%s  offset=%" PRId64 "\n",
-           devid, trk.number, trk.startLBA, trk.endLBA, trk.filename,
-           trk.fileOffset);
+    file_base += file_sectors;
+    i = j;
   }
   return true;
 }
@@ -317,9 +326,11 @@ std::unique_ptr<MediaImage> MediaImage::open(const std::string &path,
     img->read_only = true; // BIN/CUE is always read-only
     if (!parse_cue(path, img->tracks, error, devid))
       return nullptr;
+    // The medium runs to the last track's end: a gap before a track (a
+    // first INDEX 01 past 00:00:00, a pregap) is part of it, and summing
+    // the tracks' lengths left the last sectors out of reach.
     for (const CueTrack &trk : img->tracks)
-      if (trk.endLBA > trk.startLBA)
-        img->byte_size += (off_t_large)(trk.endLBA - trk.startLBA) * 2048;
+      img->byte_size = std::max(img->byte_size, (off_t_large)trk.endLBA * 2048);
     if (img->byte_size <= 0) {
       error = path + " describes no data sectors";
       return nullptr;

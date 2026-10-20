@@ -1150,6 +1150,82 @@ void t_rsoc(Rig &r) {
 }
 
 /// DISK-18: a RAM disk's contents in the state file.
+void write_text(const std::string &file, const std::string &text) {
+  FILE *f = fopen(file.c_str(), "w");
+  if (f) {
+    fputs(text.c_str(), f);
+    fclose(f);
+  }
+}
+
+/// DISK-17: BIN/CUE images, one file per track and one file for all.
+void t_bincue(Rig &r) {
+  group("DISK-17 BIN/CUE");
+  CCdbTestAdapter *a = r.a;
+  // Two files: 100 cooked data sectors, then 30 raw audio sectors.
+  make_image(path("t1.bin"), 100, 2048);
+  {
+    FILE *f = fopen(path("t2.bin").c_str(), "wb");
+    std::vector<u8> s(2352);
+    for (int i = 0; i < 30; i++) {
+      for (size_t j = 0; j < s.size(); j++)
+        s[j] = u8(i + j * 3);
+      fwrite(s.data(), 1, s.size(), f);
+    }
+    fclose(f);
+  }
+  write_text(path("two.cue"), "FILE \"t1.bin\" BINARY\n"
+                              "  TRACK 01 MODE1/2048\n"
+                              "    INDEX 01 00:00:00\n"
+                              "FILE \"t2.bin\" BINARY\n"
+                              "  TRACK 02 AUDIO\n"
+                              "    INDEX 01 00:00:00\n");
+  // One file of raw MODE1/2352 sectors, user data at byte 16.
+  {
+    FILE *f = fopen(path("raw.bin").c_str(), "wb");
+    std::vector<u8> s(2352, 0xee);
+    for (int i = 0; i < 20; i++) {
+      fill_block(&s[16], i, 2048);
+      fwrite(s.data(), 1, s.size(), f);
+    }
+    fclose(f);
+  }
+  write_text(path("raw.cue"), "FILE \"raw.bin\" BINARY\n"
+                              "  TRACK 01 MODE1/2352\n"
+                              "    INDEX 01 00:00:00\n");
+  CDisk *two =
+      file_disk(r, r.sys, 8, "file=\"" + path("two.cue") + "\";cdrom=true;");
+  CDisk *raw =
+      file_disk(r, r.sys, 9, "file=\"" + path("raw.cue") + "\";cdrom=true;");
+  (void)two;
+  (void)raw;
+  a->sense(8);
+  a->sense(9);
+
+  Res cap = a->run(8, cdb10(0x25, 0, 0));
+  check(cap.good() && be32(cap.in, 0) == 129,
+        "two files: 130 sectors, the second file after the first", "%u",
+        cap.in.size() == 8 ? be32(cap.in, 0) : 0);
+  Res toc = a->run(8, {0x43, 0, 0, 0, 0, 0, 0, 0, 255, 0});
+  check(toc.good() && toc.in.size() >= 28 && toc.in[3] == 2 && toc.in[6] == 1 &&
+            be32(toc.in, 8) == 0 && toc.in[14] == 2 &&
+            be32(toc.in, 16) == 100 && toc.in[22] == 0xaa &&
+            be32(toc.in, 24) == 130,
+        "two files: TOC track 1 at 0, track 2 at 100, lead-out at 130");
+  Res d5 = a->run(8, cdb10(0x28, 5, 2));
+  check(d5.good() && blocks_ok(d5.in, 5, 2, 2048), "two files: a data read");
+  Res au = a->run(8, cdb10(0x28, 101, 1));
+  check(au.good() && au.in.size() == 2048 && au.in[0] == 1 && au.in[1] == 4,
+        "two files: the second file's sector 1 at LBA 101");
+  Res rc = a->run(9, cdb10(0x25, 0, 0));
+  check(rc.good() && be32(rc.in, 0) == 19, "raw MODE1/2352: 20 sectors");
+  Res rd = a->run(9, cdb10(0x28, 3, 4));
+  check(rd.good() && blocks_ok(rd.in, 3, 4, 2048),
+        "raw MODE1/2352: the user data of each sector");
+  for (const char *n : {"t1.bin", "t2.bin", "raw.bin", "two.cue", "raw.cue"})
+    remove(path(n).c_str());
+}
+
 void t_ram_state(Rig &r) {
   group("DISK-18 RAM disk state");
   CCdbTestAdapter *a = r.a;
@@ -1234,6 +1310,7 @@ int main_cdbtest(int argc, char **argv) {
   t_bus_reset(r);
   t_rsoc(r);
   t_ram_state(r);
+  t_bincue(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
