@@ -9,8 +9,8 @@ bugs in it on its first boot.
 | --- | --- |
 | Media | Gentoo `install-alpha-minimal-20260426T153103Z.iso` (265 MB, `distfiles.gentoo.org/releases/alpha/autobuilds/`), SHA-256 `1ba9f219...642f74e` |
 | Kernel | Linux 7.0.1-gentoo-alpha, `CONFIG_ALPHA_GENERIC`, SMP, gcc 15.2; boot loader aboot 1.0_pre20040408 (`/boot/bootlx` on the CD) |
-| What it reaches | the live CD's root shell on the serial console, about 2.5 minutes after `boot` on the JIT lane; a Gentoo stage3 installed from it boots from the disk to a login prompt, where gcc works |
-| JIT_VERIFY | the CD's boot, through the kernel, udev and the squashfs decompression, ran 3.2 billion compiled blocks against the interpreter with no mismatch |
+| What it reaches | the live CD's root shell on the serial console, about 2.5 minutes after `boot` on the JIT lane (single runs: an estimate); a Gentoo stage3 installed from it boots from the disk to a login prompt, where gcc works; with two processors as well |
+| JIT_VERIFY | the CD's boot, through the kernel, udev and the squashfs decompression, ran 4.5 billion compiled blocks against the interpreter with no mismatch |
 | Fixed on the way | `FNOP` faulted with the FPU off; the CD drive had no READ TOC session format; an IDE command kept the last one's error bit; the UART's interrupt enable register kept bits a 16550 does not have ([below](#what-was-fixed)) |
 
 | Section | What is in it |
@@ -65,8 +65,7 @@ P00>>> boot dqb0 -flags 2
   be typed whole, for instance with `epoch=2000` added
   ([below](#guest-side-quirks)).
 
-The live system logs in as root on `ttyS0` by itself. Use bash to drive
-it over telnet: lines typed while a command runs reach the shell after it.
+The live system logs in as root on `ttyS0` by itself.
 
 ## What works
 
@@ -76,7 +75,8 @@ The kernel's view, from its log:
   Clipper from SRM": the ES40's own interrupt table; one EV68CB, 1 GB.
 - The ALi M5229 (`pata_ali`): the CD at PIO4 on `ata2`. The driver turns
   ATAPI DMA off for this chip revision by default ("ATAPI DMA disabled for
-  reliability issues"), so the CD reads by PIO, at 39 MB/s with `dd`.
+  reliability issues"), so the CD reads by PIO: about 39 MB/s in one
+  `dd` run, an estimate.
   `sr0`, ISO 9660 with Rock Ridge and Joliet, squashfs over loop.
 - Hard disks on the same controller (`sda`, `sdb`), and a BSD disklabel
   read as partitions by Linux's OSF partition code.
@@ -90,6 +90,18 @@ The kernel's view, from its log:
 platform string AlphaServer ES40", cycle frequency 800000000, timer 1024
 Hz.
 
+**Two processors** (a `cpu1` block added, the installed disk booted):
+"SMP: 2 CPUs probed", "Brought up 1 node, 2 CPUs", both in
+`/proc/cpuinfo`'s active mask, and IPIs counted on both in
+`/proc/interrupts`. `xz -T0` keeps both busy. Three `xz -T2 | xz -d`
+round trips of a 30 MB random file, run at once, each gave back the
+file's SHA-1.
+
+An observation, not measured with `perf_ab.py`: two `xz -1` jobs at once
+took about 4.5 times the wall time of one, where twice would be
+expected, with the host busy with other work. Whether that is the guest
+switching six threads on two processors or the emulator is not known.
+
 ## Guest-side quirks
 
 These are Linux's own, and a real ES40 would show them too:
@@ -97,12 +109,13 @@ These are Linux's own, and a real ES40 would show them too:
 - **The date is 2006.** Linux guesses the RTC's epoch from its year
   register (`arch/alpha/kernel/rtc.c`): 20 to 47 is taken for the NT
   epoch, 1980, so 2026 reads as 2006 ("Using epoch 1980 for rtc year
-  26"). The guess was written before 2020. The kernel parameter
+  26"), a guess that predates 2020. The kernel parameter
   `epoch=2000` overrides it. Without it, `tar` warns about every file of a
   stage3 ("time stamp ... in the future").
 - **"HWRPB cycle frequency bogus, and unable to estimate a proper
-  value!"**: Linux's table of plausible clocks puts the EV68CB at 1000 to
-  1333 MHz, the ES45's parts. The ES40's 833 MHz EV68CB is outside it as
+  value!"**: Linux's table of plausible clocks (`validate_cc_value` in
+  `arch/alpha/kernel/time.c`) puts the EV68CB at 1000 to 1333 MHz, the
+  ES45's parts. The ES40's 833 MHz EV68CB is outside it as
   well as the 800 MHz configured here. Linux then uses the HWRPB's value,
   which is the rate the emulated cycle counter runs at.
 - **No USB**: this kernel has no OHCI PCI glue (`CONFIG_USB_OHCI_HCD_PCI`
@@ -133,9 +146,9 @@ PALcode.
 appendix A), and the 21264 drops it before it issues. The emulator
 checked the FPU enable for every floating-point operate instruction
 first. Now the exact `FNOP` encoding does nothing, and the JIT treats it
-as a NOP ([cpu-fidelity.md](cpu-fidelity.md)). The FPU is off at that
-point because the console's PCB has it off; Linux turns it on when a
-process first uses it.
+as a NOP ([cpu-fidelity.md](cpu-fidelity.md)). The FPU is still off at
+that point; once `trap_init` has run, Linux answers a FEN fault by
+turning it on (`do_entIF`).
 
 How it was found, as a recipe for the next silent hang:
 
@@ -179,10 +192,10 @@ the ports are 16550A.
 
 ## Installing to a disk
 
-Done once, to a 4 GB image: Gentoo's stage3 (`stage3-alpha-openrc-
-20261018T124555Z.tar.xz`, 265 MB) with the CD's kernel boots from the
-disk, `boot dqa0 -flags 0`, to a login prompt, and gcc 15 builds and runs
-a C program there.
+Done once, to a 4 GB image: Gentoo's stage3
+(`stage3-alpha-openrc-20261018T124555Z.tar.xz`, 265 MB) with the CD's
+kernel boots from the disk, `boot dqa0 -flags 0`, to a login prompt, and
+gcc 15 builds and runs a C program there.
 
 The minimal CD has no network here and no aboot tools (`swriteboot`,
 `abootconf`), so:
@@ -219,9 +232,10 @@ The minimal CD has no network here and no aboot tools (`swriteboot`,
    ```
    then an `/etc/fstab`, the `s0` agetty line in `/etc/inittab` enabled
    for `ttyS0`, a hostname and `chpasswd` in a chroot. The unpack took
-   under three minutes of guest time on the JIT lane.
-   - `/boot` is ext2 with 128-byte inodes and no features because aboot
-     dates from 2004: it cannot read extents.
+   under three minutes of guest time on the JIT lane, in one run.
+   - `/boot` is plain ext2 (128-byte inodes, no optional features):
+     aboot's file system code dates from 2004, before ext4's extents.
+     Nothing newer was tried.
    - No initramfs: the CD's kernel has the ALi IDE driver, the disk
      driver and ext4 built in, so `root=/dev/sda2` mounts directly.
 4. **Boot**: `boot dqa0 -flags 0`. aboot finds `etc/aboot.conf` on
@@ -239,10 +253,12 @@ sees 1.3 GB used of 3.8 GB.
 
 ## Open
 
-- More than one processor; Linux's SMP start, IPIs and the Tsunami's
-  per-CPU interrupt routing.
+- Four processors, and why two parallel jobs were slower than they
+  should be (above).
 - A NIC (Tulip or Intel) on a back end, and a full Gentoo install from
   the network.
+- A kernel built for the machine (Gentoo's `sys-kernel/gentoo-kernel`
+  or a hand-built one); the installed system runs the CD's.
 - The VGA console and a graphics card's framebuffer driver (the kernel
   has `tgafb`, `radeonfb`, `pm2fb`).
 - SCSI: the kernel has the Symbios driver as a module.

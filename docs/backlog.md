@@ -127,8 +127,8 @@ gate.
    interrupt path and the MSIs, and on the Radeon the real Mesa r100
    driver. Linux on the ES40 first (the easy half), then Marvel. The
    ES40 half runs ([linux.md](linux.md), 2026-10-20): Gentoo's CD to a
-   shell, an install that boots from disk, and four emulator bugs fixed
-   on the way.
+   shell, an install that boots from disk on one and on two processors,
+   and four emulator bugs fixed on the way.
 4. **E3**: OpenVMS MIPS on the EV7 against the ES40, and native PALcode
    paths if the gap is large.
 5. **M10, the CMM's FRU and environment answers**. Done (2026-10-20):
