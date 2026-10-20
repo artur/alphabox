@@ -21,7 +21,8 @@
 /**
  * \file
  * The AlphaServer DS20E board (docs/platforms/ds20e.md): its interrupt
- * wiring, its slots, and its I2C bus.
+ * wiring, its slots, and its I2C bus; and the AlphaServer DS20
+ * (docs/platforms/ds20.md), which differs from it by one part on that bus.
  **/
 #include "StdAfx.hpp"
 
@@ -75,23 +76,34 @@ const char *ds20e_slot_refusal(int hose, int slot) {
 }
 
 /**
- * The parts the DS20E hangs on its I2C bus.
+ * The parts the DS20 and DS20E hang on their I2C bus.
  *
- * Its console addresses the same block of serial ROMs as the DS10's (0x60
- * to 0x67), and two more parts at 0x27 and 0x4f whose identity is not
- * known. The ROMs are erased -- every byte 0xff -- for the same reason as
- * the DS10's: what a real machine records there is not ours to invent.
+ * The console names each part in a table (0x15d618 in the decompressed
+ * PC264SRM.ROM V7.3-1: name, kind, size, bus address):
+ *
+ *   0x60-0x67  iic_rcm_nvram0-7, 256-byte serial ROMs
+ *   0x4f       iic_rcm_temp, 4 bytes, a thermometer (the console's
+ *              commands to it, 0xa1 0xa2 0xac 0xee 0xaa, are a DS1621's
+ *              [inferred from the values alone])
+ *   0x27       iic_8574_ocp, the operator control panel's PCF8574
+ *
+ * and more that neither machine answers here (iic_ocp0/1, iic_smb0,
+ * iic_cpu0/1, iic_system0/1). Erased serial ROMs -- every byte 0xff --
+ * stand in for all of them, for the same reason as the DS10's: what a real
+ * machine records there is not ours to invent. That makes the thermometer
+ * read 255 degrees.
+ *
+ * Which parts answer is what tells the console which machine it is on
+ * (0x7fd80, which computes the HWRPB's system variation): without
+ * iic_rcm_temp it is an AlphaPC 264DP (member 1), with it but without
+ * iic_8574_ocp an AlphaServer DS20 (member 6), with both a DS20E (member
+ * 8). So the DS20 is this bus without the PCF8574 (docs/platforms/ds20.md).
  */
-static void ds20e_i2c_devices(I2CBus &bus) {
+static void ds20_family_i2c_devices(I2CBus &bus, bool panel_8574) {
   for (uint8_t a = 0x60; a <= 0x67; a++)
     bus.attach(std::make_shared<Eeprom24C02>(a, std::vector<uint8_t>()));
-  // Two more parts its console addresses, whose identity is NOT known:
-  // erased serial ROMs stand in for them so the bus answers. That is a
-  // modelling choice, not a fact -- with them present the console reads a
-  // machine code and names itself a DS20E variant instead of falling back
-  // to the first entry of its table, but which variant follows from the
-  // erased data (docs/platforms/ds20e.md).
-  bus.attach(std::make_shared<Eeprom24C02>(0x27, std::vector<uint8_t>()));
+  if (panel_8574)
+    bus.attach(std::make_shared<Eeprom24C02>(0x27, std::vector<uint8_t>()));
   bus.attach(std::make_shared<Eeprom24C02>(0x4f, std::vector<uint8_t>()));
 }
 
@@ -100,9 +112,24 @@ static void ds20e_i2c_devices(I2CBus &bus) {
  * and the I2C bus controller the DS10 has too -- a PCF8584 at PCI 0 memory
  * 0xfff80000, which the console initialises and then waits on for the bus
  * to go free before it reads the machine's serial ROMs.
+ *
+ * Which DS20E the console names (AlphaServer or AlphaStation) is bit 0 of
+ * byte 17 of iic_rcm_nvram0 (0x7fa78): erased, it is 1, an AlphaStation.
  */
 void ds20e_board_devices(CConfigurator *cfg, CSystem *sys) {
   es40_board_devices(cfg, sys);
   CPCF8584 *i2c = new CPCF8584(cfg, sys, U64(0x00000800fff80000));
-  ds20e_i2c_devices(i2c->bus());
+  ds20_family_i2c_devices(i2c->bus(), true);
+}
+
+/**
+ * The AlphaServer DS20's own hardware: the DS20E's without the operator
+ * control panel's PCF8574, which is how its console tells the two apart
+ * (above). Everything else -- the console, its interrupt table, the slots
+ * -- is the DS20E's.
+ */
+void ds20_board_devices(CConfigurator *cfg, CSystem *sys) {
+  es40_board_devices(cfg, sys);
+  CPCF8584 *i2c = new CPCF8584(cfg, sys, U64(0x00000800fff80000));
+  ds20_family_i2c_devices(i2c->bus(), false);
 }

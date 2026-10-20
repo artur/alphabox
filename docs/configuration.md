@@ -26,6 +26,7 @@ sys0 = tsunami {
 | --- | --- | --- | --- | --- | --- |
 | `es40` (the default) | AlphaServer ES40 | Tsunami | 4 | `cl67srmrom.exe` | below |
 | `ds20e` | AlphaServer DS20E | Tsunami | 2 | `PC264SRM.ROM` | [ds20e.md](platforms/ds20e.md) |
+| `ds20` | AlphaServer DS20 | Tsunami | 2 | `PC264SRM.ROM` | [ds20.md](platforms/ds20.md); the DS20E's console and slots |
 | `ds10` | AlphaServer DS10 | Tsunami | 1 | `DS10SRM.ROM` | [ds10.md](platforms/ds10.md) |
 | `ds20l` | AlphaServer DS20L | Tsunami | 2 | `DS20L_V6_6.EXE` | [ds20l.md](platforms/ds20l.md) |
 | `es45` | AlphaServer ES45 (Model 2) | Titan | 4 | `ES45_V7_3.EXE` | [es45.md](platforms/es45.md) |
@@ -84,8 +85,8 @@ A layout the board cannot hold is refused at startup:
 
 - an array it has no slots for (the DS15 has arrays 0 and 2 only, the DS10
   and DS20L arrays 0 and 1);
-- an array larger than its console reads (1024 MB on the DS20E, DS10 and
-  DS20L);
+- an array larger than its console reads (1024 MB on the DS20E, DS20,
+  DS10 and DS20L);
 - a sum outside the board's limits.
 
 ## Firmware and graphics BIOS

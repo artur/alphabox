@@ -99,7 +99,7 @@ that depend on them.
 
 | Area | Devices |
 |---|---|
-| Machines | AlphaServer ES40, DS20E, DS20L, DS10 (Tsunami); ES45, DS25, DS15 (Titan); ES47, ES80, GS1280 (EV7, "Marvel") |
+| Machines | AlphaServer ES40, DS20E, DS20, DS20L, DS10 (Tsunami); ES45, DS25, DS15 (Titan); ES47, ES80, GS1280 (EV7, "Marvel") |
 | CPU | EV68CB (21264), 1–4; EV7 and EV7z (21364), 2–16 |
 | Storage | Symbios 53C8xx and QLogic ISP SCSI; ALi and CMD 649 IDE; floppy; virtio-blk |
 | Graphics | S3 Trio64; Cirrus GD5430/5434; ATI Mach64 through the 3D Rage Pro; 3Dlabs Permedia 2; S3 ViRGE family; DEC TGA and TGA2; ATI Radeon 7500 |

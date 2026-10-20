@@ -71,7 +71,7 @@ DMA windows) and `DimmModel` (the DIMMs, reached as
 
 ### tsunami/
 
-`CTsunami`, the 21272 of the ES40, DS20E, DS10 and DS20L, split by chip:
+`CTsunami`, the 21272 of the ES40, DS20E, DS20, DS10 and DS20L, split by chip:
 
 - `Tsunami.cpp`: decode and interrupts.
 - `TsunamiCchip`, `TsunamiPchip`, `TsunamiTig`.
@@ -113,7 +113,7 @@ them):
 | Directory | What only that board has |
 | --- | --- |
 | `es40/` | `DPR`, `Flash`, the interrupt map, the console speed patches |
-| `ds20e/` | its interrupt map and slots |
+| `ds20e/` | its interrupt map and slots, and its I2C parts; the DS20 shares all of it but one part |
 | `ds10/` | `PCF8584`, the I2C controller the DS20E shares |
 | `ds20l/` | its interrupt map and slots |
 | `es45/` | the console's interrupt table; `Es45Dpr`, the ES40's DPR with the ES45's backplane FRU and RMC; a two-part `CFlash`; the Model 1 backplane with its AGP slot (`es45m1`) |

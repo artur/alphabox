@@ -37,10 +37,12 @@ const char *es40_slot_refusal(int hose, int slot);
 void es40_board_devices(CConfigurator *cfg, CSystem *sys);
 extern const rom_patch es40_console_patches[];
 
-// AlphaServer DS20E (platforms/ds20e/Ds20e.cpp)
+// AlphaServer DS20E (platforms/ds20e/Ds20e.cpp), and the DS20, which
+// shares its console, interrupts and slots
 int ds20e_pci_interrupt(int hose, int slot, int intx, int func);
 const char *ds20e_slot_refusal(int hose, int slot);
 void ds20e_board_devices(CConfigurator *cfg, CSystem *sys);
+void ds20_board_devices(CConfigurator *cfg, CSystem *sys);
 
 // AlphaServer DS10 (platforms/ds10/Ds10.cpp)
 int ds10_pci_interrupt(int hose, int slot, int intx, int func);

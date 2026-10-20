@@ -4,7 +4,7 @@
 
 | Area | Devices |
 |---|---|
-| Machines | AlphaServer ES40, DS20E, DS20L and DS10 (Tsunami); ES45 (Model 2, and Model 1 with its AGP slot), DS25 and DS15 (Titan); ES47, ES80 and GS1280 (EV7, "Marvel"). All boot OpenVMS 8.4 ([platforms.md](platforms.md)) |
+| Machines | AlphaServer ES40, DS20E, DS20, DS20L and DS10 (Tsunami); ES45 (Model 2, and Model 1 with its AGP slot), DS25 and DS15 (Titan); ES47, ES80 and GS1280 (EV7, "Marvel"). All boot OpenVMS 8.4 ([platforms.md](platforms.md)) |
 | CPU | Alpha EV68CB (21264): 1–4 on the Tsunami and Titan machines; EV7 and EV7z (21364): 2 on the ES47, up to 8 on the ES80 and 16 on the GS1280 |
 | Chipset | Tsunami/Typhoon (Cchip, Dchip, 2 × Pchip, TIG, DPR/RMC); Titan (Cchip, Dchip, PA-chips with G and A ports, TIG); Marvel (each EV7's on-chip router and memory controllers, IO7 I/O bridges, the CMM management processors over GIO) |
 | Memory | 64 MB – 32 GB; on the Tsunami and Titan boards in up to four memory arrays (`memory.arrays`); on the EV7 machines, per processor at its own physical base |

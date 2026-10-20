@@ -1,8 +1,8 @@
 # Machines: adding CPUs, chipsets and boards
 
 Alphabox began as an emulator of one machine, the AlphaServer ES40: an
-EV68CB on the Tsunami/Typhoon chipset. It now runs ten machines on three
-chipsets. This document says how a machine is made of layers, which
+EV68CB on the Tsunami/Typhoon chipset. It now runs eleven machines on
+three chipsets. This document says how a machine is made of layers, which
 machines run and how far, what their consoles taught us, and the contract
 a piece of work on another machine is handed over with (to a person or to
 an agent).
@@ -68,6 +68,7 @@ Three layers, each added in a different way:
 | --- | --- | --- | --- | --- |
 | AlphaServer ES40 | `es40` | Tsunami | the machine this project is about | |
 | AlphaServer DS20E | `ds20e` | Tsunami | L5 | [ds20e.md](platforms/ds20e.md) |
+| AlphaServer DS20 | `ds20` | Tsunami | L5 | [ds20.md](platforms/ds20.md) |
 | AlphaServer DS10 | `ds10` | Tsunami | L5 | [ds10.md](platforms/ds10.md) |
 | AlphaServer DS20L | `ds20l` | Tsunami | L5 | [ds20l.md](platforms/ds20l.md) |
 | AlphaServer ES45 Model 2 | `es45` | Titan | L5, L3 structural | [es45.md](platforms/es45.md) |
@@ -85,6 +86,11 @@ OpenVMS 8.4 boots on every one. What each has shown, in short:
   OpenVMS. The console reaches its prompt in 80 of 80 boots (interpreter
   and JIT, one and two processors), its power-up memory test taking 2
   minutes on the interpreter.
+- **DS20**: the DS20E's console, which calls the board a DS20 because
+  the operator panel's PCF8574 is missing from its I2C bus. OpenVMS
+  (`AlphaServer DS20 833 MHz`) boots its CD and an installed disk to
+  login on one and two processors, with NIC interrupts checked on both
+  hoses; network boot.
 - **DS10**: OpenVMS from its CD and an installed disk; network boot works,
   and the power-up network test passes.
 - **DS20L**: its own update utility installs its console (V6.6-10);
@@ -253,10 +259,12 @@ fails is the disk behind it. Test interrupts with a guest driver, or with a
 console operation that waits for one.
 
 **One firmware serves many machines.** The DS20/DS20E console carries a
-table of machine names and codes and picks by a code it reads from the
-board; without it, it falls back to the first entry and calls itself
-something else. The name a console prints is a machine fact, not proof
-that the emulation is right.
+table of machine names and model numbers and picks by which parts answer
+on the board's I2C bus: with the RCM's thermometer and the operator
+panel's PCF8574 it is a DS20E, with the thermometer alone a DS20, with
+neither an AlphaPC 264DP ([ds20.md](platforms/ds20.md)). That is how the
+DS20 row came about: the DS20E's, less one part. The name a console prints
+is a machine fact, not proof that the emulation is right.
 
 **Native shortcuts belong to one firmware.** The interpreter's native
 OpenVMS PALcode routines were written against the ES40 console's PALcode.
@@ -361,8 +369,9 @@ What was done, in order, and what is left. The plan for what is left is
    did it.
 2. ~~**Pilot: DS20E**~~ ([packet](platforms/ds20e.md)): at L5. No real
    machine's listing was found, so L3 is not claimed.
-3. **The rest of the Tsunami family**: the DS10 and DS20L are at L5. The
-   DS20 and the UP2000 and XP1000 boards are not started (T1).
+3. **The rest of the Tsunami family**: the DS10, DS20L and DS20 are at
+   L5 (the DS20 with T1). The UP2000 and XP1000 are not started: neither
+   console image is on local media.
 4. ~~**Titan**~~: the ES45 ([packet](platforms/es45.md)), the DS25
    ([packet](platforms/ds25.md)) and the DS15 ([packet](platforms/ds15.md))
    are at L5, with L3 checked structurally against owner's guide listings.

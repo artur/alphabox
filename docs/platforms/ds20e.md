@@ -242,6 +242,11 @@ console's string table holds a table of machines, each a name and a code:
 
 So one firmware serves all of them and picks by a code it reads somewhere;
 ours fell to the first entry, which is why it said "AlphaPC 264DP".
+(Corrected 2026-10-20, [ds20.md](ds20.md): those codes are the system
+marketing model numbers, and each belongs to the name after it, not
+before: AlphaPC 264DP 0x72e; DS20 0x72e and 0x780; AlphaServer DS20E
+0x730, 0x781, 0x793, 0x794, 0x7be, 0x7bf; AlphaStation DS20E 0x795, 0x796,
+0x797, 0x798, 0x7ac, 0x7ad.)
 
 **Where that code comes from: the I2C bus** (2026-09-18). The earlier
 search ruled out the Dchip, the Cchip, the TIG registers and the console's
@@ -257,6 +262,16 @@ is unknown. The two parts at 0x27 and 0x4f are not known to be serial ROMs
 at all: erased ROMs stand in so the bus answers. Which DS20E variant the
 console names therefore follows from the stand-in data, not from anything
 established. A real machine's I2C contents would settle it.
+
+The mechanism is known since 2026-10-20 ([ds20.md](ds20.md), Findings).
+The console's own table names the parts: 0x27 is `iic_8574_ocp`, the
+operator panel's PCF8574, 0x4f `iic_rcm_temp`, a thermometer, and 0x60
+to 0x67 `iic_rcm_nvram0` to `7`. Their presence picks the machine: with
+the thermometer and the PCF8574 it is a DS20E, with the thermometer alone
+a DS20. Among the DS20Es, bit 0 of byte 17 of `iic_rcm_nvram0` picks
+AlphaStation (1, so the erased part) or AlphaServer (0), and the processor
+type picks the model number. What a real DS20E records in that byte is
+still not known.
 
 Still unfixed, and probably from the same source: the garbled "SROM
 Revision", the "file open failed for iic_cpu0", and the cache reported

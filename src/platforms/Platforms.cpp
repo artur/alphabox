@@ -44,6 +44,14 @@ static const platform_config platforms[] = {
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr,
      0, nullptr, nullptr, nullptr, 0, 1024},
+    // docs/platforms/ds20.md: the DS20E's console, interrupt table and
+    // slots; the console knows it from the DS20E by its I2C bus
+    // (ds20_board_devices). The board took EV6 processors, for which there
+    // is no row: the EV68CB stands in, as on the DS20E.
+    {"ds20", "AlphaServer DS20", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
+     "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
+     ds20_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr,
+     0, nullptr, nullptr, nullptr, 0, 1024},
     // docs/platforms/ds10.md: one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,

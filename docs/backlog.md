@@ -2,7 +2,7 @@
 
 The machines' processors and chipsets, as of 2026-10-05 (and unchanged
 on 2026-10-19): what is not modelled, what is modelled on an assumption,
-and the order in which to close it. All ten machines boot OpenVMS 8.4;
+and the order in which to close it. All eleven machines boot OpenVMS 8.4;
 nothing here stops a guest that runs today.
 
 **No real Alpha is available to this project.** So an item is closed by
@@ -90,11 +90,11 @@ settle them:
 - the order of the bases among four equal arrays;
 - CSC<51> for three arrays.
 
-## Tsunami (ES40, DS20E, DS10, DS20L)
+## Tsunami (ES40, DS20E, DS20, DS10, DS20L)
 
 | Gap | To close it |
 | --- | --- |
-| DS20, UP2000, XP1000 boards | **T1**: board rows; their firmware is on the CD |
+| UP2000, XP1000 boards | none without their consoles: neither image is on the CD or anywhere in `roms/` (T1, [ds20.md](platforms/ds20.md)) |
 | No reference listings for the DS boards (no L3) | published listings if they turn up; otherwise stays |
 | The ES40 console prints "4-Way" for every `memory.arrays` layout, unequal arrays included | its own rule, not read; nothing else depends on it |
 
@@ -130,7 +130,14 @@ gate.
 5. **M10**: the CMM's FRU and environment answers.
 6. **M9**: partitions, I/O drawers, several IO7s on the GS1280, 32
    processors, the route table's I/O entries.
-7. **T1**: DS20, UP2000, XP1000.
+7. **T1**, DS20, UP2000, XP1000. Done as far as the media goes:
+   - the DS20 (`ds20`) runs the DS20E's console, which calls it a DS20
+     when the operator panel's PCF8574 is absent from the I2C bus; it is
+     at L5, OpenVMS 8.4 from its CD and an installed disk on one and two
+     processors ([ds20.md](platforms/ds20.md));
+   - the UP2000 and XP1000 are not started: neither console image is on
+     the CD (it has no directory for either) or anywhere in `roms/`. Each
+     can start when its image is copied in from media the owner has.
 8. **A1, N1, H1**, each its own decision: the Adaptec AIC-78xx sequencer
    (about 5.8k lines by the last estimate), the BCM5703c, the hot-plug
    controllers. No guest needs them: OpenVMS runs on the stand-ins.

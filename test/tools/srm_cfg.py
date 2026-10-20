@@ -48,7 +48,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # controller. The ES40's are the base configuration's own. The DS20E's
 # console scans devices 0-10 and wires hose 0 devices 6-9 and hose 1 7-10
 # (docs/platforms/ds20e.md), so its ISA bridge goes to 5, the IDE to the
-# board's own device 6, and the SCSI and NIC into slots 7 and 8. The
+# board's own device 6, and the SCSI and NIC into slots 7 and 8; the DS20
+# runs the same console on the same slots (docs/platforms/ds20.md). The
 # DS10's console table puts the IDE at device 13 and the USB at device 1;
 # its on-board NICs are at 9 and 11 and its slots at 14-17
 # (docs/platforms/ds10.md).
@@ -57,6 +58,8 @@ SLOTS = {
              "scsi": "pci0.3", "nic": "pci0.4"},
     "ds20e": {"ali": "pci0.5", "ali_ide": "pci0.6", "ali_usb": None,
               "scsi": "pci0.7", "nic": "pci0.8"},
+    "ds20": {"ali": "pci0.5", "ali_ide": "pci0.6", "ali_usb": None,
+             "scsi": "pci0.7", "nic": "pci0.8"},
     "ds10": {"ali": "pci0.7", "ali_ide": "pci0.13", "ali_usb": "pci0.1",
              "scsi": "pci0.14", "nic": "pci0.9"},
 }
