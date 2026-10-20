@@ -1654,7 +1654,11 @@ int CDisk::do_scsi_command() {
     printf("%s: MODE SENSE.\n", devid_string);
 #endif
     {
-      int num_blk_desc = 1;
+      // One block descriptor, or none when DBD is set: "A DBD bit set to
+      // one specifies that the device server shall not return any block
+      // descriptors" (SPC-3 6.9.1). LLBAA (MODE SENSE(10)) only allows
+      // the long form, which this disk never uses.
+      int num_blk_desc = (state.scsi.cmd.data[1] & 0x08) ? 0 : 1;
 
       if (state.scsi.cmd.data[0] == SCSICMD_MODE_SENSE) {
         q = 4;
@@ -1708,15 +1712,17 @@ int CDisk::do_scsi_command() {
       pagecode = state.scsi.cmd.data[2] & 0x3f;
 
       // printf("[ MODE SENSE pagecode=%i ]\n", pagecode);
-      state.scsi.dati.data[q++] = 0x00; //  density code
-      state.scsi.dati.data[q++] =
-          0; //  nr of blocks, high (0 = all remaining blocks)
-      state.scsi.dati.data[q++] = 0;    //  nr of blocks, mid
-      state.scsi.dati.data[q++] = 0;    //  nr of blocks, low
-      state.scsi.dati.data[q++] = 0x00; //  reserved
-      state.scsi.dati.data[q++] = (u8)(get_block_size() >> 16) & 255;
-      state.scsi.dati.data[q++] = (u8)(get_block_size() >> 8) & 255;
-      state.scsi.dati.data[q++] = (u8)(get_block_size() >> 0) & 255;
+      if (num_blk_desc) {
+        state.scsi.dati.data[q++] = 0x00; //  density code
+        state.scsi.dati.data[q++] =
+            0; //  nr of blocks, high (0 = all remaining blocks)
+        state.scsi.dati.data[q++] = 0;    //  nr of blocks, mid
+        state.scsi.dati.data[q++] = 0;    //  nr of blocks, low
+        state.scsi.dati.data[q++] = 0x00; //  reserved
+        state.scsi.dati.data[q++] = (u8)(get_block_size() >> 16) & 255;
+        state.scsi.dati.data[q++] = (u8)(get_block_size() >> 8) & 255;
+        state.scsi.dati.data[q++] = (u8)(get_block_size() >> 0) & 255;
+      }
 
       for (unsigned int x1 = q; x1 < retlen; x1++)
         state.scsi.dati.data[x1] = 0;
@@ -1924,6 +1930,23 @@ int CDisk::do_scsi_command() {
 #endif
         do_scsi_error(SCSI_INVALID_FIELD);
         return 0;
+      }
+
+      // MODE DATA LENGTH: the bytes that follow the field and are there to
+      // be sent -- the rest of the header, the block descriptor and the
+      // page -- whatever the allocation length (SPC-3 7.4.3). It was the
+      // allocation length, so an initiator that walks the pages up to it
+      // walked into the zero padding.
+      {
+        const int end = (pagecode == SCSIMP_VENDOR)
+                            ? q
+                            : q + 2 + state.scsi.dati.data[q + 1];
+        if (state.scsi.cmd.data[0] == SCSICMD_MODE_SENSE)
+          state.scsi.dati.data[0] = (u8)(end - 1);
+        else {
+          state.scsi.dati.data[0] = (u8)((end - 2) >> 8);
+          state.scsi.dati.data[1] = (u8)(end - 2);
+        }
       }
 
 #if defined(DEBUG_SCSI)

@@ -815,6 +815,28 @@ void t_alloc(Rig &r) {
             "READ SUB-CHANNEL of a reserved format", 5, 0x24, 0);
 }
 
+/// DISK-08: MODE DATA LENGTH and DBD.
+void t_mode_length(Rig &r) {
+  group("DISK-08 MODE DATA LENGTH, DBD");
+  CCdbTestAdapter *a = r.a;
+  Res m = a->run(0, {0x1a, 0, 0x08, 0, 255, 0});
+  check(m.good() && m.in.size() >= 4 && m.in[0] == 3 + 8 + 20,
+        "MODE SENSE(6) caching page: length 31", "%d",
+        m.in.empty() ? -1 : m.in[0]);
+  Res d = a->run(0, {0x1a, 0x08, 0x08, 0, 255, 0});
+  check(d.good() && d.in.size() >= 6 && d.in[0] == 3 + 20 && d.in[3] == 0 &&
+            d.in[4] == 0x08,
+        "MODE SENSE(6) with DBD: no block descriptor");
+  Res m10 = a->run(0, {0x5a, 0, 0x0a, 0, 0, 0, 0, 1, 0, 0});
+  check(m10.good() && m10.in.size() >= 8 && be16(m10.in, 0) == 6 + 8 + 8,
+        "MODE SENSE(10) control page: length 22", "%d",
+        m10.in.size() >= 2 ? be16(m10.in, 0) : -1);
+  Res d10 = a->run(0, {0x5a, 0x08, 0x0a, 0, 0, 0, 0, 1, 0, 0});
+  check(d10.good() && d10.in.size() >= 10 && be16(d10.in, 0) == 6 + 8 &&
+            be16(d10.in, 6) == 0 && d10.in[8] == 0x0a,
+        "MODE SENSE(10) with DBD: no block descriptor");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -871,6 +893,7 @@ int main_cdbtest(int argc, char **argv) {
   t_capacity_pmi(r);
   t_sense_cleared(r);
   t_alloc(r);
+  t_mode_length(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
