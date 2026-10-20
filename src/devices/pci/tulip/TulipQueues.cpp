@@ -210,6 +210,10 @@ static void describe_dhcp(const u8 *bootp, int len, char *out, int out_len) {
  * Take what the back end has into the receive queue, then into the receive
  * ring. Only this thread reads the back end, so it does that without the
  * lock, and queues each frame under it.
+ *
+ * While the receiver is stopped, or in internal loopback, it does not
+ * listen to the wire: what arrives then is read and dropped, so it is not
+ * delivered late when the receiver starts.
  **/
 void CTulip::receive_process() {
   bool listening;
@@ -220,7 +224,12 @@ void CTulip::receive_process() {
     listening = (csr6 & OPMODE_SR) && !(csr6 & OPMODE_OM_INTLOOP);
   }
 
-  if (listening) {
+  if (!listening) {
+    const u8 *packet_data = NULL;
+    int packet_len = 0;
+    while (net_backend->receive(&packet_data, &packet_len) > 0)
+      ;
+  } else {
     const u8 *packet_data = NULL;
     int packet_len = 0;
     u8 padded[ETH_MIN_PACKET_RAW];

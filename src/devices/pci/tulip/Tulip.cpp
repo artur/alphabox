@@ -462,11 +462,13 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
         /* BUGFIX: this must change the RX state, not TX */
         set_rx_state(STATUS_RS_STOPPED);
         state.reg[CSR_STATUS / 8] |= STATUS_RPS;
-        /* When receiver is stopped, drop any queued frames to avoid growth
-         * while SR=0. */
+        /* The frames still in the FIFO go, and so does the rest of a frame
+         * the ring had no room for: the next start begins with a new frame
+         * at the retained position (HRM Table 4-13). */
         if (rx_queue) {
           rx_queue->flush();
         }
+        state.rx.current.used = state.rx.current.len;
       }
     }
 
