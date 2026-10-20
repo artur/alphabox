@@ -375,6 +375,43 @@ static void test_new_count_trigger() {
   CHECK(b >= 0x6ff && b <= 0x701);
 }
 
+/// BCD counting (control word bit 0): counts are four decades, written and
+/// read in BCD; a zero count is 10^4; mode 0 wraps to 9999 (data sheet p.6,
+/// p.17).
+static void test_bcd() {
+  Rig r;
+  r.pit.load_gate(2, true);
+  r.program(2, 0, 0x1000, true); // 1000 decimal
+  r.clocks(100);
+  CHECK_EQ(r.latch_count(2), 0x0900);
+  r.clocks(899); // 999
+  CHECK(!r.pit.out(2));
+  r.clocks(2); // 1001
+  CHECK(r.pit.out(2));
+  r.clocks(99); // 1100: 1000 - 1100 wraps to 9900
+  CHECK_EQ(r.latch_count(2), 0x9900);
+  CHECK_EQ(r.status(2) & 0x01, 0x01);
+
+  Rig q; // mode 2, count 0 = 10000 clocks a period
+  q.pit.load_gate(2, true);
+  q.program(2, 2, 0x0000, true);
+  CHECK_EQ(q.latch_count(2), 0x0000); // 10^4 reads as 0000
+  q.clocks(2500);
+  CHECK_EQ(q.latch_count(2), 0x7500);
+  q.clocks(10000);
+  CHECK_EQ(q.latch_count(2), 0x7500);
+
+  Rig w; // mode 3 from a BCD count of 100: a 100-clock square wave
+  w.pit.load_gate(2, true);
+  w.program(2, 3, 0x0100, true);
+  w.clocks(40);
+  CHECK(w.pit.out(2));
+  w.clocks(20); // 60
+  CHECK(!w.pit.out(2));
+  w.clocks(50); // 110
+  CHECK(w.pit.out(2));
+}
+
 int main() {
   test_mode3_wave();
   test_mode3_irq0();
@@ -390,6 +427,7 @@ int main() {
   test_mode2_new_count();
   test_mode3_new_count();
   test_new_count_trigger();
+  test_bcd();
   printf("i8254_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

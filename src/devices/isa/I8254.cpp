@@ -74,6 +74,22 @@ u64 CI8254::ns_for_clocks(u64 clocks) {
          (clocks % PIT_CLOCK_HZ) * 1000000000ull / PIT_CLOCK_HZ;
 }
 
+u16 CI8254::to_bcd(u32 v) {
+  v %= 10000;
+  return (u16)(((v / 1000) << 12) | (((v / 100) % 10) << 8) |
+               (((v / 10) % 10) << 4) | (v % 10));
+}
+
+u32 CI8254::from_bcd(u32 v) {
+  return ((v >> 12) & 0xf) * 1000 + ((v >> 8) & 0xf) * 100 +
+         ((v >> 4) & 0xf) * 10 + (v & 0xf);
+}
+
+u32 CI8254::wrap(int c, u32 count, u64 clocks) const {
+  const u64 m = bcd(c) ? 10000 : 0x10000;
+  return (u32)((count % m + m - clocks % m) % m);
+}
+
 void CI8254::reset() {
   std::lock_guard<std::mutex> guard(lock);
   for (int i = 0; i < 3; i++)
@@ -137,19 +153,23 @@ u8 CI8254::read(u32 port) {
 u16 CI8254::count_now_locked(int c, u64 now) {
   settle_locked(c, now);
   const u32 n = initial(c);
-  if ((s.status[c] & 0x40) || !n || !gate[c]) // unloaded, or gated off
-    return (u16)s.counter[c];
-  const u64 clocks = clocks_between(epoch[c], now);
-  switch (mode_of(c)) {
-  case 0: // counts down from n and keeps wrapping past zero
-    return (u16)((u64)n - clocks);
-  case 2: // rate generator: n .. 1, reloading every n clocks
-    return (u16)(n - (u32)(clocks % n));
-  case 3: // square wave: counts down by two, reloading each half period
-    return (u16)((n - (u32)((clocks * 2) % n)) & ~1u);
-  default:
-    return (u16)s.counter[c];
+  u32 count = s.counter[c];
+  if (!(s.status[c] & 0x40) && n && gate[c]) { // loaded and counting
+    const u64 clocks = clocks_between(epoch[c], now);
+    switch (mode_of(c)) {
+    case 0: // counts down from n and keeps wrapping past zero
+      count = wrap(c, n, clocks);
+      break;
+    case 2: // rate generator: n .. 1, reloading every n clocks
+      count = n - (u32)(clocks % n);
+      break;
+    case 3: // square wave: counts down by two, reloading each half period
+      count = (n - (u32)((clocks * 2) % n)) & ~1u;
+      break;
+    }
   }
+  // A BCD counter reads as four decades (p.6); 10^4, like 2^16, reads 0.
+  return bcd(c) ? to_bcd(count) : (u16)count;
 }
 
 void CI8254::write(u32 port, u8 data) {
@@ -230,8 +250,10 @@ void CI8254::write(u32 port, u8 data) {
     default:
       return;
     }
+    if (bcd(c))
+      count = from_bcd(count); // four decades (p.6)
     if (count == 0)
-      count = 65536; // a zero count means 2^16
+      count = bcd(c) ? 10000 : 65536; // the largest count: 10^4 or 2^16
     settle_locked(c, now);
     const int mode = mode_of(c);
     if ((mode == 2 || mode == 3) && !(s.status[c] & 0x40) && gate[c] &&
@@ -340,7 +362,7 @@ void CI8254::freeze_locked(int c, u64 now, SPit_state &into) {
   bool high;
   switch (mode_of(c)) {
   case 0: // counts down from n, wrapping past zero; OUT high from terminal
-    count = (u32)(((u64)n - clocks) & 0xffffu);
+    count = wrap(c, n, clocks);
     high = clocks >= n;
     break;
   case 2: // n .. 1
@@ -377,7 +399,7 @@ u64 CI8254::phase_locked(int c) const {
   case 0:
     if (!(s.status[c] & 0x80)) // still counting down from n
       return count <= n ? n - count : 0;
-    return (u64)n + ((0x10000u - count) & 0xffffu); // wrapped past zero
+    return (u64)n + (u64)wrap(c, 0, count); // wrapped past zero
   case 2:
     return count >= 1 && count <= n ? n - count : 0;
   case 3: {
@@ -490,11 +512,11 @@ int CI8254::clock() {
     case 0: // interrupt on terminal count
       // OUT goes high at terminal count and stays high until a new count or
       // control word (data sheet p.10); the counter does not stop, it wraps
-      // to FFFF and counts on (p.17). NULL COUNT is not touched: it only
-      // reports a written count not yet loaded (p.9).
+      // to FFFF (9999 in BCD) and counts on (p.17). NULL COUNT is not
+      // touched: it only reports a written count not yet loaded (p.9).
       if (s.counter[i] <= clocks)
         s.status[i] |= 0x80;
-      s.counter[i] = (u32)(((u64)s.counter[i] - clocks) & 0xffffu);
+      s.counter[i] = wrap(i, s.counter[i], clocks);
       break;
 
     case 3: // square wave generator: counts down by two per input clock,

@@ -132,6 +132,14 @@ private:
   static u64 clocks_between(u64 from, u64 to);
   static u64 ns_for_clocks(u64 clocks);
   int mode_of(int c) const { return (s.status[c] & 0x0e) >> 1; }
+  /// A BCD counter (control word bit 0) counts four decades; the words
+  /// hold its count in binary, and it is converted on the way in and out.
+  bool bcd(int c) const { return (s.status[c] & 0x01) != 0; }
+  static u16 to_bcd(u32 v);
+  static u32 from_bcd(u32 v);
+  /// `count` less `clocks`, wrapping below zero to the counter's largest
+  /// count (FFFF, or 9999 in BCD).
+  u32 wrap(int c, u32 count, u64 clocks) const;
 
   std::mutex lock;
   SPit_state &s;
