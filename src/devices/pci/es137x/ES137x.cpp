@@ -168,6 +168,8 @@ void CES137x::reset(ES137xState *s) {
      power-on registers describe a format (DAC1 at 5.512 kHz, 8-bit mono)
      the host stream is not in. */
   update_voices(s, s->ctl, s->sctl, true);
+  last_gain = -1.0f;
+  queue_gain();
 }
 
 SDL_AudioStream *CES137x::voice_stream(int voice) {
@@ -175,6 +177,27 @@ SDL_AudioStream *CES137x::voice_stream(int voice) {
 }
 
 void CES137x::queue_sdl(const SdlAction &a) { pending.push_back(a); }
+
+/**
+ * Queue the host gain the AC'97 mixer now asks for, if it changed: the
+ * guest's volume control, mute included, reaches the speakers. The ES1370's
+ * own mixer is not followed.
+ **/
+void CES137x::queue_gain() {
+  if (!chip.ac97)
+    return;
+  const float g = ac97.host_gain();
+  if (g == last_gain)
+    return;
+  last_gain = g;
+  for (int v = 0; v < 2; v++) {
+    SdlAction a = {};
+    a.kind = SdlAction::Gain;
+    a.voice = v;
+    a.gain = g;
+    queue_sdl(a);
+  }
+}
 
 /**
  * Do what the registers asked of the host streams. The caller holds
@@ -208,6 +231,9 @@ void CES137x::apply_sdl_actions() {
     }
     case SdlAction::Unbind:
       SDL_UnbindAudioStream(st);
+      break;
+    case SdlAction::Gain:
+      SDL_SetAudioStreamGain(st, a.gain);
       break;
     }
   }
@@ -830,6 +856,8 @@ int CES137x::RestoreState(FILE *f) {
       memcpy(s->src_ram, x.src_ram, sizeof(s->src_ram));
       ac97.load(x.ac97);
       update_voices(s, x.ctl, x.sctl, true);
+      last_gain = -1.0f;
+      queue_gain();
       for (int i = 0; i < NB_CHANNELS; i++) {
         struct chan &c = s->chan[i];
         c.leftover = x.chan[i].leftover & 3;

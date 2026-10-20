@@ -254,6 +254,65 @@ void CES137x::selftest(const std::string &spec) {
     return;
   }
 
+  if (mode == "mixer") {
+    /* Write all ones to every codec register and read it back: what comes
+       back is the implemented bits (AC'97 2.2, Table 15 and 5.5.3.2). */
+    auto cread = [&](u32 reg) {
+      wr(ES1371_REG_CODEC, (reg << CODEC_SH_ADDR) | CODEC_PIRD);
+      return rd(ES1371_REG_CODEC) & 0xffff;
+    };
+    int bad = 0;
+    for (u32 r = 0; r < 0x80; r += 2) {
+      if (r == 0x00)
+        continue; // a write resets the codec
+      const u32 before = cread(r);
+      codec(r, 0xffff);
+      const u32 got = cread(r);
+      u32 want = before; // not writable: unchanged
+      switch (r) {
+      case 0x02:
+        want = 0xbf3f;
+        break;
+      case 0x06:
+        want = 0x803f;
+        break;
+      case 0x0c:
+        want = 0x801f;
+        break;
+      case 0x0e:
+        want = 0x805f;
+        break;
+      case 0x10:
+      case 0x12:
+      case 0x18:
+        want = 0x9f1f;
+        break;
+      case 0x1a:
+        want = 0x0707;
+        break;
+      case 0x1c:
+        want = 0x8f0f;
+        break;
+      case 0x1e:
+        want = 0x800f;
+        break;
+      case 0x26:
+        want = 0xff0f;
+        break;
+      }
+      if (got != want) {
+        bad++;
+        printf("%s: selftest mixer: reg %02x read %04x, expected %04x\n",
+               devid_string, r, got, want);
+      }
+    }
+    codec(0x00, 0);
+    printf("%s: selftest mixer: %d registers differ; after a reset reg 1e "
+           "reads %04x, master %04x, record select %04x\n",
+           devid_string, bad, cread(0x1e), cread(0x02), cread(0x1a));
+    return;
+  }
+
   if (mode == "stress") {
     printf("%s: selftest stress for %d s\n", devid_string, secs);
     tone();

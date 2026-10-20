@@ -122,10 +122,15 @@ public:
   u16 read(u8 reg) const;
   void write(u8 reg, u16 value);
 
+  /// The linear gain the host stream should play at: the master and PCM
+  /// out volumes together, 0 while either is muted.
+  float host_gain() const;
+
   void dump(u16 out[64]) const;
   void load(const u16 in[64]);
 
 private:
+  static u16 write_mask(u8 reg);
   u32 id;
   u16 reg[64];
 };
@@ -192,14 +197,17 @@ private:
   /// device_lock and done outside it. voice is 0 and 1 for the DACs, 2 for
   /// the ADC.
   struct SdlAction {
-    enum Kind { Format, Bind, Unbind } kind;
+    enum Kind { Format, Bind, Unbind, Gain } kind;
     int voice;
     SDL_AudioSpec spec;
+    float gain;
   };
   std::vector<SdlAction> pending; ///< guarded by device_lock
+  float last_gain = -1.0f;        ///< the gain last queued; device_lock
 
   SDL_AudioStream *voice_stream(int voice);
   void queue_sdl(const SdlAction &a);
+  void queue_gain();        ///< follow the AC'97 mixer; device_lock held
   void apply_sdl_actions(); ///< caller holds sdl_lock, NOT device_lock
 
   /* ES137xDebug.cpp: ALPHABOX_ES137X_SELFTEST, a guest-less driver of the

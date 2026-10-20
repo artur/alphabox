@@ -37,6 +37,8 @@
 #ifdef HAVE_SDL
 #include "ES137x.hpp"
 
+#include <cmath>
+
 /* The AC'97 register map, by byte address on the link. Most of these are
    plain storage -- a mixer setting the host writes and reads back -- and
    are named here because a map with holes in it is harder to read than
@@ -101,6 +103,7 @@ void CAc97Codec::reset() {
   reg[AC97_CD_VOL >> 1] = 0x8808;
   reg[AC97_PCM_OUT_VOL >> 1] = 0x8808;
   reg[AC97_RECORD_GAIN >> 1] = 0x8000;
+  reg[AC97_RECORD_GAIN_MIC >> 1] = 0x8000;
   reg[AC97_POWERDOWN >> 1] = AC97_POWERDOWN_READY;
 
   /* No variable rate audio: the link runs at 48 kHz and always will,
@@ -132,9 +135,10 @@ void CAc97Codec::write(u8 r, u16 value) {
     break;
 
   case AC97_POWERDOWN:
-    /* The low four bits are the codec saying which of its sections are
-       up, not the host saying anything, so they survive the write. */
-    reg[i] = (value & ~AC97_POWERDOWN_READY) | AC97_POWERDOWN_READY;
+    /* The low byte is the codec saying which of its sections are up, not
+       the host saying anything, so it is not the host's to change (5.7.11,
+       p56: "no effect on read only bits 0-7"). */
+    reg[i] = (value & 0xff00) | AC97_POWERDOWN_READY;
     break;
 
   case AC97_EXTENDED_ID:
@@ -148,9 +152,68 @@ void CAc97Codec::write(u8 r, u16 value) {
     break;
 
   default:
-    reg[i] = value;
+    /* Only what the part implements keeps what is written, and only in the
+       bits the register has: reserved bits read back 0, and a register the
+       part lacks reads 0 whatever was written, which is how a driver finds
+       out it is not there (AC'97 2.2, Table 15 and its notes 1 and 2, p49;
+       the detection protocol of 5.5.3.2, p47). */
+    reg[i] = value & write_mask(r);
     break;
   }
+}
+
+/**
+ * The bits of each mixer register this codec implements, from the AC'97 2.2
+ * register map (Table 15, p49) and the sections that describe each. Mute is
+ * bit 15. The master and mono volumes have six bits a channel (5.7.2, p51);
+ * the input gains five, and the microphone's 20 dB boost is bit 6 (5.7.5,
+ * p53); record select is three bits a channel (5.7.6, p54); the record
+ * gains are four bits (5.7.7, p55). The optional registers this codec does
+ * not have, which are the AUX out volume, tone, PC beep, video, aux in,
+ * general purpose and 3D, take no bits.
+ **/
+u16 CAc97Codec::write_mask(u8 r) {
+  switch (r) {
+  case AC97_MASTER_VOL:
+    return 0xbf3f;
+  case AC97_MASTER_MONO_VOL:
+    return 0x803f;
+  case AC97_PHONE_VOL:
+    return 0x801f;
+  case AC97_MIC_VOL:
+    return 0x805f;
+  case AC97_LINE_IN_VOL:
+  case AC97_CD_VOL:
+  case AC97_PCM_OUT_VOL:
+    return 0x9f1f;
+  case AC97_RECORD_SELECT:
+    return 0x0707;
+  case AC97_RECORD_GAIN:
+    return 0x8f0f;
+  case AC97_RECORD_GAIN_MIC:
+    return 0x800f;
+  default:
+    return 0;
+  }
+}
+
+/**
+ * The level the host stream should play at for the mixer as set. The
+ * master volume attenuates in steps of 1.5 dB from 0 dB (5.7.2, p51); the
+ * PCM out gain runs from +12 dB at 0 in steps of 1.5 dB, 0 dB at 8 and
+ * -34.5 dB at 31 (5.7.5 and Table 21, pp53-54); either mute bit silences the
+ * stream. The host has one level per stream, so the mean of the left and
+ * right levels is used.
+ **/
+float CAc97Codec::host_gain() const {
+  const u16 m = reg[AC97_MASTER_VOL >> 1], p = reg[AC97_PCM_OUT_VOL >> 1];
+  if ((m | p) & 0x8000)
+    return 0.0f;
+  auto lin = [](float db) { return powf(10.0f, db / 20.0f); };
+  const float ml = -1.5f * ((m >> 8) & 0x3f), mr = -1.5f * (m & 0x3f);
+  const float pl = 12.0f - 1.5f * ((p >> 8) & 0x1f);
+  const float pr = 12.0f - 1.5f * (p & 0x1f);
+  return 0.5f * (lin(ml + pl) + lin(mr + pr));
 }
 
 /**
@@ -169,6 +232,7 @@ void CES137x::codec_write(ES137xState *s, uint32_t val) {
   else {
     ac97.write(reg, (u16)(val & CODEC_DATA));
     s->codec_result = 0;
+    queue_gain();
   }
 }
 

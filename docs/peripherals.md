@@ -659,6 +659,17 @@ Consoles and guests:
   rebinds the host streams, so a tone that was playing carries on. A state
   file from before the card was saved holds nothing for it, and restores
   with the card at power-on, as it always did.
+- **The ES1371's AC'97 mixer reaches the host.** The master volume and the
+  PCM out volume (1.5 dB a step, each with its mute bit) set the gain of
+  the host streams, so the guest's volume control and its mute button do
+  what they say. Left and right are averaged, because the host has one gain
+  per stream, and the record gains are not followed. Like the real part the
+  mixer powers up muted (master and PCM out 8000h and 8808h): a guest that
+  never unmutes it is silent. The codec's registers keep only the bits the
+  part implements and read the rest as 0; registers it lacks (headphone,
+  tone, PC beep, video, aux in, general purpose, 3D, the extended set) read
+  0 and ignore writes, which is how a driver sees they are not there.
+  Record gain mic (1Eh) powers up muted like its neighbour.
 - The ADC's stop bit (control register bit 31 on the ES1370, bit 13 on the
   ES1371) holds off the record transfers, as the specifications say; the
   sample ring's end is counted from the byte the next transfer starts at, so
