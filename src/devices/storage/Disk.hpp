@@ -203,6 +203,10 @@ protected:
 
   bool atapi_mode;
 
+  /// An IDENTIFY message came with this selection: it names the logical
+  /// unit, and the CDB's old LUN field is ignored (SCSI-2 7.2.2).
+  bool identify_received = false;
+
   /// The state structure contains all elements that need to be saved to the
   /// statefile
   struct SDisk_state {

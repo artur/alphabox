@@ -179,6 +179,7 @@ void CDisk::scsi_select_me(int bus) {
   state.scsi.stat.available = 0;
   state.scsi.stat.read = 0;
   state.scsi.lun_selected = false;
+  identify_received = false;
 
   // state.scsi.disconnect_priv = false;
   // state.scsi.will_disconnect = false;
@@ -674,7 +675,7 @@ void CDisk::do_scsi_error(int errcode, int info) {
 
   case SCSI_INVALID_LUN:
     state.scsi.sense.data[2] = 0x05;  // ILLEGAL REQUEST
-    state.scsi.sense.data[12] = 0x25; // INVALID LUN
+    state.scsi.sense.data[12] = 0x25; // LOGICAL UNIT NOT SUPPORTED
     state.scsi.sense.data[13] = 0x00;
 #if defined(DEBUG_SCSI)
     printf("%s: Check sense: INVALID LUN.\n", devid_string);
@@ -1140,16 +1141,27 @@ int CDisk::do_scsi_command() {
   if (state.scsi.cmd.data[0] != SCSICMD_REQUEST_SENSE)
     state.scsi.sense.available = 0;
 
-  if (state.scsi.cmd.data[1] & 0xe0) {
+  // The logical unit: the IDENTIFY message's, when one came, and then the
+  // CDB's LUN field is ignored ("The target shall ignore the logical unit
+  // number specified within the command descriptor block if an IDENTIFY
+  // message was received", SCSI-2 7.2.2); without one (the ATAPI and USB
+  // paths, a SCSI-1 initiator) the CDB's bits 7:5 of byte 1 name it.
+  // From SBC-2 on those bits of READ(10) and WRITE(10) are RDPROTECT and
+  // WRPROTECT, which an initiator that sends IDENTIFY may now set.
+  if (!identify_received && (state.scsi.cmd.data[1] & 0xe0)) {
 #if defined(DEBUG_SCSI)
     printf("%s: LUN selected...\n", devid_string);
 #endif
     state.scsi.lun_selected = true;
   }
 
+  // A logical unit this target does not have (SCSI-2 7.5.3, a): INQUIRY
+  // reports peripheral qualifier 011b, REQUEST SENSE returns ILLEGAL
+  // REQUEST, LOGICAL UNIT NOT SUPPORTED, and every other command is
+  // terminated with CHECK CONDITION and that sense.
   if (state.scsi.lun_selected && state.scsi.cmd.data[0] != SCSICMD_INQUIRY &&
       state.scsi.cmd.data[0] != SCSICMD_REQUEST_SENSE) {
-    do_scsi_error(SCSI_INVALID_FIELD, state.scsi.cmd.data[1] >> 5);
+    do_scsi_error(SCSI_INVALID_LUN);
     return 0;
   }
 
@@ -1269,6 +1281,12 @@ int CDisk::do_scsi_command() {
     printf("%s: REQUEST SENSE.\n", devid_string);
 #endif
     retlen = state.scsi.cmd.data[4];
+
+    // To a logical unit the target does not have: GOOD, with ILLEGAL
+    // REQUEST, LOGICAL UNIT NOT SUPPORTED as the sense (SCSI-2 7.5.3, a;
+    // SPC-3 6.27 for peripheral qualifier 011b).
+    if (state.scsi.lun_selected && !state.scsi.sense.available)
+      do_scsi_error(SCSI_INVALID_LUN); // fills sense; status reset below
 
     // With no other sense pending, REQUEST SENSE reports (and consumes) a
     // pending unit attention.
@@ -2862,6 +2880,7 @@ int CDisk::do_scsi_message() {
 #endif
         state.scsi.lun_selected = true;
       }
+      identify_received = true;
 
 #if defined(DEBUG_SCSI)
       printf("\n");

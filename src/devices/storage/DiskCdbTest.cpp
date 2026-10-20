@@ -849,6 +849,33 @@ void t_inquiry_len(Rig &r) {
         q2.why().c_str());
 }
 
+/// DISK-10: a logical unit the target does not have.
+void t_lun(Rig &r) {
+  group("DISK-10 LUN");
+  CCdbTestAdapter *a = r.a;
+  expect_cc(r, 0, a->run(0, {0, 0, 0, 0, 0, 0}, {}, {0x81}),
+            "TEST UNIT READY to LUN 1", 5, 0x25, 0, {0x81});
+  expect_cc(r, 0, a->run(0, cdb10(0x25, 0, 0), {}, {0x81}),
+            "READ CAPACITY to LUN 1", 5, 0x25, 0, {0x81});
+  Res q = a->run(0, {0x12, 0, 0, 0, 36, 0}, {}, {0x81});
+  check(q.good() && q.in.size() >= 1 && q.in[0] == 0x7f,
+        "INQUIRY to LUN 1: peripheral qualifier 3");
+  Res rs = a->run(0, {0x03, 0, 0, 0, 18, 0}, {}, {0x81});
+  check(rs.good() && rs.in.size() >= 14 && (rs.in[2] & 0x0f) == 5 &&
+            rs.in[12] == 0x25,
+        "REQUEST SENSE to LUN 1: GOOD, LOGICAL UNIT NOT SUPPORTED");
+  // With IDENTIFY, the CDB's LUN bits are ignored (SCSI-2 7.2.2); they are
+  // RDPROTECT in a READ(10) from SBC-2 on.
+  Res rd = a->run(0, cdb10(0x28, 0, 1, 0x20));
+  check(rd.good() && blocks_ok(rd.in, 0, 1, 512),
+        "READ(10) with byte 1 bit 5 after IDENTIFY: read");
+  // Without IDENTIFY, they name the unit.
+  Res nl = a->run(0, {0x00, 0x20, 0, 0, 0, 0}, {}, {0x08});
+  check(nl.cc(), "TEST UNIT READY with CDB LUN 1 and no IDENTIFY: CHECK", "%s",
+        nl.why().c_str());
+  a->sense(0);
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -907,6 +934,7 @@ int main_cdbtest(int argc, char **argv) {
   t_alloc(r);
   t_mode_length(r);
   t_inquiry_len(r);
+  t_lun(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
