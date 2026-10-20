@@ -109,6 +109,12 @@ public:
   void deassert(int index, int intno);
   void set_line(int index, int intno, bool active);
 
+  /// Whether ISA IRQ `irq` (0-15) is requested: its IRR bit.
+  bool requested(int irq) {
+    std::lock_guard<std::mutex> guard(lock);
+    return (s.irr[irq >> 3] >> (irq & 7)) & 1;
+  }
+
 private:
   void init_reset(int index);
   int get_irq(int index);

@@ -901,10 +901,7 @@ int CAliM1543C::routed_irq(int config_offset) const {
   return table[(dw >> (8 * (config_offset & 3))) & 0xf];
 }
 
-bool CAliM1543C::irq_requested(int irq) {
-  std::lock_guard<std::mutex> guard(picLock);
-  return (state.pic_irr[irq >> 3] >> (irq & 7)) & 1;
-}
+bool CAliM1543C::irq_requested(int irq) { return pic.requested(irq); }
 
 void CAliM1543C::add_usbir_listener(const void *owner,
                                     std::function<void()> fn) {
