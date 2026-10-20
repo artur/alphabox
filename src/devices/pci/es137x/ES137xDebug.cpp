@@ -37,6 +37,7 @@
  *           muted, three seconds each
  *   ring    records from the ADC into an 8-bit mono ring that has a guard
  *           region after it, and reports whether the guard was touched
+ *   ringstop  the same with the ADC stop bit set: nothing may be written
  * The thread waits for the console to have set up the PCI DMA windows
  * before it starts.
  **/
@@ -280,7 +281,7 @@ void CES137x::selftest(const std::string &spec) {
     return;
   }
 
-  if (mode == "ring") {
+  if (mode == "ring" || mode == "ringstop") {
     /* 100 bytes of 8-bit mono: 25 dwords, ring size field 24, wrapped
        many times a second so that a refill ends at every offset in the
        dword. The bytes after the ring are the guard. */
@@ -293,9 +294,11 @@ void CES137x::selftest(const std::string &spec) {
     wr(0x34, (dwords - 1) & 0xffff);
     wr(ES_REG_SERIAL_CONTROL, 0); // ADC: 8-bit mono
     wr(ES_REG_ADC_SCOUNT, 255);
-    wr(ES_REG_CONTROL, rd(ES_REG_CONTROL) | CTRL_ADC_EN);
+    const u32 stop = mode == "ringstop" ? CTRL_1371_ADC_STOP : 0;
+    wr(ES_REG_CONTROL, rd(ES_REG_CONTROL) | CTRL_ADC_EN | stop);
     nap(secs * 1000);
-    wr(ES_REG_CONTROL, rd(ES_REG_CONTROL) & ~(u32)CTRL_ADC_EN);
+    wr(ES_REG_CONTROL,
+       rd(ES_REG_CONTROL) & ~((u32)CTRL_ADC_EN | CTRL_1371_ADC_STOP));
     std::vector<uint8_t> back(bytes + 64);
     do_pci_read(ring, back.data(), 1, back.size());
     int touched = 0, written = 0;

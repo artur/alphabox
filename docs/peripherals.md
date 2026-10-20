@@ -659,6 +659,10 @@ Consoles and guests:
   rebinds the host streams, so a tone that was playing carries on. A state
   file from before the card was saved holds nothing for it, and restores
   with the card at power-on, as it always did.
+- The ADC's stop bit (control register bit 31 on the ES1370, bit 13 on the
+  ES1371) holds off the record transfers, as the specifications say; the
+  sample ring's end is counted from the byte the next transfer starts at, so
+  a mono or 8-bit stream no longer reads or writes past the guest's ring.
 - **ES1370**: the part before it, with a mixer of its own. The console has
   no table entry for 1274:5000, so `show config` prints only its ids.
 

@@ -302,9 +302,17 @@ void CES137x::update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl,
     }
     d->freq = new_freq;
 
-    if (force || ((ctl ^ s->ctl) & b->ctl_en) ||
+    /* The ADC has a second gate besides its enable: the stop bit, which
+       holds off the record transfers (ES1370 specification Rev 2.3 p10,
+       control register bit 31; ES1371 specification Rev 1.1 p15, bit 13). */
+    const uint32_t adc_stop =
+        (i == ADC_CHANNEL) ? (chip.ac97 ? CTRL_1371_ADC_STOP : CTRL_ADC_STOP)
+                           : 0;
+
+    if (force || ((ctl ^ s->ctl) & (b->ctl_en | adc_stop)) ||
         ((sctl ^ s->sctl) & b->sctl_pause)) {
-      const bool on = (ctl & b->ctl_en) && !(sctl & b->sctl_pause);
+      const bool on =
+          (ctl & b->ctl_en) && !(sctl & b->sctl_pause) && !(ctl & adc_stop);
       SdlAction a = {};
       a.kind = on ? SdlAction::Bind : SdlAction::Unbind;
       a.voice = (int)i;
@@ -579,12 +587,14 @@ void CES137x::transfer_audio(ES137xState *s, struct chan *d, int loop_sel,
       break;
 
     /*
-     * Bytes left in the guest's buffer. `leftover` is the partial-dword
-     * offset already included in the address below, so it ADDS to the span
-     * that remains -- upstream subtracts it here, which under-counts by up
-     * to 3 bytes and can end the refill early.
+     * Bytes left in the guest's buffer. The ring is size + 1 dwords long
+     * and the address below already includes `leftover`, the partial-dword
+     * offset into dword `cnt`, so the span that remains is the ring's end
+     * less that offset. (Adding it, as this once did, believed twice
+     * `leftover`, up to 6 bytes, more remained than do, and a refill ending
+     * at the seam read or, for capture, wrote past the guest's ring.)
      */
-    const int left = ((size - cnt + 1) << 2) + (int)d->leftover;
+    const int left = ((size - cnt + 1) << 2) - (int)d->leftover;
     if (left <= 0)
       break;
 
@@ -663,6 +673,10 @@ void CES137x::run_channel(ES137xState *s, size_t chan, int free_or_avail) {
   const struct chan_bits *b = &es137x_chan_bits[chan];
 
   if (!(s->ctl & b->ctl_en) || (s->sctl & b->sctl_pause)) {
+    return;
+  }
+  if (chan == ADC_CHANNEL &&
+      (s->ctl & (chip.ac97 ? CTRL_1371_ADC_STOP : CTRL_ADC_STOP))) {
     return;
   }
 
