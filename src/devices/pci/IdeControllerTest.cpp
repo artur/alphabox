@@ -430,6 +430,17 @@ void t_busmaster(Rig &r) {
   check(r.i16(b + 4) == (kPrd & 0xffff), "a 16-bit read of the pointer");
   r.o8(b + 0, 0);
 
+  // The Interrupt bit follows INTRQ, Start or not (SFF-8038i 2.2, p.4).
+  r.o8(b + 2, 0x06);
+  r.run(0, 0, 0xec, 0, 0);
+  check(r.i8(b + 2) & 0x04, "Interrupt is set by a PIO command's INTRQ",
+        "bm status %02x", r.i8(b + 2));
+  r.read_words(0, 256);
+  r.wait_ready(0);
+  r.status(0);
+  r.o8(b + 2, 0x06);
+  check(!(r.i8(b + 2) & 0x06), "and cleared by writing 1");
+
   // 128 PRD entries of 256 bytes and 40 of 820: the walk has no cap of 34.
   const u32 total = 64 * 512;
   for (u32 i = 0; i < total; i += 8)
@@ -489,6 +500,16 @@ void t_reset_in_dma(Rig &r) {
   r.o8(r.ctlport(0), 0x00);
   bool ok = r.wait_ready(0, 3000);
   check(ok, "SRST completes");
+  r.select(0, 0);
+  check(r.error(0) == 0x01 && (r.status(0) & 0x50) == 0x50,
+        "drive 0 leaves SRST with 01h and DRDY (9.2, p.318)",
+        "err %02x st %02x", r.error(0), r.status(0));
+  r.select(0, 1);
+  check(r.error(0) == 0x01 && !(r.status(0) & 0x70) && r.i8(0x1f5) == 0xeb,
+        "the PACKET drive leaves SRST with 01h, no DRDY, DF or DSC (9.2, "
+        "p.318)",
+        "err %02x st %02x", r.error(0), r.status(0));
+  r.select(0, 0);
   r.mw32(kDst, 0x55555555);
   r.issue(0, 0, 0xec, 0, 0);
   ok = r.wait_ready(0, 3000);
@@ -523,6 +544,81 @@ void t_reset_in_dma(Rig &r) {
   r.status(0);
 }
 
+// ATA/ATAPI-6 8.46.11 (p.227): a transfer mode belongs to its drive.
+void t_transfer_mode(Rig &r) {
+  g_group = "transfer-mode";
+  r.run(0, 0, 0xef, 0x42, 0, 0x03); // drive 0: Ultra DMA mode 2
+  bool udma_ok = !r.failed(0);
+  r.run(0, 1, 0xef, 0x0c, 0, 0x03); // drive 1: PIO mode 4 (a CD-ROM drive)
+  check(!r.failed(0), "the CD-ROM drive accepts a PIO mode");
+  auto w = r.identify(0, 0, false);
+  if (udma_ok)
+    check(w.size() == 256 && (w[88] & 0x0400),
+          "drive 0 still shows Ultra DMA mode 2 selected");
+  else
+    check(true, "DMA is off on this channel");
+  r.wait_ready(0);
+  r.run(0, 0, 0xef, 0x0c, 0, 0x03); // PIO mode 4 on drive 0 as well
+  w = r.identify(0, 0, false);
+  if (udma_ok)
+    check(w.size() == 256 && (w[88] & 0x0400),
+          "and a PIO mode leaves the DMA mode selected");
+  r.wait_ready(0);
+}
+
+// ATA/ATAPI-6 8.23.5 (p.162): an odd byte count ends with a pad byte.
+void t_odd_count(Rig &r) {
+  g_group = "atapi-odd";
+  const u32 b = Rig::cmdbase(0);
+  r.o8(b + 6, 0xb0);
+  r.o8(b + 1, 0);
+  r.o8(b + 4, 0xfe);
+  r.o8(b + 5, 0xff);
+  r.o8(b + 7, 0xa0);
+  r.wait_ready(0);
+  const u8 cdb[12] = {0x03, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0}; // REQUEST SENSE
+  for (int i = 0; i < 6; i++)
+    r.o16(b, cdb[2 * i] | (cdb[2 * i + 1] << 8));
+  r.wait_ready(0);
+  u32 n = r.i8(b + 4) | (r.i8(b + 5) << 8);
+  check(n == 13, "the byte count is 13", "%u", n);
+  auto w = r.read_words(0, 6);
+  check(r.status(0) & 0x08, "six words do not end the transfer");
+  r.read_words(0, 1);
+  r.wait_ready(0);
+  check(!(r.status(0) & 0x08), "the seventh does");
+  r.status(0);
+  r.select(0, 0);
+}
+
+// Intel 82077AA 2.1 (p.8), 2.1.3 (p.9), 5.0 (p.17), 5.2.4 (p.31).
+void t_floppy(Rig &r) {
+  g_group = "floppy";
+  r.o8(0x3f2, 0x1c);
+  check(r.i8(0x3f2) == 0x1c, "the DOR reads back what was written");
+  r.o8(0x3f2, 0x0c);
+  check(r.i8(0x3f2) == 0x0c, "and again");
+  // Drain the four polling interrupts a reset leaves, then ask once more.
+  r.o8(0x3f2, 0x00);
+  r.o8(0x3f2, 0x0c);
+  for (int i = 0; i < 4; i++) {
+    r.o8(0x3f5, 0x08);
+    r.i8(0x3f5);
+    r.i8(0x3f5);
+  }
+  r.o8(0x3f5, 0x08);
+  u32 msr = r.i8(0x3f4);
+  check((msr & 0xc0) == 0xc0,
+        "SENSE INTERRUPT STATUS with nothing pending: a "
+        "result is waiting",
+        "msr %02x", msr);
+  u32 st0 = r.i8(0x3f5);
+  check(st0 == 0x80, "ST0 is 80h", "%02x", st0);
+  msr = r.i8(0x3f4);
+  check((msr & 0xc0) == 0x80, "and it is the only result byte", "msr %02x",
+        msr);
+}
+
 } // namespace
 
 int main_idetest(int argc, char **argv) {
@@ -537,7 +633,8 @@ int main_idetest(int argc, char **argv) {
 
   if (!make_image(path("ide0.img"), (u64)kDiskSectors * 512) ||
       !make_image(path("ide.iso"), (u64)kCdBlocks * 2048) ||
-      !make_image(path("ide-big.img"), (u64)200 << 30)) {
+      !make_image(path("ide-big.img"), (u64)200 << 30) ||
+      !make_image(path("fdd.img"), 1474560)) {
     printf("idetest: cannot create the images in %s\n", g_dir.c_str());
     return 2;
   }
@@ -547,7 +644,10 @@ int main_idetest(int argc, char **argv) {
       "disk0.0 = file { file = \"" +
       path("ide0.img") + "\"; } disk0.1 = file { file = \"" + path("ide.iso") +
       "\"; cdrom = true; read_only = true; } disk1.0 = file { file = \"" +
-      path("ide-big.img") + "\"; } } }";
+      path("ide-big.img") +
+      "\"; } } fdc0 = floppy { disk0.0 = file { file = "
+      "\"" +
+      path("fdd.img") + "\"; } } }";
   char *roottext = strdup(systext.c_str());
   new CConfigurator(nullptr, strdup("idetest"), strdup("idetest"), roottext,
                     strlen(roottext));
@@ -592,12 +692,19 @@ int main_idetest(int argc, char **argv) {
     t_busmaster(r);
   if (want("srst"))
     t_reset_in_dma(r);
+  if (want("transfer"))
+    t_transfer_mode(r);
+  if (want("atapi-odd"))
+    t_odd_count(r);
+  if (want("floppy"))
+    t_floppy(r);
 
   printf("idetest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
   remove(path("ide0.img").c_str());
   remove(path("ide.iso").c_str());
   remove(path("ide-big.img").c_str());
+  remove(path("fdd.img").c_str());
   fflush(stdout);
   // The machine is not torn down: its components' destructors expect a
   // running system. The process ends here.

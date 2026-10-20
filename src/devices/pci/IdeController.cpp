@@ -170,6 +170,7 @@ void CIdeController::ResetPCI() {
       STATUS(i, j).index_pulse_count = 0;
       STATUS(i, j).seek_complete = false;
       PER_DRIVE(i, j).multiple_size = 1;
+      PER_DRIVE(i, j).dma_mode = 0;
       set_signature(i, j);
     }
   }
@@ -786,14 +787,22 @@ void CIdeController::ide_control_write(int index, u32 address, u32 data) {
 #ifdef DEBUG_IDE_REG_CONTROL
       printf("IDE reset on index %d ended.\n", index);
 #endif
-      STATUS(index, 0).busy = false;
-      STATUS(index, 0).drive_ready = true;
-      STATUS(index, 1).busy = false;
-      STATUS(index, 1).drive_ready = true;
+      // Each drive that is there leaves the reset with the diagnostic code
+      // 01h and its signature; an ATA drive clears DRQ and ERR, a PACKET
+      // drive also DRDY, DF and DSC (ATA/ATAPI-6 9.2, pp.317-319).
+      for (int d = 0; d < 2; d++) {
+        const bool atapi = get_disk(index, d) && get_disk(index, d)->cdrom();
+        if (get_disk(index, d))
+          REGISTERS(index, d).error = 0x01;
+        STATUS(index, d).busy = false;
+        STATUS(index, d).drive_ready = !atapi;
+        STATUS(index, d).seek_complete = !atapi;
+        STATUS(index, d).fault = false;
+        STATUS(index, d).drq = false;
+        STATUS(index, d).err = false;
+        set_signature(index, d);
+      }
       CONTROLLER(index).reset_in_progress = false;
-
-      set_signature(index, 0);
-      set_signature(index, 1);
       CONTROLLER(index).selected = 0; // ATA: drive 0 is selected after reset
     }
     break;
@@ -1029,9 +1038,10 @@ void CIdeController::raise_interrupt(int index) {
 
 #if !defined(IDE_YIELD_INTERRUPTS)
     {
+      // The Interrupt bit follows INTRQ's rising edge whether or not the
+      // engine is started (SFF-8038i 2.2, p.4).
       SCOPED_WRITE_LOCK(mtBusMaster[index]);
-      if (CONTROLLER(index).busmaster[0] & 0x01)
-        CONTROLLER(index).busmaster[2] |= 0x04;
+      CONTROLLER(index).busmaster[2] |= 0x04;
     }
     UPDATE_ALT_STATUS(index);
     CONTROLLER(index).interrupt_pending = true;
@@ -1249,7 +1259,7 @@ void CIdeController::identify_drive(int index, bool packet) {
    */
   u16 mwdma_modes = (usedma && !packet) ? 0x0007 : 0x0000;
   u16 udma_modes = (usedma && !packet) ? 0x0007 : 0x0000;
-  u8 selected_mode = CONTROLLER(index).dma_mode;
+  u8 selected_mode = SEL_PER_DRIVE(index).dma_mode;
 
   // multiword dma (2-0: modes supported, 10-8: mode selected)
   CONTROLLER(index).data[63] = mwdma_modes;
@@ -1853,11 +1863,16 @@ void CIdeController::execute(int index) {
                     num_bytes = chunk_max;
                   void *data_ptr = scsi_xfer_ptr(index, num_bytes);
                   memcpy(CONTROLLER(index).data, data_ptr, num_bytes);
+                  // An odd count ends the command: the last byte is in the
+                  // low half of a word whose high half is a pad (ATA/ATAPI-6
+                  // 8.23.5, p.162).
+                  if (num_bytes & 1)
+                    ((u8 *)CONTROLLER(index).data)[num_bytes] = 0;
                   scsi_xfer_done(index);
                   SEL_COMMAND(index).packet_phase = PACKET_DP34;
                   SEL_REGISTERS(index).BYTE_COUNT = (int)num_bytes;
                   CONTROLLER(index).data_size =
-                      (int)num_bytes / 2; // word count.
+                      ((int)num_bytes + 1) / 2; // word count.
                   CONTROLLER(index).data_ptr = 0;
                 } break;
 
@@ -2476,12 +2491,17 @@ void CIdeController::execute(int index) {
           break;
         }
 
-        if (mode != CONTROLLER(index).dma_mode && mode >= 0x20)
-          printf("%%IDE-I-XFERMODE: Controller %d drive %d selects %s DMA "
-                 "mode %d.\n",
-                 index, SEL_DRIVE(index), (mode & 0x20) ? "multiword" : "ultra",
-                 mode & 0x07);
-        CONTROLLER(index).dma_mode = mode;
+        // The mode belongs to the drive that received the command, and a PIO
+        // mode leaves the DMA mode as it was: they are separate transfer
+        // types (ATA/ATAPI-6 8.46.11, p.227).
+        if (mode >= 0x20) {
+          if (mode != SEL_PER_DRIVE(index).dma_mode)
+            printf("%%IDE-I-XFERMODE: Controller %d drive %d selects %s DMA "
+                   "mode %d.\n",
+                   index, SEL_DRIVE(index),
+                   (mode & 0x20) ? "multiword" : "ultra", mode & 0x07);
+          SEL_PER_DRIVE(index).dma_mode = mode;
+        }
         SEL_STATUS(index).busy = false;
         SEL_STATUS(index).drive_ready = true;
         SEL_STATUS(index).seek_complete = true;

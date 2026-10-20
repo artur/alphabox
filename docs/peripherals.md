@@ -61,6 +61,8 @@ What each does, and which guests drive it, is below.
 
 - `ali`: the ISA bridge with the PIT, PIC, DMA, RTC/TOY, keyboard and
   mouse, COM1/COM2, LPT1 and floppy.
+  The floppy controller's DOR reads back what was written, and SENSE
+  INTERRUPT STATUS with no interrupt pending answers with the one byte 80h.
 - `ali_ide`: bootable IDE disks and CD-ROMs.
 - `ali_usb`: OHCI 1.0a, three ports: the schedule, the root hub, and USB
   devices on it: a tablet, a keyboard, mass storage, a speaker,
@@ -104,6 +106,17 @@ each point checked against ATA/ATAPI-6 or SFF-8038i by `test/tools/ide_test.sh`:
   byte is updated under one lock, so a poll cannot undo the Interrupt bit.
 - **ATAPI data-out** (MODE SELECT and the like) arrives in blocks of at most
   65534 bytes, as data-in already did.
+- **A software reset** leaves 01h in Error on each drive that is present
+  and the signature; a CD-ROM drive then has DRDY, DF and DSC clear, as
+  after DEVICE RESET and EXECUTE DEVICE DIAGNOSTIC.
+- **SET FEATURES transfer modes are per drive**, and a PIO mode leaves the
+  selected DMA mode in IDENTIFY words 63 and 88; a disk's Ultra DMA choice
+  no longer disappears when the CD-ROM drive on the channel selects PIO 4.
+- **The bus master Interrupt bit follows INTRQ** whether or not the engine
+  was started, so a PIO command sets it and the driver clears it by
+  writing 1.
+- **An odd ATAPI byte count** is transferred as (n+1)/2 words with a zero
+  pad, not truncated.
 
 ### Keyboard and mouse
 

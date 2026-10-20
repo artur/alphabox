@@ -232,6 +232,7 @@ private:
       } command;
 
       u8 multiple_size;
+      u8 dma_mode; // the transfer mode SET FEATURES 03h last selected
     };
 
     struct SControllerState {
@@ -249,7 +250,6 @@ private:
 
       // dma stuff
       u8 busmaster[8];
-      u8 dma_mode;
       u8 bm_status;
 
       // pio stuff

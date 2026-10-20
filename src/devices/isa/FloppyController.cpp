@@ -630,8 +630,11 @@ void CFloppyController::execute_command(int cmd) {
           drive_idx < 2 ? (u8)state.drive[drive_idx].cylinder : 0;
       clear_interrupt();
     } else if (!state.interrupt) {
+      // No interrupt pending: ST0 is 80h, the invalid-command answer, and
+      // that is the whole result (82077AA 5.0, p.17; 5.2.4, p.31).
       state.cmd_res[0] = 0x80;
       state.cmd_res[1] = 0;
+      state.cmd_res_max = 1;
     } else {
       int drive_idx = state.seek_st0 & ST0_DS;
       state.cmd_res[0] = state.seek_st0;
@@ -1073,8 +1076,12 @@ u64 CFloppyController::ReadMem(int index, u64 address, int dsize) {
     break;
 
   case FDC_REG_DOR:
+    // The DOR is read/write (82077AA 2.1, p.8): it reads back what was
+    // written.
+    data = state.dor;
+    break;
+
   case FDC_REG_TAPE:
-    FDC_DEBUG("FDC: Write only register %" PRId64 " read.\n", address);
     break;
 
   case FDC_REG_STATUS:
