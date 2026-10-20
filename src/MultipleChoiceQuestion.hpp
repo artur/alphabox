@@ -188,7 +188,7 @@ public:
 
     /* Try to find the answer in the answer set.
      */
-    itAnswers = find(mAnswerSet.begin(), mAnswerSet.end(), mAnswer);
+    itAnswers = find(mAnswerSet.begin(), mAnswerSet.end(), choice);
 
     /* Has a matching answer be found?
      */

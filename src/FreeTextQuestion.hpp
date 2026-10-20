@@ -60,9 +60,12 @@ public:
 
       cout << ": ";
 
-      /* Get the answer.
+      /* Get the answer. Input that ends (a script that is too short,
+       * Ctrl-D) ends the session: nothing is written.
        */
-      getline(cin, mAnswer);
+      if (!getline(cin, mAnswer))
+        throw CAbortException("the input ended before the configuration "
+                              "was complete");
 
       /* If the question is answered with '?', display the
        * explanation, then ask again.

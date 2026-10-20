@@ -66,6 +66,20 @@ using namespace std;
 #include "ShrinkingChoiceQuestion.hpp"
 
 /**
+ * A value as the configuration file quotes it: in double quotes, a quote in
+ * it doubled.
+ **/
+static string quote(const string &s) {
+  string q = "\"";
+  for (char c : s) {
+    if (c == '"')
+      q += '"';
+    q += c;
+  }
+  return q + "\"";
+}
+
+/**
  * Add disks for a controller to the configuration file.
  *
  * \param disk_q: A ShrinkingChoiceQuestion that contains
@@ -121,8 +135,8 @@ void add_disks(ShrinkingChoiceQuestion *disk_q, ostream *os,
                         disk_q->getAnswer() + " use?");
       img_q.setExplanation("Enter the path to the " + type_q.getAnswer() +
                            " to use for this disk.");
-      *os << "      " << type_q.getAnswer() << " = \"" << img_q.ask()
-          << "\";\n";
+      *os << "      " << type_q.getAnswer() << " = " << quote(img_q.ask())
+          << ";\n";
 
       /* We need to know whether to emulate this as
        * a cd-rom, or as a hard-disk.
@@ -205,8 +219,7 @@ void add_disks(ShrinkingChoiceQuestion *disk_q, ostream *os,
         img_q.setQuestion("What file should " + disk_q->getAnswer() + " use?");
         img_q.setExplanation(
             "Enter the path to the file to use for this disk.");
-        *os << "      "
-            << "file = \"" << img_q.ask() << "\";\n";
+        *os << "      file = " << quote(img_q.ask()) << ";\n";
       } else {
         /* For a RAM DISK, we need to know what
          * size it should be.
@@ -264,30 +277,30 @@ void add_disks(ShrinkingChoiceQuestion *disk_q, ostream *os,
     ft_q.setQuestion("Would you like to set a disk model number?");
     ft_q.setExplanation("Leave blank to choose the default.");
     if (ft_q.ask() != "")
-      *os << "      model_number = \"" << ft_q.getAnswer() << "\";\n";
+      *os << "      model_number = " << quote(ft_q.getAnswer()) << ";\n";
 
     /* The user can define a custom revision
      * number for the device.
      */
     ft_q.setQuestion("Would you like to set a revision number?");
     if (ft_q.ask() != "")
-      *os << "      rev_number = \"" << ft_q.getAnswer() << "\";\n";
+      *os << "      rev_number = " << quote(ft_q.getAnswer()) << ";\n";
 
     /* The user can define a custom serial
      * number for the device.
      */
     ft_q.setQuestion("Would you like to set a serial number?");
     if (ft_q.ask() != "")
-      *os << "      serial_number = \"" << ft_q.getAnswer() << "\";\n";
+      *os << "      serial_number = " << quote(ft_q.getAnswer()) << ";\n";
 
     *os << "    }\n\n";
   }
 }
 
 /**
- * Main program entry point.
+ * The questions, and es40.cfg written from the answers.
  **/
-int main_cfg(int argc, char *argv[]) {
+static int configure_session() {
   /* Banner
    */
 #if defined _WIN32 && defined HAVE_PCAP
@@ -309,7 +322,8 @@ int main_cfg(int argc, char *argv[]) {
   /* Check if es40.cfg already exists.
    */
   ifstream check_file("es40.cfg");
-  if (check_file.is_open()) {
+  const bool existed = check_file.is_open();
+  if (existed) {
     check_file.close();
     MultipleChoiceQuestion overwrite_q;
     overwrite_q.setQuestion(
@@ -327,11 +341,21 @@ int main_cfg(int argc, char *argv[]) {
     }
   }
 
-  /* Open es40.cfg for writing.
+  /* Whether es40.cfg can be written is better known before the questions
+   * than after them. The configuration is collected in memory and written
+   * at the end, so a session that ends early leaves the file as it was.
    */
-  filebuf fb;
-  fb.open("es40.cfg", ios::out);
-  ostream os(&fb);
+  {
+    ofstream probe("es40.cfg", ios::app);
+    if (!probe) {
+      printf("Cannot write es40.cfg here: %s.\n", strerror(errno));
+      return 1;
+    }
+    probe.close();
+    if (!existed)
+      remove("es40.cfg");
+  }
+  ostringstream os;
 
   /* **************************** *
    * GUI Choice                   *
@@ -398,7 +422,7 @@ int main_cfg(int argc, char *argv[]) {
           "How many times should the display be scaled?");
       vid_scale_ratio_q.setExplanation(
           "Type an integer to set the scale ratio for the display output.");
-      vid_scale_ratio_q.setRange(1, 10);
+      vid_scale_ratio_q.setRange(1, 8);
       vid_scale_ratio_q.setDefault("1");
 
       os << "  video.scale_ratio = " << vid_scale_ratio_q.ask() << ";\n";
@@ -491,7 +515,7 @@ int main_cfg(int argc, char *argv[]) {
   rom_q.setDefault("rom/cl67srmrom.exe");
 #endif
 
-  os << "  rom.srm = \"" << rom_q.ask() << "\";\n";
+  os << "  rom.srm = " << quote(rom_q.ask()) << ";\n";
 
   rom_q.setQuestion("Where should the Flash ROM image be saved?");
 #if defined(_WIN32)
@@ -502,7 +526,7 @@ int main_cfg(int argc, char *argv[]) {
   rom_q.setDefault("rom/flash.rom");
 #endif
 
-  os << "  rom.flash = \"" << rom_q.ask() << "\";\n";
+  os << "  rom.flash = " << quote(rom_q.ask()) << ";\n";
 
   rom_q.setQuestion("Where should the DPR EEPROM image be saved?");
 #if defined(_WIN32)
@@ -513,7 +537,7 @@ int main_cfg(int argc, char *argv[]) {
   rom_q.setDefault("rom/dpr.rom");
 #endif
 
-  os << "  rom.dpr = \"" << rom_q.ask() << "\";\n\n";
+  os << "  rom.dpr = " << quote(rom_q.ask()) << ";\n\n";
 
   /* **************************** *
    * CPU's                        *
@@ -672,11 +696,11 @@ int main_cfg(int argc, char *argv[]) {
       if (exec.size() >= 2 && exec.front() == '"' && exec.back() == '"')
         exec = exec.substr(1, exec.size() - 2);
 
-      os << "    action = \"\"\"" << exec << "\"\" " << arg_q.getAnswer()
-         << "\";\n";
+      os << "    action = " << quote("\"" + exec + "\" " + arg_q.getAnswer())
+         << ";\n";
 #else
-      os << "    action = \"" << exec_q.getAnswer() << " " << arg_q.getAnswer()
-         << "\";\n";
+      os << "    action = "
+         << quote(exec_q.getAnswer() + " " + arg_q.getAnswer()) << ";\n";
 #endif
     }
     os << "  }\n\n";
@@ -794,7 +818,7 @@ int main_cfg(int argc, char *argv[]) {
 
     os << "  " << pci_q.ask() << " = " << vga_q.getAnswer() << "\n";
     os << "  {\n";
-    os << "    rom = \"" << rom_q.ask() << "\";\n";
+    os << "    rom = " << quote(rom_q.ask()) << ";\n";
     os << "  }\n\n";
   }
 
@@ -818,7 +842,7 @@ int main_cfg(int argc, char *argv[]) {
                         "if you have no more cards to add.");
   card_q.addAnswer("none", "", "No more cards to add");
 #if defined(HAVE_PCAP) || defined(__linux__)
-  card_q.addAnswer("nic", "dec21143", "DEC Tulip Network Interface (1 max)");
+  card_q.addAnswer("nic", "dec21143", "DEC Tulip Network Interface");
 
   /* Which of the family. They differ in how they describe themselves and
    * how their media are selected, not in what they carry.
@@ -875,10 +899,11 @@ int main_cfg(int argc, char *argv[]) {
       break;
 
     string card = card_q.getAnswer();
+    const bool is_nic = card == "dec21143";
 #if defined(HAVE_PCAP) || defined(__linux__)
     /* A Tulip is a family; ask which one before naming the class.
      */
-    if (card == "dec21143")
+    if (is_nic)
       card = tulip_q.ask();
 #endif
     /* So is an AudioPCI.
@@ -893,13 +918,7 @@ int main_cfg(int argc, char *argv[]) {
     os << "  " << pci_q.ask() << " = " << card << "\n";
     os << "  {\n";
 
-    if (card.compare(0, 6, "dec210") == 0) {
-      /* Due to limitations in our network
-       * emulation, only one NIC is allowed.
-       * Remove it from the list of choices.
-       */
-      card_q.dropChoice("nic");
-
+    if (is_nic) {
 #if defined(HAVE_PCAP) || defined(__linux__)
       MultipleChoiceQuestion type_q;
       type_q.setQuestion("What network backend type should be used?");
@@ -917,7 +936,7 @@ int main_cfg(int argc, char *argv[]) {
 #endif
 #endif
       string net_type = type_q.ask();
-      os << "    type = \"" << net_type << "\";\n";
+      os << "    type = " << quote(net_type) << ";\n";
 
       if (net_type == "pcap") {
 #if defined(HAVE_PCAP)
@@ -945,7 +964,7 @@ int main_cfg(int argc, char *argv[]) {
         }
 
         if (if_q.ask() != "")
-          os << "    adapter = \"" << if_q.getAnswer() << "\";\n";
+          os << "    adapter = " << quote(if_q.getAnswer()) << ";\n";
 #endif
       } else if (net_type == "tap") {
         FreeTextQuestion tap_q;
@@ -954,7 +973,7 @@ int main_cfg(int argc, char *argv[]) {
             "The TAP device will be created if it doesn't exist "
             "(requires CAP_NET_ADMIN or root).");
         tap_q.setDefault("tap0");
-        os << "    adapter = \"" << tap_q.ask() << "\";\n";
+        os << "    adapter = " << quote(tap_q.ask()) << ";\n";
 
         FreeTextQuestion bridge_q;
         bridge_q.setQuestion(
@@ -964,14 +983,14 @@ int main_cfg(int argc, char *argv[]) {
         bridge_q.setDefault("");
         string bridge = bridge_q.ask();
         if (!bridge.empty())
-          os << "    bridge = \"" << bridge << "\";\n";
+          os << "    bridge = " << quote(bridge) << ";\n";
       }
 
       FreeTextQuestion mac_q;
       mac_q.setQuestion("What should the NIC's MAC address be?");
       mac_q.setExplanation("This should be unique on your network.");
       mac_q.setDefault("08-00-2B-E5-40-00");
-      os << "    mac = \"" << mac_q.ask() << "\";\n";
+      os << "    mac = " << quote(mac_q.ask()) << ";\n";
 #endif
     } else if (card == "sym53c810") {
       /* Use a ShrinkingChoiceQuestion; once
@@ -1054,7 +1073,6 @@ int main_cfg(int argc, char *argv[]) {
       "vms", "false",
       "Report the year as expected by OpenVMS, Tru64 UNIX, Linux and BSDs.");
   arc_compat_q.setDefault("vms");
-  arc_compat_q.ask();
   os << "\n  arc_year_compat = " << arc_compat_q.ask() << ";\n\n";
 
   MultipleChoiceQuestion time_q;
@@ -1071,7 +1089,7 @@ int main_cfg(int argc, char *argv[]) {
   time_q.setDefault("no");
   time_q.ask();
 
-  if (time_q.getAnswer() == "yes") {
+  if (time_q.getAnswer() == "true") {
     for (;;) {
       FreeTextQuestion datetime_q;
       datetime_q.setQuestion("What date and time should the VM have at "
@@ -1088,15 +1106,11 @@ int main_cfg(int argc, char *argv[]) {
         cout << "\nInvalid date/time format.\n";
         continue;
       }
-      std::string datestr =
-          i2s(ft.tm_year) + "-" + i2s(ft.tm_mon) + "-" + i2s(ft.tm_mday);
-      if (n >= 4)
-        datestr += " " + i2s(ft.tm_hour);
-      if (n >= 5)
-        datestr += ":" + i2s(ft.tm_min);
-      if (n >= 6)
-        datestr += ":" + i2s(ft.tm_sec);
-      os << "  time = \"" << datestr << "\";\n\n";
+      char datestr[32];
+      snprintf(datestr, sizeof(datestr), "%04d-%02d-%02d %02d:%02d:%02d",
+               ft.tm_year, ft.tm_mon, ft.tm_mday, ft.tm_hour, ft.tm_min,
+               ft.tm_sec);
+      os << "  time = " << quote(datestr) << ";\n\n";
       break;
     }
   }
@@ -1105,7 +1119,7 @@ int main_cfg(int argc, char *argv[]) {
   os << "  {\n";
   os << "    vga_console = " << vgacons_q.getAnswer() << ";\n";
   if (lpt_q.getAnswer() != "")
-    os << "    lpt.outfile = \"" << lpt_q.getAnswer() << "\"\n";
+    os << "    lpt.outfile = " << quote(lpt_q.getAnswer()) << ";\n";
   os << "  }\n\n";
 
   if (usb_q.getAnswer() == "true") {
@@ -1122,11 +1136,29 @@ int main_cfg(int argc, char *argv[]) {
 
   os << "}\n";
 
-  /* Close es40.cfg.
+  /* Write es40.cfg.
    */
-  fb.close();
-
-  /* All is well.
-   */
+  ofstream out("es40.cfg", ios::out | ios::trunc);
+  out << os.str();
+  out.close();
+  if (!out) {
+    printf("Writing es40.cfg failed: %s.\n", strerror(errno));
+    return 1;
+  }
+  printf("\nes40.cfg written.\n");
   return 0;
+}
+
+/**
+ * Main program entry point.
+ **/
+int main_cfg(int argc, char *argv[]) {
+  (void)argc;
+  (void)argv;
+  try {
+    return configure_session();
+  } catch (CAbortException &e) {
+    printf("\n%s: es40.cfg was not written.\n", e.text().c_str());
+    return 1;
+  }
 }
