@@ -494,7 +494,24 @@ operating system can use.
 
 A `ramdisk` is `size` bytes of zeros (default 512M), or, with `file`, a
 copy of that file, whose size it takes. What the guest writes stays in
-memory and is lost when the run ends.
+memory: a state file keeps it, and the end of the run loses it.
+
+### Overlays
+
+A `file` hard disk with `overlay = "<file>"` never writes its image: the
+guest's writes go to the overlay, copy-on-write in 64 KiB clusters, and
+reads of what it never wrote come from the image. So a pristine installed
+image can be booted without copying it first, and several runs can share
+one image, each with its own overlay.
+
+- The overlay is created when missing and taken up again on the next run.
+  It records the image's size and a hash of its first and last cluster,
+  and one made over another image is refused at start.
+- `overlay_discard = true` deletes it when the emulator exits: a throwaway
+  run from a pristine image.
+- Hard disk images only: not a CD, a floppy or a BIN/CUE image.
+- A state file does not contain the disk: copy the overlay with it, as you
+  would the image.
 
 ### Serial numbers
 

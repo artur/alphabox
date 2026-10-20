@@ -39,6 +39,7 @@
 
 #include "Disk.hpp"
 #include "DiskFileBinCue.hpp"
+#include "DiskOverlay.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -62,6 +63,9 @@ struct MediaImage {
   off_t_large byte_size = 0;    ///< Flat: file size. BIN/CUE: LBAs * 2048.
   FILE *handle = nullptr;       ///< Flat image handle.
   std::vector<CueTrack> tracks; ///< BIN/CUE tracks, each with its own handle.
+  /// A hard disk's writes, when it has an overlay; \c handle is then only
+  /// read.
+  std::unique_ptr<CDiskOverlay> overlay;
 
   MediaImage() = default;
   MediaImage(const MediaImage &) = delete;

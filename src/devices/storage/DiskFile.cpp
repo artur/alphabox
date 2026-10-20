@@ -291,6 +291,7 @@ static bool lba_to_file_position(const MediaImage &img, long lba,
 // ===========================================================================
 
 MediaImage::~MediaImage() {
+  overlay.reset();
   if (handle)
     fclose(handle);
   for (CueTrack &trk : tracks)
@@ -471,10 +472,18 @@ CDiskFile::CDiskFile(CConfigurator *cfg, CSystem *sys, CDiskController *c,
     path = defaultFilename;
   }
 
+  // With an overlay the image is only read: the writes go to the overlay.
+  char *overlay_file = myCfg->get_text_value("overlay");
+  const bool have_overlay = overlay_file && *overlay_file;
+  if (have_overlay && is_removable)
+    FAILURE_1(Configuration, "%s: an overlay is for a hard disk image",
+              devid_string);
+  const bool base_read_only = read_only || have_overlay;
+
   std::unique_ptr<MediaImage> img;
   if (!path.empty()) {
     std::string error;
-    img = MediaImage::open(path, read_only, error, devid_string);
+    img = MediaImage::open(path, base_read_only, error, devid_string);
 
     u64 autocreate_mb =
         myCfg->get_num_value("autocreate_size", false, 0) / 1024 / 1024;
@@ -485,7 +494,7 @@ CDiskFile::CDiskFile(CConfigurator *cfg, CSystem *sys, CDiskController *c,
             path, (off_t_large)autocreate_mb * 1024 * 1024);
         printf("%s: %s\n", devid_string, r.message.c_str());
         if (r.ok)
-          img = MediaImage::open(path, read_only, error, devid_string);
+          img = MediaImage::open(path, base_read_only, error, devid_string);
       }
     }
 
@@ -494,6 +503,21 @@ CDiskFile::CDiskFile(CConfigurator *cfg, CSystem *sys, CDiskController *c,
         FAILURE_2(Runtime, "%s: %s", devid_string, error.c_str());
       printf("%s: %s; the drive starts empty.\n", devid_string, error.c_str());
     }
+  }
+
+  if (img && have_overlay) {
+    if (img->is_bincue)
+      FAILURE_1(Configuration, "%s: an overlay is for a flat disk image",
+                devid_string);
+    std::string error;
+    img->overlay = CDiskOverlay::open(
+        img->handle, img->byte_size, overlay_file,
+        myCfg->get_bool_value("overlay_discard", false), error);
+    if (!img->overlay)
+      FAILURE_2(Runtime, "%s: %s", devid_string, error.c_str());
+    img->read_only = read_only; // the drive writes, to the overlay
+    printf("%s: Writes go to overlay %s (%u clusters written before).\n",
+           devid_string, overlay_file, img->overlay->clusters_written());
   }
 
   {
@@ -855,7 +879,8 @@ bool CDiskFile::seek_byte(off_t_large byte) {
   if (!img || byte < 0 || byte >= byte_size)
     return false;
 
-  if (!img->is_bincue && fseek_large(img->handle, byte, SEEK_SET) != 0)
+  if (!img->is_bincue && !img->overlay &&
+      fseek_large(img->handle, byte, SEEK_SET) != 0)
     return false;
   state.byte_pos = byte;
   return true;
@@ -872,6 +897,12 @@ size_t CDiskFile::read_bytes(void *dest, size_t bytes) {
   MediaImage *img = image.get();
   if (!img)
     return 0;
+
+  if (img->overlay) {
+    size_t r = img->overlay->read(state.byte_pos, dest, bytes);
+    state.byte_pos += r;
+    return r;
+  }
 
   if (!img->is_bincue) {
     size_t r = fread(dest, 1, bytes, img->handle);
@@ -922,14 +953,17 @@ size_t CDiskFile::write_bytes(void *src, size_t bytes) {
   if (!img || img->read_only || img->is_bincue)
     return 0;
 
-  size_t r = fwrite(src, 1, bytes, img->handle);
+  size_t r = img->overlay ? img->overlay->write(state.byte_pos, src, bytes)
+                          : fwrite(src, 1, bytes, img->handle);
   state.byte_pos += r;
   return r;
 }
 
 void CDiskFile::flush() {
   MediaImage *img = image.get();
-  if (img && img->handle && !img->read_only)
+  if (img && img->overlay)
+    img->overlay->flush();
+  else if (img && img->handle && !img->read_only)
     fflush(img->handle);
 }
 

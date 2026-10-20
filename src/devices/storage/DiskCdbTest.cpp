@@ -1314,6 +1314,96 @@ void t_toc_msf(Rig &r) {
         "format 1 (session info) in MSF: 00:02:00");
 }
 
+/// Feature: a copy-on-write overlay over a disk image.
+void t_overlay(Rig &r) {
+  group("overlay");
+  CCdbTestAdapter *a = r.a;
+  const std::string base = path("base.img"), ovl = path("base.ovl");
+  remove(ovl.c_str());
+  make_image(base, kRoBlocks, 512); // 1 MB, 16 clusters
+  const std::vector<u8> before = read_file(base, 0, kRoBlocks * 512);
+  const std::string cfg = "file=\"" + base + "\"; overlay=\"" + ovl + "\";";
+  // A disk that cannot be made (a FAILURE in its constructor) is null.
+  auto make = [&](int id, const std::string &text) -> CDisk * {
+    try {
+      return file_disk(r, r.sys, id, text);
+    } catch (CException &) {
+      return nullptr;
+    }
+  };
+  auto drop = [&](CDisk *d, int id) {
+    a->bus->scsi_unregister(d, id);
+    delete d;
+  };
+
+  CDisk *d = make(10, cfg);
+  check(d != nullptr, "a disk with an overlay starts");
+  if (!d)
+    return;
+  Res rd = a->run(10, cdb10(0x28, 100, 4));
+  check(rd.good() && blocks_ok(rd.in, 100, 4, 512),
+        "unwritten blocks come from the base");
+  std::vector<u8> w1(3 * 512, 0x5a), w2(5 * 512, 0xa5);
+  expect_good(a->run(10, cdb10(0x2a, 130, 3), w1), "WRITE in one cluster");
+  // Blocks 254-258 cross the boundary between clusters 1 and 2.
+  expect_good(a->run(10, cdb10(0x2a, 254, 5), w2), "WRITE across clusters");
+  Res mix = a->run(10, cdb10(0x28, 128, 8));
+  bool ok = mix.good() && mix.in.size() == 8 * 512;
+  if (ok) {
+    std::vector<u8> head(mix.in.begin(), mix.in.begin() + 1024);
+    std::vector<u8> mid(mix.in.begin() + 1024, mix.in.begin() + 2560);
+    std::vector<u8> tail(mix.in.begin() + 2560, mix.in.end());
+    ok = blocks_ok(head, 128, 2, 512) && mid == w1 &&
+         blocks_ok(tail, 133, 3, 512);
+  }
+  check(ok, "a written cluster keeps the base's other blocks");
+  Res cross = a->run(10, cdb10(0x28, 254, 5));
+  check(cross.good() && cross.in == w2, "the write across clusters reads back");
+  check(read_file(base, 0, kRoBlocks * 512) == before,
+        "the base image is unchanged");
+
+  // Closed and opened again, the overlay still holds the writes.
+  drop(d, 10);
+  d = make(10, cfg);
+  Res again = a->run(10, cdb10(0x28, 130, 3));
+  Res base_again = a->run(10, cdb10(0x28, 100, 4));
+  check(d && again.good() && again.in == w1 && base_again.good() &&
+            blocks_ok(base_again.in, 100, 4, 512),
+        "reopened, the overlay has the writes and the base the rest");
+  if (d)
+    drop(d, 10);
+
+  // Over another base image it is refused.
+  make_image(path("base2.img"), kRoBlocks * 2, 512);
+  CDisk *other =
+      make(11, "file=\"" + path("base2.img") + "\"; overlay=\"" + ovl + "\";");
+  check(other == nullptr, "an overlay made over another base is refused");
+  if (other)
+    drop(other, 11);
+  check(make(12, "file=\"" + base + "\"; cdrom=true; overlay=\"" +
+                     path("cd.ovl") + "\";") == nullptr,
+        "a CD-ROM takes no overlay");
+
+  // overlay_discard: the file goes when the disk does.
+  const std::string tmp = path("tmp.ovl");
+  d = make(10, "file=\"" + base + "\"; overlay=\"" + tmp +
+                   "\"; overlay_discard=true;");
+  if (d) {
+    expect_good(a->run(10, cdb10(0x2a, 0, 1), std::vector<u8>(512, 1)),
+                "a write to a discarded overlay");
+    drop(d, 10);
+  }
+  FILE *f = fopen(tmp.c_str(), "rb");
+  check(d && !f, "overlay_discard removes the file");
+  if (f)
+    fclose(f);
+  check(read_file(base, 0, kRoBlocks * 512) == before,
+        "the base image is still unchanged");
+  remove(ovl.c_str());
+  remove(base.c_str());
+  remove(path("base2.img").c_str());
+}
+
 // ---------------------------------------------------------------------------
 //  The 53C8xx SCRIPTS processor
 // ---------------------------------------------------------------------------
@@ -1815,6 +1905,7 @@ int main_cdbtest(int argc, char **argv) {
   t_bincue(r);
   t_toc_formats(r);
   t_toc_msf(r);
+  t_overlay(r);
   if (sr.sym) {
     t_sym_basic(sr);
     t_sym_reserved(sr);
