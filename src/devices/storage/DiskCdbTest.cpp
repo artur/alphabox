@@ -28,8 +28,9 @@
  * (CSCSIDevice: arbitrate, select, then one transfer per phase), as a host
  * adapter would: IDENTIFY in MESSAGE OUT, the CDB, the data, the status
  * and the COMMAND COMPLETE message. Each check compares status, sense,
- * data and lengths with what SPC-3, SBC-2 and MMC-3 say. A command that
- * throws (a FAILURE, which would stop the machine) fails its check.
+ * data and lengths with what SCSI-2, SPC-3, SBC-3 and MMC-3 say. A
+ * command that throws (a FAILURE, which would stop the machine) fails its
+ * check.
  *
  * usage: alphabox cdbtest <work directory> [-v]
  * The images are created in the work directory and removed at the end.
@@ -40,7 +41,10 @@
 #include "DiskRam.hpp"
 #include "SCSIBus.hpp"
 #include "StdAfx.hpp"
+#include "Sym53C8xx.hpp"
 #include "System.hpp"
+
+#include "Sym53C8xxRegs.hpp"
 
 #include <cstdarg>
 #include <string>
@@ -1289,6 +1293,123 @@ void t_toc_msf(Rig &r) {
         "format 1 (session info) in MSF: 00:02:00");
 }
 
+// ---------------------------------------------------------------------------
+//  The 53C8xx SCRIPTS processor
+// ---------------------------------------------------------------------------
+
+/// A 53C875 at pci0.3 of the test machine, with a disk at id 0 on its bus,
+/// driven by SCRIPTS the test writes to memory and starts by writing DSP.
+/// The chipset's DMA window 0 maps PCI addresses 0-1 GB onto memory.
+struct SymRig {
+  CSystem *sys;
+  CSym53C8xx *sym;
+  u32 next = 0x100000; ///< where the next SCRIPTS program goes
+
+  u8 r8(u32 reg) { return (u8)sym->ReadMem_Bar(0, 1, reg, 8); }
+  u32 r32(u32 reg) { return sym->ReadMem_Bar(0, 1, reg, 32); }
+  void w8(u32 reg, u8 v) { sym->WriteMem_Bar(0, 1, reg, 8, v); }
+  void w32(u32 reg, u32 v) { sym->WriteMem_Bar(0, 1, reg, 32, v); }
+  void mw(u32 addr, u32 v) { sys->WriteMem(addr, 32, v, nullptr); }
+  u32 mr(u32 addr) { return (u32)sys->ReadMem(addr, 32, nullptr); }
+
+  /// Place a program (pairs of dwords) and return its address.
+  u32 program(const std::vector<u32> &words) {
+    const u32 at = next;
+    for (size_t i = 0; i < words.size(); i++)
+      mw(at + 4 * (u32)i, words[i]);
+    next += 0x1000;
+    return at;
+  }
+
+  /// Software reset (ISTAT SRST), then the registers a driver sets up.
+  void reset() {
+    w8(R_ISTAT, 0x40);
+    w8(R_ISTAT, 0x00);
+    w8(R_SCID, 0x47); // id 7, respond to reselection
+    w8(R_DIEN, 0x7d);
+    w8(R_SIEN0, 0x8f);
+    w8(R_SIEN1, 0x05);
+  }
+
+  /// Start at `at` and wait until the SCRIPTS processor interrupts (ISTAT
+  /// DIP or SIP), driving the main-thread timers as the system would.
+  /// Returns ISTAT, or 0 on a time-out; `error` gets a SCRIPTS failure.
+  u8 run(u32 at, std::string &error, int ms = 2000) {
+    w32(R_DSP, at);
+    return wait(error, ms);
+  }
+  u8 wait(std::string &error, int ms = 2000) {
+    for (int i = 0; i < ms; i++) {
+      try {
+        sym->check_state();
+      } catch (CException &e) {
+        error = e.displayText();
+        return 0;
+      }
+      const u8 istat = r8(R_ISTAT);
+      if (istat & 0x03)
+        return istat;
+      usleep(1000);
+    }
+    return 0;
+  }
+};
+
+// SCRIPTS instruction words.
+u32 sel(int id, bool atn = true) {
+  return (atn ? 0x41000000 : 0x40000000) | (u32(id) << 16);
+}
+u32 jump_when(int phase) { return 0x800b0000 | (u32(phase) << 24); }
+const u32 kJump = 0x80080000;
+const u32 kInt = 0x98080000;
+u32 move_when(int phase, u32 count) {
+  return (u32(0x08 | phase) << 24) | (count & 0xffffff);
+}
+const u32 kClearAck = 0x60000040;
+const u32 kWaitDisconnect = 0x48000000;
+
+/// The 53C875 runs a TEST UNIT READY to the disk at id 0, as a driver's
+/// SCRIPTS would; and a selection nobody answers ends in a time-out.
+void t_sym_basic(SymRig &s) {
+  group("53C8xx SCRIPTS");
+  std::string err;
+  s.reset();
+  // Data: identify, a TEST UNIT READY CDB, the status and message bytes.
+  const u32 data = 0x200000;
+  s.mw(data, 0x80);              // IDENTIFY
+  s.mw(data + 0x10, 0x00000000); // TUR cdb bytes 0-3
+  s.mw(data + 0x14, 0x00000000); // bytes 4-5
+  s.mw(data + 0x20, 0xffffffff); // status
+  s.mw(data + 0x24, 0xffffffff); // message in
+  const u32 p = s.program({sel(0), 0, move_when(SCSI_PHASE_MSG_OUT, 1), data,
+                           move_when(SCSI_PHASE_COMMAND, 6), data + 0x10,
+                           move_when(SCSI_PHASE_STATUS, 1), data + 0x20,
+                           move_when(SCSI_PHASE_MSG_IN, 1), data + 0x24,
+                           kClearAck, 0, kWaitDisconnect, 0, kInt, 0x1234});
+  const u8 istat = s.run(p, err);
+  const u8 dstat = s.r8(R_DSTAT);
+  check(err.empty() && (istat & 0x01) && (dstat & 0x04) &&
+            s.r32(0x30) == 0x1234,
+        "a TEST UNIT READY in SCRIPTS ends at its INT",
+        "istat %02x dstat %02x "
+        "dsps %08x %s",
+        istat, dstat, s.r32(0x30), err.c_str());
+  check((s.mr(data + 0x20) & 0xff) == 0 && (s.mr(data + 0x24) & 0xff) == 0,
+        "status GOOD, COMMAND COMPLETE", "%08x %08x", s.mr(data + 0x20),
+        s.mr(data + 0x24));
+
+  // SELECT of the chip's own id, 7: a selection time-out (SIST1 STO) at
+  // the next instruction that needs the target, never a stop.
+  s.reset();
+  const u32 q =
+      s.program({sel(7), 0, jump_when(SCSI_PHASE_MSG_OUT), 0, kInt, 0x1});
+  const u8 is2 = s.run(q, err);
+  const u8 sist1 = s.r8(R_SIST1);
+  check(err.empty() && (is2 & 0x02) && (sist1 & 0x04),
+        "SELECT 7 (its own id): STO, no stop", "istat %02x sist1 %02x %s", is2,
+        sist1, err.c_str());
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1311,13 +1432,35 @@ int main_cdbtest(int argc, char **argv) {
   }
   chmod(path("ro.img").c_str(), 0444);
 
-  // The rest of the emulator prints as it builds the machine; the checks'
-  // own lines start with two spaces and PASS or FAIL.
-  char roottext[] = "memory.bits=26;";
+  // The machine: an ES40 with 64 MB, no processors, and a 53C875 with a
+  // disk for the SCRIPTS checks; the disks the CDB checks drive hang off
+  // an adapter of the test's own. The rest of the emulator prints as it
+  // builds the machine; the checks' own lines start with two spaces and
+  // PASS or FAIL.
+  if (!make_image(path("sym.img"), 2048, 512)) {
+    printf("cdbtest: cannot create the images in %s\n", g_dir.c_str());
+    return 2;
+  }
+  const std::string systext =
+      "sys0 = tsunami { memory.bits = 26; pci0.3 = sym53c875 { disk0.0 = "
+      "file { file = \"" +
+      path("sym.img") + "\"; } } }";
+  char *roottext = strdup(systext.c_str());
   CConfigurator *root =
       new CConfigurator(nullptr, strdup("cdbtest"), strdup("cdbtest"), roottext,
                         strlen(roottext));
-  CSystem *sys = new CSystem(root);
+  CSystem *sys = theSystem;
+  SymRig sr;
+  sr.sys = sys;
+  sr.sym = nullptr;
+  for (int i = 0; i < sys->component_count(); i++)
+    if (CSym53C8xx *s = dynamic_cast<CSym53C8xx *>(sys->component(i)))
+      sr.sym = s;
+  // DMA window 0 of the Pchip: PCI 0-1 GB direct-mapped onto memory.
+  sys->WriteMem(U64(0x80180000100), 64, 0x3ff00000, nullptr); // WSM0
+  sys->WriteMem(U64(0x80180000200), 64, 0, nullptr);          // TBA0
+  sys->WriteMem(U64(0x80180000000), 64, 1, nullptr);          // WSBA0
+  sr.sym->start_threads();
 
   Rig r;
   r.sys = sys;
@@ -1359,6 +1502,10 @@ int main_cdbtest(int argc, char **argv) {
   t_bincue(r);
   t_toc_formats(r);
   t_toc_msf(r);
+  if (sr.sym) {
+    t_sym_basic(sr);
+  } else
+    check(false, "the 53C875 of the test machine");
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
@@ -1366,6 +1513,7 @@ int main_cdbtest(int argc, char **argv) {
   chmod(path("ro.img").c_str(), 0644);
   remove(path("ro.img").c_str());
   remove(path("cd.iso").c_str());
+  remove(path("sym.img").c_str());
   fflush(stdout);
   // The machine is not torn down: its components' destructors expect a
   // running system. The process ends here.
