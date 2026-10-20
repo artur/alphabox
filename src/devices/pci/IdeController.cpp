@@ -67,8 +67,8 @@ CIdeController::CIdeController(CConfigurator *cfg, CSystem *c, int pcibus,
   // create scsi busses
   CSCSIBus *a = new CSCSIBus(cfg, c);
   CSCSIBus *b = new CSCSIBus(cfg, c);
-  scsi_register(0, a, 7); // scsi id 7 by default
-  scsi_register(1, b, 7); // scsi id 7 by default
+  scsi_register(0, a, 7);     // scsi id 7 by default
+  scsi_register(1, b, 7);     // scsi id 7 by default
   number_disk_serials(false); // IDENTIFY shows the guest the serial
 }
 
@@ -184,6 +184,56 @@ void CIdeController::register_disk(class CDisk *dsk, int bus, int dev) {
   }
 }
 
+/// The state block as it was saved before the transfer mode became per drive
+/// and PACKET data-out went in blocks: a file written then restores into the
+/// current state, the channel's transfer mode going to both of its drives.
+namespace {
+struct LegacyIdeState {
+  struct LDrive {
+    struct {
+      bool busy, drive_ready, fault, seek_complete, drq, bit_2, index_pulse,
+          err;
+      int index_pulse_count;
+      u8 debug_last_status;
+      bool debug_status_update;
+      u8 alt_status;
+    } status;
+    struct {
+      bool lba_mode;
+      int features, error, sector_count, sector_no, cylinder_no, head_no,
+          command;
+    } registers;
+    struct {
+      bool command_in_progress;
+      int current_command;
+      int command_cycle;
+      bool packet_dma;
+      int packet_phase;
+      u8 packet_command[12];
+      int packet_buffersize;
+      u8 packet_sense;
+      u8 packet_asc;
+      u8 packet_ascq;
+    } command;
+    u8 multiple_size;
+  };
+  struct LController {
+    LDrive drive[2];
+    bool disable_irq;
+    bool reset;
+    bool reset_in_progress;
+    int selected;
+    u8 busmaster[8];
+    u8 dma_mode;
+    u8 bm_status;
+    u16 data[IDE_BUFFER_SIZE];
+    int data_ptr;
+    int data_size;
+    bool interrupt_pending;
+  } controller[2];
+};
+} // namespace
+
 static u32 ide_magic1 = 0xB222654D;
 static u32 ide_magic2 = 0xD456222C;
 
@@ -235,15 +285,82 @@ int CIdeController::RestoreState(FILE *f) {
     return -1;
   }
 
-  if (ss != sizeof(state)) {
+  static_assert(sizeof(LegacyIdeState) != sizeof(SIdeState),
+                "the two layouts are told apart by their size");
+  const bool legacy = ss == (long)sizeof(LegacyIdeState);
+  if (ss != (long)sizeof(state) && !legacy) {
     printf("%s: STRUCT SIZE does not match!\n", devid_string);
     return -1;
   }
 
-  r = fread(&state, sizeof(state), 1, f);
-  if (r != 1) {
-    printf("%s: unexpected end of file!\n", devid_string);
-    return -1;
+  if (legacy) {
+    std::unique_ptr<LegacyIdeState> old(new LegacyIdeState);
+    r = fread(old.get(), sizeof(LegacyIdeState), 1, f);
+    if (r != 1) {
+      printf("%s: unexpected end of file!\n", devid_string);
+      return -1;
+    }
+    memset(&state, 0, sizeof(state));
+    for (int c = 0; c < 2; c++) {
+      const auto &o = old->controller[c];
+      auto &n = state.controller[c];
+      for (int d = 0; d < 2; d++) {
+        const auto &os = o.drive[d].status;
+        auto &ns = n.drive[d].status;
+        ns.busy = os.busy;
+        ns.drive_ready = os.drive_ready;
+        ns.fault = os.fault;
+        ns.seek_complete = os.seek_complete;
+        ns.drq = os.drq;
+        ns.bit_2 = os.bit_2;
+        ns.index_pulse = os.index_pulse;
+        ns.err = os.err;
+        ns.index_pulse_count = os.index_pulse_count;
+        ns.alt_status = os.alt_status;
+        const auto &orr = o.drive[d].registers;
+        auto &nr = n.drive[d].registers;
+        nr.lba_mode = orr.lba_mode;
+        nr.features = orr.features;
+        nr.error = orr.error;
+        nr.sector_count = orr.sector_count;
+        nr.sector_no = orr.sector_no;
+        nr.cylinder_no = orr.cylinder_no;
+        nr.head_no = orr.head_no;
+        nr.command = orr.command;
+        const auto &oc = o.drive[d].command;
+        auto &nc = n.drive[d].command;
+        nc.command_in_progress = oc.command_in_progress;
+        nc.current_command = oc.current_command;
+        nc.command_cycle = oc.command_cycle;
+        nc.packet_dma = oc.packet_dma;
+        nc.packet_phase = oc.packet_phase;
+        memcpy(nc.packet_command, oc.packet_command, sizeof(nc.packet_command));
+        nc.packet_buffersize = oc.packet_buffersize;
+        nc.packet_chunk = oc.packet_buffersize;
+        nc.packet_sense = oc.packet_sense;
+        nc.packet_asc = oc.packet_asc;
+        nc.packet_ascq = oc.packet_ascq;
+        n.drive[d].multiple_size = o.drive[d].multiple_size;
+        n.drive[d].dma_mode = o.dma_mode;
+      }
+      n.disable_irq = o.disable_irq;
+      n.reset = o.reset;
+      n.reset_in_progress = o.reset_in_progress;
+      n.selected = o.selected;
+      memcpy(n.busmaster, o.busmaster, sizeof(n.busmaster));
+      n.busmaster[2] &= 0x07; // the DMA-capable bits are computed now
+      n.bm_status = o.bm_status;
+      memcpy(n.data, o.data, sizeof(n.data));
+      n.data_ptr = o.data_ptr;
+      n.data_size = o.data_size;
+      n.interrupt_pending = o.interrupt_pending;
+    }
+  } else {
+    r = fread(&state, sizeof(state), 1, f);
+    if (r != 1) {
+      printf("%s: unexpected end of file!\n", devid_string);
+      return -1;
+    }
   }
 
   r = fread(&m2, sizeof(u32), 1, f);
