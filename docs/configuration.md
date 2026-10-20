@@ -536,8 +536,10 @@ disk. A guest that keeps a disk's identity by that serial gets the old one
 back with `serial_number = "SRL0000";`. None of Windows 2000, the 64-bit
 Whistler beta or OpenVMS 8.4 reads the page for a parallel SCSI disk.
 
-The vital product data pages a SCSI disk has are 0x00 and 0x80; any other
-(0x83, device identification) is refused with ILLEGAL REQUEST.
+A SCSI disk has the vital product data pages 0x00, 0x80 (the serial
+number), 0x83 (device identification: a T10 vendor ID designator made of
+`DEC`, the product identification and the serial number) and 0xB0 (block
+limits, all of them 0: no limit); a CD has 0x00, 0x80 and 0x83.
 
 ### CDs and floppies
 
