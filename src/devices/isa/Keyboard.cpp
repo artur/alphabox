@@ -1257,15 +1257,23 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
         break;
       }
       state.mouse.sample_rate = value;
-      if ((value == 200) && (!state.mouse.im_request)) {
-        state.mouse.im_request = 1;
-      } else if ((value == 100) && (state.mouse.im_request == 1)) {
-        state.mouse.im_request = 2;
-      } else if ((value == 80) && (state.mouse.im_request == 2)) {
-        state.mouse.im_mode = 1;
-        state.mouse.im_request = 0;
-      } else {
-        state.mouse.im_request = 0;
+      // The IntelliMouse wheel is switched on by the sample rates 200, 100,
+      // 80 in a row (Chapweske, "The PS/2 Mouse Interface", Intellimouse
+      // Extensions). im_request remembers what the last rates can still
+      // become: 1 = ...200, 2 = 200,100, 3 = 200,200, else 0. So a failed
+      // probe right before (200,200,100,80) still counts.
+      {
+        u8 &req = state.mouse.im_request;
+        const bool after_200 = req == 1 || req == 3;
+        if (value == 200) {
+          req = after_200 ? 3 : 1;
+        } else if (value == 100) {
+          req = after_200 ? 2 : 0;
+        } else {
+          if (value == 80 && req == 2)
+            state.mouse.im_mode = 1;
+          req = 0;
+        }
       }
 
       controller_enQ(0xFA, KBC_SRC_AUX); // ack

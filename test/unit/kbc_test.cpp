@@ -464,6 +464,20 @@ static void test_mouse_scaling() {
   check("dx 5 with 1:1", motion(5, 0, 0, 0), "m08 m05 m00");
 }
 
+/// KBD-12: the IntelliMouse sequence is recognized whatever came before it.
+static void test_intellimouse_detect() {
+  fresh();
+  check("200,200,100,80 then F2",
+        aux({0xF3, 200, 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa mfa mfa m03");
+  fresh();
+  // OpenVMS's order: the five-button probe first, from ID 0
+  check("200,200,80 from ID 0", aux({0xF3, 200, 0xF3, 200, 0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa m00");
+  check("then 200,100,80", aux({0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa m03");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -481,6 +495,7 @@ int main() {
   test_mouse_bad_parameters();
   test_mouse_enable_keeps_mode();
   test_mouse_scaling();
+  test_intellimouse_detect();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }
