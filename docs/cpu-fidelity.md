@@ -368,7 +368,6 @@ still faults with the FPU disabled: the architecture says any of them may.
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
 | Reserved barrier code point `18.4C00` is OPCDEC, where ARM App. C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18 | Only hand-written barrier tests |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
-| A VAX *dirty zero* operand does not raise invalid operation | `AlphaCPU_vaxfloat.cpp` | VMS code that plants dirty zeros to catch uninitialised data |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |

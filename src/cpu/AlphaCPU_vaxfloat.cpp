@@ -163,13 +163,18 @@ int CAlphaCPU::vax_fcmp(u64 s1, u64 s2, u32 ins) {
 
   UFP b;
 
+  /* Compare the unpacked values, not the register words: a dirty zero
+     that /S lets through unpacks to a true zero and must compare equal to
+     one (ARM 4.7.7.1). */
   vax_unpack(s1, &a, ins);
   vax_unpack(s2, &b, ins);
-  if (s1 == s2)
-    return 0; /* equal? */
   if (a.sign != b.sign)
-    return (a.sign ? -1 : +1);             /* opp signs? */
-  return (((s1 < s2) ^ a.sign) ? -1 : +1); /* like signs */
+    return (a.sign ? -1 : +1); /* opp signs? */
+  if (a.exp != b.exp)
+    return (((a.exp < b.exp) ^ a.sign) ? -1 : +1);
+  if (a.frac != b.frac)
+    return (((a.frac < b.frac) ^ a.sign) ? -1 : +1);
+  return 0; /* equal */
 }
 
 /**
@@ -439,7 +444,12 @@ void CAlphaCPU::vax_unpack(u64 op, UFP *r, u32 ins) {
   r->frac = FPR_GETFRAC(op); /* get fraction */
   if (r->exp == 0)           /* exp = 0? */
   {
-    if (r->sign != 0) /* rsvd op? */
+    /* Not a number unless it is a true zero: a reserved operand (sign set)
+       takes an invalid operation trap in every mode, and so does a dirty
+       zero (sign clear, fraction set) unless the instruction has /S, which
+       treats it as zero (ARM 4.7.7.1; "VAX reserved operands and dirty
+       zeros trap", 4.10.5). */
+    if (r->sign != 0 || (r->frac != 0 && !(ins & I_FTRP_S)))
       vax_trap(TRAP_INV, ins);
 
     // zero
@@ -469,7 +479,8 @@ void CAlphaCPU::vax_unpack_d(u64 op, UFP *r, u32 ins) {
   r->frac = FDR_GETFRAC(op); /* get fraction */
   if (r->exp == 0)           /* exp = 0? */
   {
-    if (r->sign != 0) /* rsvd op? */
+    /* reserved operand or dirty zero, as vax_unpack */
+    if (r->sign != 0 || (r->frac != 0 && !(ins & I_FTRP_S)))
       vax_trap(TRAP_INV, ins);
     r->frac = r->sign = 0;
     return;

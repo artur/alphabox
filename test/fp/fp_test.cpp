@@ -85,12 +85,13 @@ static Item items[] = {
     {"FP-01", true,
      "VAX F results keep the bits below F precision, <28:0>; a single "
      "precision value in a register has them clear (ARM 4.7.1, p. 4-63)"},
-    {"FP-03", false,
+    {"FP-03", true,
      "a VAX dirty zero operand takes an invalid operation trap; with /S it "
      "is treated as zero (ARM 4.7.7.1, p. 4-70 and 4-71)"},
-    {"FP-04", false,
-     "CMPGxx/S compares values, so a dirty zero equals zero (ARM 4.7.7.1; "
-     "4.10.x VAX Floating Compare, p. 4-111)"},
+    {"FP-04", true,
+     "CMPGxx compares values, so under /S a dirty zero equals zero, and the "
+     "UNPREDICTABLE result of a compare that traps follows the values too "
+     "(ARM 4.7.7.1; 4.10.7, p. 4-111)"},
     {"FP-05", false,
      "CVTTQ overflow is an invalid operation only with /S (HRM Table A-11, "
      "p. A-17); without /S it is an integer overflow only (ARM 4.7.7.2, "
@@ -1051,6 +1052,9 @@ static Tags classify(const Op &op, const Ctx &c, u64 a, u64 b,
     const bool dirty = (!op.unary && op.src != F_Q && vax_dirty(a, false)) ||
                        (op.src != F_Q && vax_dirty(b, dsrc));
     const bool cmp = op.k == V_CMPEQ || op.k == V_CMPLT || op.k == V_CMPLE;
+    /* exp = 0 and not a true zero: a reserved operand or a dirty zero */
+    const bool nonnum = cmp && ((((a >> 52) & 0x7ff) == 0 && a) ||
+                                (((b >> 52) & 0x7ff) == 0 && b));
     if (bad.exc != good.exc || bad.trapped != good.trapped ||
         bad.fpcr != good.fpcr || bad.opcdec != good.opcdec) {
       if (dirty && !c.S)
@@ -1061,7 +1065,7 @@ static Tags classify(const Op &op, const Ctx &c, u64 a, u64 b,
         g.unexplained = true;
     }
     if (bad.res != good.res) {
-      if (cmp && dirty && c.S)
+      if (nonnum) /* compared as values; UNPREDICTABLE if it trapped */
         g.add("FP-04");
       else if ((bad.exc & X_OVF) && (good.exc & X_OVF))
         g.add("FP-10");
