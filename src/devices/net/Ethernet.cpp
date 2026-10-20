@@ -142,15 +142,12 @@ u32 eth_crc32(u32 crc, const void *vbuf, int len) {
 
 bool CPacketQueue::add_tail(const u8 *packet_data, int packet_len,
                             bool calc_crc, bool need_crc) {
-  if ((cnt >= max) || (packet_len < 1) || (packet_len > 1514)) {
+  // A full queue, or a frame no Ethernet carries: dropped and counted in
+  // `dropped`, which the destructor prints. The NIC counts what its FIFO
+  // lost in its own registers; a line per frame flooded the console under
+  // load (and read twelve bytes of whatever frame it was given).
+  if ((cnt >= max) || (packet_len < 1) || (packet_len > ETH_MAX_PACKET_RAW)) {
     dropped += 1;
-    printf("CPacketQueue(%s):add() packet lost! Size = %d", name, packet_len);
-    printf(".. dst: %02x-%02x-%02x-%02x-%02x-%02x ", packet_data[0],
-           packet_data[1], packet_data[2], packet_data[3], packet_data[4],
-           packet_data[5]);
-    printf(".. src: %02x-%02x-%02x-%02x-%02x-%02x \n", packet_data[6],
-           packet_data[7], packet_data[8], packet_data[9], packet_data[10],
-           packet_data[11]);
     return false;
   }
 

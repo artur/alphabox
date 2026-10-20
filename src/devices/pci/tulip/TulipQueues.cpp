@@ -207,6 +207,17 @@ static void describe_dhcp(const u8 *bootp, int len, char *out, int out_len) {
 }
 
 /**
+ * Count one frame lost to a full receive FIFO in CSR8: the 11-bit counter
+ * saturates and sets its overflow bit, OCO (HRM Table 3-79).
+ **/
+static inline void count_fifo_overflow(u32 &csr8) {
+  if ((csr8 & MISSED_FOC) == MISSED_FOC)
+    csr8 |= MISSED_OCO;
+  else
+    csr8 += 1u << 17;
+}
+
+/**
  * Take what the back end has into the receive queue, then into the receive
  * ring. Only this thread reads the back end, so it does that without the
  * lock, and queues each frame under it.
@@ -254,8 +265,12 @@ void CTulip::receive_process() {
         // FF).
         if (filter_match_locked(packet_data) ||
             (state.reg[CSR_OPMODE / 8] & OPMODE_RA)) {
-          rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
-          taken = true;
+          // The queue stands for the receive FIFO: a frame that finds it
+          // full is lost and counted in CSR8 (HRM Table 3-79, FOC).
+          if (rx_queue->count() >= rx_queue->max)
+            count_fifo_overflow(state.reg[CSR_MISSED / 8]);
+          else
+            taken = rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
         }
         // Set 10bT activity -- but only where CSR12 is the SIA status. On
         // the 21140 that register is eight general purpose pins, and this
