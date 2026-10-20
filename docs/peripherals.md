@@ -651,6 +651,14 @@ Consoles and guests:
   `es1371mp.sys` to it, though only after its INF is given an NT install
   section: the one on the Alpha media is decorated `.NTX86` and so matches
   nothing here.
+- A machine reset (the console's `init`, a guest reboot) puts either card
+  back to its power-on state: the DMA channels stop, the interrupt latch and
+  the PCI interrupt line clear, and the host streams are released. A
+  snapshot keeps the card: its registers, the converter's RAM, the codec's
+  registers and each channel's DMA position are saved, and a restore
+  rebinds the host streams, so a tone that was playing carries on. A state
+  file from before the card was saved holds nothing for it, and restores
+  with the card at power-on, as it always did.
 - **ES1370**: the part before it, with a mixer of its own. The console has
   no table entry for 1274:5000, so `show config` prints only its ids.
 

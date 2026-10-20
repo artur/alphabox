@@ -79,7 +79,11 @@
 #include "SystemComponent.hpp"
 
 #include <SDL3/SDL.h>
+#include <atomic>
 #include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 /**
  * \brief One part of the AudioPCI family.
@@ -118,6 +122,9 @@ public:
   u16 read(u8 reg) const;
   void write(u8 reg, u16 value);
 
+  void dump(u16 out[64]) const;
+  void load(const u16 in[64]);
+
 private:
   u32 id;
   u16 reg[64];
@@ -125,13 +132,18 @@ private:
 
 void es137x_config_space(const es137x_chip_config &chip, u32 *data, u32 *mask);
 
+/// ES137xDebug.cpp: the WAV tap on the playback device
+/// (ALPHABOX_ES137X_WAV).
+void es137x_wav_tap(SDL_AudioDeviceID dev);
+
 /**
  * \brief Ensoniq AudioPCI (ES1370, ES1371) sound card.
  **/
 class CES137x : public CPCIDevice {
 public:
-  virtual int SaveState(FILE *f) { return 0; }
-  virtual int RestoreState(FILE *f) { return 0; }
+  virtual int SaveState(FILE *f);
+  virtual int RestoreState(FILE *f);
+  virtual void ResetPCI();
   virtual void check_state() {}
   bool open_capture();
 
@@ -157,8 +169,47 @@ private:
   /// run_channel() concurrently with guest MMIO from the CPU threads:
   /// both mutate chan[] (frame_cnt/scount/leftover) and s->status, and the
   /// callback DMAs into guest memory. Recursive because ReadMem_Bar calls
-  /// itself for sub-32-bit accesses and WriteMem_Bar calls both.
+  /// itself for sub-32-bit accesses and the write path calls both.
+  ///
+  /// LOCK ORDER. SDL calls the stream callbacks with its own device and
+  /// stream locks held, and the callbacks take device_lock: SDL, then
+  /// device_lock. So nothing may call into SDL (format, bind, unbind, gain,
+  /// open) while holding device_lock. Code that holds device_lock only
+  /// queues what it wants done to SDL in `pending`; the entry point
+  /// (WriteMem_Bar, ResetPCI, RestoreState), after it has let go of
+  /// device_lock, applies the queue under `sdl_lock`. Taking sdl_lock
+  /// first, then device_lock, then (after releasing it) SDL, keeps the order
+  /// one way round: sdl_lock -> device_lock, and SDL -> device_lock, with
+  /// no path that waits for sdl_lock while holding either of the others.
   std::recursive_mutex device_lock;
+
+  /// Held across a guest operation and the SDL calls it queued, so that
+  /// two CPU threads' queues reach SDL in the order they were decided in.
+  /// Outermost: taken before device_lock, never by an SDL callback.
+  std::mutex sdl_lock;
+
+  /// What the device wants done to a host stream, decided under
+  /// device_lock and done outside it. voice is 0 and 1 for the DACs, 2 for
+  /// the ADC.
+  struct SdlAction {
+    enum Kind { Format, Bind, Unbind } kind;
+    int voice;
+    SDL_AudioSpec spec;
+  };
+  std::vector<SdlAction> pending; ///< guarded by device_lock
+
+  SDL_AudioStream *voice_stream(int voice);
+  void queue_sdl(const SdlAction &a);
+  void apply_sdl_actions(); ///< caller holds sdl_lock, NOT device_lock
+
+  /* ES137xDebug.cpp: ALPHABOX_ES137X_SELFTEST, a guest-less driver of the
+     card from a thread of its own. */
+  std::thread selftest_thread;
+  std::atomic<bool> selftest_stop{false};
+  void selftest_start();
+  void selftest_join();
+  void selftest(const std::string &spec);
+  void write_bar(int func, int bar, u32 address, int dsize, u32 data);
 
   struct chan {
     uint32_t shift;
@@ -231,7 +282,12 @@ private:
   void update_status(ES137xState *s, uint32_t new_status);
   void reset(ES137xState *s);
   void maybe_lower_irq(ES137xState *s, uint32_t sctl);
-  void update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl);
+  /// Decide what the host streams must now do for new register values.
+  /// `force` sets every stream's format and binding afresh instead of
+  /// comparing with the registers' last values: after a reset or a restore
+  /// the streams are not where the registers say they are.
+  void update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl,
+                     bool force = false);
   uint32_t fixup(ES137xState *s, uint32_t addr);
   void write_reg(void *opaque, u64 addr, uint64_t val, unsigned size);
   uint64_t read_reg(void *opaque, u64 addr, unsigned size);

@@ -118,6 +118,9 @@ void CAc97Codec::reset() {
 
 u16 CAc97Codec::read(u8 r) const { return reg[(r & 0x7f) >> 1]; }
 
+void CAc97Codec::dump(u16 out[64]) const { memcpy(out, reg, sizeof(reg)); }
+void CAc97Codec::load(const u16 in[64]) { memcpy(reg, in, sizeof(reg)); }
+
 void CAc97Codec::write(u8 r, u16 value) {
   const unsigned i = (r & 0x7f) >> 1;
 

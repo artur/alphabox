@@ -246,6 +246,15 @@ extension. The header is kept current every quarter second, so the file is
 whole even after a kill. Use it with `SDL_AUDIO_DRIVER=dummy` to keep a
 headless run off the host's speakers.
 
+### Sound card (ES1370, ES1371)
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_ES137X_WAV=<file>` | The card's playback, after the AC'97 mixer's gain, goes into `<file>` as a 16-bit stereo WAV at the host device's rate. The file starts at the first non-silent buffer. |
+| `ALPHABOX_ES137X_SELFTEST=<mode>[:<seconds>]` | A thread plays the card the way a driver would, through its register window, with no guest: `tone` (a looping 440 Hz ring), `stress` (start, stop, pause and re-rate a playing channel as fast as possible; the report line `no hang` is the pass), `mute` (the tone at 0 dB, -12 dB, then muted), `ring` (record into a 100 byte 8-bit mono ring and report whether the bytes after it were touched). It waits for the console to have opened the PCI DMA window. |
+
+Use them with `SDL_AUDIO_DRIVER=dummy` on a machine with `pci1.1 = es1371`.
+
 `ALPHABOX_USBTRACE=1` traces:
 
 - OHCI register writes, with read counts in between;

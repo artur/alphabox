@@ -190,7 +190,7 @@ One directory per family:
 | `bridge/` | `PCIBridge`: PCI-PCI bridges and the multi-port boards built on them, parts in `PCIBridgeChips.cpp` |
 | `ehci/` | `CEhci`, a NEC uPD720101 USB 2.0 card (details below) |
 | `virtio/` | paravirtual devices on legacy virtio-pci (details below) |
-| `es137x/` | `CES137x`, the Ensoniq AudioPCI sound cards sharing one DMA engine; the ES1371's AC'97 codec and sample rate converter are in `ES137xCodec.cpp` |
+| `es137x/` | `CES137x`, the Ensoniq AudioPCI sound cards sharing one DMA engine; the ES1371's AC'97 codec and sample rate converter are in `ES137xCodec.cpp`; the WAV tap and the guest-less self-test are in `ES137xDebug.cpp` |
 
 The EHCI card has the EHCI and two OHCI companions (`COhci`, the ALi's
 engine), with four ports routed between them by CONFIGFLAG and

@@ -77,6 +77,7 @@ CES137x::CES137x(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
   if (!state.audio_be_out) {
     FAILURE_1(SDL, "Failed to initialize SDL audio output: %s", SDL_GetError());
   }
+  es137x_wav_tap(state.audio_be_out);
   state.adc_voice = SDL_CreateAudioStream(NULL, &as);
   state.dac_voice[0] = SDL_CreateAudioStream(&as, NULL);
   state.dac_voice[1] = SDL_CreateAudioStream(&as, NULL);
@@ -87,6 +88,7 @@ CES137x::CES137x(CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev,
 }
 
 CES137x::~CES137x() {
+  selftest_join();
   SDL_DestroyAudioStream(state.adc_voice);
   SDL_DestroyAudioStream(state.dac_voice[0]);
   SDL_DestroyAudioStream(state.dac_voice[1]);
@@ -123,9 +125,8 @@ bool CES137x::open_capture() {
 void CES137x::init() {
   es137x_config_space(chip, cfg_data, cfg_mask);
   add_function(0, cfg_data, cfg_mask);
-  ResetPCI();
-  reset(&state);
-  update_voices(&state, state.ctl, state.sctl);
+  ResetPCI(); // which also resets the card itself
+  selftest_start();
 
   printf("%s: Ensoniq %s AudioPCI sound card.\n", devid_string, chip.part);
 }
@@ -161,14 +162,71 @@ void CES137x::reset(ES137xState *s) {
     d->scount = 0;
     d->leftover = 0;
     d->freq = 0;
-    if (i == ADC_CHANNEL) {
-      SDL_UnbindAudioStream(s->adc_voice);
-    } else {
-      SDL_UnbindAudioStream(s->dac_voice[i]);
-    }
   }
   do_pci_interrupt(0, 0);
-  update_voices(s, s->ctl, s->sctl);
+  /* Forced: the streams may be bound and set to anything, and even the
+     power-on registers describe a format (DAC1 at 5.512 kHz, 8-bit mono)
+     the host stream is not in. */
+  update_voices(s, s->ctl, s->sctl, true);
+}
+
+SDL_AudioStream *CES137x::voice_stream(int voice) {
+  return voice == ADC_CHANNEL ? state.adc_voice : state.dac_voice[voice];
+}
+
+void CES137x::queue_sdl(const SdlAction &a) { pending.push_back(a); }
+
+/**
+ * Do what the registers asked of the host streams. The caller holds
+ * sdl_lock and not device_lock (see the lock order at device_lock), so SDL
+ * can take its stream lock while an audio callback, which holds that lock
+ * and wants device_lock, is waiting for nothing we hold.
+ **/
+void CES137x::apply_sdl_actions() {
+  std::vector<SdlAction> todo;
+  {
+    std::lock_guard<std::recursive_mutex> lock(device_lock);
+    todo.swap(pending);
+  }
+  for (const SdlAction &a : todo) {
+    SDL_AudioStream *st = voice_stream(a.voice);
+    switch (a.kind) {
+    case SdlAction::Format:
+      SDL_SetAudioStreamFormat(st, &a.spec, &a.spec);
+      break;
+    case SdlAction::Bind: {
+      SDL_AudioDeviceID dev = 0;
+      if (a.voice == ADC_CHANNEL) {
+        if (open_capture())
+          dev = state.audio_be_in;
+      } else {
+        dev = state.audio_be_out;
+      }
+      if (dev)
+        SDL_BindAudioStream(dev, st);
+      break;
+    }
+    case SdlAction::Unbind:
+      SDL_UnbindAudioStream(st);
+      break;
+    }
+  }
+}
+
+/**
+ * A machine reset, or the guest's own: the card goes back to its power-on
+ * state. The DMA channels stop (the old rings are memory the guest has
+ * since reused), the interrupt latch and the line clear, and the host
+ * streams are unbound.
+ **/
+void CES137x::ResetPCI() {
+  CPCIDevice::ResetPCI();
+  std::lock_guard<std::mutex> sl(sdl_lock);
+  {
+    std::lock_guard<std::recursive_mutex> lock(device_lock);
+    reset(&state);
+  }
+  apply_sdl_actions();
 }
 
 void CES137x::maybe_lower_irq(ES137xState *s, uint32_t sctl) {
@@ -208,7 +266,8 @@ void CES137x::es1370_dac2_and_adc_calc_freq(ES137xState *s, uint32_t ctl,
   *old_freq = DAC2_DIVTOSR(old_pclkdiv);
 }
 
-void CES137x::update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl) {
+void CES137x::update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl,
+                            bool force) {
   size_t i;
   uint32_t old_freq, new_freq, old_fmt, new_fmt;
 
@@ -229,42 +288,27 @@ void CES137x::update_voices(ES137xState *s, uint32_t ctl, uint32_t sctl) {
     else
       b->calc_freq(s, ctl, &old_freq, &new_freq);
 
-    if ((old_fmt != new_fmt) || (old_freq != new_freq)) {
+    if (force || (old_fmt != new_fmt) || (old_freq != new_freq)) {
       d->shift = (new_fmt & 1) + (new_fmt >> 1);
       if (new_freq) {
-        // struct audsettings as;
-        SDL_AudioSpec as;
-
-        as.freq = new_freq;
-        as.channels = 1 << (new_fmt & 1);
-        as.format = (new_fmt & 2) ? SDL_AUDIO_S16LE : SDL_AUDIO_U8;
-
-        if (i == ADC_CHANNEL) {
-          SDL_SetAudioStreamFormat(s->adc_voice, &as, &as);
-        } else {
-          SDL_SetAudioStreamFormat(s->dac_voice[i], &as, &as);
-        }
+        SdlAction a = {};
+        a.kind = SdlAction::Format;
+        a.voice = (int)i;
+        a.spec.freq = new_freq;
+        a.spec.channels = 1 << (new_fmt & 1);
+        a.spec.format = (new_fmt & 2) ? SDL_AUDIO_S16LE : SDL_AUDIO_U8;
+        queue_sdl(a);
       }
     }
     d->freq = new_freq;
 
-    if (((ctl ^ s->ctl) & b->ctl_en) || ((sctl ^ s->sctl) & b->sctl_pause)) {
-      int on = (ctl & b->ctl_en) && !(sctl & b->sctl_pause);
-
-      if (i == ADC_CHANNEL) {
-        if (on) {
-          if (open_capture())
-            SDL_BindAudioStream(s->audio_be_in, s->adc_voice);
-        } else {
-          SDL_UnbindAudioStream(s->adc_voice);
-        }
-      } else {
-        if (on) {
-          SDL_BindAudioStream(s->audio_be_out, s->dac_voice[i]);
-        } else {
-          SDL_UnbindAudioStream(s->dac_voice[i]);
-        }
-      }
+    if (force || ((ctl ^ s->ctl) & b->ctl_en) ||
+        ((sctl ^ s->sctl) & b->sctl_pause)) {
+      const bool on = (ctl & b->ctl_en) && !(sctl & b->sctl_pause);
+      SdlAction a = {};
+      a.kind = on ? SdlAction::Bind : SdlAction::Unbind;
+      a.voice = (int)i;
+      queue_sdl(a);
     }
   }
 
@@ -470,7 +514,17 @@ u32 CES137x::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 
 void CES137x::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                            u32 data) {
-  std::lock_guard<std::recursive_mutex> lock(device_lock);
+  /* sdl_lock, then device_lock for the register work, then neither while
+     SDL is called: see the lock order at device_lock. */
+  std::lock_guard<std::mutex> sl(sdl_lock);
+  {
+    std::lock_guard<std::recursive_mutex> lock(device_lock);
+    write_bar(func, bar, address, dsize, data);
+  }
+  apply_sdl_actions();
+}
+
+void CES137x::write_bar(int func, int bar, u32 address, int dsize, u32 data) {
   if (bar != 0)
     return;
 
@@ -480,7 +534,7 @@ void CES137x::WriteMem_Bar(int func, int bar, u32 address, int dsize,
     case 8: {
       val = (val & ~(0xff << ((address & 3) * 8))) |
             ((data & 0xff) << ((address & 3) * 8));
-      CES137x::WriteMem_Bar(func, bar, address & ~3, 32, val);
+      write_bar(func, bar, address & ~3, 32, val);
       return;
     }
     case 16: {
@@ -489,7 +543,7 @@ void CES137x::WriteMem_Bar(int func, int bar, u32 address, int dsize,
       } else {
         val = (val & 0xffff0000) | data;
       }
-      CES137x::WriteMem_Bar(func, bar, address & ~3, 32, val);
+      write_bar(func, bar, address & ~3, 32, val);
       return;
     }
     }
@@ -652,5 +706,126 @@ void CES137x::dac_callback_adc(void *userdata, SDL_AudioStream *stream,
   CES137x *dev = (CES137x *)userdata;
   ES137xState *s = &dev->state;
   dev->run_channel(s, 2, additional_amount);
+}
+/**
+ * The card's state in a snapshot, ahead of the PCI block that
+ * CPCIDevice::SaveState writes: the registers, the three channels' DMA
+ * positions, the converter's RAM and the codec's register file. The host
+ * streams are not in it; RestoreState binds them again from the control
+ * registers.
+ *
+ * Files written before this block existed carry nothing for this card at
+ * all (not even its PCI block), so they go straight to the next device's
+ * data. RestoreState recognises that by the absence of the magic, rewinds,
+ * and leaves the card as it was at power-on, as such a file always did.
+ **/
+namespace {
+constexpr u32 kEsMagic = 0x45533731; // 'ES71'
+constexpr u32 kEsVersion = 1;
+struct EsChanState {
+  u32 shift, leftover, scount, frame_addr, frame_cnt, freq;
+};
+struct EsCardState {
+  u32 version;
+  u32 ctl, status, mempage, codec, sctl;
+  u32 legacy, smprate, src_phase, codec_result;
+  EsChanState chan[NB_CHANNELS];
+  u16 src_ram[SRC_RAM_WORDS];
+  u16 ac97[64];
+};
+} // namespace
+
+int CES137x::SaveState(FILE *f) {
+  EsCardState x;
+  memset(&x, 0, sizeof(x));
+  {
+    std::lock_guard<std::recursive_mutex> lock(device_lock);
+    x.version = kEsVersion;
+    x.ctl = state.ctl;
+    x.status = state.status;
+    x.mempage = state.mempage;
+    x.codec = state.codec;
+    x.sctl = state.sctl;
+    x.legacy = state.legacy;
+    x.smprate = state.smprate;
+    x.src_phase = state.src_phase;
+    x.codec_result = state.codec_result;
+    for (int i = 0; i < NB_CHANNELS; i++) {
+      const struct chan &c = state.chan[i];
+      x.chan[i] = {c.shift,      c.leftover,  c.scount,
+                   c.frame_addr, c.frame_cnt, c.freq};
+    }
+    memcpy(x.src_ram, state.src_ram, sizeof(x.src_ram));
+    ac97.dump(x.ac97);
+  }
+  const long n = sizeof(x);
+  fwrite(&kEsMagic, sizeof(u32), 1, f);
+  fwrite(&n, sizeof(long), 1, f);
+  if (fwrite(&x, 1, sizeof(x), f) != sizeof(x))
+    return -1;
+  fwrite(&kEsMagic, sizeof(u32), 1, f);
+  return CPCIDevice::SaveState(f);
+}
+
+int CES137x::RestoreState(FILE *f) {
+  u32 m;
+  const long pos = ftell(f);
+  if (fread(&m, sizeof(u32), 1, f) != 1 || m != kEsMagic) {
+    // An older file: nothing was written for this card.
+    if (fseek(f, pos, SEEK_SET)) {
+      printf("%s: cannot reposition the state file!\n", devid_string);
+      return -1;
+    }
+    return 0;
+  }
+  long n;
+  EsCardState x;
+  if (fread(&n, sizeof(long), 1, f) != 1 || n != (long)sizeof(x)) {
+    printf("%s: ES137x STRUCT SIZE does not match!\n", devid_string);
+    return -1;
+  }
+  if (fread(&x, 1, sizeof(x), f) != sizeof(x) || fread(&m, 4, 1, f) != 1 ||
+      m != kEsMagic) {
+    printf("%s: ES137x end MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  if (x.version != kEsVersion) {
+    printf("%s: ES137x state version %u is not supported!\n", devid_string,
+           x.version);
+    return -1;
+  }
+
+  {
+    std::lock_guard<std::mutex> sl(sdl_lock);
+    {
+      std::lock_guard<std::recursive_mutex> lock(device_lock);
+      ES137xState *s = &state;
+      pending.clear();
+      /* The streams are where the registers last put them, which is not
+         where the file's registers want them: start from "nothing enabled"
+         and let a forced update_voices() set every format and binding. */
+      s->ctl = 0;
+      s->sctl = 0;
+      s->mempage = x.mempage & 0xf;
+      s->codec = x.codec;
+      s->status = x.status;
+      s->legacy = x.legacy;
+      s->smprate = x.smprate;
+      s->src_phase = x.src_phase;
+      s->codec_result = x.codec_result;
+      memcpy(s->src_ram, x.src_ram, sizeof(s->src_ram));
+      ac97.load(x.ac97);
+      update_voices(s, x.ctl, x.sctl, true);
+      for (int i = 0; i < NB_CHANNELS; i++) {
+        struct chan &c = s->chan[i];
+        c.leftover = x.chan[i].leftover & 3;
+        c.scount = x.chan[i].scount;
+        c.frame_addr = x.chan[i].frame_addr;
+        c.frame_cnt = x.chan[i].frame_cnt;
+      }
+    }
+    apply_sdl_actions();
+  }
+  return CPCIDevice::RestoreState(f);
 }
 #endif /* HAVE_SDL */
