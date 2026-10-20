@@ -110,6 +110,17 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   controller's command byte. After its reset the mouse is in stream mode.
   2:1 scaling (`E7`) applies to stream packets and not to Read Data
   (`EB`); the resolution (`E8`) is reported back but not applied.
+- The mouse is an IntelliMouse Explorer: the sample rates 200, 100, 80 in
+  a row switch on the wheel (ID 3, 4-byte packets), and 200, 200, 80 after
+  that the fourth and fifth buttons as well (ID 4: the wheel in four bits,
+  the buttons in bits 4 and 5 of the fourth byte). The host's back and
+  forward buttons (SDL's X1 and X2) are buttons 4 and 5. Windows 2000
+  probes both and runs the mouse at ID 4. This mouse takes the
+  five-button sequence only once the wheel is on, the order Windows and
+  Linux send them in; OpenVMS probes five buttons first, while the mouse
+  is at ID 0, then the wheel, and so runs it at ID 3. No document says
+  what a real Explorer does with that order. Until a guest switches the
+  wheel on, wheel turns send nothing.
 
 ### SCSI
 

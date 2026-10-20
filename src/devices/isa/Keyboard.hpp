@@ -51,6 +51,12 @@
 #define MOUSE_MODE_REMOTE 12
 #define MOUSE_MODE_WRAP 13
 
+/// The mouse's packet formats (SKb_state::SAli_mouse::im_mode) and the
+/// device IDs F2 reports for them.
+#define KBD_MOUSE_STANDARD 0     ///< ID 0: 3-byte packets, three buttons
+#define KBD_MOUSE_INTELLIMOUSE 1 ///< ID 3: 4-byte packets, wheel
+#define KBD_MOUSE_EXPLORER 2     ///< ID 4: 4-byte packets, wheel, 5 buttons
+
 /// Scan code set 3 key types (commands F7-FD): a key repeats while held
 /// (typematic) and/or sends a break code when released.
 #define KBD_SET3_REPEAT 0x01
@@ -214,7 +220,10 @@ private:
       s16 delayed_dy;
       s16 delayed_dz;
       u8 im_request;
-      bool im_mode;
+      /// The packet format the guest switched on (KBD_MOUSE_*): standard,
+      /// IntelliMouse (wheel), IntelliMouse Explorer (wheel and five
+      /// buttons). A bool before 2026-10, with the same 0 and 1.
+      u8 im_mode;
       bool data_pending;
       u8 reported_buttons; ///< button state carried by the last packet
       /// button states not yet packetized, oldest first (so a press and

@@ -478,6 +478,60 @@ static void test_intellimouse_detect() {
         "mfa mfa mfa mfa mfa mfa mfa m03");
 }
 
+/// IntelliMouse Explorer: 200,200,80 after the wheel sequence gives ID 4,
+/// five buttons and a 4-bit wheel.
+static void test_explorer() {
+  // What Windows 2000's i8042prt sends (ALPHABOX_TRACE_KBC): ID 4.
+  fresh();
+  out64(0xA8);
+  check("W2K: reset", aux({0xFF}), "mfa maa m00");
+  check("W2K: ID", aux({0xF2}), "mfa m00");
+  check("W2K: E8 00, E6 x3, E9", aux({0xE8, 0x00, 0xE6, 0xE6, 0xE6, 0xE9}),
+        "mfa mfa mfa mfa mfa mfa m00 m00 m64");
+  check("W2K: wheel, then five buttons",
+        aux({0xE8, 0x03, 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF3, 200, 0xF3, 200,
+             0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa mfa m04");
+  // OpenVMS's order: five buttons first (ID 0), then the wheel (ID 3).
+  fresh();
+  check("VMS: five buttons first",
+        aux({0xFF, 0xF3, 200, 0xF3, 200, 0xF3, 80, 0xF2}),
+        "mfa maa m00 mfa mfa mfa mfa mfa mfa mfa m00");
+  check("VMS: then the wheel", aux({0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa m03");
+
+  fresh();
+  aux({0xF3, 200, 0xF3, 100, 0xF3, 80});
+  check("then 200,200,80", aux({0xF3, 200, 0xF3, 200, 0xF3, 80, 0xF2}),
+        "mfa mfa mfa mfa mfa mfa mfa m04");
+  mouse_streaming();
+  check("wheel down 1 (host -1)", motion(0, 0, -1, 0), "m08 m00 m00 m01");
+  check("wheel up 2", motion(0, 0, 2, 0), "m08 m00 m00 m0e");
+  check("button 4", motion(0, 0, 0, 0x08), "m08 m00 m00 m10");
+  check("button 5 and left", motion(0, 0, 0, 0x11), "m09 m00 m00 m20");
+  check("released", motion(0, 0, 0, 0), "m08 m00 m00 m00");
+  // the wheel is clamped to the 4-bit range, the rest follows
+  check("wheel up 10: first packet", motion(0, 0, 10, 0), "m08 m00 m00 m08");
+  kb->execute();
+  check("wheel up 10: the rest", drain(), "m08 m00 m00 m0e");
+  check("FF leaves Explorer mode", aux({0xFF}), "mfa maa m00");
+  check("ID 0 after FF", aux({0xF2}), "mfa m00");
+}
+
+/// A wheel notch in a mode without a wheel sends nothing (KBD-18); buttons
+/// 4 and 5 are not reported by a three-button mouse.
+static void test_wheel_without_wheel_mode() {
+  fresh();
+  mouse_streaming();
+  check("wheel in ID 0 mode", motion(0, 0, 1, 0), "");
+  check("button 4 in ID 0 mode", motion(0, 0, 0, 0x08), "");
+  check("left in ID 0 mode", motion(0, 0, 0, 0x09), "m09 m00 m00");
+  fresh();
+  aux({0xF3, 200, 0xF3, 100, 0xF3, 80});
+  mouse_streaming();
+  check("wheel in ID 3 mode", motion(0, 0, 1, 0), "m08 m00 m00 mff");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -496,6 +550,8 @@ int main() {
   test_mouse_enable_keeps_mode();
   test_mouse_scaling();
   test_intellimouse_detect();
+  test_explorer();
+  test_wheel_without_wheel_mode();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

@@ -1334,7 +1334,7 @@ void bx_sdl_gui_c::handle_events(void) {
         SDL_GetWindowSize(sdl_window, &w, &h);
         if (w > 0 && h > 0)
           t->set_position(sdl_event.motion.x / w, sdl_event.motion.y / h,
-                          sdl_mouse_button_state);
+                          sdl_mouse_button_state & 0x07);
       } else if (sdl_grab) {
         // PS/2 mouse Y is positive-up, SDL is positive-down; hence the
         // baseline Y negation. invert_x/y flip on top of that.
@@ -1377,6 +1377,12 @@ void bx_sdl_gui_c::handle_events(void) {
       case SDL_BUTTON_MIDDLE:
         bitmask = 0x04;
         break;
+      case SDL_BUTTON_X1: // back: the PS/2 mouse's button 4 (Explorer mode)
+        bitmask = 0x08;
+        break;
+      case SDL_BUTTON_X2: // forward: button 5
+        bitmask = 0x10;
+        break;
       default:
         break;
       }
@@ -1387,7 +1393,7 @@ void bx_sdl_gui_c::handle_events(void) {
         sdl_mouse_button_state &= ~bitmask;
 
       if (tablet)
-        tablet->set_buttons(sdl_mouse_button_state);
+        tablet->set_buttons(sdl_mouse_button_state & 0x07);
       else if (theKeyboard)
         theKeyboard->mouse_motion(0, 0, 0, sdl_mouse_button_state);
       break;

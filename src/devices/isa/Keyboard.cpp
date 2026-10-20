@@ -129,7 +129,7 @@ void CKeyboard::init() {
   state.mouse.delayed_dy = 0;
   state.mouse.delayed_dz = 0;
   state.mouse.im_request = 0; // wheel mouse mode request
-  state.mouse.im_mode = 0;    // wheel mouse mode
+  state.mouse.im_mode = KBD_MOUSE_STANDARD;
 
   myThread = nullptr;
 }
@@ -1258,10 +1258,14 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       }
       state.mouse.sample_rate = value;
       // The IntelliMouse wheel is switched on by the sample rates 200, 100,
-      // 80 in a row (Chapweske, "The PS/2 Mouse Interface", Intellimouse
+      // 80 in a row, the Explorer's wheel and buttons 4 and 5 by 200, 200,
+      // 80 (Chapweske, "The PS/2 Mouse Interface", Intellimouse
       // Extensions). im_request remembers what the last rates can still
       // become: 1 = ...200, 2 = 200,100, 3 = 200,200, else 0. So a failed
-      // probe right before (200,200,100,80) still counts.
+      // probe right before (200,200,100,80) still counts. The five-button
+      // sequence counts only once the wheel is on, which is the order
+      // Windows 2000 and Linux probe in; OpenVMS probes five buttons first
+      // and reads ID 0 there, as it did before the Explorer existed here.
       {
         u8 &req = state.mouse.im_request;
         const bool after_200 = req == 1 || req == 3;
@@ -1270,8 +1274,12 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
         } else if (value == 100) {
           req = after_200 ? 2 : 0;
         } else {
-          if (value == 80 && req == 2)
-            state.mouse.im_mode = 1;
+          if (value == 80 && req == 2 &&
+              state.mouse.im_mode == KBD_MOUSE_STANDARD)
+            state.mouse.im_mode = KBD_MOUSE_INTELLIMOUSE;
+          else if (value == 80 && req == 3 &&
+                   state.mouse.im_mode != KBD_MOUSE_STANDARD)
+            state.mouse.im_mode = KBD_MOUSE_EXPLORER;
           req = 0;
         }
       }
@@ -1373,7 +1381,9 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
 
     case 0xf2:                           // Read Device Type
       controller_enQ(0xFA, KBC_SRC_AUX); // ACK
-      if (state.mouse.im_mode)
+      if (state.mouse.im_mode == KBD_MOUSE_EXPLORER)
+        controller_enQ(0x04, KBC_SRC_AUX); // Device ID (5 buttons, wheel)
+      else if (state.mouse.im_mode == KBD_MOUSE_INTELLIMOUSE)
         controller_enQ(0x03, KBC_SRC_AUX); // Device ID (wheel z-mouse)
       else
         controller_enQ(0x00, KBC_SRC_AUX); // Device ID (standard)
@@ -1419,7 +1429,7 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       state.mouse.mode = MOUSE_MODE_STREAM;
       state.mouse.enable = 0;
       discard_mouse_motion();
-      state.mouse.im_mode = 0;
+      state.mouse.im_mode = KBD_MOUSE_STANDARD;
       state.mouse.im_request = 0;
       controller_enQ(0xFA, KBC_SRC_AUX); // ACK
       controller_enQ(0xAA, KBC_SRC_AUX); // completion code
@@ -1503,8 +1513,15 @@ void CKeyboard::mouse_motion(int delta_x, int delta_y, int delta_z,
       state.mouse.enable && state.mouse.mode == MOUSE_MODE_STREAM;
   const bool streaming = stream && state.aux_clock_enabled;
 
-  const u8 buttons = (u8)(button_state & 0x07);
-  if (buttons != state.mouse.button_status) {
+  // Buttons 4 and 5 (bits 3 and 4) exist only for the Explorer's packets;
+  // the wheel only for a mouse the guest switched to a wheel mode. Neither
+  // makes a packet otherwise (a 3-byte packet has no room for them).
+  const bool explorer = state.mouse.im_mode == KBD_MOUSE_EXPLORER;
+  const u8 buttons = (u8)(button_state & (explorer ? 0x1f : 0x07));
+  if (state.mouse.im_mode == KBD_MOUSE_STANDARD)
+    delta_z = 0;
+  const bool changed = buttons != state.mouse.button_status;
+  if (changed) {
     // Packets are built at most once per worker tick, so a press and release
     // can both happen before the next one. Keep a button state that has not
     // been packetized yet instead of overwriting it, or the click is lost.
@@ -1538,13 +1555,19 @@ void CKeyboard::mouse_motion(int delta_x, int delta_y, int delta_z,
   state.mouse.delayed_dx = accumulate(state.mouse.delayed_dx, delta_x);
   state.mouse.delayed_dy = accumulate(state.mouse.delayed_dy, delta_y);
   state.mouse.delayed_dz = accumulate(state.mouse.delayed_dz, delta_z);
-  state.mouse.data_pending = true;
+  if (changed || delta_x || delta_y || delta_z)
+    state.mouse.data_pending = true;
 }
 
 /**
- * Build a movement packet (3 bytes, 4 in wheel mode) from the accumulated
- * motion and consume the part of it the packet carries; motion beyond the
- * 9-bit range stays for the following packets.
+ * Build a movement packet (3 bytes, 4 in the wheel modes) from the
+ * accumulated motion and consume the part of it the packet carries; motion
+ * beyond the packet's range (9 bits for X and Y, -8 to +7 for the wheel)
+ * stays for the following packets. The fourth byte is the wheel, sign
+ * extended, for the IntelliMouse; for the Explorer, the wheel in bits 0-3
+ * and buttons 4 and 5 in bits 4 and 5 (Chapweske, "The PS/2 Mouse
+ * Interface", Intellimouse Extensions). The host's wheel counts up away
+ * from the user; the packet's the other way.
  **/
 int CKeyboard::build_mouse_packet(u8 *packet, bool stream) {
   auto clamp = [](int v, int lo, int hi) {
@@ -1565,10 +1588,10 @@ int CKeyboard::build_mouse_packet(u8 *packet, bool stream) {
 
   int dx = clamp(state.mouse.delayed_dx, -256, 255);
   int dy = clamp(state.mouse.delayed_dy, -256, 255);
-  const int dz = clamp(state.mouse.delayed_dz, -127, 127);
+  const int z = clamp(-state.mouse.delayed_dz, -8, 7);
   state.mouse.delayed_dx -= dx;
   state.mouse.delayed_dy -= dy;
-  state.mouse.delayed_dz = 0;
+  state.mouse.delayed_dz += z;
   if (stream && state.mouse.scaling == 2) {
     dx = clamp(scale(dx), -256, 255);
     dy = clamp(scale(dy), -256, 255);
@@ -1585,7 +1608,7 @@ int CKeyboard::build_mouse_packet(u8 *packet, bool stream) {
   state.mouse.reported_buttons = buttons;
   state.mouse.data_pending =
       state.mouse.delayed_dx != 0 || state.mouse.delayed_dy != 0 ||
-      state.mouse.button_queue_len != 0 ||
+      state.mouse.delayed_dz != 0 || state.mouse.button_queue_len != 0 ||
       state.mouse.button_status != state.mouse.reported_buttons;
 
   u8 b1 = (buttons & 0x07) | 0x08; // bit3 always set
@@ -1596,8 +1619,11 @@ int CKeyboard::build_mouse_packet(u8 *packet, bool stream) {
   packet[0] = b1;
   packet[1] = (u8)dx;
   packet[2] = (u8)dy;
-  packet[3] = (u8)-dz;
-  return state.mouse.im_mode ? 4 : 3;
+  if (state.mouse.im_mode == KBD_MOUSE_EXPLORER)
+    packet[3] = (u8)((z & 0x0f) | ((buttons & 0x18) << 1));
+  else
+    packet[3] = (u8)z;
+  return state.mouse.im_mode == KBD_MOUSE_STANDARD ? 3 : 4;
 }
 
 /**
@@ -1786,7 +1812,7 @@ int CKeyboard::RestoreState(FILE *f) {
       mb.num_elements > BX_MOUSE_BUFF_SIZE || mb.head < 0 ||
       mb.head >= BX_MOUSE_BUFF_SIZE ||
       rs.mouse.button_queue_len > BX_MOUSE_BUTTON_QSIZE ||
-      rs.current_scancodes_set > 2 ||
+      rs.current_scancodes_set > 2 || rs.mouse.im_mode > KBD_MOUSE_EXPLORER ||
       (res != 1 && res != 2 && res != 4 && res != 8)) {
     printf("kbc: bad state: a queue or index is out of range!\n");
     return -1;
