@@ -26,6 +26,9 @@
  * serve the general public.
  */
 
+#if !defined(INCLUDED_FREETEXTQUESTION_H)
+#define INCLUDED_FREETEXTQUESTION_H
+
 #include "Question.hpp"
 
 /**
@@ -37,40 +40,38 @@ public:
    * Define a list of options to show following the question,
    * to show the user what values are acceptable.
    **/
-  void setOptions(string options) { mOptions = options; }
+  void setOptions(std::string options) { mOptions = options; }
+
+  /**
+   * An empty answer (and no default) is not an answer.
+   **/
+  void setRequired(bool required) { mRequired = required; }
 
   /**
    * Ask the question, and return the answer.
    **/
-  virtual string ask() {
+  virtual std::string ask() {
     for (;;) {
-      cout << mQuestion;
+      std::string prompt = mQuestion;
 
       /* If there is an options list, display it after the
        * question enclosed in ().
        */
       if (mOptions != "")
-        cout << " (" << mOptions << ")";
+        prompt += " (" + mOptions + ")";
 
       /* If there is a default value, display it after the
        * question enclosed in [].
        */
       if (mDefault != "")
-        cout << " [" << mDefault << "]";
+        prompt += " [" + mDefault + "]";
 
-      cout << ": ";
-
-      /* Get the answer. Input that ends (a script that is too short,
-       * Ctrl-D) ends the session: nothing is written.
-       */
-      if (!getline(cin, mAnswer))
-        throw CAbortException("the input ended before the configuration "
-                              "was complete");
+      mAnswer = readAnswer(prompt + ": ");
 
       /* If the question is answered with '?', display the
        * explanation, then ask again.
        */
-      if (mAnswer == "?") {
+      if (mAnswer == "?" && !mScripted) {
         explain();
         continue;
       }
@@ -81,6 +82,13 @@ public:
       if (mAnswer == "")
         mAnswer = mDefault;
 
+      if (mRequired && mAnswer == "") {
+        if (mScripted)
+          refuseScripted(mAnswer, "an answer is needed");
+        std::cout << "\nAn answer is needed here, or '?' for help.\n\n";
+        continue;
+      }
+
       /* Return the answer.
        */
       return mAnswer;
@@ -89,5 +97,10 @@ public:
 
 protected:
   /** List of options to show after the question. */
-  string mOptions;
+  std::string mOptions;
+
+  /** Whether an empty answer is refused. */
+  bool mRequired = false;
 };
+
+#endif // !defined(INCLUDED_FREETEXTQUESTION_H)

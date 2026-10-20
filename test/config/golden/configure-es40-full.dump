@@ -1,0 +1,98 @@
+# exit 0
+gui = sdl
+{
+  video.scale_ratio = "2";
+  video.linear = "true";
+  video.scale_change_enable = "false";
+}
+
+sys0 = tsunami
+{
+  platform = "es40";
+  memory.bits = "30";
+  rom.srm = "cl67srmrom.exe";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  arc_year_compat = "true";
+  time = "2001-02-03 04:05:06";
+  exit_on_pal_halt = "true";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+    skip_memtest_hack = "true";
+  }
+  cpu1 = ev68cb
+  {
+    speed = "800M";
+    skip_memtest_hack = "true";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+    action = "xterm -e telnet localhost 21264";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  fdc0 = floppy
+  {
+    disk0.0 = file
+    {
+      file = "floppy.img";
+    }
+  }
+  pci0.15 = ali_ide
+  {
+    disk1.0 = file
+    {
+      cdrom = "true";
+      file = "ALPHA084.ISO";
+      model_number = "CD ""W"" 216";
+    }
+  }
+  pci0.19 = ali_usb
+  {
+  }
+  pci0.17 = ali_pmu
+  {
+  }
+  pci0.2 = cirrus
+  {
+    chip = "gd5430";
+    rom = "pci.bin";
+  }
+  pci0.1 = sym53c875
+  {
+    disk0.0 = file
+    {
+      file = "dka0.img";
+      autocreate_size = "4G";
+    }
+    disk0.5 = ramdisk
+    {
+      size = "10M";
+    }
+  }
+  pci0.3 = dec21143
+  {
+    type = "udp";
+    udp_local = "127.0.0.1:21511";
+    udp_remote = "127.0.0.1:5556";
+  }
+  pci0.4 = cmd649
+  {
+    disk0.0 = ramdisk
+    {
+      file = "boot.img";
+    }
+  }
+  pci1.1 = es1371
+  {
+  }
+  pci0.7 = ali
+  {
+    vga_console = "false";
+    lpt.outfile = "lpt.out";
+  }
+}

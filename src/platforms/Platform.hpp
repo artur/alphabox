@@ -95,6 +95,16 @@ struct onboard_device {
   const char *defaults;     ///< its block's text, e.g. "type=\"null\";"
 };
 
+/**
+ * One of the board's own PCI functions: the class a configuration names for
+ * it and where it sits. What a tool that writes a configuration (alphabox
+ * configure) needs to place them. A table ends with a null class.
+ */
+struct board_function {
+  const char *device_class; ///< e.g. "ali_ide"
+  const char *place;        ///< e.g. "pci0.15"
+};
+
 struct platform_config {
   const char *name;        ///< the `platform` value, e.g. "es40"
   const char *description; ///< for messages, e.g. "AlphaServer ES40"
@@ -188,10 +198,18 @@ struct platform_config {
   /// a 4 GB one as 16 MB. The DS10's and DS20L's consoles answer the same
   /// way [their code was not read]. More memory goes in more arrays.
   u16 max_array_mb = 0;
+
+  /// The board's own PCI functions, where its console looks for them, or
+  /// nullptr when it has none a configuration names.
+  const board_function *functions = nullptr;
 };
 
 /// The board named `name`, or nullptr.
 const platform_config *find_platform(const char *name);
+
+/// The boards, in the order of their table: the `i`th, or nullptr past the
+/// last.
+const platform_config *platform_at(size_t i);
 
 /// The board Alphabox emulates unless the configuration says otherwise.
 #define DEFAULT_PLATFORM "es40"

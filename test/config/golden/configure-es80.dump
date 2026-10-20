@@ -1,0 +1,35 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "es80";
+  memory.bits = "29";
+  rom.srm = "SRM_V7_3.EXE";
+  rom.nvram = "cmm_nvram.bin";
+  cpu0 = ev7
+  {
+    speed = "1000M";
+  }
+  cpu1 = ev7
+  {
+    speed = "1000M";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  pci2.2 = cmd649
+  {
+  }
+  pci2.3 = uss344
+  {
+    port1 = "tablet";
+    port2 = "keyboard";
+  }
+  fdc0 = floppy // added
+  {
+  }
+}

@@ -26,33 +26,35 @@
  * serve the general public.
  */
 
+#if !defined(INCLUDED_NUMBERQUESTION_H)
+#define INCLUDED_NUMBERQUESTION_H
+
+#include "FreeTextQuestion.hpp"
+
+#include <sstream>
+
 /**
  * Convert an integer to a string.
  **/
-inline string i2s(int x) {
-  ostringstream o;
-  o << x;
-  return o.str();
-}
+inline std::string i2s(int x) { return std::to_string(x); }
 
 /**
- * Convert a string to an integer.
- *
- * Throws a CLogicException when the input is not numeric.
+ * Convert a string to an integer: decimal digits only (a leading '-' for a
+ * negative number). Throws CLogicException for anything else.
  **/
-inline int s2i(const string x) {
-  istringstream i(x);
-  int x1;
-  char c;
-  if (!(i >> x1) || i.get(c))
-    FAILURE(Logic, "invalid conversion");
-  ;
-  return x1;
+inline int s2i(const std::string x) {
+  size_t i = (!x.empty() && x[0] == '-') ? 1 : 0;
+  if (i == x.size() || x.size() - i > 9)
+    throw CLogicException("invalid conversion");
+  for (size_t j = i; j < x.size(); j++)
+    if (x[j] < '0' || x[j] > '9')
+      throw CLogicException("invalid conversion");
+  return std::stoi(x);
 }
 
 /**
- * Question class that accepts a numeric answer within
- * a defined range.
+ * Question class implementing a question that has an integer number as
+ * the answer.
  **/
 class NumberQuestion : public FreeTextQuestion {
 public:
@@ -72,7 +74,7 @@ public:
   /**
    * Ask the question and return the answer.
    **/
-  virtual string ask() {
+  virtual std::string ask() {
     /* Set the options list to (low-high).
      */
     setOptions(i2s(mLow) + "-" + i2s(mHigh));
@@ -81,8 +83,6 @@ public:
      * answer is received.
      */
     for (;;) {
-      int value;
-
       /* Ask the question as a FreeTextQuestion. This
        * takes care of the explanation and default
        * value handling.
@@ -92,7 +92,7 @@ public:
       try {
         /* Convert the answer to an integer.
          */
-        value = s2i(mAnswer);
+        int value = s2i(mAnswer);
 
         /* If the answer is within the allowed range,
          * return it.
@@ -102,19 +102,25 @@ public:
 
         /* The answer is out of range.
          */
-        cout << "\nPlease enter a value that is within the indicated range, or "
-                "'?' for help.\n\n";
-      } catch (CLogicException) {
+        if (mScripted)
+          refuseScripted(mAnswer, "not in " + i2s(mLow) + "-" + i2s(mHigh));
+        std::cout << "\nPlease enter a value that is within the indicated "
+                     "range, or '?' for help.\n\n";
+      } catch (CLogicException &) {
         /* The answer is not a number.
          */
-        cout << "\nPlease enter an integer value.\n\n";
+        if (mScripted)
+          refuseScripted(mAnswer, "not a number");
+        std::cout << "\nPlease enter an integer value.\n\n";
       }
     }
   }
 
 protected:
   /** Low limit of the allowed range. */
-  int mLow;
+  int mLow = 0;
   /** High limit of the allowed range. */
-  int mHigh;
+  int mHigh = 0;
 };
+
+#endif // !defined(INCLUDED_NUMBERQUESTION_H)

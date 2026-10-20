@@ -43,7 +43,7 @@ Give each `srm_run.sh` its own `PORT` to run several builds at once.
 
 | Tool | Purpose |
 | --- | --- |
-| `cfg_corpus.py` | The configuration parser and rules, without starting a machine: every `.cfg` in the repository, the cases in `test/config/valid/` and the `srm_cfg.py` machines of every board, against their resolved trees in `test/config/golden/`; and the malformed files in `test/config/malformed/` (plus generated ones), each of which must be refused with an error naming its file, line and column. |
+| `cfg_corpus.py` | The configuration parser and rules, without starting a machine: every `.cfg` in the repository, the cases in `test/config/valid/`, the `srm_cfg.py` machines of every board, and what `alphabox configure` writes for every board and for each `test/config/configure/*.answers`, against their resolved trees in `test/config/golden/`; and the malformed files in `test/config/malformed/` (plus generated ones), each of which must be refused with an error naming its file, line and column. |
 
 `cfg_corpus.py build/alphabox` prints PASS or FAIL per case. It uses
 `alphabox run --dump-config` ([configuration.md](configuration.md)), so it

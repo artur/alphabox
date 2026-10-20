@@ -26,6 +26,11 @@
  * serve the general public.
  */
 
+#if !defined(INCLUDED_SHRINKINGCHOICEQUESTION_H)
+#define INCLUDED_SHRINKINGCHOICEQUESTION_H
+
+#include "MultipleChoiceQuestion.hpp"
+
 /**
  * Question class implementing a "Shrinking Choice" question.
  *
@@ -38,5 +43,7 @@ class ShrinkingChoiceQuestion : public MultipleChoiceQuestion {
    * Overridden to remove the answer that was given from the
    * allowed answer set.
    **/
-  virtual void haveChosen(string choice) { dropChoice(choice); }
+  virtual void haveChosen(std::string choice) { dropChoice(choice); }
 };
+
+#endif // !defined(INCLUDED_SHRINKINGCHOICEQUESTION_H)

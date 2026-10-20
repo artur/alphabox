@@ -4,8 +4,10 @@
 usage: cfg_corpus.py [--update] [--only SUBSTRING] <alphabox-binary>
 
 Every configuration in the repository (es40.cfg, test/**/*.cfg), the
-hand-written cases in test/config/valid/ and the test machines srm_cfg.py
-generates for each board are parsed with `alphabox run --dump-config`,
+hand-written cases in test/config/valid/, the test machines srm_cfg.py
+generates for each board, and what `alphabox configure` writes for each
+board with its defaults and for each test/config/configure/*.answers
+file, are parsed with `alphabox run --dump-config`,
 which applies every rule but starts nothing. The resolved tree it prints,
 and its exit status, must match test/config/golden/<name>.dump. A change
 to a golden file is a change of behaviour: make it on purpose, with
@@ -147,8 +149,18 @@ def run_emulator(binary, path, work):
     return status, p.stdout.decode("latin-1"), err
 
 
-def corpus(work):
-    """[(name, path)] of the configurations that must parse as before."""
+def configure(binary, out, args):
+    """`alphabox configure` writing `out`; None when it fails."""
+    p = subprocess.run([binary, "configure", "--defaults", "--out", out] + args,
+                       capture_output=True, stdin=subprocess.DEVNULL,
+                       timeout=TIMEOUT, cwd=os.path.dirname(out))
+    return out if p.returncode == 0 and os.path.exists(out) else None
+
+
+def corpus(work, binary, with_sdl):
+    """[(name, path)] of the configurations that must parse as before; the
+    path is None when the generator that writes it failed. The answers
+    files ask for SDL devices, so they need an SDL build."""
     files = []
     for top, dirs, names in os.walk(REPO):
         dirs[:] = [d for d in dirs if not d.startswith(".") and
@@ -171,7 +183,35 @@ def corpus(work):
         subprocess.run([sys.executable, os.path.join(HERE, "srm_cfg.py"),
                         "--out", out, "--dir", gen] + args, check=True)
         files.append((name, out))
+    gen = os.path.join(work, "configure")
+    os.makedirs(gen, exist_ok=True)
+    for i in range(100):
+        board = platform_name(binary, i, gen)
+        if not board:
+            break
+        out = os.path.join(gen, "configure-%s.cfg" % board)
+        files.append(("configure-" + board,
+                      configure(binary, out, ["--set", "platform=" + board])))
+    adir = os.path.join(CFGDIR, "configure")
+    for nm in sorted(os.listdir(adir)) if with_sdl else []:
+        if nm.endswith(".answers"):
+            out = os.path.join(gen, "configure-" + nm[:-8] + ".cfg")
+            files.append(("configure-" + nm[:-8], configure(
+                binary, out, ["--answers", os.path.join(adir, nm)])))
     return sorted(files)
+
+
+def platform_name(binary, i, work):
+    """The i-th board of the generator's platform question, or None."""
+    if not hasattr(platform_name, "names"):
+        # The platform question's options, from a session that stops there.
+        probe = os.path.join(work, "probe.cfg")
+        p = subprocess.run([binary, "configure", "--out", probe],
+                           capture_output=True, stdin=subprocess.DEVNULL,
+                           timeout=TIMEOUT)
+        m = re.search(r"\{platform\} [^(]*\(([^)]*)\)", p.stdout.decode())
+        platform_name.names = m.group(1).split(",") if m else []
+    return platform_name.names[i] if i < len(platform_name.names) else None
 
 
 def main():
@@ -197,10 +237,14 @@ def main():
     fails = 0
     count = 0
     os.makedirs(GOLDEN, exist_ok=True)
-    for name, path in corpus(work):
+    for name, path in corpus(work, binary, with_sdl):
         if args.only and args.only not in name:
             continue
         count += 1
+        if path is None:
+            print("FAIL %s: alphabox configure did not write it" % name)
+            fails += 1
+            continue
         status, out, err = run_check(binary, path)
         got = "# %s\n%s" % (status, out)
         gfile = os.path.join(GOLDEN, name + ".dump")

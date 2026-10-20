@@ -2,6 +2,8 @@
 
 ```
 alphabox configure                 # interactive generator, writes es40.cfg
+alphabox configure --defaults --set platform=es47 --out es47.cfg
+                                   # ... or one that asks nothing
 alphabox run                       # start the machine (reads es40.cfg)
 alphabox run my.cfg                # ... or another configuration file
 alphabox run --check my.cfg        # check it without starting anything
@@ -12,6 +14,65 @@ alphabox --version                 # version, commit and compiled-in features
 The sample [es40.cfg](../es40.cfg) documents every configuration value; the
 generator covers the common ones. If a section contains a value that its
 device doesn't use, Alphabox warns at startup (`%SYS-W-UNKNOWNCFG`).
+
+## Writing a configuration
+
+`alphabox configure` asks for a machine one question at a time and writes
+its file (`es40.cfg`, or `--out FILE`). It offers what the emulator has:
+
+- every board of the table below, with its memory sizes, processor count
+  and family, console image, slots and own PCI functions (the ALi's places,
+  the ES47's I/O expander);
+- the graphics cards and their parts, the NICs and the back ends this
+  build has, the SCSI controllers, the CMD 649, the USB cards, the sound
+  cards, `virtio_blk`;
+- disks as image files, host devices or RAM disks, CD drives, floppies.
+
+It checks the file it writes as `alphabox run --check` does, and its exit
+status is 0 only when that passes. Input that ends before the last
+question writes nothing.
+
+Every question shows its key in braces, `{platform}`, and can be answered
+beforehand:
+
+- `--set KEY=VALUE`, repeated as needed;
+- `--answers FILE`, `KEY = VALUE` lines (`#` starts a comment);
+- `--defaults`: every question not answered beforehand takes its default,
+  so the session asks nothing.
+
+A key asked more than once (`card`, `scsi.disk`) takes its answers in the
+order given, and an empty value takes that question's default. An answer
+a question does not accept, or one that no question asked for, ends the
+session without writing anything. For example, the ES47 the Marvel tests
+use:
+
+```
+alphabox configure --defaults --out es47.cfg --set platform=es47 \
+  --set rom.srm=SRM_V7_3.EXE --set card=scsi --set scsi.model=sym53c895 \
+  --set scsi.slot=pci2.1 --set scsi.disk=0 --set scsi.type=ramdisk \
+  --set scsi.path=none --set scsi.size=16M --set scsi.disk=none \
+  --set card=nic --set nic.slot=pci0.1 --set nic.type=null --set card=none
+```
+
+The keys:
+
+| Keys | What they answer |
+| --- | --- |
+| `overwrite` | whether to replace an existing file |
+| `platform` | the board (`es40`, ...) |
+| `gui`, `gui.scale`, `gui.scale_ratio`, `gui.linear`, `gui.scale_keys` | the SDL window |
+| `memory` | `256M`, `1G`, ...; on the EV7 machines each processor's |
+| `rom.srm`, `rom.flash`, `rom.dpr`, `rom.nvram` | the console image and the files the board keeps |
+| `cpus`, `cpu.model`, `cpu.speed`, `cpu.skip_memtest` | the processors |
+| `serial0.port`, `serial0.program`, `serial0.args`, and `serial1.*` | a port number or `none`, a program to start |
+| `floppy.disk`, `ide.disk`, `scsi.disk`, `virtio_blk.disk` | a drive's place on that controller, or `none` to stop |
+| `<controller>.type`, `.cdrom`, `.path`, `.create`, `.size`, `.read_only`, `.model`, `.rev`, `.serial` | that drive (`ide.type`, `scsi.path`, ...) |
+| `usb`, `usb.tablet`, `usb.keyboard`, `pmu` | the board's own USB and power management |
+| `vga`, `vga.chip`, `vga.model`, `vga.slot`, `vga.rom` | the graphics card |
+| `card` | `nic`, `scsi`, `ide`, `usb`, `virtio_blk`, `audio`, or `none` to stop |
+| `nic.model`, `nic.slot`, `nic.type`, `nic.adapter`, `nic.bridge`, `nic.udp_local`, `nic.udp_remote`, `nic.mac` | a NIC |
+| `scsi.model`, `scsi.slot`, `cmd649.slot`, `usb.model`, `usb.slot`, `virtio_blk.slot`, `audio.model`, `audio.slot` | the other cards |
+| `console`, `lpt`, `arc_year`, `time`, `time.value`, `exit_on_halt` | the console's place, the printer, the clock, halting |
 
 ## Syntax
 

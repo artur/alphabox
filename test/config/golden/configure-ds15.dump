@@ -1,0 +1,31 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "ds15";
+  memory.bits = "28";
+  rom.srm = "DS15_V7_3.EXE";
+  rom.flash = "flash.rom";
+  arc_year_compat = "false";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  fdc0 = floppy
+  {
+  }
+  pci0.13 = ali_ide
+  {
+  }
+  pci0.7 = ali
+  {
+    vga_console = "false";
+  }
+}

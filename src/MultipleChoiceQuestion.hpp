@@ -26,6 +26,14 @@
  * serve the general public.
  */
 
+#if !defined(INCLUDED_MULTIPLECHOICEQUESTION_H)
+#define INCLUDED_MULTIPLECHOICEQUESTION_H
+
+#include "FreeTextQuestion.hpp"
+
+#include <algorithm>
+#include <vector>
+
 /**
  * Class defining a possible answer to a multiple
  * choice question.
@@ -38,57 +46,58 @@ public:
    * Defines the answer, value and explanation of
    * this answer.
    **/
-  Answer(string answer, string value, string explanation) {
-    mAnswer = answer;
-    mValue = value;
-    mExplanation = explanation;
-  }
+  Answer(std::string answer, std::string value, std::string explanation)
+      : mAnswer(answer), mValue(value), mExplanation(explanation) {}
 
   /**
    * Equality operator. Matches on Answer.
    **/
-  bool operator==(string x) { return (mAnswer == x); }
+  bool operator==(const std::string &x) const { return (mAnswer == x); }
   /**
    * Get the answer.
    **/
-  string getAnswer() { return mAnswer; }
+  std::string getAnswer() const { return mAnswer; }
 
   /**
    * Get the value.
    **/
-  string getValue() { return mValue; }
+  std::string getValue() const { return mValue; }
 
   /**
    * Get the explanation.
    **/
-  string getExplanation() { return mExplanation; }
+  std::string getExplanation() const { return mExplanation; }
 
 protected:
   /** Answer as it should be entered by the user. */
-  string mAnswer;
+  std::string mAnswer;
 
   /** Value as it is output to the config file. */
-  string mValue;
+  std::string mValue;
 
   /** Explanation shown when '?' is given as an answer. */
-  string mExplanation;
+  std::string mExplanation;
 };
 
 /**
- * Vector containing all possible answers to a multiple
- * choice question.
+ * Vector of possible answers to a multiple choice question.
  **/
-typedef vector<Answer> AnswerSet;
+typedef std::vector<Answer> AnswerSet;
 
 /**
  * Question class implementing a multiple choice question.
+ *
+ * The question is asked as a FreeTextQuestion, and the answer is checked
+ * against the answers given. ask() returns the answer's value, which is
+ * what getAnswer() gives afterwards too.
  **/
 class MultipleChoiceQuestion : public FreeTextQuestion {
 public:
   /**
    * Add an answer to the set of allowed answers.
    **/
-  void addAnswer(string answer, string value, string explanation) {
+  void addAnswer(std::string answer, std::string value,
+                 std::string explanation) {
     mAnswerSet.push_back(Answer(answer, value, explanation));
   }
 
@@ -96,26 +105,16 @@ public:
    * Explain the question.
    **/
   virtual void explain() {
-    AnswerSet::iterator itAnswers;
-
-    /* Explain the quistion as usual.
+    /* Explain the question as usual.
      */
     FreeTextQuestion::explain();
 
     /* Explain the allowed answers.
      */
-    cout << "POSSIBLE VALUES:\n";
-
-    /* Iterate through the answer set.
-     */
-    for (itAnswers = mAnswerSet.begin(); itAnswers != mAnswerSet.end();
-         itAnswers++) {
-      /* Print the answer and its explanation.
-       */
-      cout << itAnswers->getAnswer() << "\t\t" << itAnswers->getExplanation()
-           << "\n";
-    }
-    cout << "\n";
+    std::cout << "POSSIBLE VALUES:\n";
+    for (const Answer &a : mAnswerSet)
+      std::cout << a.getAnswer() << "\t\t" << a.getExplanation() << "\n";
+    std::cout << "\n";
   }
 
   /**
@@ -126,23 +125,17 @@ public:
   /**
    * Ask the question.
    **/
-  virtual string ask() {
-    AnswerSet::iterator itAnswers;
-    string options;
-
-    /* Iterate through the answer set to create the
-     * options list.
+  virtual std::string ask() {
+    /* The options list; a long one is cut short ('?' lists them all).
      */
-
-    for (itAnswers = mAnswerSet.begin(); itAnswers != mAnswerSet.end();
-         itAnswers++) {
-      if (options != "")
-        options += ",";
-      options += itAnswers->getAnswer();
+    std::string options;
+    for (size_t i = 0; i < mAnswerSet.size(); i++) {
+      if (i == 12 && mAnswerSet.size() > 16) {
+        options += ",... (" + std::to_string(mAnswerSet.size()) + ")";
+        break;
+      }
+      options += (i ? "," : "") + mAnswerSet[i].getAnswer();
     }
-
-    /* Set the options list.
-     */
     setOptions(options);
 
     /* Keep repeating the question until a valid
@@ -158,14 +151,15 @@ public:
       /* Try to find the answer received in the answer
        * set.
        */
-      itAnswers = find(mAnswerSet.begin(), mAnswerSet.end(), mAnswer);
+      AnswerSet::iterator itAnswers =
+          std::find(mAnswerSet.begin(), mAnswerSet.end(), mAnswer);
 
       /* Has a matching answer be found?
        */
       if (itAnswers != mAnswerSet.end()) {
         /* Get the value for the received answer.
          */
-        string value = itAnswers->getValue();
+        std::string value = itAnswers->getValue();
         haveChosen(mAnswer);
         mAnswer = value;
 
@@ -176,41 +170,53 @@ public:
 
       /* No valid, matching answer received.
        */
-      cout << "\nPlease enter a valid value, or '?' for help.\n\n";
+      if (mScripted)
+        refuseScripted(mAnswer, "not one of " + allAnswers());
+      std::cout << "\nPlease enter a valid value, or '?' for help.\n\n";
     }
   };
 
   /**
    * Remove one answer from the answer set.
    **/
-  void dropChoice(string choice) {
-    AnswerSet::iterator itAnswers;
-
-    /* Try to find the answer in the answer set.
-     */
-    itAnswers = find(mAnswerSet.begin(), mAnswerSet.end(), choice);
-
-    /* Has a matching answer be found?
-     */
-    if (itAnswers != mAnswerSet.end()) {
-      /* Delete the answer from the list.
-       */
+  void dropChoice(std::string choice) {
+    AnswerSet::iterator itAnswers =
+        std::find(mAnswerSet.begin(), mAnswerSet.end(), choice);
+    if (itAnswers != mAnswerSet.end())
       mAnswerSet.erase(itAnswers);
-    }
   }
 
   /**
    * Override this to do something special with
    * the answer received.
    **/
-  virtual void haveChosen(string choice) {}
+  virtual void haveChosen(std::string choice) { (void)choice; }
 
   /**
-   * Return the first possible answer.
+   * Return the first possible answer, or "" when there is none.
    **/
-  string getFirstChoice() { return mAnswerSet.begin()->getAnswer(); }
+  std::string getFirstChoice() {
+    return mAnswerSet.empty() ? std::string() : mAnswerSet[0].getAnswer();
+  }
+
+  /**
+   * Whether `answer` is one of the answers.
+   **/
+  bool hasChoice(const std::string &answer) {
+    return std::find(mAnswerSet.begin(), mAnswerSet.end(), answer) !=
+           mAnswerSet.end();
+  }
 
 protected:
+  std::string allAnswers() {
+    std::string s;
+    for (const Answer &a : mAnswerSet)
+      s += (s.empty() ? "" : ", ") + a.getAnswer();
+    return s;
+  }
+
   /** Set containing all allowed answers. */
   AnswerSet mAnswerSet;
 };
+
+#endif // !defined(INCLUDED_MULTIPLECHOICEQUESTION_H)

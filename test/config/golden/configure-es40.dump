@@ -1,0 +1,38 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "es40";
+  memory.bits = "28";
+  rom.srm = "cl67srmrom.exe";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  arc_year_compat = "false";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  fdc0 = floppy
+  {
+  }
+  pci0.15 = ali_ide
+  {
+  }
+  pci0.19 = ali_usb
+  {
+  }
+  pci0.17 = ali_pmu
+  {
+  }
+  pci0.7 = ali
+  {
+    vga_console = "false";
+  }
+}

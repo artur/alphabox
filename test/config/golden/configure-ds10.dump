@@ -1,0 +1,35 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "ds10";
+  memory.bits = "28";
+  rom.srm = "DS10SRM.ROM";
+  rom.flash = "flash.rom";
+  rom.dpr = "dpr.rom";
+  arc_year_compat = "false";
+  cpu0 = ev68cb
+  {
+    speed = "800M";
+  }
+  serial0 = serial
+  {
+    port = "21264";
+  }
+  serial1 = serial
+  {
+    null_attach = "true";
+  }
+  fdc0 = floppy
+  {
+  }
+  pci0.13 = ali_ide
+  {
+  }
+  pci0.1 = ali_usb
+  {
+  }
+  pci0.7 = ali
+  {
+    vga_console = "false";
+  }
+}
