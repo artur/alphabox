@@ -204,8 +204,11 @@ firmware assigns, and its INTx lines are rotated onto the bridge's slot.
 
 `Disk` (`CDisk`, including the SCSI and ATAPI command sets),
 `DiskController`, and the disk kinds `DiskFile`, `DiskDevice` and
-`DiskRam`. `DiskFileBinCue.hpp` reads BIN/CUE images; `DiskLatency` is
-the optional model of a drive's seek and transfer time.
+`DiskRam`. `DiskFileBinCue.hpp` reads BIN/CUE images; `DiskOverlay` is
+the copy-on-write overlay a `file` disk can keep its writes in;
+`DiskLatency` is the optional model of a drive's seek and transfer time.
+`DiskCdbTest` is `alphabox cdbtest`, the conformance test of the SCSI
+disks and the 53C8xx SCRIPTS processor.
 
 ### devices/video/
 
