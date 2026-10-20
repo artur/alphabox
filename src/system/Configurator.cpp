@@ -999,6 +999,25 @@ void CConfigurator::initialize_section() {
       if (refusal)
         FAILURE_3(Configuration, "%s (%s): %s", myName, myValue, refusal);
     }
+    // The ALi's functions go where the board's console looks for them
+    // (the board row's functions). Elsewhere is a warning, not an error:
+    // configurations that run have them at the ES40's places on other
+    // boards.
+    if (is_system_device) {
+      const char *want = nullptr;
+      for (const board_function *f = board().functions; f && f->device_class;
+           f++)
+        if (!strcmp(f->device_class, myValue))
+          want = f->place;
+      if (!want)
+        cfg_msg(true, "%%SYS-W-PLACE: %s%s(%s): the %s has no %s of its own.\n",
+                place().c_str(), myName, myValue, board().description, myValue);
+      else if (strcmp(want, myName))
+        cfg_msg(true,
+                "%%SYS-W-PLACE: %s%s(%s): the %s's console looks for it at "
+                "%s.\n",
+                place().c_str(), myName, myValue, board().description, want);
+    }
   }
 
   // The two floppy controllers and the two UARTs of the ISA bridge.

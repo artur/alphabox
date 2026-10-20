@@ -137,7 +137,8 @@ ROM or port. It checks:
 - each section's class, its name (`pci<hose>.<slot>`, `disk<bus>.<unit>`)
   and its parent;
 - the board (`platform`): its slots, how many processors it takes and of
-  which family;
+  which family, and whether the ALi's functions are where its console
+  looks for them (`%SYS-W-PLACE` otherwise);
 - the values a device does not read (`%SYS-W-UNKNOWNCFG`), and the chip
   and model names of the graphics cards.
 
