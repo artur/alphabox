@@ -38,6 +38,24 @@
   SCSI), its Broadcom BCM5703 network chip, and the ES45 and DS25
   hot-plug controllers.
 
+## The ISA bridge
+
+- The 8254 models modes 0, 2 and 3; modes 1, 4 and 5 have no output, and
+  counter 0 raises IRQ0 in mode 3 only. A thread steps the counters once a
+  millisecond, so counter 0 programmed above about 1 kHz loses edges.
+  Every guest known uses mode 3 for counter 0, or the TOY clock.
+- The TOY clock raises no alarm and no update-ended flag, and register C's
+  IRQF is never set by the periodic flag; writing register B with PIE set
+  makes register C read F0h once. The divider bits do not stop the clock.
+- The interval timer runs at the rate in register A whatever PIE says:
+  Windows 2000 never sets PIE and keeps its time from that timer.
+- A second request from a slave 8259 in automatic EOI or special mask
+  mode, while its output stays high, reaches the master only when that
+  output falls. No guest known runs the slave that way.
+- The Super I/O's logical device registers for the serial ports, floppy
+  and keyboard controller are kept but not acted on: those devices stay
+  where the configuration file puts them.
+
 ## Graphics
 
 - **Mach64**: the front-end scaler and bus-master DMA are not modelled

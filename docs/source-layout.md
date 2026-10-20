@@ -161,6 +161,15 @@ its host side: the telnet connection, the BREAK menu, `null_attach`) and
 `Uart16550` (the 16550's registers, receive FIFO and interrupt, with no
 host side; `test/unit/uart16550_test.cpp` tests it).
 
+The ALi bridge's own ISA core is here too, as models over the bridge's
+state with no `CSystem` behind them, each tested in `test/unit/`: `I8254`
+(the timer, on a clock the owner passes in), `I8259` (the cascaded pair;
+the master's INT output is a callback), `Mc146818` (the TOY clock and CMOS
+RAM, on the host's wall clock) and `SuperIo` (`CSuperIo`, the
+configuration ports and logical devices, and `CIsaPnp`, the ISA Plug and
+Play ports; the ranges they place go back to the bridge through a
+callback).
+
 ### devices/pci/
 
 - `PCIDevice`: `CPCIDevice`, configuration space and BARs.

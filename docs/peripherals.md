@@ -70,6 +70,39 @@ What each does, and which guests drive it, is below.
   Whistler drive it with their own USB stacks.
 - `ali_pmu`: the power management unit.
 
+The bridge's ISA core is four models of their own in `src/devices/isa/`,
+each with a unit test on a clock the test moves (`ctest`: `i8254`,
+`i8259`, `mc146818`, `superio`): the 8254 timer, the two 8259s, the
+MC146818 TOY clock, and the Super I/O and ISA Plug and Play ports. Their
+registers stay in the bridge's state file as before. What the guest sees
+of them, from the data sheets:
+
+- **8254**: in mode 0, OUT stays high after terminal count until the
+  counter is written again, and the count wraps on; a gate drop holds the
+  count exactly. A count written to a running mode 2 or 3 counter waits
+  for the end of the cycle (half-cycle in mode 3). Reads and writes of one
+  counter may interleave. BCD counters count four decades. A snapshot
+  saves where each counter is in its count, and a restore goes on from
+  there.
+- **8259**: entering or leaving special mask mode updates the interrupt
+  line at once. All eight bits of both edge/level registers are read and
+  write, as the M1543C data sheet lists them.
+- **TOY clock**: port 71h reads the selected register when it is read,
+  and register C clears when read. UIP is high in the last 244 us before
+  the clock's own second changes, so a guest that waits for it never reads
+  a torn time. 12-hour mode reads 12 at noon and midnight. Registers C and
+  D and the UIP bit are read only, and a time byte written while SET is
+  clear sets the running clock. `ALPHABOX_TRACE_TOY=1` shows what a guest
+  does with it.
+- **Wide accesses**: a 16- or 32-bit access to any of the bridge's legacy
+  ports is served as byte accesses at consecutive ports; it used to stop
+  the emulator.
+- **ISA PnP**: the READ_DATA port is placed only in 0x203-0x3FF, as the
+  PnP specification allows; a snapshot maps it, and the parallel port,
+  again on restore.
+- **PM timer**: it survives a snapshot taken in another run, and a byte
+  or word read of it returns that part of the count.
+
 ### IDE and ATAPI behaviour
 
 What a guest can rely on from the ATA/ATAPI core (`ali_ide` and `cmd649`),

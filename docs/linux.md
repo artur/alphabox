@@ -104,14 +104,25 @@ switching six threads on two processors or the emulator is not known.
 
 ## Guest-side quirks
 
-These are Linux's own, and a real ES40 would show them too:
+These are Linux's own (or the configuration's), and a real ES40 would
+show them too:
 
 - **The date is 2006.** Linux guesses the RTC's epoch from its year
-  register (`arch/alpha/kernel/rtc.c`): 20 to 47 is taken for the NT
-  epoch, 1980, so 2026 reads as 2006 ("Using epoch 1980 for rtc year
-  26"), a guess that predates 2020. The kernel parameter
-  `epoch=2000` overrides it. Without it, `tar` warns about every file of a
-  stage3 ("time stamp ... in the future").
+  register (`init_rtc_epoch` in `arch/alpha/kernel/rtc.c`): below 20 is
+  2000, 20 to 47 the NT epoch, 1980, 48 to 69 the Digital UNIX epoch,
+  1952, and 70 up 1900. It reads register B and the year only; there is
+  no century byte to read. The year register holds 26, as on any PC-style
+  clock and as an ES40's SRM leaves it, so 2026 reads as 2006 ("Using
+  epoch 1980 for rtc year 26"), a guess that predates 2020. The kernel
+  parameter `epoch=2000` overrides it. Without it, `tar` warns about every
+  file of a stage3 ("time stamp ... in the future"). With
+  `arc_year_compat = true` in `sys0` the register holds years since 1980
+  (46), which Linux reads right ("rtc year 46", 2026) until 2027; from
+  2028 it would take it for the Digital UNIX epoch.
+- **The clock is local time.** The TOY starts from the host's local time
+  unless the `ali` block says `timezone = "utc"`, and Linux reads it as
+  UTC, so `date -u` shows local time. With `timezone = "utc"`, `date -u`
+  and `hwclock` agree with the host's UTC.
 - **"HWRPB cycle frequency bogus, and unable to estimate a proper
   value!"**: Linux's table of plausible clocks (`validate_cc_value` in
   `arch/alpha/kernel/time.c`) puts the EV68CB at 1000 to 1333 MHz, the
