@@ -34,7 +34,34 @@ CDiskRam::CDiskRam(CConfigurator *cfg, CSystem *sys, CDiskController *c,
     : CDisk(cfg, sys, c, idebus, idedev) {
   byte_size = myCfg->get_num_value("size", false, 512 * 1024 * 1024);
 
-  CHECK_ALLOCATION(ramdisk = malloc((size_t)byte_size));
+  // A file to start from (es40.cfg): the disk takes its size, in whole
+  // blocks, and its contents. What the guest writes stays in memory.
+  FILE *preload = nullptr;
+  if (const char *file = myCfg->get_text_value("file")) {
+    preload = fopen_large(file, "rb");
+    if (!preload) {
+      printf("%s: %s cannot be opened (%s); the RAMDISK starts blank.\n",
+             devid_string, file, strerror(errno));
+    } else {
+      if (fseek_large(preload, 0, SEEK_END) != 0 ||
+          (byte_size = ftell_large(preload)) < 0 ||
+          fseek_large(preload, 0, SEEK_SET) != 0)
+        FAILURE_2(File, "%s: cannot read %s", devid_string, file);
+      byte_size = (byte_size + state.block_size - 1) / state.block_size *
+                  state.block_size;
+    }
+  }
+
+  if (byte_size <= 0)
+    FAILURE_1(Configuration, "%s: a RAMDISK of 0 bytes", devid_string);
+  // Zeroed: a blank disk reads as zeros, as a new image file does.
+  CHECK_ALLOCATION(ramdisk = calloc(1, (size_t)byte_size));
+  if (preload) {
+    const size_t got = fread(ramdisk, 1, (size_t)byte_size, preload);
+    fclose(preload);
+    printf("%s: RAMDISK preloaded with %zu bytes of %s.\n", devid_string, got,
+           myCfg->get_text_value("file"));
+  }
 
   state.byte_pos = 0;
 

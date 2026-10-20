@@ -416,6 +416,10 @@ The ES40 console knows the `isp1020` and `isp1040` and boots from them. It
 has no entry for the `isp1080` or the `isp1240`, which only a guest
 operating system can use.
 
+A `ramdisk` is `size` bytes of zeros (default 512M), or, with `file`, a
+copy of that file, whose size it takes. What the guest writes stays in
+memory and is lost when the run ends.
+
 ### Serial numbers
 
 A drive's `serial_number` (alias `serial_num`) is what the guest reads:
