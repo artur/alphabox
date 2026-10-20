@@ -1212,6 +1212,13 @@ void t_bincue(Rig &r) {
             be32(toc.in, 16) == 100 && toc.in[22] == 0xaa &&
             be32(toc.in, 24) == 130,
         "two files: TOC track 1 at 0, track 2 at 100, lead-out at 130");
+  // In MSF, binary: 100 + 150 frames is 00:03:25, 130 + 150 is 00:03:55.
+  Res tm = a->run(8, {0x43, 0x02, 0, 0, 0, 0, 0, 0, 255, 0});
+  check(tm.good() && tm.in.size() >= 28 && tm.in[9] == 0 && tm.in[10] == 2 &&
+            tm.in[11] == 0 && tm.in[17] == 0 && tm.in[18] == 3 &&
+            tm.in[19] == 25 && tm.in[25] == 0 && tm.in[26] == 3 &&
+            tm.in[27] == 55,
+        "two files: TOC in MSF, 00:02:00, 00:03:25, 00:03:55");
   Res d5 = a->run(8, cdb10(0x28, 5, 2));
   check(d5.good() && blocks_ok(d5.in, 5, 2, 2048), "two files: a data read");
   Res au = a->run(8, cdb10(0x28, 101, 1));
@@ -1241,6 +1248,45 @@ void t_ram_state(Rig &r) {
   remove(path("ram.state").c_str());
   Res rd = a->run(2, cdb10(0x28, 123, 1));
   check(rc == 0 && rd.good() && rd.in == w, "contents survive a restore");
+}
+
+/// DISK-05: READ TOC formats.
+void t_toc_formats(Rig &r) {
+  group("DISK-05 READ TOC formats");
+  CCdbTestAdapter *a = r.a;
+  Res s1 = a->run(3, {0x43, 0, 1, 0, 0, 0, 0, 0, 255, 0});
+  check(s1.good() && s1.in.size() >= 12 && be16(s1.in, 0) == 10 &&
+            s1.in[2] == 1 && s1.in[3] == 1 && s1.in[6] == 1 &&
+            be32(s1.in, 8) == 0,
+        "READ TOC format 1: session 1, track 1 at LBA 0", "%s",
+        s1.why().c_str());
+  for (int f = 2; f <= 5; f++) {
+    char name[40];
+    snprintf(name, sizeof(name), "READ TOC format %d: refused", f);
+    expect_cc(r, 3, a->run(3, {0x43, 0, u8(f), 0, 0, 0, 0, 0, 255, 0}), name, 5,
+              0x24, 0);
+  }
+  expect_cc(r, 3, a->run(3, {0x43, 0, 0, 0, 0, 0, 2, 0, 255, 0}),
+            "READ TOC from track 2 of a one-track disc", 5, 0x24, 0);
+}
+
+/// DISK-16: READ TOC in MSF form.
+void t_toc_msf(Rig &r) {
+  group("DISK-16 READ TOC MSF");
+  CCdbTestAdapter *a = r.a;
+  Res t = a->run(3, {0x43, 0x02, 0, 0, 0, 0, 0, 0, 255, 0});
+  bool ok = t.good() && t.in.size() >= 20;
+  check(ok && t.in[9] == 0 && t.in[10] == 2 && t.in[11] == 0,
+        "track 1 at 00:02:00", "%02x:%02x:%02x", ok ? t.in[9] : 0,
+        ok ? t.in[10] : 0, ok ? t.in[11] : 0);
+  // 1000 + 150 frames = 15 s 25 frames.
+  check(ok && t.in[17] == 0 && t.in[18] == 15 && t.in[19] == 25,
+        "lead-out at 00:15:25", "%02x:%02x:%02x", ok ? t.in[17] : 0,
+        ok ? t.in[18] : 0, ok ? t.in[19] : 0);
+  Res s1 = a->run(3, {0x43, 0x02, 1, 0, 0, 0, 0, 0, 255, 0});
+  check(s1.good() && s1.in.size() >= 12 && s1.in[9] == 0 && s1.in[10] == 2 &&
+            s1.in[11] == 0,
+        "format 1 (session info) in MSF: 00:02:00");
 }
 
 } // namespace
@@ -1311,6 +1357,8 @@ int main_cdbtest(int argc, char **argv) {
   t_rsoc(r);
   t_ram_state(r);
   t_bincue(r);
+  t_toc_formats(r);
+  t_toc_msf(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

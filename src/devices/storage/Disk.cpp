@@ -833,40 +833,28 @@ void CDisk::do_scsi_error(int errcode, int info) {
 }
 
 /**
- * Basic algorithm taken from libcdio for converting lba to msf
+ * An LBA as a TIME (MSF) address, M << 16 | S << 8 | F.
+ *
+ * Logical block 0 is the block at MSF 00:02:00 (SCSI-2 14.1.1), so the
+ * address is the LBA plus 150 frames, at 75 frames a second: "LBA = 4500*M
+ * + 75*S + F - 150" (MMC-3 3.1.83, method 1 addressing). M, S and F are
+ * binary numbers, not BCD (SCSI-2 14.1.5; MMC-3 3.1.91: "Valid contents of
+ * F fields are binary values from 0 through 74"). This used to take 150
+ * off and add it back, giving 00:00:00 for LBA 0, and to encode the
+ * fields in BCD. M stops at 255 (FFh:3Bh:4Ah, the maximum MMC-3 5.23.2.4
+ * gives for media past what a CD addresses).
  **/
 static u32 lba2msf(off_t_large lba) {
-#define PREGAP_SECTORS 150
-#define CD_FRAMES_PER_SEC 75
-#define CD_MAX_LSN 450150
-
-#define bin2bcd(x) ((x / 10) << 4) | (x % 10)
-  int m;
-
-  int s;
-
-  int f;
-  lba -= PREGAP_SECTORS;
-  if (lba >= -PREGAP_SECTORS) {
-    m = (lba + PREGAP_SECTORS) / (CD_FRAMES_PER_SEC * 60);
-    lba -= m * (CD_FRAMES_PER_SEC * 60);
-    s = (lba + PREGAP_SECTORS) / CD_FRAMES_PER_SEC;
-    lba -= s * CD_FRAMES_PER_SEC;
-    f = lba + PREGAP_SECTORS;
-  } else {
-    m = (lba + CD_MAX_LSN) / (CD_FRAMES_PER_SEC * 60);
-    lba -= m * (CD_FRAMES_PER_SEC * 60);
-    s = (lba + CD_MAX_LSN) / CD_FRAMES_PER_SEC;
-    lba -= s * CD_FRAMES_PER_SEC;
-    f = lba + CD_MAX_LSN;
+  const u64 frames = (u64)(lba < 0 ? 0 : lba) + 150;
+  u64 m = frames / (75 * 60);
+  u64 s = (frames / 75) % 60;
+  u64 f = frames % 75;
+  if (m > 255) {
+    m = 255;
+    s = 59;
+    f = 74;
   }
-
-  if (m > 99)
-    m = 99;
-
-  // printf("m=%d, s=%d, f=%d == m=%x, s=%x, f=%x\n",
-  // m,s,f,bin2bcd(m),bin2bcd(s),bin2bcd(f));
-  return bin2bcd(m) << 16 | bin2bcd(s) << 8 | bin2bcd(f);
+  return (u32)(m << 16 | s << 8 | f);
 }
 
 static inline bool opcode_has_service_actions(u8 op) {
@@ -2891,8 +2879,7 @@ int CDisk::do_scsi_command() {
     // We use ONLY the public interface of CDiskFile so that this code
     // compiles correctly from CDisk's scope.
     // For plain ISO images get_track_count() returns 0 and we fall
-    // through to the original single-track response which OpenVMS relies
-    // on - completely unchanged.
+    // through to the single-track response.
     // -----------------------------------------------------------------
     CDiskFile *disk_file = dynamic_cast<CDiskFile *>(this);
     int bincue_tracks = disk_file ? disk_file->get_track_count() : 0;
@@ -3002,8 +2989,10 @@ int CDisk::do_scsi_command() {
     }
 
   // -----------------------------------------------------------------
-  // Original single-track response for plain ISO / raw images.
-  // This code is IDENTICAL to the original; OpenVMS relies on it.
+  // Single-track response for plain ISO / raw images. (OpenVMS 8.4 never
+  // reads the TOC: its CD boot on the 53C875 and on IDE, and a MOUNT of
+  // the CD, send no READ TOC at all; checked 2026-10-20 with
+  // ALPHABOX_TRACE_SCSI.)
   // -----------------------------------------------------------------
   single_track_toc:
 
