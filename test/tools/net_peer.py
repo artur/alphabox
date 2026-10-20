@@ -9,6 +9,7 @@ The NIC's config block:
   net_peer.py --listen <peer port> --nic <nic port> [--file IMAGE | --halt-kb N]
               [--server-ip 10.0.2.2] [--client-ip 10.0.2.15]
               [--boot-name boot.img] [--log FILE] [--timeout S]
+              [--flood PPS]
 
 Every Ethernet frame is one UDP datagram (QEMU "-netdev dgram" framing).
 The peer answers ARP for its address, BOOTP requests with the client
@@ -16,6 +17,13 @@ address and --boot-name, and TFTP read requests (any name) with the boot
 file, negotiating blksize when asked. --halt-kb N serves an N KB image
 whose first instruction is CALL_PAL HALT, so an SRM "boot ewa0"/"boot eia0"
 downloads it, runs it and reports "HALT instruction executed".
+
+It also answers ICMP echo requests to its address, so a guest can ping it.
+--flood PPS sends that many extra frames a second for load: in turn a
+broadcast, a multicast an IPv4 host joins (01:00:5e:00:00:01), one it does
+not (01:00:5e:7f:7f:7f), a unicast to another station, and a unicast to the
+NIC once it has sent a frame. They carry the local experimental Ethertype
+0x88b5, which no guest protocol claims.
 
 Prints one line per exchange and a summary at exit (on --timeout or when
 the transfer is complete and --exit-after-transfer is given).
@@ -25,6 +33,7 @@ import signal
 import socket
 import struct
 import sys
+import threading
 import time
 
 SERVER_MAC = bytes.fromhex("020000000001")
@@ -55,8 +64,11 @@ class Peer:
         self.nic = ("127.0.0.1", args.nic)
         self.log = open(args.log, "a") if args.log else None
         self.stats = {"frames_in": 0, "frames_out": 0, "arp": 0, "bootp": 0,
-                      "tftp_rrq": 0, "tftp_blocks": 0, "tftp_done": 0}
+                      "tftp_rrq": 0, "tftp_blocks": 0, "tftp_done": 0,
+                      "icmp_echo": 0, "flood": 0}
         self.tftp = None  # current transfer
+        self.nic_mac = None  # learned from the first frame the NIC sends
+        self.done = False
 
     def say(self, text):
         line = "%.3f %s" % (time.time() - self.t0, text)
@@ -162,8 +174,47 @@ class Peer:
         t["block"] += 1
         self.tftp_send_block()
 
+    def on_icmp(self, frame, ip):
+        ihl = (ip[0] & 15) * 4
+        total = struct.unpack_from("!H", ip, 2)[0]
+        icmp = ip[ihl:total]
+        if ip[16:20] != self.sip or len(icmp) < 8 or icmp[0] != 8:
+            return
+        self.stats["icmp_echo"] += 1
+        reply = b"\0\0\0\0" + icmp[4:]
+        reply = reply[:2] + struct.pack("!H", checksum(reply)) + reply[4:]
+        hdr = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(reply), 0, 0, 64,
+                          1, 0, self.sip, ip[12:16])
+        hdr = hdr[:10] + struct.pack("!H", checksum(hdr)) + hdr[12:]
+        self.send_frame(frame[6:12], 0x0800, hdr + reply)
+
+    def flood(self, pps):
+        kinds = [BROADCAST, bytes.fromhex("01005e000001"),
+                 bytes.fromhex("01005e7f7f7f"), bytes.fromhex("020000000099"),
+                 None]
+        seq = 0
+        tick = 0.01
+        per_tick = max(1, int(pps * tick))
+        while not self.done:
+            t = time.time()
+            for _ in range(per_tick):
+                dst = kinds[seq % len(kinds)] or self.nic_mac
+                seq += 1
+                if dst is None:
+                    continue
+                frame = dst + SERVER_MAC + b"\x88\xb5" + struct.pack("!I", seq) + b"\x5a" * 42
+                try:
+                    self.sock.sendto(frame, self.nic)
+                except OSError:
+                    pass  # the NIC is not listening yet
+                self.stats["flood"] += 1
+            time.sleep(max(0.0, tick - (time.time() - t)))
+
     def on_ip(self, frame):
         ip = frame[14:]
+        if len(ip) >= 28 and ip[9] == 1:
+            self.on_icmp(frame, ip)
+            return
         if len(ip) < 28 or ip[9] != 17:
             return
         ihl = (ip[0] & 15) * 4
@@ -184,6 +235,9 @@ class Peer:
         self.t0 = time.time()
         self.sock.settimeout(0.5)
         end = self.t0 + self.args.timeout
+        if self.args.flood:
+            threading.Thread(target=self.flood, args=(self.args.flood,),
+                             daemon=True).start()
         while time.time() < end:
             try:
                 frame, _ = self.sock.recvfrom(4096)
@@ -191,6 +245,8 @@ class Peer:
                 frame = None
             if frame and len(frame) >= 14:
                 self.stats["frames_in"] += 1
+                if self.nic_mac is None and not frame[6] & 1:
+                    self.nic_mac = frame[6:12]
                 ethertype = struct.unpack_from("!H", frame, 12)[0]
                 if ethertype == 0x0806:
                     self.on_arp(frame)
@@ -204,6 +260,7 @@ class Peer:
                     self.tftp_send_block()  # retransmit
             if t and t["done"] and self.args.exit_after_transfer:
                 break
+        self.done = True
         self.say("summary " + " ".join("%s=%d" % kv for kv in self.stats.items()))
         return 0 if self.stats["tftp_done"] or not self.args.exit_after_transfer else 1
 
@@ -221,6 +278,8 @@ def main():
     ap.add_argument("--log")
     ap.add_argument("--timeout", type=float, default=300)
     ap.add_argument("--exit-after-transfer", action="store_true")
+    ap.add_argument("--flood", type=int, default=0, metavar="PPS",
+                    help="extra frames a second for load (see above)")
     args = ap.parse_args()
     if args.file:
         image = open(args.file, "rb").read()
