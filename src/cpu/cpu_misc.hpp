@@ -58,7 +58,6 @@
     SAVE_CALL_PAL_R23();                                                       \
     set_pc(state.pal_base | (1 << 13) | ((function & 0x80) << 5) |             \
            ((function & 0x3f) << 6) | 1);                                      \
-    TRC(true, false)                                                           \
   } while (0)
 
 #define DO_CALL_PAL                                                            \

@@ -38,7 +38,6 @@
 #include "Flash.hpp"
 #include "StdAfx.hpp"
 #include "Tsunami.hpp"
-#include "lockstep.hpp"
 #if defined(__APPLE__) && defined(HAVE_SDL)
 #include "gui/gui.hpp" // bx_gui->main_thread_pump()
 #endif
@@ -55,13 +54,6 @@
 #include <thread>
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
-#endif
-
-#define CLOCK_RATIO 10000
-
-#if defined(LS_MASTER) || defined(LS_SLAVE)
-char debug_string[10000] = "";
-char *dbg_strptr = debug_string;
 #endif
 
 /**
@@ -112,10 +104,6 @@ CSystem::CSystem(CConfigurator *cfg) try {
       m_platform->console_bytes ? m_platform->console_bytes : 0x200000;
 
   //  iNumConfig = 0;
-#if defined(IDB)
-  iSingleStep = 0;
-  iSSCycles = 0;
-#endif
   state.cpu_lock_flags = 0;
   m_cpu_lock_flags = 0;
   memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
@@ -785,46 +773,6 @@ void CSystem::Run() {
 
   //  printf ("%%SYS-W-SHUTDOWN: CTRL-C or Device Failed\n");
   //  return 1;
-}
-
-/**
- * Do one clock tick. The cpu(s) will execute one single instruction, and
- * some devices may be clocked.
- **/
-int CSystem::SingleStep() {
-  for (int i = 0; i < iNumCPUs; i++)
-    if (!acCPUs[i]->get_waiting())
-      acCPUs[i]->execute();
-
-      //  iSingleStep++;
-#if defined(LS_MASTER) || defined(LS_SLAVE)
-  if (!(iSingleStep % 50)) {
-    lockstep_sync_m2s("sync1");
-    *dbg_strptr = '\0';
-    lockstep_compare(debug_string);
-    dbg_strptr = debug_string;
-    *dbg_strptr = '\0';
-  }
-#endif // defined(LS_MASTER) || defined(LS_SLAVE)
-
-  //  if (iSingleStep >= CLOCK_RATIO)
-  //  {
-  //     iSingleStep = 0;
-  //     for(i=0;i<iNumSlowClocks;i++)
-  //     {
-  //        result = acSlowClocks[i]->DoClock();
-  //      if (result)
-  //        return result;
-  //     }
-  //#ifdef IDB
-  //     iSSCycles++;
-  //#if !defined(LS_SLAVE)
-  //     if (bHashing)
-  //#endif
-  //       printf("%d | %016" PRIx64 "\r",iSSCycles,acCPUs[0]->get_pc());
-  //#endif
-  //  }
-  return 0;
 }
 
 #if defined(DEBUG_PORTACCESS)
@@ -1532,12 +1480,6 @@ void CSystem::start_threads() {
 
   printf("Start threads:");
   for (i = 0; i < iNumComponents; i++) {
-#ifdef IDB
-    // When running with IDB, the trace engine takes care of managing the CPU,
-    // so its thread shouldn't be started.
-    if (dynamic_cast<CAlphaCPU *>(acComponents[i]))
-      continue;
-#endif
     acComponents[i]->start_threads();
   }
   printf("\n");
@@ -1797,10 +1739,6 @@ void CSystem::panic(char *message, int flags) {
            cpunum);
 
     printf("PC: %016" PRIx64 "\n", cpu->get_pc());
-#ifdef IDB
-    printf("Physical PC: %016" PRIx64 "\n", cpu->get_current_pc_physical());
-    printf("Instruction Count: %" PRId64 "\n", cpu->get_instruction_count());
-#endif
     printf("\n");
 
     for (i = 0; i < 32; i++) {
@@ -1847,16 +1785,6 @@ void CSystem::panic(char *message, int flags) {
   }
 
   printf("\n");
-#ifdef IDB
-  if (flags & PANIC_LISTING) {
-    u64 start;
-
-    u64 end;
-    start = cpu->get_pc() - 64;
-    end = start + 128;
-    cpu->listing(start, end, cpu->get_pc());
-  }
-#endif
   if (flags & PANIC_ASKSHUTDOWN) {
     printf("Stop Emulation? ");
 

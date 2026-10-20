@@ -61,8 +61,6 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
-#include "lockstep.hpp"
-
 #define UART_BASE_CLOCK 1843200
 #define CYCLE_TIME_MS 20
 
@@ -187,24 +185,6 @@ void CSerial::init() {
 
   WaitForConnection();
 
-#if defined(IDB) && defined(LS_MASTER)
-  struct sockaddr_in dest_addr;
-  int result = -1;
-
-  throughSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-  dest_addr.sin_family = AF_INET;
-  dest_addr.sin_port = htons((u16)(listenPort + state.iNumber));
-  dest_addr.sin_addr.s_addr = inet_addr(ls_IP);
-
-  printf("%s: Waiting to initiate remote connection to %s.\n", devid_string,
-         ls_IP);
-
-  while (result == -1) {
-    result = connect(throughSocket, (struct sockaddr *)&dest_addr,
-                     sizeof(struct sockaddr));
-  }
-#endif
   state.rcvW = 0;
   state.rcvR = 0;
 
@@ -296,14 +276,11 @@ u64 CSerial::ReadMem(int index, u64 address, int dsize) {
         state.rcvR++;
         if (state.rcvR == FIFO_SIZE)
           state.rcvR = 0;
-        TRC_DEV4("Read character %02x (%c) on serial port %d\n", state.bRDR,
-                 printable(state.bRDR), state.iNumber);
 #if defined(DEBUG_SERIAL)
         printf("Read character %02x (%c) on serial port %d\n", state.bRDR,
                printable(state.bRDR), state.iNumber);
 #endif
       } else {
-        TRC_DEV2("Read past FIFO on serial port %d\n", state.iNumber);
 #if defined(DEBUG_SERIAL)
         printf("Read past FIFO on serial port %d\n", state.iNumber);
 #endif
@@ -389,8 +366,6 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
         // Transmit Hold Register
         write((const char *)&d, 1);
       }
-      TRC_DEV4("Write character %02x (%c) on serial port %d\n", d, printable(d),
-               state.iNumber);
 #if defined(DEBUG_SERIAL)
       printf("Write character %02x (%c) on serial port %d\n", d, printable(d),
              state.iNumber);
@@ -613,14 +588,10 @@ void CSerial::serial_menu() {
 
   write_cstr("\r\n<BREAK> received. What do you want to do?\r\n");
   write_cstr("     0. Continue\r\n");
-#if defined(IDB)
-  write_cstr("     1. End run\r\n");
-#else
   write_cstr("     1. Exit emulator gracefully\r\n");
   write_cstr("     2. Abort emulator (no changes saved)\r\n");
   write_cstr("     3. Save state to autosave.axp and continue\r\n");
   write_cstr("     4. Load state from autosave.axp and continue\r\n");
-#endif
   while (!exitLoop) {
     FD_ZERO(&readset);
     FD_SET(connectSocket, &readset);
@@ -958,7 +929,6 @@ void CSerial::WaitForConnection() {
   char *nargv = s;
   int i = 0;
 
-#if !defined(LS_SLAVE)
   char s2[200];
   char *argv[20];
 
@@ -1009,7 +979,6 @@ void CSerial::WaitForConnection() {
     }
 #endif
   }
-#endif
   Address.sin_addr.s_addr = INADDR_ANY;
   Address.sin_port = htons((u16)listenPort);
   Address.sin_family = AF_INET;

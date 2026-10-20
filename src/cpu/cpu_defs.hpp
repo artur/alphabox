@@ -665,52 +665,40 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
  * handler would put things straight. Instead, to speed things up, we'll
  * just perform the read as requested using the unaligned address.
  **/
-#if defined(IDB)
-#define LLR last_read_loc = phys_address
-#define LWR last_write_loc = phys_address
-#else
-#define LLR
-#define LWR
-#endif
-
 #define READ_PHYS(size)                                                        \
   (phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)          \
-                            : sys_read(phys_address, size));     \
-  LLR
+                            : sys_read(phys_address, size));
 
 #define READ_VIRT(va, size, dest)                                              \
   pbc = false;                                                                 \
   DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);                                  \
-  LLR;                                                                         \
   if (pbc) {                                                                   \
     dest = 0;                                                                  \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      dest |= (sys_read(phys_address, 8) << (ii * 8));           \
+      dest |= (sys_read(phys_address, 8) << (ii * 8));                         \
     }                                                                          \
   } else {                                                                     \
-    dest = (phys_address < dram_size                                           \
-                ? dram_read(dram_ptr, phys_address, size)                      \
-                : sys_read(phys_address, size));                 \
+    dest = (phys_address < dram_size ? dram_read(dram_ptr, phys_address, size) \
+                                     : sys_read(phys_address, size));          \
   }
 
 #define READ_VIRT_LOCK(va, size, dest)                                         \
   {                                                                            \
     pbc = false;                                                               \
-    DATA_PHYS_LOCKED(va, ACCESS_READ, (size / 8) - 1);                                \
-    LLR;                                                                       \
+    DATA_PHYS_LOCKED(va, ACCESS_READ, (size / 8) - 1);                         \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
     if (pbc) {                                                                 \
       dest = 0;                                                                \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        dest |= (sys_read(phys_address, 8) << (ii * 8));         \
+        dest |= (sys_read(phys_address, 8) << (ii * 8));                       \
       }                                                                        \
     } else {                                                                   \
-      dest = (phys_address < dram_size                                         \
-                  ? dram_read(dram_ptr, phys_address, size)                    \
-                  : sys_read(phys_address, size));               \
+      dest =                                                                   \
+          (phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)  \
+                                    : sys_read(phys_address, size));           \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -718,38 +706,36 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_VIRT_F(va, size, dest, f)                                         \
   pbc = false;                                                                 \
   DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);                                  \
-  LLR;                                                                         \
   if (pbc) {                                                                   \
     u64 aa = 0;                                                                \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
       DATA_PHYS(va + ii, ACCESS_READ, 0);                                      \
-      aa |= (sys_read(phys_address, 8) << (ii * 8));             \
+      aa |= (sys_read(phys_address, 8) << (ii * 8));                           \
     }                                                                          \
     dest = f(aa);                                                              \
   } else {                                                                     \
-    dest = f((phys_address < dram_size                                         \
-                  ? dram_read(dram_ptr, phys_address, size)                    \
-                  : sys_read(phys_address, size)));              \
+    dest =                                                                     \
+        f((phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)  \
+                                    : sys_read(phys_address, size)));          \
   }
 
 #define READ_VIRT_LOCK_F(va, size, dest, f)                                    \
   {                                                                            \
     pbc = false;                                                               \
     DATA_PHYS_LOCKED(va, ACCESS_READ, (size / 8) - 1);                         \
-    LLR;                                                                       \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
     if (pbc) {                                                                 \
       u64 aa = 0;                                                              \
       for (int ii = 0; ii < (size / 8); ii++) {                                \
         DATA_PHYS(va + ii, ACCESS_READ, 0);                                    \
-        aa |= (sys_read(phys_address, 8) << (ii * 8));           \
+        aa |= (sys_read(phys_address, 8) << (ii * 8));                         \
       }                                                                        \
       dest = f(aa);                                                            \
     } else {                                                                   \
       dest = f((phys_address < dram_size                                       \
                     ? dram_read(dram_ptr, phys_address, size)                  \
-                    : sys_read(phys_address, size)));            \
+                    : sys_read(phys_address, size)));                          \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
   }
@@ -765,13 +751,11 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     dram_write(dram_ptr, phys_address, size, data);                            \
     note_dram_write(phys_address);                                             \
   } else                                                                       \
-    sys_write(phys_address, size, data);                         \
-  LWR
+    sys_write(phys_address, size, data);
 
 #define WRITE_VIRT(va, size, src)                                              \
   pbc = false;                                                                 \
   DATA_PHYS(va, ACCESS_WRITE, (size / 8) - 1);                                 \
-  LWR;                                                                         \
   if (pbc) {                                                                   \
     u64 aa = src;                                                              \
     for (int ii = 0; ii < (size / 8); ii++) {                                  \
@@ -780,7 +764,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
         dram_write(dram_ptr, phys_address, 8, aa);                             \
         note_dram_write(phys_address);                                         \
       } else                                                                   \
-        sys_write(phys_address, 8, aa);                          \
+        sys_write(phys_address, 8, aa);                                        \
       aa >>= 8;                                                                \
     }                                                                          \
   } else {                                                                     \
@@ -788,7 +772,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       dram_write(dram_ptr, phys_address, size, src);                           \
       note_dram_write(phys_address);                                           \
     } else                                                                     \
-      sys_write(phys_address, size, src);                        \
+      sys_write(phys_address, size, src);                                      \
   }
 
 #define WRITE_VIRT_COND(va, size, src, dest)                                   \
@@ -796,7 +780,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
     u64 _stc_va = (va);                                                        \
     u64 _stc_data = (src);                                                     \
     pbc = false;                                                               \
-    DATA_PHYS_LOCKED(_stc_va, ACCESS_WRITE, (size / 8) - 1);                          \
+    DATA_PHYS_LOCKED(_stc_va, ACCESS_WRITE, (size / 8) - 1);                   \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem,                               \
                                         !pbc && phys_address < dram_size);     \
     if (pbc) {                                                                 \
@@ -807,7 +791,6 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
                              &_stc_same_address);                              \
       dest = 0;                                                                \
     } else {                                                                   \
-      LWR;                                                                     \
       dest = cSystem->cpu_stx_c(state.iProcNum, phys_address, size, _stc_data, \
                                 dram_ptr, dram_size, this);                    \
     }                                                                          \
@@ -822,8 +805,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define READ_PHYS_NT(size)                                                     \
   (ALIGN_PHYS((size) / 8) < dram_size                                          \
        ? dram_read(dram_ptr, ALIGN_PHYS((size) / 8), size)                     \
-       : sys_read(ALIGN_PHYS((size) / 8), size));                \
-  LLR;
+       : sys_read(ALIGN_PHYS((size) / 8), size));
 
 /**
  * NO-TRAP (NT) variants of write action.
@@ -831,7 +813,6 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
  * inhibited. We'll align the adress and write using the aligned
  * address.
  **/
-#if defined(IDB)
 #define WRITE_PHYS_NT(data, size)                                              \
   {                                                                            \
     u64 _pa = ALIGN_PHYS((size) / 8);                                          \
@@ -839,20 +820,8 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       dram_write(dram_ptr, _pa, size, data);                                   \
       note_dram_write(_pa);                                                    \
     } else                                                                     \
-      sys_write(_pa, size, data);                                \
-  }                                                                            \
-  LWR
-#else
-#define WRITE_PHYS_NT(data, size)                                              \
-  {                                                                            \
-    u64 _pa = ALIGN_PHYS((size) / 8);                                          \
-    if (_pa < dram_size) {                                                     \
-      dram_write(dram_ptr, _pa, size, data);                                   \
-      note_dram_write(_pa);                                                    \
-    } else                                                                     \
-      sys_write(_pa, size, data);                                \
+      sys_write(_pa, size, data);                                              \
   }
-#endif
 
 #define REG_1 RREG(I_GETRA(ins))
 #define REG_2 RREG(I_GETRB(ins))

@@ -35,8 +35,6 @@
 #include "System.hpp"
 #include "banner.hpp"
 
-#include "lockstep.hpp"
-
 #if defined(HAVE_SDL)
 #include "SDL3/SDL.h"
 #endif
@@ -97,7 +95,6 @@ void segv_handler(int signum) {
  *  - Try to find the configuration file.
  *  - Reads the configuration file, and uses the configurator to instantiate all
  *system components.
- *  - Creates the trace-engine if in debug mode.
  *  - Runs the emulator.
  *  - Cleans up.
  *  .
@@ -145,15 +142,7 @@ int main_sim(int argc, char *argv[]) {
   }
 #endif
   try {
-#if defined(IDB) && (defined(LS_MASTER) || defined(LS_SLAVE))
-    lockstep_init();
-#endif
-#if defined(IDB)
-    if ((argc == 2 || argc == 3) && argv[1][0] != '@')
-#else
-    if (argc == 2)
-#endif
-    {
+    if (argc == 2) {
       filename = argv[1];
     } else {
       for (int i = 0; path[i]; i++) {
@@ -187,9 +176,6 @@ int main_sim(int argc, char *argv[]) {
     if (!theSystem)
       FAILURE(Configuration, "no system initialized");
 
-#if defined(IDB)
-    trc = new CTraceEngine(theSystem);
-#endif
     theSystem->LoadROM();
     if (theDPR) // the ES40's management-processor RAM; not every board has one
       theDPR->init();
@@ -202,16 +188,7 @@ int main_sim(int argc, char *argv[]) {
       profiled_insts = 0;
     }
 #endif
-#if defined(IDB)
-    theSystem->start_threads();
-
-    if (argc > 1 && argc < 4 && argv[argc - 1][0] == '@')
-      trc->run_script(argv[argc - 1] + 1);
-    else
-      trc->run_script(NULL);
-#else
     theSystem->Run();
-#endif
   } catch (CGracefulException &e) {
     printf("Exiting gracefully: %s\n", e.displayText().c_str());
 

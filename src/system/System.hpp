@@ -30,7 +30,6 @@
 #include "Chipset.hpp"
 #include "Platform.hpp"
 #include "SystemComponent.hpp"
-#include "TraceEngine.hpp"
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -77,9 +76,6 @@ inline SIrqStats g_irqstats;
 extern u64 profile_buckets[PROFILE_BUCKETS];
 extern u64 profiled_insts;
 extern bool profile_started;
-#endif
-#if defined(LS_MASTER) || defined(LS_SLAVE)
-extern char *dbg_strptr;
 #endif
 
 // ALPHABOX_KEYPIPE token "dbg-dump" (docs/headless.md): bumped by the GUI,
@@ -262,7 +258,6 @@ public:
   u64 ReadMem(u64 address, int dsize, CSystemComponent *source);
   void WriteMem(u64 address, int dsize, u64 data, CSystemComponent *source);
   void Run();
-  int SingleStep();
 
   void init();
   void start_threads();
@@ -403,7 +398,6 @@ public:
 #define PANIC_NOSHUTDOWN 0
 #define PANIC_SHUTDOWN 1
 #define PANIC_ASKSHUTDOWN 2
-#define PANIC_LISTING 4
   class CLLSCDRAMGuard {
   public:
     CLLSCDRAMGuard(CSystem *system, bool active);
@@ -554,15 +548,9 @@ public:
   u64 m_direct_base = 0;
   std::atomic<u64> m_direct_end{0};
   u8 *m_direct_host = nullptr;
+
 private:
-
   CConfigurator *myCfg;
-
-  int iSingleStep;
-
-#if defined(IDB)
-  int iSSCycles;
-#endif
 };
 
 extern CSystem *theSystem;

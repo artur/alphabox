@@ -134,8 +134,5 @@ private:
              ///< touched). Use when the guest expects a UART to exist but you
              ///< don't want a telnet listener — bit-bucket semantics, like
              ///< QEMU's -serial null.
-#if defined(IDB) && defined(LS_MASTER)
-  int throughSocket;
-#endif
 };
 #endif // !defined(INCLUDED_SERIAL_H)

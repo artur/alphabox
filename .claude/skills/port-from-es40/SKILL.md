@@ -78,12 +78,16 @@ Upstream keeps every source in a flat `src/`; alphabox does not (reorganized
   DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the MAME shims),
   `net/` (Ethernet, NetworkBackend/Pcap/Tap).
 - CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). System and
-  config → `src/system/` (System, SystemComponent, Configurator, Port80,
-  TraceEngine). The Tsunami chipset (upstream's System.cpp CSR code) →
+  config → `src/system/` (System, SystemComponent, Configurator, Port80).
+  The Tsunami chipset (upstream's System.cpp CSR code) →
   `src/chipsets/tsunami/`; firmware NVRAM (DPR, Flash) →
   `src/platforms/es40/`; i2c_spd → `src/devices/common/`. Shared
   headers → `src/common/` (StdAfx, datatypes, es40_debug, es40_endian,
-  config_debug, banner, telnet, lockstep).
+  config_debug, banner, telnet).
+- Upstream's interactive debugger (the `IDB` build: TraceEngine,
+  lockstep, and every `#if defined(IDB)` block) was removed here in
+  October 2026. Drop those parts of an upstream change; do not bring them
+  back.
 - `src/es40.cfg` → repo-root `es40.cfg` (plus per-test copies in
   `test/rom/`, `test/vms/`, `test/nt/`, `test/arc/`).
 - `src/es40-cfg.cpp` → `src/es40-cfg.cpp` — entry points stay at `src/`

@@ -46,13 +46,11 @@
 #include "jit/jitengine.hpp"
 #endif
 #include "AliM1543C.hpp"
-#include "TraceEngine.hpp"
 #include "cpu_debug.hpp"
 #include "cpu_memory.hpp"
 #include "cpu_misc.hpp"
 #include "cpu_pal.hpp"
 #include "diag_rpcc.hpp"
-#include "lockstep.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <mutex>

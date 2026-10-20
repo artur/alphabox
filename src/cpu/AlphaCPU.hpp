@@ -169,13 +169,6 @@ public:
     std::atomic_thread_fence(std::memory_order_release);
     *const_cast<volatile bool *>(&state.wait_for_start) = false;
   }
-#ifdef IDB
-  u64 get_current_pc_physical();
-  u64 get_instruction_count();
-  u32 get_last_instruction();
-  u64 get_last_read_loc() { return last_read_loc; }
-  u64 get_last_write_loc() { return last_write_loc; }
-#endif
   u64 get_clean_pc();
   void next_pc();
   void set_pc(u64 p_pc);
@@ -185,10 +178,6 @@ public:
 
   u64 va_form(u64 address, bool bIBOX);
 
-#if defined(IDB)
-  void listing(u64 from, u64 to);
-  void listing(u64 from, u64 to, u64 mark);
-#endif
   int virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit, u32 instruction);
 
   virtual void init();
@@ -1257,13 +1246,6 @@ public:
   u64 last_dtb_virt[2]; /**< DTB_TAG0/1 staging registers for DTB_PTE0/1 writes
                          */
 
-#ifdef IDB
-  u64 current_pc_physical; /**< Physical address of current instruction */
-  u32 last_instruction;
-  u64 last_read_loc;
-  u64 last_write_loc;
-#endif
-
   // Kept last on purpose: the compiled code reaches the page cache and the
   // register file with one displacement from `this`, and that only works
   // while they stay near the front of the object (see kDpcEntries above).
@@ -1560,9 +1542,6 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       // keep debug/pc_phys coherent even when icache is enabled
       state.pc_phys = state.icache[i].p_address + (address & ICACHE_BYTE_MASK);
 
-#ifdef IDB
-      current_pc_physical = state.pc_phys;
-#endif
       state.last_found_icache = i;
       return 0;
     }
@@ -1598,9 +1577,6 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
 
       // same pc_phys update on fill
       state.pc_phys = p_a + (address & ICACHE_BYTE_MASK);
-#ifdef IDB
-      current_pc_physical = state.pc_phys;
-#endif
       state.last_found_icache = i;
       return 0;
     } else {
@@ -1616,9 +1592,6 @@ inline int CAlphaCPU::get_icache(u64 address, u32 *data) {
       *data = ins; // already in target little-endian form
 
       state.pc_phys = p_instr;
-#ifdef IDB
-      current_pc_physical = state.pc_phys;
-#endif
       return 0;
     }
   }
@@ -1765,14 +1738,6 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
  **/
 inline u64 CAlphaCPU::get_pc() { return state.pc; }
 
-#ifdef IDB
-
-/**
- * Return the physical address the program counter refers to.
- **/
-inline u64 CAlphaCPU::get_current_pc_physical() { return state.pc_phys; }
-#endif
-
 /**
  * Return program counter value without PALmode bit.
  **/
@@ -1876,11 +1841,4 @@ inline u64 CAlphaCPU::get_hwpcb(void) {
   return p_pcb;
 }
 
-#if defined(IDB)
-/**
- * Return the last instruction executed.
- **/
-inline u32 CAlphaCPU::get_last_instruction(void) { return last_instruction; }
-#endif
-extern bool bTB_Debug;
 #endif // !defined(INCLUDED_ALPHACPU_H)

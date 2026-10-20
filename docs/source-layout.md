@@ -58,7 +58,7 @@ hvprobe`). Built with `-DALPHABOX_HVF=ON`. See [hypervisor.md](hypervisor.md).
   threads, LL/SC, console loading and the state files.
 - `SystemComponent`: the base class of every device.
 - `Configurator`: parses `es40.cfg` and builds the device graph.
-- `Port80`, `TraceEngine`.
+- `Port80`.
 
 ## chipsets/
 
@@ -283,7 +283,7 @@ card. The user guide is [usb.md](usb.md).
   the X11 and Win32 ones are kept.
 - `common/`: `StdAfx`, `datatypes`, `es40_debug` (with `Exception`, what
   its `FAILURE()` throws), `es40_endian`, `config_debug`, `banner`,
-  `telnet`, `lockstep`, and `WakeSemaphore` (a device thread's wake-up).
+  `telnet`, and `WakeSemaphore` (a device thread's wake-up).
 - `emu/`: `emu.hpp`, the shim that stands in for MAME's header.
 - `src/` itself: the entry points `Main.cpp`, `AlphaSim.cpp`,
   `es40-cfg.cpp` (with its `*Question.hpp`), and `config.hpp.in`.

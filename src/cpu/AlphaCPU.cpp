@@ -40,7 +40,6 @@
 #include "jit/jitengine.hpp"
 #endif
 #include "AliM1543C.hpp"
-#include "TraceEngine.hpp"
 #include "cpu_arith.hpp"
 #include "cpu_bwx.hpp"
 #include "cpu_control.hpp"
@@ -55,7 +54,6 @@
 #include "cpu_pal.hpp"
 #include "cpu_vax.hpp"
 #include "diag_rpcc.hpp"
-#include "lockstep.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <map>
@@ -695,9 +693,6 @@ void CAlphaCPU::init() {
   // SROM imitation...
   add_tb(0, 0, U64(0xff61), ACCESS_READ, state.asn0);
 
-#if defined(IDB)
-  bListing = false;
-#endif
   myThread = nullptr;
 
   cc_large = 0;
@@ -1013,32 +1008,6 @@ CAlphaCPU::~CAlphaCPU() {
 #endif
 }
 
-#if defined(IDB)
-char dbg_string[1000];
-#if !defined(LS_MASTER) && !defined(LS_SLAVE)
-char *dbg_strptr;
-#endif
-
-/**
- * \brief Do whatever needs to be done to a debug-string.
- *
- * Used in IDB-mode to handle the disassembly- string. In es40_idb, it is
- * written to the standard output.
- *
- * \param s       Pointer to the debug string.
- **/
-void handle_debug_string(char *s) {
-#if defined(LS_SLAVE) || defined(LS_MASTER)
-
-  //    lockstep_compare(s);
-  *dbg_strptr++ = '\n';
-  *dbg_strptr = '\0';
-#else
-  if (*s)
-    printf("%s\n", s);
-#endif
-}
-#endif
 #if defined(MIPS_ESTIMATE)
 
 // MIPS_INTERVAL must take longer than 1 second to execute
@@ -1233,13 +1202,6 @@ _next_instruction:
     count = 0;
   }
 #endif
-#if defined(IDB)
-  char *funcname = 0;
-  dbg_string[0] = '\0';
-#if !defined(LS_MASTER) && !defined(LS_SLAVE)
-  dbg_strptr = dbg_string;
-#endif
-#endif
   state.current_pc = state.pc;
 
   //--------------------------------------------------------------------------------
@@ -1295,269 +1257,242 @@ _next_instruction:
   //--------------------------------------------------------------------------------
 
   // Service interrupts
-  if (DO_ACTION) {
 #ifndef ES40_JIT
-    // We're actually executing code. Cycle counter should be updated, interrupt
-    // and interrupt timer status needs to be checked, and the next instruction
-    // should be fetched from the instruction cache. Increase the cycle counter
-    // if it is currently enabled.
-    _icount_accum++;
-    _cc_accum += _cc_per_ins;
+  // We're actually executing code. Cycle counter should be updated, interrupt
+  // and interrupt timer status needs to be checked, and the next instruction
+  // should be fetched from the instruction cache. Increase the cycle counter
+  // if it is currently enabled.
+  _icount_accum++;
+  _cc_accum += _cc_per_ins;
 
-    if ((_batch_budget & 31) == 0) {
-      // Flush accumulated counters to state. state.cc is wall-clock (batch
-      // top); _cc_accum only feeds cc_large for the check_state speed-factor
-      // feedback.
-      state.instruction_count += _icount_accum;
-      _icount_accum = 0;
-      cc_large += _cc_accum;
-      _cc_accum = 0;
+  if ((_batch_budget & 31) == 0) {
+    // Flush accumulated counters to state. state.cc is wall-clock (batch
+    // top); _cc_accum only feeds cc_large for the check_state speed-factor
+    // feedback.
+    state.instruction_count += _icount_accum;
+    _icount_accum = 0;
+    cc_large += _cc_accum;
+    _cc_accum = 0;
 
-      // There are one or more active delayed irq_h interrupts. Go through the 6
-      // irq_h timers, decrease them as needed, and set the interrupt if the
-      // timer reaches 0. Batch to reduce memory ops.
-      if (state.check_timers) {
-        state.check_timers = false;
-        if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
-          // The direct range changed, or a page became a code page (see
-          // CSystem::request_code_page_flush).
-          flush_data_page_cache();
-          if (m_code_map) {
-            // Until this moment compiled code could still have stored into
-            // that page inline through the translation just dropped. Count
-            // one write, so the next flush does its work and any such store
-            // is caught by the source hash rather than assumed away.
-            if (!m_nopflush_break) // the break hook silences every report
-              m_code_map->note_write_all();
-            m_code_pages_seen = m_code_map->code_pages();
-          }
-        }
-        for (int j = 0; j < 6; j++)
-          count_down_irq(j, 32);
-      }
-    }
-#else
-    // New unwound interpreter / future JIT path
-
-    state.instruction_count++;
-    cc_large += _cc_per_ins;
-    // state.cc (RPCC) is pinned to wall-clock * cpu_hz at the jit_run boundary,
-    // not advanced per-instruction here - interpreter can't run RPCC ahead of
-    // wall time.
-
-    // Process delayed irq_h timers one instruction at a time.
+    // There are one or more active delayed irq_h interrupts. Go through the 6
+    // irq_h timers, decrease them as needed, and set the interrupt if the
+    // timer reaches 0. Batch to reduce memory ops.
     if (state.check_timers) {
       state.check_timers = false;
-      // The same page-cache flush request the interpreter arm above honours.
-      // It lived only there, so in a JIT build -- which is every build that
-      // matters -- request_dpc_flush() set a flag nothing ever read: the
-      // direct framebuffer window could move or be withdrawn while compiled
-      // code still wrote through a cached translation to where it used to
-      // be, and the code-page broadcast never reached the other processors.
       if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+        // The direct range changed, or a page became a code page (see
+        // CSystem::request_code_page_flush).
         flush_data_page_cache();
         if (m_code_map) {
+          // Until this moment compiled code could still have stored into
+          // that page inline through the translation just dropped. Count
+          // one write, so the next flush does its work and any such store
+          // is caught by the source hash rather than assumed away.
           if (!m_nopflush_break) // the break hook silences every report
             m_code_map->note_write_all();
           m_code_pages_seen = m_code_map->code_pages();
         }
       }
-      for (int ti = 0; ti < 6; ti++)
-        count_down_irq(ti, 1);
+      for (int j = 0; j < 6; j++)
+        count_down_irq(j, 32);
     }
-#endif
-
-    if (state.check_int && !(state.pc & 1)) {
-      // Clear the interrupt doorbell up front. A remote irq_h() (e.g. an IPI
-      // from another CPU) sets eir then re-raises check_int; clearing first
-      // guarantees a cross-thread re-raise is re-checked next tick rather than
-      // lost by a late clear.
-      state.check_int = false;
-
-      // One or more of the variables that affect interrupt status have changed,
-      // and we are not currently inside PALmode. It is not certain that this
-      // means we hava an interrupt to service, but we might have. This needs to
-      // be checked.
-
-      if (state.pal_vms && !(vmspal_off_ent & VMSPAL_OFF_INT)) {
-        // PALcode base is set to 0x8000; meaning OpenVMS PALcode is currently
-        // active. In this case, our VMS PALcode replacement routines are valid,
-        // and should be used as it is faster than using the original PALcode.
-
-        // irq<4> = halt / MP work request (TIG halt lines): the replacement
-        // routines don't handle it, so enter the real PALcode interrupt
-        // vector, as without them.
-        if (state.eir & state.eien & 0x10) {
-          GO_PAL(INTERRUPT);
-          seq_remaining = 0;
-#ifndef ES40_JIT
-          goto _next_instruction;
+  }
 #else
-          return;
-#endif
-        }
+  // New unwound interpreter / future JIT path
 
-        // irq<1>=device, irq<2>=timer, irq<3>=IPI. (Was 0x6 = device+timer
-        // only, which stranded incoming IPIs under VMS PALcode -> CPUSPINWAIT.)
-        if (state.eir & state.eien & 0xe)
-          if (vmspal_ent_ext_int(state.eir & state.eien & 0xe))
-            return;
+  state.instruction_count++;
+  cc_large += _cc_per_ins;
+  // state.cc (RPCC) is pinned to wall-clock * cpu_hz at the jit_run boundary,
+  // not advanced per-instruction here - interpreter can't run RPCC ahead of
+  // wall time.
 
-        if (state.sir & state.sien & 0xfffc)
-          if (vmspal_ent_sw_int(state.sir & state.sien))
-            return;
-
-        if (state.asten &&
-            (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
-          if (vmspal_ent_ast_int(state.aster & state.astrr &
-                                 ((1 << (state.cm + 1)) - 1)))
-            return;
-
-        if (state.sir & state.sien)
-          if (vmspal_ent_sw_int(state.sir & state.sien))
-            return;
-      } else
-
-      {
-
-        // PALcode base is set to an unsupported value. We have no choice but to
-        // transfer control to PALmode at the PALcode interrupt entry point.
-        //        if (state.eir & 8)
-        //        {
-        //          printf("%s: IP interrupt received%s...\n",devid_string,
-        //          (state.eien&8)?"(enabled)":"(masked)");
-        //        }
-        if ((state.eien & state.eir) || (state.sien & state.sir) ||
-            (state.asten &&
-             (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
-          { // ALPHABOX_IRQSTATS: what the guest is taking interrupts for
-            const u64 pend = (u64)(state.eien & state.eir);
-            for (int b = 0; b < 6; b++)
-              if (pend & (U64(1) << b))
-                g_irqstats.cpu_eir[b].fetch_add(1, std::memory_order_relaxed);
-            if (state.sien & state.sir)
-              g_irqstats.cpu_sw.fetch_add(1, std::memory_order_relaxed);
-            if (state.asten &&
-                (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
-              g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
-            g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
-            irq_trace_entry();
-          }
-          GO_PAL(INTERRUPT);
-          seq_remaining = 0;
-#ifndef ES40_JIT
-          goto _next_instruction;
-#else
-          return;
-#endif
-        }
+  // Process delayed irq_h timers one instruction at a time.
+  if (state.check_timers) {
+    state.check_timers = false;
+    // The same page-cache flush request the interpreter arm above honours.
+    // It lived only there, so in a JIT build -- which is every build that
+    // matters -- request_dpc_flush() set a flag nothing ever read: the
+    // direct framebuffer window could move or be withdrawn while compiled
+    // code still wrote through a cached translation to where it used to
+    // be, and the code-page broadcast never reached the other processors.
+    if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
+      flush_data_page_cache();
+      if (m_code_map) {
+        if (!m_nopflush_break) // the break hook silences every report
+          m_code_map->note_write_all();
+        m_code_pages_seen = m_code_map->code_pages();
       }
     }
-
-    // If profiling is enabled, increase the profiling counter for the current
-    // block of addresses.
-#if defined(PROFILE)
-    PROFILE_DO(state.pc);
+    for (int ti = 0; ti < 6; ti++)
+      count_down_irq(ti, 1);
+  }
 #endif
 
+  if (state.check_int && !(state.pc & 1)) {
+    // Clear the interrupt doorbell up front. A remote irq_h() (e.g. an IPI
+    // from another CPU) sets eir then re-raises check_int; clearing first
+    // guarantees a cross-thread re-raise is re-checked next tick rather than
+    // lost by a late clear.
+    state.check_int = false;
+
+    // One or more of the variables that affect interrupt status have changed,
+    // and we are not currently inside PALmode. It is not certain that this
+    // means we hava an interrupt to service, but we might have. This needs to
+    // be checked.
+
+    if (state.pal_vms && !(vmspal_off_ent & VMSPAL_OFF_INT)) {
+      // PALcode base is set to 0x8000; meaning OpenVMS PALcode is currently
+      // active. In this case, our VMS PALcode replacement routines are valid,
+      // and should be used as it is faster than using the original PALcode.
+
+      // irq<4> = halt / MP work request (TIG halt lines): the replacement
+      // routines don't handle it, so enter the real PALcode interrupt
+      // vector, as without them.
+      if (state.eir & state.eien & 0x10) {
+        GO_PAL(INTERRUPT);
+        seq_remaining = 0;
 #ifndef ES40_JIT
-    // ---- Fast sequential icache path ----
-    // If PC matches expected sequential address and we have words remaining
-    // in the current icache line, read directly without any lookup.
-    if (state.pc == seq_next_pc && seq_remaining > 0) {
-      ins = endian_32(seq_line_ptr[seq_offset]);
-#if defined(DEBUG_ARC)
-      if (state.current_pc < 0x10000) {
-        printf("PC=%016" PRIx64 " ins=%08x\n", state.current_pc, ins);
-      }
-#endif
-      seq_offset++;
-      seq_remaining--;
-      seq_next_pc += 4;
-      // state.pc_phys += 4;
-#if defined(IDB)
-      current_pc_physical = state.pc_phys;
-#endif
-    } else {
-      // PAL reset-vector entry: drop stale icache lines (in-place image
-      // rewrite by the firmware updater)
-      if (state.pc == (state.pal_base | 1)) {
-        JIT_FLUSH_CAUSE(EPOCH_PALRST);
-        flush_icache();
-      }
-      // Full icache lookup
-      if (get_icache(state.pc, &ins))
         goto _next_instruction;
-
-      // Set up sequential tracking from the cache hit
-      if (icache_enabled && !(state.pc & 1)) {
-        int _siq_line = state.last_found_icache;
-        seq_line_ptr = state.icache[_siq_line].data;
-        int _siq_word = (int)((state.pc >> 2) & ICACHE_INDEX_MASK);
-        seq_offset = _siq_word + 1;
-        seq_remaining = ICACHE_LINE_SIZE - seq_offset;
-        seq_next_pc = (state.pc & ~U64(0x3)) + 4;
-      } else {
-        seq_remaining = 0;
-      }
-
-#if defined(IDB)
-      current_pc_physical = state.pc_phys;
-#endif
-    }
 #else
-    // Fast sequential icache path -- the same fast path the batched interpreter
-    // uses above. The JIT lane calls execute() once per instruction, so this
-    // cursor persists across calls within an interpreted run. A compiled block
-    // can't remap (it runs no PAL/TB ops), and any flush or IMB resets the
-    // cursor through break_seq_icache(), so stale lines can't be read. A
-    // TB-miss returns to the dispatcher (which re-dispatches at the fault
-    // handler).
-    if (state.pc == seq_next_pc && seq_remaining > 0) {
-      ins = endian_32(seq_line_ptr[seq_offset]);
-      seq_offset++;
-      seq_remaining--;
-      seq_next_pc += 4;
-    } else {
-      // PAL reset-vector entry: drop stale icache lines
-      if (state.pc == (state.pal_base | 1)) {
-        JIT_FLUSH_CAUSE(EPOCH_PALRST);
-        flush_icache();
-      }
-      if (get_icache(state.pc, &ins))
         return;
+#endif
+      }
 
-      if (icache_enabled && !(state.pc & 1)) {
-        int _siq_line = state.last_found_icache;
-        seq_line_ptr = state.icache[_siq_line].data;
-        int _siq_word = (int)((state.pc >> 2) & ICACHE_INDEX_MASK);
-        seq_offset = _siq_word + 1;
-        seq_remaining = ICACHE_LINE_SIZE - seq_offset;
-        seq_next_pc = (state.pc & ~U64(0x3)) + 4;
-      } else {
+      // irq<1>=device, irq<2>=timer, irq<3>=IPI. (Was 0x6 = device+timer
+      // only, which stranded incoming IPIs under VMS PALcode -> CPUSPINWAIT.)
+      if (state.eir & state.eien & 0xe)
+        if (vmspal_ent_ext_int(state.eir & state.eien & 0xe))
+          return;
+
+      if (state.sir & state.sien & 0xfffc)
+        if (vmspal_ent_sw_int(state.sir & state.sien))
+          return;
+
+      if (state.asten &&
+          (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
+        if (vmspal_ent_ast_int(state.aster & state.astrr &
+                               ((1 << (state.cm + 1)) - 1)))
+          return;
+
+      if (state.sir & state.sien)
+        if (vmspal_ent_sw_int(state.sir & state.sien))
+          return;
+    } else
+
+    {
+
+      // PALcode base is set to an unsupported value. We have no choice but to
+      // transfer control to PALmode at the PALcode interrupt entry point.
+      //        if (state.eir & 8)
+      //        {
+      //          printf("%s: IP interrupt received%s...\n",devid_string,
+      //          (state.eien&8)?"(enabled)":"(masked)");
+      //        }
+      if ((state.eien & state.eir) || (state.sien & state.sir) ||
+          (state.asten &&
+           (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
+        { // ALPHABOX_IRQSTATS: what the guest is taking interrupts for
+          const u64 pend = (u64)(state.eien & state.eir);
+          for (int b = 0; b < 6; b++)
+            if (pend & (U64(1) << b))
+              g_irqstats.cpu_eir[b].fetch_add(1, std::memory_order_relaxed);
+          if (state.sien & state.sir)
+            g_irqstats.cpu_sw.fetch_add(1, std::memory_order_relaxed);
+          if (state.asten &&
+              (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
+            g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
+          g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
+          irq_trace_entry();
+        }
+        GO_PAL(INTERRUPT);
         seq_remaining = 0;
+#ifndef ES40_JIT
+        goto _next_instruction;
+#else
+        return;
+#endif
       }
     }
+  }
 
-#if defined(IDB)
-    current_pc_physical = state.pc_phys;
+  // If profiling is enabled, increase the profiling counter for the current
+  // block of addresses.
+#if defined(PROFILE)
+  PROFILE_DO(state.pc);
 #endif
 
-#endif
-  } // if (DO_ACTION)
-  else {
-
-    // We're not really executing any code (DO_ACTION is false); that means that
-    // we're in a debugging session, and just listing instructions at a
-    // particular address. In this case, we treat the program counter as a
-    // physical address.
-    ins = (u32)(cSystem->ReadMem(state.pc, 32, this));
+#ifndef ES40_JIT
+  // ---- Fast sequential icache path ----
+  // If PC matches expected sequential address and we have words remaining
+  // in the current icache line, read directly without any lookup.
+  if (state.pc == seq_next_pc && seq_remaining > 0) {
+    ins = endian_32(seq_line_ptr[seq_offset]);
 #if defined(DEBUG_ARC)
     if (state.current_pc < 0x10000) {
       printf("PC=%016" PRIx64 " ins=%08x\n", state.current_pc, ins);
     }
 #endif
+    seq_offset++;
+    seq_remaining--;
+    seq_next_pc += 4;
+    // state.pc_phys += 4;
+  } else {
+    // PAL reset-vector entry: drop stale icache lines (in-place image
+    // rewrite by the firmware updater)
+    if (state.pc == (state.pal_base | 1)) {
+      JIT_FLUSH_CAUSE(EPOCH_PALRST);
+      flush_icache();
+    }
+    // Full icache lookup
+    if (get_icache(state.pc, &ins))
+      goto _next_instruction;
+
+    // Set up sequential tracking from the cache hit
+    if (icache_enabled && !(state.pc & 1)) {
+      int _siq_line = state.last_found_icache;
+      seq_line_ptr = state.icache[_siq_line].data;
+      int _siq_word = (int)((state.pc >> 2) & ICACHE_INDEX_MASK);
+      seq_offset = _siq_word + 1;
+      seq_remaining = ICACHE_LINE_SIZE - seq_offset;
+      seq_next_pc = (state.pc & ~U64(0x3)) + 4;
+    } else {
+      seq_remaining = 0;
+    }
   }
+#else
+  // Fast sequential icache path -- the same fast path the batched interpreter
+  // uses above. The JIT lane calls execute() once per instruction, so this
+  // cursor persists across calls within an interpreted run. A compiled block
+  // can't remap (it runs no PAL/TB ops), and any flush or IMB resets the
+  // cursor through break_seq_icache(), so stale lines can't be read. A
+  // TB-miss returns to the dispatcher (which re-dispatches at the fault
+  // handler).
+  if (state.pc == seq_next_pc && seq_remaining > 0) {
+    ins = endian_32(seq_line_ptr[seq_offset]);
+    seq_offset++;
+    seq_remaining--;
+    seq_next_pc += 4;
+  } else {
+    // PAL reset-vector entry: drop stale icache lines
+    if (state.pc == (state.pal_base | 1)) {
+      JIT_FLUSH_CAUSE(EPOCH_PALRST);
+      flush_icache();
+    }
+    if (get_icache(state.pc, &ins))
+      return;
+
+    if (icache_enabled && !(state.pc & 1)) {
+      int _siq_line = state.last_found_icache;
+      seq_line_ptr = state.icache[_siq_line].data;
+      int _siq_word = (int)((state.pc >> 2) & ICACHE_INDEX_MASK);
+      seq_offset = _siq_word + 1;
+      seq_remaining = ICACHE_LINE_SIZE - seq_offset;
+      seq_next_pc = (state.pc & ~U64(0x3)) + 4;
+    } else {
+      seq_remaining = 0;
+    }
+  }
+#endif
 
   // Increase the program counter. The current value is retained in
   // state.current_pc. This must go through next_pc(): the icache-disabled
@@ -1572,15 +1507,9 @@ _next_instruction:
   state.r[31] = 0;
   state.f[31] = 0;
 
-  // Decode and dispatch opcode. This is kept very compact using the OP-macro
-  // defined in cpu_debug.h. For the normal emulator, this simply calls the
-  // DO_<mnemonic> macro defined in one of the other cpu_*.h files; but for the
-  // interactive debugger, it will also do disassembly, where the second
-  // parameter to the macro (e.g. R12_R3) determines the formatting applied to
-  // the operands. The macro ends with "return 0;".
-#if defined(IDB)
-  last_instruction = ins;
-#endif
+  // Decode and dispatch opcode. This is kept very compact using the OP macro
+  // defined in cpu_debug.hpp, which calls the DO_<mnemonic> macro defined in
+  // one of the other cpu_*.hpp files and ends the instruction.
   opcode = ins >> 26;
   switch (opcode) {
   case 0x00: // CALL_PAL
@@ -2277,48 +2206,6 @@ _next_instruction:
 #endif
 }
 
-#if defined(IDB)
-
-/**
- * \brief Produce disassembly-listing without marker
- *
- * \param from    Address of first instruction to be disassembled.
- * \param to      Address of instruction following the last instruction to
- *                be disassembled.
- **/
-void CAlphaCPU::listing(u64 from, u64 to) { listing(from, to, 0); }
-
-/**
- * \brief Produce disassembly-listing with marker
- *
- * \param from    Address of first instruction to be disassembled.
- * \param to      Address of instruction following the last instruction to
- *                be disassembled.
- * \param mark    Address of instruction to be underlined with a marker line.
- **/
-void CAlphaCPU::listing(u64 from, u64 to, u64 mark) {
-  printf("%%CPU-I-LISTNG: Listing from %016" PRIx64 " to %016" PRIx64 "\n",
-         from, to);
-
-  u64 iSavedPC;
-  bool bSavedDebug;
-  iSavedPC = state.pc;
-  bSavedDebug = bDisassemble;
-  bDisassemble = true;
-  bListing = true;
-  for (state.pc = from; state.pc <= to;) {
-    execute();
-    if (state.pc == mark)
-      printf("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n");
-  }
-
-  bListing = false;
-  state.pc = iSavedPC;
-  bDisassemble = bSavedDebug;
-}
-
-u64 CAlphaCPU::get_instruction_count() { return state.instruction_count; }
-#endif
 static u32 cpu_magic1 = 0x2126468C;
 static u32 cpu_magic2 = 0xC8646212;
 
@@ -2694,27 +2581,15 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
   bool va48 = (flags & ACCESS_EXEC) ? (state.i_ctl_va_mode & 1)
                                     : (state.va_ctl_va_mode & 1);
 
-#if defined IDB
-  if (bListing) {
-    *phys = virt;
-    return 0;
-  }
-#endif
 #if defined(DEBUG_TB)
   if (forreal)
-#if defined(IDB)
-    if (bTB_Debug)
-#endif
-      printf("TB %" PRIx64 ",%x: ", virt, flags);
+    printf("TB %" PRIx64 ",%x: ", virt, flags);
 #endif
 
   if (!alpha_valid_va_form(virt, va48)) {
 #if defined(DEBUG_TB)
     if (forreal)
-#if defined(IDB)
-      if (bTB_Debug)
-#endif
-        printf("acv-va-form\n");
+      printf("acv-va-form\n");
 #endif
     if (!forreal)
       return -1;
@@ -2728,10 +2603,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
 #if defined(DEBUG_TB)
     if (forreal)
-#if defined(IDB)
-      if (bTB_Debug)
-#endif
-        printf("try spe...");
+      printf("try spe...");
 #endif
 
     // HRM 5.3.9: SPE[2], when set, enables superpage mapping when VA[47:46]
@@ -2762,10 +2634,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
       if (cm) {
 #if defined(DEBUG_TB)
         if (forreal)
-#if defined(IDB)
-          if (bTB_Debug)
-#endif
-            printf("SPE-ACV\n");
+          printf("SPE-ACV\n");
 #endif
         if (!forreal)
           return -1;
@@ -2782,10 +2651,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         *asm_bit = true;
 #if defined(DEBUG_TB)
       if (forreal)
-#if defined(IDB)
-        if (bTB_Debug)
-#endif
-          printf("SPE\n");
+        printf("SPE\n");
 #endif
       return 0;
     }
@@ -2890,10 +2756,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 #if defined(DEBUG_TB)
   else {
     if (forreal)
-#if defined(IDB)
-      if (bTB_Debug)
-#endif
-        printf("entry %d - ", i);
+      printf("entry %d - ", i);
   }
 #endif
   if (!(flags & NO_CHECK)) {
@@ -2907,10 +2770,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         ((flags & WRCHK) && !state.tb[t][i].access[1][cm])) {
 #if defined(DEBUG_TB)
       if (forreal)
-#if defined(IDB)
-        if (bTB_Debug)
-#endif
-          printf("acv\n");
+        printf("acv\n");
 #endif
       if (!forreal) // FAKE probe: report failure, don't vector the fault —
                     // caller re-runs it under the interpreter
@@ -2961,10 +2821,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         ((flags & WRCHK) && state.tb[t][i].fault[1])) {
 #if defined(DEBUG_TB)
       if (forreal)
-#if defined(IDB)
-        if (bTB_Debug)
-#endif
-          printf("fault\n");
+        printf("fault\n");
 #endif
       if (!forreal) // FAKE probe: report failure, don't vector the fault —
                     // caller re-runs it under the interpreter
@@ -3030,10 +2887,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
 #if defined(DEBUG_TB)
   if (forreal)
-#if defined(IDB)
-    if (bTB_Debug)
-#endif
-      printf("phys: %" PRIx64 " - OK\n", *phys);
+    printf("phys: %" PRIx64 " - OK\n", *phys);
 #endif
   return 0;
 }
@@ -3251,9 +3105,6 @@ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
   }
 
 #if defined(DEBUG_TB_)
-#if defined(IDB)
-  if (bTB_Debug)
-#endif
   {
     printf("Add TB---------------------------------------\n");
     printf("Map VIRT    %016" PRIx64 "\n", state.tb[t][i].virt);
@@ -3496,110 +3347,3 @@ bool CAlphaCPU::run_until_below(u64 floor, int budget) {
 #endif
   return get_clean_pc() < floor;
 }
-
-#if defined(IDB)
-const char *PAL_NAME[] = {
-    "HALT",       "CFLUSH",     "DRAINA",     "LDQP",
-    "STQP",       "SWPCTX",     "MFPR_ASN",   "MTPR_ASTEN",
-    "MTPR_ASTSR", "CSERVE",     "SWPPAL",     "MFPR_FEN",
-    "MTPR_FEN",   "MTPR_IPIR",  "MFPR_IPL",   "MTPR_IPL",
-    "MFPR_MCES",  "MTPR_MCES",  "MFPR_PCBB",  "MFPR_PRBR",
-    "MTPR_PRBR",  "MFPR_PTBR",  "MFPR_SCBB",  "MTPR_SCBB",
-    "MTPR_SIRR",  "MFPR_SISR",  "MFPR_TBCHK", "MTPR_TBIA",
-    "MTPR_TBIAP", "MTPR_TBIS",  "MFPR_ESP",   "MTPR_ESP",
-    "MFPR_SSP",   "MTPR_SSP",   "MFPR_USP",   "MTPR_USP",
-    "MTPR_TBISD", "MTPR_TBISI", "MFPR_ASTEN", "MFPR_ASTSR",
-    "28",         "MFPR_VPTB",  "MTPR_VPTB",  "MTPR_PERFMON",
-    "2C",         "2D",         "MTPR_DATFX", "2F",
-    "30",         "31",         "32",         "33",
-    "34",         "35",         "36",         "37",
-    "38",         "39",         "3A",         "3B",
-    "3C",         "3D",         "WTINT",      "MFPR_WHAMI",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "-",          "-",          "-",          "-",
-    "BPT",        "BUGCHK",     "CHME",       "CHMK",
-    "CHMS",       "CHMU",       "IMB",        "INSQHIL",
-    "INSQTIL",    "INSQHIQ",    "INSQTIQ",    "INSQUEL",
-    "INSQUEQ",    "INSQUEL/D",  "INSQUEQ/D",  "PROBER",
-    "PROBEW",     "RD_PS",      "REI",        "REMQHIL",
-    "REMQTIL",    "REMQHIQ",    "REMQTIQ",    "REMQUEL",
-    "REMQUEQ",    "REMQUEL/D",  "REMQUEQ/D",  "SWASTEN",
-    "WR_PS_SW",   "RSCC",       "READ_UNQ",   "WRITE_UNQ",
-    "AMOVRR",     "AMOVRM",     "INSQHILR",   "INSQTILR",
-    "INSQHIQR",   "INSQTIQR",   "REMQHILR",   "REMQTILR",
-    "REMQHIQR",   "REMQTIQR",   "GENTRAP",    "AB",
-    "AC",         "AD",         "CLRFEN",     "AF",
-    "B0",         "B1",         "B2",         "B3",
-    "B4",         "B5",         "B6",         "B7",
-    "B8",         "B9",         "BA",         "BB",
-    "BC",         "BD",         "BE",         "BF"};
-
-const char *IPR_NAME[] = {
-    "ITB_TAG",     "ITB_PTE",     "ITB_IAP",     "ITB_IA",       "ITB_IS",
-    "PMPC",        "EXC_ADDR",    "IVA_FORM",    "IER_CM",       "CM",
-    "IER",         "IER_CM",      "SIRR",        "ISUM",         "HW_INT_CLR",
-    "EXC_SUM",     "PAL_BASE",    "I_CTL",       "IC_FLUSH_ASM", "IC_FLUSH",
-    "PCTR_CTL",    "CLR_MAP",     "I_STAT",      "SLEEP",        "?0001.1000?",
-    "?0001.1001?", "?0001.1010?", "?0001.1011?", "?0001.1100?",  "?0001.1101?",
-    "?0001.1110?", "?0001.1111?", "DTB_TAG0",    "DTB_PTE0",     "?0010.0010?",
-    "?0010.0011?", "DTB_IS0",     "DTB_ASN0",    "DTB_ALTMODE",  "MM_STAT",
-    "M_CTL",       "DC_CTL",      "DC_STAT",     "C_DATA",       "C_SHFT",
-    "M_FIX",       "?0010.1110?", "?0010.1111?", "?0011.0000?",  "?0011.0001?",
-    "?0011.0010?", "?0011.0011?", "?0011.0100?", "?0010.0101?",  "?0010.0110?",
-    "?0010.0111?", "?0011.1000?", "?0011.1001?", "?0011.1010?",  "?0011.1011?",
-    "?0011.1100?", "?0010.1101?", "?0010.1110?", "?0010.1111?",  "PCTX.00000",
-    "PCTX.00001",  "PCTX.00010",  "PCTX.00011",  "PCTX.00100",   "PCTX.00101",
-    "PCTX.00110",  "PCTX.00111",  "PCTX.01000",  "PCTX.01001",   "PCTX.01010",
-    "PCTX.01011",  "PCTX.01100",  "PCTX.01101",  "PCTX.01110",   "PCTX.01111",
-    "PCTX.10000",  "PCTX.10001",  "PCTX.10010",  "PCTX.10011",   "PCTX.10100",
-    "PCTX.10101",  "PCTX.10110",  "PCTX.10111",  "PCTX.11000",   "PCTX.11001",
-    "PCTX.11010",  "PCTX.11011",  "PCTX.11100",  "PCTX.11101",   "PCTX.11110",
-    "PCTX.11111",  "PCTX.00000",  "PCTX.00001",  "PCTX.00010",   "PCTX.00011",
-    "PCTX.00100",  "PCTX.00101",  "PCTX.00110",  "PCTX.00111",   "PCTX.01000",
-    "PCTX.01001",  "PCTX.01010",  "PCTX.01011",  "PCTX.01100",   "PCTX.01101",
-    "PCTX.01110",  "PCTX.01111",  "PCTX.10000",  "PCTX.10001",   "PCTX.10010",
-    "PCTX.10011",  "PCTX.10100",  "PCTX.10101",  "PCTX.10110",   "PCTX.10111",
-    "PCTX.11000",  "PCTX.11001",  "PCTX.11010",  "PCTX.11011",   "PCTX.11100",
-    "PCTX.11101",  "PCTX.11110",  "PCTX.11111",  "?1000.0000?",  "?1000.0001?",
-    "?1000.0010?", "?1000.0011?", "?1000.0100?", "?1000.0101?",  "?1000.0110?",
-    "?1000.0111?", "?1000.1000?", "?1000.1001?", "?1000.1010?",  "?1000.1011?",
-    "?1000.1100?", "?1000.1101?", "?1000.1110?", "?1000.1111?",  "?1001.0000?",
-    "?1001.0001?", "?1001.0010?", "?1001.0011?", "?1001.0100?",  "?1001.0101?",
-    "?1001.0110?", "?1001.0111?", "?1001.1000?", "?1001.1001?",  "?1001.1010?",
-    "?1001.1011?", "?1001.1100?", "?1001.1101?", "?1001.1110?",  "?1001.1111?",
-    "DTB_TAG1",    "DTB_PTE1",    "DTB_IAP",     "DTB_IA",       "DTB_IS1",
-    "DTB_ASN1",    "?1010.0110?", "?1010.0111?", "?1010.1000?",  "?1010.1001?",
-    "?1010.1010?", "?1010.1011?", "?1010.1100?", "?1010.1101?",  "?1010.1110?",
-    "?1010.1111?", "?1011.0000?", "?1011.0001?", "?1011.0010?",  "?1011.0011?",
-    "?1011.0100?", "?1011.0101?", "?1011.0110?", "?1011.0111?",  "?1011.1000?",
-    "?1011.1001?", "?1011.1010?", "?1011.1011?", "?1011.1100?",  "?1011.1101?",
-    "?1011.1110?", "?1011.1111?", "CC",          "CC_CTL",       "VA",
-    "VA_FORM",     "VA_CTL",      "?1100.0101?", "?1100.0110?",  "?1100.0111?",
-    "?1100.1000?", "?1100.1001?", "?1100.1010?", "?1100.1011?",  "?1100.1100?",
-    "?1100.1101?", "?1100.1110?", "?1100.1111?", "?1101.0000?",  "?1101.0001?",
-    "?1101.0010?", "?1101.0011?", "?1101.0100?", "?1101.0101?",  "?1101.0110?",
-    "?1101.0111?", "?1101.1000?", "?1101.1001?", "?1101.1010?",  "?1101.1011?",
-    "?1101.1100?", "?1101.1101?", "?1101.1110?", "?1101.1111?",  "?1110.0000?",
-    "?1110.0001?", "?1110.0010?", "?1110.0011?", "?1110.0100?",  "?1110.0101?",
-    "?1110.0110?", "?1110.0111?", "?1110.1000?", "?1110.1001?",  "?1110.1010?",
-    "?1110.1011?", "?1110.1100?", "?1110.1101?", "?1110.1110?",  "?1110.1111?",
-    "?1111.0000?", "?1111.0001?", "?1111.0010?", "?1111.0011?",  "?1111.0100?",
-    "?1111.0101?", "?1111.0110?", "?1111.0111?", "?1111.1000?",  "?1111.1001?",
-    "?1111.1010?", "?1111.1011?", "?1111.1100?", "?1111.1101?",  "?1111.1110?",
-    "?1111.1111?",
-};
-#endif
