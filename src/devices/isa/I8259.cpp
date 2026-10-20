@@ -271,8 +271,16 @@ void CI8259::write(int index, u32 address, u8 data) {
         s.poll[index] = 1;
       if (data & 0x02)
         s.read_reg_select[index] = data & 0x01;
-      if (data & 0x40)
-        s.special_mask[index] = (data >> 5) & 0x01;
+      if (data & 0x40) {
+        // Special mask mode lets a masked level in service stop blocking
+        // the others (data sheet p.16): entering or leaving it changes what
+        // is deliverable now, so the output follows at once.
+        const u8 smm = (data >> 5) & 0x01;
+        if (smm != s.special_mask[index]) {
+          s.special_mask[index] = smm;
+          update_output(index);
+        }
+      }
     } else {
       // OCW2
       const int cmd = (data >> 5) & 7;

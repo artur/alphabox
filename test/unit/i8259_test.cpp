@@ -184,6 +184,30 @@ static void test_poll() {
   CHECK_EQ(r.isr(0), 0x20);
 }
 
+/// Special mask mode (OCW3 ESMM/SMM): a level in service that is masked no
+/// longer blocks lower ones (data sheet p.16, "it inhibits further
+/// interrupts at that level and enables interrupts from all other levels
+/// (lower as well as higher) that are not masked"). A lower request already
+/// waiting is delivered as soon as the mode is entered, and leaving the mode
+/// blocks it again.
+static void test_special_mask() {
+  Rig r;
+  r.init();
+  r.pic.interrupt(0, 3);
+  CHECK_EQ(r.pic.read_vector(), 0x23); // IR3 in service
+  r.pic.interrupt(0, 5);
+  CHECK_EQ(r.line, 0);
+  r.pic.write(0, 1, 0x08); // mask IR3
+  CHECK_EQ(r.line, 0);     // normal mask mode: still blocked
+  r.pic.write(0, 0, 0x68); // OCW3: set special mask mode
+  CHECK_EQ(r.line, 1);
+  r.pic.write(0, 0, 0x48); // OCW3: reset special mask mode
+  CHECK_EQ(r.line, 0);
+  r.pic.write(0, 0, 0x68);
+  CHECK_EQ(r.pic.read_vector(), 0x25);
+  CHECK_EQ(r.isr(0), 0x28);
+}
+
 int main() {
   test_basic();
   test_cascade();
@@ -192,6 +216,7 @@ int main() {
   test_level();
   test_rotate_specific_eoi();
   test_poll();
+  test_special_mask();
   printf("i8259_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }
