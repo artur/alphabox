@@ -547,11 +547,16 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSICMD_READ_CD 0xBE
 
 #define SCSICMD_VERIFY_10 0x2F
+#define SCSICMD_VERIFY_16 0x8F
 
 #define SCSICMD_WRITE 0x0A
 #define SCSICMD_WRITE_10 0x2A
 #define SCSICMD_WRITE_12 0xAA
+#define SCSICMD_WRITE_16 0x8A
 #define SCSICMD_WRITE_LONG 0x3F
+
+#define SCSICMD_SERVICE_ACTION_IN_16 0x9E
+#define SCSISA_READ_CAPACITY_16 0x10
 
 #define SCSICMD_MODE_SELECT 0x15
 #define SCSICMD_MODE_SENSE 0x1a
@@ -891,13 +896,17 @@ static inline bool cmd_needs_media(u8 op) {
   case SCSICMD_READ:
   case SCSICMD_READ_10:
   case SCSICMD_READ_12:
+  case SCSICMD_READ_16:
   case SCSICMD_READ_CD:
   case SCSICMD_READ_LONG:
   case SCSICMD_VERIFY_10:
+  case SCSICMD_VERIFY_16:
   case SCSICMD_WRITE:
   case SCSICMD_WRITE_10:
   case SCSICMD_WRITE_12:
+  case SCSICMD_WRITE_16:
   case SCSIBLOCKCMD_READ_CAPACITY:
+  case SCSICMD_SERVICE_ACTION_IN_16:
   case SCSIBLOCKCMD_SEEK:
   case SCSICDROM_READ_TOC:
   case SCSICDROM_READ_SUBCHANNEL:
@@ -936,6 +945,13 @@ static bool cdb_lba_length(const u8 *c, u64 &lba, u64 &blocks) {
   case SCSICMD_WRITE_12:
     lba = get_be32(c + 2);
     blocks = get_be32(c + 6);
+    return true;
+  case SCSICMD_READ_16:
+  case SCSICMD_WRITE_16:
+  case SCSICMD_VERIFY_16:
+    // A 64-bit address and a 32-bit length (SBC-3 5.13, 5.34, 5.29).
+    lba = (u64(get_be32(c + 2)) << 32) | get_be32(c + 6);
+    blocks = get_be32(c + 10);
     return true;
   case SCSICMD_READ_CD:
     lba = get_be32(c + 2);
@@ -2425,16 +2441,12 @@ int CDisk::do_scsi_command() {
     }
 
     // READ CAPACITY returns the number of the last LBA (n-1);
-    // not the number of LBA's (n)
-    state.scsi.dati.data[0] = (u8)((get_lba_size() - 1) >> 24) & 255;
-    state.scsi.dati.data[1] = (u8)((get_lba_size() - 1) >> 16) & 255;
-    state.scsi.dati.data[2] = (u8)((get_lba_size() - 1) >> 8) & 255;
-    state.scsi.dati.data[3] = (u8)((get_lba_size() - 1) >> 0) & 255;
-
-    state.scsi.dati.data[4] = (u8)(get_block_size() >> 24) & 255;
-    state.scsi.dati.data[5] = (u8)(get_block_size() >> 16) & 255;
-    state.scsi.dati.data[6] = (u8)(get_block_size() >> 8) & 255;
-    state.scsi.dati.data[7] = (u8)(get_block_size() >> 0) & 255;
+    // not the number of LBA's (n). One that does not fit in 32 bits
+    // (a disk of 2 TiB and more at 512 bytes) is reported as FFFFFFFFh,
+    // which tells the initiator to ask READ CAPACITY(16) (SBC-3 5.15).
+    put_be32(state.scsi.dati.data,
+             (u32)std::min<u64>((u64)get_lba_size() - 1, 0xffffffffull));
+    put_be32(state.scsi.dati.data + 4, (u32)get_block_size());
 
     state.scsi.dati.read = 0;
     state.scsi.dati.available = 8;
@@ -2448,7 +2460,42 @@ int CDisk::do_scsi_command() {
     do_scsi_error(SCSI_OK);
     break;
 
-  case SCSICMD_VERIFY_10: {
+  case SCSICMD_SERVICE_ACTION_IN_16: {
+    // SERVICE ACTION IN(16): READ CAPACITY(16) is the one service action
+    // this disk has; any other is a reserved code value in a CDB field,
+    // INVALID FIELD IN CDB (SPC-3 4.3.1).
+    const u8 *c = state.scsi.cmd.data;
+    if ((c[1] & 0x1f) != SCSISA_READ_CAPACITY_16) {
+      do_scsi_error(SCSI_INVALID_FIELD);
+      break;
+    }
+    // READ CAPACITY(16) (SBC-3 5.16): the 64-bit last LBA and the block
+    // length; LBA and PMI as READ CAPACITY(10) has them; no protection
+    // information, one logical block per physical block, fully
+    // provisioned. Up to the allocation length (bytes 10-13).
+    const u64 rc_lba = (u64(get_be32(c + 2)) << 32) | get_be32(c + 6);
+    if (!(c[14] & 1) && rc_lba != 0) {
+      do_scsi_error(SCSI_INVALID_FIELD);
+      break;
+    }
+    if (rc_lba >= (u64)get_lba_size()) {
+      do_scsi_error(SCSI_LBA_RANGE);
+      break;
+    }
+    u8 *d = state.scsi.dati.data;
+    memset(d, 0, 32);
+    const u64 last = (u64)get_lba_size() - 1;
+    put_be32(d, (u32)(last >> 32));
+    put_be32(d + 4, (u32)last);
+    put_be32(d + 8, (u32)get_block_size());
+    state.scsi.dati.read = 0;
+    state.scsi.dati.available = std::min<u32>(32, get_be32(c + 10));
+    do_scsi_error(SCSI_OK);
+    break;
+  }
+
+  case SCSICMD_VERIFY_10:
+  case SCSICMD_VERIFY_16: {
 #if defined(DEBUG_SCSI)
     printf("%s: VERIFY(10).\n", devid_string);
 #endif
@@ -2472,6 +2519,7 @@ int CDisk::do_scsi_command() {
   case SCSICMD_READ:
   case SCSICMD_READ_10:
   case SCSICMD_READ_12:
+  case SCSICMD_READ_16:
   case SCSICMD_READ_CD:
 #if defined(DEBUG_SCSI)
     printf("%s: READ.\n", devid_string);
@@ -2605,6 +2653,7 @@ int CDisk::do_scsi_command() {
   case SCSICMD_WRITE:
   case SCSICMD_WRITE_10:
   case SCSICMD_WRITE_12:
+  case SCSICMD_WRITE_16:
 #if defined(DEBUG_SCSI)
     printf("%s: WRITE.\n", devid_string);
 #endif

@@ -323,6 +323,7 @@ u16 be16(const std::vector<u8> &v, size_t at) {
 
 /// The machine under test: disks on one adapter's bus.
 struct Rig {
+  CSystem *sys;
   CCdbTestAdapter *a;
   CConfigurator *acfg;
   CDisk *disk = nullptr;    ///< id 0: 8 MB image, read-write
@@ -963,6 +964,62 @@ void t_big(Rig &r) {
         "a state file from before the transfer state restores");
 }
 
+/// Feature: the 64-bit LBA family.
+void t_lba64(Rig &r) {
+  group("64-bit LBA");
+  CCdbTestAdapter *a = r.a;
+  Res c16 = a->run(0, {0x9e, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0});
+  check(c16.good() && c16.in.size() == 32 && be32(c16.in, 0) == 0 &&
+            be32(c16.in, 4) == kDiskBlocks - 1 && be32(c16.in, 8) == 512,
+        "READ CAPACITY(16)", "%s", c16.why().c_str());
+  Res rd = a->run(0, cdb16(0x88, 200, 5));
+  check(rd.good() && blocks_ok(rd.in, 200, 5, 512), "READ(16)");
+  std::vector<u8> w(512, 0x77);
+  expect_good(a->run(0, cdb16(0x8a, 210, 1), w), "WRITE(16)");
+  Res b = a->run(0, cdb10(0x28, 210, 1));
+  check(b.good() && b.in == w, "WRITE(16) reads back");
+  expect_cc(r, 0, a->run(0, cdb16(0x88, 0xffffffffffffffffull, 2)),
+            "READ(16) at 2^64-1", 5, 0x21, 0);
+  expect_cc(r, 0, a->run(0, cdb16(0x88, 0x100000000ull, 1)),
+            "READ(16) above 2^32", 5, 0x21, 0);
+  expect_good(a->run(0, cdb16(0x8f, 0, 8)), "VERIFY(16)");
+
+  // A disk past 2 TiB: a sparse image of 2^32 + 8 blocks, which costs the
+  // host a few blocks.
+  const u64 big = 0x100000008ull;
+  FILE *f = fopen(path("big.img").c_str(), "wb");
+  const bool made =
+      f && fseek_large(f, (off_t_large)(big * 512 - 1), SEEK_SET) == 0 &&
+      fputc(0, f) != EOF;
+  if (f)
+    fclose(f);
+  check(made, "a sparse 2 TiB image");
+  if (!made)
+    return;
+  CDisk *d = file_disk(r, r.sys, 6, "file=\"" + path("big.img") + "\";");
+  Res c10 = a->run(6, cdb10(0x25, 0, 0));
+  check(c10.good() && c10.in.size() == 8 && be32(c10.in, 0) == 0xffffffff,
+        "READ CAPACITY(10) above 2^32 blocks: FFFFFFFFh");
+  Res c16b = a->run(6, {0x9e, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0});
+  check(c16b.good() && c16b.in.size() == 32 && be32(c16b.in, 0) == 1 &&
+            be32(c16b.in, 4) == 7,
+        "READ CAPACITY(16): last LBA 2^32 + 7");
+  std::vector<u8> hi(1024, 0x5c);
+  expect_good(a->run(6, cdb16(0x8a, 0x100000002ull, 2), hi),
+              "WRITE(16) above 2^32");
+  Res hb = a->run(6, cdb16(0x88, 0x100000002ull, 2));
+  check(hb.good() && hb.in == hi, "READ(16) above 2^32 reads it back");
+  expect_cc(r, 6, a->run(6, cdb16(0x88, big - 1, 2)),
+            "READ(16) across the end of the 2 TiB disk", 5, 0x21, 0);
+  Res c8 = a->run(6, {0x9e, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0});
+  check(c8.good() && c8.in.size() == 8, "READ CAPACITY(16), allocation 8");
+  expect_cc(r, 6,
+            a->run(6, {0x9e, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0}),
+            "SERVICE ACTION IN(16), another service action", 5, 0x24, 0);
+  (void)d;
+  remove(path("big.img").c_str());
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -994,6 +1051,7 @@ int main_cdbtest(int argc, char **argv) {
   CSystem *sys = new CSystem(root);
 
   Rig r;
+  r.sys = sys;
   r.acfg = node(root, "scsi0", "cdbtest", "");
   r.a = new CCdbTestAdapter(r.acfg, sys);
   r.disk = file_disk(r, sys, 0, "file=\"" + path("disk.img") + "\";");
@@ -1024,6 +1082,7 @@ int main_cdbtest(int argc, char **argv) {
   t_lun(r);
   t_write_protect(r);
   t_big(r);
+  t_lba64(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
