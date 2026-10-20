@@ -663,6 +663,97 @@ void t_lba_wrap(Rig &r) {
   }
 }
 
+/// DISK-03: MODE SELECT block lengths.
+void t_mode_select_block(Rig &r) {
+  group("DISK-03 MODE SELECT block length");
+  CCdbTestAdapter *a = r.a;
+  auto ms6 = [&](int id, u32 bl) {
+    std::vector<u8> d = {0,           0,     0, 8, 0, 0, 0, 0, 0, u8(bl >> 16),
+                         u8(bl >> 8), u8(bl)};
+    return a->run(id, {0x15, 0x10, 0, 0, 12, 0}, d);
+  };
+  expect_cc(r, 0, ms6(0, 0), "block length 0", 5, 0x26, 0);
+  expect_cc(r, 0, ms6(0, 3), "block length 3", 5, 0x26, 0);
+  expect_cc(r, 0, ms6(0, 520), "block length 520", 5, 0x26, 0);
+  expect_cc(r, 0, ms6(0, 8192), "block length 8192", 5, 0x26, 0);
+  Res cap = a->run(0, cdb10(0x25, 0, 0));
+  check(cap.good() && be32(cap.in, 4) == 512 &&
+            be32(cap.in, 0) == kDiskBlocks - 1,
+        "a refused block length changes nothing");
+  expect_good(ms6(0, 512), "block length 512 on a disk");
+  expect_good(ms6(3, 512), "block length 512 on a CD-ROM");
+  Res cd = a->run(3, cdb10(0x25, 0, 0));
+  check(cd.good() && be32(cd.in, 4) == 512 &&
+            be32(cd.in, 0) == kCdBlocks * 4 - 1,
+        "the CD-ROM then has 512-byte blocks");
+  Res rd = a->run(3, cdb10(0x28, 4 * 17 + 1, 1));
+  std::vector<u8> sector(2048);
+  fill_block(sector.data(), 17, 2048);
+  check(rd.good() && rd.in.size() == 512 &&
+            memcmp(rd.in.data(), &sector[512], 512) == 0,
+        "and reads the second quarter of sector 17 as block 69");
+  expect_good(ms6(3, 2048), "block length 2048 on a CD-ROM");
+}
+
+/// DISK-04: MODE SENSE page control and the CD's page 5.
+void t_mode_sense_pc(Rig &r) {
+  group("DISK-04 MODE SENSE page control");
+  CCdbTestAdapter *a = r.a;
+  int stops = 0;
+  for (int id : {0, 3}) {
+    for (int p = 0; p < 0x40; p++) {
+      for (int pc = 0; pc < 4; pc++) {
+        Res m = a->run(id, {0x1a, 0, u8(pc << 6 | p), 0, 255, 0});
+        Res m10 = a->run(id, {0x5a, 0, u8(pc << 6 | p), 0, 0, 0, 0, 1, 0, 0});
+        if (!m.error.empty() || !m10.error.empty() ||
+            (m.status != 0 && m.status != 2)) {
+          if (stops++ < 3) {
+            char name[80];
+            snprintf(name, sizeof(name), "id %d page %02x PC %d", id, p, pc);
+            check(false, name, "%s",
+                  m.error.empty() ? m10.error.c_str() : m.error.c_str());
+          }
+        }
+        a->sense(id);
+      }
+    }
+  }
+  check(stops == 0, "MODE SENSE(6)/(10) of every page and PC: no stop", "%d",
+        stops);
+  expect_good(a->run(0, {0x1a, 0, 0x88, 0, 255, 0}),
+              "default values (PC 10b) of the caching page");
+  Res d = a->run(0, {0x1a, 0, 0x88, 0, 255, 0});
+  Res c = a->run(0, {0x1a, 0, 0x08, 0, 255, 0});
+  check(d.in == c.in, "default values equal current values");
+  expect_cc(r, 0, a->run(0, {0x1a, 0, 0xc8, 0, 255, 0}),
+            "saved values (PC 11b)", 5, 0x39, 0);
+  expect_cc(r, 3, a->run(3, {0x1a, 0, 0x05, 0, 255, 0}), "page 5 on a CD-ROM",
+            5, 0x24, 0);
+  Res m = a->run(0, {0x1a, 0, 0x07, 0, 255, 0});
+  check(m.cc() && m.in.empty(), "no DATA IN before CHECK CONDITION", "%s",
+        m.why().c_str());
+  a->sense(0);
+}
+
+/// DISK-05: READ CAPACITY with PMI.
+void t_capacity_pmi(Rig &r) {
+  group("DISK-05 READ CAPACITY PMI");
+  CCdbTestAdapter *a = r.a;
+  Res pmi = a->run(0, {0x25, 0, 0, 0, 0, 0, 0, 0, 1, 0});
+  check(pmi.good() && pmi.in.size() == 8 && be32(pmi.in, 0) == kDiskBlocks - 1,
+        "READ CAPACITY with PMI", "%s", pmi.why().c_str());
+  Res pmi2 = a->run(0, {0x25, 0, 0, 0, 0x10, 0, 0, 0, 1, 0});
+  check(pmi2.good() && pmi2.in.size() == 8 &&
+            be32(pmi2.in, 0) == kDiskBlocks - 1,
+        "READ CAPACITY with PMI and an LBA on the disk");
+  expect_cc(r, 0, a->run(0, cdb10(0x25, 16, 0)),
+            "READ CAPACITY with an LBA and no PMI", 5, 0x24, 0);
+  std::vector<u8> past = cdb10(0x25, kDiskBlocks, 0);
+  past[8] = 1;
+  expect_cc(r, 0, a->run(0, past), "READ CAPACITY with PMI past the end", 5,
+            0x21, 0);
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -714,6 +805,9 @@ int main_cdbtest(int argc, char **argv) {
   t_selection(r);
   t_bad_messages(r);
   t_lba_wrap(r);
+  t_mode_select_block(r);
+  t_mode_sense_pc(r);
+  t_capacity_pmi(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

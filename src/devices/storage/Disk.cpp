@@ -602,6 +602,9 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSI_NO_MEDIA_TRAY_OPEN -9   /* 02/3A/02 */
 #define SCSI_MEDIA_LOCKED -10        /* 05/53/02 medium removal prevented */
 #define SCSI_READ_ERROR -11          /* 03/11/00 unrecovered read error */
+#define SCSI_INVALID_PARAM -12       /* 05/26/00 invalid field in param list */
+#define SCSI_PARAM_LENGTH -13        /* 05/1A/00 parameter list length error */
+#define SCSI_SAVING_NOT_SUPP -14     /* 05/39/00 saving params not supported */
 
 // ALPHABOX_TRACE_SCSI=1: every command a SCSI device is given, and the
 // sense data of each one it answers with CHECK CONDITION.
@@ -624,6 +627,12 @@ void CDisk::do_scsi_error(int errcode, int info) {
 #endif
     return;
   }
+
+  // A command that ends in CHECK CONDITION is terminated: whatever data a
+  // handler had set up before it found the error is not sent, and the
+  // target goes straight to STATUS.
+  state.scsi.dati.available = 0;
+  state.scsi.dati.read = 0;
 
   state.scsi.stat.data[0] = 0x02;        // check sense
   state.scsi.sense.data[0] = 0xf0;       // error code
@@ -708,6 +717,24 @@ void CDisk::do_scsi_error(int errcode, int info) {
   case SCSI_READ_ERROR:
     state.scsi.sense.data[2] = 0x03;  // medium error
     state.scsi.sense.data[12] = 0x11; // unrecovered read error
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_INVALID_PARAM:
+    state.scsi.sense.data[2] = 0x05;  // illegal request
+    state.scsi.sense.data[12] = 0x26; // invalid field in parameter list
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_PARAM_LENGTH:
+    state.scsi.sense.data[2] = 0x05;  // illegal request
+    state.scsi.sense.data[12] = 0x1a; // parameter list length error
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_SAVING_NOT_SUPP:
+    state.scsi.sense.data[2] = 0x05;  // illegal request
+    state.scsi.sense.data[12] = 0x39; // saving parameters not supported
     state.scsi.sense.data[13] = 0x00;
     break;
 
@@ -1633,12 +1660,20 @@ int CDisk::do_scsi_command() {
         state.scsi.dati.data[7] = (u8)(8 * num_blk_desc);
       }
 
-      if ((state.scsi.cmd.data[2] & 0xc0) > 0x40) {
-        FAILURE_2(NotImplemented, "%s: mode sense, cmd[2] = 0x%02x.\n",
-                  devid_string, state.scsi.cmd.data[2]);
+      // Page control (SPC-3 6.9): 00b current, 01b changeable, 10b default
+      // and 11b saved values. Nothing here is saved -- no page has PS set
+      // and MODE SELECT's SP is not acted on -- so saved values are SAVING
+      // PARAMETERS NOT SUPPORTED (6.9.5). The defaults are the values the
+      // pages have before any MODE SELECT, which are the current ones: the
+      // block length MODE SELECT may change lives in the block descriptor,
+      // which reports current values whatever PC says (6.9.1).
+      const int page_control = state.scsi.cmd.data[2] >> 6;
+      if (page_control == 3) {
+        do_scsi_error(SCSI_SAVING_NOT_SUPP);
+        break;
       }
 
-      bool changeable = ((state.scsi.cmd.data[2] & 0xc0) == 0x40);
+      bool changeable = page_control == 1;
 
       //  Return data:
       if (retlen > DATI_BUFSZ) {
@@ -1747,9 +1782,11 @@ int CDisk::do_scsi_command() {
 
       case SCSIMP_FLEX_PARAMS: //  flexible disk page
         if (cdrom()) {
-          FAILURE_1(NotImplemented,
-                    "%s: CD-ROM write parameter page not implemented.\n",
-                    devid_string);
+          // On a CD-ROM, page 05h is MMC's write parameters page, which a
+          // drive that does not write lacks: a page the logical unit does
+          // not implement (SPC-3 6.9.1).
+          do_scsi_error(SCSI_INVALID_FIELD);
+          return 0;
         }
 
         state.scsi.dati.data[q + 0] = pagecode;
@@ -2112,6 +2149,7 @@ int CDisk::do_scsi_command() {
 #endif
 
     bool block_size_updated = false;
+    u32 new_block_size = 0;
     if (!mode_select_10) {
       if (state.scsi.dato.written == 12 &&
           state.scsi.dato.data[0] == 0x00 // data length
@@ -2124,9 +2162,9 @@ int CDisk::do_scsi_command() {
           && state.scsi.dato.data[7] == 0x00  // all blocks
           && state.scsi.dato.data[8] == 0x00) // reserved
       {
-        set_block_size((state.scsi.dato.data[9] << 16) |
-                       (state.scsi.dato.data[10] << 8) |
-                       state.scsi.dato.data[11]);
+        new_block_size = (state.scsi.dato.data[9] << 16) |
+                         (state.scsi.dato.data[10] << 8) |
+                         state.scsi.dato.data[11];
         block_size_updated = true;
       }
     } else {
@@ -2145,11 +2183,27 @@ int CDisk::do_scsi_command() {
           && state.scsi.dato.data[11] == 0x00  // all blocks
           && state.scsi.dato.data[12] == 0x00) // reserved
       {
-        set_block_size((state.scsi.dato.data[13] << 16) |
-                       (state.scsi.dato.data[14] << 8) |
-                       state.scsi.dato.data[15]);
+        new_block_size = (state.scsi.dato.data[13] << 16) |
+                         (state.scsi.dato.data[14] << 8) |
+                         state.scsi.dato.data[15];
         block_size_updated = true;
       }
+    }
+
+    // A block length the disk cannot take -- 0 divided the capacity by
+    // zero, and any other length was taken as given -- is an unsupported
+    // value in a block descriptor: CHECK CONDITION, INVALID FIELD IN
+    // PARAMETER LIST, and no mode parameter changes (SPC-3 6.7, b). The
+    // image is byte-addressed, so any power of two from 512 to 4096 can be
+    // laid over it, a disk's or a CD's.
+    if (block_size_updated) {
+      if (new_block_size != get_block_size() &&
+          (new_block_size < 512 || new_block_size > 4096 ||
+           (new_block_size & (new_block_size - 1)) != 0)) {
+        do_scsi_error(SCSI_INVALID_PARAM);
+        break;
+      }
+      set_block_size(new_block_size);
     }
 
 #if defined(DEBUG_SCSI)
@@ -2189,12 +2243,20 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: READ CAPACITY.\n", devid_string);
 #endif
-    if (state.scsi.cmd.data[8] & 1) {
-      FAILURE_1(
-          NotImplemented,
-          "%s: Don't know how to handle READ CAPACITY with PMI bit set.\n",
-          devid_string);
-      break;
+    // PMI (SBC-3 5.15): with it, the last block before "a substantial
+    // vendor specific delay in data transfer" after the LBA given; an
+    // image has no such delay, so that is the last block of the medium,
+    // provided the LBA is on it. Without it, the LBA field must be zero.
+    {
+      const u64 pmi_lba = get_be32(state.scsi.cmd.data + 2);
+      if (!(state.scsi.cmd.data[8] & 1) && pmi_lba != 0) {
+        do_scsi_error(SCSI_INVALID_FIELD);
+        break;
+      }
+      if (pmi_lba >= (u64)get_lba_size()) {
+        do_scsi_error(SCSI_LBA_RANGE);
+        break;
+      }
     }
 
     // READ CAPACITY returns the number of the last LBA (n-1);
