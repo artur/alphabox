@@ -107,6 +107,17 @@ public:
   /// counter 0's output made, each one an IRQ0 for the owner to raise.
   int clock();
 
+  /// The state as a state file should hold it: `into`, a copy of the state,
+  /// gets each running counter's count and OUT as of now, so that
+  /// restored() can put the counter back at the same point of its count.
+  void save(SPit_state &into);
+  /// After the state was read back from a file: place each counter's phase
+  /// reference so that its count goes on from the saved one, and restart
+  /// the thread's clock. The phase references are host times, meaningless
+  /// in another run, so they are not in the file. The owner sets the GATE
+  /// inputs first (load_gate).
+  void restored();
+
 private:
   bool out_locked(int c, u64 now);
   u16 count_now_locked(int c, u64 now);

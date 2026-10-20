@@ -330,6 +330,22 @@ u64 CI8254::phase_locked(int c) const {
   }
 }
 
+void CI8254::save(SPit_state &into) {
+  std::lock_guard<std::mutex> guard(lock);
+  const u64 now = now_ns();
+  for (int c = 0; c < 3; c++)
+    freeze_locked(c, now, into);
+}
+
+void CI8254::restored() {
+  std::lock_guard<std::mutex> guard(lock);
+  const u64 now = now_ns();
+  last = now;
+  acc = 0;
+  for (int c = 0; c < 3; c++)
+    epoch[c] = now - ns_for_clocks(phase_locked(c));
+}
+
 void CI8254::set_gate(int c, bool high) {
   std::lock_guard<std::mutex> guard(lock);
   const bool was_high = gate[c];

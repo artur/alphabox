@@ -217,6 +217,69 @@ static void test_gate() {
   CHECK(!r.pit.out(2));
 }
 
+/// A state file carries the counts, not host times: a counter saved in the
+/// middle of its count goes on from there when restored in another run,
+/// whose clock reads something else entirely.
+static void test_save_restore() {
+  Rig a;
+  a.pit.load_gate(2, true);
+  a.program(2, 0, 10000); // mode 0 delay, 8.38 ms
+  a.program(0, 3, 1000);  // square wave
+  a.clocks(3000);
+  SPit_state file = a.st;
+  a.pit.save(file);
+
+  Rig b;
+  b.t = 5000000000ull; // another process: another clock
+  b.st = file;
+  b.pit.load_gate(2, true);
+  b.pit.restored();
+  CHECK(!b.pit.out(2));
+  b.clocks(6990); // 9990 of 10000
+  CHECK(!b.pit.out(2));
+  b.clocks(20);
+  CHECK(b.pit.out(2));
+
+  Rig c; // counter 0: 3000 clocks in = the start of a period
+  c.t = 7000000000ull;
+  c.st = file;
+  c.pit.restored();
+  CHECK(c.pit.out(0));
+  c.clocks(490);
+  CHECK(c.pit.out(0));
+  c.clocks(20); // 510: second half
+  CHECK(!c.pit.out(0));
+  // and the thread goes on raising IRQ0 at the period
+  int edges = 0;
+  for (int i = 0; i < 100; i++) { // 100 ms: about 119 periods of 1000 clocks
+    c.ns(1000000);
+    edges += c.pit.clock();
+  }
+  CHECK(edges >= 118 && edges <= 121);
+}
+
+/// A state file written before the timer saved its counts holds the count
+/// clock() had reached: a restore goes on from that.
+static void test_restore_old_file() {
+  Rig a;
+  a.pit.load_gate(2, true);
+  a.program(2, 0, 10000);
+  for (int ms = 0; ms < 3; ms++) {
+    a.ns(1000000);
+    a.pit.clock();
+  }
+  Rig b;
+  b.t = 5000000000ull;
+  b.st = a.st; // no save(): the thread's count, 3 ms in
+  b.pit.load_gate(2, true);
+  b.pit.restored();
+  CHECK(!b.pit.out(2));
+  b.ns(5300000); // 8.3 ms in all
+  CHECK(!b.pit.out(2));
+  b.ns(200000);
+  CHECK(b.pit.out(2));
+}
+
 int main() {
   test_mode3_wave();
   test_mode3_irq0();
@@ -226,6 +289,8 @@ int main() {
   test_latch();
   test_readback_status();
   test_gate();
+  test_save_restore();
+  test_restore_old_file();
   printf("i8254_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

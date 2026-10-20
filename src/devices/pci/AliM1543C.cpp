@@ -2016,9 +2016,14 @@ int CAliM1543C::SaveState(FILE *f) {
   if ((res = CPCIDevice::SaveState(f)))
     return res;
 
+  // The timer's counts as of now: its phase references are host times, so
+  // the file carries where each counter is in its count instead.
+  SAli_state saved = state;
+  pit.save(saved.pit);
+
   fwrite(&ali_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
-  fwrite(&state, sizeof(state), 1, f);
+  fwrite(&saved, sizeof(saved), 1, f);
   fwrite(&ali_magic2, sizeof(u32), 1, f);
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
@@ -2076,8 +2081,10 @@ int CAliM1543C::RestoreState(FILE *f) {
     return -1;
   }
 
-  // The 8254's GATE2 input is port 61h bit 0, which the state just set.
+  // The 8254's GATE2 input is port 61h bit 0, which the state just set;
+  // then each counter goes on from its saved count.
   pit.load_gate(2, (state.reg_61 & 0x01) != 0);
+  pit.restored();
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   return 0;
