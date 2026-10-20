@@ -64,6 +64,7 @@
 #include <string>
 #include <vector>
 #if !defined(_WIN32)
+#include <netdb.h>
 #include <spawn.h>
 #include <sys/wait.h>
 extern char **environ;
@@ -95,7 +96,6 @@ void CSerial::init() {
   disabled = myCfg->get_bool_value("disabled");
   raw_mode = myCfg->get_bool_value("raw_mode");
   null_attach = myCfg->get_bool_value("null_attach");
-  listenPort = (int)myCfg->get_num_value("port", false, 8000 + state.iNumber);
   if (!(listenAddress = myCfg->get_text_value("address")))
     listenAddress = "0.0.0.0";
 
@@ -166,15 +166,33 @@ void CSerial::init() {
 
   socklen_t nAddressSize = sizeof(struct sockaddr_in);
 
+  const u64 port = myCfg->get_num_value("port", false, 8000 + state.iNumber);
+  if (port < 1 || port > 65535)
+    FAILURE_2(Configuration, "%s: port %" PRIu64 " is not a TCP port (1-65535)",
+              devid_string, port);
+  listenPort = (int)port;
+
+  // Resolved rather than parsed, so a host name such as "localhost" works,
+  // and an address that does not resolve stops here: it used to fall back
+  // to every interface, which opened the console (and its BREAK menu) to
+  // the network when the user had asked for one address.
+  addrinfo hints = {};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+  addrinfo *res = nullptr;
+  const int gai = getaddrinfo(listenAddress, nullptr, &hints, &res);
+  if (gai || !res)
+    FAILURE_3(Configuration, "%s: cannot listen on address \"%s\": %s",
+              devid_string, listenAddress,
+              gai ? gai_strerror(gai) : "no IPv4 address");
+  memcpy(&Address, res->ai_addr, sizeof(Address));
+  freeaddrinfo(res);
+  Address.sin_port = htons((u16)listenPort);
+
   listenSocket = (int)socket(AF_INET, SOCK_STREAM, 0);
   if (listenSocket == INVALID_SOCKET)
     FAILURE_1(Runtime, "Serial: can't create a socket: %s\n", strerror(errno));
-
-  Address.sin_addr.s_addr = inet_addr(listenAddress);
-  if (Address.sin_addr.s_addr == INADDR_NONE)
-    Address.sin_addr.s_addr = INADDR_ANY;
-  Address.sin_port = htons((u16)(listenPort));
-  Address.sin_family = AF_INET;
 
   int optval = 1;
   setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, (char *)&optval,

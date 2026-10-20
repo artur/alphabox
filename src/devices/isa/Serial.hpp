@@ -123,7 +123,7 @@ private:
     bool thre_pending; /**< THRE interrupt latched (THR emptied, not yet acked
                           by an IIR read) */
   } state;
-  int listenPort;
+  int listenPort = 0;
   int64_t listenSocket;
   int64_t connectSocket;
   bool disabled =
