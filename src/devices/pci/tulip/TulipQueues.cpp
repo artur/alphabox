@@ -66,7 +66,6 @@
  **/
 #include "StdAfx.hpp"
 
-#if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
 #include "System.hpp"
 #include <string.h>
@@ -828,5 +827,3 @@ void CTulip::SetupFilter() {
   memcpy(nf.own_mac, state.mac, sizeof(nf.own_mac));
   net_backend->set_filter(nf);
 }
-
-#endif // defined(HAVE_PCAP) || defined(__linux__)

@@ -17,9 +17,10 @@ must be refused with exit status 1 and an error that names the place
 (file:line:col) and says what is wrong (malformed/expect.txt). A crash, a
 hang, or an accepted file is a failure.
 
-The exit statuses in the golden files are those of a build with SDL
-(`alphabox --version` lists SDL3): without it, the configurations with a
-GUI are refused, and only the trees are compared.
+The exit statuses in the golden files are those of a build with SDL and
+pcap (`alphabox --version` lists SDL3 and PCap): without them, the
+configurations with a GUI or a pcap NIC are refused, and only the trees
+are compared.
 
 Generated files go to $ALPHABOX_WORK/cfg-corpus (default <repo>/lab).
 Prints PASS or FAIL per case and a summary; exit status 0 when all pass.
@@ -187,11 +188,11 @@ def main():
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     feats = features(binary)
-    with_sdl = "SDL3" in feats
+    with_sdl = "SDL3" in feats and "PCap" in feats
     print("binary: %s" % binary)
     print("  " + feats.strip().replace("\n", "\n  "))
     if not with_sdl:
-        print("  (no SDL: exit statuses are not compared)")
+        print("  (no SDL or no pcap: exit statuses are not compared)")
 
     fails = 0
     count = 0

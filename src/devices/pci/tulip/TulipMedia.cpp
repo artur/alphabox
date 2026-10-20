@@ -65,7 +65,6 @@
  **/
 #include "StdAfx.hpp"
 
-#if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
 #include "System.hpp"
 #include <string.h>
@@ -725,5 +724,3 @@ void CTulip::build_srom() {
          state.srom.data[126], state.srom.data[127]);
 #endif
 }
-
-#endif // defined(HAVE_PCAP) || defined(__linux__)

@@ -47,10 +47,15 @@
 #include "DiskDevice.hpp"
 #include "DiskFile.hpp"
 #include "DiskRam.hpp"
+#include "ES137x.hpp"
 #include "Ehci.hpp"
 #include "FloppyController.hpp"
+#include "I8255x.hpp"
+#include "Isp1040.hpp"
 #include "Keyboard.hpp"
 #include "Mach64.hpp"
+#include "NetworkBackend.hpp"
+#include "PCIBridge.hpp"
 #include "Permedia2.hpp"
 #include "Port80.hpp"
 #include "Radeon.hpp"
@@ -58,19 +63,13 @@
 #include "S3Virge.hpp"
 #include "Serial.hpp"
 #include "StdAfx.hpp"
+#include "Sym53C8xx.hpp"
 #include "System.hpp"
 #include "Tga.hpp"
+#include "Tulip.hpp"
 #include "VirtioBlk.hpp"
 #include "VirtioNet.hpp"
 #include "gui/plugin.hpp"
-#if defined(HAVE_PCAP) || defined(__linux__)
-#include "Tulip.hpp"
-#endif
-#include "ES137x.hpp"
-#include "I8255x.hpp"
-#include "Isp1040.hpp"
-#include "PCIBridge.hpp"
-#include "Sym53C8xx.hpp"
 
 /**
  * Check mode (Configurator.hpp): what initialize() keeps in place of the
@@ -950,12 +949,6 @@ void CConfigurator::initialize_section() {
     FAILURE_2(Configuration, "Class %s for %s needs an X11 platform", myValue,
               myName);
 #endif
-#if !defined(HAVE_PCAP) && !defined(__linux__)
-  if (myFlags & IS_NIC)
-    FAILURE_2(Configuration,
-              "Class %s for %s needs networking support (libpcap or Linux TAP)",
-              myValue, myName);
-#endif
   if (myFlags & IS_PCI) {
     if (!(pParent->get_flags() & HAS_PCI)) {
       FAILURE_2(Configuration,
@@ -1199,6 +1192,14 @@ void CConfigurator::check_device() {
   default:
     break;
   }
+
+  // Every NIC's backend, as create_network_backend() will choose it.
+  if (myFlags & IS_NIC) {
+    const char *type = get_text_value("type");
+    if (const char *why = network_backend_refusal(type))
+      FAILURE_3(Configuration, "%s: type = \"%s\": %s", myName,
+                type ? type : "pcap", why);
+  }
 }
 
 /**
@@ -1319,14 +1320,11 @@ void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
     break;
 #endif
 
-#if defined(HAVE_PCAP) || defined(__linux__)
-
   case c_tulip:
     // The class name ("dec21040", "dec21143") names the part.
     myDevice = new CTulip(this, theSystem, pcibus, pcidev,
                           *CTulip::find_chip(myValue));
     break;
-#endif
 
   case c_i8255x:
     // The class name ("de600", "i82558") names the board.

@@ -60,7 +60,6 @@
  **/
 #include "StdAfx.hpp"
 
-#if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
 #include "System.hpp"
 #include <string.h>
@@ -129,5 +128,3 @@ void tulip_config_space(const tulip_chip_config &chip, u32 *data, u32 *mask) {
   mask[0x14 >> 2] = 0xffffff00; // BAR1: CBMA
   mask[0x3c >> 2] = 0x000000ff; // CFIT: interrupt line
 }
-
-#endif // defined(HAVE_PCAP) || defined(__linux__)

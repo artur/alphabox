@@ -35,8 +35,35 @@
 #include "NetworkNull.hpp"
 #include "NetworkUdp.hpp"
 
+const char *network_backend_refusal(const char *type) {
+  if (!type || !strcasecmp(type, "pcap")) {
+#if defined(HAVE_PCAP)
+    return nullptr;
+#else
+    return "pcap networking not available (compiled without pcap support); "
+           "type = \"udp\", \"loopback\" or \"null\" need nothing";
+#endif
+  }
+  if (!strcasecmp(type, "tap")) {
+#if defined(__linux__)
+    return nullptr;
+#else
+    return "TAP networking is only supported on Linux";
+#endif
+  }
+  if (!strcasecmp(type, "null") || !strcasecmp(type, "loopback") ||
+      !strcasecmp(type, "udp"))
+    return nullptr;
+  return "unknown network type: pcap, tap, udp, loopback or null";
+}
+
 CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   char *type = cfg->get_text_value("type");
+  if (const char *why = network_backend_refusal(type)) {
+    printf("%s: type = \"%s\": %s.\n", cfg->get_myName(), type ? type : "pcap",
+           why);
+    return nullptr;
+  }
 
   // Not connected to anything: the NIC exists and behaves, but transmits go
   // nowhere and nothing is ever received. Always available, because it needs
@@ -53,20 +80,15 @@ CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   if (type && strcasecmp(type, "udp") == 0)
     return new CNetworkUdp();
 
-  if (type && strcasecmp(type, "tap") == 0) {
 #if defined(__linux__)
+  if (type && strcasecmp(type, "tap") == 0)
     return new CNetworkTap();
-#else
-    printf("TAP networking is only supported on Linux.\n");
-    return nullptr;
 #endif
-  }
 
   // Default: pcap
 #if defined(HAVE_PCAP)
   return new CNetworkPcap();
 #else
-  printf("pcap networking not available (compiled without pcap support).\n");
-  return nullptr;
+  return nullptr; // network_backend_refusal() said so
 #endif
 }

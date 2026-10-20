@@ -65,7 +65,6 @@
  **/
 #include "StdAfx.hpp"
 
-#if defined(HAVE_PCAP) || defined(__linux__)
 #include "Tulip.hpp"
 #include "System.hpp"
 #include "NicAddress.hpp"
@@ -722,5 +721,3 @@ void CTulip::update_irq() {
       state.irq_was_asserted = asserted;
   }
 }
-
-#endif // defined(HAVE_PCAP) || defined(__linux__)

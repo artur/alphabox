@@ -20,6 +20,7 @@ missing-semicolon-before-brace.cfg 11:3 expected ';' after the value of lpt.outf
 missing-semicolon.cfg 5:3 expected ';' after the value of time
 missing-value.cfg 4:21 expected a value
 name-missing.cfg 7:3 expected a name, found '{'
+nic-type.cfg 7:3 unknown network type
 pci-device-range.cfg 7:3 the device 0 to 31
 pci-junk.cfg 7:3 should be pci<hose>.<device>
 pci-leading-zero.cfg 7:3 should be pci<hose>.<device>

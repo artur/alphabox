@@ -50,7 +50,7 @@ Give each `srm_run.sh` its own `PORT` to run several builds at once.
 needs no ROM and takes seconds. A change to a golden file is a change of
 behaviour: regenerate them with `--update` only when that is the intent,
 and say why in the commit. The golden exit statuses are those of a build
-with SDL; on a headless build only the trees are compared.
+with SDL and pcap; on another build only the trees are compared.
 
 `srm_probe.sh` takes its variants from the environment:
 

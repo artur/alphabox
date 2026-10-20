@@ -94,4 +94,11 @@ public:
  */
 CNetworkBackend *create_network_backend(CConfigurator *cfg);
 
+/**
+ * Why a `type` cannot be used in this build ("tap" off Linux, "pcap"
+ * without libpcap, a word that is no type), or nullptr when it can. A
+ * missing type is "pcap".
+ */
+const char *network_backend_refusal(const char *type);
+
 #endif // !defined(INCLUDED_NETWORK_BACKEND_H)

@@ -258,7 +258,10 @@ Three NIC families are available, each in any free PCI slot:
   ([virtio.md](virtio.md)).
 
 Each connects to the host through one of five back ends, selected with
-`type`:
+`type`. Every NIC is in every build; `udp`, `loopback` and `null` need
+nothing from the host, `pcap` needs a build with libpcap (`alphabox
+--version` lists PCap) and `tap` Linux. A type the build lacks, or a word
+that is no type, is refused at startup and by `--check`.
 
 - `type = "pcap"` (default): captures on an existing host interface. Set
   `adapter = "eth0";` (Linux) or the `\Device\NPF_{...}` name
