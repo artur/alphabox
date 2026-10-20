@@ -754,6 +754,33 @@ void t_capacity_pmi(Rig &r) {
             0x21, 0);
 }
 
+/// DISK-06: sense data lasts until the next command.
+void t_sense_cleared(Rig &r) {
+  group("DISK-06 sense cleared");
+  CCdbTestAdapter *a = r.a;
+  a->run(0, cdb10(0x28, kDiskBlocks, 1));
+  expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "TEST UNIT READY after an error");
+  Sense s = a->sense(0);
+  check(s.key == 0 && s.asc == 0, "the next command clears the sense",
+        "%x/%02x/%02x", s.key, s.asc, s.ascq);
+  // SCSI-2 8.2.14: any command, INQUIRY included, clears it.
+  a->run(0, cdb10(0x28, kDiskBlocks, 1));
+  a->run(0, {0x12, 0, 0, 0, 36, 0});
+  s = a->sense(0);
+  check(s.key == 0 && s.asc == 0, "so does INQUIRY", "%x/%02x/%02x", s.key,
+        s.asc, s.ascq);
+  // REQUEST SENSE retrieves it once.
+  a->run(0, cdb10(0x28, kDiskBlocks, 1));
+  s = a->sense(0);
+  Sense s2 = a->sense(0);
+  check(s.key == 5 && s.asc == 0x21 && s2.key == 0,
+        "REQUEST SENSE returns it, then NO SENSE");
+  // The ATAPI path reads the sense key after the command that failed.
+  a->run(0, cdb10(0x28, kDiskBlocks, 1));
+  check(r.disk->sense_key() == 5, "sense_key() after the failed command");
+  a->sense(0);
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -808,6 +835,7 @@ int main_cdbtest(int argc, char **argv) {
   t_mode_select_block(r);
   t_mode_sense_pc(r);
   t_capacity_pmi(r);
+  t_sense_cleared(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

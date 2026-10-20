@@ -1133,6 +1133,13 @@ int CDisk::do_scsi_command() {
     printf("\n");
   }
 
+  // Sense data waits for the REQUEST SENSE that retrieves it, or for the
+  // next command, which clears it (SCSI-2 8.2.14: "Sense data shall be
+  // cleared upon receipt of any subsequent I/O process (including REQUEST
+  // SENSE)"). A REQUEST SENSE returns it and clears it below.
+  if (state.scsi.cmd.data[0] != SCSICMD_REQUEST_SENSE)
+    state.scsi.sense.available = 0;
+
   if (state.scsi.cmd.data[1] & 0xe0) {
 #if defined(DEBUG_SCSI)
     printf("%s: LUN selected...\n", devid_string);
