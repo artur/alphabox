@@ -883,46 +883,59 @@ static inline bool opcode_has_service_actions(u8 op) {
   }
 }
 
-static inline int cdb_len_for_opcode(u8 op) {
-  // Return canonical CDB sizes for commands this emulator already handles.
-  switch (op) {
-    // 6-byte CDBs
-  case 0x00: /* TEST UNIT READY   */
-    return 6;
-  case 0x03: /* REQUEST SENSE     */
-    return 6;
-  case 0x08: /* READ (6)          */
-    return 6;
-  case 0x0A: /* WRITE (6)         */
-    return 6;
-  case 0x12: /* INQUIRY           */
-    return 6;
-  case 0x1A: /* MODE SENSE (6)    */
-    return 6;
-  case 0x3E: /* READ LONG         */
-    return 6;
+/// The commands do_scsi_command() carries out, for REPORT SUPPORTED
+/// OPERATION CODES: opcode, service action (service-action commands
+/// only), CDB length, and which drives have it.
+enum { CMD_DISK = 1, CMD_CD = 2, CMD_ALL = 3 };
+struct ScsiCommandInfo {
+  u8 op;
+  bool has_sa;
+  u16 sa;
+  u8 cdb_len;
+  u8 where;
+};
+static const ScsiCommandInfo kScsiCommands[] = {
+    {0x00, false, 0, 6, CMD_ALL},    // TEST UNIT READY
+    {0x03, false, 0, 6, CMD_ALL},    // REQUEST SENSE
+    {0x08, false, 0, 6, CMD_ALL},    // READ (6)
+    {0x0A, false, 0, 6, CMD_DISK},   // WRITE (6)
+    {0x12, false, 0, 6, CMD_ALL},    // INQUIRY
+    {0x15, false, 0, 6, CMD_ALL},    // MODE SELECT (6)
+    {0x1A, false, 0, 6, CMD_ALL},    // MODE SENSE (6)
+    {0x1B, false, 0, 6, CMD_ALL},    // START STOP UNIT
+    {0x1E, false, 0, 6, CMD_ALL},    // PREVENT ALLOW MEDIUM REMOVAL
+    {0x25, false, 0, 10, CMD_ALL},   // READ CAPACITY (10)
+    {0x28, false, 0, 10, CMD_ALL},   // READ (10)
+    {0x2A, false, 0, 10, CMD_DISK},  // WRITE (10)
+    {0x2B, false, 0, 10, CMD_ALL},   // SEEK (10)
+    {0x2F, false, 0, 10, CMD_ALL},   // VERIFY (10)
+    {0x35, false, 0, 10, CMD_ALL},   // SYNCHRONIZE CACHE (10)
+    {0x3E, false, 0, 10, CMD_ALL},   // READ LONG (10)
+    {0x42, false, 0, 10, CMD_CD},    // READ SUB-CHANNEL
+    {0x43, false, 0, 10, CMD_CD},    // READ TOC/PMA/ATIP
+    {0x46, false, 0, 10, CMD_CD},    // GET CONFIGURATION
+    {0x4A, false, 0, 10, CMD_CD},    // GET EVENT STATUS NOTIFICATION
+    {0x55, false, 0, 10, CMD_ALL},   // MODE SELECT (10)
+    {0x5A, false, 0, 10, CMD_ALL},   // MODE SENSE (10)
+    {0x88, false, 0, 16, CMD_ALL},   // READ (16)
+    {0x8A, false, 0, 16, CMD_DISK},  // WRITE (16)
+    {0x8F, false, 0, 16, CMD_ALL},   // VERIFY (16)
+    {0x9E, true, 0x10, 16, CMD_ALL}, // READ CAPACITY (16)
+    {0xA3, true, 0x0C, 12, CMD_ALL}, // REPORT SUPPORTED OPERATION CODES
+    {0xA8, false, 0, 12, CMD_ALL},   // READ (12)
+    {0xAA, false, 0, 12, CMD_DISK},  // WRITE (12)
+    {0xBD, false, 0, 12, CMD_CD},    // MECHANISM STATUS
+    {0xBE, false, 0, 12, CMD_CD},    // READ CD
+};
 
-    // 10-byte CDBs
-  case 0x25: /* READ CAPACITY(10) */
-    return 10;
-  case 0x28: /* READ (10)         */
-    return 10;
-  case 0x2A: /* WRITE (10)        */
-    return 10;
-  case 0x2F: /* VERIFY (10)       */
-    return 10;
-  case 0x35: /* SYNCHRONIZE CACHE */
-    return 10;
-  case 0x5A: /* MODE SENSE (10)   */
-    return 10;
-
-    // 12-byte CDBs (supported by this tree)
-  case 0xA8: /* READ (12)         */
-    return 12;
-  case 0xAA: /* WRITE (12)        */
-    return 12;
-  }
-  return -1; // unknown/unsupported
+/// The table's entry for an opcode (and service action) on this kind of
+/// drive, or nullptr.
+static const ScsiCommandInfo *scsi_command_info(u8 op, u16 sa, bool cd) {
+  for (const ScsiCommandInfo &c : kScsiCommands)
+    if (c.op == op && (!c.has_sa || c.sa == sa) &&
+        (c.where & (cd ? CMD_CD : CMD_DISK)))
+      return &c;
+  return nullptr;
 }
 
 /// Commands that access the medium and fail with NOT READY / MEDIUM NOT
@@ -2204,7 +2217,9 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: MAINTENANCE IN.\n", devid_string);
 #endif
-    const u8 sa = state.scsi.cmd.data[1];
+    // The service action is the low five bits of byte 1 (SPC-3 6.23.1,
+    // table 154).
+    const u8 sa = state.scsi.cmd.data[1] & 0x1f;
     const u8 rctd =
         (state.scsi.cmd.data[2] >> 7) & 1; // request Command Timeouts Desc
     const u8 ropt = (state.scsi.cmd.data[2] & 0x07); // reporting options
@@ -2232,44 +2247,30 @@ int CDisk::do_scsi_command() {
     // ---- Reporting options ----
     if (ropt == 0x00) {
       // ---- all_commands ----
-      // Small, accurate list of commands we actually implement.
-      struct Desc {
-        u8 op;
-        u16 cdb_len;
-        u16 svc;
-      };
-      static const Desc kCmds[] = {
-          {0x00, 6, 0},  // TEST UNIT READY
-          {0x03, 6, 0},  // REQUEST SENSE
-          {0x12, 6, 0},  // INQUIRY
-          {0x1A, 6, 0},  // MODE SENSE(6)
-          {0x25, 10, 0}, // READ CAPACITY(10)
-          {0x28, 10, 0}, // READ(10)
-          {0x2A, 10, 0}, // WRITE(10)
-          {0x2F, 10, 0}, // VERIFY(10)
-          {0x35, 10, 0}, // SYNCHRONIZE CACHE(10)
-          {0x5A, 10, 0}, // MODE SENSE(10)
-          {0xA8, 12, 0}, // READ(12)
-          {0xAA, 12, 0}, // WRITE(12)
-          {0x3E, 6, 0},  // READ LONG
-      };
-      const u32 n = (u32)(sizeof(kCmds) / sizeof(kCmds[0]));
+      // "The list of command descriptors shall contain all commands
+      // supported by the logical unit" (SPC-3 6.23.2): every entry of
+      // kScsiCommands this kind of drive has.
       const u32 desc_len =
           rctd ? (8 + 12) : 8; // Table 166 (+ Table 171 when RCTD=1)
+      u32 n = 0;
+      for (const ScsiCommandInfo &c : kScsiCommands)
+        if (c.where & (cdrom() ? CMD_CD : CMD_DISK))
+          n++;
       const u32 payload = n * desc_len;
 
       // Header: 4-byte COMMAND DATA LENGTH (size of descriptors only)
       put_be32(p, payload);
       p += 4;
 
-      for (u32 i = 0; i < n; ++i) {
-        const Desc &d = kCmds[i];
+      for (const ScsiCommandInfo &d : kScsiCommands) {
+        if (!(d.where & (cdrom() ? CMD_CD : CMD_DISK)))
+          continue;
         p[0] = d.op;
-        p[1] = 0;               // opcode, reserved
-        put_be16(p + 2, d.svc); // service action (0 for non-SA)
+        p[1] = 0;              // opcode, reserved
+        put_be16(p + 2, d.sa); // service action (0 for non-SA)
         p[4] = 0;
         // flags: [5]=reserved [4]=RWCDLP [3]=MLU [2]=CDLP [1]=CTDP [0]=SERVACTV
-        p[5] = rctd ? 0x02 : 0x00;  // set CTDP when including descriptor
+        p[5] = (rctd ? 0x02 : 0x00) | (d.has_sa ? 0x01 : 0x00);
         put_be16(p + 6, d.cdb_len); // CDB length
         p += 8;
         if (rctd) {
@@ -2293,7 +2294,8 @@ int CDisk::do_scsi_command() {
             SCSI_INVALID_FIELD); // spec mandates INVALID FIELD IN CDB here
         break;
       }
-      const int cdb_len = cdb_len_for_opcode(req_op);
+      const ScsiCommandInfo *ci = scsi_command_info(req_op, 0, cdrom());
+      const int cdb_len = ci ? ci->cdb_len : -1;
 
       // Byte 0..1: flags (RWCDLP=0) and CTDP/MLU/CDLP/SUPPORT
       p[0] = 0x00;  // RWCDLP=0
@@ -2332,22 +2334,43 @@ int CDisk::do_scsi_command() {
             SCSI_INVALID_FIELD); // opcode without SAs -> INVALID FIELD
         break;
       }
-      // We don’t actually implement any SA-coded commands -> say "not
-      // supported"
+      // READ CAPACITY(16) and this command are the service actions the
+      // disk has; the usage data carries the opcode and, where the CDB has
+      // its SERVICE ACTION field (byte 1), the service action (6.23.3).
+      const ScsiCommandInfo *ci = scsi_command_info(req_op, req_sa, cdrom());
       p[0] = 0x00;
-      p[1] = (0x01); // SUPPORT=001b (not supported)
-      finish_ok(2);
+      if (!ci || !ci->has_sa) {
+        p[1] = 0x01; // SUPPORT=001b (not supported)
+        finish_ok(2);
+        break;
+      }
+      p[1] = 0x03; // SUPPORT=011b (supported)
+      put_be16(p + 2, ci->cdb_len);
+      memset(p + 4, 0x00, ci->cdb_len);
+      p[4] = req_op;
+      p[5] = (u8)ci->sa;
+      finish_ok(4 + ci->cdb_len);
       break;
     }
 
     if (ropt == 0x03) {
       // ---- either: SA if present, otherwise no-SA with SA==0 ----
       if (opcode_has_service_actions(req_op)) {
-        // We don't support any SA variants -> NOT SUPPORTED (no CHECK CONDITION
-        // here)
+        // As reporting option 2, but an unsupported one is NOT SUPPORTED
+        // (no CHECK CONDITION here).
+        const ScsiCommandInfo *ci = scsi_command_info(req_op, req_sa, cdrom());
         p[0] = 0x00;
-        p[1] = 0x01; // SUPPORT=001b
-        finish_ok(2);
+        if (!ci || !ci->has_sa) {
+          p[1] = 0x01; // SUPPORT=001b
+          finish_ok(2);
+          break;
+        }
+        p[1] = 0x03; // SUPPORT=011b (supported)
+        put_be16(p + 2, ci->cdb_len);
+        memset(p + 4, 0x00, ci->cdb_len);
+        p[4] = req_op;
+        p[5] = (u8)ci->sa;
+        finish_ok(4 + ci->cdb_len);
         break;
       } else {
         // Treat as one_command for a non-SA opcode; REQUESTED SA must be 0
@@ -2357,7 +2380,8 @@ int CDisk::do_scsi_command() {
           finish_ok(2);
           break;
         }
-        const int cdb_len = cdb_len_for_opcode(req_op);
+        const ScsiCommandInfo *ci = scsi_command_info(req_op, 0, cdrom());
+        const int cdb_len = ci ? ci->cdb_len : -1;
         p[0] = 0x00;
         p[1] = 0x03; // SUPPORT=011b (supported)
         if (cdb_len < 0) {

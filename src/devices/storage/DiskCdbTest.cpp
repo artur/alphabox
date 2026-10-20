@@ -1108,6 +1108,47 @@ void t_bus_reset(Rig &r) {
   expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "no unit attention after ABORT");
 }
 
+/// DISK-19: REPORT SUPPORTED OPERATION CODES.
+void t_rsoc(Rig &r) {
+  group("DISK-19 RSOC");
+  CCdbTestAdapter *a = r.a;
+  Res all = a->run(0, {0xa3, 0x0c, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0});
+  expect_good(all, "all commands");
+  auto listed = [&](u8 op) {
+    for (size_t i = 4; i + 8 <= all.in.size(); i += 8)
+      if (all.in[i] == op)
+        return be16(all.in, i + 6);
+    return u16(0);
+  };
+  check(listed(0x08) == 6 && listed(0x0a) == 6 && listed(0x1b) == 6 &&
+            listed(0x1e) == 6 && listed(0x15) == 6 && listed(0x55) == 10,
+        "READ(6), WRITE(6), START STOP, PREVENT, MODE SELECT listed");
+  check(listed(0x3e) == 10, "READ LONG is a 10-byte CDB", "%u", listed(0x3e));
+  Res one = a->run(0, {0xa3, 0x0c, 0x01, 0x08, 0, 0, 0, 0, 0x10, 0, 0, 0});
+  check(one.good() && one.in.size() >= 2 && (one.in[1] & 7) == 3,
+        "READ(6) supported (one command)");
+  Res sa = a->run(0, {0xa3, 0xec, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0});
+  check(sa.good(), "the service action is the low 5 bits");
+  bool rc16 = false;
+  for (size_t i = 4; i + 8 <= all.in.size(); i += 8)
+    rc16 |= all.in[i] == 0x9e && be16(all.in, i + 2) == 0x10 &&
+            (all.in[i + 5] & 1) && be16(all.in, i + 6) == 16;
+  check(rc16, "READ CAPACITY(16) listed with SERVACTV");
+  Res one16 =
+      a->run(0, {0xa3, 0x0c, 0x02, 0x9e, 0x00, 0x10, 0, 0, 0x10, 0, 0, 0});
+  check(one16.good() && one16.in.size() == 20 && (one16.in[1] & 7) == 3 &&
+            one16.in[4] == 0x9e && one16.in[5] == 0x10,
+        "READ CAPACITY(16) supported (one service action)");
+  Res cd = a->run(3, {0xa3, 0x0c, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0});
+  bool cd_write = false, cd_toc = false;
+  for (size_t i = 4; i + 8 <= cd.in.size(); i += 8) {
+    cd_write |= cd.in[i] == 0x2a;
+    cd_toc |= cd.in[i] == 0x43;
+  }
+  check(cd.good() && cd_toc && !cd_write,
+        "a CD-ROM lists READ TOC and not WRITE(10)");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1173,6 +1214,7 @@ int main_cdbtest(int argc, char **argv) {
   t_lba64(r);
   t_vpd(r);
   t_bus_reset(r);
+  t_rsoc(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
