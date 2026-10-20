@@ -271,6 +271,17 @@ which the console's wire-level `nettest` modes pass
 
 - **S3 Trio64**: the console, ARC/AlphaBIOS, Windows NT.
 - **CL-GD5434**: Windows 2000 draws its desktop through the BitBLT engine.
+- **Snapshots**: both cards save and restore their own registers beyond the
+  VGA core (the Cirrus bank, BitBLT and hidden-DAC registers; a block of
+  its own, versioned, that older state files simply lack and restore
+  without). A resumed text or 8 bpp screen is redrawn from the saved
+  palette instead of black.
+- **S3 after 24 bpp**: leaving a 24 bpp mode for 8, 15 or 16 bpp now draws
+  in the new format; the flag used to stay set until a reset. A read
+  through the linear window (BAR0) at 0xA0000 to 0xBFFFF returns display
+  memory, as the write does.
+- **Unassigned VGA ports**: a guest write to 0x3c1, 0x3ca to 0x3cd or
+  0x3db is ignored, as on the chips.
 
 ### Graphics: ATI Mach64
 
