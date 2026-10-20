@@ -263,13 +263,19 @@ static void test_reserved_bits() {
   CHECK_EQ(r.rd(MSR) & 0xf0, 0x30); // bit 4 (loop) was not set
 }
 
-/// The scratch register keeps what is written.
+/// The scratch register keeps what is written, and only that: writes to
+/// the read-only LSR and MSR change neither them nor it.
 static void test_scratch() {
   Rig r;
   r.wr(SCR, 0xa5);
   CHECK_EQ(r.rd(SCR), 0xa5);
   r.wr(SCR, 0x5a);
   CHECK_EQ(r.rd(SCR), 0x5a);
+  r.wr(LSR, 0x00);
+  r.wr(MSR, 0xff);
+  CHECK_EQ(r.rd(SCR), 0x5a);
+  CHECK_EQ(r.rd(LSR), 0x60);
+  CHECK_EQ(r.rd(MSR), 0x30);
 }
 
 int main() {

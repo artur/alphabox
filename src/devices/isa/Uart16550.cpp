@@ -195,6 +195,13 @@ void CUart16550::write(u32 reg, u8 value) {
     }
     break;
 
+  case REG_LSR:
+  case REG_MSR:
+    // Status registers: a write is the 16550's factory test, "not
+    // recommended" (PC16550D 8.4, p. 17; ALi M1543C p. 260), and changes
+    // nothing here. It used to land in the scratch register.
+    break;
+
   default:
     s.bSPR = value;
   }
