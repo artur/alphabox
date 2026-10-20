@@ -87,7 +87,7 @@ void CUsbStorage::transport_reset() {
   // A command the host abandoned mid-data leaves the disk selected; free
   // the bus so the next command selects it afresh.
   if (scsi_get_phase(0) != SCSI_PHASE_FREE)
-    scsi_bus[0]->reset_bus();
+    scsi_bus[0]->release_bus();
   m_stage = BOT_CBW;
   m_buf.clear();
 }
@@ -239,7 +239,7 @@ void CUsbStorage::command(const u8 *cbw) {
   // A bus left busy by a command the device has forgotten (a reset device
   // whose disk's saved state was mid-command) is freed first.
   if (scsi_get_phase(0) != SCSI_PHASE_FREE)
-    scsi_bus[0]->reset_bus();
+    scsi_bus[0]->release_bus();
   if (!scsi_arbitrate(0) || !scsi_select(0, 0))
     FAILURE(IllegalState, "USB storage: disk not responding to selection");
   memcpy(scsi_xfer_ptr(0, cblen), cbw + 15, cblen);
@@ -267,7 +267,7 @@ void CUsbStorage::command(const u8 *cbw) {
   case SCSI_PHASE_DATA_OUT:
     if (host_in || !m_expected) {
       // The disk wants data the host will not send.
-      scsi_bus[0]->reset_bus();
+      scsi_bus[0]->release_bus();
       m_status = CSW_PHASE_ERROR;
       m_stage = host_in && m_expected ? BOT_DATA_IN : BOT_CSW;
     } else {
@@ -293,7 +293,7 @@ void CUsbStorage::finish() {
     scsi_xfer_done(0);
   }
   if (scsi_get_phase(0) != SCSI_PHASE_FREE)
-    scsi_bus[0]->reset_bus();
+    scsi_bus[0]->release_bus();
   m_status = status ? CSW_FAILED : CSW_PASSED;
 }
 
@@ -308,7 +308,7 @@ void CUsbStorage::endpoint_halted(int ep_addr) {
     m_stage = BOT_CSW;
   } else if (ep_addr == 0x02 && m_stage == BOT_DATA_OUT) {
     if (scsi_get_phase(0) != SCSI_PHASE_FREE)
-      scsi_bus[0]->reset_bus();
+      scsi_bus[0]->release_bus();
     m_buf.clear();
     m_moved = 0;
     m_status = CSW_FAILED;
@@ -348,7 +348,7 @@ CUsbDevice::Result CUsbStorage::data_out(int ep, const u8 *buf, int len) {
       taken += (u32)want;
     }
     if (scsi_get_phase(0) == SCSI_PHASE_DATA_OUT) {
-      scsi_bus[0]->reset_bus(); // too little data: the command cannot run
+      scsi_bus[0]->release_bus(); // too little data: the command cannot run
       m_status = CSW_PHASE_ERROR;
       taken = 0;
     } else {

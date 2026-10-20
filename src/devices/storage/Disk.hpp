@@ -61,7 +61,10 @@ enum {
   MEDIA_CHANGE_LINE = 0x02,    ///< Floppy disk-change line (DIR bit 7).
   MEDIA_GESN_EVENT = 0x04,     ///< Media event for GET EVENT STATUS NOTIF.
   MEDIA_TRAY_OPEN = 0x08,      ///< The guest opened the tray.
-  MEDIA_FLAGS_MASK = 0x0f
+  /// A reset (RST, BUS DEVICE RESET): report 06/29/00 on the next command.
+  /// Kept with the media flags for any disk, removable or not.
+  RESET_UNIT_ATTENTION = 0x10,
+  MEDIA_FLAGS_MASK = 0x1f
 };
 
 /**
@@ -76,6 +79,7 @@ public:
   virtual int RestoreState(FILE *f);
 
   virtual void scsi_select_me(int bus);
+  virtual void scsi_reset_me(int bus);
   virtual size_t scsi_expected_xfer_me(int bus);
   virtual void *scsi_xfer_ptr_me(int bus, size_t bytes);
   virtual void scsi_xfer_done_me(int bus);

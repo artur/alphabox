@@ -125,7 +125,7 @@ public:
     Res r;
     try {
       if (scsi_get_phase(0) != SCSI_PHASE_FREE)
-        bus->reset_bus();
+        bus->release_bus();
       if (!scsi_arbitrate(0)) {
         r.error = "arbitration lost";
         return r;
@@ -1063,6 +1063,51 @@ void t_vpd(Rig &r) {
         "every drive its own identifier");
 }
 
+/// DISK-14: a bus reset resets the targets.
+void t_bus_reset(Rig &r) {
+  group("DISK-14 bus reset");
+  CCdbTestAdapter *a = r.a;
+  expect_good(a->run(3, {0x1e, 0, 0, 0, 1, 0}), "PREVENT MEDIUM REMOVAL");
+  a->bus->reset_bus();
+  check(!r.cd->media_locked(), "the reset unlocks the drive");
+  expect_cc(r, 3, a->run(3, {0, 0, 0, 0, 0, 0}),
+            "first command after the reset: UNIT ATTENTION", 6, 0x29, -1);
+  expect_good(a->run(3, {0, 0, 0, 0, 0, 0}), "then GOOD");
+  expect_cc(r, 0, a->run(0, {0, 0, 0, 0, 0, 0}),
+            "the disk reports the reset too", 6, 0x29, 0);
+  expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "and then works");
+  // INQUIRY does not take the unit attention; REQUEST SENSE does.
+  a->bus->reset_bus();
+  Res q = a->run(0, {0x12, 0, 0, 0, 36, 0});
+  Sense s = a->sense(0);
+  check(q.good() && s.key == 6 && s.asc == 0x29,
+        "INQUIRY works through it, REQUEST SENSE reports it");
+  expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "and clears it");
+  // MODE SELECT's block length returns to the power-on value.
+  std::vector<u8> d = {0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 4, 0};
+  expect_good(a->run(0, {0x15, 0x10, 0, 0, 12, 0}, d), "block length 1024");
+  a->bus->reset_bus();
+  a->sense(0);
+  Res cap = a->run(0, cdb10(0x25, 0, 0));
+  check(cap.good() && be32(cap.in, 4) == 512, "512 again after the reset");
+  // BUS DEVICE RESET: the target resets itself and frees the bus.
+  a->sense(3); // the CD has the resets above pending
+  expect_good(a->run(3, {0x1e, 0, 0, 0, 1, 0}), "PREVENT again");
+  Res bdr = a->run(3, {0, 0, 0, 0, 0, 0}, {}, {0x80, 0x0c});
+  check(bdr.selected && bdr.error.empty() && bdr.status == -1 &&
+            a->bus->get_phase() == SCSI_PHASE_FREE && !r.cd->media_locked(),
+        "BUS DEVICE RESET: BUS FREE, no status, the drive unlocked", "%s",
+        bdr.why().c_str());
+  expect_cc(r, 3, a->run(3, {0, 0, 0, 0, 0, 0}), "then a unit attention", 6,
+            0x29, 0);
+  // ABORT: BUS FREE, nothing else.
+  Res ab = a->run(0, cdb10(0x28, 0, 1), {}, {0x80, 0x06});
+  check(ab.selected && ab.error.empty() && ab.status == -1 && ab.in.empty() &&
+            a->bus->get_phase() == SCSI_PHASE_FREE,
+        "ABORT: BUS FREE, no data, no status");
+  expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "no unit attention after ABORT");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1127,6 +1172,7 @@ int main_cdbtest(int argc, char **argv) {
   t_big(r);
   t_lba64(r);
   t_vpd(r);
+  t_bus_reset(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

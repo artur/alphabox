@@ -51,6 +51,9 @@ public:
   bool scsi_arbitrate(int bus);
   bool scsi_select(int bus, int target);
   virtual void scsi_select_me(int bus);
+  /// The bus was reset (RST): a target drops what it was doing and resets
+  /// itself. Nothing to do for a device that is not a target.
+  virtual void scsi_reset_me(int bus) {}
   void scsi_set_phase(int bus, int phase);
   int scsi_get_phase(int bus);
   void scsi_free(int bus);

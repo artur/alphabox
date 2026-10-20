@@ -192,6 +192,32 @@ void CDisk::scsi_select_me(int bus) {
     scsi_set_phase(bus, SCSI_PHASE_MSG_OUT);
 }
 
+/**
+ * \brief The bus was reset (RST), or this target was sent BUS DEVICE RESET.
+ *
+ * The hard reset alternative of SCSI-2 6.2.2.1: the I/O process is
+ * cleared, the operating modes return to their power-on values (the block
+ * length MODE SELECT may have changed; nothing here is saved), and a unit
+ * attention is set for the next command (7.9). A prevention of medium
+ * removal ends (9.2.4, c), so a drive a guest locked before an init can
+ * be ejected again. Pending sense data goes with the I/O process.
+ **/
+void CDisk::scsi_reset_me(int bus) {
+  memset(&state.stream, 0, sizeof(state.stream));
+  state.scsi.dati.available = 0;
+  state.scsi.dati.read = 0;
+  state.scsi.dato.expected = 0;
+  state.scsi.dato.written = 0;
+  state.scsi.stat.available = 0;
+  state.scsi.msgi.available = 0;
+  state.scsi.sense.available = 0;
+  set_locked(false);
+  const size_t initial_block_size = is_cdrom ? 2048 : 512;
+  if (state.block_size != initial_block_size)
+    set_block_size(initial_block_size);
+  state.scsi.media_changed |= RESET_UNIT_ATTENTION;
+}
+
 static u32 disk_magic1 = 0xD15D15D1;
 static u32 disk_magic2 = 0x15D15D15;
 
@@ -481,6 +507,10 @@ void CDisk::scsi_xfer_done_me(int bus) {
 
   case SCSI_PHASE_MSG_OUT:
     newphase = do_scsi_message(); // command
+    if (newphase == SCSI_PHASE_FREE) { // ABORT, BUS DEVICE RESET
+      scsi_free(0);
+      return;
+    }
     break;
 
   case SCSI_PHASE_MSG_IN:
@@ -631,6 +661,7 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSI_SAVING_NOT_SUPP -14     /* 05/39/00 saving params not supported */
 #define SCSI_WRITE_PROTECTED -15     /* 07/27/00 write protected */
 #define SCSI_WRITE_FAULT -16 /* 04/03/00 peripheral device write fault */
+#define SCSI_RESET_OCCURRED -17 /* 06/29/00 power on, reset, or BDR */
 
 // ALPHABOX_TRACE_SCSI=1: every command a SCSI device is given, and the
 // sense data of each one it answers with CHECK CONDITION.
@@ -721,6 +752,12 @@ void CDisk::do_scsi_error(int errcode, int info) {
   case SCSI_MEDIA_CHANGE:
     state.scsi.sense.data[2] = 0x06;  // unit attention
     state.scsi.sense.data[12] = 0x28; // media changed
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_RESET_OCCURRED:
+    state.scsi.sense.data[2] = 0x06;  // unit attention
+    state.scsi.sense.data[12] = 0x29; // power on, reset, or BDR occurred
     state.scsi.sense.data[13] = 0x00;
     break;
 
@@ -1274,6 +1311,23 @@ int CDisk::do_scsi_command() {
     return 0;
   }
 
+  // After a reset, the first command but INQUIRY and REQUEST SENSE gets
+  // the unit attention: UNIT ATTENTION, POWER ON, RESET, OR BUS DEVICE
+  // RESET OCCURRED (SCSI-2 6.2.2.1 d and 7.9; 29h/00h in table 71). The
+  // MMC commands that report media events work through it, as they do
+  // through a media change.
+  {
+    const u8 op = state.scsi.cmd.data[0];
+    if ((state.scsi.media_changed & RESET_UNIT_ATTENTION) &&
+        op != SCSICMD_INQUIRY && op != SCSICMD_REQUEST_SENSE &&
+        op != SCSICMD_GET_CONFIGURATION &&
+        op != SCSICMD_GET_EVENT_STATUS_NOTIFICATION) {
+      state.scsi.media_changed &= ~RESET_UNIT_ATTENTION;
+      do_scsi_error(SCSI_RESET_OCCURRED);
+      return 0;
+    }
+  }
+
   // Removable media: a pending unit attention is reported by the first
   // command other than the ones that must work through it; after that,
   // media-access commands on an empty drive fail with NOT READY.
@@ -1398,7 +1452,12 @@ int CDisk::do_scsi_command() {
       do_scsi_error(SCSI_INVALID_LUN); // fills sense; status reset below
 
     // With no other sense pending, REQUEST SENSE reports (and consumes) a
-    // pending unit attention.
+    // pending unit attention (SCSI-2 7.9, b): a reset's first.
+    if (!state.scsi.sense.available &&
+        (state.scsi.media_changed & RESET_UNIT_ATTENTION)) {
+      state.scsi.media_changed &= ~RESET_UNIT_ATTENTION;
+      do_scsi_error(SCSI_RESET_OCCURRED); // fills sense; status reset below
+    }
     if (!state.scsi.sense.available && removable() &&
         (state.scsi.media_changed & MEDIA_UNIT_ATTENTION)) {
       state.scsi.media_changed &= ~MEDIA_UNIT_ATTENTION;
@@ -3179,9 +3238,26 @@ int CDisk::do_scsi_message() {
         break;
       }
 
+      case 0x0c: // BUS DEVICE RESET
+        // "This message forces a hard reset condition to the selected SCSI
+        // device. The target shall go to the BUS FREE phase following
+        // successful receipt of this message." (SCSI-2 6.6.3)
+        scsi_reset_me(0);
+        return SCSI_PHASE_FREE;
+
       case 0x06: // ABORT
       case 0x0d: // ABORT TAG
-      case 0x0c: // BUS DEVICE RESET
+        // The I/O process is cleared, no status or message is sent and the
+        // target goes to BUS FREE (SCSI-2 6.6.1, 6.6.2); nothing else
+        // changes. It used to carry on to the COMMAND phase.
+        memset(&state.stream, 0, sizeof(state.stream));
+        state.scsi.cmd.written = 0;
+        state.scsi.dati.available = 0;
+        state.scsi.dato.expected = 0;
+        state.scsi.stat.available = 0;
+        state.scsi.msgi.available = 0;
+        return SCSI_PHASE_FREE;
+
       case 0x08: // NO OPERATION
       case 0x07: // MESSAGE REJECT (of something we sent)
         // Nothing is queued past the current command and the current one

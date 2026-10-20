@@ -61,6 +61,9 @@ public:
   /**< Get current SCSI bus phase **/
   void free_bus(int initiator);
   void reset_bus();
+  /// Free the bus after a transfer its initiator gave up on, without a
+  /// reset: the targets keep their state (USB's Bulk-Only resets).
+  void release_bus();
 
   CSCSIDevice *targets[16]; /**< pointers to the SCSI devices that respond to
                                the 15 possible target id's. **/
