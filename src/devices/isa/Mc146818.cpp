@@ -81,14 +81,49 @@ static std::atomic<int> trace_lines{0};
 
 u8 CMc146818::read(u32 port) {
   std::lock_guard<std::mutex> guard(lock);
-  if (trace_toy && port == 1 && (ports[0] & 0x7f) == 0x0c && reg_c_reads++ < 32)
-    TOY_TRACE("read reg 0c = %02x (index byte %02x)\n", ports[1], ports[0]);
-  return ports[port];
+  switch (port) {
+  case 1: { // the register port 0 selects, as it is now
+    const u8 index = ports[0] & 0x7f;
+    const u8 v = register_locked(index);
+    if (trace_toy && index == 0x0c && reg_c_reads++ < 32)
+      TOY_TRACE("read reg 0c = %02x (index byte %02x)\n", v, ports[0]);
+    ports[1] = v;
+    return v;
+  }
+  case 3: // the upper 128 bytes of RAM
+    ports[3] = ram[0x80 + (ports[2] & 0x7f)];
+    return ports[3];
+  default: // the index ports read back what was written
+    return ports[port];
+  }
 }
 
 /**
- * Write a port. Selecting a register on port 0 regenerates the clock's
- * registers and latches the selected one for port 1.
+ * One of the clock's registers or RAM bytes, as it is at the time of the
+ * read: the address strobe only latches the address, and the data strobe
+ * of the read is when the chip drives the register onto the bus (data
+ * sheet p.8, AS and DS); and reading register C clears its flags
+ * (p.15-16, "All flag bits are cleared after Register C is read").
+ **/
+u8 CMc146818::register_locked(u8 index) {
+  if (index < 0x0e) {
+    if (!(ram[0x0b] & 0x80)) { // SET clear: the clock runs
+      ram[0x0d] = 0x80;        // valid RAM and time
+      generate_time_locked();
+    }
+    if (index == 0x0c) { // the flags, cleared by reading them
+      update_pf_locked();
+      const u8 v = ram[0x0c];
+      ram[0x0c] = 0;
+      return v;
+    }
+  }
+  return ram[index];
+}
+
+/**
+ * Write a port: an index on ports 0 and 2, the register or RAM byte it
+ * selects on ports 1 and 3.
  **/
 void CMc146818::write(u32 port, u8 data) {
   std::lock_guard<std::mutex> guard(lock);
@@ -100,35 +135,20 @@ void CMc146818::write(u32 port, u8 data) {
   ports[port] = data;
 
   switch (port) {
-  case 0:
-    if ((data & 0x7f) < 14 && !(ram[0x0b] & 0x80)) {
-      ram[0x0d] = 0x80; // valid RAM and time
-      generate_time_locked();
-    }
-    update_pf_locked();
-    ports[1] = ram[data & 0x7f];
-
-    // register C is cleared after a read, and we don't care if its a write
-    if (data == 0x0c)
-      ram[data & 0x7f] = 0;
-    break;
-
-  case 1:
-    if (ports[0] == 0x0b && data & 0x040) // If we're writing to register B, we
-                                          // make register C look like it fired.
+  case 1: {
+    const u8 index = ports[0] & 0x7f;
+    if (index == 0x0b && (data & 0x40)) // If we're writing to register B, we
+                                        // make register C look like it fired.
       ram[0x0c] = 0xf0;
     // On REG_B SET 1->0 transition, snapshot the just-written time/date
     // registers and compute an offset from host time so the value sticks
-    // after SET goes low.  Without this, the regen path overwrites the
-    // user's writes on the next port-70h poke.
-    if (ports[0] == 0x0b && (ram[0x0b] & 0x80) && !(data & 0x80))
+    // after SET goes low.  Without this, the time read next would overwrite
+    // the user's writes.
+    if (index == 0x0b && (ram[0x0b] & 0x80) && !(data & 0x80))
       set_time_from_registers(data);
-    ram[ports[0] & 0x7f] = data;
+    ram[index] = data;
     break;
-
-  case 2:
-    ports[3] = ram[0x80 + (data & 0x7f)];
-    break;
+  }
 
   case 3:
     ram[0x80 + (ports[2] & 0x7f)] = data;

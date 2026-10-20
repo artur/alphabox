@@ -189,6 +189,34 @@ static void test_12_hour() {
   CHECK_EQ(r.rd(0x02), 30);
 }
 
+/// The data port reads the selected register as it is when read, not as it
+/// was when selected (data sheet p.8): a guest that selects once and polls
+/// sees it change. Register C clears when read, not when selected
+/// (p.15-16): two reads after one select give the flags, then 0; a select
+/// with no read leaves them.
+static void test_live_reads() {
+  Rig r;
+  r.rtc.write(0, 0x00); // seconds, selected once
+  CHECK_EQ(r.rtc.read(1), 56);
+  r.ns(2000000000ull);
+  CHECK_EQ(r.rtc.read(1), 58);
+
+  r.rd(0x0c); // flags clear, pacing started
+  r.ns(1100000);
+  r.rtc.write(0, 0x0c); // selected, not read
+  r.rtc.write(0, 0x00);
+  CHECK_EQ(r.rd(0x0c) & 0x40, 0x40);
+  r.ns(1100000);
+  r.rtc.write(0, 0x0c);
+  CHECK_EQ(r.rtc.read(1) & 0x40, 0x40);
+  CHECK_EQ(r.rtc.read(1), 0x00);
+  // the NMI-disable bit (7) of the index is not part of the address
+  r.ns(1100000);
+  r.rtc.write(0, 0x8c);
+  CHECK_EQ(r.rtc.read(1) & 0x40, 0x40);
+  CHECK_EQ(r.rtc.read(1), 0x00);
+}
+
 int main() {
   test_read_time();
   test_set_time();
@@ -196,6 +224,7 @@ int main() {
   test_periodic_flag();
   test_upper_ram();
   test_12_hour();
+  test_live_reads();
   printf("mc146818_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -81,6 +81,7 @@ public:
   u64 interval_period_ns() const;
 
 private:
+  u8 register_locked(u8 index);
   void generate_time_locked();
   void update_pf_locked();
   void set_time_from_registers(u8 new_b);
