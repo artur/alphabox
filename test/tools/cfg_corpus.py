@@ -80,7 +80,8 @@ SRM_FILES = {
 
 def generated_malformed():
     """Malformed cases too large or too odd to keep as files:
-    (name, bytes, line, col, expected text)."""
+    (name, bytes, line, col, expected text[, "run"]). "run": a value only
+    the device reads, so `alphabox run` must refuse it, not --check."""
     machine = b'sys0 = tsunami\n{\n  rom.srm = "x";\n  cpu0 = ev68cb\n  {\n  }\n'
     n = 100000
     return [
@@ -97,6 +98,10 @@ def generated_malformed():
          "Illegal character 0x00"),
         ("gen-high-byte.cfg", machine + b"  caf\xc3\xa9 = 1;\n}\n", 7, 6,
          "Illegal character 0xc3"),
+        # 9000 characters into an error message (FAILURE's 8000-byte buffer).
+        ("gen-long-value.cfg", b'sys0 = tsunami\n{\n  memory.bits = "' +
+         b"x" * 9000 + b'";\n  cpu0 = ev68cb\n  {\n  }\n}\n', 1, 1,
+         "Illegal numeric value", "run"),
     ]
 
 
@@ -121,6 +126,24 @@ def run_check(binary, path, dump=True):
     if "ERROR: AddressSanitizer" in err or "runtime error:" in err:
         status = "sanitizer report"
     return (status, p.stdout.decode("latin-1"), err)
+
+
+def run_emulator(binary, path, work):
+    """`alphabox run` on a configuration that must stop before the machine
+    starts: (status, stdout, stderr), in a directory of its own."""
+    d = os.path.join(work, "run-" + os.path.basename(path))
+    os.makedirs(d, exist_ok=True)
+    try:
+        p = subprocess.run([binary, "run", path], capture_output=True,
+                           timeout=TIMEOUT, cwd=d, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "timeout", "", ""
+    rc = p.returncode
+    status = "exit %d" % rc if rc >= 0 else "signal %d" % -rc
+    err = p.stderr.decode("latin-1")
+    if "ERROR: AddressSanitizer" in err or "runtime error:" in err:
+        status = "sanitizer report"
+    return status, p.stdout.decode("latin-1"), err
 
 
 def corpus(work):
@@ -224,27 +247,36 @@ def main():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.match(r"(\S+)\s+(\d+):(\d+)\s+(.*)$", line)
+            m = re.match(r"(?:(run)\s+)?(\S+)\s+(\d+):(\d+)\s+(.*)$", line)
             if not m:
                 sys.exit("cfg_corpus: bad line in expect.txt: " + line)
-            cases.append((m.group(1), os.path.join(MALFORMED, m.group(1)),
-                          int(m.group(2)), int(m.group(3)), m.group(4)))
+            cases.append((m.group(2), os.path.join(MALFORMED, m.group(2)),
+                          int(m.group(3)), int(m.group(4)), m.group(5),
+                          m.group(1) or "check"))
         gdir = os.path.join(work, "malformed")
         os.makedirs(gdir)
-        for name, data, line, col, text in generated_malformed():
+        for case in generated_malformed():
+            name, data = case[0], case[1]
             p = os.path.join(gdir, name)
             with open(p, "wb") as f:
                 f.write(data)
-            cases.append((name, p, line, col, text))
-    for name, path, line, col, text in cases:
+            cases.append((name, p) + case[2:] + (("check",) if len(case) < 6
+                                                  else ()))
+    for name, path, line, col, text, mode in cases:
         if args.only and args.only not in name:
             continue
         count += 1
-        status, out, err = run_check(binary, path, dump=False)
         where = "%s:%d:" % (os.path.basename(path), line)
         if col:
             where += "%d:" % col
-        errs = [l for l in err.splitlines() if l.startswith("%SYS-E")]
+        if mode == "run":
+            # What only a device reads: the emulator itself must refuse it.
+            status, out, err = run_emulator(binary, path, work)
+            errs = [l for l in out.splitlines()
+                    if l.startswith("Emulator Failure")]
+        else:
+            status, out, err = run_check(binary, path, dump=False)
+            errs = [l for l in err.splitlines() if l.startswith("%SYS-E")]
         ok = (status == "exit 1" and errs and where in errs[0] and
               text.lower() in errs[0].lower())
         if ok:

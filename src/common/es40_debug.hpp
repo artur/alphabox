@@ -64,9 +64,9 @@
 #ifdef HAVE___FUNCTION__
 #define FAILURE(cls, error_msg)                                                \
   {                                                                            \
-    char where_msg[FAILMSG_BUFSIZE];;                                                       \
-    sprintf(where_msg, "%s, line %i, function '%s'", __FILE__, __LINE__,       \
-            __FUNCTION__);                                                     \
+    char where_msg[FAILMSG_BUFSIZE];                                           \
+    snprintf(where_msg, sizeof(where_msg), "%s, line %i, function '%s'",       \
+             __FILE__, __LINE__, __FUNCTION__);                                \
     throw C##cls##Exception(error_msg, where_msg);                             \
   }
 
@@ -74,7 +74,7 @@
 #define FAILURE(cls, error_msg)                                                \
   {                                                                            \
     char where_msg[FAILMSG_BUFSIZE];                                           \
-    sprintf(where_msg, "%s, line %i", __FILE__, __LINE__);                     \
+    snprintf(where_msg, sizeof(where_msg), "%s, line %i", __FILE__, __LINE__); \
     throw C##cls##Exception(error_msg, where_msg);                             \
   }
 #endif /*  !HAVE___FUNCTION__  */
@@ -82,42 +82,42 @@
 #define FAILURE_1(cls, error_msg, a)                                           \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a);                                           \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a);                        \
     FAILURE(cls, what_msg);                                                    \
   }
 
 #define FAILURE_2(cls, error_msg, a, b)                                        \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a, b);                                        \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a, b);                     \
     FAILURE(cls, what_msg);                                                    \
   }
 
 #define FAILURE_3(cls, error_msg, a, b, c)                                     \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a, b, c);                                     \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a, b, c);                  \
     FAILURE(cls, what_msg);                                                    \
   }
 
 #define FAILURE_4(cls, error_msg, a, b, c, d)                                  \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a, b, c, d);                                  \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a, b, c, d);               \
     FAILURE(cls, what_msg);                                                    \
   }
 
 #define FAILURE_5(cls, error_msg, a, b, c, d, e)                               \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a, b, c, d, e);                               \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a, b, c, d, e);            \
     FAILURE(cls, what_msg);                                                    \
   }
 
 #define FAILURE_6(cls, error_msg, a, b, c, d, e, f)                            \
   {                                                                            \
     char what_msg[FAILMSG_BUFSIZE];                                            \
-    sprintf(what_msg, error_msg, a, b, c, d, e, f);                            \
+    snprintf(what_msg, sizeof(what_msg), error_msg, a, b, c, d, e, f);         \
     FAILURE(cls, what_msg);                                                    \
   }
 
