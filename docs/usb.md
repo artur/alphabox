@@ -249,6 +249,25 @@ controllers, a completion that came back within microseconds was completed
 a second time by the request's timeout five seconds later, and the system
 bugchecked ([marvel.md](platforms/marvel.md), M7b).
 
+A host controller reset (HCR) empties the done queue, and the wait goes
+with it. Left standing, the wait would be stale when the next control TD
+retired and that TD's completion would go back at once.
+
+### What the controller does to the bus
+
+- **Bus mastering.** An OHCI function whose PCI Command register has Bus
+  Master Enable clear reads and writes no memory: no HCCA frame number, no
+  lists, no done queue. The frame clock and the start-of-frame interrupt go
+  on. A driver sets the bit when it starts the controller; firmware that
+  starts one without it gets nothing, as on hardware.
+- **HcRhDescriptorA.** The number of ports and the device type are read
+  only. The power switching, over-current and power-on-to-power-good fields
+  are the driver's to write; the reserved bits stay zero.
+- **Suspended ports.** A port whose PortSuspendStatus is set passes no
+  token, so a TD addressed to the device behind it ends DeviceNotResponding
+  until the port is resumed. A resume is still instant (the write to
+  ClearSuspendStatus finishes it), and no device signals a remote wakeup.
+
 ### The card's companions
 
 The card's two companions are the same OHCI engine as the ALi function
@@ -277,7 +296,9 @@ low-speed one being left for a companion that is not there.
 Interrupts follow the hardware:
 
 - the ALi function's goes through the bridge's USBIR routing byte to an
-  ISA IRQ, as on the real chip;
+  ISA IRQ, as on the real chip, and follows the byte: when the firmware
+  moves the routing the level leaves the old IRQ and rises on the new one at
+  once, not at the controller's next event;
 - on the card the companions are PCI INTA and INTB and the EHCI INTC
   (INTA without companions).
 
@@ -415,6 +436,12 @@ The other hooks and tools:
   the capture with the source (`test/tools/wav_compare.py`: alignment,
   envelope and waveform correlation); `test/tools/usb_snap.sh` takes the
   devices through a snapshot.
+- `ALPHABOX_OHCI_SELFTEST=1` drives the ALi function's OHCI from inside the
+  emulator once the console has set up the DMA window (put
+  `port1 = "tablet";` on `ali_usb`) and prints PASS or FAIL: the
+  HcRhDescriptorA fields, a TD to a suspended port, the done queue's wait
+  after a host controller reset, Bus Master Enable, and the interrupt line
+  following USBIR.
 - `ALPHABOX_USBTRACE=1` logs register writes, the port status the driver
   reads, every control request a device serves, each Bulk-Only command,
   TDs retired with an error, isochronous TDs retired late and packets not

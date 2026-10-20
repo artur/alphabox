@@ -130,6 +130,9 @@ struct CEhci::CCompanion : COhciHost {
     card.dma_write(a, s, size, count);
   }
   void ohci_irq(bool level) override { card.do_pci_interrupt(func, level); }
+  bool ohci_bus_master() override {
+    return (card.config_read(func, 4, 16) & 4) != 0;
+  }
 };
 
 // Capability registers.

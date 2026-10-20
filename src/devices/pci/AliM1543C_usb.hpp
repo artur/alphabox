@@ -54,6 +54,10 @@ public:
                               size_t count) = 0;
   /// The interrupt line's level; called with the core's lock held.
   virtual void ohci_irq(bool level) = 0;
+  /// Whether the PCI function lets the controller master the bus: its
+  /// Command register's Bus Master Enable (PCI 2.2, 6.2.2, Table 6-1). The
+  /// controller reads and writes no memory while it is clear.
+  virtual bool ohci_bus_master() { return true; }
 };
 
 /**
@@ -264,6 +268,7 @@ public:
     do_pci_write(a, s, size, count);
   }
   void ohci_irq(bool level) override;
+  bool ohci_bus_master() override { return (config_read(0, 4, 16) & 4) != 0; }
 
 private:
   static constexpr int kPorts = 3;
@@ -274,5 +279,9 @@ private:
   // The ISA IRQ the interrupt line is on, and its level.
   int m_irq = -1;
   bool m_irq_level = false;
+
+  // ALPHABOX_OHCI_SELFTEST (AliM1543C_usb_selftest.cpp).
+  void selftest();
+  std::thread m_selftest_thread;
 };
 #endif // !defined(INCLUDED_ALIM1543C_USB_H)

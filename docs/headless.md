@@ -224,6 +224,7 @@ It prints `%EHCI-I-SELFTEST` lines.
 | --- | --- |
 | `ALPHABOX_USB_ASYNC_US=<us>` | USB storage and the USB speaker answer like devices behind libusb, `<us>` microseconds late. |
 | `ALPHABOX_USBAUDIO_WAV=<file>` | The USB speaker (`port<n> = "audio";`) writes the PCM stream the guest sends it into `<file>` as a WAV. |
+| `ALPHABOX_OHCI_SELFTEST=1` | Drive the ALi function's OHCI from a thread of its own (`%OHCI-I-SELFTEST` lines, then PASS or FAIL). Needs `port1 = "tablet";` on `ali_usb`. |
 | `ALPHABOX_USBTRACE=1` | Trace the OHCI and the USB devices (`USBT` lines). |
 | `ALPHABOX_USBTRACE=2` | As `1`, and every TD the OHCI retires and every done-queue write-back. |
 | `ALPHABOX_OHCI_EARLY_CTL=1` | Let a done queue holding a control-endpoint TD go back at once. For A/B runs. |

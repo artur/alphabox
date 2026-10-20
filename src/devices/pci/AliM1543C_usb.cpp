@@ -231,6 +231,10 @@ CAliM1543C_usb::CAliM1543C_usb(CConfigurator *cfg, CSystem *c, int pcibus,
 
 CAliM1543C_usb::~CAliM1543C_usb() {
   stop_threads();
+  if (theAli)
+    theAli->remove_usbir_listener(this);
+  if (m_selftest_thread.joinable())
+    m_selftest_thread.join();
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
   for (auto &port : m_port) {
@@ -285,7 +289,15 @@ void CAliM1543C_usb::attach(int p, std::unique_ptr<CUsbDevice> dev) {
   m_port[p].dev = std::move(dev);
 }
 
-void CAliM1543C_usb::start_threads() { m_ohci.start_threads(); }
+void CAliM1543C_usb::start_threads() {
+  m_ohci.start_threads();
+  // The line follows the bridge's USBIR routing, also when the routing moves
+  // while the controller is idle (ALi M1543C datasheet 1.10, USBIR, p80).
+  if (theAli)
+    theAli->add_usbir_listener(this, [this]() { m_ohci.refresh_irq(); });
+  if (getenv("ALPHABOX_OHCI_SELFTEST") && !m_selftest_thread.joinable())
+    m_selftest_thread = std::thread([this]() { selftest(); });
+}
 
 void CAliM1543C_usb::stop_threads() { m_ohci.stop_threads(); }
 
@@ -493,7 +505,7 @@ void COhci::run() {
         if (StopThread)
           break;
         std::lock_guard<std::mutex> lk(m_mx);
-        if (ohci_operational()) {
+        if (ohci_operational() && m_host.ohci_bus_master()) {
           service_async_lists();
           // TDs that want their interrupt at once get it now, not at the
           // frame's end: a driver waiting on each transfer (usbstor waits on
@@ -537,6 +549,12 @@ void COhci::run() {
 // periodic list for this frame, then the control and bulk lists, then the
 // done queue.
 void COhci::frame() {
+  // No Bus Master Enable, no bus cycles: nothing is read or written, but the
+  // frame clock goes on (PCI 2.2, 6.2.2, Table 6-1, Command bit 2).
+  if (!m_host.ohci_bus_master()) {
+    ohci_status(OHCI_INT_SF);
+    return;
+  }
   const u32 hcca = state.usb_data[0x18 / 4];
   if (hcca) {
     u32 fn = m_frame; // HccaFrameNumber, and HccaPad1 cleared
@@ -607,10 +625,14 @@ bool COhci::service_list(u32 head) {
   return found;
 }
 
+// The device a token's address reaches: one on an enabled port that is not
+// suspended -- a suspended port propagates no traffic in either direction
+// (USB 2.0 11.5, hub port state machine, "Suspended: No traffic is
+// propagated downstream or upstream"; OpenHCI 1.0a 7.4.4, PortSuspendStatus).
 CUsbDevice *COhci::device_at(int address) {
   for (int p = 0; p < m_ports; ++p)
-    if (port_dev(p) && (port_reg(p) & RH_PES) && !m_port[p]->faults.unplugged &&
-        port_dev(p)->address() == address)
+    if (port_dev(p) && (port_reg(p) & RH_PES) && !(port_reg(p) & RH_PSS) &&
+        !m_port[p]->faults.unplugged && port_dev(p)->address() == address)
       return port_dev(p);
   return nullptr;
 }
@@ -1248,10 +1270,21 @@ void COhci::usb_hci_write(u64 address, int dsize, u64 data) {
       port_write((int)(address - 0x54) / 4, (u32)data);
     break;
 
+  case 0x48: {
+    // HcRhDescriptorA (OpenHCI 1.0a 7.4.1, Figure 7-19): the number of
+    // downstream ports and the device type are read only for the driver;
+    // PowerSwitchingMode, NoPowerSwitching, OverCurrentProtectionMode,
+    // NoOverCurrentProtection and PowerOnToPowerGoodTime are the writable
+    // ones, and the reserved bits stay as they are.
+    const u32 writable = 0xff000000u | 0x1b00u;
+    u32 &d = state.usb_data[0x48 / 4];
+    d = (d & ~writable) | ((u32)data & writable);
+    break;
+  }
+
   case 0x34:  // HcFmInterval
   case 0x40:  // HcPeriodicStart
   case 0x44:  // HcLSThreshold
-  case 0x48:  // HcRhDescriptorA
   case 0x4c:  // HcRhDescriptorB
   case 0x100: // HceControlRegister
   case 0x104: // HceInputRegister

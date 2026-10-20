@@ -44,6 +44,8 @@
 #include "SuperIo.hpp"
 
 #include <chrono>
+#include <functional>
+#include <vector>
 
 /**
  * \brief Emulated ISA part of the ALi M1543C chipset.
@@ -80,6 +82,14 @@ public:
   /// The ISA IRQ a routing byte of the bridge's configuration space (such
   /// as 0x74, USBIR) selects, or -1 when it routes nowhere.
   int routed_irq(int config_offset) const;
+  /// Whether ISA IRQ `irq` is requested at the 8259s (for the self-tests).
+  bool irq_requested(int irq);
+  /// Functions that follow the USBIR routing byte (0x74): `fn` runs when a
+  /// configuration write moves it. Keyed by the owner, who removes it.
+  void add_usbir_listener(const void *owner, std::function<void()> fn);
+  void remove_usbir_listener(const void *owner);
+  void config_write_custom(int func, u32 address, int dsize, u32 old_data,
+                           u32 new_data, u32 data) override;
 
   void set_floppy_presence(bool driveA, bool driveB);
 
@@ -105,6 +115,9 @@ private:
   u8 io_byte_read(int index, u32 offset);
   void io_byte_write(int index, u32 offset, u8 data);
   void note_wide_access(int index, u32 address, int dsize, bool write);
+
+  std::mutex usbirLock;
+  std::vector<std::pair<const void *, std::function<void()>>> usbir_listeners;
 
   // REGISTER 61 (NMI)
   u8 reg_61_read();

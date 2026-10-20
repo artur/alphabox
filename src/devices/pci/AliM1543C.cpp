@@ -901,6 +901,50 @@ int CAliM1543C::routed_irq(int config_offset) const {
   return table[(dw >> (8 * (config_offset & 3))) & 0xf];
 }
 
+bool CAliM1543C::irq_requested(int irq) {
+  std::lock_guard<std::mutex> guard(picLock);
+  return (state.pic_irr[irq >> 3] >> (irq & 7)) & 1;
+}
+
+void CAliM1543C::add_usbir_listener(const void *owner,
+                                    std::function<void()> fn) {
+  std::lock_guard<std::mutex> guard(usbirLock);
+  for (auto &l : usbir_listeners)
+    if (l.first == owner) {
+      l.second = std::move(fn);
+      return;
+    }
+  usbir_listeners.emplace_back(owner, std::move(fn));
+}
+
+void CAliM1543C::remove_usbir_listener(const void *owner) {
+  std::lock_guard<std::mutex> guard(usbirLock);
+  for (size_t i = 0; i < usbir_listeners.size(); i++)
+    if (usbir_listeners[i].first == owner) {
+      usbir_listeners.erase(usbir_listeners.begin() + i);
+      return;
+    }
+}
+
+/**
+ * A write to the bridge's USBIR byte moves the ISA IRQ the USB function's
+ * level interrupt leaves by (datasheet 1.10, p80): the function re-drives
+ * its line through the new routing, which releases the old one.
+ **/
+void CAliM1543C::config_write_custom(int func, u32 address, int dsize, u32, u32,
+                                     u32) {
+  if (func != 0 || !(address <= 0x74 && 0x74 < address + (u32)dsize / 8))
+    return;
+  std::vector<std::function<void()>> todo;
+  {
+    std::lock_guard<std::mutex> guard(usbirLock);
+    for (auto &l : usbir_listeners)
+      todo.push_back(l.second);
+  }
+  for (auto &fn : todo)
+    fn();
+}
+
 static u32 ali_magic1 = 0xA111543C;
 static u32 ali_magic2 = 0xC345111A;
 
