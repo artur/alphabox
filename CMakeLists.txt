@@ -69,8 +69,6 @@ file(GLOB srcs
     src/devices/net/*.cpp
     src/devices/usb/*.cpp
     src/gui/*.cpp)
-# Cirrus is not ported to the MAME-derived VGA core (disabled upstream too)
-list(REMOVE_ITEM srcs ${CMAKE_SOURCE_DIR}/src/devices/video/Cirrus.cpp)
 
 add_executable(alphabox ${srcs} src/Main.cpp)
 # Headers are included unqualified ("System.hpp"), so every source directory

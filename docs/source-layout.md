@@ -201,7 +201,6 @@ The shared parts:
 - `VGACard`: what every VGA card shares, the plumbing and the standard
   VGA registers.
 - `MonitorEdid.hpp`: the monitor a card finds on its DDC lines.
-- `Cirrus.cpp`: the old pre-MAME Cirrus model, no longer used.
 
 One directory per card family:
 

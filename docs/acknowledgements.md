@@ -79,7 +79,7 @@ keeps its own notice in the header of the file that holds it:
 | AXPbox | most of `src/` | Tomáš Glozar, Remy van Elst and contributors | GPL-2.0-or-later |
 | ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT, the SPD EEPROM and the MAME shims BSD-1-Clause |
 | MAME | `devices/video/`: `VGA.*`, `VGACard.cpp`, `s3/S3Trio64.*`, `ibm8514a.*`, `attotime`, `coretmpl`, `logmacro`, `xtal`, `address_map` | Nathan Woods, Peter Trauner, Angelo Salese, Barry Rodewald, Aaron Giles, Vas Crabb, Olivier Galibert | BSD-3-Clause |
-| Bochs | `gui/`, the CD-ROM commands in `storage/Disk.cpp`, `isa/Keyboard.*`, `video/Cirrus.cpp` | MandrakeSoft S.A. (and the plex86 developers in `gui/plugin.hpp`) | LGPL, version 2 or later |
+| Bochs | `gui/`, the CD-ROM commands in `storage/Disk.cpp`, `isa/Keyboard.*` | MandrakeSoft S.A. (and the plex86 developers in `gui/plugin.hpp`) | LGPL, version 2 or later |
 | GXemul | `common/es40_debug.*`, `net/Ethernet.*`, `pci/tulip/` | Anders Gavare | BSD-3-Clause style |
 | NetBSD | `pci/tulip/TulipMii.hpp`, `TulipRegs.hpp` | Manuel Bouyer; The NetBSD Foundation | BSD |
 | SIMH and SoftFloat | `cpu/AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`, `cpu_defs.hpp` | Robert M Supnik; John R. Hauser | MIT-style; the SoftFloat terms |
