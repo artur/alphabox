@@ -1410,6 +1410,24 @@ void t_sym_basic(SymRig &s) {
         sist1, err.c_str());
 }
 
+/// SYM-03: a reserved Transfer Control opcode is an illegal instruction.
+void t_sym_reserved(SymRig &s) {
+  group("SYM-03 reserved opcode");
+  std::string err;
+  for (u32 opc = 4; opc < 8; opc++) {
+    s.reset();
+    const u32 p = s.program({0x80080000 | (opc << 27), 0, kInt, 0x1});
+    const u8 istat = s.run(p, err);
+    const u8 dstat = s.r8(R_DSTAT);
+    char name[64];
+    snprintf(name, sizeof(name), "Transfer Control opcode %u: DSTAT IID", opc);
+    check(err.empty() && (istat & 0x01) && (dstat & 0x01) && !(dstat & 0x04) &&
+              s.r32(R_DSP) == p + 8,
+          name, "istat %02x dstat %02x dsp %08x %s", istat, dstat, s.r32(R_DSP),
+          err.c_str());
+  }
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1504,6 +1522,7 @@ int main_cdbtest(int argc, char **argv) {
   t_toc_msf(r);
   if (sr.sym) {
     t_sym_basic(sr);
+    t_sym_reserved(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

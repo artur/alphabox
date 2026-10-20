@@ -966,6 +966,15 @@ void CSym53C8xx::CChannel::execute_tc_op() {
   // wait_valid can be safely ignored, phases are always valid in this ideal
   // world... bool wait_valid = (GET_DBC()>>16) & 1;
 
+  // Opcodes 4-7 are reserved: Illegal Instruction Detected, which "will be
+  // set any time an illegal or reserved instruction op code is detected"
+  // (SYM53C895 data manual v3.0, DSTAT bit 0), and SCRIPTS halt, as a DMA
+  // interrupt always does. It used to stop the emulator.
+  if (opcode > 3) {
+    RAISE(DSTAT, IID);
+    return;
+  }
+
   // Check for delayed select timeout
   if (state.regs.reg8[R_SIST1] & R_SIST1_STO) {
 #if defined(DEBUG_SYM_SCRIPTS)
@@ -1098,11 +1107,6 @@ void CSym53C8xx::CChannel::execute_tc_op() {
 
     return;
     break;
-
-  default:
-    FAILURE_1(NotImplemented,
-              "SYM: Transfer Control Instruction with opcode %d is RESERVED.\n",
-              opcode);
   }
 }
 
