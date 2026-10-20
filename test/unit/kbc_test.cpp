@@ -299,6 +299,40 @@ static void test_reset_enables_scanning() {
   check("FF: scanning again", drain(), "1e 9e");
 }
 
+/// KBD-08 and KBD-09: the controller commands IBM documents (84F9735,
+/// Keyboard/Auxiliary Device Controller pp. 9-13) answer as listed there.
+static void test_controller_commands() {
+  fresh();
+  out64(0xFE); // pulse output port bit 0: nothing comes back
+  check("FE pulse", drain(), "");
+  out64(0xF0);
+  check("F0 pulse", drain(), "");
+  out64(0xA4);
+  check("A4 password installed?", drain(), "f1");
+  out64(0xA5);
+  out60(0x41);
+  out60(0x42);
+  out60(0x00);
+  check("A5 password bytes up to a null are swallowed", drain(), "");
+  out60(0xEE);
+  check("the keyboard gets bytes again after the null", drain(), "ee");
+  out64(0x21);
+  check("21 controller RAM", drain(), "00");
+  out64(0x3F);
+  check("3F controller RAM", drain(), "00");
+  out64(0x20);
+  check("20 command byte at power-up", drain(), "63");
+  out64(0x61);
+  out60(0x12); // controller RAM write: swallowed
+  check("61 xx", drain(), "");
+  out64(0x20);
+  check("command byte unchanged by 61", drain(), "63");
+  out64(0xE0);
+  check("E0 test inputs (Type 1: 0)", drain(), "00");
+  out64(0xC0);
+  check("C0 input port", drain(), "80");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -307,6 +341,7 @@ int main() {
   test_srm_and_vms_set3();
   test_mouse_basics();
   test_inhibit_and_overrun();
+  test_controller_commands();
   test_scan_set_default();
   test_reset_enables_scanning();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);

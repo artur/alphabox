@@ -665,7 +665,11 @@ void CKeyboard::write_60(u8 value) {
       controller_enQ(value, KBC_SRC_CTRL);
       break;
 
-    default: // only the commands above expect a data byte
+    case 0xa5: // Load Password: bytes up to a null, not kept
+      state.expecting_port60h = (value != 0);
+      break;
+
+    default: // 61-7F: controller RAM other than the command byte, not kept
       break;
     }
   } else {
@@ -711,6 +715,24 @@ void CKeyboard::write_64(u8 value) {
   case 0x60: // write command byte
     // following byte written to port 60h is command byte
     state.expecting_port60h = 1;
+    break;
+
+  // Controller commands from IBM 84F9735, PS/2 Hardware Interface Technical
+  // Reference, Common Interfaces (Oct 1990), Keyboard/Auxiliary Device
+  // Controller (Sep 1991) pp. 9-13; commands it does not list are reserved.
+  case 0xa4: // Test Password Installed: F1, none (A5 does not keep one)
+    controller_enQ(0xF1, KBC_SRC_CTRL);
+    break;
+
+  case 0xa5: // Load Password: the bytes up to a null follow on port 60h
+    state.expecting_port60h = 1;
+    break;
+
+  case 0xa6: // Enable Password: valid only with a password loaded; none is
+    break;
+
+  case 0xe0: // Read Test Inputs: always 0 on a Type 1 (translating) 8042
+    controller_enQ(0x00, KBC_SRC_CTRL);
     break;
 
   case 0xa0: // BIOS name (not modelled)
@@ -808,13 +830,23 @@ void CKeyboard::write_64(u8 value) {
 
   case 0xc1: // Continuous Input Port Poll, Low
   case 0xc2: // Continuous Input Port Poll, High
-  case 0xe0: // Read Test Inputs
     kbc_unsupported_note("controller command", value);
     break;
 
   default:
-    // F0-FD, FF: pulse output port bits; nothing is wired to them
-    if (value == 0xff || (value >= 0xf0 && value <= 0xfd))
+    // 21-3F: controller RAM other than the command byte, which is not
+    // kept: it reads as 0. 61-7F write it: their data byte is swallowed.
+    if (value > 0x20 && value < 0x40) {
+      controller_enQ(0x00, KBC_SRC_CTRL);
+      break;
+    }
+    if (value > 0x60 && value < 0x80) {
+      state.expecting_port60h = 1;
+      break;
+    }
+    // F0-FF: pulse the output port bits whose command bits are 0. Bit 0
+    // (FE) is the processor reset on a PC; it does not reset this machine.
+    if (value >= 0xf0)
       break;
     kbc_unsupported_note("controller command", value);
     break;

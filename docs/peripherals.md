@@ -93,6 +93,14 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   controller translates), as on the real keyboard; so is every key after
   it until the guest reads. A release lost that way leaves the key down in
   the guest, as it would on hardware.
+- The controller answers the commands IBM lists for its translating
+  (Type 1) 8042. Its RAM other than the command byte is not kept: `21`-`3F`
+  read 0 and `61`-`7F` swallow their byte. No password is ever installed
+  (`A4` answers `F1`; `A5`'s bytes are swallowed up to the null). `E0`
+  reads 0. `F0`-`FF` pulse output port bits, and the reset bit (`FE`, or
+  `D1` with bit 0 clear) does not reset the machine. `C1`/`C2` and the
+  vendor commands outside IBM's list (`A0`, `A1`, `AF`, `AC`) are not
+  modelled; the ALi datasheet does not list its firmware's commands.
 
 ### SCSI
 
