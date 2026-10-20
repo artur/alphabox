@@ -199,6 +199,7 @@ void CS3Trio64::s3_define_video_mode() {
     svga.rgb8_en = 0;
     svga.rgb15_en = 0;
     svga.rgb16_en = 0;
+    svga.rgb24_en = 0;
     svga.rgb32_en = 0;
     // FIXME: vision864 has only first 7 modes
     switch ((s3.ext_misc_ctrl_2) >> 4) {
@@ -247,6 +248,7 @@ void CS3Trio64::s3_define_video_mode() {
     svga.rgb8_en = (s3.memory_config & 8) >> 3;
     svga.rgb15_en = 0;
     svga.rgb16_en = 0;
+    svga.rgb24_en = 0;
     svga.rgb32_en = 0;
   }
 
@@ -2860,12 +2862,8 @@ u32 CS3Trio64::mem_read(u32 address, int dsize) {
   const u32 mv = s3_vram_mask(); // (memsize - 1)
   const u32 off = address & mv;
 
-  if (address >= 0xA0000 && address <= 0xBFFFF) {
-    uint32_t offset = address - 0xA0000;
-    // For SVGA modes, use MAME banking path
-    return mem_r(offset);
-  }
-
+  // BAR0 is a linear aperture onto display memory: every offset is VRAM,
+  // 0xA0000 to 0xBFFFF included (the legacy window is decoded elsewhere).
   switch (dsize) {
   case 8:
     return (u32)vga.memory[off];
