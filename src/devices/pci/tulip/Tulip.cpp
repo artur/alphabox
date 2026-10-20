@@ -125,11 +125,13 @@ void CTulip::run() {
   try {
     while (!StopThread.load()) {
       apply_filter();
-      receive_process();
+      const bool more = receive_process();
       while (dec21143_tx())
         ;
       update_irq();
-      mySemaphore.try_wait_for(std::chrono::milliseconds(10));
+      // A back end with frames still waiting gets the next pass at once.
+      if (!more)
+        mySemaphore.try_wait_for(std::chrono::milliseconds(10));
     }
   }
 

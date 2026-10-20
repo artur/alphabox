@@ -108,7 +108,9 @@ int CNetworkUdp::send(const u8 *data, int len) {
 }
 
 int CNetworkUdp::receive(const u8 **data, int *len) {
-  for (;;) {
+  // Datagrams that are no Ethernet frame are skipped, a bounded number per
+  // call: a peer sending nothing else must not hold the NIC thread here.
+  for (int tries = 0; tries < 64; tries++) {
     ssize_t n = recv(sock, buffer, sizeof(buffer), 0);
     if (n < 0)
       return 0; // nothing waiting (or a refused earlier send)
@@ -118,6 +120,7 @@ int CNetworkUdp::receive(const u8 **data, int *len) {
     *len = (int)n;
     return 1;
   }
+  return 0;
 }
 
 void CNetworkUdp::close() {

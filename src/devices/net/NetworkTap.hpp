@@ -41,7 +41,10 @@ private:
   int tap_fd;
   char ifname[16];
   bool created_by_us;
-  u8 rx_buf[1518]; // max ethernet frame
+  // Larger than any frame the NICs take (1514 bytes without the CRC), so
+  // a longer one arrives whole and is refused for its length instead of
+  // being cut to a length that looks legal.
+  u8 rx_buf[2048];
 
   bool tap_create(const char *devid_string, const char *name);
   bool tap_attach(const char *devid_string, const char *name);

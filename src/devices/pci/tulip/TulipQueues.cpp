@@ -210,6 +210,10 @@ static void describe_dhcp(const u8 *bootp, int len, char *out, int out_len) {
  * Count one frame lost to a full receive FIFO in CSR8: the 11-bit counter
  * saturates and sets its overflow bit, OCO (HRM Table 3-79).
  **/
+/// Frames taken off the back end in one pass of the NIC thread: the
+/// transmit ring and the interrupt line get their turn in between.
+static const int RX_BURST = 64;
+
 static inline void count_fifo_overflow(u32 &csr8) {
   if ((csr8 & MISSED_FOC) == MISSED_FOC)
     csr8 |= MISSED_OCO;
@@ -225,8 +229,11 @@ static inline void count_fifo_overflow(u32 &csr8) {
  * While the receiver is stopped, or in internal loopback, it does not
  * listen to the wire: what arrives then is read and dropped, so it is not
  * delivered late when the receiver starts.
+ *
+ * At most RX_BURST frames per call; returns whether the back end may have
+ * more.
  **/
-void CTulip::receive_process() {
+bool CTulip::receive_process() {
   bool listening;
   {
     std::lock_guard<std::mutex> lock(m_lock);
@@ -235,16 +242,19 @@ void CTulip::receive_process() {
     listening = (csr6 & OPMODE_SR) && !(csr6 & OPMODE_OM_INTLOOP);
   }
 
+  int n = 0;
   if (!listening) {
     const u8 *packet_data = NULL;
     int packet_len = 0;
-    while (net_backend->receive(&packet_data, &packet_len) > 0)
-      ;
+    while (n < RX_BURST && net_backend->receive(&packet_data, &packet_len) > 0)
+      n++;
   } else {
     const u8 *packet_data = NULL;
     int packet_len = 0;
     u8 padded[ETH_MIN_PACKET_RAW];
-    while (net_backend->receive(&packet_data, &packet_len) > 0) {
+    while (n < RX_BURST &&
+           net_backend->receive(&packet_data, &packet_len) > 0) {
+      n++;
       if (packet_len < 14)
         continue; // not even a header
       // On the wire a frame is at least 64 bytes with its CRC: the sender
@@ -286,6 +296,7 @@ void CTulip::receive_process() {
   // Fill receive descriptors until the frames or the descriptors run out.
   while (dec21143_rx())
     ;
+  return n >= RX_BURST;
 }
 
 void CTulip::trace_packet(const char *dir, const u8 *frame, int len) {

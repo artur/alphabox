@@ -178,7 +178,7 @@ public:
 
   virtual void ResetPCI();
   void ResetNIC();
-  void receive_process();
+  bool receive_process();
   virtual void run();
   virtual void init();
   virtual void start_threads();
