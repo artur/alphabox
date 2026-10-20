@@ -1039,7 +1039,10 @@ void CVGACard::io_write_b(u32 address, u8 data) {
     break;
 
   default:
-    FAILURE_1(NotImplemented, "Unhandled port %x write", address);
+    // 3c1, 3ca, 3cb, 3cc, 3cd, 3db and the rest of the range nothing
+    // claims: read-only or unassigned registers. The chip ignores a write
+    // to them; stopping the machine (a FAILURE) was never right.
+    break;
   }
 }
 
@@ -1446,6 +1449,9 @@ int CVGACard::RestoreState(FILE *f) {
   // decodes, and the render thread redraws from scratch (dimensions, the
   // 32bpp handshake, the text font, the cursor signature).
   post_restore();
+  // m_pen_table is not saved (it is derived): rebuild it from the DAC colours
+  // before the next frame, or text and 8 bpp modes redraw black.
+  vga.dac.dirty = 1;
   state.vga_mem_updated = 1;
   old_iWidth = old_iHeight = 0;
   state.last_bpp = 0;

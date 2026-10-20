@@ -358,8 +358,11 @@ void CVGA::vga_vh_text(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
        line < TEXT_LINES; line += height, addr += (offset() >> 1)) {
     for (unsigned pos = addr, column = 0; column < vga.crtc.horz_disp_end + 1;
          column++, pos++) {
-      const uint8_t ch = vga.memory[(pos << 1) + 0];
-      const uint8_t attr = vga.memory[(pos << 1) + 1];
+      // A start address or pitch from the registers can point past the
+      // card's memory: wrap like the graphics renderers do.
+      const size_t vsize = vga.svga_intf.vram_size;
+      const uint8_t ch = vga.memory[((size_t)pos << 1) % vsize];
+      const uint8_t attr = vga.memory[(((size_t)pos << 1) + 1) % vsize];
       const uint32_t font_base =
           vga.sequencer.char_sel.base[BIT(attr, 3)] + (ch << 5);
       const bool blink_sel = !!BIT(vga.attribute.data[0x10], 3);
@@ -375,7 +378,8 @@ void CVGA::vga_vh_text(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
            (h < height) && (line + h < std::min(TEXT_LINES, bitmap.height()));
            h++) {
         uint32_t *const bitmapline = &bitmap.pix(line + h);
-        uint8_t bits = vga.memory[font_base + (h >> (vga.crtc.scan_doubling))];
+        uint8_t bits =
+            vga.memory[(font_base + (h >> (vga.crtc.scan_doubling))) % vsize];
 
         int mask, w;
         for (mask = 0x80, w = 0; (w < width) && (w < 8); w++, mask >>= 1) {
