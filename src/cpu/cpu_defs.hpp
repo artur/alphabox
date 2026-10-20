@@ -100,7 +100,6 @@
 #define I_V_FTRP 13 /* floating trap mode */
 #define I_M_FTRP 0x7
 #define I_FTRP (I_M_FTRP << I_V_FTRP)
-#define I_F_VAXRSV 0x4800 /* VAX reserved */
 #define I_FTRP_V 0x2000   /* /V trap */
 #define I_FTRP_U 0x2000   /* /U trap */
 #define I_FTRP_S 0x8000   /* /S trap */
@@ -117,7 +116,6 @@
 #define I_V_FSRC 9 /* floating source */
 #define I_M_FSRC 0x3
 #define I_FSRC (I_M_FSRC << I_V_FSRC)
-#define I_FSRC_X 0x0200 /* data type X */
 #define I_V_FFNC 5      /* floating function */
 #define I_M_FFNC 0x3F
 #define I_V_LIT8 13 /* integer 8b literal */
@@ -196,7 +194,6 @@
 #define T_BIAS 0x3FF
 #define T_NAN 0x7FF
 #define T_EXP U64(0x7FF0000000000000)
-#define T_FRAC U64(0x000FFFFFFFFFFFFF)
 #define T_GETEXP(x) (((u32)((x) >> T_V_EXP)) & T_M_EXP)
 
 /* Floating point register format (all except VAX D) */

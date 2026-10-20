@@ -64,7 +64,6 @@
 
 /* Unpacked rounding constants */
 #define UF_FRND U64(0x0000008000000000) /* F round */
-#define UF_DRND U64(0x0000000000000080) /* D round */
 #define UF_GRND U64(0x0000000000000400) /* G round */
 
 /***************************************************************************/
@@ -153,7 +152,7 @@ u64 CAlphaCPU::vax_stg(u64 op) { return SWAP_VAXG(op); /* swizzle bits */ }
  * \brief Compare 2 VAX floating-point values.
  *
  * \param s1  First 64-bit VAX floating in register format to be compared.
- * \param s1  Second 64-bit VAX floating in register format to be compared.
+ * \param s2  Second 64-bit VAX floating in register format to be compared.
  * \param ins The instruction currently being executed. Used to properly
  *            handle exceptions.
  * \return    0 if s1==s2, 1 if s1>s2, -1 if s1<s2.

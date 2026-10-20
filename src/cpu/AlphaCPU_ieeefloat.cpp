@@ -101,7 +101,7 @@
  *
  * \subsection IEEE_S S-Floating
  * An IEEE single precision, or S-Floating, is a 32-bit floating point value.
- * In memory, it's layout is as follows:
+ * In memory, its layout is as follows:
  * \code
  *     31 30      23 22                      0
  *   +---+----------+-------------------------+
@@ -137,7 +137,7 @@
  *
  * \subsection IEEE_T T-Floating
  * An IEEE double precision, or T-Floating, is a 64-bit floating point value.
- * Both in memory, and in the flowting point registers it's layout is as
+ * Both in memory, and in the floating point registers its layout is as
  * follows:
  * \code
  *     63 62          52 51                                             0
@@ -209,7 +209,7 @@
 
 static inline u64 ieee_quiet_nan_result(u64 op, u32 dp) {
   op |= QNAN;
-  if (dp == DT_S) /* AAR 4.7.10.1 */
+  if (dp == DT_S) /* ARM 4.7.10.1 */
     op &= ~FPSLOW;
   return op;
 }
@@ -295,7 +295,7 @@ u64 CAlphaCPU::ieee_cvtst(u64 op, u32 ins) {
     return op | QNAN;
   if (ftpb == UFT_ZERO)
     return op & FPR_SIGN; /* DNZ flushed a denormal to its signed zero
-                             (AAR 4.7.7.11) */
+                             (ARM 4.7.7.11) */
   return op;
 }
 
@@ -318,7 +318,7 @@ u64 CAlphaCPU::ieee_cvtts(u64 op, u32 ins) {
     return (op | QNAN) & ~FPSLOW; /* nan? cvt to quiet */
   if (ftpb == UFT_INF)
     return op; /* inf? unchanged */
-  return 0;    /* denorm? 0 */
+  return 0;    /* denormal: ieee_unpack trapped; the result is UNPREDICTABLE */
 }
 
 //\}
@@ -342,10 +342,12 @@ u64 CAlphaCPU::ieee_cvtts(u64 op, u32 ins) {
  *   .
  *
  * \param s1  First IEEE floating to be compared.
- * \param s1  Second IEEE floating to be compared.
+ * \param s2  Second IEEE floating to be compared.
  * \param ins The instruction currently being executed. Used to properly
  *            handle exceptions.
- * \return    0 if s1==s2, 1 if s1>s2, -1 if s1<s2.
+ * \param trap_nan Raise invalid operation for a quiet NaN too (CMPTLT,
+ *            CMPTLE); a signalling NaN always raises it.
+ * \return    0 if s1==s2, 1 if s1>s2, -1 if s1<s2, 2 if unordered.
  **/
 s32 CAlphaCPU::ieee_fcmp(u64 s1, u64 s2, u32 ins, u32 trap_nan) {
   UFP a;
@@ -359,8 +361,8 @@ s32 CAlphaCPU::ieee_fcmp(u64 s1, u64 s2, u32 ins, u32 trap_nan) {
   if ((ftpa == UFT_NAN) || (ftpb == UFT_NAN)) { /* NaN involved? */
     if (trap_nan)
       ieee_trap(TRAP_INV, 1, FPCR_INVD, ins);
-    return 2; // FIXED: Return 2 for unordered, not +1
-  }           /* force failure */
+    return 2; /* unordered */
+  }
 
   if (ftpa == UFT_ZERO)
     a.sign = 0; /* only +0 allowed */

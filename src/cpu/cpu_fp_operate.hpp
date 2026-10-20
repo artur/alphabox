@@ -155,21 +155,21 @@
   FPSTART;                                                                     \
   {                                                                            \
     int c = vax_fcmp(state.f[FREG_1], state.f[FREG_2], ins);                   \
-    state.f[FREG_3] = (c == 0) ? U64(0x4000000000000000) : 0;                  \
+    state.f[FREG_3] = (c == 0) ? FP_TRUE : 0;                                  \
   }
 
 #define DO_CMPGLE                                                              \
   FPSTART;                                                                     \
   {                                                                            \
     int c = vax_fcmp(state.f[FREG_1], state.f[FREG_2], ins);                   \
-    state.f[FREG_3] = (c <= 0) ? U64(0x4000000000000000) : 0;                  \
+    state.f[FREG_3] = (c <= 0) ? FP_TRUE : 0;                                  \
   }
 
 #define DO_CMPGLT                                                              \
   FPSTART;                                                                     \
   {                                                                            \
     int c = vax_fcmp(state.f[FREG_1], state.f[FREG_2], ins);                   \
-    state.f[FREG_3] = (c < 0) ? U64(0x4000000000000000) : 0;                   \
+    state.f[FREG_3] = (c < 0) ? FP_TRUE : 0;                                   \
   }
 
 /* HRM Table A-11: CMPTLT/CMPTLE raise INV on ANY NaN (incl. quiet); CMPTEQ
@@ -179,21 +179,21 @@
   FPSTART;                                                                     \
   {                                                                            \
     int c = ieee_fcmp(state.f[FREG_1], state.f[FREG_2], ins, 0);               \
-    state.f[FREG_3] = (c == 0) ? U64(0x4000000000000000) : 0;                  \
+    state.f[FREG_3] = (c == 0) ? FP_TRUE : 0;                                  \
   }
 
 #define DO_CMPTLE                                                              \
   FPSTART;                                                                     \
   {                                                                            \
     int c = ieee_fcmp(state.f[FREG_1], state.f[FREG_2], ins, 1);               \
-    state.f[FREG_3] = (c <= 0) ? U64(0x4000000000000000) : 0;                  \
+    state.f[FREG_3] = (c <= 0) ? FP_TRUE : 0;                                  \
   }
 
 #define DO_CMPTLT                                                              \
   FPSTART;                                                                     \
   {                                                                            \
     int c = ieee_fcmp(state.f[FREG_1], state.f[FREG_2], ins, 1);               \
-    state.f[FREG_3] = (c < 0) ? U64(0x4000000000000000) : 0;                   \
+    state.f[FREG_3] = (c < 0) ? FP_TRUE : 0;                                   \
   }
 
 /* CMPTUN is quiet: only sNaN raises INV (handled inside ieee_unpack via the
@@ -202,7 +202,7 @@
   FPSTART;                                                                     \
   {                                                                            \
     int c = ieee_fcmp(state.f[FREG_1], state.f[FREG_2], ins, 0);               \
-    state.f[FREG_3] = (c == 2) ? U64(0x4000000000000000) : 0;                  \
+    state.f[FREG_3] = (c == 2) ? FP_TRUE : 0;                                  \
   }
 
 /* format conversions */
@@ -273,8 +273,8 @@
   state.f[FREG_3] = ieee_cvtts(state.f[FREG_2], ins);
 
 /* float <-> integer register moves
- * Alpha requires Rb == 31 for these bit-pattern moves.
- * QEMU enforces this with REQUIRE_REG_31; we use GO_PAL(OPCDEC). */
+ * The Fb field of FTOIx and the Rb field of ITOFx must be 31 (ARM 4.10.18,
+ * 4.10.19); anything else takes the OPCDEC trap here. */
 #define DO_FTOIS                                                               \
   FPSTART;                                                                     \
   do {                                                                         \
