@@ -92,7 +92,7 @@ static Item items[] = {
      "CMPGxx compares values, so under /S a dirty zero equals zero, and the "
      "UNPREDICTABLE result of a compare that traps follows the values too "
      "(ARM 4.7.7.1; 4.10.7, p. 4-111)"},
-    {"FP-05", false,
+    {"FP-05", true,
      "CVTTQ overflow is an invalid operation only with /S (HRM Table A-11, "
      "p. A-17); without /S it is an integer overflow only (ARM 4.7.7.2, "
      "p. 4-72; 4.7.7.9, p. 4-79)"},

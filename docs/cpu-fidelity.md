@@ -47,6 +47,11 @@ first audit was made on 2026-09-18; later entries carry their dates.
 - **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a
   `JIT_VERIFY` build checks the JIT's inline IEEE operations against the
   interpreter over 8.5 million cases at startup.
+- **The floating-point test**: `alphabox_fptest`, built with every lane,
+  checks the interpreter's IEEE and VAX operate instructions against the
+  architecture without a guest: IEEE results and flags against the host
+  FPU in every rounding mode, VAX results against an exact model, and hand
+  cases from the manuals ([development.md](development.md)).
 - **Guest programs**: `test/tools/bench_image.py` writes a bootable image
   from a list of instruction words, and `srm_probe.sh` boots one
   (`FLOPPY=<image> EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit`). A
@@ -427,6 +432,30 @@ against the manuals, and most of it by running code.
   being mirror images (a classic emulator bug, and we decode both), sticky
   bits set independently of trap enables, NaN propagation and quieting,
   `CMPTxx` signalling rules, `DNZ`, and the S-format load/store mapping.
+
+### Floating point (2026-10-20)
+
+`alphabox_fptest` puts every IEEE and VAX operate instruction through the
+interpreter's routines and compares result, FPCR and `EXC_SUM` with the
+manuals: 21 million cases, including every rounding mode, trap qualifier
+and FPCR disable. These were settled in that round.
+
+- **A conversion to integer that overflows** (`CVTTQ`) is an integer
+  overflow: the low 64 bits are the result, and only `/V` traps (ARM
+  4.7.7.2, 4.7.7.9). With `/S` it is also an invalid operation, which
+  `INVD` can disable: HRM Table A-11, which lists what the processor does
+  for "IEEE instructions with /S", gives "Integer overflow: Truncated
+  result, Invalid Op". Without `/S` it is not one: a plain conversion that
+  overflows "uses the low-order bits of the integer as the result without
+  trapping" (ARM 4.7.7.2), and reporting it to the user as invalid is the
+  completion handler's job (ARM B.2.1). Guests agree. GCC compiles
+  `(long)x` to `CVTTQ/C` without `-mieee` and to `CVTTQ/SVC` with it;
+  Linux sends `SIGFPE` for any arithmetic trap without the completion bit
+  (`do_entArith`), so an invalid operation on `CVTTQ/C` would kill every C
+  program that converts an out-of-range double; and the completion
+  handlers of Linux (`arch/alpha/math-emu`) and NetBSD (`fp_complete.c`)
+  raise the invalid operation themselves. Until 2026-10-20 every form
+  raised it here.
 
 ### The exception path
 

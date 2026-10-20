@@ -423,7 +423,9 @@ u64 CAlphaCPU::ieee_cvtfi(u64 op, u32 ins) {
   s32 ubexp;
 
   ftpa = ieee_unpack(op, &a, ins); /* unpack */
-  if (!Q_FINITE(ftpa))             /* inf, NaN, dnorm? */
+  if (ftpa == UFT_DENORM) /* ieee_unpack took the denormal-operand trap */
+    return 0;             /* (the result is UNPREDICTABLE) */
+  if (!Q_FINITE(ftpa))    /* inf, NaN: 0 (ARM 4.7.10.1), invalid */
   {
     ieee_trap(TRAP_INV, 1, FPCR_INVD, ins); /* inv operation */
     return 0;
@@ -478,11 +480,15 @@ u64 CAlphaCPU::ieee_cvtfi(u64 op, u32 ins) {
     /* Pass `ins` (not 0) so I_GETRC(ins) reports the real destination
        register and ins & I_FTRP_S sets TRAP_SWC correctly on /S. */
     ieee_trap(TRAP_IOV, ins & I_FTRP_V, 0, ins); /* overflow trap */
-    /* A conversion whose result does not fit the integer is also an invalid
-       operation on this part -- 21264 HRM Table A-11 gives "Integer overflow
-       -> Truncated result / Invalid Op" for CVTfi, and inexact is a separate
-       row of that table, not a consequence of overflow. */
-    ieee_trap(TRAP_INV, 1, FPCR_INVD, ins);
+    /* With /S the overflow is also an invalid operation: HRM Table A-11,
+       which lists the exceptions of "IEEE instructions with /S", gives
+       "Integer overflow: Truncated result, Invalid Op" for CVTfi. Without
+       /S it is an integer overflow only: the low-order bits are the result
+       and only /V traps (ARM 4.7.7.2, 4.7.7.9), and turning it into an
+       invalid operation is the completion handler's job (ARM B.2.1). See
+       docs/cpu-fidelity.md. */
+    if (ins & I_FTRP_S)
+      ieee_trap(TRAP_INV, 1, FPCR_INVD, ins);
   }
   if (sticky) /* rounded away something? */
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins);
