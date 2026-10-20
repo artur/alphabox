@@ -109,7 +109,14 @@ CSerial::CSerial(CConfigurator *cfg, CSystem *c, u16 number)
             if (theAli)
               theAli->pic_set_line(0, 4 - state.iNumber, active);
           },
-          [this](u8 byte) { write((const char *)&byte, 1); }) {
+          [this](u8 byte) {
+            // Telnet doubles a data byte 0xff (IAC), or the client takes it
+            // for the start of a command (RFC 854). Not in raw_mode.
+            if (byte == IAC && !raw_mode)
+              write("\xff\xff", 2);
+            else
+              write((const char *)&byte, 1);
+          }) {
   state.iNumber = number;
 }
 
@@ -754,6 +761,7 @@ void CSerial::execute() {
 
           if (cmd == IAC) {
             *c++ = 0xFF;
+            after_cr = false;
             b += 2;
             continue;
           } else if (cmd >= WILL && cmd <= DONT) {
@@ -784,9 +792,15 @@ void CSerial::execute() {
         }
 
         // ----- Normal data byte -----
-        *c = *b;
-        c++;
-        b++;
+        // CR NUL is a bare CR (RFC 854): a client that did not agree to
+        // BINARY sends it for Return, and the NUL is not for the guest.
+        if (*b == 0 && after_cr) {
+          after_cr = false;
+          b++;
+          continue;
+        }
+        after_cr = *b == '\r';
+        *c++ = *b++;
       }
 
       // Move cooked data into the staging buffer.
@@ -1036,6 +1050,7 @@ void CSerial::WaitForConnection() {
 
   iac_carry_len = 0;
   in_subneg = false;
+  after_cr = false;
   stageLen = 0;
 
   state.serial_cycles = 0;

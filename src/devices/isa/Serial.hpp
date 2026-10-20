@@ -105,6 +105,7 @@ private:
       iac_carry[8];  // Partial telnet sequence carried across recv() calls
   int iac_carry_len; // Number of valid bytes in iac_carry
   bool in_subneg;    // Currently inside IAC SB ... IAC SE subnegotiation
+  bool after_cr = false; ///< the last data byte received was CR
 
   char stageBuf[STAGE_SIZE]; // Cooked data waiting for baud-rate delivery
   int stageLen;              // Number of valid bytes in stageBuf
