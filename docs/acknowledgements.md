@@ -83,7 +83,7 @@ keeps its own notice in the header of the file that holds it:
 | GXemul | `common/es40_debug.*`, `net/Ethernet.*`, `pci/tulip/` | Anders Gavare | BSD-3-Clause style |
 | NetBSD | `pci/tulip/TulipMii.hpp`, `TulipRegs.hpp` | Manuel Bouyer; The NetBSD Foundation | BSD |
 | SIMH and SoftFloat | `cpu/AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`, `cpu_defs.hpp` | Robert M Supnik; John R. Hauser | MIT-style; the SoftFloat terms |
-| QEMU | `pci/es137x/ES137x.cpp`, `ES137xRegs.hpp` | Vassili Karpov | MIT |
+| QEMU | `pci/es137x/ES137x.cpp`, `ES137x.hpp`, `ES137xRegs.hpp` | Vassili Karpov | MIT |
 | 86Box | `video/mach64/Mach64Engine.cpp` (ported) | Sarah Walker, Miran Grca, Connor Hyde | GPL-2.0-or-later |
 
 Everything in the source is GPL-2.0-or-later or under a licence compatible
