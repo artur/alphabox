@@ -153,11 +153,11 @@ void CAliM1543C::init() {
   int i;
   char *filename;
 
-  add_legacy_io(1, 0x61, 1);
+  add_io(1, 0x61, 1);
 
   state.reg_61 = 0;
 
-  add_legacy_io(2, 0x70, 4);
+  add_io(2, 0x70, 4);
   cSystem->RegisterMemory(this, 2, U64(0x00000801fc000070), 4);
   for (i = 0; i < 4; i++)
     state.toy_access_ports[i] = 0;
@@ -309,7 +309,7 @@ void CAliM1543C::init() {
   ResetPCI();
 
   // PIT Setup
-  add_legacy_io(6, 0x40, 4);
+  add_io(6, 0x40, 4);
   for (i = 0; i < 3; i++)
     state.pit_status[i] = 0x40; // invalid/null counter
   for (i = 0; i < 9; i++)
@@ -319,10 +319,10 @@ void CAliM1543C::init() {
     m_pit_epoch[i] = m_pit_last;
   m_pit_acc = 0;
 
-  add_legacy_io(7, 0x20, 2);
-  add_legacy_io(8, 0xa0, 2);
-  add_legacy_io(30, 0x4d0, 2);
-  add_legacy_io(9, 0x22, 2); // PIC backdoor control
+  add_io(7, 0x20, 2);
+  add_io(8, 0xa0, 2);
+  add_io(30, 0x4d0, 2);
+  add_io(9, 0x22, 2); // PIC backdoor control
   state.pic_control_index = 0;
 
   // odd one, byte read in PCI IACK (interrupt acknowledge) cycle. Interrupt
@@ -347,7 +347,7 @@ void CAliM1543C::init() {
   lpt_reset();
 
   // SuperIO
-  add_legacy_io(40, 0x370, 2);
+  add_io(40, 0x370, 2);
 
   // Populate the SuperIO chip-level / LDN register banks
   // power on defaults
@@ -356,8 +356,8 @@ void CAliM1543C::init() {
   // ISA Plug-and-Play address (0x279) and write-data (0xA79) ports.
   // The OS-selectable READ_DATA port (id 52) is registered dynamically
   // when the OS programs it via PnP register 0x00.
-  add_legacy_io(50, 0x279, 1);
-  add_legacy_io(51, 0xa79, 1);
+  add_io(50, 0x279, 1);
+  add_io(51, 0xa79, 1);
   state.isapnp_state = PNP_WAIT_FOR_KEY;
   state.isapnp_key_pos = 0;
   state.isapnp_reg = 0;
@@ -397,8 +397,8 @@ CAliM1543C::~CAliM1543C() {
 }
 
 /**
- * Read (byte,word,longword) from one of the legacy ranges. Only byte-accesses
- *are supported.
+ * Read (byte,word,longword) from one of the legacy ranges. A word or longword
+ * is served as byte accesses at consecutive ports, as the ISA bus does.
  *
  * Ranges are:
  *  - 1. I/O port 61h
@@ -416,16 +416,52 @@ CAliM1543C::~CAliM1543C() {
  *  .
  **/
 u32 CAliM1543C::ReadMem_Legacy(int index, u32 address, int dsize) {
-  if (dsize != 8 &&
-      index != 20) // when interrupt vector is read, dsize doesn't matter.
-  {
-    FAILURE_4(
-        InvalidArgument,
-        "%s: DSize %d reading from legacy memory range # %d at address %02x\n",
-        devid_string, dsize, index, address);
-  }
+  // The interrupt vector is read in a PCI IACK cycle, whatever its size.
+  if (dsize == 8 || index == 20)
+    return read_byte(index, address);
 
-  int channel = 0;
+  // The registers behind these ranges are eight bits wide: the bus serves a
+  // 16- or 32-bit access as one byte access per byte lane, at consecutive
+  // ports, the lowest port in the low byte.
+  note_wide_access(index, address, dsize, false);
+  u32 data = 0;
+  for (int i = 0; i < dsize / 8; i++)
+    data |= (u32)io_byte_read(index, address + (u32)i) << (8 * i);
+  return data;
+}
+
+void CAliM1543C::add_io(int id, u32 base, u32 length) {
+  add_legacy_io(id, base, length);
+  m_io_base[id] = base;
+  m_io_len[id] = length;
+}
+
+u8 CAliM1543C::io_byte_read(int index, u32 offset) {
+  if (offset < m_io_len[index])
+    return read_byte(index, offset);
+  // Past the end of this range: the port is someone else's to answer.
+  return (u8)cSystem->ReadMem(bus_address(true, m_io_base[index] + offset), 8,
+                              this);
+}
+
+void CAliM1543C::io_byte_write(int index, u32 offset, u8 data) {
+  if (offset < m_io_len[index])
+    write_byte(index, offset, data);
+  else
+    cSystem->WriteMem(bus_address(true, m_io_base[index] + offset), 8, data,
+                      this);
+}
+
+void CAliM1543C::note_wide_access(int index, u32 address, int dsize,
+                                  bool write) {
+  static std::atomic_bool reported{false};
+  if (!reported.exchange(true))
+    printf("%%ALI-W-WIDEIO: %d-bit %s of I/O port %03x served as byte "
+           "accesses (reported once)\n",
+           dsize, write ? "write" : "read", m_io_base[index] + address);
+}
+
+u8 CAliM1543C::read_byte(int index, u32 address) {
   switch (index) {
   case 1:
     return reg_61_read();
@@ -469,8 +505,8 @@ u32 CAliM1543C::ReadMem_Legacy(int index, u32 address, int dsize) {
 }
 
 /**
- * Write (byte,word,longword) to one of the legacy ranges. Only byte-accesses
- *are supported.
+ * Write (byte,word,longword) to one of the legacy ranges. A word or longword
+ * is served as byte accesses at consecutive ports, as the ISA bus does.
  *
  * Ranges are:
  *  - 1. I/O port 61h
@@ -492,15 +528,20 @@ u32 CAliM1543C::ReadMem_Legacy(int index, u32 address, int dsize) {
  *  .
  **/
 void CAliM1543C::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
-  if (dsize != 8 && index != 40) // SuperIO
-  {
-    FAILURE_4(
-        InvalidArgument,
-        "%s: DSize %d writing to legacy memory range # %d at address %02x\n",
-        devid_string, dsize, index, address);
+  if (dsize == 8) {
+    write_byte(index, address, (u8)data);
+    return;
   }
+  // One byte access per byte lane, as for a read (ReadMem_Legacy). The
+  // console writes the Super I/O's index and data ports with one 16-bit
+  // write; that one is not worth a notice.
+  if (index != 40)
+    note_wide_access(index, address, dsize, true);
+  for (int i = 0; i < dsize / 8; i++)
+    io_byte_write(index, address + (u32)i, (u8)(data >> (8 * i)));
+}
 
-  int channel = 0;
+void CAliM1543C::write_byte(int index, u32 address, u8 data) {
   switch (index) {
   case 1:
     reg_61_write((u8)data);
@@ -531,9 +572,7 @@ void CAliM1543C::WriteMem_Legacy(int index, u32 address, int dsize, u32 data) {
     return;
 
   case 40:
-    for (int shift = 0, byte_offset = 0; shift < dsize;
-         shift += 8, byte_offset++)
-      superio_write(address + byte_offset, (u8)(data >> shift));
+    superio_write(address, (u8)data);
     return;
 
   case 27:
@@ -927,7 +966,7 @@ void CAliM1543C::superio_apply_ldn(int ldn) {
 
   case 3: // LPT — only LDN with dynamic binding implemented.
     if (activate && base != 0) {
-      add_legacy_io(27, base & 0xfffc, 4);
+      add_io(27, base & 0xfffc, 4);
 #ifdef DEBUG_SUPERIO
       printf("%s: LPT activated at %#06x\n", devid_string, base & 0xfffc);
 #endif
@@ -1057,7 +1096,7 @@ void CAliM1543C::isapnp_data_write(u8 data) {
     // Re-register our READ_DATA hook at the OS-chosen port.  The
     // system memory map updates id 52 in place, so successive
     // programmings just relocate the same registration.
-    add_legacy_io(52, new_port, 1);
+    add_io(52, new_port, 1);
 #ifdef DEBUG_ISAPNP
     printf("%%PNP-I-RDPORT: READ_DATA port set to 0x%03x\n", new_port);
 #endif

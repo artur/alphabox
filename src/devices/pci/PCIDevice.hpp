@@ -34,7 +34,9 @@
 #if !defined(__PCIDEVICE_H__)
 #define __PCIDEVICE_H__
 
-#define MAX_DEV_RANGES 50
+/// Range ids a device may give its legacy and hose ranges: 0 to
+/// MAX_DEV_RANGES - 1 (the ALi's ISA PnP ports use 50-52).
+#define MAX_DEV_RANGES 64
 
 #define PCI_RANGE_BASE 0x0800
 

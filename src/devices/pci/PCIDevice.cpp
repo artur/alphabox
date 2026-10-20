@@ -162,22 +162,33 @@ u64 CPCIDevice::map_range(int id, bool is_io, u32 base, u64 length) {
   return t;
 }
 
+// A range id indexes dev_range_is_io: one past its end would mark (and
+// later read) whatever member follows it.
+static void check_range_id(const char *name, int id) {
+  if (id < 0 || id >= MAX_DEV_RANGES)
+    FAILURE_2(Logic, "%s: legacy range id %d is out of range", name, id);
+}
+
 void CPCIDevice::add_legacy_io(int id, u32 base, u32 length) {
+  check_range_id(devid_string, id);
   dev_range_is_io[id] = true;
   map_range(id, true, base, length);
 }
 
 void CPCIDevice::add_legacy_mem(int id, u32 base, u32 length) {
+  check_range_id(devid_string, id);
   dev_range_is_io[id] = false;
   map_range(id, false, base, length);
 }
 
 void CPCIDevice::add_hose_io(int id, u32 base, u32 length) {
+  check_range_id(devid_string, id);
   dev_range_is_io[id] = true;
   cSystem->RegisterMemory(this, id, bus_address(true, base), length);
 }
 
 void CPCIDevice::add_hose_mem(int id, u32 base, u32 length) {
+  check_range_id(devid_string, id);
   dev_range_is_io[id] = false;
   cSystem->RegisterMemory(this, id, bus_address(false, base), length);
 }

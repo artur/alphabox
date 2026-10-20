@@ -88,6 +88,20 @@ private:
   std::atomic_bool myThreadDead{false};
   bool StopThread;
 
+  /// Register one of the bridge's ISA I/O ranges, keeping its base port and
+  /// length so that a 16- or 32-bit access can be split into the byte
+  /// accesses the ISA bus makes of it (ReadMem_Legacy).
+  void add_io(int id, u32 base, u32 length);
+  u32 m_io_base[MAX_DEV_RANGES] = {};
+  u32 m_io_len[MAX_DEV_RANGES] = {};
+  /// One byte of a legacy range, at an offset that may lie past its end
+  /// (the next port then belongs to whoever decodes it).
+  u8 read_byte(int index, u32 address);
+  void write_byte(int index, u32 address, u8 data);
+  u8 io_byte_read(int index, u32 offset);
+  void io_byte_write(int index, u32 offset, u8 data);
+  void note_wide_access(int index, u32 address, int dsize, bool write);
+
   std::mutex picLock;
   // Unlocked inner helpers — called only while picLock is held.
   void pic_interrupt_inner(int index, int intno);
