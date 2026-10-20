@@ -206,32 +206,39 @@ static void describe_dhcp(const u8 *bootp, int len, char *out, int out_len) {
     append_dhcp_ip(out, out_len, &pos, "request", requested);
 }
 
+/**
+ * Take what the back end has into the receive queue, then into the receive
+ * ring. Only this thread reads the back end, so it does that without the
+ * lock, and queues each frame under it.
+ **/
 void CTulip::receive_process() {
-  const u8 *packet_data = NULL;
-  int packet_len = 0;
-
-  // if receive process active
-  if (state.reg[CSR_OPMODE / 8] & OPMODE_SR) {
-
-    // get packets from host nic if not in internal loopback mode
-    if (!(state.reg[CSR_OPMODE / 8] & OPMODE_OM_INTLOOP)) {
-      while (net_backend->receive(&packet_data, &packet_len) > 0) {
-        if (trace_packets)
-          trace_packet("RX", packet_data, packet_len);
-        rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
-        // Set 10bT activity -- but only where CSR12 is the SIA status. On
-        // the 21140 that register is eight general purpose pins, and this
-        // bit is one of them.
-        if (m_chip.media != TULIP_MEDIA_GPR_21140)
-          state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
-      }
-    }
-
-    // process a receive descriptor until we run out of
-    // descriptors or packets to process
-    while (dec21143_rx())
-      ;
+  bool listening;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    const u32 csr6 = state.reg[CSR_OPMODE / 8];
+    // In internal loopback the receiver does not listen to the wire.
+    listening = (csr6 & OPMODE_SR) && !(csr6 & OPMODE_OM_INTLOOP);
   }
+
+  if (listening) {
+    const u8 *packet_data = NULL;
+    int packet_len = 0;
+    while (net_backend->receive(&packet_data, &packet_len) > 0) {
+      if (trace_packets)
+        trace_packet("RX", packet_data, packet_len);
+      std::lock_guard<std::mutex> lock(m_lock);
+      rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
+      // Set 10bT activity -- but only where CSR12 is the SIA status. On
+      // the 21140 that register is eight general purpose pins, and this
+      // bit is one of them.
+      if (m_chip.media != TULIP_MEDIA_GPR_21140)
+        state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
+    }
+  }
+
+  // Fill receive descriptors until the frames or the descriptors run out.
+  while (dec21143_rx())
+    ;
 }
 
 void CTulip::trace_packet(const char *dir, const u8 *frame, int len) {
@@ -327,85 +334,112 @@ static inline void count_missed_frame(u32 &csr8) {
 }
 
 /**
- *  Receive a packet. (If there is no current packet, then check for newly
- *  arrived ones. If the current packet couldn't be fully transfered the
- *  last time, then continue on that packet.)
+ * The status bits of the last descriptor of a received frame, besides the
+ * frame length: multicast, filtering fail, data type, too long. Under
+ * m_lock.
+ **/
+u32 CTulip::rx_last_status_locked(const u8 *frame, int len) const {
+  u32 rdes0 = TDSTAT_Rx_LS;
+
+  /*  Set the frame length: */
+  rdes0 |= ((u32)len << 16) & TDSTAT_Rx_FL; /* include CRC like HW/QEMU */
+
+  /* Set multicast / filter-fail flags. */
+  const u8 *dst = frame;
+  bool is_multicast = (dst[0] & 1) != 0;
+  if (is_multicast) {
+    rdes0 |= TDSTAT_Rx_MF;
+  }
+  /* Check perfect filter list programmed by setup-frame; fall back to our
+   * MAC. */
+  bool perfect = false;
+  for (int k = 0; k < 16; k++) {
+    const u8 *ent = &state.setup_filter[k * 12];
+    u8 pa[6] = {ent[0], ent[1], ent[4], ent[5], ent[8], ent[9]};
+    if ((pa[0] | pa[1] | pa[2] | pa[3] | pa[4] | pa[5]) == 0)
+      continue;
+    if (memcmp(dst, pa, 6) == 0) {
+      perfect = true;
+      break;
+    }
+  }
+  if (!perfect && memcmp(dst, state.mac, 6) == 0) {
+    perfect = true;
+  }
+  if (!perfect) {
+    if (state.reg[CSR_OPMODE / 8] & (OPMODE_PR | OPMODE_RA)) {
+      rdes0 |= TDSTAT_Rx_FF;
+    }
+  }
+
+  /* Data type per OM (normal / internal / external loopback). */
+  if (state.reg[CSR_OPMODE / 8] & OPMODE_OM_INTLOOP) {
+    rdes0 |= TDSTAT_Rx_DT_IL;
+  } else if (state.reg[CSR_OPMODE / 8] & OPMODE_OM_EXTLOOP) {
+    rdes0 |= TDSTAT_Rx_DT_EL;
+  } else {
+    rdes0 |= TDSTAT_Rx_DT_SR;
+  }
+
+  /*  Frame too long? (1518 is max ethernet frame length)  */
+  if (len > 1518)
+    rdes0 |= TDSTAT_Rx_TL;
+  // ^^ this is quite not possible in current code path...?
+
+  return rdes0;
+}
+
+/**
+ * Put the frame in hand, or its next part, into the current receive
+ * descriptor; a new frame is taken from the receive queue when the last one
+ * is done. Returns 1 when a descriptor was filled, 0 when there is nothing
+ * to receive or nowhere to put it.
+ *
+ * The descriptor is fetched, filled and written back without the lock (see
+ * "Threads and locking" in Tulip.cpp), and the move to the next one, the
+ * receive interrupt and the process state committed under it.
  **/
 int CTulip::dec21143_rx() {
   // The descriptor is this call's own: every Tulip runs this on its own
   // thread, so nothing here may be shared between them.
   u32 descr[4];
-  u32 rdes0;
-  u32 rdes1;
-  u32 rdes2;
-  u32 rdes3;
+  u32 addr;
+  u32 epoch;
+  bool dbo;
+  int len;
+  int used;
 
-  u32 addr = state.rx.cur_addr;
-  u32 bufaddr;
-
-  // unsigned char descr[16];
-  // u32 rdes0, rdes1, rdes2, rdes3;
-  int bufsize;
-
-  // unsigned char descr[16];
-  int buf1_size;
-
-  // unsigned char descr[16];
-  int buf2_size;
-
-  // unsigned char descr[16];
-  // int           writeback_len = 4;
-
-  // unsigned char descr[16];
-  int to_xfer;
-
-  // struct pcap_pkthdr * packet_header;
-  // const u_char * packet_data = NULL;
-
-  /*  Is current packet finished? Then check for new ones.  */
-  if (state.rx.current.used >= state.rx.current.len) {
-
-    /*  Nothing available? Then abort.  */
-    if (rx_queue->count() == 0)
-      return 0; // indicate nothing was processed
-
-    //      printf("pcap recv: %d bytes (%d captured) for
-    //      %02x:%02x:%02x:%02x:%02x:%02x  \n",packet_header->len,
-    //      packet_header->caplen,packet_data[0],packet_data[1],packet_data[2],packet_data[3],packet_data[4],packet_data[5]);
-    // get next packet from receive queue
-    rx_queue->get_head(state.rx.current);
-
-    /*  Append a 4 byte CRC:  */
-
-    // state.rx.cur_buf_len += 4;
-    // CHECK_REALLOCATION(state.rx.cur_buf, realloc(state.rx.cur_buf,
-    // state.rx.cur_buf_len), unsigned char);
-
-    /*  Get the next packet into our buffer:  */
-
-    // memcpy(state.rx.cur_buf, packet_data, state.rx.cur_buf_len);
-
-    /*  Well... the CRC is just zeros, for now.  */
-
-    // memset(state.rx.cur_buf + state.rx.cur_buf_len - 4, 0, 4);
-    // state.rx.cur_offset = 0;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (!(state.reg[CSR_OPMODE / 8] & OPMODE_SR))
+      return 0;
+    /*  Is current packet finished? Then check for new ones.  */
+    if (state.rx.current.used >= state.rx.current.len &&
+        !rx_queue->get_head(state.rx.current))
+      return 0; // nothing to receive
+    addr = state.rx.cur_addr;
+    epoch = m_rx_epoch;
+    dbo = (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO) != 0;
+    len = state.rx.current.len;
+    used = state.rx.current.used;
   }
 
   // read current descriptor
-  do_pci_read(state.rx.cur_addr, descr, 4, 4);
+  do_pci_read(addr, descr, 4, 4);
   // respect DBO bit - swap descriptor byte order if needed
-  if (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO) {
+  if (dbo) {
     for (int i = 0; i < 4; i++)
       descr[i] = bswap32_local(descr[i]);
   }
-
-  rdes0 = descr[0];
-  rdes1 = descr[1];
-  rdes2 = descr[2];
-  rdes3 = descr[3];
+  const u32 rdes1 = descr[1];
+  const u32 rdes2 = descr[2];
+  const u32 rdes3 = descr[3];
 
   /*  Only use descriptors owned by the 21143:  */
-  if (!(rdes0 & TDSTAT_OWN)) {
+  if (!(descr[0] & TDSTAT_OWN)) {
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (epoch != m_rx_epoch)
+      return 0;
     // No receive buffer: like the chip, discard the arriving frame and count
     // it in CSR8 instead of holding it back until the driver refills the
     // ring. RU is raised only on the change into the suspended state;
@@ -417,262 +451,188 @@ int CTulip::dec21143_rx() {
       state.rx.current.used = state.rx.current.len;
       count_missed_frame(state.reg[CSR_MISSED / 8]);
     }
-    state.reg[CSR_STATUS / 8] = (state.reg[CSR_STATUS / 8] & ~STATUS_RS) |
-                                (was_suspended ? 0 : STATUS_RU) |
-                                STATUS_RS_SUSPENDED;
+    if (state.reg[CSR_OPMODE / 8] & OPMODE_SR)
+      state.reg[CSR_STATUS / 8] = (state.reg[CSR_STATUS / 8] & ~STATUS_RS) |
+                                  (was_suspended ? 0 : STATUS_RU) |
+                                  STATUS_RS_SUSPENDED;
     return 0; // indicate nothing was processed
   }
 
-  buf1_size = rdes1 & TDCTL_SIZE1;
-  buf2_size = (rdes1 & TDCTL_SIZE2) >> TDCTL_SIZE2_SHIFT;
-  bufaddr = buf1_size ? rdes2 : rdes3;
-  bufsize = buf1_size ? buf1_size : buf2_size;
+  const int buf1_size = rdes1 & TDCTL_SIZE1;
+  const int buf2_size = (rdes1 & TDCTL_SIZE2) >> TDCTL_SIZE2_SHIFT;
 
-  // state.reg[CSR_STATUS/8] &= ~STATUS_RS; // dth: wrong, this is receive state
-  // stopped
-  //   printf("{ dec21143_rx: base = 0x%08x }\n", addr);
-  //       debug("{ RX (%08x): 0x%08x 0x%08x 0x%x 0x%x: buf %d bytes at 0x%x
-  //       }\n",
-  //           addr, rdes0, rdes1, rdes2, rdes3, bufsize, (int)bufaddr);
   //  Turn off all status bits, and give up ownership
-  rdes0 = 0x00000000;
+  u32 rdes0 = 0;
 
   //  Is this the first buffer of the frame?
-  if (state.rx.current.used == 0)
+  if (used == 0)
     rdes0 |= TDSTAT_Rx_FS;
+
+  // The frame's bytes are written by this thread alone (get_head above), so
+  // they are read here without the lock.
+  u8 *frame = state.rx.current.frame;
 
   // use buffer 1, if length is non-zero
   if (buf1_size > 0) {
-    to_xfer = state.rx.current.len - state.rx.current.used;
-    if (to_xfer > buf1_size)
-      to_xfer = buf1_size;
-
+    const int to_xfer = std::min(len - used, buf1_size);
     // DMA bytes from the packet into buffer 1
-    do_pci_write(rdes2, &state.rx.current.frame[state.rx.current.used], 1,
-                 to_xfer);
-
-    // update used
-    state.rx.current.used += to_xfer;
+    do_pci_write(rdes2, frame + used, 1, to_xfer);
+    used += to_xfer;
   }
 
   // use buffer 2, if length is non-zero and not a chain buffer
   if ((buf2_size > 0) && (!(rdes1 & TDCTL_CH))) {
-    to_xfer = state.rx.current.len - state.rx.current.used;
-    if (to_xfer > buf2_size)
-      to_xfer = buf2_size;
-
+    const int to_xfer = std::min(len - used, buf2_size);
     // DMA bytes from the packet into buffer 2
-    do_pci_write(rdes3, state.rx.current.frame + state.rx.current.used, 1,
-                 to_xfer);
-
-    // update used
-    state.rx.current.used += to_xfer;
+    do_pci_write(rdes3, frame + used, 1, to_xfer);
+    used += to_xfer;
   }
 
   //  Frame completed?
-  if (state.rx.current.used >= state.rx.current.len) {
-
-    //        debug("frame complete.\n");
-    rdes0 |= TDSTAT_Rx_LS;
-
-    /*  Set the frame length: */
-    rdes0 |= ((state.rx.current.len) << 16) &
-             TDSTAT_Rx_FL; /* include CRC like HW/QEMU */
-
-    /* Set multicast / filter-fail flags. */
-    const u8 *dst = state.rx.current.frame;
-    bool is_multicast = (dst[0] & 1) != 0;
-    if (is_multicast) {
-      rdes0 |= TDSTAT_Rx_MF;
-    }
-    /* Check perfect filter list programmed by setup-frame; fall back to our
-     * MAC. */
-    bool perfect = false;
-    for (int k = 0; k < 16; k++) {
-      u8 *ent = &state.setup_filter[k * 12];
-      u8 pa[6] = {ent[0], ent[1], ent[4], ent[5], ent[8], ent[9]};
-      if ((pa[0] | pa[1] | pa[2] | pa[3] | pa[4] | pa[5]) == 0)
-        continue;
-      if (memcmp(dst, pa, 6) == 0) {
-        perfect = true;
-        break;
-      }
-    }
-    if (!perfect && memcmp(dst, state.mac, 6) == 0) {
-      perfect = true;
-    }
-    if (!perfect) {
-      if (state.reg[CSR_OPMODE / 8] & (OPMODE_PR | OPMODE_RA)) {
-        rdes0 |= TDSTAT_Rx_FF;
-      }
-    }
-
-    /* Data type per OM (normal / internal / external loopback). */
-    if (state.reg[CSR_OPMODE / 8] & OPMODE_OM_INTLOOP) {
-      rdes0 |= TDSTAT_Rx_DT_IL;
-    } else if (state.reg[CSR_OPMODE / 8] & OPMODE_OM_EXTLOOP) {
-      rdes0 |= TDSTAT_Rx_DT_EL;
-    } else {
-      rdes0 |= TDSTAT_Rx_DT_SR;
-    }
-
-    /*  Frame too long? (1518 is max ethernet frame length)  */
-    if (state.rx.current.len > 1518)
-      rdes0 |= TDSTAT_Rx_TL;
-    // ^^ this is quite not possible in current code path...?
-
-    // set receive interrupt and receive state to waiting-for-packet
-    state.reg[CSR_STATUS / 8] =
-        (state.reg[CSR_STATUS / 8] & ~STATUS_RS) | STATUS_RI | STATUS_RS_WAIT;
+  const bool last = used >= len;
+  if (last) {
+    std::lock_guard<std::mutex> lock(m_lock);
+    rdes0 |= rx_last_status_locked(frame, len);
   }
 
   // Writeback rdes0, others are read-only
-  state.reg[CSR_STATUS / 8] =
-      (state.reg[CSR_STATUS / 8] & ~STATUS_RS) | STATUS_RS_CLOSE;
-  // respect DBO bit - swap descriptor byte order if needed
   {
-    u32 w0 = rdes0;
-    if (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO)
-      w0 = bswap32_local(w0);
-    do_pci_write(state.rx.cur_addr, &w0, 4, 1);
+    u32 w0 = dbo ? bswap32_local(rdes0) : rdes0;
+    do_pci_write(addr, &w0, 4, 1);
   }
+
+  std::lock_guard<std::mutex> lock(m_lock);
+  if (epoch != m_rx_epoch)
+    return 0; // reset or re-pointed meanwhile: the frame went with the ring
+  state.rx.current.used = used;
+  // set receive interrupt once the frame is in memory
+  if (last)
+    state.reg[CSR_STATUS / 8] |= STATUS_RI;
+  if (state.reg[CSR_OPMODE / 8] & OPMODE_SR)
+    set_rx_state(STATUS_RS_CLOSE);
 
   // move to next descriptor
   if (rdes1 & TDCTL_ER) // end-of-ring, return to base
     state.rx.cur_addr = state.reg[CSR_RXLIST / 8];
-  else {
-    if (rdes1 & TDCTL_CH) // explicit chain, use chain address
-      state.rx.cur_addr = rdes3;
-    else
-      // implicit chain
-      state.rx.cur_addr += (4 * sizeof(uint32_t)) + state.descr_skip;
-  }
+  else if (rdes1 & TDCTL_CH) // explicit chain, use chain address
+    state.rx.cur_addr = rdes3;
+  else // implicit chain
+    state.rx.cur_addr = addr + (4 * sizeof(uint32_t)) + state.descr_skip;
 
   return 1; // indicate processing has occurred
 }
 
 /**
- *  Transmit a packet, if the guest OS has marked a descriptor as containing
- *  data to transmit.
+ * Transmit a packet, if the guest OS has marked a descriptor as containing
+ * data to transmit. Returns 1 when a descriptor was processed.
+ *
+ * Like the receive side, the descriptor and its buffers are read and the
+ * status written back without the lock, and the move to the next descriptor
+ * committed under it.
  **/
 int CTulip::dec21143_tx() {
-  u32 addr = state.tx.cur_addr;
-
-  u32 bufaddr;
   u32 descr[4];
-  u32 tdes0;
-  u32 tdes1;
-  u32 tdes2;
-  u32 tdes3;
-  int bufsize;
-  int buf1_size;
-  int buf2_size;
+  u32 addr;
+  u32 epoch;
+  u32 txlist;
+  u32 opmode;
+  int skip;
+  int buf_len;
+  bool dbo;
 
-  if (state.tx.suspend)
-    return 0;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (!(state.reg[CSR_OPMODE / 8] & OPMODE_ST) || state.tx.suspend)
+      return 0;
+    set_tx_state(STATUS_TS_FETCH);
+    addr = state.tx.cur_addr;
+    epoch = m_tx_epoch;
+    dbo = (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO) != 0;
+    txlist = state.reg[CSR_TXLIST / 8];
+    skip = state.descr_skip;
+    buf_len = state.tx.cur_buf_len;
+  }
 
-  set_tx_state(STATUS_TS_FETCH);
   do_pci_read(addr, descr, 4, 4);
-
-  if (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO) {
+  if (dbo) {
     for (int i = 0; i < 4; i++)
       descr[i] = bswap32_local(descr[i]);
   }
-  tdes0 = descr[0];
-  tdes1 = descr[1];
-  tdes2 = descr[2];
-  tdes3 = descr[3];
+  u32 tdes0 = descr[0];
+  const u32 tdes1 = descr[1];
+  const u32 tdes2 = descr[2];
+  const u32 tdes3 = descr[3];
 
-  /*  printf("{ dec21143_tx: base=0x%08x, tdes0=0x%08x }\n", (int)addr,
-   * (int)tdes0);  */
+  const int buf1_size = tdes1 & TDCTL_SIZE1;
+  const int buf2_size = (tdes1 & TDCTL_SIZE2) >> TDCTL_SIZE2_SHIFT;
+  const u32 bufaddr = buf1_size ? tdes2 : tdes3;
+  const int bufsize = buf1_size ? buf1_size : buf2_size;
 
-  /*  Only process packets owned by the 21143:  */
-  if (!(tdes0 & TDSTAT_OWN)) {
-    /* HRM 4.3.7.1: on fetching an unowned descriptor, the chip raises
-     * STATUS_TU and moves to suspended state. Do this immediately, no
-     * idle threshold. */
-    state.reg[CSR_STATUS / 8] |= STATUS_TU;
-    set_tx_state(STATUS_TS_SUSPENDED);
-    state.tx.suspend = true;
-    update_irq();
-    return 0;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (epoch != m_tx_epoch)
+      return 0;
+    const bool running = (state.reg[CSR_OPMODE / 8] & OPMODE_ST) != 0;
+    /*  Only process packets owned by the 21143:  */
+    if (!(tdes0 & TDSTAT_OWN)) {
+      /* HRM 4.3.6.2: on fetching an unowned descriptor, the chip raises
+       * STATUS_TU and moves to suspended state. Do this immediately, no
+       * idle threshold. */
+      state.reg[CSR_STATUS / 8] |= STATUS_TU;
+      if (running)
+        set_tx_state(STATUS_TS_SUSPENDED);
+      state.tx.suspend = true;
+      return 0;
+    }
+    if (running)
+      set_tx_state((tdes1 & TDCTL_Tx_SET) ? STATUS_TS_SETUP
+                                          : STATUS_TS_READING);
+    opmode = state.reg[CSR_OPMODE / 8];
   }
 
-  buf1_size = tdes1 & TDCTL_SIZE1;
-  buf2_size = (tdes1 & TDCTL_SIZE2) >> TDCTL_SIZE2_SHIFT;
-  bufaddr = buf1_size ? tdes2 : tdes3;
-  bufsize = buf1_size ? buf1_size : buf2_size;
-
+  u32 next;
   if (tdes1 & TDCTL_ER) // end-of-ring, return to base
-    state.tx.cur_addr = state.reg[CSR_TXLIST / 8];
-  else {
-    if (tdes1 & TDCTL_CH) // explicit chain, use chain address
-      state.tx.cur_addr = tdes3;
-    else
-      // implicit chain
-      state.tx.cur_addr += (4 * sizeof(uint32_t)) + state.descr_skip;
-  }
-
-  /*
-     printf("{ TX (%llx): 0x%08x 0x%08x 0x%x 0x%x: buf %i bytes at 0x%x }\n",
-     (long long)addr, tdes0, tdes1, tdes2, tdes3, bufsize, (int)bufaddr);
-   */
+    next = txlist;
+  else if (tdes1 & TDCTL_CH) // explicit chain, use chain address
+    next = tdes3;
+  else // implicit chain
+    next = addr + (4 * sizeof(uint32_t)) + skip;
 
   /*  Assume no error:  */
   tdes0 &= ~(TDSTAT_Tx_UF | TDSTAT_Tx_EC | TDSTAT_Tx_LC | TDSTAT_Tx_NC |
              TDSTAT_Tx_LO | TDSTAT_Tx_TO | TDSTAT_ES);
+  bool ti = false;
 
   if (tdes1 & TDCTL_Tx_SET) {
-    set_tx_state(STATUS_TS_SETUP);
-
     /*
      *  Setup Packet.
-     *
-     *  TODO. For now, just ignore it, and pretend it worked.
      */
-
-    //              printf("{ TX: setup packet }\n");
+    u8 setup[192];
     if (bufsize != 192)
       printf("[ dec21143: setup packet len = %i, should be 192! ]\n",
              (int)bufsize);
-    do_pci_read(bufaddr, state.setup_filter, 1, 192);
-    SetupFilter();
+    do_pci_read(bufaddr, setup, 1, 192);
+    {
+      std::lock_guard<std::mutex> lock(m_lock);
+      if (epoch != m_tx_epoch)
+        return 0;
+      memcpy(state.setup_filter, setup, sizeof(state.setup_filter));
+      m_filter_dirty = true;
+    }
 
-    if (tdes1 & TDCTL_Tx_IC)
-      state.reg[CSR_STATUS / 8] |= STATUS_TI;
+    ti = (tdes1 & TDCTL_Tx_IC) != 0;
 
     /*  Setup frame complete (HRM 4.2.3): clear OWN, set all other
         TDES0 bits to 1. TDES1/2/3 are driver-owned -- do not touch
         (matches QEMU tulip.c and 86Box net_tulip.c). */
     tdes0 = 0x7fffffff;
   } else {
-    set_tx_state(STATUS_TS_READING);
-
     /*
-     *  Data Packet.
+     *  Data Packet. The first segment starts a new frame in the 2 KB
+     *  scratch buffer; only this thread touches its bytes.
      */
-
-    //              printf("{ TX: data packet: ");
-    if (tdes1 & TDCTL_Tx_FS) {
-
-      /*  First segment. Let's allocate a new buffer:  */
-
-      /*  printf("new frame }\n");  */
-
-      // CHECK_ALLOCATION(state.tx.cur_buf = (unsigned char *)malloc(bufsize));
-      state.tx.cur_buf_len = 0;
-    } else {
-
-      /*  Not first segment. Increase the length of the current buffer:  */
-
-      /*  printf("continuing last frame }\n");  */
-      if (state.tx.cur_buf == NULL)
-        printf("[ dec21143: WARNING! tx: middle segment, but no first "
-               "segment?! ]\n");
-
-      // CHECK_REALLOCATION(state.tx.cur_buf, realloc(state.tx.cur_buf,
-      // state.tx.cur_buf_len + bufsize), unsigned char);
-    }
+    if (tdes1 & TDCTL_Tx_FS)
+      buf_len = 0;
 
     /* Safely DMA data from guest memory, without exceeding TX scratch capacity.
      */
@@ -684,63 +644,46 @@ int CTulip::dec21143_tx() {
 
       /* Buffer 1 */
       if (buf1_size > 0) {
-        int avail = tx_cap - state.tx.cur_buf_len;
+        int avail = tx_cap - buf_len;
         int copy = (buf1_size < avail) ? buf1_size : (avail > 0 ? avail : 0);
         if (copy > 0) {
-          do_pci_read(tdes2, state.tx.cur_buf + state.tx.cur_buf_len, 1, copy);
-          state.tx.cur_buf_len += copy;
+          do_pci_read(tdes2, state.tx.cur_buf + buf_len, 1, copy);
+          buf_len += copy;
         }
       }
 
       /* Buffer 2 is valid unless the second address is chained.
          TER only controls descriptor wraparound after this descriptor. */
       if (buf2_size > 0 && !(tdes1 & TDCTL_CH)) {
-        int avail = tx_cap - state.tx.cur_buf_len;
+        int avail = tx_cap - buf_len;
         int copy = (buf2_size < avail) ? buf2_size : (avail > 0 ? avail : 0);
         if (copy > 0) {
-          do_pci_read(tdes3, state.tx.cur_buf + state.tx.cur_buf_len, 1, copy);
-          state.tx.cur_buf_len += copy;
+          do_pci_read(tdes3, state.tx.cur_buf + buf_len, 1, copy);
+          buf_len += copy;
         }
       }
     }
 
     /*  Last segment? Then actually transmit it:  */
     if (tdes1 & TDCTL_Tx_LS) {
-
-      /*  printf("{ TX: data frame complete. }\n");  */
-
       /* Enforce ethernet max frame length for delivery (without CRC = 1514
        * bytes). */
-      bool frame_too_long = (state.tx.cur_buf_len > ETH_MAX_PACKET_RAW);
+      bool frame_too_long = (buf_len > ETH_MAX_PACKET_RAW);
 
       /* Only transmit to wire if no loopback is active and frame size is legal.
        */
-      if (!frame_too_long && !(state.reg[CSR_OPMODE / 8] & OPMODE_OM)) {
+      if (!frame_too_long && !(opmode & OPMODE_OM)) {
         if (trace_packets)
-          trace_packet("TX", state.tx.cur_buf, state.tx.cur_buf_len);
-        net_backend->send(state.tx.cur_buf, state.tx.cur_buf_len);
+          trace_packet("TX", state.tx.cur_buf, buf_len);
+        net_backend->send(state.tx.cur_buf, buf_len);
       }
 
       /* In internal or external loopback, inject into RX queue iff RX is
        * running and size ok. */
-      if (!frame_too_long && (state.reg[CSR_OPMODE / 8] & OPMODE_OM) &&
-          (state.reg[CSR_OPMODE / 8] & OPMODE_SR)) {
+      if (!frame_too_long && (opmode & OPMODE_OM) && (opmode & OPMODE_SR)) {
         bool crc = !(tdes1 & TDCTL_Tx_AC);
-
-        // printf("21143: %s packet, AC: %d\n", (state.reg[CSR_OPMODE / 8] &
-        // OPMODE_OM_INTLOOP) ? "IL" : "EL", !crc); printf("21143: TX enabled:
-        // %d, RX enabled: %d\n", state.reg[CSR_OPMODE /8] & OPMODE_ST,
-        // state.reg[CSR_OPMODE /8] & OPMODE_SR); printf("21143: tx(), len=%d,
-        // addr=%08x, mode=%s\n", state.tx.cur_buf_len, (int) state.tx.cur_buf,
-        // (state.reg[CSR_OPMODE / 8] & OPMODE_OM_INTLOOP) ? "IL" : "EL");
-        // printf("21143: tx(), data=|");
-        // unsigned char* aptr = state.tx.cur_buf;
-        // for(int i=0; i<state.tx.cur_buf_len; i++) {
-        //       printf("%02x-",*aptr++);
-        // }
-        // printf("|\n");
-        (void)rx_queue->add_tail(state.tx.cur_buf, state.tx.cur_buf_len,
-                                 calc_crc, crc);
+        std::lock_guard<std::mutex> lock(m_lock);
+        (void)rx_queue->add_tail(state.tx.cur_buf, buf_len, calc_crc, crc);
       }
 
       /* Oversize frames: signal jabber and error summary, and do not deliver.
@@ -750,13 +693,10 @@ int CTulip::dec21143_tx() {
         tdes0 |= TDSTAT_ES;    /* error summary */
       }
 
-      // free(state.tx.cur_buf);
-      // state.tx.cur_buf = NULL;
-      state.tx.cur_buf_len = 0;
+      buf_len = 0;
 
       /*  Interrupt, if Tx_IC is set:  */
-      if (tdes1 & TDCTL_Tx_IC)
-        state.reg[CSR_STATUS / 8] |= STATUS_TI;
+      ti = (tdes1 & TDCTL_Tx_IC) != 0;
     }
 
     /*  We are done with this segment.  */
@@ -768,64 +708,69 @@ int CTulip::dec21143_tx() {
                TDSTAT_Tx_LO | TDSTAT_Tx_TO))
     tdes0 |= TDSTAT_ES;
 
-  set_tx_state(STATUS_TS_CLOSE);
-
   /*  Descriptor writeback:
       only write back tdes0 - the status word
       tdes1/tdes2/tdes3 are read-only from NIC's perspective */
-
-  descr[0] = tdes0;
-  if (state.reg[CSR_BUSMODE / 8] & BUSMODE_DBO)
-    descr[0] = bswap32_local(descr[0]);
+  descr[0] = dbo ? bswap32_local(tdes0) : tdes0;
   do_pci_write(addr, descr, 1, 4);
+
+  std::lock_guard<std::mutex> lock(m_lock);
+  if (epoch != m_tx_epoch)
+    return 0; // reset or re-pointed meanwhile
+  state.tx.cur_addr = next;
+  state.tx.cur_buf_len = buf_len;
+  // TI follows the status in memory (HRM 4.3.6.1).
+  if (ti)
+    state.reg[CSR_STATUS / 8] |= STATUS_TI;
+  if (state.reg[CSR_OPMODE / 8] & OPMODE_ST)
+    set_tx_state(STATUS_TS_CLOSE);
 
   return 1;
 }
 
-void CTulip::SetupFilter() {
-  u8 mac[16][6];
-  int i;
+/**
+ * The host filter: what the back end may pass up. Under m_lock.
+ **/
+NetworkFilter CTulip::host_filter_locked() const {
+  NetworkFilter nf;
+  memset(&nf, 0, sizeof(nf));
+  for (int i = 0; i < 16; i++) {
+    nf.mac_list[i][0] = state.setup_filter[i * 12];
+    nf.mac_list[i][1] = state.setup_filter[i * 12 + 1];
+    nf.mac_list[i][2] = state.setup_filter[i * 12 + 4];
+    nf.mac_list[i][3] = state.setup_filter[i * 12 + 5];
+    nf.mac_list[i][4] = state.setup_filter[i * 12 + 8];
+    nf.mac_list[i][5] = state.setup_filter[i * 12 + 9];
 #if defined(DEBUG_NIC_FILTER)
-  printf("Building a filter...\n");
-#endif
-  for (i = 0; i < 16; i++) {
-    mac[i][0] = state.setup_filter[i * 12];
-    mac[i][1] = state.setup_filter[i * 12 + 1];
-    mac[i][2] = state.setup_filter[i * 12 + 4];
-    mac[i][3] = state.setup_filter[i * 12 + 5];
-    mac[i][4] = state.setup_filter[i * 12 + 8];
-    mac[i][5] = state.setup_filter[i * 12 + 9];
-#if defined(DEBUG_NIC_FILTER)
-    printf("MAC[%d] = %02x:%02x:%02x:%02x:%02x:%02x. \n", i, mac[i][0],
-           mac[i][1], mac[i][2], mac[i][3], mac[i][4], mac[i][5]);
+    printf("MAC[%d] = %02x:%02x:%02x:%02x:%02x:%02x. \n", i, nf.mac_list[i][0],
+           nf.mac_list[i][1], nf.mac_list[i][2], nf.mac_list[i][3],
+           nf.mac_list[i][4], nf.mac_list[i][5]);
 #endif
   }
-
-#if defined(DEBUG_NIC_FILTER)
-  printf("Filter mode: ");
-  if (state.reg[CSR_OPMODE / 8] & OPMODE_PR)
-    printf("promiscuous.\n");
-  else {
-    if (state.reg[CSR_OPMODE / 8] & OPMODE_IF)
-      printf("inverse ");
-    if (state.reg[CSR_OPMODE / 8] & OPMODE_HP) {
-      printf("hash ");
-      if (state.reg[CSR_OPMODE / 8] & OPMODE_HO)
-        printf("only ");
-    } else
-      printf("perfect ");
-    printf("filtering.\n");
-  }
-#endif
 
   /* Hand the CSR6 filtering semantics to the backend; pcap builds a BPF
    * expression from these, tap relies on the guest driver's own filtering. */
-  NetworkFilter nf;
-  memcpy(nf.mac_list, mac, sizeof(nf.mac_list));
   nf.promiscuous = (state.reg[CSR_OPMODE / 8] & OPMODE_PR) != 0;
   nf.receive_all = (state.reg[CSR_OPMODE / 8] & OPMODE_RA) != 0;
   nf.pass_multicast = (state.reg[CSR_OPMODE / 8] & OPMODE_PM) != 0;
   nf.inverse = (state.reg[CSR_OPMODE / 8] & OPMODE_IF) != 0;
   memcpy(nf.own_mac, state.mac, sizeof(nf.own_mac));
+  return nf;
+}
+
+/**
+ * Hand the back end the host filter, if the NIC's has changed since. On the
+ * NIC thread, or in init before there is one: the back ends are not thread
+ * safe, and pcap's filter belongs to the handle the thread reads.
+ **/
+void CTulip::apply_filter() {
+  NetworkFilter nf;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    if (!m_filter_dirty)
+      return;
+    m_filter_dirty = false;
+    nf = host_filter_locked();
+  }
   net_backend->set_filter(nf);
 }

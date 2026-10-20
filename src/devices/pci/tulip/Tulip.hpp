@@ -71,6 +71,9 @@
 #include "PCIDevice.hpp"
 #include "WakeSemaphore.hpp"
 
+#include <atomic>
+#include <mutex>
+
 /**
  * \brief How a part hands the driver the station address.
  **/
@@ -175,7 +178,6 @@ public:
 
   virtual void ResetPCI();
   void ResetNIC();
-  void SetupFilter();
   void receive_process();
   virtual void run();
   virtual void init();
@@ -190,10 +192,27 @@ private:
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
-  bool StopThread;
+  std::atomic_bool StopThread{false};
   WakeSemaphore mySemaphore;
-  /** serializes NIC thread vs CPU-thread CSR access (recursive: nic_read /
-   * nic_write paths may re-enter through the interrupt plumbing) */
+
+  /// Guards `state`, the receive queue and the members marked (L) below.
+  /// It is never held across a DMA transfer, the interrupt line or a call
+  /// into the back end: see "Threads and locking" in Tulip.cpp.
+  std::mutex m_lock;
+  /// (L) Bumped by a reset and by a write of CSR3: a receive descriptor the
+  /// NIC thread fetched before that is not committed.
+  u32 m_rx_epoch = 0;
+  /// (L) The same for the transmit ring (a reset, a write of CSR4).
+  u32 m_tx_epoch = 0;
+  /// (L) A thread is driving the interrupt line; it looks again when done.
+  bool m_irq_busy = false;
+  /// (L) The back end's host filter no longer matches the NIC's.
+  bool m_filter_dirty = false;
+
+  void reset_locked();
+  bool nic_write_locked(u32 address, u32 data);
+  NetworkFilter host_filter_locked() const;
+  void apply_filter();
 
   u32 nic_read(u32 address, int dsize);
   void nic_write(u32 address, int dsize, u32 data);
@@ -209,6 +228,7 @@ private:
   void trace_packet(const char *dir, const u8 *frame, int len);
 
   int dec21143_rx();
+  u32 rx_last_status_locked(const u8 *frame, int len) const;
   int dec21143_tx();
   void set_tx_state(int tx_state);
   void set_rx_state(int rx_state);
@@ -225,9 +245,10 @@ private:
   bool trace_packets;
 
   /// The state structure contains all elements that need to be saved to the
-  /// statefile.
+  /// statefile. All of it is guarded by m_lock, except the bytes of
+  /// tx.cur_buf and rx.current.frame: only the NIC thread writes those.
   struct SNIC_state {
-    bool irq_was_asserted; /**< remember state of IRQ */
+    bool irq_was_asserted; /**< the level last driven on the line */
 
     u8 mac[6];            /**< ethernet address */
     u8 setup_filter[192]; /**< filter for perfect filtering */

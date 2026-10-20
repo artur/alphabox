@@ -72,44 +72,63 @@
 
 //#define DEBUG_NIC_IRQ
 
+/*
+ * Threads and locking
+ *
+ * A Tulip is driven from two sides. The CPU threads read and write its CSRs
+ * (ReadMem_Bar, WriteMem_Bar); the NIC's own thread (run) moves frames
+ * between the back end and the descriptor rings in guest memory, which is
+ * the chip's DMA. Both change the same registers, CSR5 above all, where the
+ * chip sets bits while the driver clears others, so `state` and the receive
+ * queue are guarded by one mutex, m_lock.
+ *
+ * m_lock is a leaf: nothing else is taken while it is held, and it is held
+ * only for plain computation on the state. It is never held across
+ *  - a DMA transfer (do_pci_read, do_pci_write), which takes the memory
+ *    system's DMA writer gate and can wait for the CPUs;
+ *  - the interrupt line (do_pci_interrupt), which takes the PCI device's
+ *    and the chipset's interrupt locks;
+ *  - the back end (send, receive, set_filter), whose calls can block.
+ * The lock this replaces (29d0ac0, removed in 0f7c160 after it caused
+ * regressions upstream) was held over the NIC thread's whole pass, all of
+ * the above included: a CSR access could wait for a full receive drain, and
+ * every lock taken inside those calls nested under it.
+ *
+ * What that costs, and how it is paid:
+ *  - DMA. The NIC thread takes what it needs from the state under the lock
+ *    (the descriptor's address, DBO, the frame), lets go for the transfer,
+ *    and commits the result under the lock again. A reset or a new list
+ *    address (CSR3, CSR4) meanwhile bumps m_rx_epoch or m_tx_epoch, and a
+ *    descriptor fetched before it is then not committed. A stop (SR or ST
+ *    cleared) does not: the descriptor already written back is passed on
+ *    and its interrupt raised, as the chip finishes the frame in hand, but
+ *    the process state field stays as the stop set it. The bytes of the
+ *    frame in hand (rx.current.frame, tx.cur_buf) are written by the NIC
+ *    thread alone, so it reads them during a transfer without the lock.
+ *  - The interrupt line. update_irq() computes the level under the lock.
+ *    One thread at a time drives the line (m_irq_busy); one that finds it
+ *    busy leaves the work to the other, which looks again once it has
+ *    driven the line. The line so ends at the level the last change asks
+ *    for, and no thread waits for another's interrupt delivery.
+ *  - The back end. Only the NIC thread calls it (and init, before there is
+ *    one). A change of filter (CSR6, a setup frame, a reset) sets
+ *    m_filter_dirty and wakes the thread, which hands the new host filter
+ *    to the back end (apply_filter).
+ */
+
 /**
- * Thread entry point.
+ * Thread entry point. One pass: the host filter, frames from the back end
+ * into the receive ring, the transmit ring onto the back end, the interrupt
+ * line.
  **/
 void CTulip::run() {
   try {
-    for (;;) {
-      if (StopThread)
-        return;
-
+    while (!StopThread.load()) {
+      apply_filter();
       receive_process();
-
-      bool asserted;
-
-      if ((state.reg[CSR_OPMODE / 8] & OPMODE_ST))
-        while (dec21143_tx())
-          ;
-
-      /* Normal and Abnormal interrupt summary (align with 21143/QEMU). */
-      {
-        u32 ie = state.reg[CSR_STATUS / 8] & state.reg[CSR_INTEN / 8];
-        state.reg[CSR_STATUS / 8] &= ~(STATUS_NIS | STATUS_AIS);
-        /* NIS if any normal event is enabled + set */
-        if (ie & (STATUS_TI | STATUS_TU | STATUS_RI | STATUS_TM | STATUS_ER))
-          state.reg[CSR_STATUS / 8] |= STATUS_NIS;
-        /* AIS if any abnormal event is enabled + set */
-        if (ie & (STATUS_LC | STATUS_GPPI | STATUS_SE | STATUS_LNF |
-                  STATUS_ETI | STATUS_RWT | STATUS_RPS | STATUS_RU |
-                  STATUS_UNF | STATUS_LNPANC | STATUS_TJT | STATUS_TPS))
-          state.reg[CSR_STATUS / 8] |= STATUS_AIS;
-        asserted = (state.reg[CSR_STATUS / 8] & state.reg[CSR_INTEN / 8] &
-                    (STATUS_AIS | STATUS_NIS)) != 0;
-      }
-
-      if (asserted != state.irq_was_asserted) {
-        if (do_pci_interrupt(0, asserted))
-          state.irq_was_asserted = asserted;
-      }
-
+      while (dec21143_tx())
+        ;
+      update_irq();
       mySemaphore.try_wait_for(std::chrono::milliseconds(10));
     }
   }
@@ -240,10 +259,10 @@ void CTulip::check_state() {
  **/
 u32 CTulip::nic_read(u32 address, int dsize) {
   u32 data = 0;
-
-  u32 oldreg = 0;
   int regnr = (int)(address >> 3);
 
+  // A read can move state too: CSR8 clears, CSR9 clocks the ROM.
+  std::lock_guard<std::mutex> lock(m_lock);
   if ((address & 7) == 0 && regnr < 32) {
     data = state.reg[regnr];
     // The CSR8 counters clear when read; drivers accumulate them (Linux tulip
@@ -267,10 +286,27 @@ u32 CTulip::nic_read(u32 address, int dsize) {
 }
 
 /**
- * Write to the NIC registers.
+ * Write to the NIC registers: the change under the lock, then the wake-up
+ * of the NIC thread and the interrupt line outside it.
  **/
 void CTulip::nic_write(u32 address, int dsize, u32 data) {
+  bool wake;
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    wake = nic_write_locked(address, data);
+  }
+  if (wake)
+    mySemaphore.set();
+  update_irq();
+}
+
+/**
+ * The register side of a CSR write, under m_lock. Returns whether the NIC
+ * thread has something to look at: a poll demand, a start, a new filter.
+ **/
+bool CTulip::nic_write_locked(u32 address, u32 data) {
   uint32_t oldreg = 0;
+  bool wake = false;
 
   int regnr = (int)(address >> 3);
 
@@ -278,7 +314,6 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
   printf("21143: nic_write - CSR(%d), value: %08x\n", regnr, data);
 #endif
 
-  // printf("21143: rx_queue->name= %s\n", rx_queue->name);
   if ((address & 7) == 0 && regnr < 32) {
     oldreg = state.reg[regnr];
     switch (regnr) {
@@ -294,8 +329,6 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
       printf("21143: CSR5 W1C=%08x -> CSR5=%08x CSR7=%08x\n", data,
              state.reg[CSR_STATUS / 8], state.reg[CSR_INTEN / 8]);
 #endif
-      /* Drop INTx immediately if that cleared the cause(s). */
-      update_irq();
       break;
 
     case CSR_MISSED / 8: /*  Read only  */
@@ -310,7 +343,8 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
   switch (address) {
   case CSR_BUSMODE: /*  csr0  */
     if (data & BUSMODE_SWR) {
-      ResetNIC();
+      reset_locked();
+      wake = true; // the host filter follows the reset
       data &= ~BUSMODE_SWR;
     }
 
@@ -322,11 +356,11 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     /* CaVa interpretation... */
     state.reg[CSR_STATUS / 8] &= ~STATUS_TU;
     state.tx.suspend = false;
-    mySemaphore.set();
+    wake = true;
     break;
 
   case CSR_RXPOLL: /*  csr2  */
-    mySemaphore.set();
+    wake = true;
     break;
 
   case CSR_RXLIST: /*  csr3  */
@@ -335,6 +369,7 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
       printf("[ dec21143: WARNING! RXLIST not aligned? (0x%x) ]\n", data);
     data &= ~0x3;
     state.rx.cur_addr = data;
+    m_rx_epoch++;
     break;
 
   case CSR_TXLIST: /*  csr4  */
@@ -343,19 +378,16 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
       printf("[ dec21143: WARNING! TXLIST not aligned? (0x%x) ]\n", data);
     data &= ~0x3;
     state.tx.cur_addr = data;
+    m_tx_epoch++;
     break;
 
-  case CSR_STATUS: /* csr5: handled above; just ensure IRQ is updated */
-    update_irq();
+  case CSR_STATUS: /* csr5: handled above; nic_write updates the line */
     break;
 
-  case CSR_INTEN: /* csr7: interrupt mask */
-    /* NOTE: state.reg[CSR_INTEN/8] was already written via default case above.
-                     We just need to update the line level right now. */
+  case CSR_INTEN: /* csr7: interrupt mask, stored above */
 #if defined(DEBUG_NIC_IRQ)
     printf("21143: CSR7 write %08x (mask)\n", state.reg[CSR_INTEN / 8]);
 #endif
-    update_irq();
     break;
 
   case CSR_OPMODE: /*  csr6:  */
@@ -397,7 +429,7 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
         set_tx_state(STATUS_TS_SUSPENDED);
         /* transmitter running -> clear 'process stopped' */
         state.reg[CSR_STATUS / 8] &= ~STATUS_TPS;
-        mySemaphore.set();
+        wake = true;
       } else { // ST went low
         set_tx_state(STATUS_TS_STOPPED);
         /* transmitter stopped -> advertise idle */
@@ -410,7 +442,7 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
       if (data & OPMODE_SR) { // SR went high
         set_rx_state(STATUS_RS_WAIT);
         state.reg[CSR_STATUS / 8] &= ~STATUS_RPS;
-        mySemaphore.set();
+        wake = true;
       } else { // SR went low
         /* BUGFIX: this must change the RX state, not TX */
         set_rx_state(STATUS_RS_STOPPED);
@@ -421,13 +453,13 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
           rx_queue->flush();
         }
       }
-      /* Mode & status changed → recompute IRQ level now. */
-      update_irq();
     }
 
-    /* If mode bits affecting reception/filtering changed, rebuild BPF. */
+    /* If mode bits affecting reception/filtering changed, the NIC thread
+       hands the back end a new host filter. */
     if ((data ^ oldreg) & (OPMODE_PR | OPMODE_IF | OPMODE_PM | OPMODE_RA)) {
-      SetupFilter();
+      m_filter_dirty = true;
+      wake = true;
     }
     break;
 
@@ -488,6 +520,7 @@ void CTulip::nic_write(u32 address, int dsize, u32 data) {
     printf("[ dec21143: write to unimplemented 0x%02x: 0x%02x ]\n",
            (int)address, (int)data);
   }
+  return wake;
 }
 
 void CTulip::set_tx_state(int tx_state) {
@@ -519,12 +552,29 @@ void CTulip::ResetPCI() {
 
 /**
  * Reset the network interface internals to their condition immediately
- * after power-up. This does not affect the PCI configuration.
+ * after power-up. This does not affect the PCI configuration. For init(),
+ * before the NIC thread exists; a software reset from CSR0 is
+ * reset_locked() and the rest done by nic_write and the NIC thread.
+ **/
+void CTulip::ResetNIC() {
+  {
+    std::lock_guard<std::mutex> lock(m_lock);
+    reset_locked();
+  }
+  apply_filter();
+  update_irq();
+}
+
+/**
+ * The reset itself, under m_lock. The host filter (m_filter_dirty) and the
+ * interrupt line, which a reset drops, are left to the caller.
  *
  * Code for computing the SROM checksum is taken from [T64].
  **/
-void CTulip::ResetNIC() {
-  int leaf;
+void CTulip::reset_locked() {
+  // A descriptor the NIC thread is working on belongs to the old rings.
+  m_rx_epoch++;
+  m_tx_epoch++;
 
   // Drop any queued inbound frames; a real 21143 loses its RX FIFO on reset.
   if (rx_queue)
@@ -582,11 +632,7 @@ void CTulip::ResetNIC() {
 
   // Make sure the host-side capture filter matches the reset state (SRM relies
   // on this).
-  SetupFilter();
-
-  // Real reset deasserts the interrupt line.
-  (void)do_pci_interrupt(0, false);
-  state.irq_was_asserted = false;
+  m_filter_dirty = true;
 }
 
 static u32 nic_magic1 = 0xDEC21143;
@@ -601,6 +647,10 @@ int CTulip::SaveState(FILE *f) {
 
   if ((res = CPCIDevice::SaveState(f)))
     return res;
+
+  // The threads are stopped while the state is saved; the lock is only
+  // there to say what it guards.
+  std::lock_guard<std::mutex> lock(m_lock);
 
   // state carries two heap pointers (tx/rx cur_buf) that mean nothing
   // outside this process, so write them as null with the partial frame they
@@ -633,6 +683,7 @@ int CTulip::RestoreState(FILE *f) {
   if ((res = CPCIDevice::RestoreState(f)))
     return res;
 
+  std::lock_guard<std::mutex> lock(m_lock);
   r = fread(&m1, sizeof(u32), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
@@ -684,40 +735,59 @@ int CTulip::RestoreState(FILE *f) {
     return -1;
   }
 
+  // Whatever the rings were doing belongs to the restored state now.
+  m_rx_epoch++;
+  m_tx_epoch++;
+  m_filter_dirty = true;
+
   printf("%s: %li bytes restored.\n", devid_string, ss);
   return 0;
 }
 
-/* ----- IRQ recompute: set/clear INTx instantly (level-triggered) ----- */
+/**
+ * Bring the interrupt line to the level CSR5 and CSR7 ask for, recomputing
+ * the summary bits on the way (HRM 3.2.2.8: NIS and AIS are the OR of their
+ * enabled groups; the line is their OR). Called after every CSR write and
+ * at the end of every pass of the NIC thread.
+ *
+ * The line is driven outside m_lock, by one thread at a time: a thread that
+ * finds another driving it returns, and the other computes the level again
+ * once its call is done, so the change is not lost.
+ **/
 void CTulip::update_irq() {
-  /* Rebuild NIS/AIS like the background loop does, but do it now. */
-  const u32 csr5_before = state.reg[CSR_STATUS / 8];
-  const u32 csr7 = state.reg[CSR_INTEN / 8];
+  std::unique_lock<std::mutex> lock(m_lock);
+  if (m_irq_busy)
+    return;
+  for (;;) {
+    const u32 csr7 = state.reg[CSR_INTEN / 8];
+    const u32 ie = state.reg[CSR_STATUS / 8] & csr7;
+    u32 csr5 = state.reg[CSR_STATUS / 8] & ~(STATUS_NIS | STATUS_AIS);
 
-  /* Summary recompute follows QEMU logic: only enabled events contribute. */
-  u32 ie = csr5_before & csr7;
-  u32 csr5 = csr5_before & ~(STATUS_NIS | STATUS_AIS);
+    const u32 normal =
+        (STATUS_TI | STATUS_TU | STATUS_RI | STATUS_TM | STATUS_ER);
+    const u32 abnormal = (STATUS_LC | STATUS_GPPI | STATUS_SE | STATUS_LNF |
+                          STATUS_ETI | STATUS_RWT | STATUS_RPS | STATUS_RU |
+                          STATUS_UNF | STATUS_LNPANC | STATUS_TJT | STATUS_TPS);
+    if (ie & normal)
+      csr5 |= STATUS_NIS;
+    if (ie & abnormal)
+      csr5 |= STATUS_AIS;
+    state.reg[CSR_STATUS / 8] = csr5;
 
-  const u32 normal =
-      (STATUS_TI | STATUS_TU | STATUS_RI | STATUS_TM | STATUS_ER);
-  const u32 abnormal = (STATUS_LC | STATUS_GPPI | STATUS_SE | STATUS_LNF |
-                        STATUS_ETI | STATUS_RWT | STATUS_RPS | STATUS_RU |
-                        STATUS_UNF | STATUS_LNPANC | STATUS_TJT | STATUS_TPS);
-  if (ie & normal)
-    csr5 |= STATUS_NIS;
-  if (ie & abnormal)
-    csr5 |= STATUS_AIS;
-
-  state.reg[CSR_STATUS / 8] = csr5;
-
-  const bool asserted = (csr5 & csr7 & (STATUS_AIS | STATUS_NIS)) != 0;
-  if (asserted != state.irq_was_asserted) {
+    const bool asserted = (csr5 & csr7 & (STATUS_AIS | STATUS_NIS)) != 0;
+    if (asserted == state.irq_was_asserted)
+      return;
 #if defined(DEBUG_NIC_IRQ)
     printf("21143: IRQ %s  CSR5=%08x CSR7=%08x pendN=%08x pendA=%08x\n",
            asserted ? "ASSERT" : "DEASSERT", csr5, csr7, (ie & normal),
            (ie & abnormal));
 #endif
-    if (do_pci_interrupt(0, asserted))
-      state.irq_was_asserted = asserted;
+    m_irq_busy = true;
+    lock.unlock();
+    // false: the slot has no interrupt wiring, and there is no line to drive.
+    (void)do_pci_interrupt(0, asserted);
+    lock.lock();
+    m_irq_busy = false;
+    state.irq_was_asserted = asserted;
   }
 }

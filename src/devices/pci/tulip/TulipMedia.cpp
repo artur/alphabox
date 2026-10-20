@@ -289,8 +289,6 @@ void CTulip::complete_sia_autoneg() {
     state.reg[CSR_SIATXRX / 8] &= ~(SIATXRX_TH | SIATXRX_THX | SIATXRX_T4);
     state.reg[CSR_SIATXRX / 8] |= SIATXRX_TXF;
   }
-
-  update_irq();
 }
 
 /**
@@ -304,7 +302,6 @@ void CTulip::sia_connect(u32 csr13) {
   if (!(csr13 & SIACONN_SRL)) {
     state.reg[CSR_SIASTAT / 8] |= SIASTAT_LKF | SIASTAT_NCR;
     state.reg[CSR_STATUS / 8] |= STATUS_LNF;
-    update_irq();
     return;
   }
 
@@ -317,8 +314,6 @@ void CTulip::sia_connect(u32 csr13) {
   if (m_chip.media == TULIP_MEDIA_SIA_21041 &&
       (state.reg[CSR_SIATXRX / 8] & SIATXRX_ANE))
     complete_sia_autoneg();
-  else
-    update_irq();
 }
 
 /**
