@@ -1463,10 +1463,12 @@ void t_sym_gen_timer(SymRig &s) {
     const auto t0 = std::chrono::steady_clock::now();
     s.w8(R_STIME1, stime1);
     for (;;) {
+      // Read SIST1 first: the time taken after it bounds when GEN came.
+      const bool gen = s.r8(R_SIST1) & 0x02;
       const double ms = std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - t0)
                             .count();
-      if (s.r8(R_SIST1) & 0x02)
+      if (gen)
         return ms;
       if (ms > 2000)
         return -1.0;
@@ -1540,6 +1542,46 @@ void t_sym_wait_reselect(SymRig &s) {
         "istat %02x dstat %02x dsp %08x loop %08x", istat, dstat, dsp, loop);
   s.r8(R_CTEST2);
   s.sym->ResetPCI(); // stop the loop
+}
+
+/// SYM-10: SFBR takes the first byte received, never a byte sent.
+void t_sym_sfbr(SymRig &s) {
+  group("SYM-10 SFBR");
+  std::string err;
+  s.reset();
+  const u32 data = 0x220000;
+  s.mw(data, 0x80);              // IDENTIFY
+  s.mw(data + 0x10, 0x00000003); // REQUEST SENSE
+  s.mw(data + 0x14, 0x00000012); // 18 bytes
+  // SFBR is not writable from the host (manual, register 08): load 55h
+  // with a SCRIPTS register move, MOVE 0x55 TO SFBR.
+  const u32 out = s.program(
+      {0x78085500, 0, sel(0), 0, move_when(SCSI_PHASE_MSG_OUT, 1), data,
+       move_when(SCSI_PHASE_COMMAND, 6), data + 0x10, kInt, 0x1});
+  u8 istat = s.run(out, err);
+  s.r8(R_DSTAT);
+  const u8 after_out = s.r8(R_SFBR);
+  check(err.empty() && (istat & 0x01) && after_out == 0x55,
+        "MSG OUT and COMMAND moves leave SFBR alone", "istat %02x sfbr %02x %s",
+        istat, after_out, err.c_str());
+  const u32 in =
+      s.program({move_when(SCSI_PHASE_DATA_IN, 18), data + 0x40, kInt, 0x2,
+                 move_when(SCSI_PHASE_STATUS, 1), data + 0x60,
+                 move_when(SCSI_PHASE_MSG_IN, 1), data + 0x64, kClearAck, 0,
+                 kWaitDisconnect, 0, kInt, 0x3});
+  istat = s.run(in, err);
+  s.r8(R_DSTAT);
+  const u8 after_in = s.r8(R_SFBR);
+  const u8 first = (u8)s.mr(data + 0x40); // response code, 70h or F0h
+  check(err.empty() && (istat & 0x01) && (first & 0x7f) == 0x70 &&
+            after_in == first,
+        "a DATA IN move loads SFBR with its first byte",
+        "istat %02x sfbr %02x first byte %02x %s", istat, after_in, first,
+        err.c_str());
+  istat = s.run(in + 16, err);
+  check(err.empty() && (istat & 0x01) && s.r32(0x30) == 0x3, "the command ends",
+        "istat %02x dsps %08x %s", istat, s.r32(0x30), err.c_str());
+  s.r8(R_DSTAT);
 }
 
 } // namespace
@@ -1641,6 +1683,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_gen_timer(sr);
     t_sym_pci_reset(sr);
     t_sym_wait_reselect(sr);
+    t_sym_sfbr(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

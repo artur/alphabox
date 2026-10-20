@@ -378,8 +378,16 @@ void CSym53C8xx::CChannel::execute_bm_op() {
     }
 
     SET_DBC(remaining - xfer);
+    // SFBR holds "the first byte received in any asynchronous information
+    // transfer phase ... in initiator mode, the first byte received in the
+    // Message In, Status, and Data In phases" (SYM53C895 data manual v3.0,
+    // register 08 SFBR, pdf p. 108): the first byte of an input move, not a
+    // byte the chip sent, and not the first of a later piece.
+    if (moved == 0 &&
+        (scsi_phase == SCSI_PHASE_STATUS || scsi_phase == SCSI_PHASE_DATA_IN ||
+         scsi_phase == SCSI_PHASE_MSG_IN))
+      R8(SFBR) = *org_sdata_ptr;
     moved += xfer;
-    R8(SFBR) = *org_sdata_ptr;
 
     // Update SIDL with last byte received during MSG_IN
     if (scsi_phase == SCSI_PHASE_MSG_IN)
