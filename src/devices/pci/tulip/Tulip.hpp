@@ -220,6 +220,7 @@ private:
   u32 m_tx_first_ctl = 0;
 
   void reset_locked();
+  void sanitize_state_locked();
   bool nic_write_locked(u32 address, u32 data);
   NetworkFilter host_filter_locked() const;
   bool filter_match_locked(const u8 *dst) const;
@@ -229,6 +230,11 @@ private:
   u32 nic_read(u32 address, int dsize);
   void nic_write(u32 address, int dsize, u32 data);
   void mii_access(uint32_t oldreg, uint32_t idata);
+  /// The PHY register a management frame addresses, inside phy_reg.
+  int mii_reg_index() const {
+    return ((state.mii.phyaddr & (MII_NPHY - 1)) << 5) |
+           (state.mii.regaddr & 31);
+  }
   void build_srom();
   void build_address_rom();
   void srom_access(uint32_t oldreg, uint32_t idata);

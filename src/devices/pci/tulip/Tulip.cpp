@@ -760,6 +760,8 @@ int CTulip::RestoreState(FILE *f) {
     return -1;
   }
 
+  sanitize_state_locked();
+
   // Whatever the rings were doing belongs to the restored state now.
   m_rx_epoch++;
   m_tx_epoch++;
@@ -770,6 +772,29 @@ int CTulip::RestoreState(FILE *f) {
 
   printf("%s: %li bytes restored.\n", devid_string, ss);
   return 0;
+}
+
+/**
+ * Bring what a state file says back into range where it is used as an
+ * index or a length: a damaged or foreign file must not reach outside the
+ * arrays. Under m_lock.
+ **/
+void CTulip::sanitize_state_locked() {
+  auto clamp = [](int &v, int lo, int hi) {
+    if (v < lo)
+      v = lo;
+    if (v > hi)
+      v = hi;
+  };
+  clamp(state.rx.current.len, 0, ETH_MAX_PACKET_CRC);
+  clamp(state.rx.current.used, 0, state.rx.current.len);
+  clamp(state.tx.cur_buf_len, 0, 2048);
+  clamp(state.descr_skip, 0, 31 * 4); // CSR0 DSL: five bits of longwords
+  clamp(state.srom.addr, 0, (int)sizeof(state.srom.data) - 1);
+  clamp(state.srom.curbit, 0, 3 + 6 + 16);
+  clamp(state.mii.phyaddr, 0, MII_NPHY - 1);
+  clamp(state.mii.regaddr, 0, 31);
+  clamp(state.mii.bit, 0, 31);
 }
 
 /**

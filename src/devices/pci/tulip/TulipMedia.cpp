@@ -216,8 +216,7 @@ void CTulip::mii_access(uint32_t oldreg, uint32_t idata) {
       if (idata & MIIROM_MIIDIR)
         printf("[ mii_access(): write: bad dir? ]\n");
       obit = obit ? (0x8000 >> (state.mii.bit - 14)) : 0;
-      tmp = state.mii.phy_reg[(state.mii.phyaddr << 5) + state.mii.regaddr] |
-            obit;
+      tmp = state.mii.phy_reg[mii_reg_index()] | obit;
       if (state.mii.bit >= 29) {
         state.mii.state = MII_STATE_IDLE;
 
@@ -231,7 +230,7 @@ void CTulip::mii_access(uint32_t oldreg, uint32_t idata) {
     case MII_COMMAND_READ:
       if (!(idata & MIIROM_MIIDIR))
         break;
-      tmp = state.mii.phy_reg[(state.mii.phyaddr << 5) + state.mii.regaddr];
+      tmp = state.mii.phy_reg[mii_reg_index()];
 
       //                      if (state.mii.bit == 13)
       //                              debug("[ mii_access(): READ phyaddr=0x%x
@@ -413,8 +412,10 @@ void CTulip::srom_access(uint32_t oldreg, uint32_t idata) {
         state.srom.addr <<= 1;
         state.srom.addr |= ibit;
       } else {
-        uint16_t romword = state.srom.data[state.srom.addr * 2] +
-                           (state.srom.data[state.srom.addr * 2 + 1] << 8);
+        // The address is six bits; the mask keeps a word inside the ROM.
+        const int word = state.srom.addr & 0x3f;
+        uint16_t romword =
+            state.srom.data[word * 2] + (state.srom.data[word * 2 + 1] << 8);
 
         //                              if (state.srom.curbit == 6 + 3)
         //                                      debug("[ dec21143: ROM read from
