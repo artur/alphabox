@@ -101,10 +101,12 @@
 /// Register 08: SFBR: SCSI First Byte REceived
 #define R_SFBR 0x08
 
-/// Register 09: SOCL: SCSI Output Control Latch
+/// Register 09: SOCL: SCSI Output Control Latch. Its bits are SBCL's: ATN
+/// is bit 3, bit 5 is BSY (SYM53C895 data manual v3.0, register 09 SOCL,
+/// pdf p. 108).
 #define R_SOCL 0x09
 #define R_SOCL_ACK 0x40
-#define R_SOCL_ATN 0x20
+#define R_SOCL_ATN 0x08
 
 /// Register 0A: SSID: SCSI Selector ID
 #define R_SSID 0x0A

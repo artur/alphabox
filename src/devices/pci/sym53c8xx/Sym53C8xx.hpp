@@ -233,6 +233,8 @@ private:
     void halt_scripts_on_failure(const std::string &msg);
 
     int check_phase(int chk_phase);
+    void latch_phase(int real_phase);
+    u8 bus_lines();
     void phase_mismatch(int phase, u32 insn_addr, u32 entry_addr, u8 count_top,
                         u32 remaining, u32 address, u32 moved);
     void count_scsi_bytes(int phase, u32 moved);

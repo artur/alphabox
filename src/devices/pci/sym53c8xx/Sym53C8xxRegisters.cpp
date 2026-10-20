@@ -361,8 +361,8 @@ u32 CSym53C8xx::CChannel::bar_read(int bar, u32 address, int dsize) {
         data = state.regs.reg8[address];
         break;
 
-      case R_SBCL:                        // 0B
-        data = R8(SSTAT1) & R_SBCL_PHASE; // Return current phase signals
+      case R_SBCL: // 0B
+        data = bus_lines();
         break;
 
       case R_SSTAT0: // 0D

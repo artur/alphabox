@@ -1584,6 +1584,56 @@ void t_sym_sfbr(SymRig &s) {
   s.r8(R_DSTAT);
 }
 
+/// SYM-11: SBCL shows the bus control lines; SSTAT1 latches a phase only
+/// when a target asserts one.
+void t_sym_sbcl(SymRig &s) {
+  group("SYM-11 SBCL and SSTAT1");
+  std::string err;
+  s.reset();
+  check(s.r8(R_SBCL) == 0x00, "free bus: no lines", "sbcl %02x", s.r8(R_SBCL));
+  const u32 data = 0x230000;
+  s.mw(data, 0x80);              // IDENTIFY
+  s.mw(data + 0x10, 0x00000000); // TEST UNIT READY
+  s.mw(data + 0x14, 0x00000000);
+  // Stop at an INT after each step and look at the lines.
+  std::vector<u32> w = {sel(0), 0, kInt, 0x1};
+  w.insert(w.end(), {move_when(SCSI_PHASE_MSG_OUT, 1), data,
+                     move_when(SCSI_PHASE_COMMAND, 6), data + 0x10, kInt, 0x2});
+  w.insert(w.end(), {move_when(SCSI_PHASE_STATUS, 1), data + 0x20,
+                     move_when(SCSI_PHASE_MSG_IN, 1), data + 0x24, kInt, 0x3});
+  w.insert(w.end(), {kClearAck, 0, kWaitDisconnect, 0, kInt, 0x4});
+  const u32 p = s.program(w);
+  u8 lines[4] = {0xff, 0xff, 0xff, 0xff};
+  u32 at = p;
+  for (int i = 0; i < 4; i++) {
+    const u8 istat = s.run(at, err);
+    s.r8(R_DSTAT);
+    lines[i] = s.r8(R_SBCL);
+    if (!err.empty() || !(istat & 0x01) || s.r32(0x30) != u32(i + 1))
+      break;
+    at = s.r32(R_DSP);
+  }
+  // REQ 80, ACK 40, BSY 20, SEL 10, ATN 08, MSG 04, C/D 02, I/O 01.
+  check(lines[0] == 0xae, "after SELECT with ATN: REQ BSY ATN, MSG OUT",
+        "sbcl %02x %s", lines[0], err.c_str());
+  check(lines[1] == 0xa3, "after the MSG OUT move ATN is off; STATUS",
+        "sbcl %02x", lines[1]);
+  check((lines[2] & 0xc0) == 0x40,
+        "after a MSG IN move the chip holds ACK, no REQ", "sbcl %02x",
+        lines[2]);
+  check(lines[3] == 0x00, "after the disconnect: no lines", "sbcl %02x",
+        lines[3]);
+  // A phase compare on a free bus latches nothing into SSTAT1.
+  const u8 before = s.r8(R_SSTAT1) & 7;
+  const u32 q = s.program({jump_when(SCSI_PHASE_MSG_OUT), 0, kInt, 0x5});
+  const u8 istat = s.run(q, err);
+  s.r8(R_DSTAT);
+  const u8 after = s.r8(R_SSTAT1) & 7;
+  check(err.empty() && (istat & 0x01) && after == before,
+        "a phase compare on a free bus leaves SSTAT1's phase",
+        "before %u after %u", before, after);
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1684,6 +1734,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_pci_reset(sr);
     t_sym_wait_reselect(sr);
     t_sym_sfbr(sr);
+    t_sym_sbcl(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

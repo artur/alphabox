@@ -203,13 +203,47 @@ int CSym53C8xx::CChannel::check_phase(int chk_phase) {
     return -1;
   }
 
-  // Always update SSTAT1 with the real phase
-  R8(SSTAT1) = (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (real_phase & R_SSTAT1_PHASE);
+  latch_phase(real_phase);
 
   if (real_phase == chk_phase)
     return 1;
   else
     return 0;
+}
+
+/**
+ * Latch the bus phase into SSTAT1. Its MSG, C/D and I/O bits "are latched
+ * on the asserting edge of SREQ/" (SYM53C895 data manual v3.0, register 0E
+ * SSTAT1, pdf p. 113), so only a target that has a phase up changes them:
+ * a free bus, or a selection still waiting for its target, asserts no REQ
+ * and leaves the last phase latched. (FREE and ARBITRATION, -2 and -1,
+ * used to land in SSTAT1 as 6 and 7, MSG OUT and MSG IN.)
+ **/
+void CSym53C8xx::CChannel::latch_phase(int real_phase) {
+  if (real_phase >= 0)
+    R8(SSTAT1) = (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (real_phase & R_SSTAT1_PHASE);
+}
+
+/**
+ * The SCSI control lines, as SBCL returns them: "a true representation of
+ * what is on the SCSI bus at the time the register is read", REQ, ACK,
+ * BSY, SEL, ATN, MSG, C/D and I/O (SYM53C895 data manual v3.0, register 0B
+ * SBCL, pdf p. 109). ATN and ACK are the chip's own, from SOCL. A connected
+ * target holds BSY and the phase lines, and asserts REQ for the next byte
+ * unless the chip still holds ACK for the last one; during a selection the
+ * chip asserts SEL. SBCL used to return SSTAT1's phase bits alone.
+ **/
+u8 CSym53C8xx::CChannel::bus_lines() {
+  const int phase = dev.scsi_get_phase(index);
+  u8 lines = R8(SOCL) & (R_SBCL_ACK | R_SBCL_ATN);
+  if (phase >= 0) {
+    lines |= R_SBCL_BSY | (phase & R_SBCL_PHASE);
+    if (!(lines & R_SBCL_ACK))
+      lines |= R_SBCL_REQ;
+  } else if (phase == SCSI_PHASE_ARBITRATION) {
+    lines |= R_SBCL_SEL;
+  }
+  return lines;
 }
 
 /**
@@ -312,8 +346,7 @@ void CSym53C8xx::CChannel::execute_bm_op() {
     printf("SYM: Phase mismatch! Expected %d, got different.\n", scsi_phase);
 #endif
     // Update SSTAT1 with the actual phase from the SCSI bus
-    int real_phase = dev.scsi_get_phase(index);
-    R8(SSTAT1) = (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (real_phase & R_SSTAT1_PHASE);
+    latch_phase(dev.scsi_get_phase(index));
 
     phase_mismatch(scsi_phase, insn_addr, entry_addr, count_top, count, start,
                    0);
@@ -398,6 +431,15 @@ void CSym53C8xx::CChannel::execute_bm_op() {
       // SCRIPTS that read it before the next check_phase.
       R8(SSTAT1) =
           (R8(SSTAT1) & ~R_SSTAT1_PHASE) | (scsi_phase & R_SSTAT1_PHASE);
+      // The chip "will deassert SATN/ during the final SREQ/SACK
+      // handshake" of a Message Out move, and for a Message In move "will
+      // not deassert the SACK/ signal for the last SREQ/SACK handshake":
+      // that ACK waits for a Clear ACK (SYM53C895 data manual v3.0, Block
+      // Move instruction, notes 6 and 7, pdf p. 155).
+      if (scsi_phase == SCSI_PHASE_MSG_OUT)
+        SB_R8(SOCL, ATN, false);
+      else if (scsi_phase == SCSI_PHASE_MSG_IN)
+        SB_R8(SOCL, ACK, true);
       dev.scsi_xfer_done(index);
       count_scsi_bytes(scsi_phase, moved);
       return;
