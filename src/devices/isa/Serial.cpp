@@ -35,32 +35,28 @@
  * Contains the code for the emulated Serial Port devices.
  **/
 
-// =============================================================================
-// Design:
+// The serial port's host side: the CUart16550 (Uart16550.cpp) on the ISA
+// bus, connected to a telnet client.
 //
-//   socket --> recv() --> raw buf --> cook IAC --> staging buffer --> FIFO
-//                                                      |              |
-//                                                      |              v
-//                                                 every execute()   guest reads
-//                                                   (~20 ms)       via ReadMem
+//   output: THR write -> write() queues it -> the port's thread sends it
+//           (send_output, non-blocking). A client that is behind or gone
+//           costs queue space (the newest 256 KB, kept for the next client
+//           unless raw_mode), never a processor stalled in send().
+//   input:  socket -> recv() -> telnet cooking (IAC, CR NUL) -> staging
+//           buffer -> the UART's FIFO: one character once the guest has read
+//           the previous one, which self-clocks to the guest (raw_mode: as
+//           much as the FIFO takes, no cooking).
 //
-//   - recv() and IAC cooking happen every RECV_TICKS cycles (~200ms).
-//     Cooked data goes into the staging buffer.
-//   - drain_staging() runs every execute() cycle (~20ms) but only
-//     delivers one character when the guest has consumed the previous
-//     one (FIFO empty).  This self-clocks to the emulated CPU speed,
-//     matching how a real UART works — the next character doesn't
-//     arrive until the line shifts it in, and the CPU is always fast
-//     enough to read it before then.
-//   - If staging still has data, recv() is skipped — TCP provides
-//     backpressure at the OS level.
-// =============================================================================
+// The thread wakes at once for output and reads the socket on a 5 ms tick
+// (every tenth tick for typed input). While staged input waits, the socket
+// is not read, so TCP holds the rest back.
 
 #include "Serial.hpp"
 #include "AliM1543C.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -74,12 +70,7 @@
 extern char **environ;
 #endif
 
-#define UART_BASE_CLOCK 1843200
-#define CYCLE_TIME_MS 20
-
 #define RECV_TICKS 10
-
-int iCounter = 0;
 
 #define FIFO_SIZE 1024
 
@@ -92,7 +83,18 @@ static const int SEND_FLAGS = MSG_NOSIGNAL;
 static const int SEND_FLAGS = 0;
 #endif
 
-//#define DEBUG_SERIAL 1
+/// Wait up to `ms` for `fd` to be readable (or, for the listener, to have a
+/// connection waiting). poll rather than select, whose fd_set cannot hold
+/// a descriptor at or above FD_SETSIZE. Returns poll's result.
+static int wait_readable(int64_t fd, int ms) {
+#if defined(_WIN32)
+  WSAPOLLFD p = {(SOCKET)fd, POLLRDNORM, 0};
+  return WSAPoll(&p, 1, ms);
+#else
+  pollfd p = {(int)fd, POLLIN, 0};
+  return poll(&p, 1, ms);
+#endif
+}
 
 /**
  * Constructor.
@@ -137,10 +139,6 @@ void CSerial::init() {
   null_attach = myCfg->get_bool_value("null_attach");
   if (!(listenAddress = myCfg->get_text_value("address")))
     listenAddress = "0.0.0.0";
-
-  char s[1000];
-  char *nargv = s;
-  int i = 0;
 
   cSystem->RegisterMemory(this, 0,
                           U64(0x00000801fc0003f8) - (0x100 * state.iNumber), 8);
@@ -188,8 +186,6 @@ void CSerial::init() {
 #endif // defined (_WIN32)
   struct sockaddr_in Address;
 
-  socklen_t nAddressSize = sizeof(struct sockaddr_in);
-
   const u64 port = myCfg->get_num_value("port", false, 8000 + state.iNumber);
   if (port < 1 || port > 65535)
     FAILURE_2(Configuration, "%s: port %" PRIu64 " is not a TCP port (1-65535)",
@@ -231,7 +227,8 @@ void CSerial::init() {
     FAILURE_2(Runtime, "Serial: can't listen on port %d: %s\n", listenPort,
               strerror(errno));
 
-  printf("%s: Waiting for connection on port %d.\n", devid_string, listenPort);
+  printf("%s: Waiting for connection on %s port %d.\n", devid_string,
+         listenAddress, listenPort);
 
   WaitForConnection();
 
@@ -240,8 +237,6 @@ void CSerial::init() {
   in_subneg = false;
   stageLen = 0;
   myThread = nullptr;
-
-  printf("%s: $Id$\n", devid_string);
 }
 
 void CSerial::start_threads() {
@@ -552,10 +547,8 @@ void CSerial::menu_say(const char *s) {
 }
 
 void CSerial::serial_menu() {
-  fd_set readset;
   unsigned char buffer[FIFO_SIZE + 1];
   ssize_t size;
-  struct timeval tv;
   bool exitLoop = false;
 
   cSystem->stop_threads();
@@ -567,11 +560,7 @@ void CSerial::serial_menu() {
   menu_say("     3. Save state to autosave.axp and continue\r\n");
   menu_say("     4. Load state from autosave.axp and continue\r\n");
   while (!exitLoop) {
-    FD_ZERO(&readset);
-    FD_SET(connectSocket, &readset);
-    tv.tv_sec = 60;
-    tv.tv_usec = 0;
-    if (select(connectSocket + 1, &readset, NULL, NULL, &tv) <= 0) {
+    if (wait_readable(connectSocket, 60000) <= 0) {
       menu_say("%SRL-I-TIMEOUT: no timely answer received. Continuing "
                "emulation.\r\n");
       break; // leave loop
@@ -635,14 +624,12 @@ void CSerial::serial_menu() {
 // execute  — Main loop body, called every ~20ms from the serial thread.
 // ---------------------------------------------------------------------------
 void CSerial::execute() {
-  fd_set readset;
   unsigned char raw[FIFO_SIZE + 16];
   unsigned char cbuffer[FIFO_SIZE + 1];
   unsigned char *b;
   unsigned char *c;
   unsigned char *end;
   ssize_t size;
-  struct timeval tv;
 
   drain_staging();
 
@@ -661,11 +648,7 @@ void CSerial::execute() {
       return;
     }
 
-    FD_ZERO(&readset);
-    FD_SET(connectSocket, &readset);
-    tv.tv_sec = 0;
-    tv.tv_usec = 0;
-    if (select(connectSocket + 1, &readset, NULL, NULL, &tv) > 0) {
+    if (wait_readable(connectSocket, 0) > 0) {
       unsigned char *recv_buf = raw + iac_carry_len;
 
 #if defined(_WIN32) || defined(__VMS)
@@ -807,31 +790,14 @@ void CSerial::execute() {
         *c++ = *b++;
       }
 
-      // Move cooked data into the staging buffer.
-      // drain_staging() will drip-feed it into the FIFO at baud rate
-      // on subsequent execute() cycles.
-      if (c > cbuffer) {
-        int cooked_len = (int)(c - cbuffer);
-
-        if (cooked_len <= (int)(STAGE_SIZE - stageLen)) {
-          memcpy(stageBuf + stageLen, cbuffer, cooked_len);
-          stageLen += cooked_len;
-        } else {
-          // Staging buffer full — this means the guest is severely
-          // behind.  Copy what fits; the rest is lost, but this
-          // should only happen under extreme conditions.
-          int space = STAGE_SIZE - stageLen;
-          if (space > 0) {
-            memcpy(stageBuf + stageLen, cbuffer, space);
-            stageLen += space;
-          }
-#if defined(DEBUG_SERIAL)
-          printf("%%SRL-W-STAGEDROP: staging buffer full on port %d, "
-                 "dropped %d bytes\n",
-                 state.iNumber, cooked_len - space);
-#endif
-        }
-      }
+      // Into the staging buffer, for drain_staging to hand to the FIFO a
+      // character at a time. The socket is read only when the buffer is
+      // empty (above), and a read cooks to at most FIFO_SIZE bytes, so it
+      // always fits.
+      const int cooked_len = (int)(c - cbuffer);
+      const int fit = std::min(cooked_len, STAGE_SIZE - stageLen);
+      memcpy(stageBuf + stageLen, cbuffer, fit);
+      stageLen += fit;
     }
 
     state.serial_cycles = 0;
@@ -1040,10 +1006,6 @@ void CSerial::WaitForConnection() {
            devid_string, why.c_str());
   }
 
-  Address.sin_addr.s_addr = INADDR_ANY;
-  Address.sin_port = htons((u16)listenPort);
-  Address.sin_family = AF_INET;
-
   //  Wait until we have a connection. Poll rather than block in accept(), so
   //  that stop_threads() can join the serial thread while it waits for a
   //  reconnect; without a connection the thread just returns.
@@ -1051,13 +1013,7 @@ void CSerial::WaitForConnection() {
   while (connectSocket == INVALID_SOCKET) {
     if (StopThread)
       return;
-    fd_set readset;
-    struct timeval tv;
-    FD_ZERO(&readset);
-    FD_SET(listenSocket, &readset);
-    tv.tv_sec = 0;
-    tv.tv_usec = 200000;
-    int ready = select((int)listenSocket + 1, &readset, NULL, NULL, &tv);
+    const int ready = wait_readable(listenSocket, 200);
     if (ready < 0) // EINTR or a broken listener: don't spin
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     if (ready <= 0)
@@ -1066,6 +1022,10 @@ void CSerial::WaitForConnection() {
         (int)accept(listenSocket, (struct sockaddr *)&Address, &nAddressSize);
   }
   configure_client_socket();
+  char peer[INET_ADDRSTRLEN] = "?";
+  inet_ntop(AF_INET, &Address.sin_addr, peer, sizeof(peer));
+  printf("%s: client %s:%u connected.\n", devid_string, peer,
+         (unsigned)ntohs(Address.sin_port));
 
   iac_carry_len = 0;
   in_subneg = false;
