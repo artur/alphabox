@@ -82,7 +82,7 @@ struct Item {
    (Compaq, January 2002); "HRM" is the Alpha 21264/EV68CB and EV68DC
    Hardware Reference Manual (DS-0031C-TE). */
 static Item items[] = {
-    {"FP-01", false,
+    {"FP-01", true,
      "VAX F results keep the bits below F precision, <28:0>; a single "
      "precision value in a register has them clear (ARM 4.7.1, p. 4-63)"},
     {"FP-03", false,
@@ -97,7 +97,7 @@ static Item items[] = {
      "p. 4-72; 4.7.7.9, p. 4-79)"},
     {"FP-06", false,
      "FPCR[DNZ] acts only for instructions with /S (ARM 4.7.7.11, p. 4-79)"},
-    {"FP-10", false,
+    {"FP-10", true,
      "a VAX overflow writes the largest number of the format, not the "
      "rounded fraction under a clamped exponent (the result is "
      "UNPREDICTABLE, ARM 4.7.7.1)"},
@@ -1018,41 +1018,78 @@ static Expect vax_model(const Op &op, const Ctx &c, u64 a, u64 b) {
 
 static bool is_den_t(u64 x) { return cls_t(x) == C_DEN; }
 
-static const char *classify(const Op &op, const Ctx &c, u64 a, u64 b,
-                            const Outcome &bad, const Outcome &good) {
+/* The items that explain a difference between two outcomes; a VAX result
+   and its traps can differ for separate reasons, so each is explained on
+   its own. */
+struct Tags {
+  const char *t[3] = {nullptr, nullptr, nullptr};
+  int n = 0;
+  bool unexplained = false;
+  void add(const char *x) {
+    for (int i = 0; i < n; i++)
+      if (!strcmp(t[i], x))
+        return;
+    if (n < 3)
+      t[n++] = x;
+  }
+  bool explained() const { return n > 0 && !unexplained; }
+  std::string str() const {
+    std::string r;
+    for (int i = 0; i < n; i++)
+      r += (i ? "+" : "") + std::string(t[i]);
+    if (unexplained)
+      r += n ? "+unexplained" : "no item";
+    return r;
+  }
+};
+
+static Tags classify(const Op &op, const Ctx &c, u64 a, u64 b,
+                     const Outcome &bad, const Outcome &good) {
+  Tags g;
   if (op.vax()) {
     const bool dsrc = op.src == F_D;
     const bool dirty = (!op.unary && op.src != F_Q && vax_dirty(a, false)) ||
                        (op.src != F_Q && vax_dirty(b, dsrc));
-    if (dirty) {
-      const bool cmp = op.k == V_CMPEQ || op.k == V_CMPLT || op.k == V_CMPLE;
-      return (cmp && c.S) ? "FP-04" : "FP-03";
+    const bool cmp = op.k == V_CMPEQ || op.k == V_CMPLT || op.k == V_CMPLE;
+    if (bad.exc != good.exc || bad.trapped != good.trapped ||
+        bad.fpcr != good.fpcr || bad.opcdec != good.opcdec) {
+      if (dirty && !c.S)
+        g.add("FP-03");
+      else if (op.k == V_CVTGQ && b == U64(0xC400000000000000))
+        g.add("FP-12");
+      else
+        g.unexplained = true;
     }
-    if (op.k == V_CVTGQ && b == U64(0xC400000000000000))
-      return "FP-12";
-    if ((bad.exc & X_OVF) && (good.exc & X_OVF) && bad.res != good.res &&
-        bad.fpcr == good.fpcr && bad.exc == good.exc)
-      return "FP-10";
-    if (op.dst == F_F && bad.fpcr == good.fpcr && bad.exc == good.exc &&
-        ((bad.res ^ good.res) & ~LOW29) == 0 && (good.res & LOW29) == 0)
-      return "FP-01";
-    return nullptr;
+    if (bad.res != good.res) {
+      if (cmp && dirty && c.S)
+        g.add("FP-04");
+      else if ((bad.exc & X_OVF) && (good.exc & X_OVF))
+        g.add("FP-10");
+      else if (op.dst == F_F && ((bad.res ^ good.res) & ~LOW29) == 0 &&
+               (good.res & LOW29) == 0)
+        g.add("FP-01");
+      else
+        g.unexplained = true;
+    }
+    return g;
   }
   const bool fp_src = op.src != F_Q;
-  if ((c.fpcr & FPCR_DNZ) && !c.S && fp_src &&
-      ((!op.unary && is_den_t(a)) || is_den_t(b)))
-    return "FP-06";
-  if (op.k == K_CVTTQ && !c.S && cls_t(b) == C_FIN &&
-      ((b >> 52) & 0x7ff) >= 1023 + 62 && bad.res == good.res)
-    return "FP-05";
   const u64 min =
       op.dst == F_S ? U64(0x3810000000000000) : U64(0x0010000000000000);
-  if ((good.res & ~SIGN) == min && bad.res == 0)
-    return "FP-11";
-  if (c.S && c.U && (c.fpcr & FPCR_UNFD) && !(c.fpcr & FPCR_UNDZ) &&
-      bad.res == 0 && ((good.res >> 52) & 0x7ff) == 0)
-    return "DENORM";
-  return nullptr;
+  if ((c.fpcr & FPCR_DNZ) && !c.S && fp_src &&
+      ((!op.unary && is_den_t(a)) || is_den_t(b)))
+    g.add("FP-06");
+  else if (op.k == K_CVTTQ && !c.S && cls_t(b) == C_FIN &&
+           ((b >> 52) & 0x7ff) >= 1023 + 62 && bad.res == good.res)
+    g.add("FP-05");
+  else if ((good.res & ~SIGN) == min && bad.res == 0)
+    g.add("FP-11");
+  else if (c.S && c.U && (c.fpcr & FPCR_UNFD) && !(c.fpcr & FPCR_UNDZ) &&
+           bad.res == 0 && ((good.res >> 52) & 0x7ff) == 0)
+    g.add("DENORM");
+  else
+    g.unexplained = true;
+  return g;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1389,29 +1426,37 @@ static void check(const Op &op, u32 ins, u64 a, u64 b, u64 fpcr) {
   const Outcome cur = run<CAlphaCPU>(ins, a, b, fpcr);
   n_cases++;
   if (!matches(c, e, cur)) {
+    /* tolerated while one of the items that explain it is not fixed */
     const Outcome want = derive(c, e, e.res_known ? e.res : cur.res);
-    const char *tag = classify(op, c, a, b, cur, want);
-    Item *it = tag ? item(tag) : nullptr;
-    if (it && !it->fixed) {
-      it->model_mismatch++;
+    const Tags g = classify(op, c, a, b, cur, want);
+    Item *open = nullptr;
+    for (int i = 0; i < g.n && !open; i++)
+      if (!item(g.t[i])->fixed)
+        open = item(g.t[i]);
+    if (g.explained() && open) {
+      open->model_mismatch++;
       if (verbose)
-        report("expected", op, ins, a, b, fpcr, cur, &want, tag);
+        report("expected", op, ins, a, b, fpcr, cur, &want, g.str().c_str());
     } else {
       n_failed++;
-      report("MODEL", op, ins, a, b, fpcr, cur, &want, tag);
+      report("MODEL", op, ins, a, b, fpcr, cur, &want, g.str().c_str());
     }
   }
 #if defined(FP_HAVE_FROZEN)
   const Outcome old = run<frozen::CAlphaCPU>(ins, a, b, fpcr);
   n_frozen_cmp++;
   if (!(old == cur)) {
-    const char *tag = classify(op, c, a, b, old, cur);
-    Item *it = tag ? item(tag) : nullptr;
-    if (it && it->fixed) {
-      it->frozen_explained++;
+    /* every difference from the baseline must be a fixed item */
+    const Tags g = classify(op, c, a, b, old, cur);
+    bool ok = g.explained();
+    for (int i = 0; i < g.n; i++)
+      ok = ok && item(g.t[i])->fixed;
+    if (ok) {
+      for (int i = 0; i < g.n; i++)
+        item(g.t[i])->frozen_explained++;
     } else {
       n_failed++;
-      report("FROZEN", op, ins, a, b, fpcr, old, &cur, tag);
+      report("FROZEN", op, ins, a, b, fpcr, old, &cur, g.str().c_str());
     }
   }
 #endif

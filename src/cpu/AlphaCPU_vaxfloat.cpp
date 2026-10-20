@@ -546,7 +546,11 @@ u64 CAlphaCPU::vax_rpack(UFP *r, u32 ins, u32 dp) {
 
   if (r->exp > expmax[dp]) { /* ovflo? */
     vax_trap(TRAP_OVF, ins); /* set trap */
+    /* The result of an instruction that traps is UNPREDICTABLE (ARM
+       4.7.7.1); make it the largest number of the format rather than the
+       rounded fraction under a clamped exponent. */
     r->exp = expmax[dp];
+    r->frac = X64_QUAD;
   } /* return max */
 
   if (r->exp <= expmin[dp]) { /* underflow? */
@@ -555,8 +559,15 @@ u64 CAlphaCPU::vax_rpack(UFP *r, u32 ins, u32 dp) {
     return 0;
   } /* underflow to 0 */
 
-  return (((u64)r->sign) << FPR_V_SIGN) | (((u64)r->exp) << FPR_V_EXP) |
-         ((r->frac >> FPR_GUARD) & FPR_FRAC);
+  u64 res = (((u64)r->sign) << FPR_V_SIGN) | (((u64)r->exp) << FPR_V_EXP) |
+            ((r->frac >> FPR_GUARD) & FPR_FRAC);
+  /* An F value in a register has the 29 fraction bits below F precision
+     clear (ARM 4.7.1, "Single-Precision Operations"). The fraction above
+     still holds the operation's full precision: rounding added F's round
+     bit there and chopping left it as it was. */
+  if (dp == DT_F)
+    res &= ~U64(0x000000001FFFFFFF);
+  return res;
 }
 
 /**
@@ -577,7 +588,8 @@ u64 CAlphaCPU::vax_rpack_d(UFP *r, u32 ins) {
   r->exp = r->exp + D_BIAS - G_BIAS; /* rebias */
   if (r->exp > FDR_M_EXP) {          /* ovflo? */
     vax_trap(TRAP_OVF, ins);         /* set trap */
-    r->exp = FDR_M_EXP;
+    r->exp = FDR_M_EXP;              /* the D MAX, as vax_rpack */
+    r->frac = X64_QUAD;
   } /* return max */
 
   if (r->exp <= 0) { /* underflow? */
