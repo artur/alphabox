@@ -27,6 +27,8 @@
 #include "CirrusGD54xx.hpp"
 #include "System.hpp"
 
+#include <cstring>
+
 using namespace cirrus;
 
 CCirrusGD54xx::CCirrusGD54xx(CConfigurator *cfg, CSystem *c, int pcibus,
@@ -107,6 +109,107 @@ void CCirrusGD54xx::init() {
 
   printf("%s: Cirrus Logic %s, %u KB\n", devid_string, m_chip.part,
          m_chip.vram_bytes / 1024);
+}
+
+/**
+ * The card's own state for a snapshot, written after the VGA core's block:
+ * the extended graphics controller registers (bank select, the BitBLT
+ * register file, the extended write-mode colours), the hidden DAC, the
+ * extended palette and the cursor/port bits kept outside the core. The bank
+ * windows are derived from GR09 to GR0B, and an operation in progress is
+ * dropped (the blitter is not in the file), so neither is stored.
+ *
+ * Files written before this block existed carry no 'CL54' record at this
+ * place: they go straight to the core's end magic. restore_card_state
+ * recognises that and leaves the power-on values in place, as such a file
+ * always did.
+ **/
+namespace {
+constexpr u32 kCirrusMagic = 0x434C3534; // 'CL54'
+constexpr u32 kCirrusVersion = 1;
+struct CirrusCardState {
+  u32 version;
+  u32 dac_arm;
+  u8 gr[256];
+  u8 ext_palette[16 * 3];
+  u8 hidden_dac;
+  u8 cursor_x_low;
+  u8 cursor_y_low;
+  u8 port_3c3;
+};
+} // namespace
+
+int CCirrusGD54xx::save_card_state(FILE *f) {
+  CirrusCardState x;
+  memset(&x, 0, sizeof(x));
+  x.version = kCirrusVersion;
+  x.dac_arm = (u32)m_dac_arm;
+  memcpy(x.gr, m_gr, sizeof(x.gr));
+  memcpy(x.ext_palette, m_ext_palette, sizeof(x.ext_palette));
+  x.hidden_dac = m_hidden_dac;
+  x.cursor_x_low = m_cursor_x_low;
+  x.cursor_y_low = m_cursor_y_low;
+  x.port_3c3 = m_port_3c3;
+  const long n = sizeof(x);
+  fwrite(&kCirrusMagic, sizeof(u32), 1, f);
+  fwrite(&n, sizeof(long), 1, f);
+  if (fwrite(&x, 1, sizeof(x), f) != sizeof(x))
+    return -1;
+  fwrite(&kCirrusMagic, sizeof(u32), 1, f);
+  return 0;
+}
+
+int CCirrusGD54xx::restore_card_state(FILE *f) {
+  m_card_block_restored = false;
+  // Nothing in the blitter survives a snapshot.
+  m_blitter.reset();
+
+  u32 m;
+  const long pos = ftell(f);
+  if (fread(&m, sizeof(u32), 1, f) != 1) {
+    printf("%s: unexpected end of file!\n", devid_string);
+    return -1;
+  }
+  if (m != kCirrusMagic) {
+    // An older file: no card block, the core's end magic follows.
+    if (fseek(f, pos, SEEK_SET)) {
+      printf("%s: cannot reposition the state file!\n", devid_string);
+      return -1;
+    }
+    return 0;
+  }
+  long n;
+  CirrusCardState x;
+  if (fread(&n, sizeof(long), 1, f) != 1 || n != (long)sizeof(x)) {
+    printf("%s: Cirrus STRUCT SIZE does not match!\n", devid_string);
+    return -1;
+  }
+  if (fread(&x, 1, sizeof(x), f) != sizeof(x) || fread(&m, 4, 1, f) != 1 ||
+      m != kCirrusMagic) {
+    printf("%s: Cirrus end MAGIC does not match!\n", devid_string);
+    return -1;
+  }
+  if (x.version != kCirrusVersion) {
+    printf("%s: Cirrus state version %u is not supported!\n", devid_string,
+           x.version);
+    return -1;
+  }
+  m_dac_arm = (int)x.dac_arm;
+  memcpy(m_gr, x.gr, sizeof(m_gr));
+  memcpy(m_ext_palette, x.ext_palette, sizeof(m_ext_palette));
+  m_hidden_dac = x.hidden_dac;
+  m_cursor_x_low = x.cursor_x_low;
+  m_cursor_y_low = x.cursor_y_low;
+  m_port_3c3 = x.port_3c3;
+  m_card_block_restored = true;
+  return 0;
+}
+
+void CCirrusGD54xx::post_restore() {
+  if (!m_card_block_restored)
+    return;
+  update_banks();      // from GR09..GR0B
+  define_video_mode(); // SR07 and the hidden DAC
 }
 
 void CCirrusGD54xx::recompute_params() {

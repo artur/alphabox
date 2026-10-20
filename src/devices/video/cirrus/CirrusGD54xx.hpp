@@ -91,6 +91,9 @@ protected:
   void recompute_params() override;
   uint16_t offset() override;
   bool get_interlace_mode() override;
+  int save_card_state(FILE *f) override;
+  int restore_card_state(FILE *f) override;
+  void post_restore() override;
 
   // --- sequencer (CirrusSequencer.cpp) ----------------------------------
   void sequencer_map(address_map &map) override;
@@ -171,6 +174,10 @@ protected:
 
   /// Port 0x3c3 (video subsystem enable). Stored and read back only.
   u8 m_port_3c3 = 0x01;
+
+  /// Set by restore_card_state when the state file carried the card block
+  /// (files from before it existed do not; see CirrusGD54xx.cpp).
+  bool m_card_block_restored = false;
 };
 
 #endif // !defined(INCLUDED_CIRRUS_GD54XX_H)
