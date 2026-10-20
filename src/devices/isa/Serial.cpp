@@ -98,7 +98,18 @@ static const int SEND_FLAGS = 0;
  * Constructor.
  **/
 CSerial::CSerial(CConfigurator *cfg, CSystem *c, u16 number)
-    : CSystemComponent(cfg, c) {
+    : CSystemComponent(cfg, c),
+      // IRQ4 for serial0 (COM1), IRQ3 for serial1 (COM2), driven as a level
+      // that follows the cause: pic_set_line makes one edge per rising
+      // transition. A board without the ALi (the ES47, whose CMM reads the
+      // port by polling) has no line to drive.
+      uart(
+          state,
+          [this](bool active) {
+            if (theAli)
+              theAli->pic_set_line(0, 4 - state.iNumber, active);
+          },
+          [this](u8 byte) { write((const char *)&byte, 1); }) {
   state.iNumber = number;
 }
 
@@ -142,22 +153,7 @@ void CSerial::init() {
     // rcvR==rcvW), MCR.LOOP self-test still works (loopback writes go to
     // rcvBuffer, never the socket), and TX-empty interrupts still fire when the
     // guest enables IER.bit1.
-    state.rcvW = 0;
-    state.rcvR = 0;
-    state.bTHR = 0x00;
-    state.bRDR = 0x00;
-    state.bBRB_LSB = 0x00;
-    state.bBRB_MSB = 0x00;
-    state.bIER = 0x00;
-    state.bIIR = 0x01; // no interrupt pending
-    state.bFCR = 0x00;
-    state.bLCR = 0x00;
-    state.bMCR = 0x00;
-    state.bLSR = 0x60; // THRE, TSRE
-    state.bMSR = 0x30; // CTS, DSR
-    state.bSPR = 0x00;
-    state.serial_cycles = 0;
-    state.thre_pending = false;
+    uart.reset();
     iac_carry_len = 0;
     in_subneg = false;
     stageLen = 0;
@@ -224,24 +220,7 @@ void CSerial::init() {
 
   WaitForConnection();
 
-  state.rcvW = 0;
-  state.rcvR = 0;
-
-  state.bTHR = 0x00;
-  state.bRDR = 0x00;
-  state.bBRB_LSB = 0x00;
-  state.bBRB_MSB = 0x00;
-  state.bIER = 0x00;
-  state.bIIR = 0x01; // no interrupt
-  state.bFCR = 0x00;
-  state.bLCR = 0x00;
-  state.bMCR =
-      0x00; // Important: reads of MCR.LOOP gate the case-0 LOOP-mode write path
-  state.bLSR = 0x60; // THRE, TSRE
-  state.bMSR = 0x30; // CTS, DSR
-  state.bSPR = 0x00;
-  state.serial_cycles = 0;
-  state.thre_pending = false;
+  uart.reset();
   iac_carry_len = 0;
   in_subneg = false;
   stageLen = 0;
@@ -299,85 +278,24 @@ static u64 s_ser_iir_reads = 0;
 static int s_ser_iir_first = -1;
 
 u64 CSerial::ReadMem(int index, u64 address, int dsize) {
-  u8 d;
-
   if (disabled)
     return 0xffu; // missing-UART signature
 
-  std::lock_guard<std::recursive_mutex> g(m_regs);
+  const u8 value = uart.read((u32)address);
   if (s_trace_serial == state.iNumber && address == 2) {
     if (s_ser_iir_first < 0)
-      s_ser_iir_first = state.bIIR;
+      s_ser_iir_first = value;
     s_ser_iir_reads++;
   }
-  switch (address) {
-  case 0: // data buffer
-    if (state.bLCR & 0x80) {
-      return state.bBRB_LSB;
-    } else {
-      if (state.rcvR != state.rcvW) {
-        state.bRDR = state.rcvBuffer[state.rcvR];
-        state.rcvR++;
-        if (state.rcvR == FIFO_SIZE)
-          state.rcvR = 0;
-#if defined(DEBUG_SERIAL)
-        printf("Read character %02x (%c) on serial port %d\n", state.bRDR,
-               printable(state.bRDR), state.iNumber);
-#endif
-      } else {
-#if defined(DEBUG_SERIAL)
-        printf("Read past FIFO on serial port %d\n", state.iNumber);
-#endif
-      }
-
-      // Received-data interrupt follows the FIFO — it may have just emptied.
-      eval_interrupts();
-      return state.bRDR;
-    }
-
-  case 1:
-    if (state.bLCR & 0x80) {
-      return state.bBRB_MSB;
-    } else {
-      return state.bIER;
-    }
-
-  case 2: // interrupt cause
-    d = state.bIIR;
-    if ((d & 0x0f) == 0x02) // the cause, apart from the FIFO bits above
-      state.thre_pending = false; // reading IIR acknowledges THRE
-    eval_interrupts();            // recompute IIR and re-drive the IRQ line
-    return d;
-
-  case 3:
-    return state.bLCR;
-
-  case 4:
-    return state.bMCR;
-
-  case 5: // serialization state
-    if (state.rcvR != state.rcvW)
-      state.bLSR = 0x61; // THRE, TSRE, RxRD
-    else
-      state.bLSR = 0x60; // THRE, TSRE
-    return state.bLSR;
-
-  case 6:
-    return state.bMSR;
-
-  default:
-    return state.bSPR;
-  }
+  return value;
 }
 
 void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
-  u8 d;
-  d = (u8)data;
+  const u8 d = (u8)data;
 
   if (disabled)
     return; // ignore guest writes to a disabled port
 
-  std::lock_guard<std::recursive_mutex> g(m_regs);
   if (s_trace_serial == state.iNumber) {
     printf("SERT port %d: IIR reads since last write %llu (first %02x); write "
            "reg %llu = %02x (LCR %02x IER %02x FCR %02x)\n",
@@ -387,136 +305,18 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
     s_ser_iir_reads = 0;
     s_ser_iir_first = -1;
   }
-  switch (address) {
-  case 0:
-    if (state.bLCR & 0x80) // divisor latch access bit set
-    {
-
-      // LSB of divisor latch
-      state.bBRB_LSB = d;
-    } else {
-      if (state.bMCR & 0x10) {
-        // MCR.LOOP set: deliver TX byte to our own RX FIFO instead of the wire.
-        // Windows 2000 UART detection writes a sentinel here and expects to
-        // read it back via LSR.DR.
-        int nextW = state.rcvW + 1;
-        if (nextW == FIFO_SIZE)
-          nextW = 0;
-        if (nextW != state.rcvR) {
-          state.rcvBuffer[state.rcvW] = (char)d;
-          state.rcvW = nextW;
-        }
-      } else {
-        // Transmit Hold Register
-        write((const char *)&d, 1);
-      }
-#if defined(DEBUG_SERIAL)
-      printf("Write character %02x (%c) on serial port %d\n", d, printable(d),
-             state.iNumber);
-#endif
-      // TX is instantaneous: the holding register is empty again, so
-      // re-arm THRE (delivered only if the THRE interrupt is enabled).
-      state.thre_pending = true;
-      eval_interrupts();
-    }
-    break;
-
-  case 1:
-    if (state.bLCR & 0x80) // divisor latch access bit set
-    {
-
-      // MSB of divisor latch
-      state.bBRB_MSB = d;
-    } else {
-      // Interrupt Enable Register.  Enabling the THRE interrupt while the
-      // (instantly-drained) holding register is empty arms one THRE edge.
-      // Only bits 3:0 exist; 7:4 read back zero [PC16550D datasheet].
-      // Linux's 8250 probe takes a writable bit 6 (UUE) for an XScale UART.
-      u8 prev_ier = state.bIER;
-      state.bIER = d & 0x0f;
-      if ((d & 0x02) && !(prev_ier & 0x02))
-        state.thre_pending = true;
-      eval_interrupts();
-    }
-    break;
-
-  case 2:
-    // FCR. The receive ring is the FIFO; bit 1 empties it, bit 2 has
-    // nothing to empty (transmission is immediate). Bit 0 is what a driver
-    // reads back in IIR bits 7:6 to know it has a 16550 with FIFOs: without
-    // that, every OS's probe concludes "16450, no FIFO" and takes an
-    // interrupt and two register reads per character.
-    state.bFCR = d;
-    if (d & 0x02)
-      state.rcvR = state.rcvW;
-    eval_interrupts();
-    break;
-
-  case 3:
-    state.bLCR = d;
-    break;
-
-  case 4: {
-    u8 prev_mcr = state.bMCR;
-    state.bMCR = d;
-    if (d & 0x10) {
-      // MCR.LOOP set: mirror modem-control output bits into MSR status bits.
-      // PC16550D loopback: DTR->DSR, RTS->CTS, OUT1->RI, OUT2->DCD.
-      // Windows 2000 SERIAL.SYS uses this to confirm a 16550 by toggling
-      // MCR.OUT1 and watching MSR.RI track it.
-      u8 status = 0;
-      if (d & 0x01)
-        status |= 0x20; // DTR  -> DSR
-      if (d & 0x02)
-        status |= 0x10; // RTS  -> CTS
-      if (d & 0x04)
-        status |= 0x40; // OUT1 -> RI
-      if (d & 0x08)
-        status |= 0x80; // OUT2 -> DCD
-      state.bMSR = status | (state.bMSR & 0x0f);
-    } else {
-      // Loopback released: present the default "modem connected" status the
-      // rest of the code assumes.
-      state.bMSR = (state.bMSR & 0x0f) | 0x30;
-    }
-    if (prev_mcr != d)
-      printf("SRL%d: MCR %02x -> %02x (LOOP=%d DTR=%d RTS=%d OUT1=%d OUT2=%d), "
-             "MSR now %02x\n",
-             state.iNumber, prev_mcr, d, (d >> 4) & 1, d & 1, (d >> 1) & 1,
-             (d >> 2) & 1, (d >> 3) & 1, state.bMSR);
-    break;
-  }
-
-  default:
-    state.bSPR = d;
-  }
+  const u8 prev_mcr = state.bMCR;
+  uart.write((u32)address, d);
+  if (address == 4 && prev_mcr != d)
+    printf("SRL%d: MCR %02x -> %02x (LOOP=%d DTR=%d RTS=%d OUT1=%d OUT2=%d), "
+           "MSR now %02x\n",
+           state.iNumber, prev_mcr, d, (d >> 4) & 1, d & 1, (d >> 1) & 1,
+           (d >> 2) & 1, (d >> 3) & 1, state.bMSR);
 }
 
 void CSerial::eval_interrupts() {
-  if (disabled)
-    return;
-
-  // RX-available is a level (follows the receive FIFO); THR-empty is edge-
-  // latched in thre_pending (set on THR write / THRE enable, cleared on IIR
-  // read) because es40's instant TX would make a plain THRE level storm.
-  // Under m_regs and into a local first: IIR is never seen half-computed.
-  std::lock_guard<std::recursive_mutex> g(m_regs);
-  u8 iir = 0x01; // no interrupt
-  if ((state.bIER & 0x01) && (state.rcvR != state.rcvW))
-    iir = 0x04; // received data available
-  else if ((state.bIER & 0x02) && state.thre_pending)
-    iir = 0x02; // transmitter holding register empty
-  const bool pending = (iir & 0x01) == 0;
-  if (state.bFCR & 0x01)
-    iir |= 0xC0; // FIFOs enabled: a 16550 says so here
-  state.bIIR = iir;
-
-  // Drive IRQ4 (serial0) / IRQ3 (serial1) as a level following the cause;
-  // pic_set_line() makes one edge per rising transition, retracting on fall.
-  // A board without the ALi (the ES47, whose CMM reads the port by polling)
-  // has no line to drive.
-  if (theAli)
-    theAli->pic_set_line(0, 4 - state.iNumber, pending);
+  if (!disabled)
+    uart.update();
 }
 
 /**
@@ -638,31 +438,10 @@ void CSerial::drop_client() {
 void CSerial::write_cstr(const char *s) { write(s, (int)strlen(s)); }
 
 /**
- * receive  — Push data into the FIFO.  Returns number of bytes consumed.
- *            Stops when FIFO is full.
+ * Received bytes into the UART's FIFO. Returns how many fit.
  **/
-
 int CSerial::receive(const char *data, int dsize) {
-  std::lock_guard<std::recursive_mutex> g(m_regs);
-  int consumed = 0;
-
-  while (dsize) {
-    int nextW = state.rcvW + 1;
-    if (nextW == FIFO_SIZE)
-      nextW = 0;
-
-    if (nextW == state.rcvR)
-      break; // FIFO full
-
-    state.rcvBuffer[state.rcvW] = *data;
-    state.rcvW = nextW;
-    data++;
-    dsize--;
-    consumed++;
-    eval_interrupts();
-  }
-
-  return consumed;
+  return uart.receive((const u8 *)data, dsize);
 }
 
 /**
@@ -673,13 +452,12 @@ void CSerial::drain_staging() {
   if (stageLen == 0)
     return;
 
-  std::lock_guard<std::recursive_mutex> g(m_regs);
   // Only deliver when the guest has consumed the previous character.
   // This self-clocks to the emulated CPU speed, just like a real
   // UART where the next character doesn't arrive until the baud
   // rate shifts it in — and the CPU is always fast enough to read
   // it before then.
-  if (state.rcvR != state.rcvW)
+  if (!uart.rx_empty())
     return; // previous character not yet read
 
   // Deliver exactly one character

@@ -433,6 +433,14 @@ check_include_files("time.h;sys/time.h" TIME_WITH_SYS_TIME)
 
 configure_file(src/config.hpp.in src/config.hpp)
 
+# Unit test of the 16550 register model (test/unit/uart16550_test.cpp),
+# built with every lane: run build/uart16550_test, or ctest.
+add_executable(uart16550_test test/unit/uart16550_test.cpp
+    src/devices/isa/Uart16550.cpp)
+target_include_directories(uart16550_test PRIVATE src/common src/devices/isa)
+enable_testing()
+add_test(NAME uart16550 COMMAND uart16550_test)
+
 install(TARGETS alphabox DESTINATION bin)
 
 # Unit tests: one device's source built with the rest of the machine stubbed

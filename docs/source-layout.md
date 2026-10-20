@@ -156,8 +156,10 @@ Parts more than one family uses:
 ### devices/isa/
 
 The legacy devices behind the bridge: `DMA`, `FloppyController`,
-`Keyboard` (KBC and PS/2 mouse, Bochs-derived) and `Serial` (telnet or
-`null_attach` UARTs).
+`Keyboard` (KBC and PS/2 mouse, Bochs-derived), `Serial` (a COM port and
+its host side: the telnet connection, the BREAK menu, `null_attach`) and
+`Uart16550` (the 16550's registers, receive FIFO and interrupt, with no
+host side; `test/unit/uart16550_test.cpp` tests it).
 
 ### devices/pci/
 

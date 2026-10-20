@@ -7,7 +7,7 @@
 | `src/` | the emulator; [source-layout.md](source-layout.md) maps it |
 | `test/rom/` | the ES40 firmware regression test and its reference console log |
 | `test/tools/` | the test tools below |
-| `test/unit/` | unit tests: one device's source with the rest of the machine stubbed out |
+| `test/unit/` | unit tests: one model or device's source with the rest of the machine stubbed out |
 | `test/arc/`, `test/vms/`, `test/nt/` | configurations and firmware for the ARC, OpenVMS and Windows NT runs |
 | `test/platforms/` | real machines' console output, for platform bring-ups |
 | `docs/` | this documentation |
@@ -205,6 +205,7 @@ driver does. Each is an executable in every build directory, and `ctest
 | Test | What it drives |
 | --- | --- |
 | `kbc_test` | The 8042 keyboard controller, keyboard and mouse (`Keyboard.cpp`): ports 60h and 64h, host keys and mouse motion, save and restore. |
+| `uart16550_test` | The 16550 UART model (`Uart16550.cpp`): the register sequences consoles and drivers make, against the data sheet's answers. |
 
 ### The original regression test
 

@@ -34,6 +34,7 @@
 #define INCLUDED_SERIAL_H
 
 #include "SystemComponent.hpp"
+#include "Uart16550.hpp"
 #include "telnet.hpp"
 #include <chrono>
 #include <condition_variable>
@@ -82,17 +83,6 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   std::atomic_bool StopThread{false};
-  /// The UART's registers, receive FIFO and interrupt line are changed by
-  /// more than one thread: a processor reading or writing a register (any
-  /// processor, on a machine with several), and this port's own thread
-  /// putting received characters into the FIFO. Each of them
-  /// recompute IIR and re-drive the line (eval_interrupts), so without a
-  /// lock a processor could read IIR halfway through the other thread's
-  /// recompute -- "no interrupt pending" with a character waiting -- and
-  /// dismiss the interrupt; the edge-triggered PIC line stays high and no
-  /// further interrupt ever comes (the console hangs mid-line). Recursive:
-  /// the register paths call eval_interrupts and receive with it held.
-  std::recursive_mutex m_regs;
 
   /// Guest output on its way to the client (write(), send_output()).
   std::mutex out_lock;
@@ -102,8 +92,9 @@ private:
   size_t out_dropped = 0;  ///< oldest bytes discarded, not yet reported
   std::string out_sending; ///< the thread's: taken from the queue, unsent
   size_t out_sent = 0;     ///< how much of out_sending the socket took
-  std::atomic_bool breakHit{
-      false}; ///< set by the port's thread, read by check_state
+  /// A telnet BREAK arrived: set by the port's thread, acted on by
+  /// check_state.
+  std::atomic_bool breakHit{false};
   const char *listenAddress = nullptr;
   bool threads_started = false; ///< past init: a failing `action` only warns
 #if !defined(_WIN32)
@@ -118,29 +109,10 @@ private:
   char stageBuf[STAGE_SIZE]; // Cooked data waiting for baud-rate delivery
   int stageLen;              // Number of valid bytes in stageBuf
 
-  /// The state structure contains all elements that need to be saved to the
-  /// statefile.
-  struct SSrl_state {
-    u8 bTHR; /**< Transmit Hold Register */
-    u8 bRDR; /**< Received Data Register */
-    u8 bBRB_LSB;
-    u8 bBRB_MSB;
-    u8 bIER; /**< Interrupt Enable Register */
-    u8 bIIR; /**< Interrupt Identification Register */
-    u8 bFCR;
-    u8 bLCR; /**< Line Control Register (Data Format Register) */
-    u8 bMCR; /**< Modem Control Register */
-    u8 bLSR; /**< Line Status Register */
-    u8 bMSR; /**< Modem Status Register */
-    u8 bSPR; /**< Scratch Pad Register */
-    int serial_cycles;
-    char rcvBuffer[1024];
-    int rcvW;
-    int rcvR;
-    int iNumber;
-    bool thre_pending; /**< THRE interrupt latched (THR emptied, not yet acked
-                          by an IIR read) */
-  } state;
+  /// The registers and receive FIFO, as the state file stores them.
+  SSrl_state state;
+  /// The 16550 model working on `state` (declared after it).
+  CUart16550 uart;
   int listenPort = 0;
   int64_t listenSocket;
   int64_t connectSocket;
