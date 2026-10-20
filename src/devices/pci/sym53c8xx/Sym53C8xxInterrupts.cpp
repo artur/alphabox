@@ -119,7 +119,12 @@ void CSym53C8xx::CChannel::set_interrupt(int reg, u8 interrupt) {
   }
 
   // printf("--> eval int\n");
-  eval_interrupts();
+  // An interrupt that halts SCRIPTS ends a WAIT RESELECT too: the
+  // instruction is no longer being executed, and a later SIGP must not
+  // jump to its alternate address over whatever program the driver starts
+  // next.
+  if (eval_interrupts())
+    state.wait_reselect = false;
 
   // printf("<-- eval_int\n");
 }
@@ -128,8 +133,9 @@ void CSym53C8xx::CChannel::set_interrupt(int reg, u8 interrupt) {
  * Evaluate interrupt status.
  *
  * Check interrupt registers, and determine if an interrupt should be generated.
+ * Returns whether the pending interrupts halt SCRIPTS.
  **/
-void CSym53C8xx::CChannel::eval_interrupts() {
+bool CSym53C8xx::CChannel::eval_interrupts() {
   // will_assert: when this boolean value is true at the end of this function,
   // an interrupt will be signalled to the system.
   bool will_assert = false;
@@ -242,4 +248,5 @@ void CSym53C8xx::CChannel::eval_interrupts() {
     dev.do_pci_interrupt(index, will_assert);
     state.irq_asserted = will_assert;
   }
+  return will_halt;
 }

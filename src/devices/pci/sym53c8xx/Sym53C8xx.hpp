@@ -245,7 +245,7 @@ private:
     void execute_bm_op();
     void execute();
 
-    void eval_interrupts();
+    bool eval_interrupts();
     void set_interrupt(int reg, u8 interrupt);
     void chip_reset();
 

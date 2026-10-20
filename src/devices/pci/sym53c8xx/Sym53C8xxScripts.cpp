@@ -70,8 +70,13 @@ void CSym53C8xx::CChannel::post_dsp_write() {
  **/
 void CSym53C8xx::CChannel::start_scripts() {
   state.executing = true;
-  if (!scripts_running)
+  if (!scripts_running) {
     state.insn_processed = 0;
+    // A program the guest starts replaces whatever WAIT RESELECT was
+    // pending: its jump address must not hijack the new program on the
+    // next SIGP.
+    state.wait_reselect = false;
+  }
 }
 
 /**

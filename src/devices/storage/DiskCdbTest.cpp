@@ -1504,6 +1504,44 @@ void t_sym_pci_reset(SymRig &s) {
         "scratcha %08x dsp %08x", s.r32(R_SCRATCHA), s.r32(R_DSP));
 }
 
+/// SYM-07: a WAIT RESELECT ended by an abort does not come back on SIGP.
+void t_sym_wait_reselect(SymRig &s) {
+  group("SYM-07 WAIT RESELECT");
+  std::string err;
+  s.reset();
+  const u32 target = s.program({kInt, 0x99});
+  const u32 wait = s.program({0x50000000, target});
+  // SIGP resumes a WAIT RESELECT at its alternate address.
+  s.w32(R_DSP, wait);
+  usleep(2000);
+  s.w8(R_ISTAT, 0x20); // SIGP
+  u8 istat = s.wait(err);
+  check(err.empty() && (istat & 0x01) && (s.r8(R_DSTAT) & 0x04) &&
+            s.r32(0x30) == 0x99,
+        "SIGP resumes WAIT RESELECT at its alternate address");
+  s.r8(R_CTEST2); // clears SIGP
+  // Abort it instead, start a polling loop, then set SIGP: the loop goes on.
+  s.reset();
+  s.w32(R_DSP, wait);
+  usleep(2000);
+  s.w8(R_ISTAT, 0x80); // ABRT
+  istat = s.wait(err);
+  s.w8(R_ISTAT, 0x00);
+  const u8 dstat = s.r8(R_DSTAT);
+  const u32 loop = s.next;
+  s.program({kJump, loop});
+  s.w32(R_DSP, loop);
+  usleep(2000);
+  s.w8(R_ISTAT, 0x20); // SIGP
+  usleep(5000);
+  const u32 dsp = s.r32(R_DSP);
+  check(err.empty() && (istat & 0x01) && (dstat & 0x10) && (dsp & ~7u) == loop,
+        "after an abort, SIGP leaves the new program alone",
+        "istat %02x dstat %02x dsp %08x loop %08x", istat, dstat, dsp, loop);
+  s.r8(R_CTEST2);
+  s.sym->ResetPCI(); // stop the loop
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1602,6 +1640,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_table_select(sr);
     t_sym_gen_timer(sr);
     t_sym_pci_reset(sr);
+    t_sym_wait_reselect(sr);
   } else
     check(false, "the 53C875 of the test machine");
 
