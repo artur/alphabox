@@ -876,6 +876,43 @@ void t_lun(Rig &r) {
   a->sense(0);
 }
 
+/// DISK-01: writes to write-protected media, and the WP bit.
+void t_write_protect(Rig &r) {
+  group("DISK-01 write protect");
+  CCdbTestAdapter *a = r.a;
+  const std::vector<u8> before = read_file(path("ro.img"), 0, 4096);
+  expect_cc(r, 1, a->run(1, cdb10(0x2a, 0, 8), std::vector<u8>(4096, 0xee)),
+            "WRITE(10) to a read-only image", 7, 0x27, 0);
+  check(read_file(path("ro.img"), 0, 4096) == before,
+        "the read-only image is unchanged");
+  expect_cc(r, 1, a->run(1, {0x0a, 0, 0, 0, 1, 0}, std::vector<u8>(512)),
+            "WRITE(6) to a read-only image", 7, 0x27, 0);
+  Res rw = a->run(1, cdb10(0x2a, 0, 1), std::vector<u8>(512));
+  check(rw.out_taken == 0, "no DATA OUT for a refused write", "%zu",
+        rw.out_taken);
+  a->sense(1);
+  expect_cc(r, 4, a->run(4, cdb10(0x2a, 0, 1), std::vector<u8>(512, 0xee)),
+            "WRITE(10) to a read-only RAM disk", 7, 0x27, 0);
+  Res rr = a->run(4, cdb10(0x28, 0, 1));
+  check(rr.good() && rr.in.size() == 512 && rr.in[0] != 0xee,
+        "the read-only RAM disk is unchanged");
+  // A CD-ROM has no WRITE commands (SCSI-2 14.2).
+  expect_cc(r, 3, a->run(3, cdb10(0x2a, 0, 1), std::vector<u8>(2048)),
+            "WRITE(10) to a CD-ROM", 5, 0x20, 0);
+  Res cdm = a->run(3, {0x1a, 0, 0x3f, 0, 255, 0});
+  check(cdm.good() && cdm.in.size() > 2 && cdm.in[2] == 0,
+        "MODE SENSE(6) on a CD-ROM: device-specific byte reserved, 0");
+  Res m6 = a->run(1, {0x1a, 0, 0x3f, 0, 255, 0});
+  check(m6.good() && m6.in.size() > 2 && (m6.in[2] & 0x80),
+        "MODE SENSE(6): WP set on a read-only disk");
+  Res m10 = a->run(1, {0x5a, 0, 0x3f, 0, 0, 0, 0, 1, 0, 0});
+  check(m10.good() && m10.in.size() > 3 && (m10.in[3] & 0x80),
+        "MODE SENSE(10): WP set on a read-only disk");
+  Res w6 = a->run(0, {0x1a, 0, 0x3f, 0, 255, 0});
+  check(w6.good() && w6.in.size() > 2 && !(w6.in[2] & 0x80),
+        "MODE SENSE(6): WP clear on a writable disk");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -935,6 +972,7 @@ int main_cdbtest(int argc, char **argv) {
   t_mode_length(r);
   t_inquiry_len(r);
   t_lun(r);
+  t_write_protect(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

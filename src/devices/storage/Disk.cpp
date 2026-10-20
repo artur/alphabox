@@ -606,6 +606,8 @@ void CDisk::scsi_xfer_done_me(int bus) {
 #define SCSI_INVALID_PARAM -12       /* 05/26/00 invalid field in param list */
 #define SCSI_PARAM_LENGTH -13        /* 05/1A/00 parameter list length error */
 #define SCSI_SAVING_NOT_SUPP -14     /* 05/39/00 saving params not supported */
+#define SCSI_WRITE_PROTECTED -15     /* 07/27/00 write protected */
+#define SCSI_WRITE_FAULT -16 /* 04/03/00 peripheral device write fault */
 
 // ALPHABOX_TRACE_SCSI=1: every command a SCSI device is given, and the
 // sense data of each one it answers with CHECK CONDITION.
@@ -736,6 +738,18 @@ void CDisk::do_scsi_error(int errcode, int info) {
   case SCSI_SAVING_NOT_SUPP:
     state.scsi.sense.data[2] = 0x05;  // illegal request
     state.scsi.sense.data[12] = 0x39; // saving parameters not supported
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_WRITE_PROTECTED:
+    state.scsi.sense.data[2] = 0x07;  // data protect
+    state.scsi.sense.data[12] = 0x27; // write protected
+    state.scsi.sense.data[13] = 0x00;
+    break;
+
+  case SCSI_WRITE_FAULT:
+    state.scsi.sense.data[2] = 0x04;  // hardware error
+    state.scsi.sense.data[12] = 0x03; // peripheral device write fault
     state.scsi.sense.data[13] = 0x00;
     break;
 
@@ -1682,14 +1696,19 @@ int CDisk::do_scsi_command() {
       // descriptors" (SPC-3 6.9.1). LLBAA (MODE SENSE(10)) only allows
       // the long form, which this disk never uses.
       int num_blk_desc = (state.scsi.cmd.data[1] & 0x08) ? 0 : 1;
+      // The header's device-specific parameter: a direct-access device
+      // reports WP in bit 7 when the medium is write protected (SCSI-2
+      // 9.3.3, table 154; SBC-3 6.4.1). On a CD-ROM the bit is reserved
+      // (SCSI-2 14.3.3, table 265).
+      const u8 device_specific = (!cdrom() && read_only) ? 0x80 : 0x00;
 
       if (state.scsi.cmd.data[0] == SCSICMD_MODE_SENSE) {
         q = 4;
         retlen = state.scsi.cmd.data[4];
         state.scsi.dati.data[0] = retlen; // mode data length
         state.scsi.dati.data[1] =
-            cdrom() ? 0x01 : 0x00;      // medium type (120 mm data for CD-ROM)
-        state.scsi.dati.data[2] = 0x00; // device specific parameter
+            cdrom() ? 0x01 : 0x00; // medium type (120 mm data for CD-ROM)
+        state.scsi.dati.data[2] = device_specific;
         state.scsi.dati.data[3] =
             8 * num_blk_desc; // block descriptor length: 1 page (?)
       } else {
@@ -1698,8 +1717,8 @@ int CDisk::do_scsi_command() {
         state.scsi.dati.data[0] = (u8)(retlen >> 8); // mode data length
         state.scsi.dati.data[1] = (u8)retlen;
         state.scsi.dati.data[2] =
-            cdrom() ? 0x01 : 0x00;      // medium type (120 mm data for CD-ROM)
-        state.scsi.dati.data[3] = 0x00; // device specific parameter
+            cdrom() ? 0x01 : 0x00; // medium type (120 mm data for CD-ROM)
+        state.scsi.dati.data[3] = device_specific;
         state.scsi.dati.data[4] = 0x00; // reserved
         state.scsi.dati.data[5] = 0x00; // reserved
         state.scsi.dati.data[6] =
@@ -2507,6 +2526,23 @@ int CDisk::do_scsi_command() {
 #if defined(DEBUG_SCSI)
     printf("%s: WRITE.\n", devid_string);
 #endif
+    // A CD-ROM drive has no WRITE command: SCSI-2's command set for CD-ROM
+    // devices (14.2, table 238) leaves 0Ah, 2Ah and AAh out, and a code
+    // it does not list is reserved, so INVALID COMMAND OPERATION CODE.
+    if (cdrom()) {
+      do_scsi_error(SCSI_ILL_CMD);
+      break;
+    }
+    // Write-protected medium (a read-only image, a BIN/CUE, a read-only RAM
+    // disk): DATA PROTECT, WRITE PROTECTED, before any data is taken (SCSI-2
+    // 9.1.12; SBC-3 4.10, "any write protection shall cause otherwise valid
+    // commands that request alteration of the medium to be rejected with
+    // CHECK CONDITION status with the sense key set to DATA PROTECT"). It
+    // used to take the data, drop it and answer GOOD.
+    if (read_only) {
+      do_scsi_error(SCSI_WRITE_PROTECTED);
+      break;
+    }
     // Within bounds?
     cdb_lba_length(state.scsi.cmd.data, lba, blocks);
     if (!lba_range_ok(lba, blocks)) {
@@ -2532,7 +2568,16 @@ int CDisk::do_scsi_command() {
       do_scsi_error(SCSI_LBA_RANGE);
       break;
     }
-    write_blocks(state.scsi.dato.data, blocks);
+    // A write the host could not complete (its disk full, an I/O error) is
+    // an error the guest hears about, not a GOOD over lost data: HARDWARE
+    // ERROR, PERIPHERAL DEVICE WRITE FAULT (03h/00h, a direct-access code in
+    // SCSI-2 table 71 and SPC-3 table 28), with the LBA it was writing.
+    if (write_blocks(state.scsi.dato.data, blocks) != blocks) {
+      printf("%s: write of %" PRIu64 " blocks at %" PRIu64 " failed.\n",
+             devid_string, blocks, lba);
+      do_scsi_error(SCSI_WRITE_FAULT, (int)lba);
+      break;
+    }
 
 #if defined(DEBUG_SCSI)
     printf("%s: WRITE  ofs=%" PRIu64 " size=%" PRIu64 "\n", devid_string, lba,

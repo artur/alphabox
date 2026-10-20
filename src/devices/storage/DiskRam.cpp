@@ -116,7 +116,9 @@ size_t CDiskRam::read_bytes(void *dest, size_t bytes) {
 }
 
 size_t CDiskRam::write_bytes(void *src, size_t bytes) {
-  if (state.byte_pos >= byte_size)
+  // A read-only RAM disk is not written, whoever asks: the SCSI path
+  // refuses first, and any other caller gets the short count.
+  if (read_only || state.byte_pos >= byte_size)
     return 0;
 
   // Clamp to the bytes left in the image. The old loop stopped one byte short
