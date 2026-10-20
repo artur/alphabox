@@ -29,6 +29,7 @@ gives its usage and variables.
 | --- | --- |
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
+| `boards_check.sh` | Every board of `src/platforms/Platforms.cpp` to its console prompt, with its own firmware from `roms/`: `show config` (and `show fru` on the EV7 boards), a PASS/FAIL line per board, normalised console logs. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
@@ -39,6 +40,16 @@ gives its usage and variables.
 | `unix_pal_probe.py` | A boot image that switches to the console's UNIX PALcode with SWPPAL, calls a dozen of its routines (optionally clock interrupts and a cache flush) and halts: the UNIX PALcode without a UNIX guest. |
 
 Give each `srm_run.sh` its own `PORT` to run several builds at once.
+
+`boards_check.sh <alphabox> <label> [board ...]` is the gate for a change to
+a shared board or chipset file, which `srm_run.sh` (the ES40 only) cannot
+see. It boots the boards one after another on ports 21600 and up, writes
+`$ALPHABOX_WORK/runs/boards-<label>/<board>.log` (normalised, so two labels
+diff) and the emulator's `%SYS-W-`, `%SYS-E-` and FAILURE lines, and exits
+0 only if every board reached its prompt. The machines that ship only an
+update utility (DS20L, ES45, DS25, DS15) first run it to install their
+console into the flash, as on a real machine. `boards_check.sh --diff A B`
+compares the command output of two runs.
 
 ### Configuration
 
