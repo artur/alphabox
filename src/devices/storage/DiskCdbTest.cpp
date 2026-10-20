@@ -611,6 +611,28 @@ void t_selection(Rig &r) {
   expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "the bus works afterwards");
 }
 
+/// DISK-11: malformed messages.
+void t_bad_messages(Rig &r) {
+  group("DISK-11 messages");
+  CCdbTestAdapter *a = r.a;
+  const std::vector<std::vector<u8>> streams = {
+      {0x80, 0x01, 0x00, 0x01},             // SDTR, length 0
+      {0x80, 0x01, 0xff, 0x01, 0x19},       // SDTR, length 255
+      {0x80, 0x01, 0x03, 0x01},             // SDTR cut short
+      {0x80, 0x01},                         // extended, no length
+      {0x80, 0x01, 0x05, 0x04, 1, 2, 3, 4}, // PPR
+  };
+  int i = 0;
+  for (const auto &m : streams) {
+    Res t = a->run(0, {0, 0, 0, 0, 0, 0}, {}, m);
+    char name[64];
+    snprintf(name, sizeof(name), "message stream %d", i++);
+    check(t.good() && t.msg_in.size() >= 1 && t.msg_in.size() < 300 &&
+              t.msg_in[0] == 0x07,
+          name, "%s msg_in %zu", t.why().c_str(), t.msg_in.size());
+  }
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -660,6 +682,7 @@ int main_cdbtest(int argc, char **argv) {
   t_messages(r);
   t_atapi(sys, root);
   t_selection(r);
+  t_bad_messages(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

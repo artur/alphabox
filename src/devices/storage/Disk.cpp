@@ -2746,8 +2746,13 @@ int CDisk::do_scsi_message() {
   unsigned int msg;
   unsigned int msglen;
 
+  // The initiator is offered 256 bytes; whatever it says, nothing past them
+  // is a message.
+  const unsigned int written = std::min<unsigned int>(
+      state.scsi.msgo.written, sizeof(state.scsi.msgo.data));
+
   msg = 0;
-  while (msg < state.scsi.msgo.written) {
+  while (msg < written) {
     if (state.scsi.msgo.data[msg] & 0x80) {
 
       // identify
@@ -2781,6 +2786,19 @@ int CDisk::do_scsi_message() {
 #if defined(DEBUG_SCSI)
         printf("%s: MSG: extended: ", devid_string);
 #endif
+        // EXTENDED MESSAGE: 01h, the length of what follows, the code and
+        // its arguments. One that is cut off, or whose length is not the
+        // code's own (SDTR 3, WDTR 2), is rejected and ends the stream: the
+        // bytes after it cannot be told apart from its arguments. The reply
+        // never runs past what was received or past msgi.data.
+        if (msg + 2 > written ||
+            msg + 2 + state.scsi.msgo.data[msg + 1] > written ||
+            state.scsi.msgo.data[msg + 1] == 0) {
+          state.scsi.msgi.available = 1;
+          state.scsi.msgi.data[0] = 0x07; // MESSAGE REJECT
+          msg = written;
+          break;
+        }
         msglen = state.scsi.msgo.data[msg + 1];
         msg += 2;
         switch (state.scsi.msgo.data[msg]) {
@@ -2788,6 +2806,11 @@ int CDisk::do_scsi_message() {
 #if defined(DEBUG_SCSI)
           printf("SDTR.\n");
 #endif
+          if (msglen != 3) {
+            state.scsi.msgi.available = 1;
+            state.scsi.msgi.data[0] = 0x07; // MESSAGE REJECT
+            break;
+          }
           state.scsi.msgi.available = msglen + 2;
           state.scsi.msgi.data[0] = 0x01;
           state.scsi.msgi.data[1] = msglen;
@@ -2804,6 +2827,11 @@ int CDisk::do_scsi_message() {
           // requires. Echoing the initiator's 16-bit offer contradicted the
           // INQUIRY data, and the Windows 2000 symc8xx driver rejects that
           // reply and resets the bus.
+          if (msglen != 2) {
+            state.scsi.msgi.available = 1;
+            state.scsi.msgi.data[0] = 0x07; // MESSAGE REJECT
+            break;
+          }
           state.scsi.msgi.available = 4;
           state.scsi.msgi.data[0] = 0x01; // extended message
           state.scsi.msgi.data[1] = 0x02; // length
