@@ -1886,7 +1886,17 @@ static int run_misc() {
   o = run<CAlphaCPU>(cvtql_v, 0, U64(0xFFFFFFFF80000000), FPCR_N);
   if (o.trapped || o.res != U64(0x8000000000000000))
     bad++;
-  printf("loads, stores, FPCR, CVTQL: %d failed\n", bad);
+  /* FNOP (CPYS F31,F31,F31) generates no exception, so no FEN fault with
+     the FPU disabled; any other CPYS does fault (docs/cpu-fidelity.md) */
+  cpu.state.fpen = false;
+  cpu.pal_entries = 0;
+  cpu.fp_exec(0x5fff041f);
+  if (cpu.pal_entries != 0)
+    bad++;
+  cpu.fp_exec((0x17u << 26) | (1u << 21) | (2u << 16) | (0x020 << 5) | 3);
+  if (cpu.pal_entries != 1)
+    bad++;
+  printf("loads, stores, FPCR, CVTQL, FNOP: %d failed\n", bad);
   return bad;
 }
 
