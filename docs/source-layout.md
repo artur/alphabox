@@ -356,7 +356,7 @@ The comments in `cpu/AlphaCPU.hpp` give the details.
 
 Where the emulated processor knowingly differs from a real 21264 is
 recorded in [cpu-fidelity.md](cpu-fidelity.md): unaligned accesses that do
-not trap, `FPCR[UNDZ]`, machine checks that are never raised, the oversized
+not trap, machine checks that are never raised, the oversized
 instruction cache. It also lists what was audited and found correct. Read
 it before "fixing" CPU behaviour, and add to it when a divergence is found
 or closed.

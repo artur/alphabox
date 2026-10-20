@@ -115,52 +115,6 @@ host atomic compare-and-swap, which is a bus error that killed the
 emulator. And the alignment trap no longer claims an access violation in
 `MM_STAT`.
 
-### An underflow with UNFD set and UNDZ clear gives the denormal
-
-A 21264 cannot produce a denormal result. With FPCR `UNFD` set and `UNDZ`
-clear, an IEEE instruction with `/S` that underflows traps "to supply a
-possible denormal result" (HRM Table 2-14), and the operating system's
-completion handler computes the denormal and carries on (ARM Appendix
-B.2). Alphabox computes the denormal itself and does not trap.
-
-That is what the architecture asks of a processor that can: with a trap
-disable bit set, "the hardware implementation sets the result of the
-operation to the nontrapping result value as specified in the IEEE
-standard ... If the implementation is unable to calculate the required
-result, it ignores the trap disable bit and signals a trap as usual" (ARM
-4.7.7.10); `UNDZ` clear makes that result "the non-trapping result
-(denorm, +0 or -0) specified in the IEEE standard" (ARM Table 4-11); and
-"a system that includes these bits may choose to complete computations
-involving non-finite values without the assistance of software
-completion" (ARM B.2).
-
-What a guest sees:
-
-- Linux runs programs with `UNFD` set and `UNDZ` clear unless a program
-  asks for underflows mapped to zero (`IEEE_MAP_UMZ`, the only thing that
-  sets `UNDZ`); NetBSD does the same once a program's first underflow has
-  set its sticky flag. A program built with `-mieee` gets gradual
-  underflow, as on hardware, without a trap and an emulated instruction
-  per underflow. Windows programs run with `UNFD` clear (FPCR
-  `8990000000000000` in the Direct3D investigation below) and never reach
-  this path.
-- The result is rounded on the format's own grid, denormals included, in
-  the instruction's rounding mode; it can be a denormal, a signed zero or
-  MIN. An S result is an S denormal in register format (exponent field
-  0, fraction in `<51:29>`).
-- `FPCR<UNF>` follows the architecture's definition of underflow, which
-  "does not depend on whether the result is inexact" (ARM 4.7.7.7), so an
-  exact denormal result sets it. IEEE's flag would not, and on hardware
-  Linux's completion handler clears it again. `FPCR<INE>` is set only when
-  the denormal is inexact, and an `/SUI` instruction traps for it unless
-  `INED` is set.
-- Without `/S`, with `UNFD` clear, or with `UNDZ` set as well, an underflow
-  is a true zero, with the trap the instruction and the FPCR enable, as on
-  the 21264.
-
-The JIT completes no underflow: a denormal result or a zero from nonzero
-operands sends the instruction to the interpreter.
-
 ### Machine checks are never raised
 
 `MCHK` is defined and never used. An unclaimed physical address returns data
@@ -505,6 +459,40 @@ and FPCR disable. These were settled in that round.
   returned MIN: `ALPHABOX_JIT_FPTEST` with those operands added showed 185
   disagreements, and shows none now.
 
+- **An underflow with `UNFD` set and `UNDZ` clear traps** (closed
+  2026-10-20). A 21264 cannot produce a denormal result. With `/U` and
+  `/S`, FPCR `UNFD` set and `UNDZ` clear the instruction traps "to supply
+  a possible denormal result" (HRM Table 2-14, p. 2-36; the EV6, EV67 and
+  EV68CB/DC manuals say the same), and the operating system's completion
+  handler computes the denormal. Only `UNFD` with `UNDZ` suppresses the
+  trap and writes a true zero. The ARM would allow an implementation to
+  compute the denormal itself: with a trap disable bit set, "the hardware
+  implementation sets the result of the operation to the nontrapping
+  result value as specified in the IEEE standard ... If the
+  implementation is unable to calculate the required result, it ignores
+  the trap disable bit and signals a trap as usual" (4.7.7.10, p. 4-79),
+  and `UNDZ` clear makes that result "the non-trapping result (denorm, +0
+  or -0) specified in the IEEE standard" (Table 4-11, p. 4-81). The 21264
+  does not compute it, and neither does Alphabox. Before 2026-10-20 the
+  interpreter flushed to zero without trapping (`UNDZ` was never read);
+  for a few hours it computed the denormal itself (commit `9ad20bc`),
+  which no 21264 does and which hid the completion handler's work.
+  What the trap leaves behind is what the existing underflow trap leaves:
+  `EXC_SUM<UNF>` and `<SWC>` set (HRM Table 5-9, p. 5-14), `<SET_UNF>` set
+  if `FPCR<UNF>` was clear, `<REG>` the destination register, and
+  `<SET_INE>` and `<INE>` for an `/SUI` instruction that is not
+  `INED`-disabled; `FPCR<UNF>` and `<INE>` are set, as the architecture
+  defines underflow, which "does not depend on whether the result is
+  inexact" (ARM 4.7.7.7). The destination register holds a true zero:
+  Table A-11 (HRM p. A-16) gives "Exponent underflow: +0", and A.8 says a
+  true zero is written. The manuals do not say what the register holds on
+  the trap "to supply a denormal", only that software supplies the
+  result, so the zero is an inference, the same one the plain `/U` trap
+  already made. A result that rounds up to MIN (FP-11) is not an
+  underflow and does not trap. The JIT completes no underflow: a denormal
+  result or a zero from nonzero operands sends the instruction to the
+  interpreter, so it never sees this trap.
+
 **On a guest.** The Gentoo install on the ES40 ([linux.md](linux.md))
 compiled one C program twice with gcc 15, with and without `-mieee`: it
 divides `DBL_MIN` by 3, halves it, divides `FLT_MIN` by 3, and converts
@@ -514,7 +502,7 @@ second. Linux runs both with `UNFD` set and `UNDZ` clear.
 
 | | before 2026-10-20 | now |
 | --- | --- | --- |
-| `-mieee` | `0x0p+0` three times | `0x0.5555555555555p-1022`, `0x0.8p-1022`, `0x1.555558p-128` (the IEEE results) |
+| `-mieee` | `0x0p+0` three times | `0x0.5555555555555p-1022`, `0x0.8p-1022`, `0x1.555558p-128` (the IEEE results, computed by the kernel's completion handler after the underflow trap) |
 | without | zeros; the conversion kills the program with `SIGFPE` | zeros (true zeros: no `/U`); the conversion gives 5076964154930102272, the low 64 bits of the double 1e30 |
 
 ### The exception path
@@ -695,5 +683,5 @@ a guest says whether the emulator can still run. The first audit's round
 returned for an overflow under chopped rounding, denormals worth half
 their value, memory barriers compiled to nothing) and one change that the
 handbook endorses but a guest must approve before it ships (`UNDZ`;
-settled on 2026-10-20 by computing the denormal, above).
+settled on 2026-10-20 by trapping as the 21264 does, above).
 Neither reference alone would have been enough.

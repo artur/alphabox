@@ -110,9 +110,10 @@ static Item items[] = {
      "VAX CVTGQ of exactly -2**63 is in range, not an integer overflow (ARM "
      "4.7.7.9, p. 4-79)"},
     {"DENORM", true,
-     "with /S, FPCR[UNFD] set and [UNDZ] clear, an underflow gives the IEEE "
-     "denormal result instead of a true zero (ARM 4.7.7.10 and 4.7.7.11, "
-     "p. 4-79; Table 4-11 bit 61)"},
+     "with /U and /S, FPCR[UNFD] set and [UNDZ] clear, an underflow traps "
+     "so that software can supply the denormal (21264 HRM Table 2-14, "
+     "p. 2-36: \"UNFD=1, UNDZ=0: Trap to supply a possible denormal "
+     "result\"); only UNFD with UNDZ suppresses the trap (ARM Table 4-11)"},
 };
 
 static Item *item(const char *id) {
@@ -465,20 +466,15 @@ static void ieee_result(Expect &e, const Ctx &c, u64 reg, bool den, bool zero,
      (ARM 4.7.5); the Alpha definition does not depend on whether
      the result is exact (4.7.7.7). */
   if (den || (zero && f.inexact)) {
-    if (c.S && c.U && (c.fpcr & FPCR_UNFD) && !(c.fpcr & FPCR_UNDZ)) {
-      /* The nontrapping IEEE result (4.7.7.10). */
-      e.res = reg;
-      e.det |= X_UNF;
-      if (f.inexact)
-        ieee_ine(e, c);
-    } else {
-      /* A true zero (4.7.7.7); zeroing is inexact (4.7.7.11). */
-      e.res = 0;
-      e.det |= X_UNF;
-      if (c.U && !(c.S && (c.fpcr & FPCR_UNFD)))
-        e.trap |= X_UNF;
-      ieee_ine(e, c);
-    }
+    /* A true zero (4.7.7.7); zeroing is inexact (4.7.7.11). With /S, UNFD
+       set and UNDZ clear the trap is still taken, so that software can
+       supply the denormal: HRM Table 2-14, "UNFD=1, UNDZ=0: Trap to supply
+       a possible denormal result". Only UNFD with UNDZ suppresses it. */
+    e.res = 0;
+    e.det |= X_UNF;
+    if (c.U && !(c.S && (c.fpcr & FPCR_UNFD) && (c.fpcr & FPCR_UNDZ)))
+      e.trap |= X_UNF;
+    ieee_ine(e, c);
     return;
   }
   e.res = reg;
@@ -1089,7 +1085,7 @@ static Tags classify(const Op &op, const Ctx &c, u64 a, u64 b,
   else if ((good.res & ~SIGN) == min && bad.res == 0)
     g.add("FP-11");
   else if (c.S && c.U && (c.fpcr & FPCR_UNFD) && !(c.fpcr & FPCR_UNDZ) &&
-           bad.res == 0 && ((good.res >> 52) & 0x7ff) == 0)
+           bad.res == 0 && good.res == 0 && ((good.exc & ~bad.exc) & X_UNF))
     g.add("DENORM");
   else
     g.unexplained = true;
@@ -1634,24 +1630,29 @@ static const Hand hands[] = {
     {nullptr, "4.7.7.10 UNFD without /S has no effect", "MULT", QU | QN,
      U64(0x0010000000000000), U64(0x3FE0000000000000), FPCR_N | FPCR_UNFD, 0,
      X_UNF | X_INE, X_UNF},
-    {"DENORM", "4.7.7.10: UNFD with /S, UNDZ clear: the exact denormal", "MULT",
+    /* HRM Table 2-14 (p. 2-36): UNFD=1, UNDZ=0 is "Trap to supply a
+       possible denormal result". The destination holds the true zero of
+       HRM Table A-11 ("Exponent underflow: +0") and the operating system's
+       completion handler replaces it; the documents say no more about the
+       register on this trap. */
+    {"DENORM", "HRM 2-14: UNFD with /S, UNDZ clear: traps, true zero", "MULT",
      QSU | QN, U64(0x0010000000000000), U64(0x3FE0000000000000),
-     FPCR_N | FPCR_UNFD, U64(0x0008000000000000), X_UNF, 0},
-    {"DENORM", "4.7.7.10: a negative denormal keeps its sign", "MULT", QSU | QN,
-     U64(0x8010000000000000), U64(0x3FE0000000000000), FPCR_N | FPCR_UNFD,
-     U64(0x8008000000000000), X_UNF, 0},
-    {"DENORM", "4.7.7.10: a rounded denormal is inexact (/SUI traps INE)",
-     "DIVT", QSUI | QN, U64(0x0010000000000000), U64(0x4008000000000000),
-     FPCR_N | FPCR_UNFD, U64(0x0005555555555555), X_UNF | X_INE, X_INE},
-    {"DENORM", "4.7.7.10: S denormal in register format", "MULS", QSU | QN,
-     U64(0x3810000000000000), U64(0x3FE0000000000000), FPCR_N | FPCR_UNFD,
-     U64(0x0008000000000000), X_UNF, 0},
-    {"DENORM", "4.7.7.10: below half the least denormal rounds to -0", "MULT",
+     FPCR_N | FPCR_UNFD, 0, X_UNF | X_INE, X_UNF},
+    {"DENORM", "HRM 2-14: a negative underflow is a true zero too", "MULT",
+     QSU | QN, U64(0x8010000000000000), U64(0x3FE0000000000000),
+     FPCR_N | FPCR_UNFD, 0, X_UNF | X_INE, X_UNF},
+    {"DENORM", "HRM 2-14: /SUI as well: the inexact traps with it", "DIVT",
+     QSUI | QN, U64(0x0010000000000000), U64(0x4008000000000000),
+     FPCR_N | FPCR_UNFD, 0, X_UNF | X_INE, X_UNF | X_INE},
+    {"DENORM", "HRM 2-14: an S underflow traps", "MULS", QSU | QN,
+     U64(0x3810000000000000), U64(0x3FE0000000000000), FPCR_N | FPCR_UNFD, 0,
+     X_UNF | X_INE, X_UNF},
+    {"DENORM", "HRM 2-14: below half the least denormal traps", "MULT",
      QSU | QN, U64(0x8000000000000001) | U64(0x0010000000000000),
-     U64(0x3C80000000000000), FPCR_N | FPCR_UNFD, SIGN, X_UNF | X_INE, 0},
-    {"DENORM", "4.7.7.10: plus infinity rounds a tiny value up", "MULT",
+     U64(0x3C80000000000000), FPCR_N | FPCR_UNFD, 0, X_UNF | X_INE, X_UNF},
+    {"DENORM", "HRM 2-14: rounding to plus infinity traps too", "MULT",
      QSU | QD, U64(0x0010000000000000), U64(0x0010000000000000),
-     (U64(3) << 58) | FPCR_UNFD, U64(0x0000000000000001), X_UNF | X_INE, 0},
+     (U64(3) << 58) | FPCR_UNFD, 0, X_UNF | X_INE, X_UNF},
     {"FP-11", "4.7.5: a true result of MIN - 1/2 LSB rounds to MIN", "MULT", QN,
      U64(0x3FEFFFFFFFFFFFFF), U64(0x0010000000000000), FPCR_N,
      U64(0x0010000000000000), X_INE, 0},
@@ -1736,9 +1737,9 @@ static const Hand hands[] = {
     {nullptr, "CVTTS: above S MAX + 1/2 LSB overflows", "CVTTS", QN, 0,
      U64(0x47EFFFFFF0000000), FPCR_N, U64(0x7FF0000000000000), X_OVF | X_INE,
      X_OVF},
-    {"DENORM", "CVTTS/SU, UNFD: 1.5 * 2^-149 rounds to the even 2^-148",
-     "CVTTS", QSU | QN, 0, U64(0x36A8000000000000), FPCR_N | FPCR_UNFD,
-     U64(0x0000000040000000), X_UNF | X_INE, 0},
+    {"DENORM", "CVTTS/SU, UNFD: 1.5 * 2^-149 underflows S and traps", "CVTTS",
+     QSU | QN, 0, U64(0x36A8000000000000), FPCR_N | FPCR_UNFD, 0, X_UNF | X_INE,
+     X_UNF},
     {nullptr, "CVTST of an S denormal is exact", "CVTST", 0, 0,
      U64(0x0000000020000000), FPCR_N, U64(0x36A0000000000000), 0, 0},
     {nullptr, "CVTST/S, DNZ: an S denormal is a signed zero", "CVTST", QS, 0,

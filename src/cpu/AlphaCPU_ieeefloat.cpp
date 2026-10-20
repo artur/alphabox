@@ -906,10 +906,10 @@ void CAlphaCPU::ieee_norm(UFP *r) {
  *   .
  *
  * Underflow:
- *   - UNF is always set in FPCR; /U traps unless /S and UNFD disable it.
- *   - With /S, UNFD set and UNDZ clear, the result is the IEEE denormal (or
- *     signed zero), inexact only if it is, and nothing traps for it.
- *   - Otherwise the result is a true zero and INE is set too.
+ *   - UNF is always set in FPCR; /U traps unless /S with UNFD and UNDZ
+ *     both set disables it. With /S, UNFD set and UNDZ clear it traps, so
+ *     that software can supply the denormal (HRM Table 2-14).
+ *   - The result is a true zero and INE is set too.
  *   - /SUI traps the inexact unless INED is set.
  *   .
  *
@@ -985,25 +985,13 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
 
   if (tiny) { /* underflow? */
     /* FPCR<UNF> records an underflow whether or not the result is exact
-       (ARM 4.7.7.7), and /U traps unless /S with UNFD disables it. */
-    ieee_trap(TRAP_UNF, ins & I_FTRP_U, FPCR_UNFD, ins);
-    if ((ins & I_FTRP_S) && (ins & I_FTRP_U) && (state.fpcr & FPCR_UNFD) &&
-        !(state.fpcr & FPCR_UNDZ)) {
-      /* The trap is disabled and UNDZ is clear: the result is "the
-         non-trapping result (denorm, +0 or -0) specified in the IEEE
-         standard" (ARM Table 4-11), which an implementation able to
-         calculate it must deliver (ARM 4.7.7.10). A 21264 traps here so
-         that software can supply it (HRM Table 2-14); Alphabox supplies it
-         itself. It is inexact only if bits were lost. See
-         docs/cpu-fidelity.md. */
-      res =
-          (((u64)r->sign) << FPR_V_SIGN) | ((r->frac >> FPR_GUARD) & FPR_FRAC);
-      if ((rndm == I_FRND_N) && (rndbits == stdrnd[dp])) /* tie: to even */
-        res &= ~(dp == DT_S ? U64(0x0000000020000000) : U64(1));
-      if (dp == DT_S) /* an S denormal: fraction in <51:29> */
-        res &= ~U64(0x000000001FFFFFFF);
-      return res;
-    }
+       (ARM 4.7.7.7). /U traps it, and /S with UNFD set disables the trap
+       only if UNDZ is set too. With UNFD set and UNDZ clear the trap is
+       taken "to supply a possible denormal result" (21264 HRM Table 2-14,
+       p. 2-36): the chip cannot make the denormal, so the operating
+       system's completion handler does. See docs/cpu-fidelity.md. */
+    ieee_trap(TRAP_UNF, ins & I_FTRP_U,
+              (state.fpcr & FPCR_UNDZ) ? FPCR_UNFD : 0, ins);
     ieee_trap(TRAP_INE, Q_SUI(ins), FPCR_INED, ins); /* set inexact */
     /* A true zero, not a signed one: ARM 4.7.7.7 says "a true zero (64 bits
        of zero) is always stored in the result register ... even if the
