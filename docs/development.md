@@ -175,6 +175,7 @@ and transfers. It writes the emulator's pid to `emulator.pid`: profile
 | `usb_snap.sh` | USB devices across a snapshot and a restore of a running Windows 2000. |
 | `wav_compare.py` | Compares a captured WAV with its reference. |
 | `cdb_test.sh` | The SCSI disk's and the 53C8xx's conformance test (`alphabox cdbtest`): status, sense, data and lengths of each command, and SCRIPTS programs, with no guest. |
+| `ide_test.sh` | The IDE controller's register-level test (`alphabox idetest`): task file, control block and bus master registers driven the way a driver does, with its own PRD tables in guest memory, no guest and no firmware. Each check cites ATA/ATAPI-6 or SFF-8038i. |
 | `win_storage.sh` | A storage controller (`CTRL=<class>`) with a FAT16 disk added to a Windows guest, which copies a file on it. |
 | `fat_disk.py` | Builds and inspects small FAT16 test disks. |
 | `aboot_disk.py` | A sparse disk SRM boots Linux from: boot block, BSD disklabel, aboot's `bootlx`, a `/boot` and a root partition ([linux.md](linux.md)). |
