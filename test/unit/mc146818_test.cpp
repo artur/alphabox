@@ -161,12 +161,41 @@ static void test_upper_ram() {
   CHECK_EQ(r.ram[0x90], 0xa5);
 }
 
+/// 12-hour mode: hours 1 to 12, PM in bit 7 (data sheet Table 3, p.12):
+/// 00:30 is 12 AM, 12:30 is 12 PM, in binary and BCD; and the time written
+/// back that way sets the clock to the same hour.
+static void test_12_hour() {
+  Rig r;
+  r.wr(0x0b, 0x04); // binary, 12 hour
+  r.at(2026, 10, 20, 0, 30, 0);
+  CHECK_EQ(r.rd(0x04), 0x0c);
+  r.at(2026, 10, 20, 12, 30, 0);
+  CHECK_EQ(r.rd(0x04), 0x8c);
+  r.at(2026, 10, 20, 13, 30, 0);
+  CHECK_EQ(r.rd(0x04), 0x81);
+  r.wr(0x0b, 0x00); // BCD, 12 hour
+  r.at(2026, 10, 20, 0, 30, 0);
+  CHECK_EQ(r.rd(0x04), 0x12);
+  r.at(2026, 10, 20, 23, 30, 0);
+  CHECK_EQ(r.rd(0x04), 0x91);
+  // read 12 AM and write it back: still half past midnight
+  r.at(2026, 10, 20, 0, 30, 0);
+  const u8 h = r.rd(0x04);
+  r.wr(0x0b, 0x80);
+  r.wr(0x04, h);
+  r.wr(0x0b, 0x00);
+  r.wr(0x0b, 0x06); // binary, 24 hour
+  CHECK_EQ(r.rd(0x04), 0);
+  CHECK_EQ(r.rd(0x02), 30);
+}
+
 int main() {
   test_read_time();
   test_set_time();
   test_arc_year();
   test_periodic_flag();
   test_upper_ram();
+  test_12_hour();
   printf("mc146818_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

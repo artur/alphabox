@@ -143,6 +143,10 @@ void CMc146818::write(u32 port, u8 data) {
 void CMc146818::generate_time_locked() {
   struct tm stime;
   utc_tm(host_seconds(clk.real_ns()) + offset, &stime);
+  // 12-hour mode counts 1 to 12, PM in bit 7 (data sheet Table 3, p.12:
+  // $01-$0C AM, $81-$8C PM): midnight is 12 AM and noon 12 PM, never 0.
+  const u8 pm = (stime.tm_hour >= 12) ? 0x80 : 0;
+  const int h12 = (stime.tm_hour % 12) ? (stime.tm_hour % 12) : 12;
   if (ram[0x0b] & 4) {
 
     // binary
@@ -152,7 +156,7 @@ void CMc146818::generate_time_locked() {
       ram[4] = (u8)(stime.tm_hour);
     else
       // 12-hour
-      ram[4] = (u8)(((stime.tm_hour / 12) ? 0x80 : 0) | (stime.tm_hour % 12));
+      ram[4] = (u8)(pm | h12);
     ram[6] = (u8)(stime.tm_wday + 1);
     ram[7] = (u8)(stime.tm_mday);
     ram[8] = (u8)(stime.tm_mon + 1);
@@ -165,11 +169,8 @@ void CMc146818::generate_time_locked() {
     ram[2] = (u8)(((stime.tm_min / 10) << 4) | (stime.tm_min % 10));
     if (ram[0x0b] & 2) // 24-hour
       ram[4] = (u8)(((stime.tm_hour / 10) << 4) | (stime.tm_hour % 10));
-    else { // 12-hour
-      ram[4] = (u8)(((stime.tm_hour / 12) ? 0x80 : 0) |
-                    (((stime.tm_hour % 12) / 10) << 4) |
-                    ((stime.tm_hour % 12) % 10));
-    }
+    else // 12-hour
+      ram[4] = (u8)(pm | ((h12 / 10) << 4) | (h12 % 10));
 
     ram[6] = (u8)(stime.tm_wday + 1);
     ram[7] = (u8)(((stime.tm_mday / 10) << 4) | (stime.tm_mday % 10));
