@@ -35,6 +35,8 @@
 
 #include "SystemComponent.hpp"
 #include "telnet.hpp"
+#include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 
@@ -70,6 +72,11 @@ private:
   void serial_menu();
   void drain_staging();
   bool launch_action(std::string &why);
+  void configure_client_socket();
+  bool send_output();
+  void wait_writable(std::chrono::steady_clock::time_point until);
+  void flush_output(int ms);
+  void menu_say(const char *s);
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
@@ -85,6 +92,15 @@ private:
   /// further interrupt ever comes (the console hangs mid-line). Recursive:
   /// the register paths call eval_interrupts and receive with it held.
   std::recursive_mutex m_regs;
+
+  /// Guest output on its way to the client (write(), send_output()).
+  std::mutex out_lock;
+  std::condition_variable out_cv;
+  std::string out_queue;   ///< queued by write(), under out_lock
+  bool out_kick = false;   ///< the queue grew since the thread last looked
+  size_t out_dropped = 0;  ///< oldest bytes discarded, not yet reported
+  std::string out_sending; ///< the thread's: taken from the queue, unsent
+  size_t out_sent = 0;     ///< how much of out_sending the socket took
   bool breakHit = false;
   const char *listenAddress = nullptr;
   bool threads_started = false; ///< past init: a failing `action` only warns

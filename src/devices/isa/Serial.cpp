@@ -61,10 +61,14 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
+#include <chrono>
 #include <string>
 #include <vector>
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <netdb.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
 extern char **environ;
@@ -78,6 +82,15 @@ extern char **environ;
 int iCounter = 0;
 
 #define FIFO_SIZE 1024
+
+/// Output kept for a client that is not reading (see write()).
+static const size_t OUT_QUEUE_MAX = 256 * 1024;
+
+#if defined(MSG_NOSIGNAL)
+static const int SEND_FLAGS = MSG_NOSIGNAL;
+#else
+static const int SEND_FLAGS = 0;
+#endif
 
 //#define DEBUG_SERIAL 1
 
@@ -255,6 +268,10 @@ void CSerial::stop_threads() {
   if (disabled || null_attach)
     return;
   StopThread = true;
+  {
+    std::lock_guard<std::mutex> g(out_lock);
+    out_cv.notify_one();
+  }
   if (myThread) {
     sprintf(buffer, "srl%d", state.iNumber);
     printf(" %s", buffer);
@@ -502,14 +519,97 @@ void CSerial::eval_interrupts() {
     theAli->pic_set_line(0, 4 - state.iNumber, pending);
 }
 
+/**
+ * Queue bytes for the client. The processors only append here (a THR
+ * write arrives with the UART's lock held); the port's thread hands the
+ * queue to the socket (send_output). A client that stops reading therefore
+ * costs queue space, never a processor blocked in send(): the queue keeps
+ * its newest bytes, as a terminal keeps the end of its scrollback.
+ **/
 void CSerial::write(const char *s, int dsize) {
-  if (disabled || null_attach)
+  if (disabled || null_attach || dsize <= 0)
     return; // null_attach: drop TX silently; no socket to send on
-  // The result is dropped on purpose: with SIGPIPE ignored (see main_sim) a
-  // telnet client that vanished turns this into EPIPE, and console output
-  // for a peer that is gone has nowhere to go. execute() spots the closed
-  // socket and goes back to waiting for a new connection.
-  (void)send(connectSocket, s, dsize, 0);
+  std::lock_guard<std::mutex> g(out_lock);
+  out_queue.append(s, (size_t)dsize);
+  if (out_queue.size() > OUT_QUEUE_MAX) {
+    // The oldest quarter goes at once, not a byte per write: each erase
+    // moves the whole queue.
+    const size_t excess = out_queue.size() - OUT_QUEUE_MAX * 3 / 4;
+    out_queue.erase(0, excess);
+    out_dropped += excess;
+  }
+  if (!out_kick) {
+    out_kick = true;
+    out_cv.notify_one();
+  }
+}
+
+/**
+ * Hand output to the client without blocking. The port's thread owns
+ * out_sending, what it took from the queue and the socket has not taken
+ * yet, so a slow client costs no copying under the lock. Returns false
+ * when the socket is full: the caller then waits for room (wait_writable)
+ * rather than trying again at once. Called on the port's thread, or with
+ * it stopped (the BREAK menu).
+ **/
+bool CSerial::send_output() {
+  if (connectSocket == INVALID_SOCKET)
+    return true;
+  for (;;) {
+    if (out_sent == out_sending.size()) {
+      out_sending.clear();
+      out_sent = 0;
+      size_t dropped;
+      {
+        std::lock_guard<std::mutex> g(out_lock);
+        out_sending.swap(out_queue);
+        dropped = out_dropped;
+        out_dropped = 0;
+      }
+      if (dropped)
+        printf("%%SRL-W-BEHIND: %s: the client is not reading; %zu bytes of "
+               "output dropped.\n",
+               devid_string, dropped);
+      if (out_sending.empty())
+        return true;
+    }
+    const ssize_t n = send(connectSocket, out_sending.data() + out_sent,
+                           out_sending.size() - out_sent, SEND_FLAGS);
+    if (n > 0)
+      out_sent += (size_t)n;
+    else if (n < 0 && errno == EINTR)
+      continue;
+    else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+      return false;
+    else
+      // A peer that vanished (EPIPE; SIGPIPE is ignored, see main_sim):
+      // the receive side notices the closed socket and reconnects.
+      return true;
+  }
+}
+
+/// Wait until the client socket has room again, or until `until`.
+void CSerial::wait_writable(std::chrono::steady_clock::time_point until) {
+  const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           until - std::chrono::steady_clock::now())
+                           .count();
+  const int timeout = ms < 1 ? 1 : (int)ms;
+#if defined(_WIN32)
+  WSAPOLLFD p = {(SOCKET)connectSocket, POLLWRNORM, 0};
+  WSAPoll(&p, 1, timeout);
+#else
+  pollfd p = {(int)connectSocket, POLLOUT, 0};
+  poll(&p, 1, timeout);
+#endif
+}
+
+/// Send everything now, waiting up to `ms` for a slow client: the BREAK
+/// menu's prompts and the last output before the port's thread stops.
+void CSerial::flush_output(int ms) {
+  const auto end =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+  while (!send_output() && std::chrono::steady_clock::now() < end)
+    wait_writable(end);
 }
 
 void CSerial::write_cstr(const char *s) { write(s, (int)strlen(s)); }
@@ -573,12 +673,29 @@ void CSerial::run() {
   if (disabled)
     return;
   try {
-    for (;;) {
-      if (StopThread)
-        return;
-      execute();
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    // Output goes out as soon as a processor queues it (write() wakes this
+    // thread); the receive side keeps its own 5 ms tick. While the client
+    // is behind, the thread waits for room in the socket instead.
+    auto next_tick = std::chrono::steady_clock::now();
+    bool blocked = false;
+    while (!StopThread) {
+      if (blocked)
+        wait_writable(next_tick);
+      {
+        std::unique_lock<std::mutex> lk(out_lock);
+        if (!blocked)
+          out_cv.wait_until(lk, next_tick,
+                            [this] { return out_kick || StopThread; });
+        out_kick = false;
+      }
+      blocked = !send_output();
+      if (std::chrono::steady_clock::now() >= next_tick) {
+        execute();
+        next_tick =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+      }
     }
+    flush_output(1000); // what the guest printed last, before stopping
   }
 
   catch (CException &e) {
@@ -604,6 +721,13 @@ void CSerial::check_state() {
     FAILURE(Thread, "Serial thread has died");
 }
 
+/// A line of the BREAK menu, sent at once: the port's thread is stopped
+/// while the menu is open.
+void CSerial::menu_say(const char *s) {
+  write_cstr(s);
+  flush_output(2000);
+}
+
 void CSerial::serial_menu() {
   fd_set readset;
   unsigned char buffer[FIFO_SIZE + 1];
@@ -613,20 +737,20 @@ void CSerial::serial_menu() {
 
   cSystem->stop_threads();
 
-  write_cstr("\r\n<BREAK> received. What do you want to do?\r\n");
-  write_cstr("     0. Continue\r\n");
-  write_cstr("     1. Exit emulator gracefully\r\n");
-  write_cstr("     2. Abort emulator (no changes saved)\r\n");
-  write_cstr("     3. Save state to autosave.axp and continue\r\n");
-  write_cstr("     4. Load state from autosave.axp and continue\r\n");
+  menu_say("\r\n<BREAK> received. What do you want to do?\r\n");
+  menu_say("     0. Continue\r\n");
+  menu_say("     1. Exit emulator gracefully\r\n");
+  menu_say("     2. Abort emulator (no changes saved)\r\n");
+  menu_say("     3. Save state to autosave.axp and continue\r\n");
+  menu_say("     4. Load state from autosave.axp and continue\r\n");
   while (!exitLoop) {
     FD_ZERO(&readset);
     FD_SET(connectSocket, &readset);
     tv.tv_sec = 60;
     tv.tv_usec = 0;
     if (select(connectSocket + 1, &readset, NULL, NULL, &tv) <= 0) {
-      write_cstr("%SRL-I-TIMEOUT: no timely answer received. Continuing "
-                 "emulation.\r\n");
+      menu_say("%SRL-I-TIMEOUT: no timely answer received. Continuing "
+               "emulation.\r\n");
       break; // leave loop
     }
 
@@ -646,36 +770,36 @@ void CSerial::serial_menu() {
     }
     switch (buffer[0]) {
     case '0':
-      write_cstr("%SRL-I-CONTINUE: continuing emulation.\r\n");
+      menu_say("%SRL-I-CONTINUE: continuing emulation.\r\n");
       exitLoop = true;
       break;
 
     case '1':
-      write_cstr("%SRL-I-EXIT: exiting emulation gracefully.\r\n");
+      menu_say("%SRL-I-EXIT: exiting emulation gracefully.\r\n");
       FAILURE(Graceful, "Graceful exit");
       break;
 
     case '2':
-      write_cstr("%SRL-I-ABORT: aborting emulation.\r\n");
+      menu_say("%SRL-I-ABORT: aborting emulation.\r\n");
       FAILURE(Abort, "Aborting");
       break;
 
     case '3':
-      write_cstr("%SRL-I-SAVESTATE: Saving state to autosave.axp.\r\n");
+      menu_say("%SRL-I-SAVESTATE: Saving state to autosave.axp.\r\n");
       cSystem->SaveState("autosave.axp");
-      write_cstr("%SRL-I-CONTINUE: continuing emulation.\r\n");
+      menu_say("%SRL-I-CONTINUE: continuing emulation.\r\n");
       exitLoop = true;
       break;
 
     case '4':
-      write_cstr("%SRL-I-LOADSTATE: Loading state from autosave.axp.\r\n");
+      menu_say("%SRL-I-LOADSTATE: Loading state from autosave.axp.\r\n");
       cSystem->RestoreState("autosave.axp");
-      write_cstr("%SRL-I-CONTINUE: continuing emulation.\r\n");
+      menu_say("%SRL-I-CONTINUE: continuing emulation.\r\n");
       exitLoop = true;
       break;
 
     default:
-      write_cstr("%SRL-W-INVALID: Not a valid answer.\r\n");
+      menu_say("%SRL-W-INVALID: Not a valid answer.\r\n");
       break;
     }
   }
@@ -948,6 +1072,28 @@ int CSerial::RestoreState(FILE *f) {
 }
 
 /**
+ * Set up an accepted client socket. Non-blocking, so that send_output
+ * never waits for a slow client; TCP_NODELAY, because the queue already
+ * batches what is ready and Nagle's algorithm would hold the rest of a
+ * line until the client's delayed ACK.
+ **/
+void CSerial::configure_client_socket() {
+  int one = 1;
+  setsockopt(connectSocket, IPPROTO_TCP, TCP_NODELAY, (char *)&one,
+             sizeof(one));
+#if defined(SO_NOSIGPIPE)
+  setsockopt(connectSocket, SOL_SOCKET, SO_NOSIGPIPE, (char *)&one,
+             sizeof(one));
+#endif
+#if defined(_WIN32)
+  u_long nb = 1;
+  ioctlsocket(connectSocket, FIONBIO, &nb);
+#else
+  fcntl(connectSocket, F_SETFL, fcntl(connectSocket, F_GETFL) | O_NONBLOCK);
+#endif
+}
+
+/**
  * Split the `action` command line into words. Blanks separate words; a
  * double-quoted stretch keeps its blanks and loses its quotes, so
  * `"c:\Program Files\PuTTY\putty.exe" telnet://localhost:8000` is two
@@ -1068,6 +1214,15 @@ void CSerial::WaitForConnection() {
     connectSocket =
         (int)accept(listenSocket, (struct sockaddr *)&Address, &nAddressSize);
   }
+  configure_client_socket();
+  {
+    // What the guest printed while nobody was connected is not kept.
+    std::lock_guard<std::mutex> g(out_lock);
+    out_queue.clear();
+    out_dropped = 0;
+  }
+  out_sending.clear();
+  out_sent = 0;
 
   iac_carry_len = 0;
   in_subneg = false;
