@@ -36,6 +36,7 @@
 #include "SystemComponent.hpp"
 #include "telnet.hpp"
 #include <mutex>
+#include <string>
 
 #define STAGE_SIZE 8192
 
@@ -68,6 +69,7 @@ public:
 private:
   void serial_menu();
   void drain_staging();
+  bool launch_action(std::string &why);
 
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
@@ -85,6 +87,10 @@ private:
   std::recursive_mutex m_regs;
   bool breakHit = false;
   const char *listenAddress = nullptr;
+  bool threads_started = false; ///< past init: a failing `action` only warns
+#if !defined(_WIN32)
+  pid_t action_pid = -1; ///< the last `action` program started
+#endif
 
   unsigned char
       iac_carry[8];  // Partial telnet sequence carried across recv() calls

@@ -61,6 +61,14 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
+#include <string>
+#include <vector>
+#if !defined(_WIN32)
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
+
 #define UART_BASE_CLOCK 1843200
 #define CYCLE_TIME_MS 20
 
@@ -219,6 +227,7 @@ void CSerial::start_threads() {
     sprintf(buffer, "srl%d", state.iNumber);
     printf(" %s", buffer);
     StopThread = false;
+    threads_started = true;
     myThread = std::make_unique<std::thread>([this]() { this->run(); });
   }
 }
@@ -920,65 +929,102 @@ int CSerial::RestoreState(FILE *f) {
   return 0;
 }
 
+/**
+ * Split the `action` command line into words. Blanks separate words; a
+ * double-quoted stretch keeps its blanks and loses its quotes, so
+ * `"c:\Program Files\PuTTY\putty.exe" telnet://localhost:8000` is two
+ * words. A quote left open runs to the end of the line.
+ **/
+static std::vector<std::string> split_command(const char *line) {
+  std::vector<std::string> words;
+  std::string word;
+  bool in_word = false, quoted = false;
+  for (const char *p = line; *p; p++) {
+    if (*p == '"') {
+      quoted = !quoted;
+      in_word = true;
+    } else if ((*p == ' ' || *p == '\t') && !quoted) {
+      if (in_word)
+        words.push_back(word);
+      word.clear();
+      in_word = false;
+    } else {
+      word += *p;
+      in_word = true;
+    }
+  }
+  if (in_word)
+    words.push_back(word);
+  return words;
+}
+
+/**
+ * Start the `action` program (typically a telnet client pointed at this
+ * port) without waiting for it. Returns false, with the reason in `why`,
+ * when it could not be started. A launcher that exits at once (`open`, a
+ * script that backgrounds the client) is a success.
+ **/
+bool CSerial::launch_action(std::string &why) {
+  const std::vector<std::string> words =
+      split_command(myCfg->get_text_value("action", ""));
+  if (words.empty())
+    return true;
+#if defined(_WIN32)
+  // The C runtime joins the arguments with blanks, so a word that has one
+  // must carry its quotes again.
+  std::vector<std::string> quoted;
+  for (const std::string &w : words)
+    quoted.push_back(w.find(' ') != std::string::npos ? "\"" + w + "\"" : w);
+  std::vector<const char *> argv;
+  for (const std::string &w : quoted)
+    argv.push_back(w.c_str());
+  argv.push_back(nullptr);
+  if (_spawnvp(_P_NOWAIT, words[0].c_str(), argv.data()) < 0) {
+    why = strerror(errno);
+    return false;
+  }
+#else
+  // A child that has finished since the previous launch is collected here,
+  // so a port that reconnects all day leaves no zombies behind.
+  if (action_pid > 0 && waitpid(action_pid, nullptr, WNOHANG) == action_pid)
+    action_pid = -1;
+  // posix_spawnp, not fork: this runs on the port's thread while the
+  // processors run, and the child of a multi-threaded fork may only call
+  // async-signal-safe functions before exec.
+  std::vector<char *> argv;
+  for (const std::string &w : words)
+    argv.push_back(const_cast<char *>(w.c_str()));
+  argv.push_back(nullptr);
+  pid_t pid;
+  const int err =
+      posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), environ);
+  if (err) {
+    why = strerror(err);
+    return false;
+  }
+  action_pid = pid;
+#endif
+  return true;
+}
+
 void CSerial::WaitForConnection() {
   struct sockaddr_in Address;
   socklen_t nAddressSize = sizeof(struct sockaddr_in);
   const char *telnet_options = "%c%c%c";
   char buffer[8];
   char s[1000];
-  char *nargv = s;
-  int i = 0;
 
-  char s2[200];
-  char *argv[20];
-
-  strncpy(s, myCfg->get_text_value("action", ""), 999);
-  s[999] = '\0';
-
-  // printf("%s: Specified : %s\n",devid_string,s);
-  if (strcmp(s, "")) {
-
-    // spawn external program (telnet client)...
-    while (*nargv) {
-      argv[i] = nargv;
-      if (nargv[0] == '\"')
-        nargv = strchr(nargv + 1, '\"');
-      if (nargv)
-        nargv = strchr(nargv, ' ');
-      if (!nargv)
-        break;
-      *nargv++ = '\0';
-      i++;
-      argv[i] = NULL;
-    }
-
-    argv[i + 1] = NULL;
-    strcpy(s2, argv[0]);
-    nargv = s2;
-    if (nargv[0] == '\"') {
-      nargv++;
-      *(strchr(nargv, '\"')) = '\0';
-    }
-
-    // printf("%s: Starting %s\n", devid_string,nargv);
-#if defined(_WIN32)
-    if (_spawnvp(_P_NOWAIT, nargv, argv) < 0)
-      FAILURE_1(Runtime, "Exec of '%s' has failed.\n", argv[0]);
-#elif !defined(__VMS)
-    pid_t child;
-    int status;
-    if (!(child = fork())) {
-      execvp(argv[0], argv);
-      FAILURE_1(Runtime, "Exec of '%s' failed.\n", argv[0]);
-    } else {
-      sleep(1);                         // give it a chance to start up.
-      waitpid(child, &status, WNOHANG); // reap it, if needed.
-      if (kill(child, 0) < 0) {         // uh oh, no kiddo.
-        FAILURE_1(Runtime, "Exec of '%s' has failed.\n", argv[0]);
-      }
-    }
-#endif
+  std::string why;
+  if (!launch_action(why)) {
+    // At startup a bad `action` is a configuration error; later (a client
+    // went away) the port keeps waiting for one to come back by hand.
+    if (!threads_started)
+      FAILURE_2(Configuration, "%s: cannot start the action program: %s",
+                devid_string, why.c_str());
+    printf("%%SRL-W-ACTION: %s: cannot start the action program: %s\n",
+           devid_string, why.c_str());
   }
+
   Address.sin_addr.s_addr = INADDR_ANY;
   Address.sin_port = htons((u16)listenPort);
   Address.sin_family = AF_INET;
