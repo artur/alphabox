@@ -82,7 +82,7 @@ public:
 private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
-  bool StopThread;
+  std::atomic_bool StopThread{false};
 
   std::mutex kbdLock;
 

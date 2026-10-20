@@ -375,6 +375,17 @@ configure_file(src/config.hpp.in src/config.hpp)
 
 install(TARGETS alphabox DESTINATION bin)
 
+# Unit tests: one device's source built with the rest of the machine stubbed
+# out, driven through its registers (test/unit/). `ctest --test-dir <lane>`
+# runs them; each is also a plain executable in the lane.
+enable_testing()
+add_executable(kbc_test test/unit/kbc_test.cpp
+    src/devices/isa/Keyboard.cpp src/gui/scancodes.cpp)
+target_include_directories(kbc_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(kbc_test Threads::Threads)
+add_test(NAME kbc COMMAND kbc_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")
