@@ -123,7 +123,7 @@ void CKeyboard::init() {
   state.mouse.sample_rate = 100;   // reports per second
   state.mouse.resolution_cpmm = 4; // 4 counts per millimeter
   state.mouse.scaling = 1;         /* 1:1 (default) */
-  state.mouse.mode = MOUSE_MODE_RESET;
+  state.mouse.mode = MOUSE_MODE_STREAM; // after its power-on self-test
   state.mouse.enable = 0;
   state.mouse.delayed_dx = 0;
   state.mouse.delayed_dy = 0;
@@ -1238,10 +1238,24 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
   // Command bytes (E6..FF) never collide with parameter values (sample rates
   // <= 200 = C8h, resolutions 0-3), so one that arrives while a parameter is
   // expected aborts the pending command and is executed instead.
+  //
+  // A parameter that is not one of the values the command takes gets Resend
+  // (FE), and the mouse still waits for the parameter. The valid values are
+  // those in Chapweske, "The PS/2 Mouse Interface" (2003), Command Set: E8h
+  // takes 0-3, F3h 10, 20, 40, 60, 80, 100 or 200; the mouse sends Resend
+  // and Error "the same as they do as host-to-device commands", and the
+  // keyboard sends Resend "following receipt of an invalid input" (IBM
+  // 84F9735, Common Interfaces, Keyboards p. 19).
   if (state.expecting_mouse_parameter && value < 0xE6) {
     state.expecting_mouse_parameter = 0;
     switch (state.last_mouse_command) {
     case 0xf3: // Set Mouse Sample Rate
+      if (value != 10 && value != 20 && value != 40 && value != 60 &&
+          value != 80 && value != 100 && value != 200) {
+        state.expecting_mouse_parameter = 1;
+        controller_enQ(0xFE, KBC_SRC_AUX); // Resend
+        break;
+      }
       state.mouse.sample_rate = value;
       if ((value == 200) && (!state.mouse.im_request)) {
         state.mouse.im_request = 1;
@@ -1271,8 +1285,10 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       case 3:
         state.mouse.resolution_cpmm = 8;
         break;
-      default: // not a resolution: ignored
-        break;
+      default: // not a resolution
+        state.expecting_mouse_parameter = 1;
+        controller_enQ(0xFE, KBC_SRC_AUX); // Resend
+        return;
       }
       discard_mouse_motion(); // resets the movement counters
 
@@ -1360,10 +1376,12 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       state.expecting_mouse_parameter = 1;
       break;
 
-    case 0xf4: // Enable (in stream mode)
+    case 0xf4: // Enable Data Reporting
+      // Reporting matters in stream mode only; a mouse in remote mode stays
+      // there (Chapweske, Command Set, F4h). The interface clock is the
+      // controller's: only A7, A8 and its command byte change it (IBM
+      // 84F9735, Keyboard/Auxiliary Device Controller pp. 10-12).
       state.mouse.enable = 1;
-      state.mouse.mode = MOUSE_MODE_STREAM;
-      set_aux_clock_enable(1);
       discard_mouse_motion();
       controller_enQ(0xFA, KBC_SRC_AUX); // ACK
       break;
@@ -1388,7 +1406,9 @@ void CKeyboard::ctrl_to_mouse(u8 value) {
       state.mouse.sample_rate = 100;   /* reports per second (default) */
       state.mouse.resolution_cpmm = 4; /* 4 counts per millimeter (default) */
       state.mouse.scaling = 1;         /* 1:1 (default) */
-      state.mouse.mode = MOUSE_MODE_RESET;
+      // after its self-test and ID the mouse is in stream mode (Chapweske,
+      // Reset Mode)
+      state.mouse.mode = MOUSE_MODE_STREAM;
       state.mouse.enable = 0;
       discard_mouse_motion();
       state.mouse.im_mode = 0;
@@ -1759,6 +1779,10 @@ int CKeyboard::RestoreState(FILE *f) {
     return -1;
   }
 
+  // Before 2026-10 the mouse stayed in "reset mode" after FF until F4
+  // forced stream mode; it is stream mode with reporting off.
+  if (restored.mouse.mode == MOUSE_MODE_RESET)
+    restored.mouse.mode = MOUSE_MODE_STREAM;
   {
     std::lock_guard<std::mutex> guard(kbdLock);
     state = restored;

@@ -101,6 +101,13 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   `D1` with bit 0 clear) does not reset the machine. `C1`/`C2` and the
   vendor commands outside IBM's list (`A0`, `A1`, `AF`, `AC`) are not
   modelled; the ALi datasheet does not list its firmware's commands.
+- The mouse follows the PS/2 mouse command set as A. Chapweske's "The
+  PS/2 Mouse Interface" (2003) describes it; IBM's and Microsoft's
+  documents for it are not public. A resolution other than 0-3 or a
+  sample rate other than 10, 20, 40, 60, 80, 100 or 200 gets Resend (`FE`)
+  and the mouse waits for the value again. Enable (`F4`) turns reporting
+  on in whichever mode the mouse is in, and does not touch the
+  controller's command byte. After its reset the mouse is in stream mode.
 
 ### SCSI
 

@@ -44,6 +44,8 @@
 #define BX_KBD_ELEMENTS 16
 #define BX_MOUSE_BUFF_SIZE 48
 
+/// Reset is transient (the self-test, then stream mode); only state files
+/// from before 2026-10 hold it, and RestoreState turns it into stream.
 #define MOUSE_MODE_RESET 10
 #define MOUSE_MODE_STREAM 11
 #define MOUSE_MODE_REMOTE 12
@@ -171,14 +173,17 @@ private:
       u8 saved_mode; // the mode prior to entering wrap mode
       bool enable;
 
+      /// E9 byte 1: bit 6 remote mode, 5 reporting enabled, 4 scaling 2:1,
+      /// 3 always 0, 2 left, 1 middle, 0 right (Chapweske, "The PS/2 Mouse
+      /// Interface", 2003, Command Set, E9h). button_status has bit 0 left,
+      /// 1 right, 2 middle.
       u8 get_status_byte() {
-
-        // top bit is 0 , bit 6 is 1 if remote mode.
         u8 ret = (u8)((mode == MOUSE_MODE_REMOTE) ? 0x40 : 0);
         ret |= (enable << 5);
         ret |= (scaling == 1) ? 0 : (1 << 4);
         ret |= ((button_status & 0x1) << 2);
-        ret |= ((button_status & 0x2) << 0);
+        ret |= ((button_status & 0x4) >> 1);
+        ret |= ((button_status & 0x2) >> 1);
         return ret;
       }
 

@@ -406,6 +406,46 @@ static void test_key_range() {
   check("out-of-range keys", drain(), "");
 }
 
+/// KBD-03: the E9 status byte: bit 0 right, bit 1 middle, bit 2 left.
+static void test_mouse_status_buttons() {
+  fresh();
+  mouse_streaming();
+  // status byte 1 is 0x20 (reporting on) plus the buttons
+  motion(0, 0, 0, 0x02); // right
+  check("E9 with right held", aux({0xE9}).substr(0, 7), "mfa m21");
+  motion(0, 0, 0, 0x04); // middle
+  check("E9 with middle held", aux({0xE9}).substr(0, 7), "mfa m22");
+  motion(0, 0, 0, 0x01); // left
+  check("E9 with left held", aux({0xE9}).substr(0, 7), "mfa m24");
+}
+
+/// KBD-04: an invalid resolution or rate gets Resend, never silence.
+static void test_mouse_bad_parameters() {
+  fresh();
+  check("E8 04", aux({0xE8, 0x04}), "mfa mfe");
+  check("E8 03 after the Resend", aux({0x03}), "mfa");
+  check("E9 reads resolution 3", aux({0xE9}), "mfa m00 m03 m64");
+  check("F3 00", aux({0xF3, 0x00}), "mfa mfe");
+  check("F3 then a command aborts it", aux({0xF2}), "mfa m00");
+}
+
+/// KBD-05: F4 neither leaves remote mode nor changes the command byte.
+static void test_mouse_enable_keeps_mode() {
+  fresh();
+  out64(0xA8);
+  check("remote mode, enable", aux({0xF0, 0xF4}), "mfa mfa");
+  check("E9 status: remote, enabled", aux({0xE9}).substr(0, 7), "mfa m60");
+  check("remote mode: no stream packet", motion(4, 0, 0, 0), "");
+  check("remote mode: EB reads it", aux({0xEB}), "mfa m08 m04 m00");
+  fresh();
+  out64(0xA7);
+  aux({0xF4});
+  out64(0x20);
+  const std::string ccb = drain();
+  check_true("A7, D4 F4: the command byte keeps the aux disable bit",
+             ccb.size() == 2 && (strtoul(ccb.c_str(), 0, 16) & 0x20) != 0);
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -419,6 +459,9 @@ int main() {
   test_reset_enables_scanning();
   test_restore_validation();
   test_key_range();
+  test_mouse_status_buttons();
+  test_mouse_bad_parameters();
+  test_mouse_enable_keeps_mode();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }
