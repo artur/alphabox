@@ -93,20 +93,23 @@ void segv_handler(int signum) {
  * in check mode, the machine it describes).
  **/
 static CConfigurator *load_configuration(const char *filename) {
-  char *ch1;
-  size_t ll1;
+  // Read to the end rather than ask for the size first: a pipe
+  // (alphabox run <(generator)) has none.
   FILE *f = fopen(filename, "rb");
   if (f == NULL)
-    FAILURE(File, "configuration file");
-  fseek(f, 0, SEEK_END);
-  ll1 = ftell(f);
-  ch1 = (char *)calloc(ll1, 1);
-  fseek(f, 0, SEEK_SET);
-  ll1 = fread(ch1, 1, ll1, f);
-  CConfigurator *cfg = new CConfigurator(0, 0, 0, ch1, ll1);
+    FAILURE_2(File, "cannot open the configuration file %s: %s", filename,
+              strerror(errno));
+  std::string text;
+  char buf[65536];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+    text.append(buf, n);
+  const int err = ferror(f) ? errno : 0;
   fclose(f);
-  free(ch1);
-  return cfg;
+  if (err)
+    FAILURE_2(File, "cannot read the configuration file %s: %s", filename,
+              strerror(err));
+  return new CConfigurator(0, 0, 0, text.data(), text.size(), filename);
 }
 
 /**

@@ -35,8 +35,14 @@
 
 #include "StdAfx.hpp"
 
-#define CFG_MAX_CHILDREN 25
-#define CFG_MAX_VALUES 50
+#include <string>
+#include <vector>
+
+/// How deep sections may nest. A machine is at most five deep (machine,
+/// bridge, bridge, controller, disk); anything near this is a broken file.
+#define CFG_MAX_DEPTH 16
+/// The longest name or class a section or value may have.
+#define CFG_MAX_NAME 255
 
 typedef enum {
   c_none,
@@ -85,12 +91,15 @@ typedef enum {
 
 class CConfigurator {
 public:
+  /**
+   * The master configurator: parse `text` (a configuration file, read from
+   * `source`, the name messages give) and initialize the sections it holds.
+   * With a parent: a section the emulator adds itself (initialize()), its
+   * body in `text` and no place in a file.
+   **/
   CConfigurator(class CConfigurator *parent, char *name, char *value,
-                char *text, size_t textlen);
+                const char *text, size_t textlen, const char *source = nullptr);
   ~CConfigurator(void);
-
-  char *strip_string(char *c);
-  void add_value(char *n, char *v);
 
   char *get_text_value(const char *n) { return get_text_value(n, (char *)0); };
   char *get_text_value(const char *n, const char *def);
@@ -132,25 +141,39 @@ public:
   void dump(FILE *f, int depth = 0);
 
 private:
+  /// A section the parser found in the file, at line:col.
+  CConfigurator(class CConfigurator *parent, char *name, char *value, int line,
+                int col);
+  void parse(class CConfigLexer &lex, int depth);
+  void add_value(char *n, char *v, int line, int col);
+  /// "file:line:col: " for this section, or "" for one the emulator added.
+  std::string place() const;
+  void initialize_section();
   void check_device();
   void create_device(int pcibus, int pcidev, int idebus, int idedev,
                      int fdcbus);
   void initialize_child(CConfigurator *child);
+  void add_child(const char *name, const char *value, const char *text);
   const struct platform_config &board();
 
   class CConfigurator *pParent;
-  class CConfigurator *pChildren[CFG_MAX_CHILDREN];
-  int iNumChildren;
+  std::vector<CConfigurator *> pChildren;
   char *myName;
   char *myValue;
   void *myDevice;
   classid myClassId;
   int myFlags;
   bool myAdded; ///< added by initialize(), not named in the file
-  int iNumValues;
+  int myLine;   ///< where the section's name is (0: added)
+  int myCol;
+  /// The values, in the file's order. Devices keep the char pointers, so
+  /// they are never freed or moved.
   struct SCfg_Value {
     char *name;
     char *value;
-  } pValues[CFG_MAX_VALUES];
+    int line; ///< where the value's name is (0: no place in a file)
+    int col;
+  };
+  std::vector<SCfg_Value> pValues;
 };
 #endif //! defined(__CONFIGURATOR_H__)

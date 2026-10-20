@@ -39,7 +39,7 @@ public:
   explicit CException(const std::string &msg = std::string())
       : m_msg(msg), m_text(msg) {}
   CException(const std::string &msg, const std::string &arg)
-      : m_msg(msg), m_text(msg) {
+      : m_msg(msg), m_text(msg), m_where(arg) {
     if (!arg.empty()) {
       m_msg.append(": ");
       m_msg.append(arg);
@@ -53,6 +53,8 @@ public:
   /// The message without where it was thrown (FAILURE's source location):
   /// what a user is shown when the source location means nothing to them.
   const std::string &text() const { return m_text; }
+  /// Where it was thrown (the second argument), or "".
+  const std::string &where() const { return m_where; }
 
   /// "name: message", or the name alone when there is no message.
   std::string displayText() const {
@@ -67,6 +69,7 @@ public:
 private:
   std::string m_msg;
   std::string m_text;
+  std::string m_where;
 };
 
 #define ALPHABOX_EXCEPTION(CLS, BASE, NAME)                                    \

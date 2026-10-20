@@ -1,0 +1,22 @@
+# Each file here must be refused (cfg_corpus.py): exit status 1, and an
+# error at file:line:col that says the text. Columns count bytes from 1.
+# file  line:col  text the error must contain (case does not matter)
+bad-platform.cfg 1:1 Unknown platform es99
+bad-slot.cfg 7:3 no such PCI slot
+chained-equals.cfg 4:12 expected ';'
+extra-brace.cfg 8:1 '}' closes no section
+file-ends-after-name.cfg 8:5 found the end of the file
+illegal-char.cfg 10:26 Illegal character ':'
+lone-slash.cfg 4:16 Illegal character '/'
+missing-equals.cfg 4:6 expected '=' after foo
+missing-semicolon-before-brace.cfg 11:3 expected ';' after the value of lpt.outfile
+missing-semicolon.cfg 5:3 expected ';' after the value of time
+missing-value.cfg 4:21 expected a value
+name-missing.cfg 7:3 expected a name, found '{'
+quoted-name.cfg 4:3 expected a name
+unclosed-brace.cfg 1:1 sys0 (tsunami) is not closed
+unclosed-comment.cfg 8:1 comment opened here is not closed
+unclosed-string-eof.cfg 8:5 quoted value opened here is not closed
+unclosed-string.cfg 4:13 does not end on its line
+unknown-class.cfg 7:3 Class foo for pci0.1 not known
+unquoted-spaces.cfg 11:30 must be quoted

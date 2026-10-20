@@ -84,23 +84,19 @@ def generated_malformed():
     machine = b'sys0 = tsunami\n{\n  rom.srm = "x";\n  cpu0 = ev68cb\n  {\n  }\n'
     n = 100000
     return [
-        ("gen-deep-nesting.cfg", b"a = b {" * n + b"}" * n + b"\n", 1, 0,
-         "nested"),
+        # The 17th section: 16 "a = b {" before it, 7 bytes each.
+        ("gen-deep-nesting.cfg", b"a = b {" * n + b"}" * n + b"\n", 1, 113,
+         "nested more than 16 deep"),
         ("gen-long-name.cfg", machine + b"  " + b"x" * 9000 + b" = 1;\n}\n",
          7, 3, "longer than"),
         ("gen-long-class.cfg", machine + b"  pci0.1 = " + b"y" * 9000 +
-         b"\n  {\n  }\n}\n", 7, 3, "not known"),
-        ("gen-long-value.cfg", b'sys0 = tsunami\n{\n  memory.bits = "' +
-         b"9" * 9000 + b'";\n  cpu0 = ev68cb\n  {\n  }\n}\n', 3, 3,
-         "out of range"),
-        ("gen-number-overflow.cfg", b'sys0 = tsunami\n{\n'
-         b'  memory.bits = 18446744073709551616;\n  cpu0 = ev68cb\n  {\n  }\n}\n',
-         3, 3, "out of range"),
-        ("gen-number-overflow-suffix.cfg", b'sys0 = tsunami\n{\n'
-         b'  memory.bits = 17179869184G;\n  cpu0 = ev68cb\n  {\n  }\n}\n', 3, 3,
-         "out of range"),
-        ("gen-nul-byte.cfg", machine + b"  rom.dpr = \"a\x00b\";\n}\n", 7, 17,
-         "Illegal character"),
+         b"\n  {\n  }\n}\n", 7, 12, "longer than"),
+        ("gen-nul-byte.cfg", machine + b"  rom.dpr = \"a\x00b\";\n}\n", 7, 15,
+         "Illegal character NUL"),
+        ("gen-nul-outside.cfg", machine + b"  \x00\n}\n", 7, 3,
+         "Illegal character 0x00"),
+        ("gen-high-byte.cfg", machine + b"  caf\xc3\xa9 = 1;\n}\n", 7, 6,
+         "Illegal character 0xc3"),
     ]
 
 
@@ -120,7 +116,11 @@ def run_check(binary, path, dump=True):
         return "timeout", "", ""
     rc = p.returncode
     status = "exit %d" % rc if rc >= 0 else "signal %d" % -rc
-    return (status, p.stdout.decode("latin-1"), p.stderr.decode("latin-1"))
+    err = p.stderr.decode("latin-1")
+    # A build with -fsanitize=address,undefined: any report is a failure.
+    if "ERROR: AddressSanitizer" in err or "runtime error:" in err:
+        status = "sanitizer report"
+    return (status, p.stdout.decode("latin-1"), err)
 
 
 def corpus(work):

@@ -1,4 +1,4 @@
-# exit 1
+# exit 0
 sys0 = tsunami
 {
   platform = "gs1280";
@@ -103,5 +103,12 @@ sys0 = tsunami
   serial0 = serial
   {
     port = "21814";
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
   }
 }

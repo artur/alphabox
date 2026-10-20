@@ -1,1 +1,24 @@
-# exit 1
+# exit 0
+sys0 = tsunami
+{
+  rom.srm = "cl67srmrom.exe";
+  cpu0 = ev68cb
+  {
+  }
+  serial0 = serial
+  {
+    port = "21264";
+    action = "xterm -T {console} -e telnet localhost 21264 // not a comment";
+  }
+  pci0.7 = ali
+  {
+    lpt.outfile = "a{b/*c";
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

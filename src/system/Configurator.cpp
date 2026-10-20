@@ -109,388 +109,349 @@ static void cfg_msg(bool warning, const char *fmt, ...) {
     s_check_warnings++;
 }
 
+/// The configuration file's name, for messages: one per process.
+static std::string s_source;
+
+/// "file:line:col: ", or "" for what has no place in the file (line 0).
+static std::string place_of(int line, int col) {
+  if (!line)
+    return std::string();
+  return s_source + ":" + std::to_string(line) + ":" + std::to_string(col) +
+         ": ";
+}
+
 /**
- * Constructor.
+ * A configuration error that already says where in the file it is: the
+ * sections it passes through on its way out leave it as it is.
+ **/
+class CPlacedConfigurationException : public CConfigurationException {
+public:
+  using CConfigurationException::CConfigurationException;
+};
+
+/**
+ * The configuration language's tokens: names and unquoted values (words),
+ * quoted values (strings), and = ; { }.
+ **/
+struct CConfigToken {
+  enum Kind { WORD, STRING, EQUALS, SEMICOLON, OPEN, CLOSE, END } kind;
+  std::string text; ///< a word's or a string's text, unquoted
+  int line;
+  int col;
+};
+
+/**
+ * Splits a configuration into tokens, skipping white space and comments,
+ * and knows where each one is. The language:
  *
- * The portion of the configuration file that corresponds with the device we are
- *the configurator for is passed as text, with a length of textlen. We parse
- *this text portion, creating values and children configurators as needed. If
- *parent is NULL, we are the master configurator, and we will call initialize
- *for our children (probably GUI and System) so they can instantiate the classes
- *that correspond to the devices that they configure for. The children will in
- *turn initialize their children.
+ *  - `// ...` and, when it is the first thing on its line, `; ...` comment
+ *    out the rest of the line; `/ * ... * /` (without the spaces) a block;
+ *  - a word is letters, digits, '_' and '.': a name, a class or a value;
+ *  - a quoted value is "...", on one line, with "" for a quote in it;
+ *  - anything else is refused, with its line and column.
  *
- * \bug This needs to be more robust! As it is now, this code was more or less
- *"hacked together" in a few minutes. Also, more comments should be provided to
- *make it more readable.
+ * A file may start with a UTF-8 byte order mark, which is skipped.
+ **/
+class CConfigLexer {
+public:
+  /// `source` names the file in messages; nullptr for text the emulator
+  /// wrote itself, whose tokens get no place (line 0).
+  CConfigLexer(const char *text, size_t len, const char *source)
+      : p(text), end(text + len), placed(source != nullptr) {
+    if (placed && len >= 3 && (u8)text[0] == 0xef && (u8)text[1] == 0xbb &&
+        (u8)text[2] == 0xbf)
+      p += 3;
+  }
+
+  CConfigToken next();
+
+  /// Refuse the configuration: "file:line:col: message".
+  [[noreturn]] void fail(int at_line, int at_col, const char *fmt, ...);
+  [[noreturn]] void fail(const CConfigToken &t, const char *fmt, ...);
+
+  /// A token as an error message names it.
+  static std::string describe(const CConfigToken &t);
+
+private:
+  CConfigToken token(CConfigToken::Kind kind, int l, int c,
+                     std::string text = std::string()) {
+    return CConfigToken{kind, std::move(text), placed ? l : 0, placed ? c : 0};
+  }
+  void advance() {
+    if (*p == '\n') {
+      line++;
+      col = 1;
+      line_has_token = false;
+    } else
+      col++;
+    p++;
+  }
+  [[noreturn]] void vfail(int at_line, int at_col, const char *fmt, va_list ap);
+
+  const char *p;
+  const char *end;
+  bool placed;
+  int line = 1;
+  int col = 1;
+  bool line_has_token = false; ///< a ';' after one ends a value
+};
+
+static bool is_word_char(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_' || c == '.';
+}
+
+CConfigToken CConfigLexer::next() {
+  for (;;) {
+    if (p >= end)
+      return token(CConfigToken::END, line, col);
+    const char c = *p;
+    if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' ||
+        c == '\v') {
+      advance();
+      continue;
+    }
+    const bool second_slash = c == '/' && p + 1 < end && p[1] == '/';
+    // A line comment, "//" anywhere or ";" first on the line: the rest of
+    // the line (CR or LF ends it).
+    if (second_slash || (c == ';' && !line_has_token)) {
+      while (p < end && *p != '\n' && *p != '\r')
+        advance();
+      continue;
+    }
+    if (c == '/' && p + 1 < end && p[1] == '*') {
+      const int l = line, cc = col;
+      advance();
+      advance();
+      while (p < end && !(*p == '*' && p + 1 < end && p[1] == '/'))
+        advance();
+      if (p >= end)
+        fail(l, cc, "the comment opened here is not closed (no */)");
+      advance();
+      advance();
+      continue;
+    }
+
+    const int l = line, cc = col;
+    line_has_token = true;
+    switch (c) {
+    case '=':
+      advance();
+      return token(CConfigToken::EQUALS, l, cc);
+    case ';':
+      advance();
+      return token(CConfigToken::SEMICOLON, l, cc);
+    case '{':
+      advance();
+      return token(CConfigToken::OPEN, l, cc);
+    case '}':
+      advance();
+      return token(CConfigToken::CLOSE, l, cc);
+    case '"': {
+      std::string s;
+      advance();
+      for (;;) {
+        if (p >= end)
+          fail(l, cc, "the quoted value opened here is not closed");
+        if (*p == '\n' || *p == '\r')
+          fail(l, cc,
+               "the quoted value opened here does not end on its line "
+               "(multi-line strings are forbidden)");
+        if (*p == 0)
+          fail(line, col, "Illegal character NUL in a quoted value");
+        if (*p == '"') {
+          advance();
+          if (p < end && *p == '"') {
+            s += '"';
+            advance();
+            continue;
+          }
+          return token(CConfigToken::STRING, l, cc, s);
+        }
+        s += *p;
+        advance();
+      }
+    }
+    default:
+      if (is_word_char(c)) {
+        const char *start = p;
+        while (p < end && is_word_char(*p))
+          advance();
+        return token(CConfigToken::WORD, l, cc, std::string(start, p));
+      }
+      if (c == '/')
+        fail(l, cc,
+             "Illegal character '/' (a value with one must be quoted; "
+             "comments are // and /* */)");
+      if ((u8)c >= 0x20 && (u8)c < 0x7f)
+        fail(l, cc, "Illegal character '%c' (a value with one must be quoted)",
+             c);
+      fail(l, cc, "Illegal character 0x%02x", (unsigned)(u8)c);
+    }
+  }
+}
+
+void CConfigLexer::vfail(int at_line, int at_col, const char *fmt, va_list ap) {
+  char msg[512];
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  throw CPlacedConfigurationException(
+      (placed ? place_of(at_line, at_col) : std::string()) + msg,
+      "the configuration parser");
+}
+
+void CConfigLexer::fail(int at_line, int at_col, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vfail(at_line, at_col, fmt, ap);
+}
+
+void CConfigLexer::fail(const CConfigToken &t, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vfail(t.line, t.col, fmt, ap);
+}
+
+std::string CConfigLexer::describe(const CConfigToken &t) {
+  std::string s = t.text.size() > 40 ? t.text.substr(0, 40) + "..." : t.text;
+  switch (t.kind) {
+  case CConfigToken::WORD:
+    return "'" + s + "'";
+  case CConfigToken::STRING:
+    return "the quoted value \"" + s + "\"";
+  case CConfigToken::EQUALS:
+    return "'='";
+  case CConfigToken::SEMICOLON:
+    return "';'";
+  case CConfigToken::OPEN:
+    return "'{'";
+  case CConfigToken::CLOSE:
+    return "'}'";
+  default:
+    return "the end of the file";
+  }
+}
+
+/**
+ * Parse a section's body (the master's: the whole file) up to its closing
+ * brace. Each statement is `name = value;` or `name = class { body }`; a
+ * ';' on its own is allowed (after a '}', say). `depth` is how deep this
+ * section is (the master: 0).
+ **/
+void CConfigurator::parse(CConfigLexer &lex, int depth) {
+  for (;;) {
+    const CConfigToken t = lex.next();
+    if (t.kind == CConfigToken::END) {
+      if (pParent && !myAdded)
+        lex.fail(myLine, myCol,
+                 "the section %s (%s) is not closed: the file ends before "
+                 "its '}'",
+                 myName, myValue);
+      return;
+    }
+    if (t.kind == CConfigToken::CLOSE) {
+      if (!pParent)
+        lex.fail(t, "'}' closes no section");
+      return;
+    }
+    if (t.kind == CConfigToken::SEMICOLON)
+      continue;
+    if (t.kind != CConfigToken::WORD)
+      lex.fail(t, "expected a name, found %s",
+               CConfigLexer::describe(t).c_str());
+    if (t.text.size() > CFG_MAX_NAME)
+      lex.fail(t, "a name longer than %d characters", CFG_MAX_NAME);
+
+    const CConfigToken eq = lex.next();
+    if (eq.kind != CConfigToken::EQUALS)
+      lex.fail(eq, "expected '=' after %s, found %s", t.text.c_str(),
+               CConfigLexer::describe(eq).c_str());
+
+    const CConfigToken v = lex.next();
+    if (v.kind != CConfigToken::WORD && v.kind != CConfigToken::STRING)
+      lex.fail(v, "expected a value or a class after '%s =', found %s",
+               t.text.c_str(), CConfigLexer::describe(v).c_str());
+
+    const CConfigToken after = lex.next();
+    if (after.kind == CConfigToken::SEMICOLON) {
+      add_value(strdup(t.text.c_str()), strdup(v.text.c_str()), t.line, t.col);
+      continue;
+    }
+    if (after.kind != CConfigToken::OPEN)
+      lex.fail(after, "expected ';' after the value of %s, found %s%s",
+               t.text.c_str(), CConfigLexer::describe(after).c_str(),
+               v.kind == CConfigToken::WORD && after.kind == CConfigToken::WORD
+                   ? " (a value with spaces must be quoted)"
+                   : "");
+
+    // A section: `name = class {`.
+    if (v.text.size() > CFG_MAX_NAME)
+      lex.fail(v, "a class name longer than %d characters", CFG_MAX_NAME);
+    if (depth + 1 > CFG_MAX_DEPTH)
+      lex.fail(t, "sections nested more than %d deep", CFG_MAX_DEPTH);
+    for (CConfigurator *c : pChildren) {
+      if (!strcmp(c->myName, t.text.c_str())) {
+        cfg_msg(true,
+                "%%SYS-W-DUPSECTION: %s\"%s\" is defined more than once "
+                "in the configuration file (first at line %d). Each "
+                "definition creates its own device (a later telnet serial "
+                "section overrides an earlier null_attach one, etc.) -- "
+                "remove the duplicate.\n",
+                place_of(t.line, t.col).c_str(), t.text.c_str(), c->myLine);
+        break;
+      }
+    }
+    CConfigurator *child = new CConfigurator(
+        this, strdup(t.text.c_str()), strdup(v.text.c_str()), t.line, t.col);
+    pChildren.push_back(child);
+    child->parse(lex, depth + 1);
+  }
+}
+
+/**
+ * Constructor of the master configurator (no parent): parse the whole
+ * configuration, then initialize the sections it holds, which instantiate
+ * their devices and initialize their own children in turn. With a parent:
+ * a section the emulator adds (initialize()), whose body is `text`.
  **/
 CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
-                             char *value, char *text, size_t textlen) {
-  if (parent == 0) {
-
-    /* Phase 1:  Basic Syntax Check & Strip [first pass only]
-     * - Make sure quotes and comments are closed.
-     * - Make sure braces are balanced
-     * - remove everything except configuration data.
-     */
-    char *dst = (char *)malloc(textlen + 1);
-    char *p = dst;
-    char *q = text;
-
-    int cbrace = 0;
-    enum {
-      STATE_NONE,
-      STATE_C_COMMENT,
-      STATE_CC_COMMENT,
-      STATE_STRING
-    }
-
-    state = STATE_NONE;
-
-    int state_start = 0;
-    int line = 1;
-    int col = 1;
-    bool line_has_content = false;
-    for (unsigned i = 0; i < textlen; i++, q++, col++) {
-      if (*q == 0x0a) {
-        line++;
-        col = 1;
-        line_has_content = false;
-      }
-
-      switch (state) {
-      case STATE_NONE:
-        switch (*q) {
-        case '"':
-          state = STATE_STRING;
-          state_start = line;
-          line_has_content = true;
-          *p++ = *q;
-          break;
-
-        case '/':
-          if (i == textlen - 1)
-            FAILURE_2(Configuration,
-                      "Configuration file ends in mid-token at line %d, col %d",
-                      line, col);
-
-          if (*(q + 1) == '/') {
-            state = STATE_CC_COMMENT;
-            state_start = line;
-          } else if (*(q + 1) == '*') {
-            state = STATE_C_COMMENT;
-            state_start = line;
-          }
-          break;
-
-        case '{':
-          cbrace++;
-          line_has_content = true;
-          *p++ = *q;
-          break;
-
-        case '}':
-          if (cbrace == 0)
-            FAILURE_2(Configuration,
-                      "Too many closed braces at line %d, col %d", line, col);
-          cbrace--;
-          line_has_content = true;
-          *p++ = *q;
-          break;
-
-        case ';':
-          // A ';' as the first non-whitespace character of a line is
-          // an INI-style comment running to end of line. Elsewhere it
-          // keeps its meaning as the value terminator.
-          if (!line_has_content) {
-            state = STATE_CC_COMMENT;
-            state_start = line;
-          } else
-            *p++ = *q;
-          break;
-
-        default:
-          if (!isspace(*q)) {
-            line_has_content = true;
-            if (isalnum(*q) || *q == '_' || *q == '.' || *q == '=') {
-              *p++ = *q;
-            } else
-              FAILURE_3(Configuration,
-                        "Illegal character %c at line %d, col %d", *q, line,
-                        col);
-          }
-        }
-        break;
-
-      case STATE_CC_COMMENT: // c++ comment
-        if (*q == 0x0d || *q == 0x0a) {
-          state = STATE_NONE;
-          state_start = line;
-        }
-        break;
-
-      case STATE_C_COMMENT: // c comment
-        if (*q == '*') {
-          if (i == textlen - 1)
-            FAILURE_2(
-                Configuration,
-                "Configuration file ends in mid-comment at line %d, col %d",
-                line, col);
-          if (*(q + 1) == '/') {
-            state = STATE_NONE;
-            state_start = line;
-          }
-        }
-        break;
-
-      case STATE_STRING: // string
-        if (*q == '"') {
-          if (i == textlen - 1)
-            FAILURE_2(
-                Configuration,
-                "Configuration file ends in mid-string at line %d, col %d",
-                line, col);
-          if (*(q + 1) != '"') {
-            state_start = line;
-            state = STATE_NONE;
-          } else {
-            *p++ = *q;
-            i++;
-            q++;
-          }
-        } else if (*q == 0x0a || *q == 0x0d)
-          FAILURE_2(Configuration,
-                    "Multi-line strings are forbidden at line %d, col %d", line,
-                    col);
-        *p++ = *q;
-        break;
-      }
-    }
-
-    *p++ = 0;
-
-    if (state != 0 && state != 1) {
-      cfg_msg(false, "%%SYS-E-PARSE: unclosed %s.  Started on line %d.\n",
-              state == STATE_C_COMMENT ? "comment" : "string", state_start);
-    }
-
-    if (cbrace != 0) {
-      cfg_msg(false, "%%SYS-E-PARSE: unclosed brace in file.\n");
-    }
-
-    textlen = strlen(dst);
-    memcpy(text, dst, textlen + 1);
-    free(dst);
-  }
-
-  /* Phase 2: Parse the file [every time]
-   * The data is in a very compressed form at this point.  We also
-   * know some important things about the data:
-   * - There is no whitespace (except in strings)
-   * - the braces are all closed
-   * - comments have been removed.
-   * - strings are valid.
-   */
-  enum {
-    STATE_NONE,
-    STATE_NAME,
-    STATE_IS,
-    STATE_VALUE,
-    STATE_QUOTE,
-    STATE_CHILD
-  }
-
-  state = STATE_NONE;
-
-  char *cur_name;
-  char *cur_value;
-
-  int child_depth = 0;
-
-  size_t name_start = 0;
-  size_t name_len = 0;
-
-  size_t value_start = 0;
-  size_t value_len = 0;
-
-  size_t child_start = 0;
-  size_t child_len = 0;
-
-  pParent = parent;
-  iNumChildren = 0;
-  iNumValues = 0;
-  myName = name;
-  myValue = value;
-  myDevice = nullptr;
-  myClassId = c_none;
-  myFlags = 0;
-  myAdded = false;
-
-  for (size_t curtext = 0; curtext < textlen; curtext++) {
-    switch (state) {
-    case STATE_NONE:
-      if (isalnum((unsigned char)text[curtext]) || text[curtext] == '.' ||
-          text[curtext] == '_') {
-        name_start = curtext;
-        state = STATE_NAME;
-      }
-      break;
-
-    case STATE_NAME:
-      if (text[curtext] == '=') {
-        state = STATE_IS;
-        name_len = curtext - name_start;
-      }
-      break;
-
-    case STATE_IS:
-      if (isalnum((unsigned char)text[curtext]) || text[curtext] == '.' ||
-          text[curtext] == '_') {
-        value_start = curtext;
-        value_len = 1;
-        state = STATE_VALUE;
-      }
-
-      if (text[curtext] == '\"') {
-        value_start = curtext;
-        state = STATE_QUOTE;
-
-        // curtext--;
-      }
-      break;
-
-    case STATE_VALUE:
-      if (text[curtext] == ';') {
-        value_len = curtext - value_start;
-        cur_name = (char *)malloc(name_len + 1);
-        memcpy(cur_name, &text[name_start], name_len);
-        cur_name[name_len] = '\0';
-        cur_value = (char *)malloc(value_len + 1);
-        memcpy(cur_value, &text[value_start], value_len);
-        cur_value[value_len] = '\0';
-
-        //        printf("Calling strip_string for  <%s>. \n",cur_value);
-        strip_string(cur_value);
-        add_value(cur_name, cur_value);
-
-        state = STATE_NONE;
-      } else if (text[curtext] == '{') {
-        value_len = curtext - value_start;
-        state = STATE_CHILD;
-        child_start = curtext + 1;
-        child_depth = 1;
-      }
-      break;
-
-    case STATE_QUOTE:
-      if ((text[curtext] == '\"') && (text[curtext + 1] == '\"')) {
-        curtext++;
-      } else if (text[curtext] == '\"') {
-        state = STATE_VALUE;
-      }
-      break;
-
-    case STATE_CHILD:
-      if (text[curtext] == '{')
-        child_depth++;
-      else if (text[curtext] == '}') {
-        child_depth--;
-        if (!child_depth) {
-          cur_name = (char *)malloc(name_len + 1);
-          memcpy(cur_name, &text[name_start], name_len);
-          cur_name[name_len] = '\0';
-          cur_value = (char *)malloc(value_len + 1);
-          memcpy(cur_value, &text[value_start], value_len);
-          cur_value[value_len] = '\0';
-          child_len = curtext - child_start;
-          state = STATE_NONE;
-
-          strip_string(cur_value);
-
-          for (int dup = 0; dup < iNumChildren; dup++) {
-            if (!strcmp(pChildren[dup]->get_myName(), cur_name)) {
-              cfg_msg(true,
-                      "%%SYS-W-DUPSECTION: \"%s\" is defined more than once "
-                      "in the configuration file. Each definition creates its "
-                      "own device (a later telnet serial section overrides an "
-                      "earlier null_attach one, etc.) -- remove the "
-                      "duplicate.\n",
-                      cur_name);
-              break;
-            }
-          }
-
-          if (iNumChildren >= CFG_MAX_CHILDREN)
-            FAILURE_2(Configuration, "%s: more than %d sections",
-                      myName ? myName : "configuration", CFG_MAX_CHILDREN);
-          pChildren[iNumChildren++] = new CConfigurator(
-              this, cur_name, cur_value, &text[child_start], child_len);
-        }
-      }
-    }
-  }
+                             char *value, const char *text, size_t textlen,
+                             const char *source)
+    : CConfigurator(parent, name, value, 0, 0) {
+  myAdded = parent != nullptr;
+  if (!parent)
+    s_source = source ? source : "configuration";
+  CConfigLexer lex(text, textlen, parent ? nullptr : s_source.c_str());
+  parse(lex, 0);
 
   if (parent == 0) {
-    for (int i = 0; i < iNumChildren; i++)
+    for (size_t i = 0; i < pChildren.size(); i++)
       initialize_child(pChildren[i]);
   }
 }
 
 /**
+ * A section the parser found, its name at line:col.
+ **/
+CConfigurator::CConfigurator(class CConfigurator *parent, char *name,
+                             char *value, int line, int col)
+    : pParent(parent), myName(name), myValue(value), myDevice(nullptr),
+      myClassId(c_none), myFlags(0), myAdded(false), myLine(line), myCol(col) {}
+
+/**
  * Destructor.
  *
- * \bug This does nothing now; it should:
- *       - if we are a top-level component (System or GUI) delete the component
- *(which will delete the components children).
- *       - delete our children.
- *       - free memory we allocated for values.
- *       .
+ * Nothing is freed: devices keep pointers to names and values for as long
+ * as the process runs.
  **/
 CConfigurator::~CConfigurator(void) {}
 
-/**
- * Reduce a quoted string to it's real value.
- * Some values are enclosed in double quotes("), in this case, we take off the
- *quotes, and replace all double double quotes ("") with single double quotes
- *("). Quoting values is particularly useful if values contain forbidden
- *characters such as spaces, quotes, semicolons, etc. e.g. a text like
- *   "c:\program files\putty\putty.exe" telnet://localhost:8000
- * should be quoted as
- *   """c:\program files\putty\putty.exe"" telnet://localhost:8000"
- **/
-char *CConfigurator::strip_string(char *c) {
-  char *pos = c;
-  char *org = c + 1;
-  bool end_it = false;
-
-  if (c[0] == '\"') {
-    while (!end_it) {
-      if (*org == '\"') {
-        org++;
-        if (*org == '\"')
-          *pos++ = *org++;
-        else
-          end_it = true;
-      } else
-        *pos++ = *org++;
-    }
-
-    *pos = '\0';
-  }
-
-  return c;
-}
+std::string CConfigurator::place() const { return place_of(myLine, myCol); }
 
 /**
  * Add a value to our list of values.
  **/
-void CConfigurator::add_value(char *n, char *v) {
-  if (iNumValues >= CFG_MAX_VALUES)
-    FAILURE_2(Configuration, "%s: more than %d values",
-              myName ? myName : "configuration", CFG_MAX_VALUES);
-  pValues[iNumValues].name = n;
-  pValues[iNumValues].value = v;
-  iNumValues++;
+void CConfigurator::add_value(char *n, char *v, int line, int col) {
+  pValues.push_back(SCfg_Value{n, v, line, col});
 }
 
 /**
@@ -498,10 +459,9 @@ void CConfigurator::add_value(char *n, char *v) {
  * our list of values, return def.
  **/
 char *CConfigurator::get_text_value(const char *n, const char *def) {
-  int i;
-  for (i = 0; i < iNumValues; i++) {
-    if (!strcmp(pValues[i].name, n))
-      return pValues[i].value;
+  for (const SCfg_Value &v : pValues) {
+    if (!strcmp(v.name, n))
+      return v.value;
   }
 
   return (char *)def;
@@ -521,10 +481,9 @@ char *CConfigurator::get_text_value(const char *n, const char *def) {
  *  .
  **/
 bool CConfigurator::get_bool_value(const char *n, bool def) {
-  int i;
-  for (i = 0; i < iNumValues; i++) {
-    if (!strcmp(pValues[i].name, n)) {
-      switch (pValues[i].value[0]) {
+  for (const SCfg_Value &v : pValues) {
+    if (!strcmp(v.name, n)) {
+      switch (v.value[0]) {
       case 't':
       case 'T':
       case 'y':
@@ -540,8 +499,8 @@ bool CConfigurator::get_bool_value(const char *n, bool def) {
         return false;
 
       default:
-        FAILURE_2(Configuration, "Illegal boolean value (%s) for %s",
-                  pValues[i].value, n);
+        FAILURE_2(Configuration, "Illegal boolean value (%s) for %s", v.value,
+                  n);
       }
     }
   }
@@ -554,13 +513,12 @@ bool CConfigurator::get_bool_value(const char *n, bool def) {
  * our list of values, return def.
  **/
 u64 CConfigurator::get_num_value(const char *n, bool decimal, u64 def) {
-  int i;
   u64 multiplier = decimal ? 1000 : 1024;
-  for (i = 0; i < iNumValues; i++) {
-    if (!strcmp(pValues[i].name, n)) {
+  for (const SCfg_Value &v : pValues) {
+    if (!strcmp(v.name, n)) {
       u64 retval = 0;
       u64 partval = 0;
-      char *val = pValues[i].value;
+      char *val = v.value;
       int j = 0;
       for (;;) {
         while (val[j] && strchr("0123456789", val[j])) {
@@ -590,8 +548,8 @@ u64 CConfigurator::get_num_value(const char *n, bool decimal, u64 def) {
           return retval;
 
         default:
-          FAILURE_2(Configuration, "Illegal numeric value (%s) for %s",
-                    pValues[i].value, n);
+          FAILURE_2(Configuration, "Illegal numeric value (%s) for %s", v.value,
+                    n);
         }
       }
     }
@@ -836,9 +794,20 @@ const platform_config &CConfigurator::board() {
 /**
  * Determine what device this configurator represents, and instantiate it;
  * then call initialize for our children. In check mode the device is not
- * instantiated (check_device()).
+ * instantiated (check_device()). A configuration error says where in the
+ * file the section is.
  **/
 void CConfigurator::initialize() {
+  try {
+    initialize_section();
+  } catch (CPlacedConfigurationException &) {
+    throw;
+  } catch (CConfigurationException &e) {
+    throw CPlacedConfigurationException(place() + e.text(), e.where());
+  }
+}
+
+void CConfigurator::initialize_section() {
   myClassId = c_none;
 
   int i = 0;
@@ -864,10 +833,10 @@ void CConfigurator::initialize() {
   // Warn about configuration values this device class does not read;
   // they have no effect and should be removed from the config file.
   if (classes[i].known_values) {
-    for (int v = 0; v < iNumValues; v++) {
+    for (const SCfg_Value &v : pValues) {
       bool recognized = false;
       for (const char *const *k = classes[i].known_values; *k; k++) {
-        if (!strcmp(pValues[v].name, *k)) {
+        if (!strcmp(v.name, *k)) {
           recognized = true;
           break;
         }
@@ -875,10 +844,10 @@ void CConfigurator::initialize() {
 
       if (!recognized)
         cfg_msg(true,
-                "%%SYS-W-UNKNOWNCFG: %s(%s): \"%s\" is not a recognized "
+                "%%SYS-W-UNKNOWNCFG: %s%s(%s): \"%s\" is not a recognized "
                 "configuration value for this device; it has been ignored "
                 "and should be removed from the configuration file.\n",
-                myName, myValue, pValues[v].name);
+                place_of(v.line, v.col).c_str(), myName, myValue, v.name);
     }
   }
 
@@ -1029,7 +998,7 @@ void CConfigurator::initialize() {
   if (myFlags & IS_CS) {
     bool have_serial[2] = {false, false};
     bool have_fdc0 = false;
-    for (i = 0; i < iNumChildren; i++) {
+    for (i = 0; i < (int)pChildren.size(); i++) {
       if (!strcmp(pChildren[i]->get_myValue(), "serial")) {
         number = 0;
         if (!strncmp(pChildren[i]->get_myName(), "serial", 6))
@@ -1044,20 +1013,9 @@ void CConfigurator::initialize() {
     }
 
     if (!have_fdc0) {
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE(Configuration, "No room to add default configuration for fdc0");
-
       cfg_msg(false, "%%SYS-I-DEFAULTFDC: fdc0 is not configured; "
                      "adding the built-in floppy controller.\n");
-
-      char *fname = (char *)malloc(5);
-      strcpy(fname, "fdc0");
-      char *fvalue = (char *)malloc(7);
-      strcpy(fvalue, "floppy");
-      char ftext[] = "";
-      pChildren[iNumChildren] =
-          new CConfigurator(this, fname, fvalue, ftext, 0);
-      pChildren[iNumChildren++]->myAdded = true;
+      add_child("fdc0", "floppy", "");
     }
 
     // The board's own devices of ordinary classes (the DS25's 82559ER):
@@ -1067,45 +1025,28 @@ void CConfigurator::initialize() {
                                                            : nullptr;
          ob && ob->name; ob++) {
       bool have = false;
-      for (i = 0; i < iNumChildren; i++)
-        have |= !strcmp(pChildren[i]->get_myName(), ob->name);
+      for (const CConfigurator *c : pChildren)
+        have |= !strcmp(c->myName, ob->name);
       if (have)
         continue;
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_1(Configuration, "No room to add the on-board %s", ob->name);
       cfg_msg(false,
               "%%SYS-I-ONBOARD: %s is not configured; adding the board's "
               "%s (%s).\n",
               ob->name, ob->device_class, ob->defaults);
-      char *otext = strdup(ob->defaults);
-      pChildren[iNumChildren] =
-          new CConfigurator(this, strdup(ob->name), strdup(ob->device_class),
-                            otext, strlen(otext));
-      pChildren[iNumChildren++]->myAdded = true;
-      free(otext);
+      add_child(ob->name, ob->device_class, ob->defaults);
     }
 
     for (number = 0; number < 2; number++) {
       if (have_serial[number])
         continue;
 
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_1(Configuration,
-                  "No room to add default configuration for serial%d", number);
-
       cfg_msg(true,
               "%%SYS-W-NOSERIAL: serial%d is not configured; "
               "defaulting to null_attach mode.\n",
               number);
-
-      char *sname = (char *)malloc(8);
-      sprintf(sname, "serial%d", number);
-      char *svalue = (char *)malloc(7);
-      strcpy(svalue, "serial");
-      char stext[] = "null_attach=true;";
-      pChildren[iNumChildren] =
-          new CConfigurator(this, sname, svalue, stext, strlen(stext));
-      pChildren[iNumChildren++]->myAdded = true;
+      char sname[16];
+      snprintf(sname, sizeof(sname), "serial%d", number);
+      add_child(sname, "serial", "null_attach=true;");
     }
   }
 
@@ -1117,28 +1058,32 @@ void CConfigurator::initialize() {
       char name[16];
       snprintf(name, sizeof(name), "pci.%d", number);
       bool have = false;
-      for (i = 0; i < iNumChildren; i++)
-        have |= !strcmp(pChildren[i]->get_myName(), name);
+      for (const CConfigurator *c : pChildren)
+        have |= !strcmp(c->myName, name);
       if (have)
         continue;
-      if (iNumChildren >= CFG_MAX_CHILDREN)
-        FAILURE_2(Configuration, "No room to add %s to %s", name, myName);
       cfg_msg(false,
               "%%SYS-I-DEFAULTPORT: %s(%s): port %s is not configured; "
               "adding it unconnected (type = \"null\").\n",
               myName, myValue, name);
-      char ptext[] = "type=\"null\";";
-      pChildren[iNumChildren] = new CConfigurator(
-          this, strdup(name), strdup(board->port_class), ptext, strlen(ptext));
-      pChildren[iNumChildren++]->myAdded = true;
+      add_child(name, board->port_class, "type=\"null\";");
     }
   }
 
-  for (i = 0; i < iNumChildren; i++)
+  for (i = 0; i < (int)pChildren.size(); i++)
     initialize_child(pChildren[i]);
 
   if (!s_check && (myFlags & IS_CS))
     ((CSystem *)myDevice)->init();
+}
+
+/**
+ * Add a section the configuration does not name, with `text` as its body.
+ **/
+void CConfigurator::add_child(const char *name, const char *value,
+                              const char *text) {
+  pChildren.push_back(
+      new CConfigurator(this, strdup(name), strdup(value), text, strlen(text)));
 }
 
 /**
@@ -1436,17 +1381,17 @@ static void dump_quoted(FILE *f, const char *s) {
  **/
 void CConfigurator::dump(FILE *f, int depth) {
   const int in = 2 * depth;
-  for (int v = 0; v < iNumValues; v++) {
+  for (size_t v = 0; v < pValues.size(); v++) {
     bool again = false;
-    for (int w = 0; w < v && !again; w++)
+    for (size_t w = 0; w < v && !again; w++)
       again = !strcmp(pValues[w].name, pValues[v].name);
     fprintf(f, "%*s%s%s = ", in, "", again ? "// " : "", pValues[v].name);
     dump_quoted(f, pValues[v].value);
     fprintf(f, ";%s\n", again ? " (named twice: the first one is used)" : "");
   }
-  for (int c = 0; c < iNumChildren; c++) {
+  for (size_t c = 0; c < pChildren.size(); c++) {
     CConfigurator *k = pChildren[c];
-    if (!pParent && (c > 0 || iNumValues))
+    if (!pParent && (c > 0 || !pValues.empty()))
       fputc('\n', f);
     fprintf(f, "%*s%s = %s%s\n%*s{\n", in, "", k->myName, k->myValue,
             k->myAdded ? " // added" : "", in, "");

@@ -13,6 +13,44 @@ The sample [es40.cfg](../es40.cfg) documents every configuration value; the
 generator covers the common ones. If a section contains a value that its
 device doesn't use, Alphabox warns at startup (`%SYS-W-UNKNOWNCFG`).
 
+## Syntax
+
+A configuration is a list of statements. Each is a value or a section:
+
+```
+name = value;
+name = class { statements }
+```
+
+- **Names and classes** are letters, digits, `_` and `.` (`pci0.7`,
+  `memory.bits`), at most 255 characters.
+- **Values** are such a word (`800M`, `true`, `disk.img`) or a quoted
+  string. A value with any other character (a space, `/`, `:`, `-`)
+  must be quoted: `file = "img/disk 1.img";`. A quoted string ends on its
+  own line, and `""` in it stands for one `"`.
+- Every value ends with `;`. A `;` on its own is allowed (after a `}`,
+  say).
+- **Comments**: `//` to the end of the line; `;` to the end of the line
+  when it is the first thing on its line; `/* ... */` anywhere outside a
+  quoted string, over several lines if need be.
+- Sections nest at most 16 deep. A real machine needs five.
+- A file may start with a UTF-8 byte order mark. Line ends may be LF or
+  CRLF.
+- A value named twice in one section keeps its first value; the later one
+  is ignored. A section named twice makes two devices
+  (`%SYS-W-DUPSECTION`).
+
+Anything else is refused with the file, the line and the column, and what
+was expected there:
+
+```
+Emulator Failure: Configuration error: es40.cfg:12:5: expected ';' after the value of lpt.outfile, found '}': ...
+```
+
+Errors found after parsing (an unknown class, a slot the board does not
+have) give the place of their section, and `%SYS-W-UNKNOWNCFG` the place
+of the value.
+
 ## Checking a configuration
 
 `alphabox run --check my.cfg` reads the file and applies every rule the
