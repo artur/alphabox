@@ -59,6 +59,8 @@ CSCSIBus::~CSCSIBus(void) {}
  * Register a SCSI device as responding to a specific SCSI id.
  **/
 void CSCSIBus::scsi_register(CSCSIDevice *dev, int bus, int target) {
+  if (target < 0 || target >= 16)
+    FAILURE(Configuration, "SCSI id out of range (0 to 15)");
   if (targets[target] && targets[target] != dev)
     FAILURE(IllegalState, "More than one SCSI device at the same ID");
   targets[target] = dev;
@@ -72,7 +74,7 @@ void CSCSIBus::scsi_register(CSCSIDevice *dev, int bus, int target) {
  * for some controllers if software changes it's SCSI id.
  **/
 void CSCSIBus::scsi_unregister(CSCSIDevice *dev, int target) {
-  if (targets[target] != dev)
+  if (target < 0 || target >= 16 || targets[target] != dev)
     FAILURE(IllegalState, "Attempt to unregister other SCSI device");
   targets[target] = 0;
 }
@@ -101,18 +103,27 @@ bool CSCSIBus::arbitrate(int initiator) {
  * by changing the SCSI phase.
  * The initiator calling this function should have succesfully arbitrated
  * for the SCSI bus first.
+ *
+ * An id nothing answers on is a selection time-out (false), whatever the
+ * initiator asked for: an id past the 16 a wide bus has (the ISP1040 takes
+ * a target byte from its request queue, the 53C8xx a 4-bit SELECT field),
+ * the initiator's own id, or a device that is not a target. The bus stays
+ * in arbitration for the initiator to release.
  **/
 bool CSCSIBus::select(int initiator, int target) {
   if (state.phase != SCSI_PHASE_ARBITRATION || state.initiator != initiator)
     FAILURE(IllegalState,
             "Attempt to select while the device has not won SCSI arbitration");
 
-  if (!targets[target])
+  if (target < 0 || target >= 16 || target == initiator || !targets[target])
     return false;
 
   state.target = target;
   targets[target]->scsi_select_me(target_bus_no[target]);
-  return (state.phase >= 0);
+  if (state.phase >= 0)
+    return true;
+  state.target = -1;
+  return false;
 }
 
 /**
@@ -221,6 +232,16 @@ int CSCSIBus::RestoreState(FILE *f) {
   if (m2 != scsi_magic2) {
     printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
+  }
+
+  // set_phase and the transfers index targets[] with the saved target: a
+  // file that names no device there restores a free bus.
+  if (state.target < -1 || state.target >= 16 ||
+      (state.phase >= 0 && (state.target < 0 || !targets[state.target]))) {
+    printf("%s: restored bus state names no target; the bus is free.\n",
+           devid_string);
+    state.target = -1;
+    state.phase = SCSI_PHASE_FREE;
   }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);

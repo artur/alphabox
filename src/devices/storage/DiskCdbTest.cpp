@@ -598,6 +598,19 @@ void t_atapi(CSystem *sys, CConfigurator *root) {
         "%s key %d", bad.why().c_str(), d->sense_key());
 }
 
+/// DISK-12 and DISK-13: selections nobody answers.
+void t_selection(Rig &r) {
+  group("DISK-12/13 selection");
+  CCdbTestAdapter *a = r.a;
+  for (int id : {7, 6, 16, 100, 255, -1}) {
+    Res t = a->run(id, {0, 0, 0, 0, 0, 0});
+    char name[64];
+    snprintf(name, sizeof(name), "SELECT %d: time-out", id);
+    check(!t.selected && t.error.empty(), name, "%s", t.why().c_str());
+  }
+  expect_good(a->run(0, {0, 0, 0, 0, 0, 0}), "the bus works afterwards");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -646,6 +659,7 @@ int main_cdbtest(int argc, char **argv) {
   t_ram(r);
   t_messages(r);
   t_atapi(sys, root);
+  t_selection(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

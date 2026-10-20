@@ -85,10 +85,11 @@ bool CSCSIDevice::scsi_select(int bus, int target) {
  * Override this to allow this device to be selected. Overrided
  * functions should at least call scsi_set_phase to set
  * the SCSI bus phase to a valid phase.
+ *
+ * A device that is not a target (a host adapter) does not answer: the
+ * phase stays where it is and the initiator sees a selection time-out.
  **/
-void CSCSIDevice::scsi_select_me(int bus) {
-  FAILURE(NotImplemented, "selected device doesn't implement scsi_select_me");
-}
+void CSCSIDevice::scsi_select_me(int bus) {}
 
 /**
  * \brief Change the SCSI bus phase.
