@@ -30,6 +30,7 @@ gives its usage and variables.
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
 | `boards_check.sh` | Every board of `src/platforms/Platforms.cpp` to its console prompt, with its own firmware from `roms/`: `show config` (and `show fru` on the EV7 boards), a PASS/FAIL line per board, normalised console logs. |
+| `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
@@ -50,6 +51,20 @@ diff) and the emulator's `%SYS-W-`, `%SYS-E-` and FAILURE lines, and exits
 update utility (DS20L, ES45, DS25, DS15) first run it to install their
 console into the flash, as on a real machine. `boards_check.sh --diff A B`
 compares the command output of two runs.
+
+`guests_check.sh <alphabox> <label> [guest ...]` is the gate for a change
+that only a guest exercises: input, timers, disks, video, USB, sound,
+floating point. It boots each guest from an APFS clone of its image (never
+the original), on ports 21950 and up, and waits for a marker with a timeout.
+The Windows guests (`w2k`, `w2k-beta`, `xp64`) must reach a desktop with a
+taskbar and no dialog; for `w2k` the taskbar clock is also read with
+tesseract, when it is installed, and must be the host's time. `vms-es40`,
+`vms-es47` and `linux` log in on the serial console and run commands
+(`SHOW TIME`, `uname -a`, a C program compiled and run), `arc` waits for the
+AlphaBIOS menu and `netbsd` for the installer's menu. It writes
+`$ALPHABOX_WORK/runs/guests-<label>/<guest>.png` (the last frame),
+`<guest>.log` (the console) and `<guest>.warn`, and exits 0 only if every
+guest passed. A whole run takes about 15 minutes.
 
 ### Configuration
 
