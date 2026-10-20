@@ -242,6 +242,50 @@ static void test_scan_set_default() {
   check("FF returns to set 2", drain(), "fa aa fa fa 02");
 }
 
+/// KBD-02: keys typed while the controller inhibits the keyboard wait in
+/// the keyboard. An event that does not fit in its 16-byte buffer is lost
+/// and the overrun code takes the last position; keys after it are lost
+/// until the guest reads (IBM 84F9735, Keyboards pp. 19-20).
+static void test_inhibit_and_overrun() {
+  fresh();
+  out64(0xAD);
+  tap(BX_KEY_A);
+  check("nothing while inhibited", drain(), "");
+  out64(0xAE);
+  check("make and break after AE", drain(), "1e 9e");
+  out64(0x60);
+  out60(0x51); // bit 4: keyboard disabled
+  tap(BX_KEY_A);
+  check("nothing while the command byte inhibits", drain(), "");
+  out64(0x60);
+  out60(0x41);
+  check("make and break once released", drain(), "1e 9e");
+
+  // Translated: nobody reads while A..T are pressed. A goes to the output
+  // register, B..Q fill the buffer, R finds it full and the overrun code
+  // replaces Q; S and T are lost.
+  fresh();
+  out64(0x60);
+  out60(0x44); // translate, no interrupts: nobody reads
+  for (int i = 0; i < 20; i++)
+    press(BX_KEY_A + i);
+  check("full buffer, translated", drain(),
+        "1e 30 2e 20 12 21 22 23 17 24 25 26 32 31 18 19 ff");
+  tap(BX_KEY_A);
+  check("typing after an overrun", drain(), "1e 9e");
+
+  // Untranslated set 2: a two-byte break that does not fit leaves room
+  // for the overrun code, 00.
+  fresh();
+  out64(0x60);
+  out60(0x04);
+  for (int i = 0; i < 16; i++)
+    press(BX_KEY_A + i);
+  release(BX_KEY_A);
+  check("break that does not fit, set 2", drain(),
+        "1c 32 21 23 24 2b 34 33 43 3b 42 4b 3a 31 44 4d 00");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -249,6 +293,7 @@ int main() {
   test_controller_basics();
   test_srm_and_vms_set3();
   test_mouse_basics();
+  test_inhibit_and_overrun();
   test_scan_set_default();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;

@@ -86,6 +86,13 @@ the Keyboards and Keyboard/Auxiliary Device Controller sections).
   (`ALPHABOX_TRACE_KBC=1`): SRM set 3, untranslated, and then `F6`;
   AlphaBIOS and Windows 2000 set 2, translated; OpenVMS set 3,
   untranslated ([openvms.md](openvms.md#keyboard-and-mouse)).
+- Keys typed while the controller inhibits the keyboard (`AD`, or bit 4
+  of the command byte) wait in the keyboard's 16-byte buffer. A key event
+  that does not fit is lost and the overrun code takes the buffer's last
+  position (`00` in sets 2 and 3, `FF` in set 1 and whenever the
+  controller translates), as on the real keyboard; so is every key after
+  it until the guest reads. A release lost that way leaves the key down in
+  the guest, as it would on hardware.
 
 ### SCSI
 

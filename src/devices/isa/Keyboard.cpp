@@ -227,11 +227,11 @@ void CKeyboard::gen_scancode(u32 key) {
   unsigned char *scancode;
   size_t i;
 
-  // Ignore scancode if keyboard clock is driven low
-  if (state.kbd_clock_enabled == 0)
-    return;
-
-  // Ignore scancode if scanning is disabled
+  // A keyboard that is not scanning (F5) does not see the key. One the
+  // controller inhibits (command AD, or bit 4 of its command byte) keeps it
+  // in its buffer until the clock is released: kbd_service() delivers only
+  // while the clock runs. Source: IBM 84F9735, Common Interfaces, Keyboards
+  // (Sep 1991) pp. 12 and 19.
   if (state.kbd_internal_buffer.scanning_enabled == 0)
     return;
 
@@ -427,8 +427,12 @@ void CKeyboard::set3_default_key_types() {
 
 /**
  * Enqueue the bytes of one key event (make or break sequence) into the
- * keyboard's internal buffer. The event is stored whole or not at all, so a
- * full buffer never leaves half a multi-byte sequence behind.
+ * keyboard's internal buffer. An event that does not fit is discarded whole
+ * and the overrun code takes the last position in the buffer: 00 in scan
+ * code sets 2 and 3, FF in set 1, and FF either way once the controller
+ * translates. Keys pressed after that are lost until the guest has read
+ * some. Source: IBM 84F9735, Common Interfaces, Keyboards (Sep 1991)
+ * pp. 19-20, "Overrun" and "Buffer".
  **/
 void CKeyboard::kbd_enQ_sequence(const u8 *bytes, int count) {
   SKb_state::SAli_kbdib &kb = state.kbd_internal_buffer;
@@ -436,7 +440,24 @@ void CKeyboard::kbd_enQ_sequence(const u8 *bytes, int count) {
   if (count <= 0)
     return;
   if (kb.num_elements + count > BX_KBD_ELEMENTS) {
+    u8 overrun = state.current_scancodes_set == 0 ? 0xFF : 0x00;
+    if (state.scancodes_translate)
+      overrun = translation8042[overrun];
+    const int used = kb.num_elements;
+    const int last = (kb.head + (used ? used - 1 : 0)) % BX_KBD_ELEMENTS;
+    if (used && kb.seq_start[last] && kb.buffer[last] == overrun)
+      return; // already overrun: the key is lost
     kbc_drop_note("keyboard buffer full, key event lost", bytes[0]);
+    if (used < BX_KBD_ELEMENTS) {
+      const int tail = (kb.head + used) % BX_KBD_ELEMENTS;
+      kb.buffer[tail] = overrun;
+      kb.seq_start[tail] = true;
+      kb.num_elements++;
+    } else {
+      kb.buffer[last] = overrun;
+      kb.seq_start[last] = true;
+    }
+    kbd_service();
     return;
   }
 
