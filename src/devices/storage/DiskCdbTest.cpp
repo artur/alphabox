@@ -837,6 +837,18 @@ void t_mode_length(Rig &r) {
         "MODE SENSE(10) with DBD: no block descriptor");
 }
 
+/// DISK-09: INQUIRY lengths.
+void t_inquiry_len(Rig &r) {
+  group("DISK-09 INQUIRY lengths");
+  CCdbTestAdapter *a = r.a;
+  Res q = a->run(0, {0x12, 0, 0, 0, 36, 0});
+  check(q.good() && q.in.size() >= 5 && q.in[4] == 31, "ADDITIONAL LENGTH 31",
+        "%d", q.in.size() > 4 ? q.in[4] : -1);
+  Res q2 = a->run(0, {0x12, 0, 0, 1, 0, 0});
+  check(q2.good() && q2.in.size() >= 36, "allocation 256 in two bytes", "%s",
+        q2.why().c_str());
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -894,6 +906,7 @@ int main_cdbtest(int argc, char **argv) {
   t_sense_cleared(r);
   t_alloc(r);
   t_mode_length(r);
+  t_inquiry_len(r);
 
   printf("cdbtest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");

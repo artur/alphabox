@@ -1365,7 +1365,12 @@ int CDisk::do_scsi_command() {
 
     u8 qual_dev = state.scsi.lun_selected ? 0x7F : (cdrom() ? 0x05 : 0x00);
 
-    retlen = state.scsi.cmd.data[4];
+    // The allocation length is byte 4 in SCSI-2 (8.2.5, byte 3 reserved)
+    // and bytes 3-4 in SPC-3 (6.4.1); a SCSI-2 initiator sends 0 in byte 3,
+    // so taking both serves either. The padded reply below stays within
+    // the 255 bytes one byte could ask for.
+    retlen = std::min<unsigned int>(
+        (state.scsi.cmd.data[3] << 8) | state.scsi.cmd.data[4], 255);
     // The data phase is as long as the initiator allows, as it always was
     // here (no controller model takes a short one in its stride); what lies
     // past the page is zeros, not what the last command left behind.
@@ -1416,7 +1421,7 @@ int CDisk::do_scsi_command() {
       state.scsi.dati.data[1] = 0;    // not removable;
       state.scsi.dati.data[2] = 0x02; // ANSI scsi 2
       state.scsi.dati.data[3] = 0x02; // response format
-      state.scsi.dati.data[4] = 32;   // additional length
+      state.scsi.dati.data[4] = 31;   // additional length: n - 4 (36 bytes)
       state.scsi.dati.data[5] = 0;    // reserved
       state.scsi.dati.data[6] = 0;    // reserved in SCSI-2 (a bit was set)
       // Byte 7: what this target can do. Sync (0x10) and CmdQue (0x02):
