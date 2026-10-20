@@ -415,6 +415,15 @@ int CSym53C8xx::CChannel::restore(FILE *f, const char *devid) {
     return -1;
   }
 
+  // A running general purpose timer counts on from the restore (the host
+  // clock of the saved run means nothing here). Files from before the
+  // timer used the host clock held a poll count here: any nonzero value
+  // is a running timer all the same.
+  if (state.gen_timer) {
+    state.gen_timer = 0;
+    gen_program(0);
+  }
+
   printf("%s: %d bytes restored.\n", devid, (int)ss);
   return 0;
 }
@@ -477,14 +486,9 @@ std::string CSym53C8xx::CChannel::poll() {
     return msg;
   }
 
-  if (state.gen_timer) {
-    state.gen_timer--;
-    if (!state.gen_timer) {
-      state.gen_timer = (R8(STIME1) & R_STIME1_GEN) * 30;
-      RAISE(SIST1, GEN);
-      return std::string();
-    }
-  }
+  // The general purpose timer, for a guest that waits for its interrupt
+  // rather than polling (a polling one is served on its own reads).
+  gen_check();
 
   /**
 

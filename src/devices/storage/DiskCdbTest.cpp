@@ -46,6 +46,7 @@
 
 #include "Sym53C8xxRegs.hpp"
 
+#include <chrono>
 #include <cstdarg>
 #include <string>
 #include <sys/stat.h>
@@ -1450,6 +1451,40 @@ void t_sym_table_select(SymRig &s) {
         s.r8(R_SCNTL3), s.r8(R_SXFER));
 }
 
+/// SYM-09: the general purpose timer counts host time in the manual's units.
+void t_sym_gen_timer(SymRig &s) {
+  group("SYM-09 general purpose timer");
+  s.reset();
+  // How long after a 0 -> value write of STIME1 SIST1 GEN appears, polling
+  // SIST1 as a driver measuring its clock does; -1 if not within 2 s.
+  auto measure = [&](u8 stime1) {
+    s.w8(R_STIME1, 0);
+    s.r8(R_SIST1);
+    const auto t0 = std::chrono::steady_clock::now();
+    s.w8(R_STIME1, stime1);
+    for (;;) {
+      const double ms = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+      if (s.r8(R_SIST1) & 0x02)
+        return ms;
+      if (ms > 2000)
+        return -1.0;
+    }
+  };
+  const double t4 = measure(0x04);  // 1 ms
+  const double t11 = measure(0x0b); // 128 ms
+  const double tsf = measure(0x21); // 125 us x 16 = 2 ms
+  s.w8(R_STIME1, 0);
+  check(t4 >= 1.0 && t4 < 50.0, "GEN = 4: 1 ms", "%.1f ms", t4);
+  check(t11 >= 128.0 && t11 < 400.0, "GEN = 11: 128 ms", "%.1f ms", t11);
+  check(tsf >= 2.0 && tsf < 50.0, "GEN = 1 with GENSF: 2 ms", "%.1f ms", tsf);
+  // GEN = 0 stops it.
+  s.r8(R_SIST1);
+  usleep(5000);
+  check(!(s.r8(R_SIST1) & 0x02), "GEN = 0: no interrupt");
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1546,6 +1581,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_basic(sr);
     t_sym_reserved(sr);
     t_sym_table_select(sr);
+    t_sym_gen_timer(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

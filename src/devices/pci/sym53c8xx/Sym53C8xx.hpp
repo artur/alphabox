@@ -56,6 +56,7 @@
 #include "PCIDevice.hpp"
 #include "SCSIDevice.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -244,6 +245,12 @@ private:
     void eval_interrupts();
     void set_interrupt(int reg, u8 interrupt);
     void chip_reset();
+
+    /// The general purpose timer (STIME1 GEN): see gen_program().
+    void gen_program(u8 old_stime1);
+    void gen_check();
+    std::chrono::steady_clock::time_point gen_deadline;
+    std::chrono::microseconds gen_period{0};
 
     /// The device this core is a part of, and its part description: the
     /// register macros in Sym53C8xxRegs.hpp read m_chip directly.

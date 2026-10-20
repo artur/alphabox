@@ -232,10 +232,12 @@ void CSym53C8xx::CChannel::bar_write(int bar, u32 address, int dsize,
           WRM_R8(MACNTL, (u8)data);
         break;
 
-      case R_STIME1: // 49
+      case R_STIME1: { // 49
+        const u8 old_stime1 = R8(STIME1);
         WRM_R8(STIME1, (u8)data);
-        state.gen_timer = (R8(STIME1) & R_STIME1_GEN) * 30;
+        gen_program(old_stime1);
         break;
+      }
 
       case R_STEST1: // 4D
         WRM_R8(STEST1, (u8)data);
@@ -380,6 +382,10 @@ u32 CSym53C8xx::CChannel::bar_read(int bar, u32 address, int dsize) {
         break;
 
       case R_ISTAT: // 14
+        // A driver that waits for the general purpose timer polls ISTAT
+        // or SIST1: the timer is checked against the host clock here, not
+        // only on the main thread's 100 ms tick.
+        gen_check();
         // CON mirrors the connection state (SCNTL1 CON). Drivers check it
         // in their interrupt handlers: the Windows 2000 symc8xx driver
         // resets the bus on a message interrupt that finds it clear.
@@ -464,6 +470,7 @@ u32 CSym53C8xx::CChannel::bar_read(int bar, u32 address, int dsize) {
 
       case R_SIST0: // 42
       case R_SIST1: // 43
+        gen_check();
         data = read_b_sist(address - R_SIST0);
         break;
 
@@ -827,6 +834,51 @@ u8 CSym53C8xx::CChannel::read_b_sist(int id) {
   eval_interrupts();
 
   return retval;
+}
+
+/**
+ * STIME1 was written: start, retime or stop the general purpose timer.
+ *
+ * The SYM53C895 data manual (v3.0, register 49 STIME1, pdf pp. 139-140)
+ * gives GEN3-0 the periods of table 5-11: 0 disables the timer, and 1 to
+ * 15 are 125 us doubling at every step to 2.048 s, with a 40 or 160 MHz
+ * SCSI clock (the 875 manual's table has the same 125 us at 40 MHz); GENSF
+ * (bit 5, on the parts from the 825 on) multiplies them by 16. "To reset a
+ * timer before it has expired and obtain repeatable delays, the time value
+ * must be written to zero first, and then written back": only a write that
+ * takes GEN from 0 to a period starts a new count, against the host clock.
+ * The count used to be the main thread's 100 ms polls times 30 per GEN
+ * step, so GEN = 1, 125 us on the chip, took 3 s.
+ **/
+void CSym53C8xx::CChannel::gen_program(u8 old_stime1) {
+  const u8 gen = R8(STIME1) & R_STIME1_GEN;
+  if (!gen) {
+    state.gen_timer = 0;
+    return;
+  }
+  gen_period = std::chrono::microseconds(125LL << (gen - 1));
+  if (R8(STIME1) & 0x20) // GENSF
+    gen_period *= 16;
+  if (!(old_stime1 & R_STIME1_GEN) || !state.gen_timer) {
+    state.gen_timer = 1;
+    gen_deadline = std::chrono::steady_clock::now() + gen_period;
+  }
+}
+
+/**
+ * Has the general purpose timer run out? Then SIST1 GEN, and the next
+ * period starts. Caller holds myRegLock.
+ **/
+void CSym53C8xx::CChannel::gen_check() {
+  if (!state.gen_timer)
+    return;
+  const auto now = std::chrono::steady_clock::now();
+  if (now < gen_deadline)
+    return;
+  gen_deadline += gen_period;
+  if (gen_deadline <= now)
+    gen_deadline = now + gen_period;
+  RAISE(SIST1, GEN);
 }
 
 /**
