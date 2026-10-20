@@ -217,6 +217,59 @@ static void test_live_reads() {
   CHECK_EQ(r.rtc.read(1), 0x00);
 }
 
+/// UIP is high in the 244 us before the time registers advance (data sheet
+/// p.14-15), so a reader that waits for UIP low and then reads within
+/// 244 us never sees a torn time. SET clears UIP (p.15).
+static void test_uip() {
+  Rig r;
+  r.at(2026, 10, 20, 12, 59, 58, 500000000);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0);
+  r.at(2026, 10, 20, 12, 59, 58, 999755000);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0);
+  r.at(2026, 10, 20, 12, 59, 58, 999757000);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0x80);
+  CHECK_EQ(r.rd(0x00), 58); // not advanced yet
+  r.at(2026, 10, 20, 12, 59, 59, 0);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0);
+  CHECK_EQ(r.rd(0x00), 59);
+
+  // A reader across three rollovers, one that hours and minutes change
+  // at: wait for UIP low, then read seconds, minutes and hours 60 us
+  // apart. Every time read is a time the clock showed, never decreasing.
+  r.at(2026, 10, 20, 12, 59, 58, 0);
+  int last = -1, torn = 0, backwards = 0, reads = 0;
+  for (int i = 0; i < 3000000 / 37; i++) {
+    r.ns(37000);
+    if (r.rd(0x0a) & 0x80)
+      continue;
+    const s64 t0 = r.real;
+    r.ns(60000);
+    const int s = r.rd(0x00);
+    r.ns(60000);
+    const int m = r.rd(0x02);
+    r.ns(60000);
+    const int h = r.rd(0x04);
+    const int v = h * 3600 + m * 60 + s;
+    // the clock's time at the UIP read, or the second after it
+    const int at0 = (int)((t0 / 1000000000) % 86400);
+    if (v != at0 && v != (at0 + 1) % 86400)
+      torn++;
+    if (last >= 0 && v < last && !(last >= 86398 && v < 2))
+      backwards++;
+    last = v;
+    reads++;
+  }
+  CHECK_EQ(torn, 0);
+  CHECK_EQ(backwards, 0);
+  CHECK_EQ(reads > 10000, 1);
+
+  // SET clears UIP
+  r.at(2026, 10, 20, 12, 0, 0, 999900000);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0x80);
+  r.wr(0x0b, 0x86);
+  CHECK_EQ(r.rd(0x0a) & 0x80, 0);
+}
+
 int main() {
   test_read_time();
   test_set_time();
@@ -225,6 +278,7 @@ int main() {
   test_upper_ram();
   test_12_hour();
   test_live_reads();
+  test_uip();
   printf("mc146818_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

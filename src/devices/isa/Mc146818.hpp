@@ -93,9 +93,6 @@ private:
   Clocks clk;
   bool arc_year_compat = false;
 
-  /// UIP's one-second cadence counts from the first access.
-  bool uip_started = false;
-  u64 uip_epoch = 0;
   /// Register C's periodic flag (PF), paced by the monotonic clock: the
   /// time the rate was last chosen, periods counted since, and the rate.
   u64 pf_epoch = 0;

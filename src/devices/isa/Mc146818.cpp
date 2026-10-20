@@ -146,6 +146,10 @@ void CMc146818::write(u32 port, u8 data) {
     // the user's writes.
     if (index == 0x0b && (ram[0x0b] & 0x80) && !(data & 0x80))
       set_time_from_registers(data);
+    // "Writing the SET bit in Register B to a 1 inhibits any update cycle
+    // and then clears the UIP status bit" (data sheet p.15).
+    if (index == 0x0b && (data & 0x80))
+      ram[0x0a] &= ~0x80;
     ram[index] = data;
     break;
   }
@@ -161,8 +165,13 @@ void CMc146818::write(u32 port, u8 data) {
  * register B selects, and register A's UIP.
  **/
 void CMc146818::generate_time_locked() {
+  // One sample of the wall clock for the time and for UIP, so that the
+  // seconds change exactly where UIP says they do.
+  const s64 now = clk.real_ns();
+  const time_t secs = host_seconds(now);
+  const s64 into_second = now - (s64)secs * 1000000000;
   struct tm stime;
-  utc_tm(host_seconds(clk.real_ns()) + offset, &stime);
+  utc_tm(secs + offset, &stime);
   // 12-hour mode counts 1 to 12, PM in bit 7 (data sheet Table 3, p.12:
   // $01-$0C AM, $81-$8C PM): midnight is 12 AM and noon 12 PM, never 0.
   const u8 pm = (stime.tm_hour >= 12) ? 0x80 : 0;
@@ -202,18 +211,13 @@ void CMc146818::generate_time_locked() {
     }
   }
 
-  // MC146818 UIP (Update-In-Progress) bit at register A bit 7.
-  // Real hardware pulses UIP high for ~244 µs every 1 second of
-  // wall-clock when the internal RTC is about to advance, then
-  // holds it low for the remainder of the second.
-  const u64 now = clk.steady_ns();
-  if (!uip_started) {
-    uip_started = true;
-    uip_epoch = now;
-  }
-  const u64 sub_sec_us = ((now - uip_epoch) / 1000) % 1000000ull;
-  // UIP is high during the last 244 µs of each second.
-  if (sub_sec_us >= (1000000ull - 244ull))
+  // UIP (register A bit 7) goes high 244 us before the update that advances
+  // the seconds (data sheet p.14: "After the UIP bit goes high, the update
+  // begins 244 us later. Therefore, if a low is read on the UIP bit, the
+  // user has at least 244 us before the time/calendar data will be
+  // changed"). The time registers advance when the clock's second does, so
+  // UIP is high in the last 244 us of each of its seconds.
+  if (into_second >= 1000000000 - 244000)
     ram[0x0a] |= 0x80;
   else
     ram[0x0a] &= ~0x80;
