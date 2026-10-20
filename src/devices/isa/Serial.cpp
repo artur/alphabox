@@ -307,11 +307,12 @@ void CSerial::WriteMem(int index, u64 address, int dsize, u64 data) {
   }
   const u8 prev_mcr = state.bMCR;
   uart.write((u32)address, d);
-  if (address == 4 && prev_mcr != d)
+  const u8 mcr = state.bMCR;
+  if (address == 4 && prev_mcr != mcr)
     printf("SRL%d: MCR %02x -> %02x (LOOP=%d DTR=%d RTS=%d OUT1=%d OUT2=%d), "
            "MSR now %02x\n",
-           state.iNumber, prev_mcr, d, (d >> 4) & 1, d & 1, (d >> 1) & 1,
-           (d >> 2) & 1, (d >> 3) & 1, state.bMSR);
+           state.iNumber, prev_mcr, mcr, (mcr >> 4) & 1, mcr & 1,
+           (mcr >> 1) & 1, (mcr >> 2) & 1, (mcr >> 3) & 1, state.bMSR);
 }
 
 void CSerial::eval_interrupts() {

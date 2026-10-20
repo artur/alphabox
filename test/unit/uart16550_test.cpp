@@ -246,6 +246,23 @@ static void test_loopback() {
   CHECK_EQ(r.rd(LSR) & 0x01, 0x00);
 }
 
+/// IER bits 7:4 and MCR bits 7:5 read 0 (PC16550D 8.7 and 8.8; ALi
+/// M1543C pp. 262-263). Linux's 8250 probe writes IER bit 6 (UUE) and
+/// takes the port for an XScale UART when the bit sticks.
+static void test_reserved_bits() {
+  Rig r;
+  r.wr(LCR, 0x03);
+  r.wr(IER, 0xff);
+  CHECK_EQ(r.rd(IER), 0x0f);
+  r.wr(IER, 0x40); // Linux: iersave | UART_IER_UUE
+  CHECK_EQ(r.rd(IER) & 0x40, 0x00);
+  r.wr(MCR, 0xef);
+  CHECK_EQ(r.rd(MCR), 0x0f);
+  r.wr(MCR, 0xe0);
+  CHECK_EQ(r.rd(MCR), 0x00);
+  CHECK_EQ(r.rd(MSR) & 0xf0, 0x30); // bit 4 (loop) was not set
+}
+
 /// The scratch register keeps what is written.
 static void test_scratch() {
   Rig r;
@@ -263,6 +280,7 @@ int main() {
   test_priority();
   test_fifo();
   test_loopback();
+  test_reserved_bits();
   test_scratch();
   printf("uart16550_test: %d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;

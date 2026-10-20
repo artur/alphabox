@@ -144,10 +144,10 @@ void CUart16550::write(u32 reg, u8 value) {
       s.bBRB_MSB = value;
       break;
     }
-    // Only bits 3:0 exist; 7:4 read back zero [PC16550D datasheet].
-    // Linux's 8250 probe takes a writable bit 6 (UUE) for an XScale UART.
-    // Enabling the THRE interrupt while the (instantly drained) holding
-    // register is empty arms one THRE interrupt.
+    // Bits 7:4 are always 0 (PC16550D 8.7; ALi M1543C p. 262): Linux's
+    // probe takes an IER bit 6 that sticks for an XScale UART. Enabling the
+    // THRE interrupt while the (instantly drained) holding register is
+    // empty arms one THRE interrupt.
     value &= 0x0f;
     if ((value & IER_THRE) && !(s.bIER & IER_THRE))
       s.thre_pending = true;
@@ -172,6 +172,8 @@ void CUart16550::write(u32 reg, u8 value) {
     break;
 
   case REG_MCR:
+    // Bits 7:5 are permanently 0 (PC16550D 8.8; ALi M1543C p. 263).
+    value &= 0x1f;
     s.bMCR = value;
     if (value & MCR_LOOP) {
       // Loopback: the modem outputs drive the modem inputs, DTR->DSR,
