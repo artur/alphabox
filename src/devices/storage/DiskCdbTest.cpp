@@ -1634,6 +1634,43 @@ void t_sym_sbcl(SymRig &s) {
         "before %u after %u", before, after);
 }
 
+/// SYM-06: a Memory Move takes the whole 24-bit count, keeps TEMP, and
+/// refuses misaligned addresses and reserved bits.
+void t_sym_memory_move(SymRig &s) {
+  group("SYM-06 Memory Move");
+  std::string err;
+  const u32 src = 0x400000, dst = 0x800000, len = 0x200000; // 2 MiB
+  for (u32 i = 0; i < len; i += 4)
+    s.mw(src + i, i * 2654435761u);
+  s.reset();
+  s.w32(R_TEMP, 0x00abcde0);
+  const u32 p = s.program({0xc0000000 | len, src, dst, kInt, 0x6});
+  u8 istat = s.run(p, err, 5000);
+  u8 dstat = s.r8(R_DSTAT);
+  bool same = true;
+  for (u32 i = 0; i < len && same; i += 4)
+    same = s.mr(dst + i) == i * 2654435761u;
+  check(err.empty() && (istat & 0x01) && (dstat & 0x7f) == 0x04 && same,
+        "a 2 MiB move copies all of it", "istat %02x dstat %02x %s", istat,
+        dstat, same ? "" : "data differs");
+  check(s.r32(R_TEMP) == 0x00abcde0, "TEMP is preserved", "temp %08x",
+        s.r32(R_TEMP));
+  struct {
+    u32 dcmd, from, to;
+    const char *name;
+  } bad[] = {
+      {0xc0000010, src + 1, dst + 2, "source and destination A(1-0) differ"},
+      {0xc2000010, src, dst, "a reserved DCMD bit (25) set"}};
+  for (auto &b : bad) {
+    s.reset();
+    const u32 q = s.program({b.dcmd, b.from, b.to, kInt, 0x7});
+    istat = s.run(q, err);
+    dstat = s.r8(R_DSTAT);
+    check(err.empty() && (istat & 0x01) && (dstat & 0x01) && !(dstat & 0x04),
+          b.name, "istat %02x dstat %02x %s", istat, dstat, err.c_str());
+  }
+}
+
 } // namespace
 
 int main_cdbtest(int argc, char **argv) {
@@ -1735,6 +1772,7 @@ int main_cdbtest(int argc, char **argv) {
     t_sym_wait_reselect(sr);
     t_sym_sfbr(sr);
     t_sym_sbcl(sr);
+    t_sym_memory_move(sr);
   } else
     check(false, "the 53C875 of the test machine");
 

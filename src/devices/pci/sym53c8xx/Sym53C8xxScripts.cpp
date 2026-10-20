@@ -1281,7 +1281,17 @@ void CSym53C8xx::CChannel::execute_ls_op() {
  *
  * The DBC register holds the number of bytes to be moved.
  * The DSPS register holds the source address.
- * The TEMP register holds the destination address.
+ * The third word, the destination address, goes to the TEMP shadow
+ * register: "The third word, used only by Memory Move instructions, is
+ * loaded into the TEMP shadow register", and TEMP itself, a CALL's return
+ * address, is preserved (SYM53C895 data manual v3.0, pdf p. 149 and
+ * register 1C TEMP, pdf p. 120; the 810, 810A and 875 manuals say the same).
+ *
+ * "Up to 16 MB may be transferred with one instruction", the whole 24-bit
+ * count, and the source and destination "must start with the same address
+ * alignment (A(1-0) must be the same)" or "an illegal instruction interrupt
+ * will occur", as it does when one of the reserved DCMD bits 28-25 is set
+ * (pdf p. 169, and DSTAT IID conditions 12 and 13, pdf p. 111).
  */
 void CSym53C8xx::CChannel::execute_mm_op() {
   u32 temp_shadow;
@@ -1293,28 +1303,31 @@ void CSym53C8xx::CChannel::execute_mm_op() {
          R32(DSP) - 12, GET_DBC(), R32(DSPS), temp_shadow);
 #endif
 
+  if ((R8(DCMD) & 0x1e) || ((R32(DSPS) ^ temp_shadow) & 3)) {
+    RAISE(DSTAT, IID);
+    return;
+  }
+
   const u32 dbc = GET_DBC();
-  if (dbc == 0 ||
-      dbc > 0x100000) // 1 MiB cap — larger than any legit Memory Move
-  {
-    printf("SYM: Memory Move DBC=%u out of range; aborting.\n", dbc);
+  if (dbc == 0) {
+    // The manual does not say what a count of zero does; this model has
+    // always aborted it.
+    printf("SYM: Memory Move DBC=0; aborting.\n");
     state.executing = false;
     RAISE(DSTAT, ABRT);
     return;
   }
 
-  void *buf = malloc(dbc);
-  if (!buf) {
-    printf("SYM: Memory Move malloc(%u) failed; aborting.\n", dbc);
-    state.executing = false;
-    RAISE(DSTAT, ABRT);
-    return;
+  // Through a 64 KiB buffer, front to back, as the chip moves bursts
+  // through its DMA FIFO.
+  static constexpr u32 kChunk = 0x10000;
+  std::vector<u8> buf(std::min(dbc, kChunk));
+  for (u32 done = 0; done < dbc;) {
+    const u32 n = std::min(dbc - done, kChunk);
+    dev.do_pci_read(R32(DSPS) + done, buf.data(), 1, n);
+    dev.do_pci_write(temp_shadow + done, buf.data(), 1, n);
+    done += n;
   }
-
-  dev.do_pci_read(R32(DSPS), buf, 1, dbc);
-  dev.do_pci_write(temp_shadow, buf, 1, dbc);
-  free(buf);
-  return;
 }
 
 /**
