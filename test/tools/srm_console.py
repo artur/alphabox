@@ -78,6 +78,26 @@ def main():
         return 1
     s.settimeout(1)
 
+    # The port escapes a data byte 0xff as IAC IAC (RFC 854), as a telnet
+    # client expects; undo that, so a log shows what the guest sent. Other
+    # telnet commands pass through as they always have. An IAC that ends a
+    # read waits for the next one.
+    iac_pending = [False]
+
+    def unescape(d):
+        out = bytearray()
+        for b in d:
+            if iac_pending[0]:
+                iac_pending[0] = False
+                out.append(0xff)
+                if b == 0xff:
+                    continue
+            if b == 0xff:
+                iac_pending[0] = True
+                continue
+            out.append(b)
+        return bytes(out)
+
     def pump(secs, sink=None):
         """Read until the prompt (True), EOF/timeout (False)."""
         buf = b""
@@ -91,7 +111,7 @@ def main():
                 return False
             if not d:
                 return False
-            d = bytes(b for b in d if b != 0)
+            d = unescape(bytes(b for b in d if b != 0))
             log.write(d)
             log.flush()
             if sink:
