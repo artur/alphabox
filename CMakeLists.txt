@@ -354,6 +354,66 @@ if (GIT_FOUND)
     set(PACKAGE_GITSHA "\"${GIT_SHA}\"")
 endif()
 
+# The floating-point test, alphabox_fptest (test/fp; docs/development.md):
+# the interpreter's IEEE and VAX routines against the host FPU, an exact VAX
+# model and hand tables from the manuals, and against the same routines as
+# they were at ALPHABOX_FP_BASELINE. `ctest` runs it. It compiles the
+# routines against test/fp/shim/AlphaCPU.hpp; a quoted #include looks in the
+# including file's own directory first, so they are compiled from copies
+# made at build time, away from the real AlphaCPU.hpp. Needs unsigned
+# __int128 (GCC, Clang).
+option(ALPHABOX_FPTEST "Build the floating-point test alphabox_fptest" ON)
+set(ALPHABOX_FP_BASELINE "682932c" CACHE STRING
+    "Commit whose floating-point routines alphabox_fptest compares against")
+if (ALPHABOX_FPTEST AND NOT MSVC)
+  set(fp_cur ${CMAKE_BINARY_DIR}/fp_current_src)
+  set(fp_cur_srcs)
+  foreach(f AlphaCPU_ieeefloat.cpp AlphaCPU_vaxfloat.cpp)
+    add_custom_command(OUTPUT ${fp_cur}/${f}
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/cpu/${f}
+                ${fp_cur}/${f}
+        DEPENDS ${CMAKE_SOURCE_DIR}/src/cpu/${f})
+    list(APPEND fp_cur_srcs ${fp_cur}/${f})
+  endforeach()
+  add_executable(alphabox_fptest test/fp/fp_test.cpp test/fp/fp_host.cpp
+      test/fp/fp_exec_current.cpp ${fp_cur_srcs})
+  target_include_directories(alphabox_fptest PRIVATE test/fp/shim test/fp
+      src/cpu src/common ${CMAKE_BINARY_DIR}/src ${CMAKE_BINARY_DIR})
+  # The baseline's routines, for the comparison with the frozen code.
+  set(fp_frozen ${CMAKE_BINARY_DIR}/fp_frozen_src)
+  set(fp_frozen_ok ${GIT_FOUND})
+  if (fp_frozen_ok)
+    file(MAKE_DIRECTORY ${fp_frozen})
+    foreach(f AlphaCPU_ieeefloat.cpp AlphaCPU_vaxfloat.cpp cpu_fp_operate.hpp)
+      execute_process(COMMAND ${GIT_EXECUTABLE} show
+              ${ALPHABOX_FP_BASELINE}:src/cpu/${f}
+          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+          OUTPUT_FILE ${fp_frozen}/${f} RESULT_VARIABLE fp_rc ERROR_QUIET)
+      if (NOT fp_rc EQUAL 0)
+        set(fp_frozen_ok FALSE)
+      endif()
+    endforeach()
+  endif()
+  if (fp_frozen_ok)
+    target_sources(alphabox_fptest PRIVATE test/fp/fp_frozen.cpp)
+    target_compile_definitions(alphabox_fptest PRIVATE FP_HAVE_FROZEN)
+  else()
+    message(STATUS "alphabox_fptest: baseline ${ALPHABOX_FP_BASELINE} not "
+                   "available from git; built without the frozen comparison")
+  endif()
+  # The host FPU is the IEEE oracle: no folding or reordering around
+  # fesetround/fetestexcept.
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(test/fp/fp_host.cpp PROPERTIES
+        COMPILE_OPTIONS "-ffp-model=strict")
+  elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(test/fp/fp_host.cpp PROPERTIES
+        COMPILE_OPTIONS "-frounding-math;-fsignaling-nans")
+  endif()
+  enable_testing()
+  add_test(NAME fp COMMAND alphabox_fptest)
+endif()
+
 set(VERSION "\"${PROJECT_VERSION}\"")
 set(PACKAGE ${PROJECT_NAME})
 set(PACKAGE_BUGREPORT "tglozar@gmail.com")
