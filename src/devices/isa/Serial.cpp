@@ -227,16 +227,29 @@ void CSerial::init() {
     FAILURE_2(Runtime, "Serial: can't listen on port %d: %s\n", listenPort,
               strerror(errno));
 
+  uart.reset();
+  myThread = nullptr;
+
+  // The client program, if one is configured. Here a failure is a
+  // configuration error; when it is started again for a reconnect, a
+  // warning (execute).
+  std::string why;
+  if (!launch_action(why))
+    FAILURE_2(Configuration, "%s: cannot start the action program: %s",
+              devid_string, why.c_str());
+
+  // wait = false: the machine starts at once. The port's thread takes the
+  // first client when it comes, and what the guest printed until then
+  // follows the greeting (the newest 256 KB of it).
+  if (!myCfg->get_bool_value("wait", true)) {
+    printf("%s: listening on %s port %d; the machine starts without "
+           "waiting for a client.\n",
+           devid_string, listenAddress, listenPort);
+    return;
+  }
   printf("%s: Waiting for connection on %s port %d.\n", devid_string,
          listenAddress, listenPort);
-
   WaitForConnection();
-
-  uart.reset();
-  iac_carry_len = 0;
-  in_subneg = false;
-  stageLen = 0;
-  myThread = nullptr;
 }
 
 void CSerial::start_threads() {
@@ -245,7 +258,6 @@ void CSerial::start_threads() {
   if (!myThread) {
     printf(" srl%d", state.iNumber);
     StopThread = false;
-    threads_started = true;
     myThread = std::make_unique<std::thread>([this]() { this->run(); });
   }
 }
@@ -497,6 +509,11 @@ void CSerial::run() {
     auto next_tick = std::chrono::steady_clock::now();
     bool blocked = false;
     while (!StopThread) {
+      if (connectSocket == INVALID_SOCKET) {
+        // wait = false, and no client yet: nothing to send or read.
+        WaitForConnection();
+        continue;
+      }
       if (blocked)
         wait_writable(next_tick);
       {
@@ -670,6 +687,10 @@ void CSerial::execute() {
         printf("-SRL-I-WAITFOR: Waiting for a new connection on port %d.\n",
                listenPort);
         drop_client();
+        std::string why;
+        if (!launch_action(why))
+          printf("%%SRL-W-ACTION: %s: cannot start the action program: %s\n",
+                 devid_string, why.c_str());
         WaitForConnection();
         return;
       }
@@ -994,17 +1015,6 @@ void CSerial::WaitForConnection() {
   struct sockaddr_in Address;
   socklen_t nAddressSize = sizeof(struct sockaddr_in);
   char s[100];
-
-  std::string why;
-  if (!launch_action(why)) {
-    // At startup a bad `action` is a configuration error; later (a client
-    // went away) the port keeps waiting for one to come back by hand.
-    if (!threads_started)
-      FAILURE_2(Configuration, "%s: cannot start the action program: %s",
-                devid_string, why.c_str());
-    printf("%%SRL-W-ACTION: %s: cannot start the action program: %s\n",
-           devid_string, why.c_str());
-  }
 
   //  Wait until we have a connection. Poll rather than block in accept(), so
   //  that stop_threads() can join the serial thread while it waits for a

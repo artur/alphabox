@@ -96,7 +96,6 @@ private:
   /// check_state.
   std::atomic_bool breakHit{false};
   const char *listenAddress = nullptr;
-  bool threads_started = false; ///< past init: a failing `action` only warns
 #if !defined(_WIN32)
   pid_t action_pid = -1; ///< the last `action` program started
 #endif

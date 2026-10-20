@@ -294,10 +294,20 @@ The sample configuration attaches both UARTs as `null_attach`: present but
 unconnected. The emulator then starts without waiting for anything, and the
 console lives on the VGA window (`vga_console = true`).
 
-To use a telnet console instead, set `port = 21264;` in a serial section.
-The emulator then **waits at startup** until a client connects
-(`nc localhost 21264`). Ports left out of the configuration are added as
-`null_attach` automatically.
+To use a telnet console instead, set `port = 21264;` in a serial section
+(`address = "127.0.0.1";`, or a host name such as `"localhost"`, limits it
+to one interface; by default it listens on all of them). The emulator then
+**waits at startup** until a client connects (`nc localhost 21264`), unless
+the section also has `wait = false;`: then the machine starts at once, and
+the client that comes later first gets what the guest printed meanwhile.
+Ports left out of the configuration are added as `null_attach`
+automatically.
+
+A client can leave and come back: the port takes the next connection, and
+what the guest printed in between (the newest 256 KB) is sent to it first.
+A client that stops reading costs no more than that: the guest never waits
+for it. With `raw_mode = true;` (a debugger's byte stream) nothing is kept
+for the next client.
 
 Sending a telnet BREAK opens a small menu: continue, exit, abort, save the
 machine state to `autosave.axp`, or load it back.
