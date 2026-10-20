@@ -189,6 +189,59 @@ static void test_mouse_basics() {
   check("wrap mode echoes", aux({0xEE, 0x12, 0x34, 0xEC}), "mfa m12 m34 mfa");
 }
 
+/// KBD-01: power-up and reset leave the keyboard in scan code set 2, which
+/// the controller translates to set 1.
+static void test_scan_set_default() {
+  fresh();
+  out60(0xF0);
+  out60(0x00);
+  check("F0 00 at power-up (translated)", drain(), "fa fa 41");
+  out60(0xFF);
+  check("FF reset", drain(), "fa aa");
+  out60(0xF0);
+  out60(0x00);
+  check("F0 00 after FF (translated)", drain(), "fa fa 41");
+
+  press(BX_KEY_CTRL_L);
+  release(BX_KEY_CTRL_L);
+  press(BX_KEY_ALT_L);
+  release(BX_KEY_ALT_L);
+  check("left Ctrl, left Alt, translated", drain(), "1d 9d 38 b8");
+
+  out64(0x60);
+  out60(0x01); // translation off, keyboard interrupt on
+  out60(0xF0);
+  out60(0x00);
+  check("F0 00 untranslated", drain(), "fa fa 02");
+  tap(BX_KEY_CTRL_L);
+  check("left Ctrl in set 2", drain(), "14 f0 14");
+
+  // set 3, as SRM and OpenVMS select it: only the shift keys break
+  out60(0xF0);
+  out60(0x03);
+  check("F0 03", drain(), "fa fa");
+  tap(BX_KEY_CTRL_L);
+  tap(BX_KEY_A);
+  check("set 3: left Ctrl make/break, A make only", drain(), "11 f0 11 1c");
+
+  // Set Default (F6) and Default Disable (F5) keep the scan code set: SRM
+  // selects set 3 and then sends F6.
+  out60(0xF6);
+  out60(0xF0);
+  out60(0x00);
+  check("F6 keeps set 3", drain(), "fa fa fa 03");
+  out60(0xF5);
+  out60(0xF0);
+  out60(0x00);
+  out60(0xF4);
+  check("F5 keeps set 3", drain(), "fa fa fa 03 fa");
+  // Reset (FF) is power-up: set 2 again
+  out60(0xFF);
+  out60(0xF0);
+  out60(0x00);
+  check("FF returns to set 2", drain(), "fa aa fa fa 02");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -196,6 +249,7 @@ int main() {
   test_controller_basics();
   test_srm_and_vms_set3();
   test_mouse_basics();
+  test_scan_set_default();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

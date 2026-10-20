@@ -96,7 +96,7 @@ void CKeyboard::init() {
   // pending-motion state, ...) starts out zero.
   memset(&state, 0, sizeof(state));
 
-  resetinternals(1);
+  resetinternals(true);
 
   state.kbd_internal_buffer.led_status = 0;
   state.kbd_internal_buffer.scanning_enabled = 1;
@@ -367,7 +367,13 @@ void CKeyboard::gen_scancode(u32 key) {
 }
 
 /**
- * Reset keyboard internals.
+ * Reset keyboard internals to the defaults that Set Default (F6) and Default
+ * Disable (F5) restore: an empty buffer, the typematic rate and delay, and
+ * the scan code set 3 key types. With powerup, also what only power-on and
+ * Reset (FF) do: scan code set 2. F5 and F6 keep the scan code set, and SRM
+ * relies on it: it selects set 3 and then sends F6. Source: IBM 84F9735,
+ * PS/2 Hardware Interface Technical Reference, Common Interfaces (Oct 1990),
+ * Keyboards (Sep 1991) pp. 1, 12-14.
  **/
 void CKeyboard::resetinternals(bool powerup) {
   // The keyboard discards the keystrokes it has not sent yet, including the
@@ -381,18 +387,16 @@ void CKeyboard::resetinternals(bool powerup) {
 
   state.kbd_internal_buffer.expecting_typematic = 0;
   state.kbd_internal_buffer.expecting_key_type = 0;
-  set3_default_key_types();
-
-  // Default scancode set is mf2 (translation is controlled by the 8042)
+  state.kbd_internal_buffer.expecting_led_write = 0;
   state.expecting_scancodes_set = 0;
+  set3_default_key_types();
+  state.kbd_internal_buffer.delay = 1;          // 500 mS
+  state.kbd_internal_buffer.repeat_rate = 0x0b; // 10.9 chars/sec
 
-  state.current_scancodes_set = 2; // startup in set 2
-
-  if (powerup) {
-    state.kbd_internal_buffer.expecting_led_write = 0;
-    state.kbd_internal_buffer.delay = 1;          // 500 mS
-    state.kbd_internal_buffer.repeat_rate = 0x0b; // 10.9 chars/sec
-  }
+  // current_scancodes_set indexes scancodes[][3]: 0, 1, 2 are sets 1, 2, 3.
+  // The 8042 translates set 2 to set 1 while the command byte says so.
+  if (powerup)
+    state.current_scancodes_set = 1;
 }
 
 /**
@@ -1074,14 +1078,14 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
     kbd_response_enQ(0xFA); // send ACK
     break;
 
-  case 0xf5: // reset keyboard to power-up settings and disable scanning
-    resetinternals(1);
+  case 0xf5: // Default Disable: the defaults, and stop scanning
+    resetinternals(false);
     kbd_response_enQ(0xFA); // send ACK
     state.kbd_internal_buffer.scanning_enabled = 0;
     break;
 
-  case 0xf6: // reset keyboard to power-up settings and enable scanning
-    resetinternals(1);
+  case 0xf6: // Set Default: the defaults, and scan
+    resetinternals(false);
     kbd_response_enQ(0xFA); // send ACK
     state.kbd_internal_buffer.scanning_enabled = 1;
     break;
@@ -1131,7 +1135,7 @@ void CKeyboard::ctrl_to_kbd(u8 value) {
     break;
 
   case 0xff: // reset: internal keyboard reset and afterwards the BAT
-    resetinternals(1);
+    resetinternals(true);
     kbd_response_enQ(0xFA); // send ACK
     kbd_response_enQ(0xAA); // BAT test passed
     break;

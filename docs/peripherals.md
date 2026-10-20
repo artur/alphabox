@@ -68,6 +68,25 @@ What each does, and which guests drive it, is below.
   Whistler drive it with their own USB stacks.
 - `ali_pmu`: the power management unit.
 
+### Keyboard and mouse
+
+The ALi's keyboard controller sits at ports 60h and 64h with IRQ 1 and 12,
+and has a PS/2 keyboard and mouse behind it (`src/devices/isa/Keyboard.cpp`).
+The ALi datasheet says only that it is software compatible with the 8042AH
+and runs a ROM programmed to the customer's order (M1543C datasheet V1.10,
+section 4.4.5), so the commands follow IBM's reference for the PS/2
+(84F9735, PS/2 Hardware Interface Technical Reference, Common Interfaces:
+the Keyboards and Keyboard/Auxiliary Device Controller sections).
+
+- The keyboard powers up, and comes out of Reset (`FF`), in scan code set
+  2, which the controller translates to set 1 while bit 6 of its command
+  byte is set. Set Default (`F6`) and Default Disable (`F5`) restore the
+  typematic rate and the set 3 key types but keep the scan code set.
+- Every console and guest traced selects a set itself
+  (`ALPHABOX_TRACE_KBC=1`): SRM set 3, untranslated, and then `F6`;
+  AlphaBIOS and Windows 2000 set 2, translated; OpenVMS set 3,
+  untranslated ([openvms.md](openvms.md#keyboard-and-mouse)).
+
 ### SCSI
 
 - **53C825, 875, 895**: wide, 4 KB SCRIPTS RAM; the 875 Ultra-Wide, the
