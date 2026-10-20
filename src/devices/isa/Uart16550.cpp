@@ -43,13 +43,13 @@ enum : u32 {
 };
 
 static const u8 LCR_DLAB = 0x80;
-static const u8 IER_RDA = 0x01, IER_THRE = 0x02, IER_MS = 0x08;
+static const u8 IER_RDA = 0x01, IER_THRE = 0x02, IER_RLS = 0x04, IER_MS = 0x08;
 static const u8 IIR_NONE = 0x01, IIR_MS = 0x00, IIR_THRE = 0x02, IIR_RDA = 0x04,
-                IIR_FIFO = 0xc0;
+                IIR_RLS = 0x06, IIR_FIFO = 0xc0;
 static const u8 FCR_ENABLE = 0x01, FCR_RX_RESET = 0x02;
 static const u8 MCR_DTR = 0x01, MCR_RTS = 0x02, MCR_OUT1 = 0x04,
                 MCR_OUT2 = 0x08, MCR_LOOP = 0x10;
-static const u8 LSR_DR = 0x01, LSR_THRE = 0x20, LSR_TEMT = 0x40;
+static const u8 LSR_DR = 0x01, LSR_OE = 0x02, LSR_THRE = 0x20, LSR_TEMT = 0x40;
 static const u8 MSR_DCTS = 0x01, MSR_DDSR = 0x02, MSR_TERI = 0x04,
                 MSR_DDCD = 0x08, MSR_DELTAS = 0x0f;
 static const u8 MSR_CTS = 0x10, MSR_DSR = 0x20, MSR_RI = 0x40, MSR_DCD = 0x80;
@@ -108,9 +108,15 @@ u8 CUart16550::read(u32 reg) {
   case REG_MCR:
     return s.bMCR;
 
-  case REG_LSR:
-    s.bLSR = LSR_THRE | LSR_TEMT | (rx_empty_locked() ? 0 : LSR_DR);
-    return s.bLSR;
+  case REG_LSR: {
+    // OE is kept in bLSR from the overrun to this read, which clears it
+    // and the receiver-line-status interrupt (PC16550D 8.4, Table IV).
+    const u8 lsr = LSR_THRE | LSR_TEMT | (rx_empty_locked() ? 0 : LSR_DR) |
+                   (s.bLSR & LSR_OE);
+    s.bLSR = lsr & ~LSR_OE;
+    update_locked();
+    return lsr;
+  }
 
   case REG_MSR: {
     // Reading MSR clears its delta bits, and with them the modem-status
@@ -134,12 +140,15 @@ void CUart16550::write(u32 reg, u8 value) {
       s.bBRB_LSB = value;
       break;
     }
-    if (s.bMCR & MCR_LOOP)
+    if (s.bMCR & MCR_LOOP) {
       // Loopback: the byte comes back into the receive FIFO instead of
       // going out (Windows 2000's UART detection writes a sentinel here and
-      // reads it back through LSR.DR).
-      push_rx(value);
-    else
+      // reads it back through LSR.DR). Into a full FIFO it is an overrun:
+      // the byte is lost and LSR.OE set (PC16550D 8.4, bit 1). Only here:
+      // host input that does not fit waits on the host side instead.
+      if (!push_rx(value))
+        s.bLSR |= LSR_OE;
+    } else
       tx(value);
     // Transmission is instantaneous: the holding register is empty again,
     // so THRE is re-armed (delivered only if its interrupt is enabled).
@@ -284,7 +293,9 @@ void CUart16550::update_locked() {
   // plain THRE level would interrupt without end. Into a local first: IIR
   // is never seen half-computed.
   u8 iir = IIR_NONE;
-  if ((s.bIER & IER_RDA) && !rx_empty_locked())
+  if ((s.bIER & IER_RLS) && (s.bLSR & LSR_OE))
+    iir = IIR_RLS;
+  else if ((s.bIER & IER_RDA) && !rx_empty_locked())
     iir = IIR_RDA;
   else if ((s.bIER & IER_THRE) && s.thre_pending)
     iir = IIR_THRE;

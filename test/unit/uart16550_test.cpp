@@ -221,6 +221,33 @@ static void test_fifo() {
   CHECK_EQ(r.uart.rx_empty(), true);
 }
 
+/// Overrun: a byte that finds the receive FIFO full is lost and sets
+/// LSR.OE, which the next LSR read reports and clears, with the
+/// receiver-line-status interrupt, the highest (PC16550D 8.4, Table IV).
+static void test_overrun() {
+  Rig r;
+  r.wr(FCR, 0x01);
+  r.wr(MCR, 0x10); // loopback: the only way to overfill the FIFO
+  r.wr(IER, 0x05); // RDA and receiver line status
+  for (int i = 0; i < UART_FIFO_SIZE - 1; i++)
+    r.wr(THR, (u8)i);
+  CHECK_EQ(r.rd(LSR), 0x61); // full, no error yet
+  CHECK_EQ(r.rd(IIR), 0xc4);
+  r.wr(THR, 0xee); // one too many
+  CHECK_EQ(r.line, true);
+  CHECK_EQ(r.rd(IIR), 0xc6); // receiver line status outranks RDA
+  CHECK_EQ(r.rd(LSR), 0x63); // DR, OE, THRE, TEMT
+  CHECK_EQ(r.rd(LSR), 0x61); // OE cleared by the read
+  CHECK_EQ(r.rd(IIR), 0xc4);
+  int bad = 0;
+  for (int i = 0; i < UART_FIFO_SIZE - 1; i++)
+    if (r.rd(RBR) != (u8)i)
+      bad++;
+  CHECK_EQ(bad, 0); // the FIFO kept its bytes; the extra one was lost
+  CHECK_EQ(r.rd(LSR), 0x60);
+  CHECK_EQ(r.line, false);
+}
+
 /// Loopback: transmitted bytes come back into the receiver and the modem
 /// outputs drive the modem inputs (Linux's probe writes MCR=1a and expects
 /// MSR bits 7:4 = 9).
@@ -336,6 +363,7 @@ int main() {
   test_priority();
   test_fifo();
   test_loopback();
+  test_overrun();
   test_modem_status();
   test_reserved_bits();
   test_scratch();
