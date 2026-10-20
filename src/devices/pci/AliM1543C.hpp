@@ -39,6 +39,7 @@
 
 #include "I8254.hpp"
 #include "I8259.hpp"
+#include "Mc146818.hpp"
 #include "PCIDevice.hpp"
 #include "SuperIo.hpp"
 
@@ -113,14 +114,7 @@ private:
   u64 m_r61_last_ns = 0;
   unsigned m_r61_run = 0;
 
-  // REGISTERS 70 - 73: TOY
-  u8 toy_read(u32 address);
-  void toy_write(u32 address, u8 data);
 
-  // RTC periodic-flag (reg C PF) pacing; re-primed on a rate change.
-  std::chrono::steady_clock::time_point m_toy_pf_epoch;
-  u64 m_toy_pf_count = 0;
-  u64 m_toy_pf_freq = 0;
 
 public:
   // Period in ns of the MC146818 SQW output (rate from TOY reg A).
@@ -182,6 +176,8 @@ private:
   CSuperIo superio;
   /// The ISA Plug and Play ports, over state.isapnp.
   CIsaPnp isapnp;
+  /// The TOY clock and CMOS RAM, over state.toy_*.
+  CMc146818 toy;
 
   FILE *lpt;
 

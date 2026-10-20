@@ -128,10 +128,16 @@ u32 ali_cfg_mask[64] = {
 /**
  * Constructor.
  **/
-// The 8254's clock: nanoseconds on the host's monotonic clock.
+// The 8254's clock, and the TOY's: nanoseconds on the host's monotonic
+// clock, and on its wall clock since the Unix epoch.
 static u64 steady_ns() {
   return (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+static s64 real_ns() {
+  return (s64)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
 
@@ -144,7 +150,9 @@ CAliM1543C::CAliM1543C(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
                 if (ldn == 3) // the parallel port's four registers
                   add_io(27, base, 4);
               }),
-      isapnp(state.isapnp, [this](u16 port) { add_io(52, port, 1); }) {
+      isapnp(state.isapnp, [this](u16 port) { add_io(52, port, 1); }),
+      toy(state.toy_stored_data, state.toy_access_ports, state.toy_offset,
+          {real_ns, steady_ns}) {
   if (theAli != 0)
     FAILURE(Configuration, "More than one Ali");
   theAli = this;
@@ -181,12 +189,14 @@ void CAliM1543C::init() {
 
   arc_year_compat =
       myCfg->get_myParent()->get_bool_value("arc_year_compat", false);
+  toy.set_arc_year_compat(arc_year_compat);
 
   // Optional absolute time override from sys0:
   //   time = "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
   // Interpreted as UTC to match the runtime ARC/SRM TOY edit path
-  // (see toy_write SET_TIME below). Sets the initial toy_offset; subsequent
-  // guest TOY writes still take precedence and overwrite this offset.
+  // (CMc146818::set_time_from_registers). Sets the initial toy_offset;
+  // subsequent guest TOY writes still take precedence and overwrite this
+  // offset.
   char *faketime = myCfg->get_myParent()->get_text_value("time");
   if (faketime) {
     struct tm ft = {};
@@ -459,7 +469,7 @@ u8 CAliM1543C::read_byte(int index, u32 address) {
     return reg_61_read();
 
   case 2:
-    return toy_read(address);
+    return toy.read(address);
 
   case 6:
     return pit.read(address);
@@ -540,7 +550,7 @@ void CAliM1543C::write_byte(int index, u32 address, u8 data) {
     return;
 
   case 2:
-    toy_write(address, (u8)data);
+    toy.write(address, data);
     return;
 
   case 6:
@@ -733,277 +743,6 @@ void CAliM1543C::reg_61_write(u8 data) {
   pit.set_gate(2, (data & 0x01) != 0);
 }
 
-/**
- * Read time-of-year clock ports (70h-73h).
- **/
-u8 CAliM1543C::toy_read(u32 address) {
-
-  // printf("%%ALI-I-READTOY: read port %02x: 0x%02x\n", (u32)(0x70 + address),
-  // state.toy_access_ports[address]);
-  return (u8)state.toy_access_ports[address];
-}
-
-/**
- * Write time-of-year clock ports (70h-73h). On a write to port 0, recalculate
- *clock values.
- **/
-void CAliM1543C::toy_write(u32 address, u8 data) {
-  time_t ltime;
-  struct tm stime;
-  static long read_count = 0;
-  static long hold_count = 0;
-
-  // printf("%%ALI-I-WRITETOY: write port %02x: 0x%02x\n", (u32)(0x70 +
-  // address), data);
-  state.toy_access_ports[address] = (u8)data;
-
-  switch (address) {
-  case 0:
-    if ((data & 0x7f) < 14 && !(state.toy_stored_data[0x0b] & 0x80)) {
-      state.toy_stored_data[0x0d] = 0x80; // data is geldig!
-
-      // update clock.......
-      time(&ltime);
-      ltime += state.toy_offset;
-      gmtime_s(&stime, &ltime);
-      if (state.toy_stored_data[0x0b] & 4) {
-
-        // binary
-        state.toy_stored_data[0] = (u8)(stime.tm_sec);
-        state.toy_stored_data[2] = (u8)(stime.tm_min);
-        if (state.toy_stored_data[0x0b] & 2) // 24-hour
-          state.toy_stored_data[4] = (u8)(stime.tm_hour);
-        else
-          // 12-hour
-          state.toy_stored_data[4] =
-              (u8)(((stime.tm_hour / 12) ? 0x80 : 0) | (stime.tm_hour % 12));
-        state.toy_stored_data[6] = (u8)(stime.tm_wday + 1);
-        state.toy_stored_data[7] = (u8)(stime.tm_mday);
-        state.toy_stored_data[8] = (u8)(stime.tm_mon + 1);
-        state.toy_stored_data[9] =
-            (u8)(arc_year_compat ? (stime.tm_year - 80)
-                                 : (stime.tm_year % 100));
-      } else {
-
-        // BCD
-        state.toy_stored_data[0] =
-            (u8)(((stime.tm_sec / 10) << 4) | (stime.tm_sec % 10));
-        state.toy_stored_data[2] =
-            (u8)(((stime.tm_min / 10) << 4) | (stime.tm_min % 10));
-        if (state.toy_stored_data[0x0b] & 2) // 24-hour
-          state.toy_stored_data[4] =
-              (u8)(((stime.tm_hour / 10) << 4) | (stime.tm_hour % 10));
-        else { // 12-hour
-          state.toy_stored_data[4] = (u8)(((stime.tm_hour / 12) ? 0x80 : 0) |
-                                          (((stime.tm_hour % 12) / 10) << 4) |
-                                          ((stime.tm_hour % 12) % 10));
-        }
-
-        state.toy_stored_data[6] = (u8)(stime.tm_wday + 1);
-        state.toy_stored_data[7] =
-            (u8)(((stime.tm_mday / 10) << 4) | (stime.tm_mday % 10));
-        state.toy_stored_data[8] =
-            (u8)((((stime.tm_mon + 1) / 10) << 4) | ((stime.tm_mon + 1) % 10));
-        {
-          int yy_dec =
-              arc_year_compat ? (stime.tm_year - 80) : (stime.tm_year % 100);
-          state.toy_stored_data[9] = (u8)(((yy_dec / 10) << 4) | (yy_dec % 10));
-        }
-      }
-
-      // Debian Linux wants something out of 0x0a.  It gets initialized
-      // with 0x26, by the SRM
-      // Ah, here's something from the linux kernel:
-      //# /********************************************************
-      //# * register details
-      //# ********************************************************/
-      //# #define RTC_FREQ_SELECT RTC_REG_A
-      //#
-      //# /* update-in-progress - set to "1" 244 microsecs before RTC goes off
-      // the bus, # * reset after update (may take 1.984ms @ 32768Hz RefClock)
-      // is complete, # * totalling to a max high interval of 2.228 ms. # */ # #
-      // define RTC_UIP 0x80 # # define RTC_DIV_CTL 0x70 # /* divider control:
-      // refclock values 4.194 / 1.049 MHz / 32.768 kHz */ # # define
-      // RTC_REF_CLCK_4MHZ 0x00 # # define RTC_REF_CLCK_1MHZ 0x10 # # define
-      // RTC_REF_CLCK_32KHZ 0x20 # /* 2 values for divider stage reset, others
-      // for "testing purposes only" */ # # define RTC_DIV_RESET1 0x60 # #
-      // define RTC_DIV_RESET2 0x70 # /* Periodic intr. / Square wave rate
-      // select. 0=none, 1=32.8kHz,... 15=2Hz */ # # define RTC_RATE_SELECT 0x0F
-      //#
-      // The SRM-init value of 0x26 means:
-      //  xtal speed 32.768KHz  (standard)
-      //  periodic interrupt rate divisor of 32 = interrupt every 976.562 ms
-      //  (1024Hz clock)
-
-      // MC146818 UIP (Update-In-Progress) bit at register A bit 7.
-      // Real hardware pulses UIP high for ~244 µs every 1 second of
-      // wall-clock when the internal RTC is about to advance, then
-      // holds it low for the remainder of the second.
-      {
-        using clk = std::chrono::steady_clock;
-        static auto uip_epoch = clk::now();
-        const auto now = clk::now();
-        const u64 elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now -
-                                                                  uip_epoch)
-                .count();
-        const u64 sub_sec_us = elapsed_us % 1000000ull;
-        // UIP is high during the last 244 µs of each second.
-        if (sub_sec_us >= (1000000ull - 244ull))
-          state.toy_stored_data[0x0a] |= 0x80;
-        else
-          state.toy_stored_data[0x0a] &= ~0x80;
-      }
-      (void)read_count;
-      (void)hold_count;
-
-      //# /****************************************************/
-      //# #define RTC_CONTROL RTC_REG_B
-      //# # define RTC_SET 0x80 /* disable updates for clock setting */
-      //# # define RTC_PIE 0x40 /* periodic interrupt enable */
-      //# # define RTC_AIE 0x20 /* alarm interrupt enable */
-      //# # define RTC_UIE 0x10 /* update-finished interrupt enable */
-      //# # define RTC_SQWE 0x08 /* enable square-wave output */
-      //# # define RTC_DM_BINARY 0x04 /* all time/date values are BCD if clear
-      //*/ # # define RTC_24H 0x02 /* 24 hour mode - else hours bit 7 means pm
-      //*/ # # define RTC_DST_EN 0x01 /* auto switch DST - works f. USA only */
-      //#
-      // this is set (by the srm?) to 0x0e = SQWE | DM_BINARY | 24H
-      // linux sets the PIE bit later.
-      //# /***********************************************************/
-      //# #define RTC_INTR_FLAGS RTC_REG_C
-      //# /* caution - cleared by read */
-      //# # define RTC_IRQF 0x80 /* any of the following 3 is active */
-      //# # define RTC_PF 0x40
-      //# # define RTC_AF 0x20
-      //# # define RTC_UF 0x10
-      //#
-    }
-
-    {
-      /*
-        See sys/dev/ic/mc146818reg.h and sys/arch/alpha/alpha/mcclock.c in
-        NetBSD
-      */
-#define MC_BASE_32_KHz 0x20
-#define RTC_PF 0x40
-      // Periodic flag (reg C PF), paced by wall-clock time: PF sets once per
-      // elapsed rate period, counted against a fixed epoch, so a fast poller
-      // sees the true cadence (976.5625 us at the SRM's 1024 Hz) and a slow
-      // one coalesces missed periods into the single flag, as on the chip.
-      // (It used clock(), the process CPU time summed over every emulator
-      // thread, with a last-fire time shared by all instances.)
-      const int rate_pow = state.toy_stored_data[0x0a] & 0x0f;
-      u64 pf_freq = rate_pow ? (65536ull >> rate_pow) : 0;
-      if (state.toy_stored_data[0x0a] & MC_BASE_32_KHz) {
-        if (rate_pow == 0x1)
-          pf_freq = 256;
-        else if (rate_pow == 0x2)
-          pf_freq = 128;
-      }
-      if (pf_freq) {
-        const auto now = std::chrono::steady_clock::now();
-        if (pf_freq != m_toy_pf_freq) { // rate change or first use: restart
-          m_toy_pf_freq = pf_freq;
-          m_toy_pf_epoch = now;
-          m_toy_pf_count = 0;
-        }
-        const u64 elapsed_ns =
-            (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now - m_toy_pf_epoch)
-                .count();
-        // elapsed_ns * 32768 overflows 64 bits after ~6 days, so split off
-        // whole seconds: floor((q * 1e9 + r) * f / 1e9) = q * f + r * f / 1e9
-        // exactly, and r * f stays below 2^45. (No __int128: 32-bit and
-        // MSVC builds have none.)
-        const u64 due = (elapsed_ns / 1000000000ull) * pf_freq +
-                        (elapsed_ns % 1000000000ull) * pf_freq / 1000000000ull;
-        if (due != m_toy_pf_count) {
-          state.toy_stored_data[0x0c] |= RTC_PF;
-          m_toy_pf_count = due;
-        }
-      }
-    }
-
-    state.toy_access_ports[1] = state.toy_stored_data[data & 0x7f];
-
-    // register C is cleared after a read, and we don't care if its a write
-    if (data == 0x0c)
-      state.toy_stored_data[data & 0x7f] = 0;
-    break;
-
-  case 1:
-    if (state.toy_access_ports[0] == 0x0b &&
-        data & 0x040) // If we're writing to register B, we make register C look
-                      // like it fired.
-      state.toy_stored_data[0x0c] = 0xf0;
-    // On REG_B SET 1->0 transition, snapshot the just-written time/date
-    // registers and compute an offset from host time so the value sticks
-    // after SET goes low.  Without this, the regen path overwrites the
-    // user's writes on the next port-70h poke.
-    if (state.toy_access_ports[0] == 0x0b &&
-        (state.toy_stored_data[0x0b] & 0x80) && !(data & 0x80)) {
-      bool binary = (data & 0x04) != 0;
-      bool h24 = (data & 0x02) != 0;
-
-      u8 ss = state.toy_stored_data[0];
-      u8 mm = state.toy_stored_data[2];
-      u8 hh = state.toy_stored_data[4];
-      u8 dd = state.toy_stored_data[7];
-      u8 mo = state.toy_stored_data[8];
-      u8 yy = state.toy_stored_data[9];
-
-      bool pm = false;
-      if (!h24) {
-        pm = (hh & 0x80) != 0;
-        hh &= 0x7f;
-      }
-
-      auto unbcd = [](u8 v) -> int {
-        return ((v >> 4) & 0x0f) * 10 + (v & 0x0f);
-      };
-
-      struct tm st = {};
-      st.tm_sec = binary ? ss : unbcd(ss);
-      st.tm_min = binary ? mm : unbcd(mm);
-      st.tm_hour = binary ? hh : unbcd(hh);
-      st.tm_mday = binary ? dd : unbcd(dd);
-      st.tm_mon = (binary ? mo : unbcd(mo)) - 1;
-      if (arc_year_compat) {
-        st.tm_year = (binary ? yy : unbcd(yy)) + 80; // 1980-base
-      } else {
-        st.tm_year = binary ? yy : unbcd(yy);
-        if (st.tm_year < 70)
-          st.tm_year += 100; // 20XX pivot
-      }
-
-      if (!h24 && pm && st.tm_hour < 12)
-        st.tm_hour += 12;
-      if (!h24 && !pm && st.tm_hour == 12)
-        st.tm_hour = 0;
-#ifdef _WIN32
-      time_t set_time = _mkgmtime(&st);
-#else
-      time_t set_time = timegm(&st);
-#endif
-      time_t host_now;
-      time(&host_now);
-      if (set_time != (time_t)-1)
-        state.toy_offset = (long)(set_time - host_now);
-    }
-    state.toy_stored_data[state.toy_access_ports[0] & 0x7f] = (u8)data;
-    break;
-
-  case 2:
-    state.toy_access_ports[3] = state.toy_stored_data[0x80 + (data & 0x7f)];
-    break;
-
-  case 3:
-    state.toy_stored_data[0x80 + (state.toy_access_ports[2] & 0x7f)] = (u8)data;
-    break;
-  }
-}
-
 // ALPHABOX_IRQSTATS: print (and reset) the interrupt counters.
 static void print_irqstats(double secs) {
   SIrqStats &s = g_irqstats;
@@ -1083,18 +822,7 @@ void CAliM1543C::do_pit_clock() {
 }
 
 u64 CAliM1543C::get_interval_period_ns() const {
-  const u8 reg_a = state.toy_stored_data[0x0a];
-  const int rate_pow = reg_a & 0x0f;
-  if (rate_pow == 0)
-    return 0;
-
-  if (reg_a & 0x20) {
-    if (rate_pow == 0x1)
-      return 1000000000ull / 256;
-    if (rate_pow == 0x2)
-      return 1000000000ull / 128;
-  }
-  return ((1ull << rate_pow) * 1000000000ull) / 65536ull;
+  return toy.interval_period_ns();
 }
 
 // 8259 PIC
