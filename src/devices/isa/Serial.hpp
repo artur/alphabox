@@ -103,20 +103,20 @@ private:
 
   unsigned char
       iac_carry[8];  // Partial telnet sequence carried across recv() calls
-  int iac_carry_len; // Number of valid bytes in iac_carry
-  bool in_subneg;    // Currently inside IAC SB ... IAC SE subnegotiation
+  int iac_carry_len = 0;  // Number of valid bytes in iac_carry
+  bool in_subneg = false; // Currently inside IAC SB ... IAC SE subnegotiation
   bool after_cr = false; ///< the last data byte received was CR
 
   char stageBuf[STAGE_SIZE]; // Cooked data waiting for baud-rate delivery
-  int stageLen;              // Number of valid bytes in stageBuf
+  int stageLen = 0;          // Number of valid bytes in stageBuf
 
   /// The registers and receive FIFO, as the state file stores them.
   SSrl_state state;
   /// The 16550 model working on `state` (declared after it).
   CUart16550 uart;
   int listenPort = 0;
-  int64_t listenSocket;
-  int64_t connectSocket;
+  int64_t listenSocket = INVALID_SOCKET;
+  int64_t connectSocket = INVALID_SOCKET;
   bool disabled =
       false; ///< If true, port is not exposed to guest; reads return 0xff,
              ///< writes ignored. Used to skip KDCOM probe on AXP64 2210 etc.

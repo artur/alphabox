@@ -117,6 +117,7 @@ CSerial::CSerial(CConfigurator *cfg, CSystem *c, u16 number)
             else
               write((const char *)&byte, 1);
           }) {
+  memset(&state, 0, sizeof(state));
   state.iNumber = number;
 }
 
@@ -124,6 +125,13 @@ CSerial::CSerial(CConfigurator *cfg, CSystem *c, u16 number)
  * Initialize the Serial port device.
  **/
 void CSerial::init() {
+  // COM1 and COM2 are all the ALi has. serial2 claimed 0x1f8 and drove
+  // IRQ 2, the PIC's cascade; serial5 and up shifted by a negative count.
+  if (state.iNumber > 1)
+    FAILURE_2(Configuration,
+              "%s: there is no serial%d: the ports are serial0 (COM1) and "
+              "serial1 (COM2)",
+              devid_string, state.iNumber);
   disabled = myCfg->get_bool_value("disabled");
   raw_mode = myCfg->get_bool_value("raw_mode");
   null_attach = myCfg->get_bool_value("null_attach");
@@ -237,12 +245,10 @@ void CSerial::init() {
 }
 
 void CSerial::start_threads() {
-  char buffer[5];
   if (disabled || null_attach)
     return;
   if (!myThread) {
-    sprintf(buffer, "srl%d", state.iNumber);
-    printf(" %s", buffer);
+    printf(" srl%d", state.iNumber);
     StopThread = false;
     threads_started = true;
     myThread = std::make_unique<std::thread>([this]() { this->run(); });
@@ -250,7 +256,6 @@ void CSerial::start_threads() {
 }
 
 void CSerial::stop_threads() {
-  char buffer[5];
   if (disabled || null_attach)
     return;
   StopThread = true;
@@ -259,8 +264,7 @@ void CSerial::stop_threads() {
     out_cv.notify_one();
   }
   if (myThread) {
-    sprintf(buffer, "srl%d", state.iNumber);
-    printf(" %s", buffer);
+    printf(" srl%d", state.iNumber);
     // Always join: the thread notices StopThread within 200 ms, also while it
     // waits for a telnet connection (see WaitForConnection). Destroying a
     // joinable std::thread would terminate the process.
@@ -884,11 +888,26 @@ int CSerial::RestoreState(FILE *f) {
     return -1;
   }
 
-  r = fread(&state, sizeof(state), 1, f);
+  SSrl_state saved;
+  r = fread(&saved, sizeof(saved), 1, f);
   if (r != 1) {
     printf("%s: unexpected end of file!\n", devid_string);
     return -1;
   }
+  // The FIFO indices are used as array indices on the next read: a damaged
+  // file is refused rather than trusted.
+  if (saved.rcvR < 0 || saved.rcvR >= UART_FIFO_SIZE || saved.rcvW < 0 ||
+      saved.rcvW >= UART_FIFO_SIZE) {
+    printf("%s: receive FIFO pointers out of range (%d, %d)!\n", devid_string,
+           saved.rcvR, saved.rcvW);
+    return -1;
+  }
+  // The port keeps its own number (its address and IRQ were set from it).
+  if (saved.iNumber != state.iNumber)
+    printf("%s: the saved record is serial%d's; restored into serial%d.\n",
+           devid_string, saved.iNumber, state.iNumber);
+  saved.iNumber = state.iNumber;
+  state = saved;
 
   r = fread(&m2, sizeof(u32), 1, f);
   if (r != 1) {
