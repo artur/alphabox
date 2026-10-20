@@ -468,40 +468,37 @@ char *CConfigurator::get_text_value(const char *n, const char *def) {
 }
 
 /**
+ * Refuse a value: "file:line:col: " and the message, with the value cut
+ * short if it is long.
+ **/
+[[noreturn]] static void value_fail(const char *what, const char *value,
+                                    const char *name, int line, int col,
+                                    const char *why) {
+  std::string v(value);
+  if (v.size() > 40)
+    v = v.substr(0, 40) + "...";
+  throw CPlacedConfigurationException(place_of(line, col) + what + " \"" + v +
+                                          "\" for " + name + ": " + why,
+                                      "the configuration");
+}
+
+/**
  * Return a boolean value, if the name of the value can't be found in
- * our list of values, or if the value isn't valid, return def.
- *
- * Valid values are strings that have a first character of:
- *  - t (true)
- *  - y (yes, evaluates to true)
- *  - 1 (evaluates to true)
- *  - f (false)
- *  - n (no, evaluates to false)
- *  - 0 (evaluates to false)
- *  .
+ * our list of values, return def. A value is one of these words, in any
+ * case: true, yes, on, 1, t, y; false, no, off, 0, f, n. Anything else is
+ * refused.
  **/
 bool CConfigurator::get_bool_value(const char *n, bool def) {
+  static const char *const words[2][6] = {{"false", "no", "off", "0", "f", "n"},
+                                          {"true", "yes", "on", "1", "t", "y"}};
   for (const SCfg_Value &v : pValues) {
     if (!strcmp(v.name, n)) {
-      switch (v.value[0]) {
-      case 't':
-      case 'T':
-      case 'y':
-      case 'Y':
-      case '1':
-        return true;
-
-      case 'f':
-      case 'F':
-      case 'n':
-      case 'N':
-      case '0':
-        return false;
-
-      default:
-        FAILURE_2(Configuration, "Illegal boolean value (%s) for %s", v.value,
-                  n);
-      }
+      for (int b = 0; b < 2; b++)
+        for (const char *w : words[b])
+          if (!strcasecmp(v.value, w))
+            return b != 0;
+      value_fail("Illegal boolean value", v.value, n, v.line, v.col,
+                 "true or false, yes or no, on or off, 1 or 0");
     }
   }
 
@@ -511,48 +508,55 @@ bool CConfigurator::get_bool_value(const char *n, bool def) {
 /**
  * Return a numeric value, if the name of the value can't be found in
  * our list of values, return def.
+ *
+ * A value is one or more groups of decimal digits added up: each group but
+ * the last ends in K, M, G or T, and the last may, which multiplies it by
+ * 1024 (1000 with decimal) once to four times: 512, 100K, 2G512M. An empty
+ * value, a suffix without digits, and a number that does not fit in 64 bits
+ * are refused.
  **/
 u64 CConfigurator::get_num_value(const char *n, bool decimal, u64 def) {
-  u64 multiplier = decimal ? 1000 : 1024;
+  const u64 unit = decimal ? 1000 : 1024;
   for (const SCfg_Value &v : pValues) {
-    if (!strcmp(v.name, n)) {
-      u64 retval = 0;
-      u64 partval = 0;
-      char *val = v.value;
-      int j = 0;
-      for (;;) {
-        while (val[j] && strchr("0123456789", val[j])) {
-          partval *= 10;
-          partval += val[j] - '0';
-          j++;
-        }
-
-        switch (val[j]) {
-        case 'T':
-          partval *= multiplier;
-          [[fallthrough]];
-        case 'G':
-          partval *= multiplier;
-          [[fallthrough]];
-        case 'M':
-          partval *= multiplier;
-          [[fallthrough]];
-        case 'K':
-          retval += partval * multiplier;
-          partval = 0;
-          j++;
-          break;
-
-        case '\0':
-          retval += partval;
-          return retval;
-
-        default:
-          FAILURE_2(Configuration, "Illegal numeric value (%s) for %s", v.value,
-                    n);
+    if (strcmp(v.name, n))
+      continue;
+    const char *p = v.value;
+    u64 total = 0;
+    bool overflow = false;
+    if (!*p)
+      value_fail("Illegal numeric value", v.value, n, v.line, v.col,
+                 "it is empty");
+    while (*p) {
+      if (*p < '0' || *p > '9')
+        value_fail("Illegal numeric value", v.value, n, v.line, v.col,
+                   "a number is digits, and a group of them may end in K, M, "
+                   "G or T (512M, 2G512M)");
+      u64 part = 0;
+      for (; *p >= '0' && *p <= '9'; p++) {
+        const u64 d = (u64)(*p - '0');
+        overflow |= part > (~(u64)0 - d) / 10;
+        part = part * 10 + d;
+      }
+      const char *const suffixes = "KMGT";
+      const char *s = *p ? strchr(suffixes, *p) : nullptr;
+      if (*p && !s)
+        value_fail("Illegal numeric value", v.value, n, v.line, v.col,
+                   "a number is digits, and a group of them may end in K, M, "
+                   "G or T (512M, 2G512M)");
+      if (s) {
+        p++;
+        for (const char *k = suffixes; k <= s; k++) {
+          overflow |= part > ~(u64)0 / unit;
+          part *= unit;
         }
       }
+      overflow |= total > ~(u64)0 - part;
+      total += part;
     }
+    if (overflow)
+      value_fail("Numeric value", v.value, n, v.line, v.col,
+                 "out of range (more than 64 bits)");
+    return total;
   }
 
   return def;

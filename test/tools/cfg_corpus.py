@@ -100,7 +100,7 @@ def generated_malformed():
          "Illegal character 0xc3"),
         # 9000 characters into an error message (FAILURE's 8000-byte buffer).
         ("gen-long-value.cfg", b'sys0 = tsunami\n{\n  memory.bits = "' +
-         b"x" * 9000 + b'";\n  cpu0 = ev68cb\n  {\n  }\n}\n', 1, 1,
+         b"x" * 9000 + b'";\n  cpu0 = ev68cb\n  {\n  }\n}\n', 3, 3,
          "Illegal numeric value", "run"),
     ]
 

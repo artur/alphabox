@@ -1,6 +1,8 @@
 # Each file here must be refused (cfg_corpus.py): exit status 1, and an
 # error at file:line:col that says the text. Columns count bytes from 1.
-# file  line:col  text the error must contain (case does not matter)
+# "run": a value only a device reads, which `alphabox run` refuses
+# (--check does not construct the device).
+# [run] file  line:col  text the error must contain (case does not matter)
 bad-platform.cfg 1:1 Unknown platform es99
 bad-slot.cfg 7:3 no such PCI slot
 bridge-device-range.cfg 9:5 0 to 15
@@ -29,3 +31,10 @@ unclosed-string-eof.cfg 8:5 quoted value opened here is not closed
 unclosed-string.cfg 4:13 does not end on its line
 unknown-class.cfg 7:3 Class foo for pci0.1 not known
 unquoted-spaces.cfg 11:30 must be quoted
+run bool-word.cfg 3:3 Illegal boolean value "tomorrow"
+run number-empty.cfg 3:3 it is empty
+run number-lowercase.cfg 3:3 Illegal numeric value "1k"
+run number-overflow-suffix.cfg 3:3 out of range
+run number-overflow.cfg 3:3 out of range
+run number-ramdisk-overflow.cfg 15:7 out of range
+run number-suffix-only.cfg 3:3 Illegal numeric value "M"
