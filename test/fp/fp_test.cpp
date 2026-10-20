@@ -106,7 +106,7 @@ static Item items[] = {
      "IEEE underflow is decided on the result rounded to the destination "
      "format: a true result that rounds to MIN is not an underflow (ARM "
      "4.7.5, p. 4-67)"},
-    {"FP-12", false,
+    {"FP-12", true,
      "VAX CVTGQ of exactly -2**63 is in range, not an integer overflow (ARM "
      "4.7.7.9, p. 4-79)"},
     {"DENORM", false,

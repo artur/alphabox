@@ -238,7 +238,10 @@ u64 CAlphaCPU::vax_cvtfi(u64 op, u32 ins) {
       a.frac = 0; /* out of range */
     else
       a.frac = (a.frac << (ubexp - UF_V_NM - 1)) & X64_QUAD; /* no rnd bit */
-    if (ins & I_FTRP_V)                                      /* trap enabled? */
+    /* -2**63 is the one value of this magnitude that fits (ARM 4.7.7.9:
+       the range is -2**63..2**63-1). */
+    const bool fits = a.sign && ubexp == UF_V_NM + 1 && a.frac == Q_SIGN;
+    if (!fits && (ins & I_FTRP_V)) /* trap enabled? */
       vax_trap(TRAP_IOV, ins);
   } /* set overflow */
 
