@@ -48,13 +48,22 @@ private:
   u32 smb_io_read(u32 address, int dsize);
   void smb_io_write(u32 address, int dsize, u32 data);
   u32 pm_timer_value();
+  u64 pm_timer_us();
+
+  /// The PM timer: whether it has started, the microseconds it had run at
+  /// m_pm_t0 (a time on this process's steady clock, in microseconds).
+  std::mutex m_pm_lock;
+  bool m_pm_running = false;
+  u64 m_pm_base_us = 0;
+  u64 m_pm_t0 = 0;
 
   struct SPMU_state {
     // 64-byte PM I/O block.  Holds the latched values of every read/write
     u8 pm_block[64];
     // 32-byte SMBus I/O block (host status/control + data).
     u8 smb_block[32];
-    // Wall-clock anchor for the 3.579545 MHz PM timer
+    // The 3.579545 MHz PM timer in a state file: the microseconds it had
+    // run, plus one; 0 if it had not started. Unused while running.
     u64 pm_timer_anchor_us;
   } state;
 };

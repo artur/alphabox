@@ -248,19 +248,30 @@ void CAliM1543C_pmu::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 }
 
 // Free-running 32-bit timer at 3.579545 MHz, the ACPI-fixed PM-timer rate.
-// Returned as ticks since first read of the device, so the count starts at
-// 0 the first time anyone looks and advances monotonically thereafter.
+// It starts at 0 the first time anyone looks and advances monotonically
+// thereafter, across a save and restore too: the microseconds it has run
+// are what a state file keeps (see SaveState), and a restore goes on from
+// them on this process's clock.
+static u64 steady_us() {
+  return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+u64 CAliM1543C_pmu::pm_timer_us() {
+  std::lock_guard<std::mutex> guard(m_pm_lock);
+  const u64 now = steady_us(); // under the lock: never before m_pm_t0
+  if (!m_pm_running) {
+    m_pm_running = true;
+    m_pm_t0 = now;
+  }
+  return m_pm_base_us + (now - m_pm_t0);
+}
+
 u32 CAliM1543C_pmu::pm_timer_value() {
-  using clk = std::chrono::steady_clock;
-  auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                    clk::now().time_since_epoch())
-                    .count();
-  if (state.pm_timer_anchor_us == 0)
-    state.pm_timer_anchor_us = (u64)now_us;
-  u64 elapsed_us = (u64)now_us - state.pm_timer_anchor_us;
-  // 3.579545 MHz → 3.579545 ticks per us.  Use a /1000 factor that's close
+  // 3.579545 MHz -> 3.579545 ticks per us.  Use a /1000 factor that's close
   // enough for delay-calibration loops without needing floating-point.
-  return (u32)((elapsed_us * 3579545ull) / 1000000ull);
+  return (u32)((pm_timer_us() * 3579545ull) / 1000000ull);
 }
 
 // PM I/O block, 64 bytes wide.  Layout the OS expects:
@@ -281,10 +292,24 @@ u32 CAliM1543C_pmu::pm_io_read(u32 address, int dsize) {
     return v;
   }
 
+  // PM1_TMR, 08h-0Bh, is read only and returns the running count (ALi
+  // M1543C data sheet v1.10, PDF p.197): a byte or word of it is that part
+  // of the count, not a stored byte.
   u32 v = 0;
+  u32 tmr = 0;
+  bool have_tmr = false;
   const int bytes = dsize / 8;
-  for (int i = 0; i < bytes && (off + i) < (int)sizeof(state.pm_block); i++)
-    v |= ((u32)state.pm_block[off + i]) << (8 * i);
+  for (int i = 0; i < bytes && (off + i) < (int)sizeof(state.pm_block); i++) {
+    u32 b = state.pm_block[off + i];
+    if (off + i >= 0x08 && off + i <= 0x0b) {
+      if (!have_tmr) {
+        tmr = pm_timer_value();
+        have_tmr = true;
+      }
+      b = (tmr >> (8 * (off + i - 0x08))) & 0xff;
+    }
+    v |= b << (8 * i);
+  }
 
 #ifdef DEBUG_PMU
   printf("%%PMU-I-PMRD: off=%02x dsize=%d -> %08x\n", off, dsize, v);
@@ -301,7 +326,8 @@ void CAliM1543C_pmu::pm_io_write(u32 address, int dsize, u32 data) {
 
   const int bytes = dsize / 8;
   for (int i = 0; i < bytes && (off + i) < (int)sizeof(state.pm_block); i++)
-    state.pm_block[off + i] = (u8)(data >> (8 * i));
+    if (off + i < 0x08 || off + i > 0x0b) // PM1_TMR is read only
+      state.pm_block[off + i] = (u8)(data >> (8 * i));
 }
 
 // SMBus I/O block, 32 bytes wide.  Stub: stores writes, returns last
@@ -357,9 +383,19 @@ int CAliM1543C_pmu::SaveState(FILE *f) {
   if ((res = CPCIDevice::SaveState(f)))
     return res;
 
+  // The PM timer's anchor is a time on this process's clock, meaningless in
+  // another run: the file keeps how long the timer has run instead, plus
+  // one (0: it has not started).
+  SPMU_state saved = state;
+  {
+    std::lock_guard<std::mutex> guard(m_pm_lock);
+    saved.pm_timer_anchor_us =
+        m_pm_running ? m_pm_base_us + (steady_us() - m_pm_t0) + 1 : 0;
+  }
+
   fwrite(&pmu_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
-  fwrite(&state, sizeof(state), 1, f);
+  fwrite(&saved, sizeof(saved), 1, f);
   fwrite(&pmu_magic2, sizeof(u32), 1, f);
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
@@ -408,6 +444,16 @@ int CAliM1543C_pmu::RestoreState(FILE *f) {
   if (m2 != pmu_magic2) {
     printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
+  }
+
+  // The timer goes on from the time it had run. (A file from before this
+  // holds the host's clock at the timer's start instead: the timer then goes
+  // on from that, a large count but a monotonic one.)
+  {
+    std::lock_guard<std::mutex> guard(m_pm_lock);
+    m_pm_running = state.pm_timer_anchor_us != 0;
+    m_pm_base_us = m_pm_running ? state.pm_timer_anchor_us - 1 : 0;
+    m_pm_t0 = steady_us();
   }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
