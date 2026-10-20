@@ -208,10 +208,14 @@ private:
   bool m_irq_busy = false;
   /// (L) The back end's host filter no longer matches the NIC's.
   bool m_filter_dirty = false;
+  /// (L) A setup frame has been loaded since the last reset.
+  bool m_setup_loaded = false;
 
   void reset_locked();
   bool nic_write_locked(u32 address, u32 data);
   NetworkFilter host_filter_locked() const;
+  bool filter_match_locked(const u8 *dst) const;
+  void trace_setup(const u8 *setup, u32 csr6);
   void apply_filter();
 
   u32 nic_read(u32 address, int dsize);

@@ -224,15 +224,25 @@ void CTulip::receive_process() {
     const u8 *packet_data = NULL;
     int packet_len = 0;
     while (net_backend->receive(&packet_data, &packet_len) > 0) {
+      bool taken = false;
+      {
+        std::lock_guard<std::mutex> lock(m_lock);
+        // The address filter (HRM 4.3.5.2): a frame it fails is dropped
+        // unless CSR6 RA takes everything, and then it is marked (RDES0
+        // FF).
+        if (packet_len >= 6 && (filter_match_locked(packet_data) ||
+                                (state.reg[CSR_OPMODE / 8] & OPMODE_RA))) {
+          rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
+          taken = true;
+        }
+        // Set 10bT activity -- but only where CSR12 is the SIA status. On
+        // the 21140 that register is eight general purpose pins, and this
+        // bit is one of them.
+        if (m_chip.media != TULIP_MEDIA_GPR_21140)
+          state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
+      }
       if (trace_packets)
-        trace_packet("RX", packet_data, packet_len);
-      std::lock_guard<std::mutex> lock(m_lock);
-      rx_queue->add_tail(packet_data, packet_len, calc_crc, true);
-      // Set 10bT activity -- but only where CSR12 is the SIA status. On
-      // the 21140 that register is eight general purpose pins, and this
-      // bit is one of them.
-      if (m_chip.media != TULIP_MEDIA_GPR_21140)
-        state.reg[CSR_SIASTAT / 8] |= SIASTAT_TRA;
+        trace_packet(taken ? "RX" : "RX filtered", packet_data, packet_len);
     }
   }
 
@@ -344,33 +354,13 @@ u32 CTulip::rx_last_status_locked(const u8 *frame, int len) const {
   /*  Set the frame length: */
   rdes0 |= ((u32)len << 16) & TDSTAT_Rx_FL; /* include CRC like HW/QEMU */
 
-  /* Set multicast / filter-fail flags. */
-  const u8 *dst = frame;
-  bool is_multicast = (dst[0] & 1) != 0;
-  if (is_multicast) {
+  /* A multicast destination (HRM Table 4-1, RDES0 MF). */
+  if (frame[0] & 1)
     rdes0 |= TDSTAT_Rx_MF;
-  }
-  /* Check perfect filter list programmed by setup-frame; fall back to our
-   * MAC. */
-  bool perfect = false;
-  for (int k = 0; k < 16; k++) {
-    const u8 *ent = &state.setup_filter[k * 12];
-    u8 pa[6] = {ent[0], ent[1], ent[4], ent[5], ent[8], ent[9]};
-    if ((pa[0] | pa[1] | pa[2] | pa[3] | pa[4] | pa[5]) == 0)
-      continue;
-    if (memcmp(dst, pa, 6) == 0) {
-      perfect = true;
-      break;
-    }
-  }
-  if (!perfect && memcmp(dst, state.mac, 6) == 0) {
-    perfect = true;
-  }
-  if (!perfect) {
-    if (state.reg[CSR_OPMODE / 8] & (OPMODE_PR | OPMODE_RA)) {
-      rdes0 |= TDSTAT_Rx_FF;
-    }
-  }
+  /* Filtering fail: set only in receive-all mode, for a frame the filter
+     of Table 3-75 would have refused (HRM Table 4-1, RDES0 FF). */
+  if ((state.reg[CSR_OPMODE / 8] & OPMODE_RA) && !filter_match_locked(frame))
+    rdes0 |= TDSTAT_Rx_FF;
 
   /* Data type per OM (normal / internal / external loopback). */
   if (state.reg[CSR_OPMODE / 8] & OPMODE_OM_INTLOOP) {
@@ -608,6 +598,7 @@ int CTulip::dec21143_tx() {
      *  Setup Packet.
      */
     u8 setup[192];
+    u32 setup_mode = 0;
     if (bufsize != 192)
       printf("[ dec21143: setup packet len = %i, should be 192! ]\n",
              (int)bufsize);
@@ -617,8 +608,29 @@ int CTulip::dec21143_tx() {
       if (epoch != m_tx_epoch)
         return 0;
       memcpy(state.setup_filter, setup, sizeof(state.setup_filter));
+      // The filtering type, TDES1 FT1:FT0 (HRM Table 4-8), shows in CSR6's
+      // read-only HP, HO and IF (Table 3-71).
+      u32 mode = 0;
+      switch (((tdes1 & TDCTL_Tx_FT1) ? 2 : 0) |
+              ((tdes1 & TDCTL_Tx_FT0) ? 1 : 0)) {
+      case 1: // hash: 512-bit table for multicast, one perfect address
+        mode = OPMODE_HP;
+        break;
+      case 2: // inverse: 16 perfect addresses refused
+        mode = OPMODE_IF;
+        break;
+      case 3: // hash only: the table for every destination
+        mode = OPMODE_HP | OPMODE_HO;
+        break;
+      }
+      state.reg[CSR_OPMODE / 8] =
+          (state.reg[CSR_OPMODE / 8] & ~OPMODE_FILTER_MODE) | mode;
+      m_setup_loaded = true;
       m_filter_dirty = true;
+      setup_mode = mode;
     }
+    if (trace_packets)
+      trace_setup(setup, setup_mode);
 
     ti = (tdes1 & TDCTL_Tx_IC) != 0;
 
@@ -728,33 +740,161 @@ int CTulip::dec21143_tx() {
   return 1;
 }
 
+/*
+ * The address filter (21143 HRM, 4.2.3 "Setup Frame" and Table 3-75; the
+ * 21140A's is the same, 21140A HRM 4.2.3 and Table 3-45).
+ *
+ * The setup frame is 192 bytes of 48 longwords, of which only the low 16
+ * bits count (Figures 4-12 and 4-14):
+ *  - perfect and inverse filtering: 16 addresses, address n in longwords
+ *    3n to 3n+2, two bytes each;
+ *  - hash filtering: a 512-bit table in longwords 0 to 31, bit i being bit
+ *    i % 16 of longword i / 16, and one physical address in longwords 39
+ *    to 41 (where perfect address 13 would be);
+ *  - hash-only filtering: the table alone.
+ */
+
+/// Address `n` of a perfect-filtering setup frame (HRM Figure 4-12).
+static void setup_address(const u8 *setup, int n, u8 out[6]) {
+  const u8 *e = &setup[n * 12];
+  out[0] = e[0];
+  out[1] = e[1];
+  out[2] = e[4];
+  out[3] = e[5];
+  out[4] = e[8];
+  out[5] = e[9];
+}
+
+/// The physical address a hash setup frame carries: longwords 39 to 41.
+static const int SETUP_HASH_PHYSICAL = 13;
+
 /**
- * The host filter: what the back end may pass up. Under m_lock.
+ * The bit of the 512-bit table a destination address selects: the low 9
+ * bits of the address's CRC-32, computed little endian from an all-ones
+ * start without the final inversion (HRM 4.2.3.4 and the routine of
+ * Appendix C.1, checked against the addresses of Example G-3). eth_crc32
+ * inverts at the end, so it is inverted back.
+ **/
+static int setup_hash_index(const u8 *dst) {
+  return (int)(~eth_crc32(0, dst, 6) & 0x1ff);
+}
+
+static bool setup_hash_bit(const u8 *setup, int i) {
+  return (setup[(i >> 4) * 4 + ((i >> 3) & 1)] >> (i & 7)) & 1;
+}
+
+/**
+ * Whether the address filter takes a frame for `dst` (HRM Table 3-75 with
+ * Table 4-8): promiscuous mode takes everything, pass-all-multicast every
+ * multicast, and the rest is the setup frame's filtering type. Under
+ * m_lock.
+ *
+ * The HRM leaves the filter undefined until the first setup frame (4.2.3.1:
+ * one must come before the receiver is started); until then the station
+ * address from the ROM and broadcast pass, which is what the host filter
+ * has always let through.
+ **/
+bool CTulip::filter_match_locked(const u8 *dst) const {
+  static const u8 broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  const u32 csr6 = state.reg[CSR_OPMODE / 8];
+  const bool multicast = (dst[0] & 1) != 0;
+  u8 a[6];
+
+  if (csr6 & OPMODE_PR)
+    return true;
+  if (multicast && (csr6 & OPMODE_PM))
+    return true;
+  if (!m_setup_loaded)
+    return memcmp(dst, state.mac, 6) == 0 || memcmp(dst, broadcast, 6) == 0;
+
+  if (csr6 & OPMODE_HP) {
+    if (multicast || (csr6 & OPMODE_HO))
+      return setup_hash_bit(state.setup_filter, setup_hash_index(dst));
+    setup_address(state.setup_filter, SETUP_HASH_PHYSICAL, a);
+    return memcmp(dst, a, 6) == 0;
+  }
+
+  bool hit = false;
+  for (int n = 0; n < 16 && !hit; n++) {
+    setup_address(state.setup_filter, n, a);
+    hit = memcmp(dst, a, 6) == 0;
+  }
+  return (csr6 & OPMODE_IF) ? !hit : hit;
+}
+
+/**
+ * With trace_packets, what a setup frame loaded: its filtering type and the
+ * addresses, or the number of hash bits set.
+ **/
+void CTulip::trace_setup(const u8 *setup, u32 mode) {
+  char line[400];
+  int pos = 0;
+  u8 a[6];
+
+  if (mode & OPMODE_HP) {
+    int bits = 0;
+    for (int i = 0; i < 512; i++)
+      bits += setup_hash_bit(setup, i);
+    pos = snprintf(line, sizeof(line), "%s, %d hash bits",
+                   (mode & OPMODE_HO) ? "hash only" : "hash", bits);
+    if (!(mode & OPMODE_HO)) {
+      setup_address(setup, SETUP_HASH_PHYSICAL, a);
+      snprintf(line + pos, sizeof(line) - pos,
+               ", physical %02x:%02x:%02x:%02x:%02x:%02x", a[0], a[1], a[2],
+               a[3], a[4], a[5]);
+    }
+  } else {
+    pos = snprintf(line, sizeof(line), "%s",
+                   (mode & OPMODE_IF) ? "inverse" : "perfect");
+    for (int n = 0; n < 16 && pos < (int)sizeof(line) - 20; n++) {
+      setup_address(setup, n, a);
+      bool seen = false;
+      for (int m = 0; m < n && !seen; m++) {
+        u8 b[6];
+        setup_address(setup, m, b);
+        seen = memcmp(a, b, 6) == 0;
+      }
+      if (!seen)
+        pos += snprintf(line + pos, sizeof(line) - pos,
+                        " %02x:%02x:%02x:%02x:%02x:%02x", a[0], a[1], a[2],
+                        a[3], a[4], a[5]);
+    }
+  }
+  printf("%s: setup frame: %s\n", devid_string, line);
+}
+
+/**
+ * The host filter: what the back end may pass up, never less than the
+ * NIC's own filter takes (the NIC filters again in receive_process). Under
+ * m_lock.
  **/
 NetworkFilter CTulip::host_filter_locked() const {
   NetworkFilter nf;
   memset(&nf, 0, sizeof(nf));
-  for (int i = 0; i < 16; i++) {
-    nf.mac_list[i][0] = state.setup_filter[i * 12];
-    nf.mac_list[i][1] = state.setup_filter[i * 12 + 1];
-    nf.mac_list[i][2] = state.setup_filter[i * 12 + 4];
-    nf.mac_list[i][3] = state.setup_filter[i * 12 + 5];
-    nf.mac_list[i][4] = state.setup_filter[i * 12 + 8];
-    nf.mac_list[i][5] = state.setup_filter[i * 12 + 9];
-#if defined(DEBUG_NIC_FILTER)
-    printf("MAC[%d] = %02x:%02x:%02x:%02x:%02x:%02x. \n", i, nf.mac_list[i][0],
-           nf.mac_list[i][1], nf.mac_list[i][2], nf.mac_list[i][3],
-           nf.mac_list[i][4], nf.mac_list[i][5]);
-#endif
-  }
-
-  /* Hand the CSR6 filtering semantics to the backend; pcap builds a BPF
-   * expression from these, tap relies on the guest driver's own filtering. */
-  nf.promiscuous = (state.reg[CSR_OPMODE / 8] & OPMODE_PR) != 0;
-  nf.receive_all = (state.reg[CSR_OPMODE / 8] & OPMODE_RA) != 0;
-  nf.pass_multicast = (state.reg[CSR_OPMODE / 8] & OPMODE_PM) != 0;
-  nf.inverse = (state.reg[CSR_OPMODE / 8] & OPMODE_IF) != 0;
   memcpy(nf.own_mac, state.mac, sizeof(nf.own_mac));
+
+  const u32 csr6 = state.reg[CSR_OPMODE / 8];
+  nf.promiscuous = (csr6 & OPMODE_PR) != 0;
+  nf.receive_all = (csr6 & OPMODE_RA) != 0;
+  nf.pass_multicast = (csr6 & OPMODE_PM) != 0;
+
+  if (!m_setup_loaded)
+    return nf; // the station address and broadcast
+  if ((csr6 & OPMODE_IF) || (csr6 & OPMODE_HO)) {
+    // Inverse filtering and hashed unicast: no address list says it.
+    nf.promiscuous = true;
+  } else if (csr6 & OPMODE_HP) {
+    // Hash filtering: whichever multicast the table holds, one physical.
+    nf.pass_multicast = true;
+    setup_address(state.setup_filter, SETUP_HASH_PHYSICAL, nf.mac_list[0]);
+  } else {
+    for (int n = 0; n < 16; n++)
+      setup_address(state.setup_filter, n, nf.mac_list[n]);
+  }
+#if defined(DEBUG_NIC_FILTER)
+  printf("%s: host filter pr=%d ra=%d pm=%d\n", devid_string, nf.promiscuous,
+         nf.receive_all, nf.pass_multicast);
+#endif
   return nf;
 }
 

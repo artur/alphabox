@@ -483,6 +483,10 @@ of transmission */
 #define OPMODE_RA 0x40000000     /* receive all (21140) */
 #define OPMODE_SC 0x80000000     /* special capture effect enable (21041+) */
 
+/* The read-only bits that report the filtering mode the last setup frame
+   loaded. */
+#define OPMODE_FILTER_MODE (OPMODE_HP | OPMODE_HO | OPMODE_IF)
+
 /* Shorthand for media-related OPMODE bits */
 #define OPMODE_MEDIA_BITS                                                      \
   (OPMODE_FD | OPMODE_PS | OPMODE_TTM | OPMODE_PCS | OPMODE_SCR)

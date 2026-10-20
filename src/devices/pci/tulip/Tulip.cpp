@@ -397,6 +397,10 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
      * verify by the driver (e.g. AlphaBIOS adapter self-test) succeeds
      * even when the write omitted MBO. */
     state.reg[regnr] |= 0x02000000;
+    /* HP, HO and IF are read only: they report the filtering mode the last
+       setup frame loaded (21143 HRM Table 3-71, CSR6 bits 0, 2, 4). */
+    state.reg[regnr] = (state.reg[regnr] & ~OPMODE_FILTER_MODE) |
+                       (oldreg & OPMODE_FILTER_MODE);
     if (data & 0x02000000) {
 
       /*  A must-be-one bit.  */
@@ -457,9 +461,14 @@ bool CTulip::nic_write_locked(u32 address, u32 data) {
 
     /* If mode bits affecting reception/filtering changed, the NIC thread
        hands the back end a new host filter. */
-    if ((data ^ oldreg) & (OPMODE_PR | OPMODE_IF | OPMODE_PM | OPMODE_RA)) {
+    if ((state.reg[regnr] ^ oldreg) & (OPMODE_PR | OPMODE_PM | OPMODE_RA)) {
       m_filter_dirty = true;
       wake = true;
+      if (trace_packets)
+        printf("%s: CSR6 filtering:%s%s%s\n", devid_string,
+               (state.reg[regnr] & OPMODE_PR) ? " promiscuous" : "",
+               (state.reg[regnr] & OPMODE_PM) ? " all-multicast" : "",
+               (state.reg[regnr] & OPMODE_RA) ? " receive-all" : "");
     }
     break;
 
@@ -582,6 +591,7 @@ void CTulip::reset_locked() {
 
   // Clear any previously programmed perfect-filter setup frame.
   memset(state.setup_filter, 0, sizeof(state.setup_filter));
+  m_setup_loaded = false;
 
   // Reset derived/internal soft state that is not covered by the CSR array.
   state.descr_skip = 0;
@@ -739,6 +749,9 @@ int CTulip::RestoreState(FILE *f) {
   m_rx_epoch++;
   m_tx_epoch++;
   m_filter_dirty = true;
+  m_setup_loaded = (state.reg[CSR_OPMODE / 8] & OPMODE_HP) != 0;
+  for (u8 b : state.setup_filter)
+    m_setup_loaded |= b != 0;
 
   printf("%s: %li bytes restored.\n", devid_string, ss);
   return 0;
