@@ -505,6 +505,18 @@ and FPCR disable. These were settled in that round.
   returned MIN: `ALPHABOX_JIT_FPTEST` with those operands added showed 185
   disagreements, and shows none now.
 
+**On a guest.** The Gentoo install on the ES40 ([linux.md](linux.md))
+compiled one C program twice with gcc 15, with and without `-mieee`: it
+divides `DBL_MIN` by 3, halves it, divides `FLT_MIN` by 3, and converts
+1e30 to `long`. gcc emitted `divt/su`, `mult/su`, `divs/su` and
+`cvttq/svc` for the first, `divt`, `mult`, `divs` and `cvttq/c` for the
+second. Linux runs both with `UNFD` set and `UNDZ` clear.
+
+| | before 2026-10-20 | now |
+| --- | --- | --- |
+| `-mieee` | `0x0p+0` three times | `0x0.5555555555555p-1022`, `0x0.8p-1022`, `0x1.555558p-128` (the IEEE results) |
+| without | zeros; the conversion kills the program with `SIGFPE` | zeros (true zeros: no `/U`); the conversion gives 5076964154930102272, the low 64 bits of the double 1e30 |
+
 ### The exception path
 
 `EXC_ADDR` is the faulting instruction for a *fault*, which is what a fault
