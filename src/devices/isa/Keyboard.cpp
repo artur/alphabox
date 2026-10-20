@@ -224,6 +224,11 @@ void CKeyboard::gen_scancode(u32 key) {
   unsigned char *scancode;
   size_t i;
 
+  // Only codes the scan code tables have (the GUI's BX_KEY_UNHANDLED is not
+  // one of them).
+  if ((key & ~(u32)BX_KEY_RELEASED) >= BX_KEY_NBKEYS)
+    return;
+
   // A keyboard that is not scanning (F5) does not see the key. One the
   // controller inhibits (command AD, or bit 4 of its command byte) keeps it
   // in its buffer until the clock is released: kbd_service() delivers only
@@ -1716,9 +1721,30 @@ int CKeyboard::RestoreState(FILE *f) {
     return -1;
   }
 
-  r = fread(&state, sizeof(state), 1, f);
+  SKb_state restored;
+  r = fread(&restored, sizeof(restored), 1, f);
   if (r != 1) {
     printf("kbc: unexpected end of file!\n");
+    return -1;
+  }
+
+  // The size check catches a state from another build, not a damaged one.
+  // Every count and index into the fixed arrays, and every value a table or
+  // the E9 reply is indexed by, must be in range, or the first guest access
+  // would run off an array.
+  const SKb_state &rs = restored;
+  const SKb_state::SAli_kbdib &kb = rs.kbd_internal_buffer;
+  const SKb_state::SAli_mib &mb = rs.mouse_internal_buffer;
+  const u8 res = rs.mouse.resolution_cpmm;
+  if (rs.kbd_controller_Qsize > BX_KBD_CONTROLLER_QSIZE ||
+      kb.num_elements < 0 || kb.num_elements > BX_KBD_ELEMENTS || kb.head < 0 ||
+      kb.head >= BX_KBD_ELEMENTS || mb.num_elements < 0 ||
+      mb.num_elements > BX_MOUSE_BUFF_SIZE || mb.head < 0 ||
+      mb.head >= BX_MOUSE_BUFF_SIZE ||
+      rs.mouse.button_queue_len > BX_MOUSE_BUTTON_QSIZE ||
+      rs.current_scancodes_set > 2 ||
+      (res != 1 && res != 2 && res != 4 && res != 8)) {
+    printf("kbc: bad state: a queue or index is out of range!\n");
     return -1;
   }
 
@@ -1733,6 +1759,10 @@ int CKeyboard::RestoreState(FILE *f) {
     return -1;
   }
 
+  {
+    std::lock_guard<std::mutex> guard(kbdLock);
+    state = restored;
+  }
   printf("kbc: %d bytes restored.\n", (int)ss);
   return 0;
 }

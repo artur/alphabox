@@ -333,6 +333,79 @@ static void test_controller_commands() {
   check("C0 input port", drain(), "80");
 }
 
+/// KBD-11: a state whose queue counts or indexes are out of range is refused.
+static void test_restore_validation() {
+  fresh();
+  tap(BX_KEY_A); // something in the state
+  FILE *f = tmpfile();
+  check_true("save", kb->SaveState(f) == 0);
+  const long len = ftell(f);
+  std::vector<unsigned char> img((size_t)len);
+  rewind(f);
+  check_true("read back", fread(img.data(), 1, img.size(), f) == img.size());
+  rewind(f);
+  check_true("restore of a good state", kb->RestoreState(f) == 0);
+  check("state restored", drain(), "1e 9e");
+
+  // Each field below indexes an array; any byte pattern in it that is out of
+  // range must be refused. Patch every byte of the state in turn to 0xff and
+  // make sure a restore either refuses it or leaves a controller that still
+  // works.
+  int refused = 0, accepted = 0;
+  const size_t hdr = sizeof(u32) + sizeof(long);
+  for (size_t at = hdr; at + sizeof(u32) < img.size(); at++) {
+    std::vector<unsigned char> bad = img;
+    bad[at] = 0xff;
+    FILE *g = tmpfile();
+    fwrite(bad.data(), 1, bad.size(), g);
+    rewind(g);
+    if (kb->RestoreState(g) != 0) {
+      refused++;
+    } else {
+      accepted++;
+      // exercise every queue
+      drain();
+      tap(BX_KEY_A);
+      kb->mouse_motion(1, 1, 0, 1);
+      kb->execute();
+      drain();
+      out64(0x20);
+      drain();
+    }
+    fclose(g);
+  }
+  char what[96];
+  snprintf(what, sizeof(what),
+           "corrupt states: %d refused, %d accepted, none crashed", refused,
+           accepted);
+  check_true(what, refused > 0);
+
+  // A refused state leaves the controller as it was.
+  fresh();
+  tap(BX_KEY_A);
+  std::vector<unsigned char> junk = img;
+  for (size_t at = hdr; at + sizeof(u32) < junk.size(); at++)
+    junk[at] = 0xff;
+  FILE *g = tmpfile();
+  fwrite(junk.data(), 1, junk.size(), g);
+  rewind(g);
+  check_true("an all-FF state is refused", kb->RestoreState(g) != 0);
+  check("the controller kept its own state", drain(), "1e 9e");
+  fclose(g);
+  fclose(f);
+  fresh();
+}
+
+/// KBD-10: a key code outside the table is ignored.
+static void test_key_range() {
+  fresh();
+  press(200);
+  press(BX_KEY_UNHANDLED);
+  press(BX_KEY_NBKEYS);
+  release(200);
+  check("out-of-range keys", drain(), "");
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a crash keeps what came before it
   CSystem *sys = reinterpret_cast<CSystem *>(sys_storage);
@@ -344,6 +417,8 @@ int main() {
   test_controller_commands();
   test_scan_set_default();
   test_reset_enables_scanning();
+  test_restore_validation();
+  test_key_range();
   printf("kbc_test: %d of %d checks passed\n", checks - failures, checks);
   return failures ? 1 : 0;
 }
