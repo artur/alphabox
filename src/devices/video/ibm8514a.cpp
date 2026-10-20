@@ -648,6 +648,50 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
   // gpbusy still covers the host-data WAIT states.
   ibm8514.force_busy = false;
 
+  // Clipped pixels leave nothing behind except, in pixel-transfer mode, the
+  // bit position src_x; the loops below skip whole clipped runs only when
+  // that mode is not in use (see the rectangle fill).
+  const bool clip_skip_mode = (ibm8514.pixel_control & 0x00c0) != 0x0080;
+  // The rectangle fill and the BitBLT count X from the command's start point
+  // and wrap at the right edge, one row at a time, when X starts there and
+  // the 16-bit counter cannot overflow on the way.
+  auto blit_clip_skip_ok = [&]() -> bool {
+    const int w = ibm8514.rect_width;
+    return clip_skip_mode && ibm8514.curr_x == ibm8514.prev_x &&
+           ((ibm8514.current_cmd & 0x0020) ? ibm8514.prev_x + w <= 32766
+                                           : ibm8514.prev_x - w >= -32767);
+  };
+  // True when every pixel of one row of a BitBLT or pattern fill (the clip
+  // test of those two reads the display-memory offset of the pixel) lies
+  // above or below the scissors. Only claimed where the offsets do not wrap
+  // around the end of display memory, so they run monotonically.
+  auto blit_row_clipped = [&](uint32_t row_off, bool inc_x) -> bool {
+    if (!clip_skip_mode)
+      return false;
+    const uint64_t span =
+        (uint64_t)ibm8514.rect_width * ((uint64_t)ibm8514.color_bpp + 1);
+    uint64_t lo, hi;
+    if (inc_x) {
+      lo = row_off;
+      hi = (uint64_t)row_off + span;
+    } else {
+      if (row_off < span)
+        return false;
+      lo = row_off - span;
+      hi = row_off;
+    }
+    if (hi >= m_vga->vga.svga_intf.vram_size)
+      return false;
+    uint64_t line_len = IBM8514_LINE_LENGTH;
+    if (line_len == 0)
+      line_len = 1;
+    const uint64_t ylo = lo / line_len, yhi = hi / line_len;
+    if (yhi > 32767)
+      return false;
+    return (int64_t)yhi < ibm8514.scissors_top ||
+           (int64_t)ylo > ibm8514.scissors_bottom;
+  };
+
   switch (data & 0xe000) {
   case 0x0000: // NOP (for "Short Stroke Vectors")
     ibm8514.state = IBM8514_IDLE;
@@ -831,7 +875,36 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
     off += (IBM8514_LINE_LENGTH * ibm8514.curr_y);
     off += (ibm8514.curr_x * (ibm8514.color_bpp + 1));
     for (y = 0; y <= ibm8514.rect_height; y++) {
-      for (x = 0; x <= ibm8514.rect_width; x++) {
+      // A guest-sized rectangle (up to 8192 x 4096) is mostly outside the
+      // scissors, and a clipped pixel changes nothing but the counters this
+      // loop walks. When a row starts at the command's start point, skip the
+      // pixels that cannot pass the scissors test and leave the counters
+      // where the full walk would have left them (row end: X back at the
+      // start point, Y one step on). Same result, work proportional to what
+      // shows.
+      int xlo = 0, xhi = ibm8514.rect_width;
+      if (blit_clip_skip_ok()) {
+        const int w = ibm8514.rect_width;
+        const int px = ibm8514.prev_x;
+        const bool inc_x = (ibm8514.current_cmd & 0x0020) != 0;
+        if (ibm8514.curr_y < ibm8514.scissors_top ||
+            ibm8514.curr_y > ibm8514.scissors_bottom) {
+          xlo = 1;
+          xhi = 0; // the whole row is clipped
+        } else if (inc_x) {
+          xlo = std::max(0, ibm8514.scissors_left - px);
+          xhi = std::min(w, ibm8514.scissors_right - px);
+        } else {
+          xlo = std::max(0, px - ibm8514.scissors_right);
+          xhi = std::min(w, px - ibm8514.scissors_left);
+        }
+        if (xlo <= xhi)
+          ibm8514.curr_x = inc_x ? px + xlo : px - xlo;
+      }
+      // True when the walk below stops short of the right edge, where the
+      // full walk would have wrapped.
+      const bool row_skipped = !(xlo <= xhi && xhi == (int)ibm8514.rect_width);
+      for (x = xlo; x <= xhi; x++) {
         if (data & 0x0020) // source pattern is always based on current X/Y?
           ibm8514_write((off + x * (ibm8514.color_bpp + 1)) %
                             m_vga->vga.svga_intf.vram_size,
@@ -864,6 +937,15 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
           }
         }
       }
+      if (row_skipped) {
+        // What the full walk does as its last pixel passes the right edge.
+        ibm8514.curr_x = ibm8514.prev_x;
+        ibm8514.src_x = 0;
+        if (ibm8514.current_cmd & 0x0080)
+          ibm8514.curr_y++;
+        else
+          ibm8514.curr_y--;
+      }
       if (data & 0x0080)
         off += IBM8514_LINE_LENGTH;
       else
@@ -888,7 +970,11 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
     readmask =
         ((ibm8514.read_mask & 0x01) << 7) | ((ibm8514.read_mask & 0xfe) >> 1);
     for (y = 0; y <= ibm8514.rect_height; y++) {
-      for (x = 0; x <= ibm8514.rect_width; x++) {
+      // A row wholly above or below the scissors draws nothing: skip its
+      // pixels and do what the full walk does at the right edge.
+      const bool row_clipped =
+          blit_clip_skip_ok() && blit_row_clipped(off, (data & 0x0020) != 0);
+      for (x = 0; x <= (row_clipped ? -1 : (int)ibm8514.rect_width); x++) {
         if (data & 0x0020)
           ibm8514_write(off + x * (ibm8514.color_bpp + 1),
                         src + x * (ibm8514.color_bpp + 1));
@@ -917,6 +1003,14 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
               ibm8514.curr_y--;
           }
         }
+      }
+      if (row_clipped) {
+        ibm8514.curr_x = ibm8514.prev_x;
+        ibm8514.src_x = 0;
+        if (ibm8514.current_cmd & 0x0080)
+          ibm8514.curr_y++;
+        else
+          ibm8514.curr_y--;
       }
       if (data & 0x0080) {
         src += IBM8514_LINE_LENGTH;
@@ -950,7 +1044,10 @@ void ibm8514a_device::ibm8514_cmd_w(uint16_t data) {
     src += (IBM8514_LINE_LENGTH * pattern_y);
 
     for (y = 0; y <= ibm8514.rect_height; y++) {
-      for (x = 0; x <= ibm8514.rect_width; x++) {
+      // A row wholly above or below the scissors draws nothing, and the
+      // pattern and X counters are reset at the end of the row anyway.
+      const bool row_clipped = blit_row_clipped(off, (data & 0x0020) != 0);
+      for (x = 0; x <= (row_clipped ? -1 : (int)ibm8514.rect_width); x++) {
         if (data & 0x0020) {
           ibm8514_write(off + x * (ibm8514.color_bpp + 1),
                         src + pattern_x * (ibm8514.color_bpp + 1));
