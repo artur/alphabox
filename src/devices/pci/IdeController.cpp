@@ -111,7 +111,22 @@ namespace {
 /// Thrown on a controller thread woken to stop while a command waited for
 /// the guest (do_dma_transfer): run() ends there.
 struct IdeStopping {};
+
+/// Thrown on a controller thread when a reset or a new command ends the
+/// command parked in do_dma_transfer(): run() drops it and takes the next.
+struct IdeCancelled {};
 } // namespace
+
+/// Release a DMA command parked for the bus master's start bit: SRST and a
+/// new command abandon the command in progress (ATA/ATAPI-6 9.2, software
+/// reset protocol), and the command must not be left to run against the PRD
+/// table of whatever the guest starts next.
+void CIdeController::cancel_dma_wait(int index) {
+  if (dma_parked[index].load()) {
+    dma_cancel[index].store(true);
+    semBusMaster[index].set();
+  }
+}
 
 void CIdeController::stop_threads() {
   StopThread = true;
@@ -295,9 +310,9 @@ void CIdeController::WriteMem_Legacy(int index, u32 address, int dsize,
 
   case SEC_BUSMASTER:
     channel = 1;
-
+    [[fallthrough]];
   case PRI_BUSMASTER:
-    ide_busmaster_write(channel, address, dsize, data);
+    ide_busmaster_write(channel, address, data, dsize);
     break;
   }
 }
@@ -410,6 +425,11 @@ u32 CIdeController::ide_command_read(int index, u32 address, int dsize) {
     }
 
     data = 0;
+
+    // The pointer never leaves the buffer, whatever size a command set.
+    if (CONTROLLER(index).data_ptr < 0 ||
+        CONTROLLER(index).data_ptr + (dsize == 32 ? 2 : 1) > IDE_BUFFER_SIZE)
+      break;
 
     switch (dsize) {
     case 32:
@@ -527,6 +547,12 @@ void CIdeController::ide_command_write(int index, u32 address, int dsize,
       break;
     }
 
+    // Nothing is stored past the buffer: a write the buffer cannot hold is
+    // dropped.
+    if (CONTROLLER(index).data_ptr < 0 ||
+        CONTROLLER(index).data_ptr + (dsize == 32 ? 2 : 1) > IDE_BUFFER_SIZE)
+      break;
+
     switch (dsize) {
     case 32:
       CONTROLLER(index).data[CONTROLLER(index).data_ptr++] = data & 0xffff;
@@ -621,6 +647,7 @@ void CIdeController::ide_command_write(int index, u32 address, int dsize,
     if ((data & 0xf0) == 0x10)
       data = 0x10;
 
+    cancel_dma_wait(index); // a command parked for the bus master is over
     SEL_COMMAND(index).command_in_progress = false;
     SEL_COMMAND(index).current_command = data;
     if (g_idetrace)
@@ -748,6 +775,8 @@ void CIdeController::ide_control_write(int index, u32 address, u32 data) {
       COMMAND(index, 1).command_in_progress = false;
 
       CONTROLLER(index).reset_in_progress = true;
+      cancel_dma_wait(index); // SRST releases a command parked for the bus
+                              // master (ATA/ATAPI-6 9.2)
       SEL_REGISTERS(index).error = 0x01; // no error
       COMMAND(index, 0).current_command = 0;
       // Do NOT force disable_irq=false here: the OS commonly writes
@@ -780,7 +809,11 @@ void CIdeController::ide_control_write(int index, u32 address, u32 data) {
  * Read from the IDE controller busmaster interface.
  **/
 u8 CIdeController::ide_busmaster_status(int index) {
-  u8 status = CONTROLLER(index).busmaster[2] & 0x07;
+  u8 status;
+  {
+    SCOPED_READ_LOCK(mtBusMaster[index]);
+    status = CONTROLLER(index).busmaster[2] & 0x07;
+  }
 
   if (usedma) {
     CDisk *drive0 = get_disk(index, 0);
@@ -796,6 +829,17 @@ u8 CIdeController::ide_busmaster_status(int index) {
   }
 
   return status;
+}
+
+/// One byte of the bus master registers as the guest reads it; the DMA
+/// capable bits of the status byte are computed here and never stored.
+u8 CIdeController::busmaster_byte(int index, int reg) {
+  if (reg == 2)
+    return ide_busmaster_status(index);
+  if (reg < 0 || reg > 7)
+    return 0;
+  SCOPED_READ_LOCK(mtBusMaster[index]);
+  return CONTROLLER(index).busmaster[reg];
 }
 
 // ALPHABOX_IDETRACE: the guest's writes to this function's PCI COMMAND
@@ -816,22 +860,11 @@ u32 CIdeController::ide_busmaster_read(int index, u32 address, int dsize) {
       printf("IDET %10.1f ch%d BM read @%u/%d\n", idetrace_ms(), index,
              (unsigned)address, dsize);
   }
-  switch (dsize) {
-  case 8:
-    if (address == 2)
-      CONTROLLER(index).busmaster[2] = ide_busmaster_status(index);
-    data = CONTROLLER(index).busmaster[address];
-    break;
-
-  case 32:
-    CONTROLLER(index).busmaster[2] = ide_busmaster_status(index);
-    data = *(u32 *)(&CONTROLLER(index).busmaster[address]);
-    break;
-
-  default:
-    FAILURE(InvalidArgument, "16-bit read from busmaster");
-    break;
-  }
+  // The registers are byte, word and dword accessible (SFF-8038i 2.0, p.3):
+  // an access is assembled from its bytes, and bytes past the eight registers
+  // of the channel read 0.
+  for (int i = 0; i < dsize / 8 && i < 4; i++)
+    data |= (u32)busmaster_byte(index, (int)address + i) << (8 * i);
 
 #ifdef DEBUG_IDE_BUSMASTER
   printf(
@@ -854,9 +887,6 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
   }
 #endif
 
-  u32 prd_address;
-
-  //  u32 base, control;
   switch (dsize) {
   case 32:
     ide_busmaster_write(index, address, data & 0xff, 8);
@@ -878,20 +908,26 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
            (data & 0x08 ? "write" : "read"), (data & 0x01 ? "start" : "stop"));
 #endif
 
-    // bits 7:4 & 2:1 are reserved and must return zero on read.
-    CONTROLLER(index).busmaster[0] = data & 0x09;
-    if (data & 0x01) {
+    {
+      SCOPED_WRITE_LOCK(mtBusMaster[index]);
 
-      // set the status register
-      CONTROLLER(index).busmaster[2] |= 0x01;
+      // bits 7:4 & 2:1 are reserved and must return zero on read.
+      CONTROLLER(index).busmaster[0] = data & 0x09;
+      if (data & 0x01) {
+
+        // set the status register
+        CONTROLLER(index).busmaster[2] |= 0x01;
+      } else {
+
+        // clear the status register
+        CONTROLLER(index).busmaster[2] &= 0xfe;
+      }
+    }
+    if (data & 0x01) {
       if (g_idetrace)
         printf("IDET %10.1f ch%d BM start %02x\n", idetrace_ms(), index,
                (unsigned)data);
       semBusMaster[index].set(); // wake up the controller for busmastering
-    } else {
-
-      // clear the status register
-      CONTROLLER(index).busmaster[2] &= 0xfe;
     }
     break;
 
@@ -904,16 +940,18 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
     // bit 1 = error (write 1 to reset)
     // bit 0 = busmaster active.
     {
-      u8 status = CONTROLLER(index).busmaster[2];
-      if (data & 0x04) // interrupt
-        status &= ~0x04;
-      if (data & 0x02) // error
-        status &= ~0x02;
-      if (data & 0x01) // active; several ALi drivers write this to work around
-                       // sticky active
-        status &= ~0x01;
-      CONTROLLER(index).busmaster[2] =
-          (status & 0x07) | (ide_busmaster_status(index) & 0x60);
+      {
+        SCOPED_WRITE_LOCK(mtBusMaster[index]);
+        u8 status = CONTROLLER(index).busmaster[2];
+        if (data & 0x04) // interrupt
+          status &= ~0x04;
+        if (data & 0x02) // error
+          status &= ~0x02;
+        if (data & 0x01) // active; several ALi drivers write this to work
+                         // around sticky active
+          status &= ~0x01;
+        CONTROLLER(index).busmaster[2] = status & 0x07;
+      }
       if ((data & 0x04) || (data & 0x01))
         deassert_interrupt(index);
     }
@@ -922,25 +960,13 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
   case 4: // descriptor table pointer register(s)
   case 5:
   case 6:
-    CONTROLLER(index).busmaster[address] = data;
+  case 7: {
+    // Bits 1:0 of the pointer are reserved and read 0 (SFF-8038i 2.3, p.4).
+    SCOPED_WRITE_LOCK(mtBusMaster[index]);
+    CONTROLLER(index).busmaster[address] =
+        (address == 4) ? (u8)(data & 0xfc) : (u8)data;
     break;
-
-  case 7:
-    CONTROLLER(index).busmaster[address] = data;
-    prd_address = endian_32(*(u32 *)(&CONTROLLER(index).busmaster[4]));
-#ifdef DEBUG_IDE_BUSMASTER
-    printf("%%IDE-I-PRD: Virtual address: %" PRIx64 "  \n",
-           endian_32(*(u32 *)(&CONTROLLER(index).busmaster[4])));
-    printf("-IDE-I-PRD: Physical address: %" PRIx64 "  \n", prd_address);
-    u32 base, control;
-    do {
-      do_pci_read(prd_address, &base, 4, 1);
-      do_pci_read(prd_address + 4, &control, 4, 1);
-      printf("-IDE-I-PRD: base: %x, control: %x  \n", base, control);
-      prd_address += 8;
-    } while ((control & 0x80000000) == 0);
-#endif
-    break;
+  }
 
   default:
     break;
@@ -1184,10 +1210,15 @@ void CIdeController::identify_drive(int index, bool packet) {
   }
 
   // lba capacity
-  CONTROLLER(index).data[60] =
-      (u16)(SEL_DISK(index)->get_lba_size() >> 0) & 0xFFFF;
-  CONTROLLER(index).data[61] =
-      (u16)(SEL_DISK(index)->get_lba_size() >> 16) & 0xFFFF;
+  {
+    // Words 60-61 hold at most 0FFFFFFFh; more needs the 48-bit feature set
+    // (ATA/ATAPI-6 6.2.1, p.22; IDENTIFY words 60-61, p.116).
+    off_t_large lbas = SEL_DISK(index)->get_lba_size();
+    if (lbas > 0x0FFFFFFF)
+      lbas = 0x0FFFFFFF;
+    CONTROLLER(index).data[60] = (u16)(lbas >> 0) & 0xFFFF;
+    CONTROLLER(index).data[61] = (u16)(lbas >> 16) & 0xFFFF;
+  }
 
   /* The DMA modes this drive offers.
    *
@@ -1255,13 +1286,14 @@ void CIdeController::identify_drive(int index, bool packet) {
   // command set supported (cdrom = nop,packet,removable; disk=nop)
   CONTROLLER(index).data[82] = SEL_DISK(index)->cdrom() ? 0x4014 : 0x4000;
 
-  // command sets supported(no additional command sets)
-  CONTROLLER(index).data[83] = 0x4000;
+  // command sets supported: an ATA disk has the mandatory FLUSH CACHE (bit
+  // 12), a PACKET device does not need it (ATA/ATAPI-6 8.15, p.117; 8.12.2)
+  CONTROLLER(index).data[83] = SEL_DISK(index)->cdrom() ? 0x4000 : 0x5000;
   CONTROLLER(index).data[84] = 0x4000;
 
   // command sets enabled.
   CONTROLLER(index).data[85] = SEL_DISK(index)->cdrom() ? 0x4014 : 0x4000;
-  CONTROLLER(index).data[86] = 0x4000;
+  CONTROLLER(index).data[86] = SEL_DISK(index)->cdrom() ? 0x4000 : 0x5000;
   CONTROLLER(index).data[87] = 0x4000;
 
   // ultra dma (2-0: modes supported, 10-8: mode selected)
@@ -1270,10 +1302,12 @@ void CIdeController::identify_drive(int index, bool packet) {
     CONTROLLER(index).data[88] |= (u16)(0x0100 << (selected_mode & 0x07));
 }
 
-u32 CIdeController::get_disk_lba(int index) {
+/// The address in the task file, or -1 for a CHS address the geometry does
+/// not have (the caller ends the command with IDNF).
+s64 CIdeController::get_disk_lba(int index) {
   if (SEL_REGISTERS(index).lba_mode) {
-    return (SEL_REGISTERS(index).head_no << 24) |
-           (SEL_REGISTERS(index).cylinder_no << 8) |
+    return ((s64)SEL_REGISTERS(index).head_no << 24) |
+           ((s64)SEL_REGISTERS(index).cylinder_no << 8) |
            SEL_REGISTERS(index).sector_no;
   }
 
@@ -1282,10 +1316,10 @@ u32 CIdeController::get_disk_lba(int index) {
   if (heads <= 0 || sectors <= 0 || SEL_REGISTERS(index).head_no >= heads ||
       SEL_REGISTERS(index).sector_no < 1 ||
       SEL_REGISTERS(index).sector_no > sectors) {
-    FAILURE(InvalidArgument, "Invalid CHS disk address");
+    return -1;
   }
 
-  return (u32)((((off_t_large)SEL_REGISTERS(index).cylinder_no * heads) +
+  return (s64)((((off_t_large)SEL_REGISTERS(index).cylinder_no * heads) +
                 SEL_REGISTERS(index).head_no) *
                    sectors +
                (SEL_REGISTERS(index).sector_no - 1));
@@ -1296,7 +1330,7 @@ void CIdeController::advance_disk_address(int index, int sectors) {
     return;
 
   if (SEL_REGISTERS(index).lba_mode) {
-    u32 lba = get_disk_lba(index) + sectors;
+    s64 lba = get_disk_lba(index) + sectors;
     SEL_REGISTERS(index).sector_no = lba & 0xff;
     SEL_REGISTERS(index).cylinder_no = (lba >> 8) & 0xffff;
     SEL_REGISTERS(index).head_no = (lba >> 24) & 0x0f;
@@ -1305,9 +1339,8 @@ void CIdeController::advance_disk_address(int index, int sectors) {
 
   long heads = SEL_DISK(index)->get_heads();
   long sectors_per_track = SEL_DISK(index)->get_sectors();
-  if (heads <= 0 || sectors_per_track <= 0) {
-    FAILURE(InvalidArgument, "Invalid CHS disk geometry");
-  }
+  if (heads <= 0 || sectors_per_track <= 0)
+    return;
 
   int sector = (SEL_REGISTERS(index).sector_no - 1) + sectors;
   SEL_REGISTERS(index).sector_no = (sector % sectors_per_track) + 1;
@@ -1315,6 +1348,32 @@ void CIdeController::advance_disk_address(int index, int sectors) {
   int head = SEL_REGISTERS(index).head_no + (sector / sectors_per_track);
   SEL_REGISTERS(index).head_no = head % heads;
   SEL_REGISTERS(index).cylinder_no += head / heads;
+}
+
+/// Whether `sectors` sectors from `lba` (-1: a bad CHS address) lie inside
+/// the drive's user-addressable range.
+bool CIdeController::range_ok(int index, s64 lba, s64 sectors) {
+  return lba >= 0 && lba + sectors <= (s64)SEL_DISK(index)->get_lba_size();
+}
+
+/// End a data command with an error: ERR set, `error` in the Error register
+/// (IDNF 10h for an address outside the range, UNC 40h for a sector the image
+/// cannot give), an interrupt. The task file keeps the address of the sector
+/// that failed (ATA/ATAPI-6 8.34.6, p.200).
+void CIdeController::fail_transfer(int index, u8 error) {
+  printf("ide%d.%d command 0x%02x failed, error 0x%02x\n", index,
+         SEL_DRIVE(index), SEL_COMMAND(index).current_command & 0xff, error);
+  SEL_STATUS(index).busy = false;
+  SEL_STATUS(index).drive_ready = true;
+  SEL_STATUS(index).seek_complete = true;
+  SEL_STATUS(index).fault = false;
+  SEL_STATUS(index).drq = false;
+  SEL_STATUS(index).err = true;
+  SEL_REGISTERS(index).error = error;
+  CONTROLLER(index).data_ptr = 0;
+  SEL_COMMAND(index).command_in_progress = false;
+  UPDATE_ALT_STATUS(index);
+  raise_interrupt(index);
 }
 
 void CIdeController::command_aborted(int index, u8 command) {
@@ -1440,6 +1499,14 @@ void CIdeController::execute(int index) {
 
     case 0x20: // read with retries
     case 0x21: // read without retries
+      if (SEL_DISK(index)->cdrom()) {
+
+        // A PACKET device aborts READ SECTOR(S) and posts its signature
+        // (ATA/ATAPI-6 8.34.5.2, p.200; 9.12, p.366).
+        set_signature(index, SEL_DRIVE(index));
+        command_aborted(index, SEL_COMMAND(index).current_command);
+        break;
+      }
       if (SEL_COMMAND(index).command_cycle == 0) {
 
         // fixup the 0=256 case.
@@ -1451,10 +1518,21 @@ void CIdeController::execute(int index) {
 
         // buffer is empty, so lets fill it.
         {
-          u32 lba = get_disk_lba(index);
+          s64 lba = get_disk_lba(index);
 
-          SEL_DISK(index)->seek_block(lba);
-          SEL_DISK(index)->read_blocks(&(CONTROLLER(index).data[0]), 1);
+          // An address outside the drive ends the command with IDNF, a
+          // sector the image cannot give with UNC (ATA/ATAPI-6 8.34.6,
+          // p.200).
+          if (!range_ok(index, lba, 1)) {
+            fail_transfer(index, 0x10);
+            break;
+          }
+          if (!SEL_DISK(index)->seek_block(lba) ||
+              SEL_DISK(index)->read_blocks(&(CONTROLLER(index).data[0]), 1) !=
+                  1) {
+            fail_transfer(index, 0x40);
+            break;
+          }
 #if defined(ES40_BIG_ENDIAN)
           for (int i = 0; i < SEL_DISK(index)->get_block_size() / sizeof(u16);
                i++)
@@ -1508,23 +1586,34 @@ void CIdeController::execute(int index) {
 
           // the buffer is full.  Do something with the data.
           {
-            u32 lba = get_disk_lba(index);
+            s64 lba = get_disk_lba(index);
+            if (!range_ok(index, lba, 1)) {
+              fail_transfer(index, 0x10); // IDNF
+              break;
+            }
+            bool written;
 
 #if defined(ES40_BIG_ENDIAN)
             {
               u16 data[IDE_BUFFER_SIZE];
 
-              SEL_DISK(index)->seek_block(lba);
+              written = SEL_DISK(index)->seek_block(lba);
               for (int i = 0;
                    i < SEL_DISK(index)->get_block_size() / sizeof(u16); i++)
                 data[i] = endian_16(CONTROLLER(index).data[i]);
-              SEL_DISK(index)->write_blocks(&(data[0]), 1);
+              written =
+                  written && SEL_DISK(index)->write_blocks(&(data[0]), 1) == 1;
             }
 
 #else
-            SEL_DISK(index)->seek_block(lba);
-            SEL_DISK(index)->write_blocks(&(CONTROLLER(index).data[0]), 1);
+            written = SEL_DISK(index)->seek_block(lba) &&
+                      SEL_DISK(index)->write_blocks(
+                          &(CONTROLLER(index).data[0]), 1) == 1;
 #endif
+            if (!written) {
+              fail_transfer(index, 0x04); // ABRT: the image refused it
+              break;
+            }
             SEL_STATUS(index).busy = false;
             SEL_STATUS(index).drive_ready = true;
             SEL_STATUS(index).fault = false;
@@ -1559,10 +1648,10 @@ void CIdeController::execute(int index) {
         if (SEL_REGISTERS(index).sector_count == 0)
           SEL_REGISTERS(index).sector_count = 256;
 
-        u32 lba = get_disk_lba(index);
+        s64 lba = get_disk_lba(index);
         int sectors = SEL_REGISTERS(index).sector_count;
-        if ((off_t_large)lba + sectors > SEL_DISK(index)->get_lba_size()) {
-          command_aborted(index, SEL_COMMAND(index).current_command);
+        if (!range_ok(index, lba, sectors)) {
+          fail_transfer(index, 0x10); // IDNF
         } else {
           advance_disk_address(index, sectors);
           SEL_REGISTERS(index).sector_count = 0;
@@ -1593,9 +1682,31 @@ void CIdeController::execute(int index) {
       }
       break;
 
-      /*
-       * 0x90: execute device diagnostic: mandatory
+    case 0x90: // execute device diagnostic: mandatory
+      /* Both devices run it whichever is selected, pass, and leave their
+       * signature and the diagnostic code 01h in the Error register (ATA/
+       * ATAPI-6 8.11.5, p.105; Table 26, p.106; 9.12, p.365), DEV cleared.
+       * A PACKET device does not set DRDY (9.12, p.366). INTRQ follows
+       * (9.10, Figure 37, p.360).
        */
+      for (int d = 0; d < 2; d++) {
+        if (!get_disk(index, d))
+          continue;
+        REGISTERS(index, d).error = 0x01;
+        set_signature(index, d);
+        STATUS(index, d).busy = false;
+        STATUS(index, d).drq = false;
+        STATUS(index, d).err = false;
+        STATUS(index, d).fault = false;
+        STATUS(index, d).seek_complete = true;
+        STATUS(index, d).drive_ready = !get_disk(index, d)->cdrom();
+        COMMAND(index, d).command_in_progress = false;
+      }
+      CONTROLLER(index).selected = 0;
+      SEL_COMMAND(index).command_in_progress = false;
+      raise_interrupt(index);
+      break;
+
     case 0x91: // initialize device parameters
       SEL_COMMAND(index).command_in_progress = false;
       if (SEL_DISK(index)->cdrom()) {
@@ -1652,8 +1763,8 @@ void CIdeController::execute(int index) {
       } else {
         if (SEL_REGISTERS(index).features & 0x02) {
 
-          // overlap not supported
-          PAUSE("overlapping not supported");
+          // overlap is not supported: the command is aborted (ATA/ATAPI-6
+          // 8.23.6, p.163: ABRT for an invalid command parameter)
           command_aborted(index, SEL_COMMAND(index).current_command);
         } else {
           if (SEL_COMMAND(index).packet_phase == PACKET_NONE) {
@@ -1758,6 +1869,14 @@ void CIdeController::execute(int index) {
                                     true);
                     scsi_xfer_done(index);
                   } else {
+
+                    // The host sends the data in blocks of at most 65534
+                    // bytes (the buffer holds 128 KB, the SCSI side up to
+                    // 256 KB); DP34 hands each block over and comes back
+                    // here for the rest.
+                    if (num_bytes > 65534)
+                      num_bytes = 65534;
+                    SEL_COMMAND(index).packet_chunk = (int)num_bytes;
                     SEL_COMMAND(index).packet_phase = PACKET_DP34;
                     SEL_REGISTERS(index).BYTE_COUNT = (int)num_bytes;
                     CONTROLLER(index).data_size =
@@ -1799,7 +1918,11 @@ void CIdeController::execute(int index) {
 
             case PACKET_DP34:
               if (scsi_get_phase(index) == SCSI_PHASE_DATA_OUT) {
-                size_t num_bytes = scsi_expected_xfer(index);
+                size_t num_bytes = SEL_COMMAND(index).packet_chunk;
+                if (num_bytes > scsi_expected_xfer(index))
+                  num_bytes = scsi_expected_xfer(index);
+                if (num_bytes > sizeof(CONTROLLER(index).data))
+                  num_bytes = sizeof(CONTROLLER(index).data);
                 void *data_ptr = scsi_xfer_ptr(index, num_bytes);
                 memcpy(data_ptr, CONTROLLER(index).data, num_bytes);
                 scsi_xfer_done(index);
@@ -1994,7 +2117,10 @@ void CIdeController::execute(int index) {
       break;
 
     case 0xc4: // read multiple
-      if (SEL_DISK(index)->cdrom()) {
+      if (SEL_DISK(index)->cdrom() || SEL_PER_DRIVE(index).multiple_size == 0) {
+
+        // after SET MULTIPLE MODE with a count of 0 the command is aborted
+        // (ATA/ATAPI-6 8.49.4, p.243)
         command_aborted(index, SEL_COMMAND(index).current_command);
       } else {
         if (SEL_COMMAND(index).command_cycle == 0) {
@@ -2009,7 +2135,7 @@ void CIdeController::execute(int index) {
 
           // buffer is empty, so lets fill it.
           {
-            u32 lba = get_disk_lba(index);
+            s64 lba = get_disk_lba(index);
 
             if (SEL_REGISTERS(index).sector_count >=
                 SEL_PER_DRIVE(index).multiple_size) {
@@ -2034,11 +2160,18 @@ void CIdeController::execute(int index) {
                    SEL_DRIVE(index), CONTROLLER(index).data_size / 256,
                    SEL_REGISTERS(index).sector_count);
 #endif
-            SEL_DISK(index)->seek_block(lba);
-            SEL_DISK(index)->read_blocks(
-                &(CONTROLLER(index).data[0]),
-                CONTROLLER(index).data_size /
-                    256); // actual number of blocks we want.
+            if (!range_ok(index, lba, sectors_read)) {
+              fail_transfer(index, 0x10); // IDNF
+              break;
+            }
+            if (!SEL_DISK(index)->seek_block(lba) ||
+                SEL_DISK(index)->read_blocks(&(CONTROLLER(index).data[0]),
+                                             CONTROLLER(index).data_size /
+                                                 256) !=
+                    (size_t)sectors_read) { // blocks we want
+              fail_transfer(index, 0x40);   // UNC
+              break;
+            }
 #if defined(ES40_BIG_ENDIAN)
             for (int i = 0; i < CONTROLLER(index).data_size; i++)
               CONTROLLER(index).data[i] = endian_16(CONTROLLER(index).data[i]);
@@ -2068,7 +2201,7 @@ void CIdeController::execute(int index) {
       break;
 
     case 0xc5: // write multiple
-      if (SEL_DISK(index)->cdrom()) {
+      if (SEL_DISK(index)->cdrom() || SEL_PER_DRIVE(index).multiple_size == 0) {
         command_aborted(index, SEL_COMMAND(index).current_command);
       } else {
         if (SEL_COMMAND(index).command_cycle == 0) {
@@ -2102,25 +2235,38 @@ void CIdeController::execute(int index) {
 
             // the buffer is full.  Do something with the data.
             {
-              u32 lba = get_disk_lba(index);
+              s64 lba = get_disk_lba(index);
               int sectors_written = CONTROLLER(index).data_size / 256;
+              if (!range_ok(index, lba, sectors_written)) {
+                fail_transfer(index, 0x10); // IDNF
+                break;
+              }
+              bool written;
 
 #if defined(ES40_BIG_ENDIAN)
               {
                 u16 data[IDE_BUFFER_SIZE];
 
-                SEL_DISK(index)->seek_block(lba);
+                written = SEL_DISK(index)->seek_block(lba);
                 for (int i = 0; i < CONTROLLER(index).data_size; i++)
                   data[i] = endian_16(CONTROLLER(index).data[i]);
-                SEL_DISK(index)->write_blocks(
-                    &(data[0]), CONTROLLER(index).data_size / 256);
+                written = written &&
+                          SEL_DISK(index)->write_blocks(
+                              &(data[0]), CONTROLLER(index).data_size / 256) ==
+                              (size_t)sectors_written;
               }
 
 #else
-              SEL_DISK(index)->seek_block(lba);
-              SEL_DISK(index)->write_blocks(&(CONTROLLER(index).data[0]),
-                                            CONTROLLER(index).data_size / 256);
+              written = SEL_DISK(index)->seek_block(lba) &&
+                        SEL_DISK(index)->write_blocks(
+                            &(CONTROLLER(index).data[0]),
+                            CONTROLLER(index).data_size / 256) ==
+                            (size_t)sectors_written;
 #endif
+              if (!written) {
+                fail_transfer(index, 0x04); // ABRT: the image refused it
+                break;
+              }
               SEL_STATUS(index).busy = false;
               SEL_STATUS(index).drive_ready = true;
               SEL_STATUS(index).fault = false;
@@ -2161,10 +2307,16 @@ void CIdeController::execute(int index) {
     case 0xc6: // set multiple mode
       if (SEL_DISK(index)->cdrom()) {
         command_aborted(index, SEL_COMMAND(index).current_command);
+      } else if (SEL_REGISTERS(index).sector_count > MAX_MULTIPLE_SECTORS) {
+
+        // a block count above word 47 is not supported (ATA/ATAPI-6 8.49.4
+        // and 8.49.6, pp.243-244)
+        command_aborted(index, SEL_COMMAND(index).current_command);
       } else {
+
+        // 0 is accepted: READ/WRITE MULTIPLE are then aborted until the next
+        // SET MULTIPLE MODE with a count (8.49.4, p.243)
         SEL_PER_DRIVE(index).multiple_size = SEL_REGISTERS(index).sector_count;
-        printf("Set multiple mode: sector_count = %d\n",
-               SEL_REGISTERS(index).sector_count);
         SEL_STATUS(index).busy = false;
         SEL_STATUS(index).drive_ready = true;
         SEL_STATUS(index).fault = false;
@@ -2190,16 +2342,23 @@ void CIdeController::execute(int index) {
                SEL_REGISTERS(index).sector_count * 512);
 #endif
 
-        u32 lba = get_disk_lba(index);
+        s64 lba = get_disk_lba(index);
 
-        SEL_DISK(index)->seek_block(lba);
-
-        SEL_DISK(index)->read_blocks(&(CONTROLLER(index).data[0]),
-                                     SEL_REGISTERS(index).sector_count);
+        if (!range_ok(index, lba, SEL_REGISTERS(index).sector_count)) {
+          fail_transfer(index, 0x10); // IDNF
+          break;
+        }
+        if (!SEL_DISK(index)->seek_block(lba) ||
+            SEL_DISK(index)->read_blocks(&(CONTROLLER(index).data[0]),
+                                         SEL_REGISTERS(index).sector_count) !=
+                (size_t)SEL_REGISTERS(index).sector_count) {
+          fail_transfer(index, 0x40); // UNC
+          break;
+        }
 
         u8 *ptr = (u8 *)(&CONTROLLER(index).data[0]);
-        u8 status = do_dma_transfer(
-            index, ptr, SEL_REGISTERS(index).sector_count * 512, false);
+        do_dma_transfer(index, ptr, SEL_REGISTERS(index).sector_count * 512,
+                        false);
         SEL_COMMAND(index).command_in_progress = false;
         SEL_STATUS(index).drive_ready = true;
         SEL_STATUS(index).seek_complete = true;
@@ -2230,14 +2389,23 @@ void CIdeController::execute(int index) {
                  SEL_REGISTERS(index).sector_count * 512);
 #endif
 
-          u8 *ptr = (u8 *)(&CONTROLLER(index).data[0]);
-          u8 status = do_dma_transfer(
-              index, ptr, SEL_REGISTERS(index).sector_count * 512, true);
-          u32 lba = get_disk_lba(index);
+          s64 lba = get_disk_lba(index);
+          if (!range_ok(index, lba, SEL_REGISTERS(index).sector_count)) {
+            fail_transfer(index, 0x10); // IDNF
+            break;
+          }
 
-          SEL_DISK(index)->seek_block(lba);
-          SEL_DISK(index)->write_blocks(&(CONTROLLER(index).data[0]),
-                                        SEL_REGISTERS(index).sector_count);
+          u8 *ptr = (u8 *)(&CONTROLLER(index).data[0]);
+          do_dma_transfer(index, ptr, SEL_REGISTERS(index).sector_count * 512,
+                          true);
+          if (!SEL_DISK(index)->seek_block(lba) ||
+              SEL_DISK(index)->write_blocks(
+                  &(CONTROLLER(index).data[0]),
+                  SEL_REGISTERS(index).sector_count) !=
+                  (size_t)SEL_REGISTERS(index).sector_count) {
+            fail_transfer(index, 0x04); // ABRT: the image refused it
+            break;
+          }
           SEL_COMMAND(index).command_in_progress = false;
           SEL_STATUS(index).drive_ready = true;
           SEL_STATUS(index).seek_complete = true;
@@ -2366,6 +2534,11 @@ void CIdeController::execute(int index) {
     case 0xe6: // sleep
     case 0xe7: // flush cache
     case 0xea: // flush cache ext
+      // FLUSH CACHE returns when everything written is on the media (ATA/
+      // ATAPI-6 8.12.8, p.108).
+      if (SEL_COMMAND(index).current_command == 0xe7 ||
+          SEL_COMMAND(index).current_command == 0xea)
+        SEL_DISK(index)->flush();
       SEL_STATUS(index).busy = false;
       SEL_STATUS(index).drive_ready = true;
       SEL_STATUS(index).drq = false;
@@ -2374,10 +2547,9 @@ void CIdeController::execute(int index) {
       raise_interrupt(index);
       break;
 
-    default: // unknown/unhandled ATA command
-      ide_status(index);
-      FAILURE_1(NotImplemented, "Unknown IDE command %x",
-                SEL_COMMAND(index).current_command);
+    default: // a command the device does not implement is aborted (ABRT),
+             // not ignored (ATA/ATAPI-6 8.34.6 ABRT, p.200)
+      command_aborted(index, SEL_COMMAND(index).current_command);
       break;
     }
 
@@ -2403,16 +2575,31 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   u8 xfer;
   size_t xfersize = 0;
   u8 status = 0;
-  u8 count = 0;
+  u32 entries = 0;
   u32 prd;
   work_done[index].store(work_queued[index].load()); // parked on the guest
+
+  // A start the guest wrote when no command waited for it is not this
+  // command's start, unless the bit is still set.
+  if (!(busmaster_byte(index, 0) & 0x01))
+    semBusMaster[index].try_wait_for(std::chrono::milliseconds(0));
+  dma_cancel[index].store(false);
+  dma_parked[index].store(true);
   semBusMaster[index].wait(); // wait until the start bit is set.
+  dma_parked[index].store(false);
   if (StopThread)
     throw IdeStopping(); // stop_threads woke us: the command ends here
+  if (dma_cancel[index].exchange(false))
+    throw IdeCancelled(); // SRST or a new command: this one is over
   {
     SCOPED_READ_LOCK(mtBusMaster[index]);
-    prd = endian_32(*(u32 *)(&CONTROLLER(index).busmaster[4]));
+    prd = CONTROLLER(index).busmaster[4] |
+          ((u32)CONTROLLER(index).busmaster[5] << 8) |
+          ((u32)CONTROLLER(index).busmaster[6] << 16) |
+          ((u32)CONTROLLER(index).busmaster[7] << 24);
   }
+  prd &= ~(u32)3;
+  bool eot;
   do {
     u32 base;
     do_pci_read(prd, &base, 4, 1);
@@ -2448,22 +2635,27 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
 
     xfersize += size;
     prd += 8; // go to next entry.
-    if (xfer == 0x80 && xfersize < buffersize) {
+
+    // Only bit 7 of the entry's last byte marks the end of the table
+    // (SFF-8038i 1.2, p.2).
+    eot = (xfer & 0x80) != 0;
+    if (eot && xfersize < buffersize) {
 
       // we still have disk data left over!
       status = 1;
     }
 
-    if (count++ > 32) {
-      FAILURE(InvalidArgument, "Too many PRD nodes?");
-    }
-
-    if (buffersize == xfersize && xfer != 0x80) {
+    if (buffersize == xfersize && !eot) {
 
       // we're done, but there's more prd nodes.
       status = 2;
     }
-  } while (xfer != 0x80 && status == 0);
+
+    // A table may not cross a 64 KB boundary (SFF-8038i 1.1, p.2), so it has
+    // at most 8192 entries: one that has not ended by then is broken.
+    if (!eot && status == 0 && ++entries >= 8192)
+      status = 3;
+  } while (!eot && status == 0);
 
   switch (status) {
   case 0: // normal completion.
@@ -2488,6 +2680,13 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
     // leave active set.
     raise_interrupt(index);
     break;
+
+  case 3: // a table that never ends: the controller stops with Error set and
+  {       // raises no interrupt (SFF-8038i 4.0, p.6)
+    SCOPED_WRITE_LOCK(mtBusMaster[index]);
+    CONTROLLER(index).busmaster[2] &= 0xfe;
+    CONTROLLER(index).busmaster[2] |= 0x02;
+  } break;
   }
 
   return status;
@@ -2538,8 +2737,10 @@ u64 CIdeController::media_time_us(int index) {
   default:
     return 0;
   }
-  return d->latency().service_us(get_disk_lba(index), blocks,
-                                 d->get_block_size(), first);
+  const s64 at = get_disk_lba(index);
+  if (at < 0)
+    return 0;
+  return d->latency().service_us(at, blocks, d->get_block_size(), first);
 }
 
 /**
@@ -2595,7 +2796,11 @@ void CIdeController::run(int index) {
           if (SEL_COMMAND(index).command_in_progress && !StopThread) {
             tl_hold_irq = true;
             tl_held_irq = false;
-            execute(index);
+            try {
+              execute(index);
+            } catch (const IdeCancelled &) {
+              tl_held_irq = false; // the command was abandoned
+            }
             tl_hold_irq = false;
           }
         }

@@ -138,8 +138,12 @@ private:
   void ide_busmaster_write(int channel, u32 address, u32 data, int dsize);
   u8 ide_busmaster_status(int channel);
   int do_dma_transfer(int index, u8 *buffer, u32 size, bool direction);
-  u32 get_disk_lba(int index);
+  s64 get_disk_lba(int index);
   void advance_disk_address(int index, int sectors);
+  bool range_ok(int index, s64 lba, s64 sectors);
+  void fail_transfer(int index, u8 error);
+  void cancel_dma_wait(int index);
+  u8 busmaster_byte(int index, int reg);
 
   void raise_interrupt(int channel);
   void deassert_interrupt(int channel);
@@ -164,6 +168,10 @@ private:
   std::atomic<u64> work_done[2]{};
   WakeSemaphore semController[2];   // controller start/stop
   WakeSemaphore semBusMaster[2];    // bus master start/stop
+  // A DMA command is parked waiting for the bus master's start bit; SRST or
+  // a new command sets dma_cancel to end it (see cancel_dma_wait()).
+  std::atomic_bool dma_parked[2]{};
+  std::atomic_bool dma_cancel[2]{};
   std::shared_mutex mtRegisters[2]; // main registers
   std::shared_mutex mtBusMaster[2]; // busmaster registers
   std::atomic_bool StopThread{false};
@@ -217,6 +225,7 @@ private:
         int packet_phase;
         u8 packet_command[12];
         int packet_buffersize;
+        int packet_chunk; // bytes of the data-out block being received
         u8 packet_sense;
         u8 packet_asc;
         u8 packet_ascq;

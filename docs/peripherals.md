@@ -68,6 +68,43 @@ What each does, and which guests drive it, is below.
   Whistler drive it with their own USB stacks.
 - `ali_pmu`: the power management unit.
 
+### IDE and ATAPI behaviour
+
+What a guest can rely on from the ATA/ATAPI core (`ali_ide` and `cmd649`),
+each point checked against ATA/ATAPI-6 or SFF-8038i by `test/tools/ide_test.sh`:
+
+- **A command the drive does not implement is aborted** (ERR, ABRT in
+  Error), never fatal: SMART, the 48-bit set, security and the rest. PACKET
+  with the overlap bit is aborted the same way.
+- **EXECUTE DEVICE DIAGNOSTIC (90h)** runs on both drives whichever is
+  selected: Error 01h, the ATA or the PACKET signature, DRDY only on an ATA
+  drive, an interrupt.
+- **Addresses outside the drive end the command with IDNF** (Error 10h) and
+  leave the task file at the failing sector: LBA past the last sector, a
+  CHS address with sector 0, a sector or head the geometry lacks. A sector
+  the image cannot read is UNC (40h). READ/WRITE SECTORS, MULTIPLE, DMA and
+  READ VERIFY all go through the same check; a write past the end no longer
+  lands on the previous sector.
+- **READ SECTORS to a CD-ROM drive is aborted** with the PACKET signature in
+  the cylinder registers.
+- **SET MULTIPLE MODE** takes 0 to 128 and aborts above; with 0, READ and
+  WRITE MULTIPLE are aborted until the next count.
+- **FLUSH CACHE (E7h) flushes the image**, and IDENTIFY words 83 and 86 bit
+  12 say so for a disk (not for a CD-ROM drive). IDENTIFY words 60-61 never
+  exceed 0FFFFFFFh; a larger image is reachable only with 48-bit commands,
+  which are not implemented.
+- **A software reset, or a new command, ends a DMA command still waiting
+  for the bus master's Start bit**; the channel used to stay wedged after a
+  driver's timeout and reset.
+- **Bus master registers** read as bytes, words or dwords (a 16-bit read
+  used to stop the emulator); the descriptor table pointer reads with bits
+  1:0 clear; a descriptor table may have up to 8192 entries and ends at the
+  entry whose bit 31 is set, whatever its other reserved bits hold; a table
+  that does not end sets the Error bit and raises no interrupt. The status
+  byte is updated under one lock, so a poll cannot undo the Interrupt bit.
+- **ATAPI data-out** (MODE SELECT and the like) arrives in blocks of at most
+  65534 bytes, as data-in already did.
+
 ### Keyboard and mouse
 
 The ALi's keyboard controller sits at ports 60h and 64h with IRQ 1 and 12,
