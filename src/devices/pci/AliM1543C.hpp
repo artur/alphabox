@@ -37,6 +37,7 @@
 #if !defined(INCLUDED_ALIM1543C_H_)
 #define INCLUDED_ALIM1543C_H_
 
+#include "I8254.hpp"
 #include "PCIDevice.hpp"
 
 #include <chrono>
@@ -120,22 +121,6 @@ private:
   u8 toy_read(u32 address);
   void toy_write(u32 address, u8 data);
 
-  // Timer/Counter
-  u8 pit_read(u32 address);
-  void pit_write(u32 address, u8 data);
-  void pit_clock();
-  bool pit_out(int c);
-  u16 pit_count_now(int c);
-
-  // Wall-clock pacing for the 8254: elapsed host time is converted to
-  // 1.193182 MHz input clocks; m_pit_acc carries the sub-clock remainder
-  // (in ns * PIT_CLOCK_HZ units). m_pit_epoch marks each channel's last
-  // counter load so pit_out() can derive the output pin analytically
-  // (jitter-free) instead of from thread-tick decrements.
-  // Not saved state - re-primed on restore.
-  std::chrono::steady_clock::time_point m_pit_last;
-  std::chrono::steady_clock::time_point m_pit_epoch[3];
-  u64 m_pit_acc;
   // RTC periodic-flag (reg C PF) pacing; re-primed on a rate change.
   std::chrono::steady_clock::time_point m_toy_pf_epoch;
   u64 m_toy_pf_count = 0;
@@ -199,12 +184,8 @@ private:
     u8 toy_access_ports[4];
     long toy_offset; // seconds: (user-set time) - (host time)
 
-    // Timer/Counter
-    u32 pit_counter[9];
-#define PIT_OFFSET_LATCH 3
-#define PIT_OFFSET_MAX 6
-    u8 pit_status[4];
-    u8 pit_mode[4];
+    // Timer/Counter (the 8254, CI8254)
+    SPit_state pit;
 
     // interrupt controller  IRR (request) and ISR (in-service) are kept
     // separate so an edge that arrives while a higher-priority IRQ is in
@@ -249,6 +230,13 @@ private:
     u16 isapnp_rd_port = 0; // OS-set RD_DATA port in 0x203-0x3FF
     u8 isapnp_wake_csn = 0;
   } state;
+  // SaveState writes the struct as it is: a change of layout makes old state
+  // files unreadable (the size is that of an LP64 host).
+  static_assert(sizeof(long) != 8 || sizeof(SAli_state) == 4736,
+                "SAli_state is in the state file: its layout must not change");
+
+  /// The 8254 timer, over state.pit.
+  CI8254 pit;
 
   FILE *lpt;
 

@@ -454,6 +454,12 @@ target_include_directories(kbc_test PRIVATE
 target_link_libraries(kbc_test Threads::Threads)
 add_test(NAME kbc COMMAND kbc_test)
 
+# The ALi M1543C's ISA core as separate models, each on a clock the test
+# moves: the 8254 timer.
+add_executable(i8254_test test/unit/i8254_test.cpp src/devices/isa/I8254.cpp)
+target_include_directories(i8254_test PRIVATE src/common src/devices/isa)
+add_test(NAME i8254 COMMAND i8254_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")
