@@ -90,6 +90,8 @@ DMA windows) and `DimmModel` (the DIMMs, reached as
 - `TsunamiCchip`, `TsunamiPchip`, `TsunamiTig`.
 - `TsunamiMemory`: the AARn arrays, and the SPD on the MPD pins.
 
+Trace: `ALPHABOX_TRACE_CSR=1`, every chipset register access with its value.
+
 ### titan/
 
 `CTitan`, the 21274 of the ES45, DS25 and DS15:

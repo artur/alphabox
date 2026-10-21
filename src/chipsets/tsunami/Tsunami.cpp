@@ -33,6 +33,47 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
+#include <unordered_map>
+
+namespace {
+
+/// ALPHABOX_TRACE_CSR=1 (the variable Marvel's trace answers to): every
+/// access to a Cchip, Dchip, Pchip or TIG register, with the processor and
+/// the instruction that made it, or "dev" for a device's DMA. The first three
+/// from one instruction, then every power of two, as the unknown-access trace
+/// does: the console polls MISC and the TIG in loops.
+bool csr_trace_on() {
+  static const bool on = getenv("ALPHABOX_TRACE_CSR") != nullptr;
+  return on;
+}
+
+u64 csr_trace(const char *chip, u32 off, bool write, u64 v) {
+  if (!csr_trace_on())
+    return v;
+  static std::mutex m;
+  static std::unordered_map<u64, u64> seen;
+  const u64 pc = t_running_cpu ? t_running_cpu->get_pc() : 0;
+  u64 n;
+  {
+    std::lock_guard<std::mutex> g(m);
+    if (seen.size() > 100000)
+      seen.clear();
+    n = ++seen[(pc << 24) ^ ((u64)(uintptr_t)chip << 40) ^ ((u64)off << 1) ^
+               (write ? 1 : 0)];
+  }
+  if (n > 3 && (n & (n - 1)))
+    return v;
+  char who[8] = "dev";
+  if (t_running_cpu)
+    snprintf(who, sizeof(who), "cpu%d", t_running_cpu->get_cpuid());
+  printf("%%TSU-T-CSR: %s %s %-5s %08x %s %016" PRIx64 "%s pc=%" PRIx64 "\n",
+         who, write ? "write" : "read ", chip, off, write ? "=" : "->", v,
+         n > 3 ? " (repeated)" : "", pc);
+  return v;
+}
+
+} // namespace
+
 CTsunami::CTsunami(CSystem *sys) : CChipset(sys) {
   // The SPD EEPROMs on the MPD pins describe the configured memory.
   if (const uint32_t *arrays = sys->memory_arrays()) {
@@ -279,26 +320,31 @@ void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
   }
 
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF)) {
+    csr_trace("cchip", (u32)a & 0xFFFFFFF, true, data);
     cchip_csr_write((u32)a & 0xFFFFFFF, data, source);
     return;
   }
 
   if (a >= U64(0x0000080180000000) && a <= U64(0x000008018FFFFFFF)) {
+    csr_trace("pchp0", (u32)a & 0xFFFFFFF, true, data);
     pchip_csr_write(0, (u32)a & 0xFFFFFFF, data);
     return;
   }
 
   if (a >= U64(0x0000080380000000) && a <= U64(0x000008038FFFFFFF)) {
+    csr_trace("pchp1", (u32)a & 0xFFFFFFF, true, data);
     pchip_csr_write(1, (u32)a & 0xFFFFFFF, data);
     return;
   }
 
   if (a >= U64(0x00000801B0000000) && a <= U64(0x00000801BFFFFFFF)) {
+    csr_trace("dchip", (u32)a & 0xFFFFFFF, true, data);
     dchip_csr_write((u32)a & 0xFFFFFFF, (u8)data & 0xff);
     return;
   }
 
   if (a >= U64(0x0000080100000000) && a <= U64(0x000008013FFFFFFF)) {
+    csr_trace("tig", (u32)a & 0x3FFFFFFF, true, data);
     tig_write((u32)a & 0x3FFFFFFF, (u8)data);
     return;
   }
@@ -477,19 +523,25 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
   }
 
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF))
-    return cchip_csr_read((u32)a & 0xFFFFFFF, source);
+    return csr_trace("cchip", (u32)a & 0xFFFFFFF, false,
+                     cchip_csr_read((u32)a & 0xFFFFFFF, source));
 
   if (a >= U64(0x0000080180000000) && a <= U64(0x000008018FFFFFFF))
-    return pchip_csr_read(0, (u32)a & 0xFFFFFFF);
+    return csr_trace("pchp0", (u32)a & 0xFFFFFFF, false,
+                     pchip_csr_read(0, (u32)a & 0xFFFFFFF));
 
   if (a >= U64(0x0000080380000000) && a <= U64(0x000008038FFFFFFF))
-    return pchip_csr_read(1, (u32)a & 0xFFFFFFF);
+    return csr_trace("pchp1", (u32)a & 0xFFFFFFF, false,
+                     pchip_csr_read(1, (u32)a & 0xFFFFFFF));
 
   if (a >= U64(0x00000801B0000000) && a <= U64(0x00000801BFFFFFFF))
-    return dchip_csr_read((u32)a & 0xFFFFFFF) * U64(0x0101010101010101);
+    return csr_trace("dchip", (u32)a & 0xFFFFFFF, false,
+                     dchip_csr_read((u32)a & 0xFFFFFFF) *
+                         U64(0x0101010101010101));
 
   if (a >= U64(0x0000080100000000) && a <= U64(0x000008013FFFFFFF))
-    return tig_read((u32)a & 0x3FFFFFFF);
+    return csr_trace("tig", (u32)a & 0x3FFFFFFF, false,
+                     tig_read((u32)a & 0x3FFFFFFF));
 
   if ((a >= U64(0x801fe000000) && a < U64(0x801ff000000)) ||
       (a >= U64(0x803fe000000) && a < U64(0x803ff000000))) {

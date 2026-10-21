@@ -563,6 +563,7 @@ machine's firmware wants hardware that is not emulated yet (see
 | `ALPHABOX_TRACE_KBC=1` | the keyboard controller |
 | `ALPHABOX_TRACE_PORT61=1` | the ISA refresh-toggle port, as bursts of reads |
 | `ALPHABOX_TRACE_TOY=1` | the TOY clock: the guest's writes to its registers 00h-0Dh, selections with the NMI-disable bit, the first reads of register C |
+| `ALPHABOX_TRACE_CSR=1` | on the Tsunami boards, every access to a Cchip, Dchip, Pchip or TIG register, with the value, the processor (or `dev` for a device's DMA) and the instruction; on Marvel, see below |
 | `ALPHABOX_DUMP_MEMORY=1` | guest memory, written to `memory_000000000000.dmp` when the emulator is asked to stop |
 
 `ALPHABOX_TRACE_UNKNOWN` gives the address, its width, and the instruction
