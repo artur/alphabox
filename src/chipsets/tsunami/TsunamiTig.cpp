@@ -79,6 +79,9 @@
  * \endcode
  **/
 u8 CTsunami::tig_read(u32 a) {
+  // The halt and ipcr registers are how one processor starts and hands work
+  // to another: written on one CPU thread, read on another (tig_write).
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x30000000: // trr
     return 0;
@@ -112,11 +115,11 @@ u8 CTsunami::tig_read(u32 a) {
  * Drive each CPU's IRQ4 (halt / MP work request) line from the TIG halt
  * registers: bit n of (ttcr | ev6_halt) is CPU n's line, level-triggered. The
  * PALcode's MP work request sets the target's bit, and the target's halt
- * interrupt handler clears it again, which drops the line. Serialized with
- * interrupt(): the writing CPU changes other CPUs' interrupt state.
+ * interrupt handler clears it again, which drops the line. Called with
+ * m_lock held, as interrupt() holds it: the writing CPU changes other CPUs'
+ * interrupt state.
  **/
 void CTsunami::tig_update_halt_lines() {
-  std::lock_guard<std::mutex> g(m_lock);
   const u8 lines = state.tig.HaltA | state.tig.HaltB;
   for (int i = 0; i < m_sys->get_cpu_num(); i++)
     m_sys->get_cpu(i)->irq_h(4, (lines >> i) & 1, 0);
@@ -127,6 +130,20 @@ void CTsunami::tig_write(u32 a, u8 data) {
   if (a == 0x300003c0 || a == 0x300005c0 ||
       (a >= 0x30000a00 && a <= 0x30000b00))
     m_sys->trace_mp("TIG write", a, data);
+  if (a == 0x30000600 || a == 0x30000640) { // srcr0, srcr1
+    // Empirical: LFU writes 0x30 here when exiting after an update. Outside
+    // the lock: the flash is written out before the reset.
+    if (data & 0x30) {
+      printf("%%SYS-I-RESETREQ: TIG SRCR write %07x=%02x\n", a, data);
+      if (theSROM)
+        theSROM->FlushIfDirty();
+      m_sys->RequestSystemReset();
+    }
+    return;
+  }
+  // The halt and ipcr registers are written by one processor and read by
+  // another, and the halt lines are driven to every processor.
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x30000000: // trr
     return;
@@ -153,16 +170,6 @@ void CTsunami::tig_write(u32 a, u8 data) {
   case 0x30000ac0:
   case 0x30000b00:
     state.tig.ipcr[(a - 0x30000a00) >> 6] = data;
-    return;
-  case 0x30000600: // srcr0
-  case 0x30000640: // srcr1
-    // Empirical: LFU writes 0x30 here when exiting after an update.
-    if (data & 0x30) {
-      printf("%%SYS-I-RESETREQ: TIG SRCR write %07x=%02x\n", a, data);
-      if (theSROM)
-        theSROM->FlushIfDirty();
-      m_sys->RequestSystemReset();
-    }
     return;
   default:
     printf("Unknown TIG %07x write with %02x attempted.\n", a, data);
