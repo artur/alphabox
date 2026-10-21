@@ -650,6 +650,10 @@ u64 CTsunami::pci_phys(int pcibus, u32 address) {
 
     // Step through windows
     for (j = 0; j < 4; j++) {
+      // Window 3 with DAC set answers dual-address cycles only, which no
+      // device here issues: its base is not used (HRM Table 10-36).
+      if (j == 3 && (p.wsba[3] & U64(0x0000008000000000)))
+        continue;
       if ((p.wsba[j] & 1) // window enabled...
           && !((address ^ p.wsba[j]) & 0xfff00000 &
                ~p.wsm[j])) // address in range...
