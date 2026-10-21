@@ -95,10 +95,20 @@ public:
   bool restore_state(FILE *f) override;
 
   // --- For the ES40 console's native PALcode (cpu/AlphaCPU_vmspal.cpp) ----
-  // It replaces PALcode that reads these Cchip registers.
-  u64 misc() const { return state.cchip.misc; }
-  u64 dir(int cpu) const { return state.cchip.drir & state.cchip.dim[cpu]; }
-  u64 dim(int cpu) const { return state.cchip.dim[cpu]; }
+  // It replaces PALcode that reads these Cchip registers. Read under the
+  // lock, as the CSR path reads them: DRIR changes on device threads.
+  u64 misc() const {
+    std::lock_guard<std::mutex> g(m_lock);
+    return state.cchip.misc;
+  }
+  u64 dir(int cpu) const {
+    std::lock_guard<std::mutex> g(m_lock);
+    return state.cchip.drir & state.cchip.dim[cpu];
+  }
+  u64 dim(int cpu) const {
+    std::lock_guard<std::mutex> g(m_lock);
+    return state.cchip.dim[cpu];
+  }
   /// Write a processor's device interrupt mask the way the Cchip register
   /// does: under the lock that serialises with interrupt(), and re-driving
   /// that processor's lines afterwards. The bare assignment this used to be
@@ -138,9 +148,10 @@ private:
 
   // Serializes DRIR read-modify-write and line delivery in interrupt()
   // across device threads, and every other change to MISC, DIMn and the TIG
-  // halt lines that re-drives a processor's interrupt pins. Not part of the
-  // saved state.
-  std::mutex m_lock;
+  // halt lines that re-drives a processor's interrupt pins; every read of
+  // them takes it too. Nothing that holds it calls back into the chipset or
+  // into a device. Not part of the saved state.
+  mutable std::mutex m_lock;
 
 public:
   /**

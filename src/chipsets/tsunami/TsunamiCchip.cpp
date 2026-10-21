@@ -35,21 +35,16 @@
 
 u64 CTsunami::cchip_csr_read(u32 a, CSystemComponent *source) {
   CAlphaCPU *cpu = (CAlphaCPU *)source;
+  // DRIR changes on device threads (interrupt()), MISC and DIMn on every
+  // processor's: each read is taken under the lock their writers hold, or
+  // it races them (HRM 10.2.2.6-10.2.2.8: DIRn is DRIR AND DIMn).
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x000:
     return state.cchip.csc;
 
   case 0x080:
-
-    //    printf("MISC: %016" PRIx64 " from CPU %d (@%" PRIx64 ") (other @ %" LL
-    //    "x).\n",state.cchip.misc | cpu->get_cpuid(),cpu->get_cpuid(),
-    //    cpu->get_pc()-4, acCPUs[1-cpu->get_cpuid()]->get_pc());
-    {
-      // Consistent read of MISC against the concurrent RMW in
-      // cchip_csr_write()/ack_interval_timer().
-      std::lock_guard<std::mutex> g(m_lock);
-      return state.cchip.misc | cpu->get_cpuid();
-    }
+    return state.cchip.misc | cpu->get_cpuid();
 
   case 0x0c0: { // MPD: bit3=DR (SDA read), bit2=CKR (SCL read), bits1:0 read
                 // as 0
@@ -100,6 +95,13 @@ u64 CTsunami::cchip_csr_read(u32 a, CSystemComponent *source) {
 
 void CTsunami::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
   CAlphaCPU *cpu = (CAlphaCPU *)source;
+  if (a == 0x080 && (data & U64(0x0000000000000ff0)))
+    m_sys->trace_mp("Cchip MISC write", 0x080, data);
+  // Serialize with interrupt()/ack_ipi()/ack_interval_timer() and with the
+  // other processors' reads: an unlocked IPI ack on one CPU thread could
+  // erase an IPI another CPU thread is raising (irq_h's check-then-act),
+  // hanging the sender. Nothing below calls back into the chipset.
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x000: // CSC
     state.cchip.csc &= ~U64(0x0777777fff3f0000);
@@ -108,12 +110,6 @@ void CTsunami::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
 
   case 0x080: { // MISC
     // Interprocessor interrupt requests and arbitration live here.
-    if (data & U64(0x0000000000000ff0))
-      m_sys->trace_mp("Cchip MISC write", 0x080, data);
-    // Serialize with interrupt()/ack_ipi()/ack_interval_timer(): an unlocked
-    // IPI ack on one CPU thread could otherwise erase an IPI another CPU
-    // thread is raising (irq_h's check-then-act), hanging the sender.
-    std::lock_guard<std::mutex> g(m_lock);
     state.cchip.misc |= (data & U64(0x00000f0000f00000));  // W1S
     state.cchip.misc &= ~(data & U64(0x0000000010000ff0)); // W1C
     if (data & U64(0x0000000001000000)) {
@@ -192,10 +188,9 @@ void CTsunami::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
   case 0x240:
   case 0x600:
   case 0x640: {
-    // DIMn: serialize with interrupt(), and re-drive that CPU's device lines
-    // now -- the HAL may route (or mask) a device that is already asserted,
-    // and the next interrupt() call could be a long way off.
-    std::lock_guard<std::mutex> g(m_lock);
+    // DIMn: re-drive that CPU's device lines now -- the HAL may route (or
+    // mask) a device that is already asserted, and the next interrupt() call
+    // could be a long way off.
     const int n = ((a >> 9) & 2) | ((a >> 6) & 1);
     state.cchip.dim[n] = data;
     if (n < m_sys->get_cpu_num()) {
