@@ -62,6 +62,9 @@ extern const marvel_layout es47_layout;
 void marvel_board_devices(CConfigurator *cfg, CSystem *sys);
 int marvel_pci_interrupt(int hose, int slot, int intx, int func);
 const char *marvel_slot_refusal(const platform_config &, int hose, int slot);
+/// Why `value` cannot be the system block's serial_number (the CMM EEPROM's
+/// 12-byte system serial number field), or null if it can.
+const char *marvel_serial_refusal(const char *value);
 
 // AlphaServer ES80 (platforms/es80/Es80.cpp)
 void es80_board_devices(CConfigurator *cfg, CSystem *sys);

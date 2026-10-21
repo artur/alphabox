@@ -1,0 +1,22 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "es47";
+  memory.bits = "30";
+  serial_number = "AY12345678";
+  rom.srm = "SRM_V7_3.EXE";
+  cpu0 = ev7
+  {
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial0 = serial // added
+  {
+    null_attach = "true";
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

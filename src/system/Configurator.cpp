@@ -40,6 +40,7 @@
 #include "AliM1543C_pmu.hpp"
 #include "AliM1543C_usb.hpp"
 #include "AlphaCPU.hpp"
+#include "Boards.hpp"
 #include "CirrusGD5430.hpp"
 #include "CirrusGD5434.hpp"
 #include "Cmd649.hpp"
@@ -617,7 +618,8 @@ static const char *const kv_tsunami[] = {
     "rom.dpr",     "rom.decompressed", "rom.nvram",
     "time",        "arc_year_compat",  "exit_on_pal_halt",
     "platform",    "memory.arrays",    "gdb",
-    "gdb.wait",    "timezone",         0,
+    "gdb.wait",    "timezone",         "serial_number",
+    0,
 };
 static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "skip_memtest_hack",
@@ -1176,6 +1178,18 @@ void CConfigurator::check_device() {
     s_check_platform = find_platform(name);
     if (!s_check_platform)
       FAILURE_1(Configuration, "Unknown platform %s", name);
+    if (const char *serial = get_text_value("serial_number", (const char *)0)) {
+      if (s_check_platform->chipset != CHIPSET_MARVEL)
+        cfg_msg(true,
+                "%%SYS-W-SERIAL: serial_number is read by the Marvel boards "
+                "(ES47, ES80, GS1280) only; the %s ignores it\n",
+                s_check_platform->description);
+      else if (const char *why = marvel_serial_refusal(serial))
+        for (const SCfg_Value &v : pValues)
+          if (!strcmp(v.name, "serial_number"))
+            value_fail("Illegal serial number", v.value, v.name, v.line, v.col,
+                       why);
+    }
     break;
   }
 

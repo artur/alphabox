@@ -66,8 +66,16 @@ public:
   /// `nvram` is the file the console's NVRAM image is kept in (the MBM's
   /// copy on a real machine). `toy_offset` is the TOY's initial offset from
   /// the host clock in seconds (toy_seed_offset); the console's TOY SET
-  /// replaces it.
-  CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset = 0);
+  /// replaces it. `serial` is the system serial number the console reads
+  /// (the system block's serial_number), or null for the board's invented
+  /// one.
+  CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset = 0,
+           const char *serial = nullptr);
+
+  /// Why `value` cannot be the system serial number (null: the default), or
+  /// null if it can: 1 to 12 printable ASCII characters, no space, the 12
+  /// bytes at <0x80> of the CMM's EEPROM 1.
+  static const char *serial_refusal(const char *value);
   ~CEs47Cmm() override;
 
   bool gio_write(u32 pid, u32 reg, u64 value) override;
@@ -120,6 +128,7 @@ private:
   int power_supply_state(u32 ip, u8 *r);
   u32 systype() const; ///< the system type's low byte: 0x11, or 1
   std::string system_serial() const;
+
   void nvram_load();
   void nvram_save();
   void refresh_toy(u32 pid);
@@ -143,6 +152,7 @@ private:
   s64 m_toy_offset = 0; ///< seconds the TOY is set away from the host clock
   std::string m_nvram_file;
   std::vector<u8> m_nvram; ///< the console's NVRAM image, 2 KB
+  std::string m_serial;    ///< the configured system serial number, or empty
 };
 
 #endif // !defined(INCLUDED_ES47_CMM_H_)

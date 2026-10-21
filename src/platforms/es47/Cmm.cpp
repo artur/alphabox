@@ -157,8 +157,10 @@ void put32(u8 *p, u32 v) {
  * first processor), non-zero for every other [inference: what the CMM
  * writes there is not known beyond zero and non-zero].
  */
-CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset)
-    : m_sys(sys), m_nvram_file(nvram), m_nvram(kNvramSize, 0) {
+CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset,
+                   const char *serial)
+    : m_sys(sys), m_nvram_file(nvram), m_nvram(kNvramSize, 0),
+      m_serial(serial ? serial : "") {
   m_toy_offset = toy_offset;
   nvram_load();
   if (const char *fn = getenv("ALPHABOX_GIO_LOG"))
@@ -817,10 +819,27 @@ u32 CEs47Cmm::systype() const {
   return marvel()->topology().cmm_systype() & 0xff;
 }
 
+const char *CEs47Cmm::serial_refusal(const char *value) {
+  if (!value)
+    return nullptr;
+  const size_t n = strlen(value);
+  if (n == 0 || n > 12)
+    return "the system serial number is 1 to 12 characters (the 12 bytes "
+           "at <0x80> of the CMM's EEPROM 1)";
+  for (size_t i = 0; i < n; i++)
+    if ((unsigned char)value[i] <= 0x20 || (unsigned char)value[i] > 0x7e)
+      return "the system serial number takes printable ASCII characters, "
+             "no spaces";
+  return nullptr;
+}
+
 /// The system serial number the console takes as sys_serial_num when its
-/// NVRAM holds none: the board's name and "EM", as the disks' "ES40EM"
-/// serials (an invented identity; `set sys_serial_num` replaces it).
+/// NVRAM holds none: the system block's serial_number, else the board's
+/// name and "EM", as the disks' "ES40EM" serials (an invented identity;
+/// the console refuses `set sys_serial_num`).
 std::string CEs47Cmm::system_serial() const {
+  if (!m_serial.empty())
+    return m_serial;
   std::string s;
   for (const char *p = m_sys->platform().name; p && *p; p++)
     s += (char)toupper((unsigned char)*p);

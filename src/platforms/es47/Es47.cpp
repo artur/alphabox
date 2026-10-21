@@ -74,6 +74,10 @@ const marvel_layout es47_layout = {0x11, es47_coordinates,     es47_has_io7,
  * Every Marvel board: the CMMs answer every processor's GIO port (Cmm.hpp),
  * and an IO7 hangs on each processor the board row's layout cables one to.
  */
+const char *marvel_serial_refusal(const char *value) {
+  return CEs47Cmm::serial_refusal(value);
+}
+
 void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   CMarvel *marvel = marvel_of(sys);
   if (!marvel)
@@ -82,8 +86,12 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   // the system block's `time` or `timezone` (ToySeed.hpp).
   const long toy_offset = toy_seed_offset(
       cfg->get_text_value("time"), cfg->get_text_value("timezone", "local"), 0);
-  marvel->set_management(std::unique_ptr<GioManagement>(new CEs47Cmm(
-      sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"), toy_offset)));
+  const char *serial = cfg->get_text_value("serial_number", (const char *)0);
+  if (const char *why = marvel_serial_refusal(serial))
+    FAILURE_2(Configuration, "serial_number \"%s\": %s", serial, why);
+  marvel->set_management(std::unique_ptr<GioManagement>(
+      new CEs47Cmm(sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"),
+                   toy_offset, serial)));
   const CMarvelTopology &t = marvel->topology();
   const marvel_layout *layout = sys->platform().marvel;
   for (int i = 0; i < t.count(); i++)

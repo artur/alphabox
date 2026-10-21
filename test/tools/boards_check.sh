@@ -47,6 +47,10 @@
 #   BOARDS_CMD_TMO       seconds per console command (default 180)
 #   BOARDS_MIN_FREE_GB   stop if the data volume has less free (default 3)
 #   BOARDS_KEEP=1        keep the copied firmware and decompressed consoles
+#   BOARDS_SYS_EXTRA     text added inside the machine block (e.g.
+#                        'serial_number = "AY12345678";')
+#   BOARDS_EXTRA_CMDS    more console commands, separated by ';' (e.g.
+#                        'show sys_serial_num')
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -150,6 +154,7 @@ write_cfg() {
     echo '{'
     echo "  platform = \"$B_PLAT\";"
     echo "  memory.bits = $B_BITS;"
+    [ -n "${BOARDS_SYS_EXTRA:-}" ] && echo "  $BOARDS_SYS_EXTRA"
     [ "$withrom" = 1 ] && echo "  rom.srm = \"$(basename "$B_SRC")\";"
     if [ "$B_KIND" = ev7 ]; then echo '  rom.nvram = "cmm_nvram.bin";'
     else
@@ -299,6 +304,10 @@ for b in $BOARDS; do
   write_cfg "$D" "$PORT" "$withrom"
   cmds=(--cmd "show config"); cmdnames="show config"
   [ "$B_KIND" = ev7 ] && { cmds+=(--cmd "show fru"); cmdnames="show config, show fru"; }
+  if [ -n "${BOARDS_EXTRA_CMDS:-}" ]; then
+    IFS=';' read -r -a extra_cmds <<< "$BOARDS_EXTRA_CMDS"
+    for c in "${extra_cmds[@]}"; do cmds+=(--cmd "$c"); cmdnames="$cmdnames, $c"; done
+  fi
   start_emu "$D"
   python3 -I "$T/srm_console.py" --port "$PORT" --log "$D/console.log" \
     --cmd-log "$D/cmds.txt" --timeout "$PTMO" --cmd-timeout "$CTMO" \

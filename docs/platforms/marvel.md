@@ -927,7 +927,11 @@ sys_serial_num` with "sys_serial_num protected from attempted operation".
 That was so before M10 too (checked on the M7 interpreter binary), so the
 console's advice could never be followed. The model's value is the board
 name and "EM", padded to 12 with zeros: ES47EM000000, ES80EM000000,
-GS1280EM0000 **[guess]**. There is no configuration key for it.
+GS1280EM0000 **[guess]**. The system block's `serial_number` replaces it:
+1 to 12 printable ASCII characters without spaces (the field is 12 bytes;
+a shorter value leaves the rest of the field zero), refused at
+configuration time otherwise, and ignored with a warning on the other
+boards. The character set is the emulator's rule, not the console's.
 
 **VRMs, SMLAN 0x090f** (`get_vrm_status` 0x30c6a0, read by `build_vrm_hw`
 0x2f8990), of the module's CMM: 8 bytes, <0> u16 the VRMs there and <6>
