@@ -165,7 +165,8 @@ The ALi bridge's own ISA core is here too, as models over the bridge's
 state with no `CSystem` behind them, each tested in `test/unit/`: `I8254`
 (the timer, on a clock the owner passes in), `I8259` (the cascaded pair;
 the master's INT output is a callback), `Mc146818` (the TOY clock and CMOS
-RAM, on the host's wall clock) and `SuperIo` (`CSuperIo`, the
+RAM, on the host's wall clock; `ToySeed` turns the `timezone` and `time`
+keys into its initial offset, for the Marvel CMM's clock too) and `SuperIo` (`CSuperIo`, the
 configuration ports and logical devices, and `CIsaPnp`, the ISA Plug and
 Play ports; the ranges they place go back to the bridge through a
 callback).

@@ -64,8 +64,10 @@ class CSerial;
 class CEs47Cmm : public GioManagement {
 public:
   /// `nvram` is the file the console's NVRAM image is kept in (the MBM's
-  /// copy on a real machine).
-  CEs47Cmm(CSystem *sys, const char *nvram);
+  /// copy on a real machine). `toy_offset` is the TOY's initial offset from
+  /// the host clock in seconds (toy_seed_offset); the console's TOY SET
+  /// replaces it.
+  CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset = 0);
   ~CEs47Cmm() override;
 
   bool gio_write(u32 pid, u32 reg, u64 value) override;
@@ -138,7 +140,7 @@ private:
   FILE *m_log = nullptr;
   bool m_trace = false;
   bool m_ready = false; ///< late_init has run
-  s64 m_toy_offset = 0; ///< seconds the console set the TOY away from host
+  s64 m_toy_offset = 0; ///< seconds the TOY is set away from the host clock
   std::string m_nvram_file;
   std::vector<u8> m_nvram; ///< the console's NVRAM image, 2 KB
 };

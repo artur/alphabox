@@ -613,10 +613,11 @@ typedef struct {
 // the user to remove it.
 static const char *const kv_none[] = {0};
 static const char *const kv_tsunami[] = {
-    "memory.bits",      "rom.srm",   "rom.flash",     "rom.dpr",
-    "rom.decompressed", "rom.nvram", "time",          "arc_year_compat",
-    "exit_on_pal_halt", "platform",  "memory.arrays", "gdb",
-    "gdb.wait",         0,
+    "memory.bits", "rom.srm",          "rom.flash",
+    "rom.dpr",     "rom.decompressed", "rom.nvram",
+    "time",        "arc_year_compat",  "exit_on_pal_halt",
+    "platform",    "memory.arrays",    "gdb",
+    "gdb.wait",    "timezone",         0,
 };
 static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "skip_memtest_hack",

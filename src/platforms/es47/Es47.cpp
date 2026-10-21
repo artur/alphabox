@@ -43,6 +43,7 @@
 #include "Marvel.hpp"
 #include "System.hpp"
 #include "Topology.hpp"
+#include "ToySeed.hpp"
 
 namespace {
 
@@ -77,8 +78,12 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   CMarvel *marvel = marvel_of(sys);
   if (!marvel)
     FAILURE(Configuration, "a Marvel board needs the Marvel chipset");
-  marvel->set_management(std::unique_ptr<GioManagement>(
-      new CEs47Cmm(sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"))));
+  // The CMM's clock starts at the host's local time, as the ES40's RTC does:
+  // the system block's `time` or `timezone` (ToySeed.hpp).
+  const long toy_offset = toy_seed_offset(
+      cfg->get_text_value("time"), cfg->get_text_value("timezone", "local"), 0);
+  marvel->set_management(std::unique_ptr<GioManagement>(new CEs47Cmm(
+      sys, cfg->get_text_value("rom.nvram", "cmm_nvram.bin"), toy_offset)));
   const CMarvelTopology &t = marvel->topology();
   const marvel_layout *layout = sys->platform().marvel;
   for (int i = 0; i < t.count(); i++)

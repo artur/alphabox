@@ -157,8 +157,9 @@ void put32(u8 *p, u32 v) {
  * first processor), non-zero for every other [inference: what the CMM
  * writes there is not known beyond zero and non-zero].
  */
-CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram)
+CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset)
     : m_sys(sys), m_nvram_file(nvram), m_nvram(kNvramSize, 0) {
+  m_toy_offset = toy_offset;
   nvram_load();
   if (const char *fn = getenv("ALPHABOX_GIO_LOG"))
     m_log = fopen(fn, "w");

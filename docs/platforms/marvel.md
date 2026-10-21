@@ -2288,7 +2288,9 @@ without the ALi no longer touches the ALi's PIC.
 **The TOY** is the MC146818 image in the CMM memory: the model refreshes
 it from the host clock (binary, 24-hour, register B 0x06) on every read
 of a time byte, and when the console clears SET after writing it keeps
-the difference as an offset. The console's own TOY test and OpenVMS's
+the difference as an offset. The offset starts as on the ES40: host local
+time by default, or the system block's `timezone` and `time` keys
+(`toy_seed_offset`, `ToySeed.hpp`, shared with the ALi's RTC). The console's own TOY test and OpenVMS's
 cserve GET_TOY/PUT_TOY were not exercised at M4. OpenVMS's use came with
 M5 (byte 10, above); `SET TIME` was checked 2026-10-05.
 

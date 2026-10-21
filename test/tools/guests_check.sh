@@ -655,9 +655,7 @@ for g in $GUESTS; do
     steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW CPU" "expect=\\$ \$@60"
             "send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
-      # the ES47's clock is its CMM's, which keeps UTC (Cmm.cpp), not the
-      # host's local time as the ES40's RTC does
-      d=$(date -u +%e-%b-%Y | tr a-z A-Z | sed 's/^ //')
+      d=$(date +%e-%b-%Y | tr a-z A-Z | sed 's/^ //')
       if grep -aqE "(^|[^0-9])0?$d" "$D/console.log"; then
         stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW CPU, SHUTDOWN"
       else fail "logged in, but SHOW TIME output not as expected"; continue; fi

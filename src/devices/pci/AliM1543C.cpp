@@ -39,12 +39,13 @@
  * Contains the code for the emulated Ali M1543C chipset devices.
  **/
 #include "AliM1543C.hpp"
-#include <cerrno>
-#include <cstdlib>
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include "Tga.hpp"
+#include "ToySeed.hpp"
 #include "VGA.hpp"
+#include <cerrno>
+#include <cstdlib>
 #ifdef __APPLE__
 #include <mach/mach_time.h>
 #else
@@ -192,128 +193,12 @@ void CAliM1543C::init() {
       myCfg->get_myParent()->get_bool_value("arc_year_compat", false);
   toy.set_arc_year_compat(arc_year_compat);
 
-  // Optional absolute time override from sys0:
-  //   time = "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
-  // Interpreted as UTC to match the runtime ARC/SRM TOY edit path
-  // (CMc146818::set_time_from_registers). Sets the initial toy_offset;
-  // subsequent guest TOY writes still take precedence and overwrite this
-  // offset.
-  char *faketime = myCfg->get_myParent()->get_text_value("time");
-  if (faketime) {
-    struct tm ft = {};
-    int n = sscanf(faketime, "%d-%d-%d %d:%d:%d", &ft.tm_year, &ft.tm_mon,
-                   &ft.tm_mday, &ft.tm_hour, &ft.tm_min, &ft.tm_sec);
-    if (n < 3)
-      FAILURE_1(Configuration,
-                "Invalid time format: %s (use YYYY-MM-DD or "
-                "YYYY-MM-DD HH:MM:SS)",
-                faketime);
-    ft.tm_year -= 1900;
-    ft.tm_mon -= 1;
-#ifdef _WIN32
-    time_t set_time = _mkgmtime(&ft);
-#else
-    time_t set_time = timegm(&ft);
-#endif
-    if (set_time == (time_t)-1)
-      FAILURE_1(Configuration, "Invalid time value: %s", faketime);
-    time_t host_now;
-    time(&host_now);
-    state.toy_offset = (long)(set_time - host_now);
-  } else {
-    // Alphabox 'timezone' option: seed the TOY offset so the guest clock
-    // shows host local time by default ("local"), UTC ("utc"), or either
-    // with an offset appended: "+<n>" or "-<n>", then s|m|h|d|M|y
-    // (e.g. "local+2h", "local-20M", "utc+20y"). Guest TOY writes and the
-    // sys0 'time' override still take precedence over this initial seed.
-    std::string timezone{myCfg->get_text_value("timezone", "local")};
-    std::string timebase;
-    bool offset_present = false;
-    long offset = 0;
-
-    if (timezone.rfind("local", 0) == 0)
-      timebase = "local";
-    else if (timezone.rfind("utc", 0) == 0)
-      timebase = "utc";
-    else
-      FAILURE_1(Configuration, "Invalid timezone %s", timezone.c_str());
-
-    // The offset: a sign, digits and one unit letter, nothing else.
-    const char *rest = timezone.c_str() + timebase.length();
-    if (*rest) {
-      char *end = nullptr;
-      errno = 0;
-      if (*rest == '+' || *rest == '-')
-        offset = strtol(rest, &end, 10);
-      if (!end || end == rest + 1 || errno || !end[0] || end[1])
-        FAILURE_1(Configuration, "Invalid timezone %s", timezone.c_str());
-      offset_present = true;
-    }
-
-    time_t host_now;
-    time(&host_now);
-    time_t shifted = host_now;
-
-    if (offset_present) {
-      switch (timezone.at(timezone.length() - 1)) {
-      case 's':
-        shifted += offset;
-        break;
-      case 'm':
-        shifted += offset * 60;
-        break;
-      case 'h':
-        shifted += offset * 3600;
-        break;
-      case 'd':
-        shifted += offset * 86400;
-        break;
-      case 'M':
-      case 'y':
-        break;
-      default:
-        FAILURE_1(Configuration, "Invalid timezone offset type %c",
-                  timezone.at(timezone.length() - 1));
-      }
-    }
-
-    struct tm target = {};
-    if (timebase == "local") {
-#ifdef _WIN32
-      localtime_s(&target, &shifted);
-#else
-      localtime_r(&shifted, &target);
-#endif
-    } else {
-#ifdef _WIN32
-      gmtime_s(&target, &shifted);
-#else
-      gmtime_r(&shifted, &target);
-#endif
-    }
-
-    if (offset_present) {
-      switch (timezone.at(timezone.length() - 1)) {
-      case 'M':
-        target.tm_year += (int)(offset / 12);
-        target.tm_mon += (int)(offset % 12);
-        break;
-      case 'y':
-        target.tm_year += (int)offset;
-        break;
-      }
-    }
-
-    // The TOY itself runs in UTC + toy_offset, so express the target
-    // wall-clock as a UTC delta against the host clock.
-#ifdef _WIN32
-    time_t seeded = _mkgmtime(&target);
-#else
-    time_t seeded = timegm(&target);
-#endif
-    if (seeded != (time_t)-1)
-      state.toy_offset = (long)(seeded - host_now);
-  }
+  // The initial TOY offset: sys0's 'time' override, else the 'timezone'
+  // option (toy_seed_offset, ToySeed.hpp). Guest TOY writes still take
+  // precedence over it.
+  state.toy_offset = toy_seed_offset(
+      myCfg->get_myParent()->get_text_value("time"),
+      myCfg->get_text_value("timezone", "local"), state.toy_offset);
 
   state.toy_stored_data[0x17] = myCfg->get_bool_value("vga_console") ? 1 : 0;
 
