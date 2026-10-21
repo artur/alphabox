@@ -433,6 +433,9 @@ u64 CTsunami::pchip_csr_read(int num, u32 a) {
   case 0x300:
     return state.pchip[num].pctl;
 
+  case 0x340: // PLAT
+    return state.pchip[num].plat;
+
   case 0x3c0:
     return state.pchip[num].perr;
 
@@ -497,8 +500,8 @@ void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
     state.pchip[num].pctl |= (data & U64(0x00001cff0fcfffff));
     return;
 
-  case 0x340:
-    state.pchip[num].plat = data;
+  case 0x340: // PLAT: LAT <15:8> is the only field (HRM Table 10-41)
+    state.pchip[num].plat = data & U64(0x000000000000ff00);
     return;
 
   case 0x3c0: // PERR
