@@ -194,11 +194,14 @@ void CAliM1543C::init() {
   toy.set_arc_year_compat(arc_year_compat);
 
   // The initial TOY offset: sys0's 'time' override, else the 'timezone'
-  // option (toy_seed_offset, ToySeed.hpp). Guest TOY writes still take
-  // precedence over it.
+  // option, this block's or else sys0's, where the Marvel boards take it
+  // (toy_seed_offset, ToySeed.hpp). Guest TOY writes still take precedence
+  // over it.
   state.toy_offset = toy_seed_offset(
       myCfg->get_myParent()->get_text_value("time"),
-      myCfg->get_text_value("timezone", "local"), state.toy_offset);
+      myCfg->get_text_value("timezone", myCfg->get_myParent()->get_text_value(
+                                            "timezone", "local")),
+      state.toy_offset);
 
   state.toy_stored_data[0x17] = myCfg->get_bool_value("vga_console") ? 1 : 0;
 
