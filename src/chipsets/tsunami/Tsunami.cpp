@@ -293,32 +293,6 @@ void CTsunami::ack_ipi(int ProcNum) {
  **/
 void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
                         CSystemComponent *source) {
-  if ((a == U64(0x00000801FC000CF8)) && (dsize == 32)) {
-    state.cf8_address[0] = (u32)data & 0x00ffffff;
-    return;
-  }
-
-  if ((a == U64(0x00000803FC000CF8)) && (dsize == 32)) {
-    state.cf8_address[1] = (u32)data & 0x00ffffff;
-    return;
-  }
-
-  if ((a == U64(0x00000801FC000CFC)) && (dsize == 32)) {
-    printf("PCI 0 config space write through CF8/CFC mechanism.   \n");
-    getc(stdin);
-    m_sys->WriteMem(U64(0x00000801FE000000) | state.cf8_address[0], dsize, data,
-                    source);
-    return;
-  }
-
-  if ((a == U64(0x00000803FC000CFC)) && (dsize == 32)) {
-    printf("PCI 1 config space write through CF8/CFC mechanism.   \n");
-    getc(stdin);
-    m_sys->WriteMem(U64(0x00000803FE000000) | state.cf8_address[1], dsize, data,
-                    source);
-    return;
-  }
-
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF)) {
     csr_trace("cchip", (u32)a & 0xFFFFFFF, true, data);
     cchip_csr_write((u32)a & 0xFFFFFFF, data, source);
@@ -508,20 +482,6 @@ void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
  * \endcode
  **/
 u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
-  if ((a == U64(0x00000801FC000CFC)) && (dsize == 32)) {
-    printf("PCI 0 config space read through CF8/CFC mechanism.   \n");
-    getc(stdin);
-    return m_sys->ReadMem(U64(0x00000801FE000000) | state.cf8_address[0], dsize,
-                          source);
-  }
-
-  if ((a == U64(0x00000803FC000CFC)) && (dsize == 32)) {
-    printf("PCI 1 config space read through CF8/CFC mechanism.   \n");
-    getc(stdin);
-    return m_sys->ReadMem(U64(0x00000803FE000000) | state.cf8_address[1], dsize,
-                          source);
-  }
-
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF))
     return csr_trace("cchip", (u32)a & 0xFFFFFFF, false,
                      cchip_csr_read((u32)a & 0xFFFFFFF, source));

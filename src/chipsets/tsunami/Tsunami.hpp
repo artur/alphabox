@@ -349,6 +349,9 @@ public:
       u64 tba[4];
     } pchip[2];
 
+    /// Unused, kept for the state file's layout. It held a PC-style
+    /// 0xCF8 configuration address, a mechanism the 21272 does not have
+    /// (its configuration space is linear, HRM 10.1.3.3).
     u32 cf8_address[2];
   } state;
 };
