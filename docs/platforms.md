@@ -131,6 +131,41 @@ OpenVMS 8.4 boots on every one. What each has shown, in short:
   login on the ES47 and the ES80, and DECwindows draws its login box on the
   Radeon 7500 AGP with a USB keyboard and pointer.
 
+## Chip revisions in `show config`
+
+Each Tsunami-family board reports its own core-logic revisions
+(`tsunami_revisions` in `src/platforms/Platform.hpp`, the rows in
+`Platforms.cpp`), matched to real listings. The console reads them from:
+
+| Printed | Register | Printed as |
+| --- | --- | --- |
+| Cchip | MISC<REV> (HRM Table 10-12; 1 Tsunami, 8 Typhoon) | REV + 1, so 1 prints "Rev 2" |
+| Pchip | PCTL<REV> (always 1) and PMONCTL (HRM Table 10-47) | "Rev 2"; "Rev 2.2" when PMONCTL is not 0 (the DS20 family's console) |
+| TIG | the TIG bus byte at 0x38000180 (the ES40's console: 0x30000000, in hex) | byte >> 5 . byte & 31 |
+| Arbiter | the TIG bus byte at 0x38000140, and 0x380001c0 in parentheses | the same, then the raw byte |
+
+Real listings (a console prints a chip's revision in its own format, so the
+same hardware prints differently on different firmware):
+
+| Board | Cchip | Dchip | Pchip | TIG | Arbiter | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| ES40, V5.9-24 | Rev 9(C4) | Rev 2 | Rev 2 | Rev 10 | none | https://ratatoskr.run/lkml/2001/05/383420, ES40 user interface guide EK-ES240-UI.B01 |
+| DS20E 666 MHz, V6.1-2 | Rev 2.1 | Rev 2.0 | Rev 2.2 | Rev 4.22 | Rev 2.16 (0x1) | https://pastebin.com/kC3Lirdj |
+| DS20 500 MHz, V7.2-1 | Rev 2.1 | Rev 2.0 | Rev 2.2 | Rev 4.14 | Rev 2.10 (0x1) | https://www.zx.net.nz/computers/dec/ds20/ |
+| DS10 466 MHz, V7.3-1 | Rev 2 | Rev 2 | Rev 2 | Rev 2.1 | Rev 7.30 (0xfe) | https://metebalci.com/blog/alpha-and-tru64-in-2023/ |
+| DS20L 833 MHz, V5.9-16 | Rev 2.1 | Rev 2.0 | Rev 2.2 | Rev 4.15 | Rev 2.8 (0x1) | https://www.manualsdir.com/manuals/99104/hp-ds20l.html?page=97 |
+
+The DS20, DS20E and DS20L carry a Tsunami Cchip (MISC<REV> = 1), as does the
+DS10; only the ES40 reports a Typhoon (REV 8). The Cchip's other state (CSC,
+the Typhoon's P0W/P1W and BC fields, the four memory arrays) is unchanged:
+the consoles size memory and start their processors as before.
+
+Not settled: the DS20L's console here is V6.6, which prints the Cchip as
+"Rev 2(C2)" for the same register, not the "Rev 2.1" of the V5.9-16 listing;
+no V6.6 listing was found. The Dchip and the DS10's Pchip already match.
+The ES40's TIG byte is printed in hex, so 0x10 is read as "Rev 10"; the
+guide does not say whether the console prints decimal.
+
 ## Source layout (agreed 2026-10-02, reached by the chipset split)
 
 `CSystem` used to be the Tsunami chipset, with ES40 board hardware (DPR,

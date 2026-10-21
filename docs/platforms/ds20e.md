@@ -138,7 +138,10 @@ refinement, not a prerequisite.
   console never starts on it. Processor presence is discovered differently
   here than on the ES40.
 - The TIG reports revision 7.30 and an arbiter revision appears, neither of
-  which the ES40 listing has.
+  which the ES40 listing has. (Since fixed: the row now reports the real
+  DS20E's Cchip Rev 2.1, Pchip Rev 2.2, TIG Rev 4.22 and Arbiter Rev 2.16
+  (0x1), https://pastebin.com/kC3Lirdj; see "Chip revisions in `show
+  config`" in [../platforms.md](../platforms.md).)
 
 **Accesses nothing claims** (`ALPHABOX_TRACE_UNKNOWN=1`): the empty-slot
 configuration reads any bus scan makes, and byte writes at PCI memory

@@ -176,6 +176,11 @@ arithmetic. The row no longer patches it (see the DS10 packet, where one of
 them broke the power-up network test). The console still reaches `P00>>>`,
 passes `Testing ei* devices.` and network-boots from a DE600 without them.
 
+## Chip revisions
+
+The row reports the Tsunami Cchip, Pchip, TIG and arbiter revisions of the DS20L (the HP manual listing, V5.9-16);
+see "Chip revisions in `show config`" in [../platforms.md](../platforms.md).
+
 ## Rules
 
 As in [TEMPLATE.md](TEMPLATE.md).

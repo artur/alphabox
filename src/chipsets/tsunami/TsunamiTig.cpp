@@ -83,8 +83,8 @@ u8 CTsunami::tig_read(u32 a) {
   // to another: written on one CPU thread, read on another (tig_write).
   std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
-  case 0x30000000: // trr
-    return 0;
+  case 0x30000000: // trr: the ES40 console prints it as the TIG revision
+    return m_rev.tig_trr;
   case 0x30000040: // smir
     return state.tig.FwWrite;
   case 0x30000100: // mod_info
@@ -102,8 +102,12 @@ u8 CTsunami::tig_read(u32 a) {
   case 0x30000ac0:
   case 0x30000b00:
     return state.tig.ipcr[(a - 0x30000a00) >> 6];
-  case 0x38000180: // Arbiter revision
-    return 0xfe;
+  case 0x38000140: // arbiter revision (printed major.minor)
+    return m_rev.arbiter_rev;
+  case 0x38000180: // TIG revision (printed major.minor)
+    return m_rev.tig_rev;
+  case 0x380001c0: // arbiter identity, printed in hex after its revision
+    return m_rev.arbiter_id;
   default:
     printf("Unknown TIG %08x read attempted.\n", a);
     m_sys->trace_unknown("TIG register", a, 8, false, 0, nullptr);

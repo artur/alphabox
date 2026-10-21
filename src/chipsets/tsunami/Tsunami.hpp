@@ -65,6 +65,7 @@
 
 #include "Chipset.hpp"
 #include "DimmModel.hpp"
+#include "Platform.hpp"
 #include "i2c_spd.hpp"
 #include <mutex>
 #include <vector>
@@ -137,6 +138,9 @@ private:
   /// Build SPD images that match the configured memory.
   void init_spd(uint32_t total_mb);
   dimm_population m_dimms;
+
+  /// The board's chip revisions (Platform.hpp, tsunami_revisions).
+  tsunami_revisions m_rev;
 
   /// Host-side open-drain drivers for the Cchip's MPD I2C pins.
   struct MPDState {

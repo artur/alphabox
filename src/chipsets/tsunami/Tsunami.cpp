@@ -75,6 +75,9 @@ u64 csr_trace(const char *chip, u32 off, bool write, u64 v) {
 } // namespace
 
 CTsunami::CTsunami(CSystem *sys) : CChipset(sys) {
+  // A board without a row reports what the ES40 did before the rows existed.
+  static const tsunami_revisions typhoon = {8, 0, 0, 0xfe, 0, 0};
+  m_rev = sys->platform().tsunami ? *sys->platform().tsunami : typhoon;
   // The SPD EEPROMs on the MPD pins describe the configured memory.
   if (const uint32_t *arrays = sys->memory_arrays()) {
     m_dimms = model_dimm_arrays(arrays);
@@ -106,7 +109,7 @@ void CTsunami::power_on_state() {
   for (int i = 0; i < 4; i++)
     state.cchip.dim[i] = 0;
   state.cchip.drir = 0;
-  state.cchip.misc = U64(0x0000000800000000);
+  state.cchip.misc = (u64)m_rev.cchip_rev << 32;
   state.cchip.csc = U64(0x3142444014157803);
 
   state.dchip.drev = 0x01;

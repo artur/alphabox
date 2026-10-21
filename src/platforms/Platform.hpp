@@ -105,6 +105,31 @@ struct board_function {
   const char *place;        ///< e.g. "pci0.15"
 };
 
+/**
+ * The revisions of a Tsunami-family board's core-logic chips, as its console
+ * reads them for `show config` (docs/platforms.md, "Chip revisions"). Each
+ * field is the register the SRM console prints its revision from; the
+ * printed text is the console's own (it halves a TIG or arbiter byte into
+ * major.minor as byte >> 5 and byte & 31).
+ */
+struct tsunami_revisions {
+  /// Cchip MISC<REV> (HRM Table 10-12): 1 is a Tsunami, 8 a Typhoon. The
+  /// console prints REV + 1.
+  u8 cchip_rev;
+  /// Pchip PMONCTL (HRM Table 10-47) as read; the DS20 family's console
+  /// prints "Rev 2.2" instead of "Rev 2" when it is not zero.
+  u64 pchip_pmonctl;
+  /// TIG bus byte at 0x30000000, which the ES40's console prints as its TIG
+  /// revision (in hex).
+  u8 tig_trr;
+  /// TIG bus bytes at 0x38000180, 0x38000140 and 0x380001c0: the TIG
+  /// revision and the arbiter's revision and identity byte, which the other
+  /// boards' consoles print.
+  u8 tig_rev;
+  u8 arbiter_rev;
+  u8 arbiter_id;
+};
+
 struct platform_config {
   const char *name;        ///< the `platform` value, e.g. "es40"
   const char *description; ///< for messages, e.g. "AlphaServer ES40"
@@ -202,6 +227,10 @@ struct platform_config {
   /// The board's own PCI functions, where its console looks for them, or
   /// nullptr when it has none a configuration names.
   const board_function *functions = nullptr;
+
+  /// A Tsunami-family board's chip revisions; nullptr means the defaults
+  /// the ES40 reported before the rows existed (Typhoon, PMONCTL 0).
+  const tsunami_revisions *tsunami = nullptr;
 };
 
 /// The board named `name`, or nullptr.

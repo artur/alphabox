@@ -449,6 +449,9 @@ u64 CTsunami::pchip_csr_read(int num, u32 a) {
   case 0x800: // PCI reset
     return 0;
 
+  case 0x500: // PMONCTL (HRM Table 10-47): a board fact, see Platform.hpp
+    return m_rev.pchip_pmonctl;
+
   default:
     printf("Unknown PCHIP %d CSR %07x read attempted.\n", num, a);
     return 0;

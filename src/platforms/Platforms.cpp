@@ -62,11 +62,35 @@ static const board_function ds15_functions[] = {
 static const board_function marvel_functions[] = {
     {"cmd649", "pci2.2"}, {"uss344", "pci2.3"}, {nullptr, nullptr}};
 
+// The core-logic revisions each Tsunami-family console prints in `show
+// config`, from real listings (docs/platforms/<board>.md has each source).
+// The printed text is in the comment. TIG and arbiter bytes are major << 5 |
+// minor: 4.22 is 0x96.
+//
+// ES40, V5.9-24, "Cchip Rev 9(C4)", "TIG Rev 10":
+// https://ratatoskr.run/lkml/2001/05/383420 and the ES40 user interface
+// guide (EK-ES240-UI.B01 on manx-docs.org).
+static const tsunami_revisions es40_revisions = {8, 0, 0x10, 0xfe, 0, 0};
+// DS20E, V6.1-2, "Cchip Rev 2.1", "Pchip Rev 2.2", "TIG Rev 4.22",
+// "Arbiter Rev 2.16 (0x1)": https://pastebin.com/kC3Lirdj
+static const tsunami_revisions ds20e_revisions = {1, 1, 0, 0x96, 0x50, 0x01};
+// DS20, V7.2-1, "TIG Rev 4.14", "Arbiter Rev 2.10 (0x1)":
+// https://www.zx.net.nz/computers/dec/ds20/
+static const tsunami_revisions ds20_revisions = {1, 1, 0, 0x8e, 0x4a, 0x01};
+// DS10, V7.3-1, "Cchip Rev 2", "TIG Rev 2.1", "Arbiter Rev 7.30 (0xfe)":
+// https://metebalci.com/blog/alpha-and-tru64-in-2023/ (the Pchip prints
+// "Rev 2" with PMONCTL 0, as on the ES40)
+static const tsunami_revisions ds10_revisions = {1, 0, 0, 0x41, 0xfe, 0xfe};
+// DS20L, V5.9-16, "Cchip Rev 2.1", "TIG Rev 4.15", "Arbiter Rev 2.8 (0x1)":
+// https://www.manualsdir.com/manuals/99104/hp-ds20l.html?page=97
+static const tsunami_revisions ds20l_revisions = {1, 1, 0, 0x8f, 0x48, 0x01};
+
 static const platform_config platforms[] = {
     {"es40", "AlphaServer ES40", CHIPSET_TSUNAMI, "ev68cb", 4, 26, 35,
      "cl67srmrom.exe", FW_LFU_BUNDLE, 2, SECONDARIES_BY_CONSOLE,
      es40_board_devices, es40_pci_interrupt, es40_slot_refusal, U64(0x8000),
-     es40_console_patches, 0, nullptr, nullptr, nullptr, 0, 0, es40_functions},
+     es40_console_patches, 0, nullptr, nullptr, nullptr, 0, 0, es40_functions,
+     &es40_revisions},
     // docs/platforms/ds20e.md. The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
@@ -74,7 +98,7 @@ static const platform_config platforms[] = {
     {"ds20e", "AlphaServer DS20E", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr,
-     0, nullptr, nullptr, nullptr, 0, 1024, ds20e_functions},
+     0, nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20e_revisions},
     // docs/platforms/ds20.md: the DS20E's console, interrupt table and
     // slots; the console knows it from the DS20E by its I2C bus
     // (ds20_board_devices). The board took EV6 processors, for which there
@@ -82,13 +106,13 @@ static const platform_config platforms[] = {
     {"ds20", "AlphaServer DS20", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, 0, nullptr,
-     0, nullptr, nullptr, nullptr, 0, 1024, ds20e_functions},
+     0, nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20_revisions},
     // docs/platforms/ds10.md: one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,
      "DS10SRM.ROM", FW_ROM_HEADER, 1, SECONDARIES_AFTER_ARBITRATION,
      ds10_board_devices, ds10_pci_interrupt, ds10_slot_refusal, 0, nullptr, 0,
-     nullptr, nullptr, nullptr, 0x3, 1024, ds10_functions},
+     nullptr, nullptr, nullptr, 0x3, 1024, ds10_functions, &ds10_revisions},
     // docs/platforms/ds20l.md: its console image comes
     // as an update file, with no header in front of it.
     // Memory: its console lists arrays 0 and 1 only, of up to 1 GB each
@@ -96,7 +120,8 @@ static const platform_config platforms[] = {
     {"ds20l", "AlphaServer DS20L", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 31,
      "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, SECONDARIES_AFTER_ARBITRATION,
      es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, 0, nullptr,
-     0, nullptr, nullptr, nullptr, 0x3, 1024, ds20l_functions},
+     0, nullptr, nullptr, nullptr, 0x3, 1024, ds20l_functions,
+     &ds20l_revisions},
     // docs/platforms/marvel.md: two EV7s, each with its
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
