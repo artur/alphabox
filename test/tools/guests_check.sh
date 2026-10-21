@@ -6,7 +6,7 @@
 # With no guests: all of them, in this order:
 #   w2k       Windows 2000 Professional (RC2, build 2128), 2 CPUs: the desktop,
 #             no "installing new devices" dialog, and the taskbar clock reads
-#             the host's time (read with tesseract when it is installed)
+#             the host's time (read by matching the font's glyphs)
 #   w2k-beta  Japanese Windows 2000 Server beta (build 1877), 2 CPUs (its HAL
 #             sends IPIs to CPUs 0-1 only): the desktop
 #   xp64      Windows XP 64-bit (Whistler 2210 AXP64), booted through
@@ -270,26 +270,74 @@ def fbtext(d, tmo, pid, rx, box):
     return 1
 
 
-def clock(frame):
-    """The taskbar clock, as minutes since midnight, or None.
+# The taskbar clock's font (Windows 2000, 8 pixels high): each glyph as its
+# 8 rows of "#" (dark) and "." joined by "/". Add a missing one from the
+# pattern the failure message prints.
+CLOCK_FONT = {
+    ".###./#...#/#...#/#...#/#...#/#...#/#...#/.###.": "0",
+    ".#./##./.#./.#./.#./.#./.#./###": "1",
+    ".###./#...#/....#/...#./..#../.#.../#..../#####": "2",
+    ".###./#...#/....#/..##./....#/....#/#...#/.###.": "3",
+    "...#./..##./.#.#./#..#./#####/...#./...#./...#.": "4",
+    "#####/#..../#..../####./....#/....#/#...#/.###.": "5",
+    "..##./.#.../#..../####./#...#/#...#/#...#/.###.": "6",
+    "#####/....#/...#./...#./..#../..#../.#.../.#...": "7",
+    ".###./#...#/#...#/.###./#...#/#...#/#...#/.###.": "8",
+    ".###./#...#/#...#/#...#/.####/....#/...#./.##..": "9",
+    "././#/#/././#/#": ":",
+    "..##../..##../.#..#./.#..#./.#..#./######/#....#/#....#": "A",
+    "####./#...#/#...#/#...#/####./#..../#..../#....": "P",
+    "##...##/##...##/#.#.#.#/#.#.#.#/#..#..#/#..#..#/#.....#/#.....#": "M",
+}
 
-    The clock's 8-pixel font is small for tesseract, and each way of
-    enlarging it misreads some time: without a margin "9:47" came back as
-    "3:47", with one a colon goes missing. So three readings vote, and a
-    time at least two agree on is the answer; "4M" is how "AM" often reads."""
-    votes = []
-    for scale, pad in ((6, 0), (6, 20), (8, 20)):
-        t = ocr(frame, (-65, -20, -8, -3), scale=scale, pad=pad)
-        if t is None:
-            return None
-        m = re.search(r"(\d{1,2}):?(\d\d)[.,]?\s*([AaPp4])M", t)
-        if m and int(m.group(1)) in range(1, 13) and int(m.group(2)) < 60:
-            pm = m.group(3) in "Pp"
-            votes.append((int(m.group(1)) % 12 + (12 if pm else 0)) * 60 + int(m.group(2)))
-    for v in votes:
-        if votes.count(v) >= 2:
-            return v
-    return None
+
+def clock_read(frame):
+    """The taskbar clock, as (minutes since midnight, None), or (None, why).
+
+    The clock is drawn in a fixed bitmap font, so each character is an exact
+    pixel pattern: crop the tray, take dark pixels as text, split into glyphs
+    at empty columns and look each one up in CLOCK_FONT."""
+    w, h, _ = img = read_ppm(frame)
+    if h < 400:
+        return None, "frame is %dx%d, not a desktop" % (w, h)
+    xs = range(w - 70, w - 6)
+    ys = range(h - 24, h - 3)
+
+    def dark(x, y):
+        return sum(px(img, x, y)) < 384
+
+    rows = [y for y in ys if any(dark(x, y) for x in xs)]
+    if not rows:
+        return None, "no text in the tray"
+    band = range(rows[0], rows[0] + 8)
+    spans, cur = [], None
+    for x in xs:
+        if any(dark(x, y) for y in band):
+            cur = [x, x] if cur is None else [cur[0], x]
+        elif cur:
+            spans.append(cur)
+            cur = None
+    if cur:
+        spans.append(cur)
+    text, unknown = "", []
+    for a, b in spans:
+        g = "/".join("".join("#" if dark(x, y) else "." for x in range(a, b + 1)) for y in band)
+        c = CLOCK_FONT.get(g)
+        if c is None:
+            unknown.append(g)
+            c = "?"
+        text += c
+    if unknown:
+        return None, "unknown glyph(s) in '%s': %s" % (text, " | ".join(unknown))
+    m = re.fullmatch(r"(\d{1,2}):(\d\d)([AP])M", text)
+    if not m or not 1 <= int(m.group(1)) <= 12 or int(m.group(2)) > 59:
+        return None, "'%s' is not a time" % text
+    return (int(m.group(1)) % 12 + (12 if m.group(3) == "P" else 0)) * 60 + int(m.group(2)), None
+
+
+def clock(frame):
+    """The taskbar clock as minutes since midnight, or None (see clock_read)."""
+    return clock_read(frame)[0]
 
 
 class Chat:
@@ -410,9 +458,9 @@ if __name__ == "__main__":
     if a[0] == "fbtext":
         sys.exit(fbtext(a[1], float(a[2]), int(a[3]), a[4], tuple(int(v) for v in a[5].split(","))))
     if a[0] == "clock":
-        c = clock(a[1])
+        c, why = clock_read(a[1])
         if c is None:
-            print("unread")
+            print("unread:", why)
             sys.exit(2)
         now = time.localtime()
         host = now.tm_hour * 60 + now.tm_min
@@ -524,7 +572,7 @@ win_guest() {
     local c; c=$(H clock "$(ls "$D"/fb/*.ppm | tail -1)")
     case $? in
       0) W_WHAT="$W_WHAT, clock $c" ;;
-      2) W_WHAT="$W_WHAT, clock not read (no tesseract?)" ;;
+      2) W_WHAT="$W_WHAT, clock not read (${c#unread: })" ;;
       *) W_WHAT="$W_WHAT, clock WRONG ($c)"; return 1 ;;
     esac
   fi
