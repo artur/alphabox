@@ -496,8 +496,11 @@ void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
     return;
 
   case 0x300:
-    state.pchip[num].pctl &= U64(0xffffe300f0300000);
-    state.pchip[num].pctl |= (data & U64(0x00001cff0fcfffff));
+    // PCTL (HRM Table 10-40): PID <47:46>, RPP <45>, PCLKX <41:40> and REV
+    // <31:24> are read-only, <63:48> and <17:16> reserved; CDQMAX <23:20>
+    // is read/write.
+    state.pchip[num].pctl &= U64(0xffffe300ff030000);
+    state.pchip[num].pctl |= (data & U64(0x00001cff00fcffff));
     return;
 
   case 0x340: // PLAT: LAT <15:8> is the only field (HRM Table 10-41)
