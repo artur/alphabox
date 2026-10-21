@@ -408,6 +408,9 @@
  *written is ignored.
  **/
 u64 CTsunami::pchip_csr_read(int num, u32 a) {
+  // The windows are read by device threads (pci_phys) while processors
+  // write them: both sides take the lock.
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x000:
   case 0x040:
@@ -455,6 +458,15 @@ u64 CTsunami::pchip_csr_read(int num, u32 a) {
  * For a description of the PCHIP registers, see pchip_csr_read.
  **/
 void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
+  if (a == 0x800) { // SPRST: PCI reset
+    // Outside the lock: the devices reset drop their interrupt lines
+    // through interrupt(), which takes it.
+    m_sys->reset_pci_devices();
+    return;
+  }
+  // The windows are read by device threads (pci_phys) while processors
+  // write them: both sides take the lock.
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x000:
   case 0x040:
@@ -498,10 +510,6 @@ void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
 
   case 0x480: // TLBIV
   case 0x4c0: // TLBIA
-    return;
-
-  case 0x800: // PCI reset
-    m_sys->reset_pci_devices();
     return;
 
   default:
@@ -607,6 +615,15 @@ u64 CTsunami::pci_phys(int pcibus, u32 address) {
   u64 a;
   int j;
 
+  // A device thread translates while the processors may be writing the
+  // windows: take a copy of this hose's under the lock, and translate from
+  // it outside the lock (a scatter-gather entry is read from memory).
+  SState::SSys_pchip p;
+  {
+    std::lock_guard<std::mutex> g(m_lock);
+    p = state.pchip[pcibus];
+  }
+
 #if defined(DEBUG_PCI)
   printf("-------------- PCI MEMORY ACCESS FOR PCI HOSE %d --------------\n",
          pcibus);
@@ -614,29 +631,26 @@ u64 CTsunami::pci_phys(int pcibus, u32 address) {
   // Step through windows
   for (j = 0; j < 4; j++) {
     printf("WSBA%d: %016" PRIx64 " WSM: %016" PRIx64 " TBA: %016" PRIx64 "\n",
-           j, state.pchip[pcibus].wsba[j], state.pchip[pcibus].wsm[j],
-           state.pchip[pcibus].tba[j]);
+           j, p.wsba[j], p.wsm[j], p.tba[j]);
   }
 
-  printf("HOLE: %s\n",
-         test_bit_64(state.pchip[pcibus].pctl, 5) ? "enabled" : "disabled");
+  printf("HOLE: %s\n", test_bit_64(p.pctl, 5) ? "enabled" : "disabled");
   printf("--------------------------------------------------------------\n");
 #endif
-  if (!(state.pchip[pcibus].pctl & PCI_PCTL_HOLE) // hole disabled
+  if (!(p.pctl & PCI_PCTL_HOLE) // hole disabled
       || (address < PCI_PCTL_HOLE_START) ||
       (address > PCI_PCTL_HOLE_END)) // or address outside hole
   {
 
     // Step through windows
     for (j = 0; j < 4; j++) {
-      if ((state.pchip[pcibus].wsba[j] & 1) // window enabled...
-          && !((address ^ state.pchip[pcibus].wsba[j]) & 0xfff00000 &
-               ~state.pchip[pcibus].wsm[j])) // address in range...
+      if ((p.wsba[j] & 1) // window enabled...
+          && !((address ^ p.wsba[j]) & 0xfff00000 &
+               ~p.wsm[j])) // address in range...
       {
-        if (state.pchip[pcibus].wsba[j] & 2) {
+        if (p.wsba[j] & 2) {
           try {
-            a = pci_phys_scatter_gather(address, state.pchip[pcibus].wsm[j],
-                                        state.pchip[pcibus].tba[j]);
+            a = pci_phys_scatter_gather(address, p.wsm[j], p.tba[j]);
           }
 
           catch (char) {
@@ -647,8 +661,7 @@ u64 CTsunami::pci_phys(int pcibus, u32 address) {
                    (u64)address;
           }
         } else
-          a = pci_phys_direct_mapped(address, state.pchip[pcibus].wsm[j],
-                                     state.pchip[pcibus].tba[j]);
+          a = pci_phys_direct_mapped(address, p.wsm[j], p.tba[j]);
 #if defined(DEBUG_PCI)
         printf("PCI memory address %08x translated to %016" PRIx64 "\n",
                address, a);
