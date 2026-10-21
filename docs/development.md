@@ -30,7 +30,7 @@ gives its usage and variables.
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
 | `boards_check.sh` | Every board of `src/platforms/Platforms.cpp` to its console prompt, with its own firmware from `roms/`: `show config` (and `show fru` on the EV7 boards), a PASS/FAIL line per board, normalised console logs. |
-| `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
+| `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console; OpenVMS on the DS20E, DS20, DS10 and DS20L when named) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
@@ -68,6 +68,19 @@ menu. It writes
 `$ALPHABOX_WORK/runs/guests-<label>/<guest>.png` (the last frame),
 `<guest>.log` (the console) and `<guest>.warn`, and exits 0 only if every
 guest passed. A whole run takes about 15 minutes.
+
+Four more guests run only when named, so the default run stays short:
+`vms-ds20e`, `vms-ds20`, `vms-ds10` and `vms-ds20l` boot the same
+OpenVMS 8.4 disk on those boards, each with its own console, IDE place
+and processor count (2, 2, 1, 2). Each logs in, runs `SHOW CPU`, reads
+`F$GETSYI("HW_NAME")` and the active CPU count, copies
+`SYS$BASE_IMAGE.EXE` with BACKUP (a DMA exercise) and compares the copy
+with `DIFFERENCES` (no differences allowed), runs `SHOW ERROR` (no device
+with errors) and shuts down. Run them after a change to the Tsunami
+chipset code, the board rows or the chip revisions, which an operating
+system may read and act on: `guests_check.sh <alphabox> <label> vms-ds20e
+vms-ds20 vms-ds10 vms-ds20l`. The DS20L's console is the one its update
+utility wrote into `lab/ds20l-lfu/flash.rom`.
 
 ### Configuration
 

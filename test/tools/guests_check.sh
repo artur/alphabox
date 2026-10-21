@@ -18,6 +18,17 @@
 #             tiny C program
 #   arc       the AlphaBIOS/ARC console from a programmed flash: its menu
 #   netbsd    the NetBSD/alpha install CD: the installer's menu
+# Not in the default list (they add about 12 minutes), named when needed:
+#   vms-ds20e, vms-ds20, vms-ds10, vms-ds20l
+#             OpenVMS 8.4 (the disk installed on the ES40) on those boards,
+#             each with its own console, IDE place and processor count (2, 2,
+#             1, 2): boot dqa0, log in, SHOW CPU and the active CPU count,
+#             F$GETSYI("HW_NAME"), a DMA exercise (BACKUP of SYS$BASE_IMAGE.EXE
+#             and DIFFERENCES of the copy: no differences), SHOW ERROR (no
+#             device with errors), SHUTDOWN. They guard what an operating
+#             system reads from the chipset (Cchip revision, Pchip and TIG
+#             values); the DS20L's console comes from the flash the update
+#             utility wrote (lab/ds20l-lfu).
 # Each guest boots on an APFS clone (cp -c) of its disk, deleted afterwards;
 # the originals are never opened. A check waits for a marker (a frame with a
 # taskbar and no dialog, a console prompt) with a timeout, never a fixed
@@ -56,6 +67,8 @@ BASE=${GUESTS_PORT_BASE:-21950}
 BTMO=${GUESTS_BOOT_TMO:-900}
 MINFREE=${GUESTS_MIN_FREE_GB:-3}
 ALL="w2k w2k-beta xp64 vms-es40 vms-es47 linux arc netbsd"
+# guests that run only when named; they follow ALL in the port numbering
+EXTRA="vms-ds20e vms-ds20 vms-ds10 vms-ds20l"
 
 [ $# -ge 2 ] || { sed -n '2,3p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -622,8 +635,8 @@ serial_guest() {
 }
 
 # the DCL dialogue shared by both OpenVMS guests
-vms_steps() { # vms_steps <boot-device> <boot-timeout>
-  echo "expect=P00>>>@240"
+vms_steps() { # vms_steps <boot-device> <boot-timeout> [prompt-regex]
+  echo "expect=${3:-P00>>>}@240"   # the DS10 console's prompt has no P00
   echo "send=boot $1"
   echo "reply=enter date and time[^\n]*\n?>\$DATE"
   echo "expect=job terminated at@$2"
@@ -638,9 +651,86 @@ vms_steps() { # vms_steps <boot-device> <boot-timeout>
   echo "expect=\\$ \$@60"
 }
 
+# board_cfg <dir> <port> <platform> <cpus> <rom> <ali> <ide> <usb>: a Tsunami
+# family board (not the ES40) whose console is the telnet port, an ALi IDE
+# with the disk at the board's own place. <rom> is a file name copied into
+# <dir>, or - for a console already in the flash (the DS20L's, installed by
+# its update utility); the places are the ones in test/tools/srm_cfg.py.
+board_cfg() {
+  local d=$1 port=$2 plat=$3 cpus=$4 rom=$5 ali=$6 ide=$7 usb=$8 i
+  {
+    echo 'sys0 = tsunami'; echo '{'
+    echo "  platform = \"$plat\";"
+    echo '  memory.bits = 30;'
+    if [ "$rom" != - ]; then
+      echo "  rom.srm = \"$rom\";"
+      echo "  rom.decompressed = \"$rom-decompressed.rom\";"
+    fi
+    echo '  rom.flash = "flash.rom";'
+    echo '  rom.dpr = "dpr.rom";'
+    for ((i = 0; i < cpus; i++)); do echo "  cpu$i = ev68cb { speed = 833M; }"; done
+    echo "  serial0 = serial { address = \"127.0.0.1\"; port = $port; }"
+    echo '  serial1 = serial { null_attach = true; }'
+    echo "  $ali = ali { vga_console = false; }"
+    echo "  $ide = ali_ide"; echo '  {'
+    echo '    disk0.0 = file { file = "disk.img"; }'
+    echo '  }'
+    [ -n "$usb" ] && echo "  $usb = ali_usb { }"
+    echo '}'
+  } > "$d/es40.cfg"
+}
+
+# vms_board <guest> <platform> <cpus> <rom|-> <ali> <ide> <usb>: OpenVMS 8.4
+# on one board: the DCL login, then the checks the header lists. Returns 1
+# after fail() has reported.
+vms_board() {
+  local g=$1 plat=$2 cpus=$3 rom=$4 ali=$5 ide=$6 usb=$7 src=$WORK/vms84/disk-installed.img f
+  rm -rf "$D"; mkdir -p "$D"
+  cp -c "$src" "$D/disk.img" || { fail "no image $src"; return 1; }
+  if [ "$rom" = - ]; then
+    for f in flash.rom dpr.rom; do
+      cp "$WORK/ds20l-lfu/$f" "$D/" && chmod u+w "$D/$f" || { fail "no $WORK/ds20l-lfu/$f"; return 1; }
+    done
+  else
+    f=$ROMS/alpha-firmware-v7.3/$rom; rom=$(basename "$rom")
+    cp "$f" "$D/" && chmod u+w "$D/$rom" || { fail "no console $f"; return 1; }
+  fi
+  board_cfg "$D" "$PORT" "$plat" "$cpus" "$rom" "$ali" "$ide" "$usb"
+  local steps=(); while IFS= read -r l; do steps+=("$l"); done < <(vms_steps dqa0 "$BTMO" '(P00>>>|\n>>>)')
+  steps+=("send=SHOW CPU" "expect=\\$ \$@60"
+          "send=WRITE SYS\$OUTPUT \"GC-HW=[\"+F\$GETSYI(\"HW_NAME\")+\"]\"" "expect=\\$ \$@60"
+          "send=WRITE SYS\$OUTPUT \"GC-CPUS=\"+F\$STRING(F\$GETSYI(\"ACTIVECPU_CNT\"))" "expect=\\$ \$@60"
+          "send=BACKUP SYS\$LOADABLE_IMAGES:SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
+          "send=DIFFERENCES SYS\$LOADABLE_IMAGES:SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
+          "send=WRITE SYS\$OUTPUT \"GC-DIFF-DONE\"" "expect=\\$ \$@60"
+          "send=DELETE SYS\$SCRATCH:GC_COPY.EXE;*" "expect=\\$ \$@60"
+          "send=SHOW ERROR" "expect=\\$ \$@60"
+          "send=WRITE SYS\$OUTPUT \"GC-ERR-DONE\"" "expect=\\$ \$@60"
+          "send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
+  serial_guest "$g" "$PORT" "${steps[@]}" || { fail "console dialogue: $SG_RESULT"; return 1; }
+  local txt hw ncpu nd ne why=
+  txt=$(tr -d '\r\000' < "$D/console.log")
+  hw=$(echo "$txt" | sed -n 's/^GC-HW=\[\(.*\)\]$/\1/p' | head -1)
+  ncpu=$(echo "$txt" | sed -n 's/^GC-CPUS=\([0-9]*\)$/\1/p' | head -1)
+  # DIFFERENCES prints "Number of difference sections found: 0" when equal
+  nd=$(echo "$txt" | sed -n 's/.*difference sections found: *\([0-9]*\).*/\1/p' | head -1)
+  # SHOW ERROR lists a device only when it has errors: count "NAME: n" lines
+  # between the command and the marker. The IDE positions with no drive
+  # (DQA1, DQB0, DQB1) each count the one failed probe at boot: not errors.
+  ne=$(echo "$txt" | awk '/^\$ SHOW ERROR/ {on=1; next} /^GC-ERR-DONE/ {on=0} on && /^[A-Za-z_$][A-Za-z0-9_$]*: +[0-9]+ *$/ && $1 !~ /(DQA1|DQB0|DQB1):$/ {n++} END {print n+0}')
+  [ -n "$hw" ] || why="$why no HW_NAME;"
+  [ "$ncpu" = "$cpus" ] || why="$why active CPUs '$ncpu' not $cpus;"
+  [ "$nd" = 0 ] || why="$why DIFFERENCES sections '$nd';"
+  [ "$ne" = 0 ] || why="$why $ne devices with errors;"
+  echo "$txt" | grep -aqE 'BUGCHECK|CPUSPINWAIT|INVEXCEPTN' && why="$why bugcheck;"
+  [ -z "$why" ] || { fail "logged in, but:$why"; return 1; }
+  stop_emu
+  report "$g" PASS "$(secs)" "DCL login, HW_NAME $hw, $ncpu CPUs, BACKUP + DIFFERENCES 0, SHOW ERROR clean, SHUTDOWN"
+}
+
 rc_all=0
 for g in $GUESTS; do
-  idx=0; for x in $ALL; do [ "$x" = "$g" ] && break; idx=$((idx + 1)); done
+  idx=0; for x in $ALL $EXTRA; do [ "$x" = "$g" ] && break; idx=$((idx + 1)); done
   PORT=$((BASE + idx))
   t0=$(date +%s)
   secs() { echo $(( $(date +%s) - t0 )); }
@@ -651,7 +741,7 @@ for g in $GUESTS; do
            [ "${GUESTS_KEEP:-0}" = 1 ] || rm -rf "$D"; }
   D=$OUT/$g
   case $g in
-  w2k|w2k-beta|xp64|vms-es40|vms-es47|linux|arc|netbsd) ;;
+  w2k|w2k-beta|xp64|vms-es40|vms-es47|linux|arc|netbsd|vms-ds20e|vms-ds20|vms-ds10|vms-ds20l) ;;
   *) echo "FAIL $g 0 unknown guest"; rc_all=1; continue ;;
   esac
   check_free; case $? in
@@ -722,6 +812,10 @@ for g in $GUESTS; do
         stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW CPU, SHUTDOWN"
       else fail "logged in, but SHOW TIME output not as expected"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
+  vms-ds20e) vms_board "$g" ds20e 2 DS20/PC264SRM.ROM pci0.5 pci0.6 "" || continue ;;
+  vms-ds20) vms_board "$g" ds20 2 DS20/PC264SRM.ROM pci0.5 pci0.6 "" || continue ;;
+  vms-ds10) vms_board "$g" ds10 1 DS10/DS10SRM.ROM pci0.7 pci0.13 pci0.1 || continue ;;
+  vms-ds20l) vms_board "$g" ds20l 2 - pci0.7 pci0.15 pci0.19 || continue ;;
   linux)
     src=$WORK/linux
     rm -rf "$D"; mkdir -p "$D"
