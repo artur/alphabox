@@ -545,7 +545,8 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
 
   if (a >= U64(0x803fc000000) && a < U64(0x803fe000000)) {
 
-    // Unused PCI I/O space
+    // Unused PCI I/O space: master-aborted, all ones, as on hose 0 (HRM
+    // 8.8.2.1).
     m_sys->trace_unknown("PCI 1 I/O", a, dsize, false, 0, source);
     if (source) {
       printf("Read from unknown IO port %" PRIx64 " on PCI 1 from %s   \n",
@@ -553,7 +554,7 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
     } else
       printf("Read from unknown IO port %" PRIx64 " on PCI 1   \n",
              a & U64(0x1ffffff));
-    return 0;
+    return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
   }
 
   if (a >= U64(0x80000000000) && a < U64(0x80100000000)) {
