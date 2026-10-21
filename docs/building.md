@@ -47,7 +47,7 @@ cmake --build build -j$(nproc)
 
 The binary is `build/alphabox`.
 
-- Headless build: add `-DDISABLE_SDL=yes -DDISABLE_X11=yes`.
+- Headless build: add `-DDISABLE_SDL=yes`.
 - Without networking: add `-DDISABLE_PCAP=yes`.
 
 To use a NIC with the pcap backend without running as root, grant capture

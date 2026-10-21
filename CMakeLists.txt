@@ -225,7 +225,6 @@ check_symbol_exists(_stricasecmp "string.h" HAVE__STRICASECMP)
 check_symbol_exists(_stricmp "string.h" HAVE__STRICMP)
 
 # Features
-check_include_file("X11/X.h" HAVE_X11)
 # Large file support (fopen64 / disk files > 2 GB)
 ALPHABOX_TEST_LARGE_FILES(HAVE_LARGE_FILES)
 
@@ -300,9 +299,6 @@ else()
         set(HAVE_SDL 0)
     endif()
 endif()
-if (DISABLE_X11 STREQUAL "yes")
-    set(HAVE_X11 0)
-endif()
 
 if(HAVE_SDL)
     target_link_libraries(alphabox SDL3::SDL3)
@@ -311,12 +307,6 @@ else()
     message(WARNING "SDL3 not found (no system SDL3 and third_party/SDL "
                     "submodule not initialized; run: git submodule update "
                     "--init). Building without SDL graphics support")
-endif()
-if(HAVE_X11)
-    target_link_libraries(alphabox X11)
-    message(STATUS "x11 found. x11 graphics support enabled")
-else()
-    message(WARNING "x11 not found. Building without x11 graphics support")
 endif()
 
 if (STATIC_COMPILE STREQUAL "yes")

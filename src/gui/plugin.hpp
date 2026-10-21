@@ -58,10 +58,4 @@
 #if defined(HAVE_SDL)
 DECLARE_PLUGIN_INIT_FINI_FOR_MODULE(sdl)
 #endif
-#if defined(_WIN32)
-DECLARE_PLUGIN_INIT_FINI_FOR_MODULE(win32)
-#endif
-#if defined(HAVE_X11)
-DECLARE_PLUGIN_INIT_FINI_FOR_MODULE(x11)
-#endif
 #endif /* __PLUGIN_H */

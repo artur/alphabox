@@ -309,8 +309,8 @@ card. The user guide is [usb.md](usb.md).
 
 ## gui/, common/ and the entry points
 
-- `gui/`: the `bx_gui` back ends. SDL3 (`sdl.cpp`) is the maintained one;
-  the X11 and Win32 ones are kept.
+- `gui/`: the `bx_gui` back ends. SDL3 (`sdl.cpp`) is the only one; `gui = win32`
+  and `gui = X11` in a configuration name the SDL window.
 - `common/`: `StdAfx`, `datatypes`, `es40_debug` (with `Exception`, what
   its `FAILURE()` throws), `es40_endian`, `config_debug`, `banner`,
   `telnet`, and `WakeSemaphore` (a device thread's wake-up).

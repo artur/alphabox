@@ -702,8 +702,6 @@ static const char *const kv_gui_sdl[] = {
     "hotkey.media_force",   "hotkey.ctrl_alt_delete",
     "hotkey.reset_window",  "hotkey.scale_up",
     "hotkey.scale_down",    0};
-static const char *const kv_gui_x11[] = {"keyboard.use_mapping", "keyboard.map",
-                                         "private_colormap", 0};
 
 classinfo classes[] = {
     {"tsunami", c_tsunami, N_P | IS_CS | HAS_PCI, kv_tsunami},
@@ -758,7 +756,7 @@ classinfo classes[] = {
     {"ramdisk", c_ramdisk, IS_DISK, kv_disk_ram},
     {"sdl", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"win32", c_sdl, N_P | IS_GUI, kv_gui_sdl},
-    {"X11", c_x11, N_P | IS_GUI, kv_gui_x11},
+    {"X11", c_sdl, N_P | IS_GUI, kv_gui_sdl},
     {"ehci", c_ehci, IS_PCI | HAS_DISK, kv_ehci},
     {"uss344", c_ehci, IS_PCI | HAS_DISK, kv_uss344},
     {"virtio_blk", c_virtio_blk, IS_PCI | HAS_DISK, kv_none},
@@ -949,11 +947,6 @@ void CConfigurator::initialize_section() {
   if (myClassId == c_sdl || myClassId == c_es137x)
     FAILURE_2(Configuration,
               "Class %s for %s needs compilation with SDL support", myValue,
-              myName);
-#endif
-#if !defined(HAVE_X11)
-  if (myClassId == c_x11)
-    FAILURE_2(Configuration, "Class %s for %s needs an X11 platform", myValue,
               myName);
 #endif
   if (myFlags & IS_PCI) {
@@ -1216,7 +1209,9 @@ void CConfigurator::check_device() {
     break;
 
   case c_sdl:
-  case c_x11:
+    if (!strcmp(myValue, "X11"))
+      cfg_msg(false, "%%SYS-I-GUIX11: gui = X11 is the SDL window now; the "
+                     "X11 back end is gone\n");
     s_check_gui = true;
     break;
 
@@ -1413,12 +1408,6 @@ void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
   case c_sdl:
 #if defined(HAVE_SDL)
     PLUG_load_plugin(this, sdl);
-#endif
-    break;
-
-  case c_x11:
-#if defined(HAVE_X11)
-    PLUG_load_plugin(this, x11);
 #endif
     break;
 
