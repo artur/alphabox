@@ -74,18 +74,27 @@ u64 CTitan::cchip_read(u32 a, CSystemComponent *source) {
       log2++;
     return (arr.base & U64(0x7ff000000)) | ((u64)(log2 - 23) << 12);
   }
+  // DRIR changes on device threads (interrupt()) and DIMn on the
+  // processors' own: read them under the lock their writers hold, as the
+  // Tsunami does (TSU-01).
   case 0x200:
   case 0x240:
   case 0x600:
-  case 0x640:
+  case 0x640: {
+    std::lock_guard<std::mutex> g(m_lock);
     return state.cchip.dim[dim_index(a)];
+  }
   case 0x280:
   case 0x2c0:
   case 0x680:
-  case 0x6c0:
+  case 0x6c0: {
+    std::lock_guard<std::mutex> g(m_lock);
     return state.cchip.drir & state.cchip.dim[dim_index(a)];
-  case 0x300:
+  }
+  case 0x300: {
+    std::lock_guard<std::mutex> g(m_lock);
     return state.cchip.drir;
+  }
   case 0x340:
     return state.cchip.prben;
   case 0x380:
