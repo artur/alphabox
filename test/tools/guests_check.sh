@@ -154,24 +154,28 @@ def has_taskbar_no_dialog(path):
     return hits >= 0.98 * tot
 
 
-def ocr(path, box, scale=6, psm="13", extra=()):
+def ocr(path, box, scale=6, psm="13", extra=(), pad=0):
     """Text in box (x0, y0, x1, y1; negative values count from the right and
-    bottom edges) with tesseract, or None when it is not installed."""
+    bottom edges) with tesseract, or None when it is not installed. pad adds
+    a white margin of that many pixels around the enlarged text."""
     if not shutil.which("tesseract"):
         return None
     w, h, b = read_ppm(path)
     x0, y0, x1, y1 = [v + (w if i % 2 == 0 else h) if v < 0 else v
                       for i, v in enumerate(box)]
-    rows = []
+    width = (x1 - x0) * scale + 2 * pad
+    rows = [b"\xff" * width] * pad
     for y in range(y0, y1):
-        r = bytearray()
+        r = bytearray(b"\xff" * pad)
         for x in range(x0, x1):
             o = (y * w + x) * 3
             r += bytes([(b[o] * 30 + b[o + 1] * 59 + b[o + 2] * 11) // 100]) * scale
+        r += b"\xff" * pad
         rows += [bytes(r)] * scale
+    rows += [b"\xff" * width] * pad
     fd, pg = tempfile.mkstemp(suffix=".pgm")
     with os.fdopen(fd, "wb") as f:
-        f.write(b"P5\n%d %d\n255\n" % ((x1 - x0) * scale, (y1 - y0) * scale))
+        f.write(b"P5\n%d %d\n255\n" % (width, len(rows)))
         f.write(b"".join(rows))
     try:
         r = subprocess.run(["tesseract", pg, "-", "--psm", psm, *extra],
@@ -267,15 +271,25 @@ def fbtext(d, tmo, pid, rx, box):
 
 
 def clock(frame):
-    """The taskbar clock, as minutes since midnight, or None."""
-    t = ocr(frame, (-65, -20, -8, -3))
-    if not t:
-        return None
-    m = re.search(r"(\d{1,2}):(\d\d)\s*([AP])M", t)
-    if not m:
-        return None
-    hh = int(m.group(1)) % 12 + (12 if m.group(3) == "P" else 0)
-    return hh * 60 + int(m.group(2))
+    """The taskbar clock, as minutes since midnight, or None.
+
+    The clock's 8-pixel font is small for tesseract, and each way of
+    enlarging it misreads some time: without a margin "9:47" came back as
+    "3:47", with one a colon goes missing. So three readings vote, and a
+    time at least two agree on is the answer; "4M" is how "AM" often reads."""
+    votes = []
+    for scale, pad in ((6, 0), (6, 20), (8, 20)):
+        t = ocr(frame, (-65, -20, -8, -3), scale=scale, pad=pad)
+        if t is None:
+            return None
+        m = re.search(r"(\d{1,2}):?(\d\d)[.,]?\s*([AaPp4])M", t)
+        if m and int(m.group(1)) in range(1, 13) and int(m.group(2)) < 60:
+            pm = m.group(3) in "Pp"
+            votes.append((int(m.group(1)) % 12 + (12 if pm else 0)) * 60 + int(m.group(2)))
+    for v in votes:
+        if votes.count(v) >= 2:
+            return v
+    return None
 
 
 class Chat:
