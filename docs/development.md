@@ -57,11 +57,14 @@ that only a guest exercises: input, timers, disks, video, USB, sound,
 floating point. It boots each guest from an APFS clone of its image (never
 the original), on ports 21950 and up, and waits for a marker with a timeout.
 The Windows guests (`w2k`, `w2k-beta`, `xp64`) must reach a desktop with a
-taskbar and no dialog; for `w2k` the taskbar clock is also read with
-tesseract, when it is installed, and must be the host's time. `vms-es40`,
-`vms-es47` and `linux` log in on the serial console and run commands
-(`SHOW TIME`, `uname -a`, a C program compiled and run), `arc` waits for the
-AlphaBIOS menu and `netbsd` for the installer's menu. It writes
+taskbar and no dialog; for `w2k` the taskbar clock is also read, by
+matching the font's glyphs against a table in the script, and must be
+within 5 minutes of the host's time (a clock it cannot read is reported,
+not failed). `vms-es40`, `vms-es47` and `linux` log in on the serial
+console and run commands (`SHOW TIME`, `uname -a`, a C program compiled
+and run), `arc` waits for the AlphaBIOS menu, which it reads with
+tesseract (without it `arc` fails), and `netbsd` for the installer's
+menu. It writes
 `$ALPHABOX_WORK/runs/guests-<label>/<guest>.png` (the last frame),
 `<guest>.log` (the console) and `<guest>.warn`, and exits 0 only if every
 guest passed. A whole run takes about 15 minutes.
