@@ -48,14 +48,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Where each board takes the base configuration's devices: the ISA bridge,
 # its IDE and USB functions (None drops one), the --scsi and the --nic
-# controller. The ES40's are the base configuration's own. The DS20E's
-# console scans devices 0-10 and wires hose 0 devices 6-9 and hose 1 7-10
+# controller. The functions' places are the board rows' own (board_function
+# in src/platforms/Platforms.cpp), which the emulator insists on; the slots
+# are places each board's slot rule accepts. The ES40's are the base
+# configuration's own. The DS20E's console scans devices 0-10 and wires hose 0 devices 6-9 and hose 1 7-10
 # (docs/platforms/ds20e.md), so its ISA bridge goes to 5, the IDE to the
 # board's own device 6, and the SCSI and NIC into slots 7 and 8; the DS20
 # runs the same console on the same slots (docs/platforms/ds20.md). The
 # DS10's console table puts the IDE at device 13 and the USB at device 1;
 # its on-board NICs are at 9 and 11 and its slots at 14-17
-# (docs/platforms/ds10.md).
+# (docs/platforms/ds10.md). The DS20L has the ES40's places without the
+# power management unit, in hose 0 slots 3-6. The ES45, DS25 and DS15 put
+# the IDE at 16, 16 and 13 with no USB; their slots are hose 0 devices 10
+# and 11 (ES45, also its Model 1), 9 and 10 (DS25) and hose 2 devices 7 and 8
+# (DS15). The EV7 boards have no ALi: the I/O expander on PID 0's hose 2
+# carries a CMD 649 in the ALi IDE's place (the class changes with it) and a
+# USS-344 USB; their slots are hose 1's two.
+EV7_SLOTS = {"ali": None, "ali_ide": "pci2.2", "ali_usb": None,
+             "ide_class": "cmd649", "uss344": "pci2.3",
+             "scsi": "pci1.1", "nic": "pci1.2"}
+# The processor class of each board's row (cpu_model in Platforms.cpp).
+CPU_CLASS = {"es47": "ev7", "es80": "ev7", "gs1280": "ev7"}
 SLOTS = {
     "es40": {"ali": "pci0.7", "ali_ide": "pci0.15", "ali_usb": "pci0.19",
              "scsi": "pci0.3", "nic": "pci0.4"},
@@ -65,6 +78,19 @@ SLOTS = {
              "scsi": "pci0.7", "nic": "pci0.8"},
     "ds10": {"ali": "pci0.7", "ali_ide": "pci0.13", "ali_usb": "pci0.1",
              "scsi": "pci0.14", "nic": "pci0.9"},
+    "ds20l": {"ali": "pci0.7", "ali_ide": "pci0.15", "ali_usb": "pci0.19",
+              "scsi": "pci0.3", "nic": "pci0.4"},
+    "es45": {"ali": "pci0.7", "ali_ide": "pci0.16", "ali_usb": None,
+             "scsi": "pci0.10", "nic": "pci0.11"},
+    "es45m1": {"ali": "pci0.7", "ali_ide": "pci0.16", "ali_usb": None,
+               "scsi": "pci0.10", "nic": "pci0.11"},
+    "ds25": {"ali": "pci0.7", "ali_ide": "pci0.16", "ali_usb": None,
+             "scsi": "pci0.9", "nic": "pci0.10"},
+    "ds15": {"ali": "pci0.7", "ali_ide": "pci0.13", "ali_usb": None,
+             "scsi": "pci2.7", "nic": "pci2.8"},
+    "es47": EV7_SLOTS,
+    "es80": EV7_SLOTS,
+    "gs1280": EV7_SLOTS,
 }
 BASE = os.path.join(HERE, "..", "rom", "es40.cfg")
 
@@ -118,6 +144,11 @@ def main():
         lines = "".join("\n    %s = %s;" % tuple(o.split("=", 1)) for o in opts)
         return re.sub(r"\{", "{" + lines, block, count=1) if lines else block
 
+    platform = args.platform or "es40"
+    if platform not in SLOTS:
+        sys.exit("srm_cfg: no places for platform %s (add it to SLOTS)" % platform)
+    cpu0 = cpu0.replace("= ev68cb", "= " + CPU_CLASS.get(platform, "ev68cb"), 1)
+
     blocks = [with_opts(cpu0, args.cpu_opt)]
     for i in range(1, args.cpus):
         b = cpu0.replace("cpu0", "cpu%d" % i)
@@ -146,18 +177,22 @@ def main():
         if n != 1:
             sys.exit("srm_cfg: empty ali_ide block not found in base config")
 
-    slots = SLOTS.get(args.platform or "es40", SLOTS["es40"])
+    slots = SLOTS[platform]
     for dev in ("ali", "ali_ide", "ali_usb"):
         base = SLOTS["es40"][dev]
         if slots[dev] is None:
             t, n = re.subn(r"\n  %s = %s\s*\{[^}]*\}\n" % (re.escape(base), dev), "\n", t)
         else:
+            cls = slots.get("ide_class", dev) if dev == "ali_ide" else dev
             t, n = re.subn(r"\b%s = %s\b" % (re.escape(base), dev),
-                           "%s = %s" % (slots[dev], dev), t)
+                           "%s = %s" % (slots[dev], cls), t)
         if n != 1:
             sys.exit("srm_cfg: %s block not found in base config" % dev)
 
     extra = ""
+    if "uss344" in slots:
+        extra += ("\n  %s = uss344\n  {\n    port1 = \"tablet\";\n"
+                  "    port2 = \"keyboard\";\n  }\n") % slots["uss344"]
     if args.scsi:
         def sparse_disk(bus, name):
             with open(os.path.join(out_dir, name), "wb") as f:

@@ -41,3 +41,5 @@ run number-overflow-suffix.cfg 3:3 out of range
 run number-overflow.cfg 3:3 out of range
 run number-ramdisk-overflow.cfg 15:7 out of range
 run number-suffix-only.cfg 3:3 Illegal numeric value "M"
+ali-misplaced.cfg 8:3 console looks for it at pci0.5
+ali-pmu-not-on-board.cfg 11:3 has no ali_pmu of its own

@@ -1,4 +1,4 @@
-# exit 1
+# exit 0
 sys0 = tsunami
 {
   platform = "es47";
@@ -7,7 +7,7 @@ sys0 = tsunami
   rom.decompressed = "decompressed.rom";
   rom.flash = "flash.rom";
   rom.dpr = "dpr.rom";
-  cpu0 = ev68cb
+  cpu0 = ev7
   {
     speed = "800M";
   }
@@ -16,14 +16,13 @@ sys0 = tsunami
     address = "127.0.0.1";
     port = "21000";
   }
-  pci0.15 = ali_ide
+  pci2.2 = cmd649
   {
   }
-  pci0.7 = ali
+  pci2.3 = uss344
   {
-  }
-  pci0.19 = ali_usb
-  {
+    port1 = "tablet";
+    port2 = "keyboard";
   }
   fdc0 = floppy // added
   {

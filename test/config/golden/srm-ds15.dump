@@ -16,13 +16,10 @@ sys0 = tsunami
     address = "127.0.0.1";
     port = "21000";
   }
-  pci0.15 = ali_ide
+  pci0.13 = ali_ide
   {
   }
   pci0.7 = ali
-  {
-  }
-  pci0.19 = ali_usb
   {
   }
   fdc0 = floppy // added

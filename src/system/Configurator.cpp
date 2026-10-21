@@ -626,9 +626,12 @@ static const char *const kv_serial[] = {"port",     "action",   "address",
                                         "disabled", "raw_mode", "null_attach",
                                         "wait",     "log",      0};
 static const char *const kv_ali[] = {"vga_console", "lpt.outfile", "timezone",
-                                     0};
-static const char *const kv_ali_ide[] = {"dma", 0};
-static const char *const kv_ali_usb[] = {"port1", "port2", "port3", 0};
+                                     "place.check", 0};
+static const char *const kv_ali_ide[] = {"dma", "place.check", 0};
+static const char *const kv_cmd649[] = {"dma", 0};
+static const char *const kv_ali_usb[] = {"port1", "port2", "port3",
+                                         "place.check", 0};
+static const char *const kv_ali_pmu[] = {"place.check", 0};
 static const char *const kv_ehci[] = {"port1", "port2",      "port3",
                                       "port4", "companions", 0};
 static const char *const kv_uss344[] = {"port1", "port2", "port3", "port4", 0};
@@ -711,9 +714,9 @@ classinfo classes[] = {
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
     {"ali", c_ali, IS_PCI, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
-    {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_ali_ide},
+    {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_cmd649},
     {"ali_usb", c_ali_usb, IS_PCI | HAS_DISK, kv_ali_usb},
-    {"ali_pmu", c_ali_pmu, IS_PCI, kv_none},
+    {"ali_pmu", c_ali_pmu, IS_PCI, kv_ali_pmu},
     {"serial", c_serial, ON_CS, kv_serial},
     {"s3", c_s3, IS_PCI | ON_GUI, kv_vga},
     {"cirrus", c_cirrus, IS_PCI | ON_GUI, kv_cirrus},
@@ -1004,23 +1007,28 @@ void CConfigurator::initialize_section() {
         FAILURE_3(Configuration, "%s (%s): %s", myName, myValue, refusal);
     }
     // The ALi's functions go where the board's console looks for them
-    // (the board row's functions). Elsewhere is a warning, not an error:
-    // configurations that run have them at the ES40's places on other
-    // boards.
-    if (is_system_device) {
+    // (the board row's functions); anywhere else the console does not find
+    // them. A configuration that must keep a device where an installed
+    // guest has seen it says so with place.check = false.
+    if (is_system_device && get_bool_value("place.check", true)) {
       const char *want = nullptr;
       for (const board_function *f = board().functions; f && f->device_class;
            f++)
         if (!strcmp(f->device_class, myValue))
           want = f->place;
-      if (!want)
-        cfg_msg(true, "%%SYS-W-PLACE: %s%s(%s): the %s has no %s of its own.\n",
-                place().c_str(), myName, myValue, board().description, myValue);
-      else if (strcmp(want, myName))
-        cfg_msg(true,
-                "%%SYS-W-PLACE: %s%s(%s): the %s's console looks for it at "
-                "%s.\n",
-                place().c_str(), myName, myValue, board().description, want);
+      if (!want) {
+        FAILURE_4(Configuration,
+                  "%s (%s): the %s has no %s of its own. Remove the block, "
+                  "or set place.check = false; in it to keep it",
+                  myName, myValue, board().description, myValue);
+      }
+      if (strcmp(want, myName)) {
+        FAILURE_4(Configuration,
+                  "%s (%s): the %s's console looks for it at %s, not here. "
+                  "Move it there, or set place.check = false; in the block "
+                  "to keep it",
+                  myName, myValue, board().description, want);
+      }
     }
   }
 
