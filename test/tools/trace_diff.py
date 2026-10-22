@@ -58,6 +58,8 @@ def streams(path, devices, ignore):
     with open(path, errors="replace") as f:
         for line in f:
             line = line.rstrip("\n")
+            if line.startswith("#"):
+                continue
             fields = line.split(" ")
             if len(fields) < 7:
                 continue

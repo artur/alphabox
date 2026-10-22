@@ -256,8 +256,13 @@ line state itself, such as a shared input's wire-OR, needs a unit test and
 a guest boot that exercises it. A device
 that depends on nothing but its accesses (the flash, an EEPROM, the I2C
 parts) can also be tested by replay: record it with `raw` in the list,
-keep the file under `test/unit/`, and have its unit test feed the writes
-and check every read.
+keep the part of the file that matters under `test/unit/data/` with `#`
+lines saying where it came from and what was left out, and have its unit
+test read it with `test/unit/AccessReplay.hpp`, feed the writes and check
+every read. `flash_test` replays the ES40 console setting a console
+variable, `i2c_test` the DS20E console's boot through its PCF8584. A fix
+that changes what the device answers changes the record too: record it
+again with the fixed build, and say so in the commit.
 
 ### Builds and helpers
 

@@ -462,6 +462,27 @@ add_executable(superio_test test/unit/superio_test.cpp
 target_include_directories(superio_test PRIVATE src/common src/devices/isa)
 add_test(NAME superio COMMAND superio_test)
 
+# The TIG-bus flash, with a replay of the ES40 console's own accesses.
+add_executable(flash_test test/unit/flash_test.cpp
+    src/platforms/es40/Flash.cpp)
+target_include_directories(flash_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_compile_definitions(flash_test PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test/unit/data")
+add_test(NAME flash COMMAND flash_test)
+add_executable(i2c_test test/unit/i2c_test.cpp src/devices/common/i2c_spd.cpp
+    src/platforms/ds10/PCF8584.cpp)
+target_include_directories(i2c_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_compile_definitions(i2c_test PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test/unit/data")
+add_test(NAME i2c COMMAND i2c_test)
+add_executable(eeprom93_test test/unit/eeprom93_test.cpp
+    src/devices/common/Eeprom93cx6.cpp)
+target_include_directories(eeprom93_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+add_test(NAME eeprom93 COMMAND eeprom93_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")
