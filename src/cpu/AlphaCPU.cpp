@@ -603,6 +603,7 @@ void CAlphaCPU::init() {
     o.state_asn0 = (uint32_t)((char *)&state.asn0 - (char *)this);
     o.dram_ptr = (uint32_t)((char *)&dram_ptr - (char *)this);
     o.dram_size = (uint32_t)((char *)&dram_size - (char *)this);
+    o.code_page_bits = (uint32_t)((char *)&m_code_page_bits - (char *)this);
     o.state_pc = (uint32_t)((char *)&state.pc - (char *)this);
     o.state_current_pc = (uint32_t)((char *)&state.current_pc - (char *)this);
     o.jit_budget = (uint32_t)((char *)&m_jit_budget - (char *)this);
@@ -706,6 +707,7 @@ void CAlphaCPU::init() {
 
   dram_ptr = cSystem->PtrToMem(0);
   dram_size = U64(1) << cSystem->get_memory_bits();
+  m_code_page_bits = cSystem->code_pages()->page_bits();
 
   flush_data_page_cache();
 
@@ -780,6 +782,7 @@ void CAlphaCPU::ResetForSystemReset() {
 
   dram_ptr = cSystem->PtrToMem(0);
   dram_size = U64(1) << cSystem->get_memory_bits();
+  m_code_page_bits = cSystem->code_pages()->page_bits();
 
   flush_data_page_cache();
 

@@ -753,7 +753,8 @@ block at five positions, an interrupt at the return from PALcode,
 LDx_L/STx_C across blocks, PALmode blocks, and rewritten code before an
 `IC_FLUSH` ([development.md](development.md)). The interpreter passes
 all of them, and so do both back ends under every JIT switch, except
-for two divergences of compiled code, KNOWN on the oracle's last pass:
+for two divergences of compiled code, KNOWN on the oracle's last pass
+until they were fixed:
 
 - **A chained block runs in a mode it was not looked up for** (JIT-01,
   both back ends). Blocks are keyed by the processor mode they were
@@ -766,13 +767,19 @@ for two divergences of compiled code, KNOWN on the oracle's last pass:
   `ALPHABOX_JIT_CHAIN=0` closes it. Only a virtual address executed in
   two modes, with a successor the second mode may not execute, shows it;
   correct guests never branch into code their mode cannot run.
-- **AArch64's inline `HW_ST` does not tell the code-page map** (JIT-02).
-  The physical `HW_ST` that compiled PALcode performs inline stores to
-  DRAM without reporting the write, where the helper (and the x86-64
-  emitter, which always calls it) does. An `IC_FLUSH` after such a store
-  into compiled code is skipped as having nothing to flush, and the old
-  instructions run (HRM 5.2.17). `ALPHABOX_JIT_INLMEM=0` closes it. No
-  guest is known to rewrite instructions with `HW_ST`.
+- **AArch64's inline `HW_ST` did not tell the code-page map** (JIT-02,
+  closed 2026-10-22). The physical `HW_ST` that compiled PALcode
+  performs inline stored to DRAM without reporting the write, where the
+  helper (and the x86-64 emitter, which always calls it) does. An
+  `IC_FLUSH` after such a store into compiled code was skipped as having
+  nothing to flush, and the old instructions ran (HRM 5.2.17). The
+  inline store now tests the map's bit for its page first, and a store
+  into a page that holds compiled code takes the helper, which reports
+  it: the rule the page cache's write row already kept for virtual
+  stores. `jitsmc` passes on both back ends, and so does `smc_test.sh`
+  in all four arms. No guest is known to rewrite instructions with
+  `HW_ST`; Windows 2000 RC2, whose PALcode does physical `HW_ST`s
+  constantly, reached its desktop on one processor and on two.
 
 ## A guest's floating-point exception that is the guest's own
 

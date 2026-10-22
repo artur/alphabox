@@ -569,6 +569,10 @@ public:
   char *dram_ptr; // cSystem->PtrToMem(0) - host pointer to base es40 ram array
                   // thingy
   u64 dram_size; // 1ULL << cSystem->get_memory_bits() — size of DRAM in bytes
+  // The code-page map's page bits (CCodePageMap::page_bits), read by the
+  // AArch64 emitter's inline physical HW_ST: a store into a page that holds
+  // code takes the helper, which reports it to the map.
+  const u8 *m_code_page_bits = nullptr;
 
   // Sequential icache fast path
   // Tracks position within current icache line for back-to-back sequential

@@ -37,7 +37,6 @@ UNALIGNED_REF = "cpu-fidelity: unaligned data accesses do not trap"
 # Findings of the JIT audit (lab/legacy-audit/jit/AUDIT.md), KNOWN on the
 # compiled pass until they are fixed.
 JIT01 = "JIT-01: a chained block runs in a mode it was not looked up for"
-JIT02 = "JIT-02: AArch64 inline HW_ST does not tell the code-page map"
 
 # Scratch for these cases: page 2 from 0x1000 (KSEG, kernel read/write),
 # away from the other groups' bytes; R_SCR + JSCR is its address.
@@ -977,8 +976,7 @@ def g_jitsmc(b):
             b.emit(mem(OP["STL"], 17, 16, 0))
             b.emit(call_pal(0x8E))                 # IC_FLUSH
         b.emit(bra(OP["BSR"], 18, (p - (b.va() + 4)) // 4))
-        b.store(1, "r1, the routine after the rewrite", 2,
-                known=(1, JIT02, "compiled") if hw else None)
+        b.store(1, "r1, the routine after the rewrite", 2)
         b.load(17, orig)                           # put it back for the next pass
         if hw:
             b.emit(call_pal(0x8D))

@@ -1481,13 +1481,23 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       ea_x2((int32_t)(ins << 20) >> 20);
 #ifndef JIT_VERIFY
       // Physical forms into DRAM store inline (see HW_LD above); the MMIO
-      // range and the virtual forms take the helper.
+      // range, a page that holds compiled code and the virtual forms take
+      // the helper. The helper reports a store into code to the code-page
+      // map, so that the next IC_FLUSH or IMB is not skipped as having
+      // nothing to flush (HRM 5.2.17; the write row of the page cache keeps
+      // virtual stores off such pages the same way).
       if (st_phys) {
         Label st_slow = a.new_label(), st_done = a.new_label();
         a.and_(x11, x2, imm(~(uint64_t)(size_bits / 8 - 1)));
         a.ldr(x10, fld(m_off.dram_size, 3));
         a.cmp(x11, x10);
         a.b_hs(st_slow);
+        a.ldr(x10, fld(m_off.code_page_bits, 3)); // CCodePageMap::holds_code
+        a.lsr(x0, x11, imm(CCodePageMap::kPageShift + 3));
+        a.ldrb(w0, a64::ptr(x10, x0));
+        a.ubfx(x1, x11, imm(CCodePageMap::kPageShift), imm(3));
+        a.lsr(w0, w0, w1);
+        a.tbnz(w0, imm(0), st_slow);
         a.ldr(x10, fld(m_off.dram_ptr, 3));
         const a64::Gp v = src_reg(ra, x12, false);
         if (size_bits == 32)

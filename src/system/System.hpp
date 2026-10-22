@@ -141,6 +141,9 @@ public:
            (__atomic_load_n(&m_page_bits[pg >> 3], __ATOMIC_RELAXED) &
             (1u << (pg & 7)));
   }
+  /// The page bits themselves, for compiled code that tests holds_code()
+  /// inline (AArch64's physical HW_ST): bit (pa >> 13) & 7 of byte pa >> 16.
+  const u8 *page_bits() const { return m_page_bits; }
   /// Was code compiled from this 256-byte line?
   bool holds_code_line(u64 phys) const {
     const u64 ln = phys >> kLineShift;

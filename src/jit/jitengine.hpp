@@ -361,6 +361,7 @@ public:
     uint32_t dpc2_base, dpc2_row, dpc2_bits, dpc2_gen;
     uint32_t dpc_slot_gen; // a slot's gen field, from the slot
     uint32_t state_cm, state_asn0, dram_ptr, dram_size, state_pc;
+    uint32_t code_page_bits;   // CAlphaCPU::m_code_page_bits (a64 HW_ST)
     uint32_t state_current_pc; // GO_PAL takes EXC_ADDR from it (FLTV traps)
     uint32_t fpen, exc_sum, fpcr,
         f_base; // FP inline path: FPSTART gate + FPCR (rounding/INE) + f[] base
