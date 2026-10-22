@@ -195,6 +195,9 @@ static int sdl_mouse_button_state = 0;
 // events so multipliers < 1.0 don't drop slow movement.
 static double sdl_mouse_accum_x = 0.0;
 static double sdl_mouse_accum_y = 0.0;
+// Wheel travel not yet a whole notch: touchpads and free-spinning wheels
+// report fractions, and truncating each report loses all of them.
+static double sdl_wheel_accum = 0.0;
 // Re-grab bookkeeping for compositors that bounce focus on grab (WSLg):
 // when a focus loss forces an ungrab, take the mouse back on focus gain.
 static bool sdl_regrab_on_focus = false;
@@ -960,6 +963,48 @@ static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
   return true;
 }
 
+// Host mouse events through SDL's queue, as sc: does for keys:
+//   hmotion:<dx>:<dy>   relative motion in host pixels
+//   hbutton:<n>:<0|1>   SDL button n (1 left, 2 middle, 3 right, 4 and 5 X1,
+//                       X2) released or pressed
+//   hwheel:<y>          wheel travel in notches, fractions allowed
+static bool sdl_debug_hostmouse(const char *token, bool press, bool &handled) {
+  handled = !strncmp(token, "hmotion:", 8) || !strncmp(token, "hbutton:", 8) ||
+            !strncmp(token, "hwheel:", 7);
+  if (!handled)
+    return false;
+  SDL_Event e;
+  SDL_zero(e);
+  if (token[1] == 'm') {
+    float dx, dy;
+    char tail;
+    if (sscanf(token + 8, "%f:%f%c", &dx, &dy, &tail) != 2)
+      return false;
+    e.type = SDL_EVENT_MOUSE_MOTION;
+    e.motion.xrel = dx;
+    e.motion.yrel = dy;
+  } else if (token[1] == 'b') {
+    int n, down;
+    char tail;
+    if (sscanf(token + 8, "%d:%d%c", &n, &down, &tail) != 2 || n < 1 || n > 5 ||
+        (down != 0 && down != 1))
+      return false;
+    e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+    e.button.button = (Uint8)n;
+    e.button.down = down != 0;
+  } else {
+    float y;
+    char tail;
+    if (sscanf(token + 7, "%f%c", &y, &tail) != 1)
+      return false;
+    e.type = SDL_EVENT_MOUSE_WHEEL;
+    e.wheel.y = y;
+  }
+  if (press)
+    SDL_PushEvent(&e);
+  return true;
+}
+
 static bool sdl_debug_press(const char *token, bool press) {
   bool tablet;
   const bool tablet_ok = sdl_debug_tablet(token, press, tablet);
@@ -977,6 +1022,10 @@ static bool sdl_debug_press(const char *token, bool press) {
   const bool host_ok = sdl_debug_hostkey(token, press, host);
   if (host)
     return host_ok;
+  bool hmouse;
+  const bool hmouse_ok = sdl_debug_hostmouse(token, press, hmouse);
+  if (hmouse)
+    return hmouse_ok;
   static const struct {
     const char *name;
     u32 key;
@@ -1263,10 +1312,10 @@ void bx_sdl_gui_c::handle_events(void) {
         int dx = (int)sdl_mouse_accum_x;
         int dy = (int)sdl_mouse_accum_y;
 
-        if ((dx != 0 || dy != 0) && theKeyboard) {
+        if (dx != 0 || dy != 0) {
           sdl_mouse_accum_x -= dx;
           sdl_mouse_accum_y -= dy;
-          theKeyboard->mouse_motion(dx, dy, 0, sdl_mouse_button_state);
+          gui_guest_mouse(dx, dy, 0, sdl_mouse_button_state);
         }
       }
       break;
@@ -1311,28 +1360,34 @@ void bx_sdl_gui_c::handle_events(void) {
 
       if (tablet)
         tablet->set_buttons(sdl_mouse_button_state & 0x07);
-      else if (theKeyboard)
-        theKeyboard->mouse_motion(0, 0, 0, sdl_mouse_button_state);
+      else
+        gui_guest_mouse(0, 0, 0, sdl_mouse_button_state);
       break;
     }
 
-    case SDL_EVENT_MOUSE_WHEEL:
+    case SDL_EVENT_MOUSE_WHEEL: {
+      // SDL3: float, +y is away from the user (scroll up), fractional on
+      // touchpads and high-resolution wheels.
+      float wy = sdl_event.wheel.y;
+      if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+        wy = -wy;
       if (CUsbTablet *t = theUsbTablet.load()) {
-        float wy = sdl_event.wheel.y;
-        if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
-          wy = -wy;
-        if ((int)wy)
-          t->add_wheel((int)wy);
+        sdl_wheel_accum += wy;
+        const int dz = (int)sdl_wheel_accum;
+        if (dz) {
+          sdl_wheel_accum -= dz;
+          t->add_wheel(dz);
+        }
       } else if (sdl_grab) {
-        float wy =
-            sdl_event.wheel.y; // SDL3: float; +y = away from user (scroll up)
-        if (sdl_event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
-          wy = -wy;
-        int dz = (int)wy;
-        if (dz != 0 && theKeyboard)
-          theKeyboard->mouse_motion(0, 0, dz, sdl_mouse_button_state);
+        sdl_wheel_accum += wy;
+        const int dz = (int)sdl_wheel_accum;
+        if (dz) {
+          sdl_wheel_accum -= dz;
+          gui_guest_mouse(0, 0, dz, sdl_mouse_button_state);
+        }
       }
       break;
+    }
     case SDL_EVENT_WINDOW_FOCUS_LOST: {
       // Releases of keys held while focus leaves never arrive here.
       release_all_guest_keys();
@@ -1627,6 +1682,13 @@ void bx_sdl_gui_c::mouse_enabled_changed_specific(bool val) {
     }
   }
 
+  // The grab ending (or starting) with a button held, or part of a notch or a
+  // count unsent, must not leak into the next grab: the guest has been told
+  // the buttons are up (bx_gui_c::mouse_enabled_changed), so do not keep
+  // them down here, whose releases are dropped while there is no grab.
+  sdl_mouse_button_state = 0;
+  sdl_mouse_accum_x = sdl_mouse_accum_y = 0.0;
+  sdl_wheel_accum = 0.0;
   sdl_grab = val;
 }
 

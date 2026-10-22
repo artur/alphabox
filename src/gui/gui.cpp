@@ -158,11 +158,26 @@ void gui_guest_key(u32 key_event) {
     k->key(key_event);
 }
 
+void gui_guest_mouse(int dx, int dy, int dz, unsigned buttons) {
+  if (s_trace_keys)
+    printf("%%GUI-I-MOUSE: dx %d dy %d dz %d buttons %02x\n", dx, dy, dz,
+           buttons);
+  if (theKeyboard)
+    theKeyboard->mouse_motion(dx, dy, dz, buttons);
+}
+
 bool gui_guest_has_keyboard() { return theKeyboard || theUsbKeyboard.load(); }
 
 void bx_gui_c::mouse_enabled_changed(bool val) {
-  if (theKeyboard)
+  if (theKeyboard) {
+    // The controller drops mouse input once the capture is off, so release
+    // the buttons first: a button held when the grab ends (the hotkey, a
+    // focus loss) would otherwise stay down in the guest, whose release the
+    // host sends nowhere.
+    if (!val)
+      gui_guest_mouse(0, 0, 0, 0);
     theKeyboard->set_mouse_capture(val);
+  }
 
   // This is only called when SIM->get_init_done is 1.  Note that VAL
   // is the new value of mouse_enabled, which may not match the old

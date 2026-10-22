@@ -92,6 +92,10 @@ extern class bx_gui_c *bx_gui;
 /// the machine has. A board without an 8042 (the EV7 machines) may have
 /// neither.
 void gui_guest_key(u32 key_event);
+/// Motion (counts, y positive up), wheel (notches, positive away from the
+/// user) and the button state (bit 0 left, 1 right, 2 middle, 3 and 4 the side
+/// buttons) for the PS/2 mouse, if the machine has one.
+void gui_guest_mouse(int dx, int dy, int dz, unsigned buttons);
 /// Whether the machine has a keyboard gui_guest_key reaches.
 bool gui_guest_has_keyboard();
 

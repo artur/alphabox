@@ -104,6 +104,14 @@ Besides keys, the two variables take these tokens:
   held for the event, as letters: `c` Ctrl, `a` Alt, `s` Shift, `g` GUI.
   `sc:48:c` is Ctrl+Pause (Break), `sc:46:a` is Alt+Print Screen (SysRq).
   Pair it with `ALPHABOX_TRACE_KEYS=1`.
+- **`hmotion:DX:DY`, `hbutton:N:1|0`, `hwheel:Y`** put a host mouse event in
+  SDL's queue (relative motion in host pixels; SDL button N, 1 left, 2 middle,
+  3 right, 4 and 5 the side buttons, pressed or released; wheel notches,
+  fractions allowed), so the grab, the speed and invert settings, button
+  bookkeeping and wheel accumulation run, where `mouse:` enters at the guest.
+  The guest gets them only while the mouse is grabbed (`sc:43:c`, Ctrl+F10,
+  toggles that); `ALPHABOX_TRACE_KEYS=1` reports what reached it as
+  `%GUI-I-MOUSE`.
 - **`mouse:DX:DY[:B[:Z]]`** moves the PS/2 mouse by DX, DY counts (DY
   positive is down the screen) with buttons B held (bit 0 left, 1 right,
   2 middle, 3 and 4 the fourth and fifth buttons), and turns the wheel by
@@ -570,7 +578,7 @@ machine's firmware wants hardware that is not emulated yet (see
 | `ALPHABOX_TRACE_FLASH=1` | the commands firmware sends the flash |
 | `ALPHABOX_TRACE_SERIAL=<n>` | serial port n (0 for `serial0`): each register write, the IIR reads between writes, each change of MCR |
 | `ALPHABOX_TRACE_KBC=1` | the keyboard controller |
-| `ALPHABOX_TRACE_KEYS=1` | every key the GUI hands the guest (`%GUI-I-KEY`): the key number, press or release, and its set 1 bytes |
+| `ALPHABOX_TRACE_KEYS=1` | every key the GUI hands the guest (`%GUI-I-KEY`): the key number, press or release, and its set 1 bytes; and the PS/2 mouse motion, buttons and wheel (`%GUI-I-MOUSE`) |
 | `ALPHABOX_TRACE_PORT61=1` | the ISA refresh-toggle port, as bursts of reads |
 | `ALPHABOX_TRACE_TOY=1` | the TOY clock: the guest's writes to its registers 00h-0Dh, selections with the NMI-disable bit, the first reads of register C |
 | `ALPHABOX_TRACE_CSR=1` | on the Tsunami boards, every access to a Cchip, Dchip, Pchip or TIG register, with the value, the processor (or `dev` for a device's DMA) and the instruction; on Marvel, see below |
