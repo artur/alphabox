@@ -357,6 +357,43 @@ Now the exact `FNOP` encoding does nothing in the interpreter and is a NOP
 to the JIT. Any other floating-point instruction, `F31` operands or not,
 still faults with the FPU disabled: the architecture says any of them may.
 
+### Closed 2026-10-22: what the instruction oracle found
+
+The CPU audit of 2026-10-22 (the legacy audit's CPU lane; its findings
+are named CPU-nn in the oracle's KNOWN cases) found these with the
+instruction oracle. Each is fixed in both engines, and the oracle passes
+its cases on the interpreter, AArch64 JIT, `JIT_VERIFY` and x86-64 JIT
+lanes.
+
+**Loads to R31** (CPU-03, CPU-05). `LDQ_U` to R31 (`UNOP`) was performed:
+translated, able to fault, and read. So were the other integer loads to
+R31, a device read included, because the `if (Ra != 31)` in the load
+macros guarded only the first statement of `READ_VIRT`. Compiled code
+skipped `LDQ`, `LDBU` and `LDWU` to R31 altogether and took no DTB miss,
+so the two engines disagreed where `JIT_VERIFY` could not see it (its
+compiled pass goes through the helper, which faulted like the
+interpreter). One rule now holds in the interpreter and in both
+emitters:
+
+- `LDQ_U` to R31 is retired without execution (HRM 2.5, Table 2-6): no
+  translation, no fault.
+- `LDL`, `LDQ`, `LDBU` and `LDWU` to R31 are prefetches (HRM 2.6): they
+  are translated and take the DTB miss, access violation or
+  fault-on-read the load would take ("Load operations to R31 and F31 may
+  generate exceptions. These exceptions must be dismissed by PALcode"),
+  and nothing is read. A prefetch to I/O space is converted to one to
+  memory space (HRM 4.2, p. 4-5), so no device sees it.
+- Compiled code answers a prefetch from its page cache and otherwise asks
+  `jit_read` to translate only.
+
+Floating-point loads to F31 are still not translated: they take no DTB
+miss, which the "may" of HRM 2.6 allows, and the two engines agree. With
+the fix the SRM console log is unchanged on the interpreter, JIT and
+`JIT_VERIFY` lanes (106 million compiled blocks, 0 mismatches); Windows
+2000 RC2 on two processors reached its desktop on the JIT and on
+`JIT_VERIFY` (768 million compiled blocks, 0 mismatches); Gentoo Linux
+logged in, compiled and ran a C program (`guests_check.sh linux`).
+
 ### Smaller ones
 
 | What | Where | Consequence |
@@ -372,7 +409,6 @@ still faults with the FPU disabled: the architecture says any of them may.
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
 | A `STx_C` succeeds after an ordinary load or store ran between it and its `LDx_L`, where HRM D.19 (Restriction 23, p. D-13) says the 21264 makes it fail; the ARM leaves it UNPREDICTABLE (4.2.4) | `System.cpp` `cpu_stx_c` | "No useful program should do this" (ARM 4.2.4). Found by the oracle (CPU-01) |
 | `CALL_PAL` writes `EXC_ADDR` with its own PC. HRM 6.8 makes CALL_PAL entries and exceptions two classes, and 5.2.7 says `EXC_ADDR` is updated "when it encounters an exception or interrupt" | `cpu_misc.hpp` `ENTER_NATIVE_CALL_PAL`, the JIT's `OP_CALL_PAL` | PALcode that reads `EXC_ADDR` inside a CALL_PAL routine would see the call, not the last exception. None known (CPU-02) |
-| `LDQ_U` to R31 (`UNOP`) is performed: translated, able to fault, and read; HRM 2.5 Table 2-6 retires it without execution. The other loads to R31 are performed too, which matches the 21264's DTB miss (HRM 2.6: "these exceptions must be dismissed by PALcode"), but a prefetch to I/O space reads the device, where the 21264 reads memory (HRM 4.2, p. 4-5). The `if (Ra != 31)` in `DO_LDBU`/`DO_LDWU`/`DO_LDL`/`DO_LDQ`/`DO_LDQ_U` guards only the first statement of the `READ_VIRT` macro | `cpu_memory.hpp`, `cpu_defs.hpp` | An `UNOP` with a stray base register can fault. Compiled code instead skips `LDQ`/`LDBU`/`LDWU` to R31 altogether (no DTB miss), so the two engines disagree where `JIT_VERIFY` cannot see it (CPU-03, CPU-05) |
 | An integer operate with R31 as its destination still traps on overflow (`ADDQ/V`...): HRM 2.5 Table 2-6 retires it at decode; ARM 14.3.2 leaves it UNPREDICTABLE | `cpu_arith.hpp` | Only hand-written code (CPU-04) |
 | The reserved barrier code point `18.4800` flushes the instruction cache and the ITB and is no memory barrier; ARM C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18, `DO_IMB` | As for `18.4C00` above (CPU-06) |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |

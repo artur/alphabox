@@ -1984,8 +1984,12 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // Memory-format loads: va = regs[Rb] + disp16.
     if (op == OP_LDQ || op == OP_LDL || op == OP_LDBU || op == OP_LDWU ||
         op == OP_LDQ_U) {
-      if (ra == 31)
-        continue; // LDx R31 is a NOP (interpreter skips the read)
+      // To R31: LDQ_U is UNOP, retired without execution (HRM 2.5, Table
+      // 2-6), and the others are prefetches, translated with their faults but
+      // reading nothing (HRM 2.6; DO_LDL and friends in cpu_memory.hpp).
+      if (ra == 31 && op == OP_LDQ_U)
+        continue;
+      const bool prefetch = ra == 31;
       const int disp = (int)(int16_t)(ins & 0xFFFF);
       const int size_bits = (op == OP_LDQ || op == OP_LDQ_U) ? 64
                             : (op == OP_LDL)                 ? 32
@@ -2006,10 +2010,12 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // returning i (0..i-1 committed). In JIT_VERIFY builds this is the ONLY
       // path, so the helper's replay keeps the differential check race-free.
       auto emit_helper = [&]() {
-        emit_call(read_helper, {{JA_CPU, 0},
-                                {JA_VA, 0},
-                                {JA_I32, (uint64_t)size_bits},
-                                {JA_OUT, 0}});
+        // bit 9 of the size argument: a prefetch (jit_read)
+        emit_call(read_helper,
+                  {{JA_CPU, 0},
+                   {JA_VA, 0},
+                   {JA_I32, (uint64_t)size_bits | (prefetch ? 0x200u : 0u)},
+                   {JA_OUT, 0}});
         Label ok = a.new_label();
         a.test(x86::eax, x86::eax);
         a.jz(ok);
@@ -2019,6 +2025,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
               x86::dword_ptr(x86::rsp, 40)); // + earlier chained iterations
         a.jmp(done);
         a.bind(ok);
+        if (prefetch)
+          return; // translated; nothing loaded
         if (op == OP_LDQ || op == OP_LDQ_U)
           a.mov(x86::rax, x86::qword_ptr(x86::rsp, 32)); // LDQ/LDQ_U: full quad
         else if (op == OP_LDL)
@@ -2061,6 +2069,13 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
                 m_off.state_cm)); // rax = {cm, asn0} (adjacent in state)
       a.cmp(x86::qword_ptr(x86::rbp, x86::r11, 0, m_off.dpc_cm), x86::rax);
       a.jne(slow); // vs slot {cm, asn}
+      if (prefetch) { // the page is mapped for reading: nothing to fault
+        a.jmp(ldone);
+        a.bind(slow);
+        emit_helper();
+        a.bind(ldone);
+        continue;
+      }
       a.mov(x86::r10,
             x86::qword_ptr(
                 x86::rbp, x86::r11, 0,

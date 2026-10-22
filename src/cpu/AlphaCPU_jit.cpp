@@ -1576,8 +1576,11 @@ void dump_device_pages() {
 
 int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // Bit 8 of size_bits selects DTB_ALTMODE access checks (the HW_LD/HW_ST
-  // virtual-alt forms); plain loads/stores pass the bare size.
+  // virtual-alt forms); plain loads/stores pass the bare size. Bit 9 is a
+  // prefetch, a load to R31 (DO_LDL and friends, HRM 2.6): translated, with
+  // the load's faults, and nothing read or replayed; *out is not written.
   const int cm = (size_bits & 0x100) ? cpu->state.alt_cm : cpu->state.cm;
+  const bool prefetch = (size_bits & 0x200) != 0;
   size_bits &= 0xff;
   const u64 amask = (u64)(size_bits / 8) - 1;
   cpu->m_jit->note_helper(CJitEngine::HK_READ);
@@ -1653,6 +1656,8 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
              cm, cpu->state.asn0);
     cpu->dpc_l2_put(0, dpc);
   }
+  if (prefetch) // translated: a prefetch reads nothing, not even a device
+    return 0;
 
   // DRAM only: bail on MMIO so the interpreter does device reads (side effects
   // + ordering). This MUST precede the verify replay: production bails here,

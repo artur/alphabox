@@ -164,12 +164,17 @@ void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
     default:
       break;
     }
-    // A load into R31 emits no code at all (UNOP is LDQ_U R31, 0(SP)): it
+    // LDQ_U into R31 emits no code at all (UNOP is LDQ_U R31, 0(SP)): it
     // neither probes nor disturbs anything, so it is invisible here. Counting
     // it as a probe let the next op reuse x3/x16 left by an earlier block --
     // another address space, another row -- and Windows 2000 died booting.
-    if (size && !write && ra == 31)
+    // The other loads into R31 are prefetches, whose slow path calls a helper
+    // that clobbers x3/x16: they end the chain.
+    if (size && !write && ra == 31) {
+      if (op != 0x0b)
+        prev = -1;
       continue;
+    }
     if (size) {
       if (prev >= 0 && prev_rb == rb && prev_write == write && size > 1 &&
           disp - prev_disp > -0x2000 && disp - prev_disp < 0x2000) {
@@ -900,12 +905,59 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // Memory-format loads: Ra = MEM[Rb + disp16].
     if (op == OP_LDQ || op == OP_LDL || op == OP_LDBU || op == OP_LDWU ||
         op == OP_LDQ_U) {
-      if (ra == 31)
-        continue; // LDx R31 is a NOP (interpreter skips the read)
+      // To R31: LDQ_U is UNOP, retired without execution (HRM 2.5, Table
+      // 2-6), and emits nothing; the others are prefetches, translated with
+      // their faults but reading nothing (HRM 2.6; DO_LDL and friends in
+      // cpu_memory.hpp).
+      if (ra == 31 && op == OP_LDQ_U)
+        continue;
       const int size_bits = (op == OP_LDQ || op == OP_LDQ_U) ? 64
                             : (op == OP_LDL)                 ? 32
                             : (op == OP_LDWU)                ? 16
                                                              : 8;
+      if (ra == 31) {
+        // A prefetch: a level-1 page-cache hit means the page is mapped for
+        // reading in this mode, so there is nothing to fault; anything else
+        // asks jit_read (bit 9 of the size: translate only), which bails on
+        // a fault. The helper call clobbers x3/x16, so the reuse plan ends
+        // its chain here (a64_plan_reuse).
+        auto emit_prefetch = [&]() {
+          emit_call(hs.read_helper, {{JA_CPU, 0},
+                                     {JA_VA, 0},
+                                     {JA_I32, (uint64_t)size_bits | 0x200u},
+                                     {JA_OUT, 0}});
+          bail_if_w0();
+        };
+#ifdef JIT_VERIFY
+        ea_x2((int16_t)(ins & 0xFFFF));
+        emit_prefetch();
+#else
+        if (m_cold_pass) { // x2 = va, as the hot path left it
+          a.bind(Label(m_cold_slow[cold_idx]));
+          emit_prefetch();
+          a.b(Label(m_cold_back[cold_idx]));
+          continue;
+        }
+        ea_x2((int16_t)(ins & 0xFFFF));
+        if (!g_jit_inline_mem) {
+          emit_prefetch();
+          continue;
+        }
+        Label slow = a.new_label(), pdone = a.new_label();
+        if (size_bits > 8) {
+          a.tst(x2, imm((uint64_t)(size_bits / 8 - 1)));
+          a.b_ne(slow);
+        }
+        dpc_probe(false, slow, x2);
+        if (!cold_record(slow, pdone)) {
+          a.b(pdone);
+          a.bind(slow);
+          emit_prefetch();
+        }
+        a.bind(pdone);
+#endif
+        continue;
+      }
       auto load_from = [&](const a64::Mem &m) {
         // Land the value in the destination's own pinned register where there
         // is one, instead of loading into x0 and moving it across. The cost is

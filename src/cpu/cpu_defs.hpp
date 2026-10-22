@@ -680,6 +680,10 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
                                      : sys_read(phys_address, size));          \
   }
 
+/* A prefetch (a load to R31, cpu_memory.hpp): the load's translation and its
+   faults, and no access. */
+#define PREFETCH_VIRT(va, size) DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);
+
 #define READ_VIRT_LOCK(va, size, dest)                                         \
   {                                                                            \
     pbc = false;                                                               \

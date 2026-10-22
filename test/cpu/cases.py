@@ -399,6 +399,13 @@ def g_mem(b):
     b.emit(mem(OP["LDA"], 10, R_SCR, 0x40))
     b.emit(mem(OP["LDQ"], 10, 10, 0))
     b.store(10, "r10", mread(m, 0x40, 8))
+    # A load to R31 on a mapped page takes no trap (HRM 2.5, 2.6); compiled
+    # code answers it from its page cache.
+    for op in ("LDL", "LDQ", "LDBU", "LDWU", "LDQ_U"):
+        b.begin("%s r31,8(r26) on a mapped address" % op)
+        b.trap_clear()
+        b.emit(mem(OP[op], R31, R_SCR, 8))
+        b.trap_check()
     # Prefetches and hints take no exception, even unmapped (ARM 4.2.5 notes,
     # 4.11.3, 4.11.5, 4.11.8, 4.11.11): VA 0x10000000 has no translation.
     b.load(11, 0x10000000)
@@ -414,14 +421,12 @@ def g_mem(b):
         at = b.va()
         b.emit(mem(OP[op], R31, 11, 0))
         b.trap_check(vector=0x300, exc_addr=at, exc_sum=31 << 8,
-                     exc_sum_mask=0x1F00, va=0x10000000,
-                     known=(0, JIT_PREFETCH_REF, "compiled")
-                     if op != "LDL" else None)
+                     exc_sum_mask=0x1F00, va=0x10000000)
     # HRM 2.5, Table 2-6: LDQ_U to R31 (UNOP) is retired without execution.
     b.begin("LDQ_U r31 (UNOP) on an unmapped address")
     b.trap_clear()
     b.emit(mem(OP["LDQ_U"], R31, 11, 0))
-    b.trap_check(known=(1, PREFETCH_REF))
+    b.trap_check()
     for nm, word in (("FETCH", mfc(A.MISC["FETCH"], R31, 11)),
                      ("FETCH_M", mfc(A.MISC["FETCH_M"], R31, 11)),
                      ("ECB", mfc(A.MISC["ECB"], R31, 11)),
@@ -433,9 +438,6 @@ def g_mem(b):
         b.trap_check()
 
 
-PREFETCH_REF = "CPU-03: a load to R31 is performed (LDQ_U r31 faults)"
-JIT_PREFETCH_REF = ("CPU-05: compiled LDQ/LDBU/LDWU r31 skip the access "
-                    "(HRM 2.6: they 'may' fault)")
 MT_FPCR_REF = "cpu-fidelity: MT_FPCR does not take its synchronous trap"
 R31DEST_REF = "CPU-04: an operate into R31 still traps"
 UNALIGNED_REF = "cpu-fidelity: unaligned data accesses do not trap"
