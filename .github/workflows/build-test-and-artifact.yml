@@ -103,9 +103,11 @@ jobs:
       env:
         BUILD_DATE: ${{ steps.date.outputs.date }} 
 
-  linux-arm-gcc-crosscompile:
-    runs-on: "ubuntu-24.04"
-    continue-on-error: true
+  linux-arm64-gcc-jit:
+    # Native 64-bit ARM with the AArch64 JIT: the only job that builds the
+    # JIT (it is off by default), and the one that runs the instruction
+    # oracle on both engines.
+    runs-on: "ubuntu-24.04-arm"
 
     steps:
     - uses: actions/checkout@v5
@@ -115,7 +117,12 @@ jobs:
       run: echo "date=$(date +'%Y-%m-%dT%H%M')" >> $GITHUB_OUTPUT
 
     - name: Install build dependencies
-      run: sudo apt -y update && sudo apt -y install netcat-openbsd qemu-user qemu-user-binfmt gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
+      run: sudo apt -y update && sudo apt -y install libpcap-dev libslirp-dev libglib2.0-dev netcat-openbsd
+
+    - name: Fetch asmjit at the pinned commit
+      run: |
+        git clone https://github.com/asmjit/asmjit third_party/asmjit
+        git -C third_party/asmjit checkout 0bd5787b54b575ed94bf32ac452153b34385c514
 
     - name: Create build environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -123,32 +130,37 @@ jobs:
     - name: Configure CMake
       shell: bash
       working-directory: ${{runner.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE -DSTATIC_COMPILE=yes -DDISABLE_PCAP=yes -DDISABLE_SDL=yes -DDISABLE_X11=yes -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Wall" -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ -DCMAKE_CXX_FLAGS="-O3 -mcpu=cortex-a7 -mfpu=neon -mfloat-abi=hard -mno-unaligned-access"
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DES40_DISABLE_ASMJIT=OFF -DDISABLE_SDL=yes -DCMAKE_CXX_FLAGS="-Wall"
 
     - name: Build
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: cmake --build . --config Release
       env:
-        MAKEFLAGS: "-j2"
+        MAKEFLAGS: "-j4"
 
-    - name: Run binary
+    - name: Run unit tests
+      working-directory: ${{runner.workspace}}/build
+      shell: bash
+      run: ctest --output-on-failure
+
+    - name: Run the instruction oracle (interpreted and compiled passes)
       working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: ${{runner.workspace}}/build/alphabox
+      run: python3 test/cpu/cpu_oracle.py ${{runner.workspace}}/build/alphabox ci
 
-    - name: Binary info
+    - name: Run test scripts
       working-directory: ${{runner.workspace}}/alphabox
       shell: bash
-      run: file ${{runner.workspace}}/build/alphabox
+      run: ${{runner.workspace}}/alphabox/test/run
 
     - name: Upload Alphabox binary
       uses: actions/upload-artifact@v6
       with:
-        name: Alphabox-linux-ARM-gcc-${{ env.BUILD_DATE }}
+        name: Alphabox-linux-arm64-gcc-jit-${{ env.BUILD_DATE }}
         path: ${{runner.workspace}}/build/alphabox
       env:
-        BUILD_DATE: ${{ steps.date.outputs.date }}        
+        BUILD_DATE: ${{ steps.date.outputs.date }}
 
   windows-x86-msvc:
     # Paused: the MSVC build fails and its log is not public. One cause was
