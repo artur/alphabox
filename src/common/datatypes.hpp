@@ -34,9 +34,7 @@
 #if !defined(INCLUDED_DATATYPES_H)
 #define INCLUDED_DATATYPES_H
 
-#if defined(HAVE_STDINT_H)
-#include <stdint.h>
-#endif
+#include <stdint.h> // u8..u64 below; HAVE_STDINT_H is not defined before config.hpp
 
 #if !defined(__STDC_FORMAT_MACROS)
 #define __STDC_FORMAT_MACROS // needed for inttypes

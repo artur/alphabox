@@ -23,6 +23,7 @@
 
 #include "SCSIDevice.hpp"
 #include "UsbDevice.hpp"
+#include <string>
 
 class CDisk;
 class CSCSIBus;
