@@ -91,7 +91,7 @@ bool CRadeon::gart_translate(u32 mc, u32 *bus) {
     pte = vram_read((pte_mc - fb_start) & vram_mask(), 4);
   } else {
     pte = 0;
-    do_pci_read(pte_mc, &pte, 4, 1);
+    do_pci_read(0, pte_mc, &pte, 4, 1);
   }
   *bus = (pte & ~0xfffu) | (mc & 0xfffu);
   return true;

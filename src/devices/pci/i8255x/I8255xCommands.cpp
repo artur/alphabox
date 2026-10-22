@@ -101,13 +101,13 @@ bool CI8255x::action_command(u32 cb) {
     break;
 
   case CB_IA_SETUP:
-    do_pci_read(cb + CB_PARAM, state.ia, 1, 6);
+    do_pci_read(0, cb + CB_PARAM, state.ia, 1, 6);
     update_host_filter();
     break;
 
   case CB_CONFIGURE: {
     u8 bytes[CFG_BYTES];
-    do_pci_read(cb + CB_PARAM, bytes, 1, CFG_BYTES);
+    do_pci_read(0, cb + CB_PARAM, bytes, 1, CFG_BYTES);
     int count = bytes[0] & CFG0_COUNT_MASK;
     if (count < 8)
       count = 8;
@@ -195,7 +195,7 @@ void CI8255x::transmit(u32 cb, u16 command) {
   auto append = [&](u32 address, int size) {
     size = std::min(size, TX_FRAME_MAX - len);
     if (size > 0) {
-      do_pci_read(address, frame + len, 1, size);
+      do_pci_read(0, address, frame + len, 1, size);
       len += size;
     }
   };
@@ -255,7 +255,7 @@ void CI8255x::setup_multicast(u32 cb) {
   memset(state.hash, 0, sizeof(state.hash));
   for (int i = 0; i + 6 <= bytes; i += 6) {
     u8 address[6];
-    do_pci_read(cb + CB_PARAM + 2 + i, address, 1, 6);
+    do_pci_read(0, cb + CB_PARAM + 2 + i, address, 1, 6);
     const int h = hash_index(address);
     state.hash[h >> 3] |= u8(1 << (h & 7));
   }

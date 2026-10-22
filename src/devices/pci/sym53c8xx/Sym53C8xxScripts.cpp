@@ -125,7 +125,7 @@ void CSym53C8xx::CChannel::run_scripts_inline() {
 bool CSym53C8xx::CChannel::inline_can_execute_next() {
   u32 insn;
   try {
-    dev.do_pci_read(R32(DSP), &insn, 4, 1);
+    dev.do_pci_read(index, R32(DSP), &insn, 4, 1);
   } catch (...) {
     return false; // let the thread's execute() hit and report it
   }
@@ -319,12 +319,12 @@ void CSym53C8xx::CChannel::execute_bm_op() {
            R32(DSPS), entry_addr);
 #endif
     u32 entry;
-    dev.do_pci_read(entry_addr, &entry, 4, 1);
+    dev.do_pci_read(index, entry_addr, &entry, 4, 1);
     count = entry & 0x00ffffff;
     count_top = (u8)(entry >> 24);
-    dev.do_pci_read(entry_addr + 4, &start, 4, 1);
+    dev.do_pci_read(index, entry_addr + 4, &start, 4, 1);
   } else if (indirect) {
-    dev.do_pci_read(R32(DSPS), &start, 4, 1);
+    dev.do_pci_read(index, R32(DSPS), &start, 4, 1);
     count = GET_DBC();
   } else {
     start = R32(DSPS);
@@ -398,14 +398,14 @@ void CSym53C8xx::CChannel::execute_bm_op() {
     case SCSI_PHASE_COMMAND:
     case SCSI_PHASE_DATA_OUT:
     case SCSI_PHASE_MSG_OUT:
-      dev.do_pci_read(R32(DNAD), scsi_data_ptr, 1, xfer);
+      dev.do_pci_read(index, R32(DNAD), scsi_data_ptr, 1, xfer);
       R32(DNAD) += xfer;
       break;
 
     case SCSI_PHASE_STATUS:
     case SCSI_PHASE_DATA_IN:
     case SCSI_PHASE_MSG_IN:
-      dev.do_pci_write(R32(DNAD), scsi_data_ptr, 1, xfer);
+      dev.do_pci_write(index, R32(DNAD), scsi_data_ptr, 1, xfer);
       R32(DNAD) += xfer;
       break;
     }
@@ -635,7 +635,7 @@ void CSym53C8xx::CChannel::execute_io_op() {
 #endif
 
     u32 io_struc;
-    dev.do_pci_read(io_addr, &io_struc, 4, 1);
+    dev.do_pci_read(index, io_addr, &io_struc, 4, 1);
     destination = (io_struc >> 16) & 0x0f;
     // The table holds SCNTL3 (bits 31-24), the ID and SXFER (bits 15-8),
     // and the chip loads all three: "The SCNTL3 value, SCSI ID,
@@ -1241,7 +1241,7 @@ void CSym53C8xx::CChannel::execute_ls_op() {
     // Perform Load Operation
     for (int i = 0; i < byte_count; i++) {
       u8 dat;
-      dev.do_pci_read(memaddr + i, &dat, 1, 1);
+      dev.do_pci_read(index, memaddr + i, &dat, 1, 1);
 #if defined(DEBUG_SYM_SCRIPTS)
       printf("SYM: %02x -> reg%02x\n", dat, regaddr + i);
 #endif
@@ -1260,7 +1260,7 @@ void CSym53C8xx::CChannel::execute_ls_op() {
 #if defined(DEBUG_SYM_SCRIPTS)
       printf("SYM: %02x <- reg%02x\n", dat, regaddr + i);
 #endif
-      dev.do_pci_write(memaddr + i, &dat, 1, 1);
+      dev.do_pci_write(index, memaddr + i, &dat, 1, 1);
     }
   }
 }
@@ -1299,7 +1299,7 @@ void CSym53C8xx::CChannel::execute_ls_op() {
  */
 void CSym53C8xx::CChannel::execute_mm_op() {
   u32 temp_shadow;
-  dev.do_pci_read(R32(DSP), &temp_shadow, 4, 1);
+  dev.do_pci_read(index, R32(DSP), &temp_shadow, 4, 1);
   R32(DSP) += 4;
 
 #if defined(DEBUG_SYM_SCRIPTS)
@@ -1328,8 +1328,8 @@ void CSym53C8xx::CChannel::execute_mm_op() {
   std::vector<u8> buf(std::min(dbc, kChunk));
   for (u32 done = 0; done < dbc;) {
     const u32 n = std::min(dbc - done, kChunk);
-    dev.do_pci_read(R32(DSPS) + done, buf.data(), 1, n);
-    dev.do_pci_write(temp_shadow + done, buf.data(), 1, n);
+    dev.do_pci_read(index, R32(DSPS) + done, buf.data(), 1, n);
+    dev.do_pci_write(index, temp_shadow + done, buf.data(), 1, n);
     done += n;
   }
 }
@@ -1370,8 +1370,8 @@ void CSym53C8xx::CChannel::execute() {
 #endif
 
   // Read 2 DWORDS into the DCMD, DBC and DSPS registers.
-  dev.do_pci_read(R32(DSP), &R32(DBC), 4, 1);
-  dev.do_pci_read(R32(DSP) + 4, &R32(DSPS), 4, 1);
+  dev.do_pci_read(index, R32(DSP), &R32(DBC), 4, 1);
+  dev.do_pci_read(index, R32(DSP) + 4, &R32(DSPS), 4, 1);
 
   // Increase DSP to point to the next instruction
   R32(DSP) += 8;

@@ -204,7 +204,7 @@ void CS3Virge::command_dma_run() {
   bool host = false;
   while (read_ptr != write_ptr) {
     u32 w = 0;
-    do_pci_read(base + read_ptr, &w, 4, 1);
+    do_pci_read(0, base + read_ptr, &w, 4, 1);
     read_ptr = (read_ptr + 4) & (size - 1);
     if (!left) {
       left = w & 0xffff;

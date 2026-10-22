@@ -644,9 +644,9 @@ void CES137x::transfer_audio(ES137xState *s, struct chan *d, int loop_sel,
         copied = SDL_GetAudioStreamData(s->adc_voice, tmpbuf, to_copy);
         if (copied <= 0)
           break;
-        do_pci_write(addr, tmpbuf, 1, copied);
+        do_pci_write(0, addr, tmpbuf, 1, copied);
       } else {
-        do_pci_read(addr, tmpbuf, 1, to_copy);
+        do_pci_read(0, addr, tmpbuf, 1, to_copy);
         static const bool trace = getenv("ALPHABOX_ES137X_TRACE") != nullptr;
         static unsigned nth = 0;
         if (trace && (nth++ % 200) == 0) {

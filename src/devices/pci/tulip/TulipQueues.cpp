@@ -477,7 +477,7 @@ int CTulip::dec21143_rx() {
   }
 
   // read current descriptor
-  do_pci_read(addr, descr, 4, 4);
+  do_pci_read(0, addr, descr, 4, 4);
   // respect DBO bit - swap descriptor byte order if needed
   if (dbo) {
     for (int i = 0; i < 4; i++)
@@ -542,7 +542,7 @@ int CTulip::dec21143_rx() {
   if (buf1_size > 0) {
     const int to_xfer = std::min(len - used, buf1_size);
     // DMA bytes from the packet into buffer 1
-    do_pci_write(rdes2, frame + used, 1, to_xfer);
+    do_pci_write(0, rdes2, frame + used, 1, to_xfer);
     used += to_xfer;
   }
 
@@ -550,7 +550,7 @@ int CTulip::dec21143_rx() {
   if ((buf2_size > 0) && (!(rdes1 & TDCTL_CH))) {
     const int to_xfer = std::min(len - used, buf2_size);
     // DMA bytes from the packet into buffer 2
-    do_pci_write(rdes3, frame + used, 1, to_xfer);
+    do_pci_write(0, rdes3, frame + used, 1, to_xfer);
     used += to_xfer;
   }
 
@@ -564,7 +564,7 @@ int CTulip::dec21143_rx() {
   // Writeback rdes0, others are read-only
   {
     u32 w0 = dbo ? bswap32_local(rdes0) : rdes0;
-    do_pci_write(addr, &w0, 4, 1);
+    do_pci_write(0, addr, &w0, 4, 1);
   }
 
   std::lock_guard<std::mutex> lock(m_lock);
@@ -621,7 +621,7 @@ int CTulip::dec21143_tx() {
     buf_len = state.tx.cur_buf_len;
   }
 
-  do_pci_read(addr, descr, 4, 4);
+  do_pci_read(0, addr, descr, 4, 4);
   if (dbo) {
     for (int i = 0; i < 4; i++)
       descr[i] = bswap32_local(descr[i]);
@@ -684,7 +684,7 @@ int CTulip::dec21143_tx() {
     if (bufsize != 192)
       printf("[ dec21143: setup packet len = %i, should be 192! ]\n",
              (int)bufsize);
-    do_pci_read(bufaddr, setup, 1, 192);
+    do_pci_read(0, bufaddr, setup, 1, 192);
     {
       std::lock_guard<std::mutex> lock(m_lock);
       if (epoch != m_tx_epoch)
@@ -743,7 +743,7 @@ int CTulip::dec21143_tx() {
         int avail = tx_cap - buf_len;
         int copy = (buf1_size < avail) ? buf1_size : (avail > 0 ? avail : 0);
         if (copy > 0) {
-          do_pci_read(tdes2, state.tx.cur_buf + buf_len, 1, copy);
+          do_pci_read(0, tdes2, state.tx.cur_buf + buf_len, 1, copy);
           buf_len += copy;
         }
       }
@@ -754,7 +754,7 @@ int CTulip::dec21143_tx() {
         int avail = tx_cap - buf_len;
         int copy = (buf2_size < avail) ? buf2_size : (avail > 0 ? avail : 0);
         if (copy > 0) {
-          do_pci_read(tdes3, state.tx.cur_buf + buf_len, 1, copy);
+          do_pci_read(0, tdes3, state.tx.cur_buf + buf_len, 1, copy);
           buf_len += copy;
         }
       }
@@ -817,7 +817,7 @@ int CTulip::dec21143_tx() {
       only write back tdes0 - the status word
       tdes1/tdes2/tdes3 are read-only from NIC's perspective */
   descr[0] = dbo ? bswap32_local(tdes0) : tdes0;
-  do_pci_write(addr, descr, 1, 4);
+  do_pci_write(0, addr, descr, 1, 4);
 
   std::lock_guard<std::mutex> lock(m_lock);
   if (epoch != m_tx_epoch)

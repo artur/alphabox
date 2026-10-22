@@ -573,6 +573,7 @@ machine's firmware wants hardware that is not emulated yet (see
 | Variable | Reports |
 | --- | --- |
 | `ALPHABOX_TRACE_UNKNOWN=1` | every read or write that no device answered |
+| `ALPHABOX_TRACE_BME=1` | a PCI function reading or writing memory with Bus Master Enable (command bit 2) clear: the device, the function and the address, at the first such access and at every tenfold count after it |
 | `ALPHABOX_TRACE_I2C=1` | every address the firmware puts on the chipset's I2C bus, and whether anything answered |
 | `ALPHABOX_TRACE_MP=1` | the registers a console uses to start other processors and hand work to them |
 | `ALPHABOX_TRACE_CALLS=1` | the firmware's own calls, once per call site and routine (interpreter builds) |

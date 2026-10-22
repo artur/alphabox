@@ -132,9 +132,9 @@ static void dma_copy(u8 *data, size_t count, size_t width, u64 page,
                      u16 current, bool decrement, bool to_memory) {
   auto move = [to_memory](u64 addr, u8 *buf, size_t n) {
     if (to_memory)
-      theAli->do_pci_write((u32)addr, buf, 1, n);
+      theAli->do_pci_write(0, (u32)addr, buf, 1, n);
     else
-      theAli->do_pci_read((u32)addr, buf, 1, n);
+      theAli->do_pci_read(0, (u32)addr, buf, 1, n);
   };
 
   if (decrement) {

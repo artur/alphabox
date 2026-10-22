@@ -725,13 +725,32 @@ void CPCIDevice::WriteMem_Bar(int func, int bar, u32 address, int dsize,
  * 32-bit address put on the PCI bus. element_count elements of element_size
  * bytes each will be read in an endian-aware manner.
  **/
-void CPCIDevice::do_pci_read(u32 address, void *dest, size_t element_size,
-                             size_t element_count) {
+void CPCIDevice::note_bme_clear(int func, u32 address, bool write) {
+  static const bool on = getenv("ALPHABOX_TRACE_BME") != nullptr;
+  if (!on)
+    return;
+  const u64 n = ++bme_clear_dma[func & 7];
+  u64 tenfold = 1;
+  while (tenfold < n)
+    tenfold *= 10;
+  if (tenfold != n)
+    return;
+  diag_printf("%%PCI-W-BME: %s(%s) pci%d.%d func %d %s %08x with Bus Master "
+              "Enable clear (access %" PRIu64 ")\n",
+              myCfg->get_myName(), myCfg->get_myValue(), myPCIBus, myPCIDev,
+              func, write ? "writes" : "reads", address, n);
+}
+
+void CPCIDevice::do_pci_read(int func, u32 address, void *dest,
+                             size_t element_size, size_t element_count) {
   size_t el;
   char *dst = (char *)dest;
 
   if (element_count == 0)
     return;
+
+  if (!(endian_16(*(u16 *)((u8 *)pci_state.config_data[func] + 4)) & 4))
+    note_bme_clear(func, address, false);
 
   // get the 64-bit system wide address
   u64 phys_addr = cSystem->PCI_Phys(myPCIBus, address);
@@ -836,13 +855,16 @@ void CPCIDevice::do_pci_read(u32 address, void *dest, size_t element_size,
  * 32-bit address put on the PCI bus. element_count elements of element_size
  * bytes each will be written in an endian-aware manner.
  **/
-void CPCIDevice::do_pci_write(u32 address, void *source, size_t element_size,
-                              size_t element_count) {
+void CPCIDevice::do_pci_write(int func, u32 address, void *source,
+                              size_t element_size, size_t element_count) {
   size_t el;
   char *src = (char *)source;
 
   if (element_count == 0)
     return;
+
+  if (!(endian_16(*(u16 *)((u8 *)pci_state.config_data[func] + 4)) & 4))
+    note_bme_clear(func, address, true);
 
   // get the 64-bit system wide address
   u64 phys_addr = cSystem->PCI_Phys(myPCIBus, address);

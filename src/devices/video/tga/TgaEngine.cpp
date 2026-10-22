@@ -531,7 +531,7 @@ void CTga::op_dma_read(u32 a, u32 data) {
   if (r[GPSR] & 0xc)
     unimplemented("DMA-read copy pixel shift above 3");
   std::vector<u32> buf(count);
-  do_pci_read(r[GDBR] & ~3u, buf.data(), 4, count);
+  do_pci_read(0, r[GDBR] & ~3u, buf.data(), 4, count);
   a &= ~3u;
   u32 residue = 0;
   auto put = [&](u32 da, u32 v, u32 m) {
@@ -575,12 +575,12 @@ void CTga::op_dma_write(u32 a, u32 data) {
     v &= r[GDAR];
     if (m != 0xf) {
       u32 old;
-      do_pci_read(p, &old, 4, 1);
+      do_pci_read(0, p, &old, 4, 1);
       for (unsigned b = 0; b < 4; b++)
         if (!(m & (1u << b)))
           v = (v & ~(0xffu << (8 * b))) | (old & (0xffu << (8 * b)));
     }
-    do_pci_write(p, &v, 4, 1);
+    do_pci_write(0, p, &v, 4, 1);
     p += 4;
   };
   byte_shift(vram64(m_vram, m_vram_mask, qa), 8); // primes the residue

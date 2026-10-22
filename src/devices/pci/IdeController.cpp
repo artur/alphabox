@@ -2739,13 +2739,13 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   bool eot;
   do {
     u32 base;
-    do_pci_read(prd, &base, 4, 1);
+    do_pci_read(0, prd, &base, 4, 1);
 
     u16 size_16;
-    do_pci_read(prd + 4, &size_16, 2, 1);
+    do_pci_read(0, prd + 4, &size_16, 2, 1);
 
     size_t size = size_16 ? size_16 : 65536;
-    do_pci_read(prd + 7, &xfer, 1, 1);
+    do_pci_read(0, prd + 7, &xfer, 1, 1);
 
 #ifdef DEBUG_IDE_DMA
     printf("-IDE-I-DMA: Transfer %d bytes to/from %lx (%x)\n", size, base,
@@ -2763,10 +2763,10 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
 
     // copy it to/from ram.
     if (!direction) {
-      do_pci_write(base, buffer, 1, size);
+      do_pci_write(0, base, buffer, 1, size);
       buffer += size;
     } else {
-      do_pci_read(base, buffer, 1, size);
+      do_pci_read(0, base, buffer, 1, size);
       buffer += size;
     }
 

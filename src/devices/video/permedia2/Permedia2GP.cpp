@@ -113,7 +113,7 @@ void CPermedia2::gp_dma(u32 count) {
     return;
   const u32 addr = r.ctl[DMA_ADDRESS >> 2];
   std::vector<u32> buf(count);
-  do_pci_read(addr, buf.data(), 4, count);
+  do_pci_read(0, addr, buf.data(), 4, count);
   if (m_trace_gp)
     printf("%s: dma %u words from %08x\n", devid_string, count, addr);
   for (u32 w : buf)

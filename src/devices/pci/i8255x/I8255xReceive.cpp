@@ -185,7 +185,7 @@ void CI8255x::receive_frame(const u8 *in, int in_len) {
 
   // The part that fits the RFD itself.
   const int in_rfd = std::min(len, size);
-  do_pci_write(rfd + RFD_DATA, frame, 1, in_rfd);
+  do_pci_write(0, rfd + RFD_DATA, frame, 1, in_rfd);
   int stored = in_rfd;
   bool rbds_exhausted = false;
 
@@ -238,7 +238,7 @@ int CI8255x::store_frame_rbds(const u8 *data, int len, u32 *first_rbd) {
 
     if (*first_rbd == 0xffffffff)
       *first_rbd = state.rbd_offset;
-    do_pci_write(buffer, const_cast<u8 *>(data + stored), 1, n);
+    do_pci_write(0, buffer, const_cast<u8 *>(data + stored), 1, n);
     stored += n;
     dma_write16(rbd + RBD_COUNT,
                 u16(n | COUNT_F | (stored == len ? COUNT_EOF : 0)));

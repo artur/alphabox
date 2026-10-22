@@ -75,7 +75,7 @@ void CIsp1040::run_request_queue() {
     const u32 address =
         state.request_base + u32(state.request_out) * ISP_QUEUE_ENTRY_SIZE;
     u8 entry[ISP_QUEUE_ENTRY_SIZE];
-    do_pci_read(address, entry, 1, sizeof(entry));
+    do_pci_read(0, address, entry, 1, sizeof(entry));
 
     // Whatever the entry turns out to be, it has been taken.
     state.request_out = u16((state.request_out + (entry[1] ? entry[1] : 1)) %
@@ -122,7 +122,7 @@ int CIsp1040::gather_segments(u32 entry_address, const u8 *entry, u32 *address,
   while (found < wanted && found < max_segments) {
     const u32 at = state.request_base + u32(slot) * ISP_QUEUE_ENTRY_SIZE;
     u8 cont[ISP_QUEUE_ENTRY_SIZE];
-    do_pci_read(at, cont, 1, sizeof(cont));
+    do_pci_read(0, at, cont, 1, sizeof(cont));
     if (cont[0] != ISP_ENTRY_TYPE_DATASEG && cont[0] != ISP_ENTRY_TYPE_A64_CONT)
       break;
 
@@ -240,9 +240,9 @@ bool CIsp1040::execute_entry(u32 entry_address, u8 *entry) {
         const size_t now = std::min<size_t>(left, room);
         const u32 at = seg_address[segment] + offset_in_segment;
         if (in)
-          do_pci_write(at, p, 1, now);
+          do_pci_write(0, at, p, 1, now);
         else
-          do_pci_read(at, p, 1, now);
+          do_pci_read(0, at, p, 1, now);
         p += now;
         left -= now;
         moved += (u32)now;
@@ -428,7 +428,7 @@ void CIsp1040::post_response(const u8 *request, u16 completion, u16 scsi_status,
   entry[ISP_RSP_RESID + 2] = u8(residual >> 16);
   entry[ISP_RSP_RESID + 3] = u8(residual >> 24);
 
-  do_pci_write(at, entry, 1, sizeof(entry));
+  do_pci_write(0, at, entry, 1, sizeof(entry));
   state.response_in = u16((state.response_in + 1) % state.response_length);
   publish(state.mailbox_out, state.request_out, state.response_in);
 

@@ -321,7 +321,7 @@ bool CVirtioPci::dma_read(u64 a, void *d, size_t n) {
   }
   if (a + n > 0x100000000ull)
     return false; // beyond a 32-bit PCI bus address
-  do_pci_read(u32(a), d, 1, n);
+  do_pci_read(0, u32(a), d, 1, n);
   return true;
 }
 
@@ -336,7 +336,7 @@ bool CVirtioPci::dma_write(u64 a, const void *s, size_t n) {
   }
   if (a + n > 0x100000000ull)
     return false;
-  do_pci_write(u32(a), (void *)s, 1, n);
+  do_pci_write(0, u32(a), (void *)s, 1, n);
   return true;
 }
 

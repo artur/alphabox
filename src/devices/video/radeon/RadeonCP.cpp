@@ -224,7 +224,7 @@ u32 CRadeon::cp_read32(u32 mc) {
   if (vram)
     return vram_read(a, 4);
   u32 v = 0;
-  do_pci_read(a, &v, 4, 1);
+  do_pci_read(0, a, &v, 4, 1);
   return v;
 }
 
@@ -237,7 +237,7 @@ void CRadeon::cp_write32(u32 mc, u32 data) {
     vram_write(a, 4, data);
     return;
   }
-  do_pci_write(a, &data, 4, 1);
+  do_pci_write(0, a, &data, 4, 1);
 }
 
 /// The swaps of CP_RB_CNTL BUF_SWAP, CP_RB_RPTR_ADDR RB_RPTR_SWAP and

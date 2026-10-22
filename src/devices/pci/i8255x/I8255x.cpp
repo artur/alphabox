@@ -252,30 +252,30 @@ void CI8255x::update_host_filter() {
 
 u8 CI8255x::dma_read8(u32 address) {
   u8 b;
-  do_pci_read(address, &b, 1, 1);
+  do_pci_read(0, address, &b, 1, 1);
   return b;
 }
 
 u16 CI8255x::dma_read16(u32 address) {
   u8 b[2];
-  do_pci_read(address, b, 1, 2);
+  do_pci_read(0, address, b, 1, 2);
   return u16(b[0] | b[1] << 8);
 }
 
 u32 CI8255x::dma_read32(u32 address) {
   u8 b[4];
-  do_pci_read(address, b, 1, 4);
+  do_pci_read(0, address, b, 1, 4);
   return u32(b[0]) | u32(b[1]) << 8 | u32(b[2]) << 16 | u32(b[3]) << 24;
 }
 
 void CI8255x::dma_write16(u32 address, u16 value) {
   u8 b[2] = {u8(value), u8(value >> 8)};
-  do_pci_write(address, b, 1, 2);
+  do_pci_write(0, address, b, 1, 2);
 }
 
 void CI8255x::dma_write32(u32 address, u32 value) {
   u8 b[4] = {u8(value), u8(value >> 8), u8(value >> 16), u8(value >> 24)};
-  do_pci_write(address, b, 1, 4);
+  do_pci_write(0, address, b, 1, 4);
 }
 
 static const u32 i8255x_magic1 = 0x82558A00;

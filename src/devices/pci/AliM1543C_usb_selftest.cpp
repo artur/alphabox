@@ -85,10 +85,10 @@ void CAliM1543C_usb::selftest() {
   const u32 HCCA = base, ED = base + 0x100, TD0 = base + 0x200,
             BUF = base + 0x1000;
   u32 tds = 0;
-  auto w32 = [&](u32 a, u32 v) { do_pci_write(a, &v, sizeof(u32), 1); };
+  auto w32 = [&](u32 a, u32 v) { do_pci_write(0, a, &v, sizeof(u32), 1); };
   auto r32 = [&](u32 a) {
     u32 v = 0;
-    do_pci_read(a, &v, sizeof(u32), 1);
+    do_pci_read(0, a, &v, sizeof(u32), 1);
     return v;
   };
   auto td_addr = [&](u32 n) { return TD0 + 0x20 * n; };
@@ -120,7 +120,7 @@ void CAliM1543C_usb::selftest() {
 
   // One SETUP TD (GET_DESCRIPTOR) after another, on one control ED.
   static const u8 setup[8] = {0x80, 6, 0, 1, 0, 0, 8, 0};
-  do_pci_write(BUF, (void *)setup, 1, 8);
+  do_pci_write(0, BUF, (void *)setup, 1, 8);
   w32(ED + 0, 8u << 16);   // FA 0, EN 0, MPS 8
   w32(ED + 4, td_addr(0)); // TailP: the dummy
   w32(ED + 8, td_addr(0)); // HeadP

@@ -166,8 +166,15 @@ private:
   // Memory the controller reads and writes: through the PCI DMA windows,
   // or -- in the self-test, which runs before any firmware has set them --
   // guest physical addresses as they are.
-  void dma_read(u32 a, void *d, size_t size, size_t count);
-  void dma_write(u32 a, const void *s, size_t size, size_t count);
+  // `func` is the PCI function mastering: the EHCI's own, or a companion's.
+  void dma_read(int func, u32 a, void *d, size_t size, size_t count);
+  void dma_write(int func, u32 a, const void *s, size_t size, size_t count);
+  void dma_read(u32 a, void *d, size_t size, size_t count) {
+    dma_read(m_func, a, d, size, count);
+  }
+  void dma_write(u32 a, const void *s, size_t size, size_t count) {
+    dma_write(m_func, a, s, size, count);
+  }
   std::atomic_bool m_selftest{false}; // read by the schedule and the CPUs
   std::unique_ptr<std::thread> m_selftest_thread;
   void selftest();

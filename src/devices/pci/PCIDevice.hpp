@@ -46,6 +46,7 @@
 #define PCI_ROM_ADDRESS_MASK 0xFFFFF800u   // ROM BAR: bits[31:11] addr
 
 #include "SystemComponent.hpp"
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -81,9 +82,11 @@ public:
                                    u32 old_data, u32 new_data, u32 data){};
   void register_bar(int func, int bar, u32 data, u32 mask);
 
-  void do_pci_read(u32 address, void *dest, size_t element_size,
+  /// Bus-master access to memory, issued by function `func` of this device
+  /// (the command register that governs it is that function's).
+  void do_pci_read(int func, u32 address, void *dest, size_t element_size,
                    size_t element_count);
-  void do_pci_write(u32 address, void *source, size_t element_size,
+  void do_pci_write(int func, u32 address, void *source, size_t element_size,
                     size_t element_count);
 
   int pci_bus() const { return myPCIBus; }
@@ -140,6 +143,12 @@ protected:
   /// A type 1 (PCI-PCI bridge) header: two BARs, then bus numbers and
   /// forwarding windows instead of BARs 2-5, and the ROM BAR at 0x38.
   bool bridge_header(int func) const;
+
+  /// Function `func` mastering with Bus Master Enable (command bit 2) clear:
+  /// counts it and reports the first one and every tenfold count after it
+  /// (ALPHABOX_TRACE_BME).
+  void note_bme_clear(int func, u32 address, bool write);
+  std::atomic<u64> bme_clear_dma[8] = {};
 
   int myPCIBus;
   int myPCIDev;

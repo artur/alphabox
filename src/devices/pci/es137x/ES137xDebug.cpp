@@ -226,7 +226,7 @@ void CES137x::selftest(const std::string &spec) {
       const int16_t v = (int16_t)(12000.0 * sin(2 * M_PI * 440.0 * i / 44100));
       pcm[2 * i] = pcm[2 * i + 1] = v;
     }
-    do_pci_write(ring, pcm.data(), 1, pcm.size() * 2);
+    do_pci_write(0, ring, pcm.data(), 1, pcm.size() * 2);
   };
 
   if (mode == "tone" || mode == "mute") {
@@ -346,7 +346,7 @@ void CES137x::selftest(const std::string &spec) {
        dword. The bytes after the ring are the guard. */
     const u32 bytes = 100, dwords = bytes / 4;
     std::vector<uint8_t> fill(bytes + 64, 0xaa);
-    do_pci_write(ring, fill.data(), 1, fill.size());
+    do_pci_write(0, ring, fill.data(), 1, fill.size());
     set_rate(SRC_RAM_ADC, 8000);
     wr(ES_REG_MEMPAGE, 0xd);
     wr(0x30, ring);
@@ -359,7 +359,7 @@ void CES137x::selftest(const std::string &spec) {
     wr(ES_REG_CONTROL,
        rd(ES_REG_CONTROL) & ~((u32)CTRL_ADC_EN | CTRL_1371_ADC_STOP));
     std::vector<uint8_t> back(bytes + 64);
-    do_pci_read(ring, back.data(), 1, back.size());
+    do_pci_read(0, ring, back.data(), 1, back.size());
     int touched = 0, written = 0;
     for (u32 i = bytes; i < bytes + 64; i++)
       touched += back[i] != 0xaa;

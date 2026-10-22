@@ -262,10 +262,10 @@ public:
   bool inject_fault(const char *op, int port, int ep, int arg) override;
 
   void ohci_dma_read(u32 a, void *d, size_t size, size_t count) override {
-    do_pci_read(a, d, size, count);
+    do_pci_read(0, a, d, size, count);
   }
   void ohci_dma_write(u32 a, void *s, size_t size, size_t count) override {
-    do_pci_write(a, s, size, count);
+    do_pci_write(0, a, s, size, count);
   }
   void ohci_irq(bool level) override;
   bool ohci_bus_master() override { return (config_read(0, 4, 16) & 4) != 0; }

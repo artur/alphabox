@@ -124,10 +124,10 @@ struct CEhci::CCompanion : COhciHost {
       : card(c), func(f), ohci(*this, c.m_ports_per_companion,
                                c.m_chip.ohci_legacy, kCompanionNames[f & 3]) {}
   void ohci_dma_read(u32 a, void *d, size_t size, size_t count) override {
-    card.dma_read(a, d, size, count);
+    card.dma_read(func, a, d, size, count);
   }
   void ohci_dma_write(u32 a, void *s, size_t size, size_t count) override {
-    card.dma_write(a, s, size, count);
+    card.dma_write(func, a, s, size, count);
   }
   void ohci_irq(bool level) override { card.do_pci_interrupt(func, level); }
   bool ohci_bus_master() override {
@@ -366,18 +366,19 @@ void CEhci::start_threads() {
   }
 }
 
-void CEhci::dma_read(u32 a, void *d, size_t size, size_t count) {
+void CEhci::dma_read(int func, u32 a, void *d, size_t size, size_t count) {
   if (m_selftest)
     memcpy(d, cSystem->PtrToMem(a), size * count);
   else
-    do_pci_read(a, d, size, count);
+    do_pci_read(func, a, d, size, count);
 }
 
-void CEhci::dma_write(u32 a, const void *s, size_t size, size_t count) {
+void CEhci::dma_write(int func, u32 a, const void *s, size_t size,
+                      size_t count) {
   if (m_selftest)
     memcpy(cSystem->PtrToMem(a), s, size * count);
   else
-    do_pci_write(a, (void *)s, size, count);
+    do_pci_write(func, a, (void *)s, size, count);
 }
 
 void CEhci::stop_threads() {
