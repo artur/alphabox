@@ -511,6 +511,15 @@ target_include_directories(pcicfg_test PRIVATE
 target_link_libraries(pcicfg_test Threads::Threads)
 add_test(NAME pcicfg COMMAND pcicfg_test)
 
+# The PCI-PCI bridge: header, bus numbers, windows, swizzle, secondary reset.
+add_executable(pcibridge_test test/unit/pcibridge_test.cpp
+    src/devices/pci/PCIDevice.cpp src/devices/pci/bridge/PCIBridge.cpp
+    src/devices/pci/bridge/PCIBridgeChips.cpp)
+target_include_directories(pcibridge_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(pcibridge_test Threads::Threads)
+add_test(NAME pcibridge COMMAND pcibridge_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")

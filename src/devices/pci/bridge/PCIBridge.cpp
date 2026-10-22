@@ -276,7 +276,14 @@ u64 CPCIBridge::ReadMem(int index, u64 address, int dsize) {
     cSystem->trace_unknown("behind a PCI-PCI bridge",
                            bus_address(m_windows[w].io, addr), dsize, false, 0,
                            this);
-    return 0; // master abort, answered as the hose answers for itself
+    // A master abort on the secondary bus. With Master-Abort Mode clear
+    // the bridge completes the read with FFFF FFFFh (PCI-to-PCI Bridge
+    // Architecture Specification 1.1 6.3.1, PDF p. 101), as the hose does
+    // for I/O nothing claims. Memory reads as the hose reads unclaimed
+    // memory, zero (TSU-09 of the Tsunami audit, deferred there).
+    if (!m_windows[w].io)
+      return 0;
+    return dsize >= 64 ? ~U64(0) : (U64(1) << dsize) - 1;
   }
   return r->dev->ReadMem(r->index, addr - r->base, dsize);
 }
