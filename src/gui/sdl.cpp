@@ -1425,8 +1425,8 @@ void bx_sdl_gui_c::handle_events(void) {
         break;
 
       // A held key arrives as a stream of KEY_DOWN events. The lock keys
-      // toggle on the first press only (each repeat was a toggle of its own,
-      // so a held Caps Lock flickered), and Pause sends its sequence once.
+      // reach the guest once per press (a guest that toggles on every make
+      // code would flicker), and Pause sends its sequence once.
       if (sdl_event.key.repeat &&
           (key_event == BX_KEY_NUM_LOCK || key_event == BX_KEY_CAPS_LOCK ||
            key_event == BX_KEY_PAUSE || key_event == BX_KEY_CTRL_BREAK))
@@ -1434,11 +1434,12 @@ void bx_sdl_gui_c::handle_events(void) {
 
       gui_guest_key(key_event);
 
-      // Locks: generate immediate press+release pair
-      if ((key_event == BX_KEY_NUM_LOCK) || (key_event == BX_KEY_CAPS_LOCK)) {
-        gui_guest_key(key_event | BX_KEY_RELEASED);
-      } else if (sdl_event.key.scancode > SDL_SCANCODE_UNKNOWN &&
-                 sdl_event.key.scancode < SDL_SCANCODE_COUNT) {
+      // The lock keys are keys like any other. SDL3 reports a tap as a down
+      // and an up on every platform; on macOS, which only says that the lock
+      // state changed, it sends the two together. A press+release pair for
+      // each of them toggled the guest twice per tap.
+      if (sdl_event.key.scancode > SDL_SCANCODE_UNKNOWN &&
+          sdl_event.key.scancode < SDL_SCANCODE_COUNT) {
         guest_key_by_scancode[sdl_event.key.scancode] = key_event;
         guest_key_pressed[sdl_event.key.scancode] = true;
       }
@@ -1472,10 +1473,6 @@ void bx_sdl_gui_c::handle_events(void) {
 
       if (key_event == BX_KEY_UNHANDLED)
         break;
-
-      if ((key_event == BX_KEY_NUM_LOCK) || (key_event == BX_KEY_CAPS_LOCK)) {
-        gui_guest_key(key_event);
-      }
 
       gui_guest_key(key_event | BX_KEY_RELEASED);
       break;
