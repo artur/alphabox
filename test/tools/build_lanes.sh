@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build Alphabox build lanes and print one rc line per lane.
+# Build Alphabox build lanes, run each lane's unit tests (ctest), and print
+# one rc line per lane.
 # usage: build_lanes.sh [lane ...]
 #   With no arguments, every configured build*/ directory in the repo root.
 #   Lanes are configured beforehand (see the build-lanes skill).
@@ -33,7 +34,19 @@ for l in "${lanes[@]}"; do
     continue
   fi
   if cmake --build "$l" -j"$JOBS" >> "$l/build_lanes.log" 2>&1; then
-    printf '  %-26s rc=0\n' "$l"
+    # The lane's unit tests (test/unit/, the FP differential): a lane whose
+    # tests fail has not built.
+    if [ ! -f "$l/CTestTestfile.cmake" ]; then
+      printf '  %-26s rc=0\n' "$l"
+    elif ctest --test-dir "$l" -j"$JOBS" --output-on-failure \
+      > "$l/ctest.log" 2>&1; then
+      n=$(grep -a 'tests passed' "$l/ctest.log" | sed -E 's/.* out of ([0-9]+).*/\1/')
+      printf '  %-26s rc=0 (%s tests passed)\n' "$l" "$n"
+    else
+      printf '  %-26s TESTS FAILED (see %s/ctest.log)\n' "$l" "$l"
+      grep -aE 'Failed|\*\*\*' "$l/ctest.log" | head -5 | sed 's/^/    /'
+      failed=1
+    fi
   else
     printf '  %-26s FAILED (see %s/build_lanes.log)\n' "$l" "$l"
     grep -a 'error:' "$l/build_lanes.log" | head -5 | sed 's/^/    /'

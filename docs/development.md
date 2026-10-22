@@ -258,7 +258,7 @@ and check every read.
 
 | Tool | Purpose |
 | --- | --- |
-| `build_lanes.sh` | Builds every configured build directory. |
+| `build_lanes.sh` | Builds every configured build directory and runs its unit tests (`ctest`: `test/unit/` and the FP differential); a lane whose tests fail counts as failed. |
 | `build_revs.sh` | Builds every commit of a series in a worktree. |
 | `keys_for.py` | Key tokens for a line of text. |
 | `alphabox hvprobe` | Hypervisor.framework's mechanics measured on the host. |
