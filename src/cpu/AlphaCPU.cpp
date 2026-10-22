@@ -647,6 +647,7 @@ void CAlphaCPU::init() {
     o.regs = (uint32_t)((char *)&state.r[0] - (char *)this);
     o.jit_epoch = (uint32_t)((char *)&m_jit_epoch - (char *)this);
     o.llsc_clean = (uint32_t)((char *)&m_llsc_clean - (char *)this);
+    o.int_resignal = (uint32_t)((char *)&m_int_resignal - (char *)this);
     o.jit_ind_base = (uint32_t)((char *)&m_jit_ind_base - (char *)this);
 #if defined(__aarch64__)
     // The AArch64 emitter addresses every guest register, shadow bank
@@ -655,7 +656,8 @@ void CAlphaCPU::init() {
     // fail to encode and quietly run in the interpreter -- measured at 6-28
     // times slower, while SRM and JIT_VERIFY still pass.
     if (o.regs + 64 * 8 > 16380 || o.jit_epoch > 32760 ||
-        o.jit_ind_base > 32760 || o.llsc_clean > 32760) {
+        o.jit_ind_base > 32760 || o.llsc_clean > 32760 ||
+        o.int_resignal > 32760) {
       printf("%%CPU-F-JITLAYOUT: state.r at %u is out of reach of compiled "
              "code; CAlphaCPU's layout needs fixing\n",
              o.regs);
@@ -1363,6 +1365,7 @@ _next_instruction:
       // vector, as without them.
       if (state.eir & state.eien & 0x10) {
         GO_PAL(INTERRUPT);
+        m_int_resignal = 1; // DO_HW_RET
         seq_remaining = 0;
 #ifndef ES40_JIT
         goto _next_instruction;
@@ -1418,6 +1421,9 @@ _next_instruction:
           irq_trace_entry();
         }
         GO_PAL(INTERRUPT);
+        // check_int was cleared to take this one; what is still pending is
+        // signalled again when the PALcode returns to native mode (DO_HW_RET).
+        m_int_resignal = 1;
         seq_remaining = 0;
 #ifndef ES40_JIT
         goto _next_instruction;
@@ -2499,6 +2505,8 @@ int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
   int res;
 
   state.exc_addr = state.current_pc;
+  // An exception other than a TB miss clears the lock flag, as GO_PAL does.
+  cSystem->cpu_clear_lock(state.iProcNum);
 
   if (flags & ACCESS_EXEC) {
     state.exc_sum = 0;
@@ -2793,6 +2801,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
         // handle I-stream access violation
         state.exc_addr = state.current_pc;
+        cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.exc_sum = 0;
         if (state.pal_vms) {
           if ((res = vmspal_ent_iacv(flags)))
@@ -2805,6 +2814,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
         // Handle D-stream access violation
         state.exc_addr = state.current_pc;
+        cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.fault_va = virt;
         /* HRM 5.1.5/D.24: VA_FORM is derived from VA, which is written
            on every D-stream fault (incl. DFAULT), not just TB miss.
@@ -2844,6 +2854,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
         // handle I-stream access fault
         state.exc_addr = state.current_pc;
+        cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.exc_sum = 0;
         if (state.pal_vms) {
           if ((res = vmspal_ent_iacv(flags)))
@@ -2856,6 +2867,7 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
 
         // handle D-stream access fault
         state.exc_addr = state.current_pc;
+        cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.fault_va = virt;
         /* HRM 5.1.5/D.24: VA_FORM is derived from VA, which is written
            on every D-stream fault (including FOR/FOW DFAULT), not just TB

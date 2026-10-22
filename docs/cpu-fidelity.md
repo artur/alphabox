@@ -465,6 +465,21 @@ I_CTL`; it starts at 0x502006 now, so a read agrees with what the
 processor does. PALcode runs with `SDE` set and saves and restores
 `I_CTL` whole, so nothing a guest runs saw either.
 
+**The lock flag on access faults, and an interrupt still pending**
+(CPU-09, CPU-15). The access violations and faults on read or write that
+the translation raises itself (`DFAULT`, `IACV`) set the PC without
+going through `GO_PAL`, so they left the lock flag set, where every other
+exception but a TB miss clears it. They clear it now; the ARM leaves the
+case UNPREDICTABLE (4.2.4), so this is the code's own rule made whole.
+Delivering an interrupt clears the doorbell (`check_int`) that makes the
+dispatcher look for one, so one still pending when PALcode went back to
+native mode without writing an interrupt register waited for the next
+line change or IPR write. The 21264 signals it again "when the PALcode
+returns to native mode" (HRM 5.2.11): now the first `HW_RET` to native
+mode after a delivery raises `check_int`, in the interpreter and in
+compiled code. PALcode that lowers the IPL rewrites `IER`, which raised
+it anyway, so this was latency at most.
+
 ### Smaller ones
 
 | What | Where | Consequence |

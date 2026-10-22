@@ -1924,7 +1924,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
-    // HW_RET (PALmode): PC = Rb & ~2.
+    // HW_RET (PALmode): PC = Rb & ~2; to native mode after an interrupt was
+    // delivered, raise check_int (DO_HW_RET).
     if (op == OP_HW_RET) {
       if (rb == 31)
         a.mov(x9, imm(0));
@@ -1932,6 +1933,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         mov_from_reg(x9, rb);
       a.and_(x9, x9, imm(~(uint64_t)2));
       a.str(x9, fld(m_off.state_pc, 3));
+      Label no_resignal = a.new_label();
+      a.tbnz(x9, imm(0), no_resignal);
+      a.ldr(x10, fld(m_off.int_resignal, 3));
+      a.cbz(x10, no_resignal);
+      a.str(a64::xzr, fld(m_off.int_resignal, 3));
+      a.mov(w11, imm(1));
+      a.strb(w11, fld(m_off.check_int, 0));
+      a.bind(no_resignal);
       continue;
     }
 

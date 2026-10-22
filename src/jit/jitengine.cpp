@@ -3229,6 +3229,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.and_(x86::r10, imm(~(uint64_t)2)); // target = Rb & ~2 (clear bit 1)
       a.mov(x86::qword_ptr(x86::rbp, m_off.state_pc),
             x86::r10); // state.pc = target
+      // To native mode after an interrupt was delivered: raise check_int
+      // (DO_HW_RET).
+      Label no_resignal = a.new_label();
+      a.test(x86::r10b, imm(1));
+      a.jnz(no_resignal);
+      a.cmp(x86::qword_ptr(x86::rbp, m_off.int_resignal), imm(0));
+      a.je(no_resignal);
+      a.mov(x86::qword_ptr(x86::rbp, m_off.int_resignal), imm(0));
+      a.mov(x86::byte_ptr(x86::rbp, m_off.check_int), imm(1));
+      a.bind(no_resignal);
       continue;
     }
 

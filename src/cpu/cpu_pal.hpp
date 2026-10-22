@@ -370,10 +370,17 @@
 /*
  * HW_RET (HRM 6.4.3) is a simple jump-to-target on EV6/EV68.
  */
+/* A return to native mode after an interrupt was delivered raises check_int,
+   so an interrupt still pending is taken (CAlphaCPU::m_int_resignal). The
+   compiled HW_RETs do the same. */
 #define DO_HW_RET                                                              \
   do {                                                                         \
     u64 target = state.r[REG_2] & ~U64(0x2);                                   \
     set_pc(target);                                                            \
+    if (!(target & 1) && m_int_resignal) {                                     \
+      m_int_resignal = 0;                                                      \
+      state.check_int = true;                                                  \
+    }                                                                          \
   } while (0)
 
 #define DO_HW_LDL                                                              \

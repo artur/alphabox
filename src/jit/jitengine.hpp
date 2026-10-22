@@ -380,6 +380,7 @@ public:
     uint32_t regs; // state.r[0]: [cpu + regs] on AArch64, x86's rbx
     uint32_t jit_epoch, jit_ind_base; // CAlphaCPU::m_jit_epoch, m_jit_ind_base
     uint32_t llsc_clean; // CAlphaCPU::m_llsc_clean (a u64), cleared by memops
+    uint32_t int_resignal; // CAlphaCPU::m_int_resignal (a u64), HW_RET
     // The cycle counter, for the inline RPCC stub. A guest that times
     // anything reads RPCC constantly -- Windows 2000 does it 16 times per
     // 100 instructions -- and a helper call spills and reloads eight

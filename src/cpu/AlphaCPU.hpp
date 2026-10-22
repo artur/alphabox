@@ -929,6 +929,12 @@ public:
   /// cpu pointer). Not in the state file: a STx_C right after a restore
   /// fails, which the architecture allows.
   u64 m_llsc_clean = 0;
+  /// Set when an interrupt is delivered, which clears check_int: the next
+  /// HW_RET to native mode raises check_int again, so whatever is still
+  /// pending is looked at then, as the 21264 signals it again "when the
+  /// PALcode returns to native mode" (HRM 5.2.11). Compiled HW_RETs read it
+  /// from the cpu pointer.
+  u64 m_int_resignal = 0;
   /// ALPHABOX_LLSC_MEMOP=0: a memory operation between LDx_L and STx_C does
   /// not make the STx_C fail (as before 2026-10-22); an A/B switch.
   bool m_llsc_memop = true;
