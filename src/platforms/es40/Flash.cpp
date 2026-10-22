@@ -76,7 +76,7 @@ CFlash::CFlash(CConfigurator *cfg, CSystem *c, int chips)
   for (int &m : m_mode)
     m = MODE_READ;
   RestoreStateF();
-  dirty = false;
+  dirty.store(false);
   for (int &m : m_mode) // always start in read mode after load
     m = MODE_READ;
 
@@ -142,11 +142,15 @@ bool CFlash::FindCpqPartition(const char *name, u32 *offset, u32 *size) const {
   return false;
 }
 
+/**
+ * Save the flash to its file if the guest changed it since the last save. The
+ * flag is cleared first, so a write that races with the save is flushed next
+ * time instead of being lost.
+ **/
 void CFlash::FlushIfDirty() {
-  if (!dirty)
+  if (!dirty.exchange(false))
     return;
   SaveStateF();
-  dirty = false;
 }
 
 /**
@@ -154,11 +158,8 @@ void CFlash::FlushIfDirty() {
  **/
 void CFlash::check_state() {
   const time_t QUIESCE_SECS = 2;
-  if (!dirty)
-    return;
-  if (time(nullptr) - last_dirty < QUIESCE_SECS)
-    return;
-  FlushIfDirty();
+  if (dirty.load() && time(nullptr) - last_dirty.load() >= QUIESCE_SECS)
+    FlushIfDirty();
 }
 
 /**
@@ -306,8 +307,8 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
 
     if (newv != oldv) {
       m_flash[a] = newv;
-      dirty = true;
-      last_dirty = time(nullptr);
+      last_dirty.store(time(nullptr));
+      dirty.store(true);
       printf("%%SRM-I-FLASH: Wrote data: 0x%02X to sector address: 0x%04X\n",
              byte, a);
     }
@@ -418,8 +419,8 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
     if ((ad == 0x5555) && (byte == 0x10)) {
       printf("%%SRM-I-FLASH: Erasing flash chip\n");
       memset(&m_flash[(size_t)(a / CHIP_SIZE) * CHIP_SIZE], 0xff, CHIP_SIZE);
-      dirty = true;
-      last_dirty = time(nullptr);
+      last_dirty.store(time(nullptr));
+      dirty.store(true);
       mode = MODE_CONFIRM_1;
       return;
     }
@@ -429,8 +430,8 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       printf("%%SRM-I-FLASH: Erasing flash sector\n");
       const int sector_start = a & ~0xFFFF;
       memset(&m_flash[sector_start], 0xFF, 0x10000);
-      dirty = true;
-      last_dirty = time(nullptr);
+      last_dirty.store(time(nullptr));
+      dirty.store(true);
       mode = MODE_CONFIRM_1;
       return;
     }

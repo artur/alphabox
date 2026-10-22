@@ -34,6 +34,8 @@
 #define INCLUDED_FLASH_H
 
 #include "SystemComponent.hpp"
+#include <atomic>
+#include <ctime>
 #include <vector>
 
 /**
@@ -87,8 +89,10 @@ public:
   void FlushIfDirty();
 
 protected:
-  bool dirty = false;
-  time_t last_dirty = 0; // wall-clock when dirty was last (re)set
+  // Guest writes since the last save to the flash file (set on CPU threads,
+  // flushed from the main thread), and when the last one came.
+  std::atomic<bool> dirty{false};
+  std::atomic<time_t> last_dirty{0};
 
   static const int CHIP_SIZE = 2 * 1024 * 1024;
   static const int MAX_CHIPS = 2;
