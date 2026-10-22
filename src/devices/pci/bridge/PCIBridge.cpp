@@ -336,6 +336,17 @@ void CPCIBridge::config_write_custom(int func, u32 address, int dsize,
     remap_children();
   }
 
+  // PMCSR power state: D1 and D2 are not implemented, and a write of one
+  // is completed and its data ignored (21154 data sheet 15.1.35; the 21152
+  // 13.1.33 the same).
+  if (m_chip.pm_capabilities && !(m_chip.pm_capabilities & 0x0600) &&
+      address <= PPB_PM_CAP + 4 && PPB_PM_CAP + 4 < end) {
+    u8 *state = (u8 *)pci_state.config_data[0] + PPB_PM_CAP + 4;
+    const u8 was = u8(old_data >> (8 * (PPB_PM_CAP + 4 - address)));
+    if ((*state & 3) == 1 || (*state & 3) == 2)
+      *state = u8((*state & ~3) | (was & 3));
+  }
+
   // Asserting the secondary reset resets every device behind the bridge.
   if (address <= PPB_BRIDGE_CONTROL && PPB_BRIDGE_CONTROL < end) {
     const int shift = 8 * (PPB_BRIDGE_CONTROL - address);

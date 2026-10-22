@@ -42,14 +42,19 @@ static const pci_bridge_config chips[] = {
     // 13.1.32; the AA, revisions 00h-02h, has no capability list).
     {"dec21152", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0x0001,
      nullptr, 0, nullptr},
-    {"dec21153", "DECchip 21153", 0x1011, 0x0025, 0x01, true, true, 0x7e02,
+    // The 21154 (data sheet 278108-002, 15.1.32-15.1.36): PM 1.0, no D1/D2,
+    // no PME# from any state, PMC 0001h. No data sheet for the 21153 is at
+    // hand (Intel published none that is online), so its row takes the
+    // 21154's values, the part it is closest to; revisit if one turns up.
+    {"dec21153", "DECchip 21153", 0x1011, 0x0025, 0x01, true, true, 0x0001,
      nullptr, 0, nullptr},
-    {"dec21154", "DECchip 21154", 0x1011, 0x0026, 0x02, true, true, 0x7e02,
+    {"dec21154", "DECchip 21154", 0x1011, 0x0026, 0x02, true, true, 0x0001,
      nullptr, 0, nullptr},
     {"de602", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0x0001,
      "de602_port", 2, "DE602-AA"},
-    // Revision unknown: the console only matches "Intel 21154-*E".
-    {"de602b", "Intel 21154", 0x8086, 0xb154, 0x00, true, true, 0x7e02,
+    // Revision unknown: the console only matches "Intel 21154-*E". Built on
+    // the 21154, so its power management is the 21154's (PMC 0001h).
+    {"de602b", "Intel 21154", 0x8086, 0xb154, 0x00, true, true, 0x0001,
      "de602b_port", 2, "DE602-B*"},
 };
 

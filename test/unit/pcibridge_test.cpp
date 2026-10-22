@@ -298,6 +298,25 @@ static void test_header() {
   CHECK_EQ(cfg_rd(&b, 0xe0, 16), 0x0003); // the power state alone
   cfg_wr(&b, 0xe0, 16, 0);
 
+  // The 21153, 21154 and DE602-B give the 21154's power management (data
+  // sheet 15.1.34-15.1.35): PM 1.0, no D1/D2, no PME#. D1 and D2 are not
+  // implemented, so writing them leaves the power state alone.
+  for (const char *name : {"dec21153", "dec21154", "de602b"}) {
+    CTestBridge pm(nullptr, 5, name);
+    CHECK_EQ(cfg_rd(&pm, 0xdc, 32), 0x00010001);
+    CHECK_EQ(cfg_rd(&pm, 0xde, 16), 0x0001);
+    cfg_wr(&pm, 0xe0, 16, 0xffff);
+    CHECK_EQ(cfg_rd(&pm, 0xe0, 16), 0x0003); // D3, PME_En stays 0
+    cfg_wr(&pm, 0xe0, 16, 0x0001);
+    CHECK_EQ(cfg_rd(&pm, 0xe0, 16), 0x0003); // D1 ignored
+    cfg_wr(&pm, 0xe0, 16, 0x0002);
+    CHECK_EQ(cfg_rd(&pm, 0xe0, 16), 0x0003); // D2 ignored
+    cfg_wr(&pm, 0xe0, 16, 0);
+    CHECK_EQ(cfg_rd(&pm, 0xe0, 16), 0x0000);
+    cfg_wr(&pm, 0xe0, 16, 0x0001);
+    CHECK_EQ(cfg_rd(&pm, 0xe0, 16), 0x0000);
+  }
+
   // A 21050 has no capabilities, and its status says so (PCI 2.2 6.2.3).
   CTestBridge old(nullptr, 4, "dec21050");
   CHECK_EQ(cfg_rd(&old, 0x06, 16), 0x0280);
