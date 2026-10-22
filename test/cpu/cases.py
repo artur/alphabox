@@ -742,9 +742,6 @@ def g_fix(b):
     b.trap_check(vector=0x700, exc_addr=at, known=(0, MT_FPCR_REF))
 
 
-MB18_REF = "cpu-fidelity: 18.4C00 is OPCDEC, ARM C.13 makes it an MB"
-
-
 def g_misc(b):
     b.begin("AMASK #-1 and #0xff")
     b.load(1, M64)
@@ -767,11 +764,11 @@ def g_misc(b):
         b.emit(mfc(A.MISC[nm]))
         b.trap_check()
     # ARM C.13: the reserved 18.4800 and 18.4C00 must act as MB.
-    for code, known in ((0x4800, None), (0x4C00, (1, MB18_REF))):
+    for code in (0x4800, 0x4C00):
         b.begin("18.%04X (reserved barrier)" % code)
         b.trap_clear()
         b.emit(mfc(code))
-        b.trap_check(known=known)
+        b.trap_check()
     # RC/RS: Ra <- intr_flag, then clear/set it (ARM 4.12).
     b.begin("RS, RS, RC, RC")
     b.emit(mfc(A.MISC["RS"], 7, R31))

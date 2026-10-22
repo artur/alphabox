@@ -441,6 +441,16 @@ differences) and on the ES47 with two, Windows 2000 RC2 on two
 processors, and SRM on four (interpreter, JIT and `JIT_VERIFY`: 87
 million compiled blocks, 0 mismatches) all ran as before.
 
+**The reserved barriers `18.4800` and `18.4C00`** (CPU-06). ARM C.13
+reserves them for weaker memory barriers, and until those are defined
+they "must operate as a Memory Barrier instruction (MB 18.4000)".
+`18.4800` flushed the instruction cache and the ITB and fenced nothing,
+and `18.4C00` took OPCDEC. Both are `MB` now, in both engines. `DO_IMB`,
+which only `18.4800` ran, is gone, and with it the line here that said
+`IMB` invalidates the ITB: `CALL_PAL IMB` is the PALcode's, which flushes
+the instruction cache with `HW_MTPR IC_FLUSH` (the interpreter's native
+OpenVMS routine does the same) and leaves the ITB alone.
+
 ### Smaller ones
 
 | What | Where | Consequence |
@@ -448,13 +458,10 @@ million compiled blocks, 0 mismatches) all ran as before.
 | `VA_FORM` is derived from the VPTE address on a double TB miss, where the HRM says the faulting address | `AlphaCPU.cpp`, `virt2phys` VPTE branch | Latent: shipping PALcode uses VA+PTBR, so nothing observed. New firmware reading `VA_FORM` there would compute the wrong page-table address |
 | `lock_flag` is not cleared by `CALL_PAL REI` | `AlphaCPU_vmspal.cpp`, `cpu_pal.hpp` | Every real preemption reaches REI through an exception, which does clear it, so only a deliberate `LDx_L; REI; STx_C` sees it |
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
-| Reserved barrier code point `18.4C00` is OPCDEC, where ARM App. C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18 | Only hand-written barrier tests |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
-| `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
-| The reserved barrier code point `18.4800` flushes the instruction cache and the ITB and is no memory barrier; ARM C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18, `DO_IMB` | As for `18.4C00` above (CPU-06) |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need

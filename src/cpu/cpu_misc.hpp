@@ -311,12 +311,3 @@
 #define DO_WH64 ;    /* write hint: no effect */
 #define DO_WH64EN ;  /* write hint enable: no effect */
 
-// IMB (Instruction Memory Barrier): ensure instruction fetch observes prior
-// stores. Architecturally this invalidates any stale I-cache state visible to
-// this CPU.
-#define DO_IMB                                                                 \
-  do {                                                                         \
-    JIT_FLUSH_CAUSE(EPOCH_IMB);                                                \
-    flush_icache();                                                            \
-    tbia(ACCESS_EXEC);                                                         \
-  } while (0)

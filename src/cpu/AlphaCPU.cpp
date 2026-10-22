@@ -1984,8 +1984,9 @@ _next_instruction:
       OP(MB, NOP);
     case 0x4400:
       OP(WMB, NOP);
-    case 0x4800:
-      OP(IMB, NOP);
+    case 0x4800: // reserved for weaker barriers; until defined they "must
+    case 0x4C00: // operate as a Memory Barrier instruction" (ARM C.13)
+      OP(MB, NOP);
     case 0x8000:
       OP(FETCH, NOP);
     case 0xA000:

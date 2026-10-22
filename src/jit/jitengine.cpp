@@ -621,6 +621,8 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     case 0x0400: // TRAPB, EXCB
     case 0x4000:
     case 0x4400:
+    case 0x4800: // reserved barriers: they act as MB (ARM C.13)
+    case 0x4C00:
       return OP_MFENCE; // MB, WMB
     case 0x8000:
     case 0xA000:
