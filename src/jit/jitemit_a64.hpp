@@ -2812,6 +2812,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   const uint32_t off_body = (uint32_t)((char *)&b->jit_body - (char *)b);
   const uint32_t off_tag = (uint32_t)((char *)&b->tag - (char *)b);
   const uint32_t off_vgen = (uint32_t)((char *)&b->vgen - (char *)b);
+  const uint32_t off_cm = (uint32_t)((char *)&b->cm - (char *)b);
   // Cached direct link (x9 = next PC): tail into a live successor's body --
   // compiled, mapping this PC, and validated under the current epoch --
   // else record a link-patch request and fall through to lbl.
@@ -2850,6 +2851,15 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_tag));
       a.cmp(a64::x2, a64::x9);
       a.b_ne(nxt);
+      if (!(b->tag & 1)) { // a native target of this block's mode (see the
+                           // x86-64 emitter's emit_chain)
+        Label pal_tgt = a.new_label();
+        a.tbnz(a64::x9, imm(0), pal_tgt);
+        a.ldrb(a64::w2, a64::ptr(a64::x0, (int32_t)off_cm));
+        a.cmp(a64::w2, imm(b->cm));
+        a.b_ne(nxt);
+        a.bind(pal_tgt);
+      }
       a.ldr(a64::x2, a64::ptr(a64::x0, (int32_t)off_vgen));
       a.cmp(a64::x2, a64::x10);
       a.b_ne(nxt);
@@ -3069,9 +3079,10 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     Label exit_chain = a.new_label();
     a64_emit_gate(a, m_off, exit_chain);
     // Inline computed-jump cache (m_ind_cache, through the cpu's
-    // m_jit_ind_base): hash the target, match tag + current epoch, tail into
-    // the body. A PALmode target (SDE gate), a miss or an empty slot takes the
-    // jit_indirect helper, which also fills the cache.
+    // m_jit_ind_base): hash the target, match tag (target | the live mode,
+    // see ind_cache_fill) + current epoch, tail into the body. A PALmode
+    // target (SDE gate), a miss or an empty slot takes the jit_indirect
+    // helper, which also fills the cache.
     {
       Label slow = a.new_label();
       a.tst(a64::x9, imm(1));
@@ -3080,8 +3091,10 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.lsr(a64::x1, a64::x9, imm(2));
       a.and_(a64::x1, a64::x1, imm((uint64_t)((1u << kIndBits) - 1)));
       a.add(a64::x1, a64::x10, a64::x1, a64::lsl(5)); // the entry
-      a.ldr(a64::x2, a64::ptr(a64::x1, 0));           // tag
-      a.cmp(a64::x2, a64::x9);
+      a.ldr(a64::w3, a64_cpu_field(a, m_off.state_cm, 2));
+      a.orr(a64::x3, a64::x9, a64::x3);     // the key: target | mode
+      a.ldr(a64::x2, a64::ptr(a64::x1, 0)); // tag
+      a.cmp(a64::x2, a64::x3);
       a.b_ne(slow);
       a.ldr(a64::x2, a64_cpu_field(a, m_off.jit_epoch, 3)); // epoch
       a.ldr(a64::x3, a64::ptr(a64::x1, 8));                 // vgen

@@ -227,10 +227,11 @@ public:
     uint64_t phys;    // start physical PC (source bytes for compilation)
     uint32_t asn;     // address space number (key; ignored when asm_global)
     uint8_t cm;       // the processor mode this block was translated for: part
-                      // of the key, because whether the mode may execute the
-                      // page was settled once, when it was translated. A
-                      // global (ASM) page is global across address spaces, not
-                      // across modes.
+                      // of the key (key_matches), because whether the mode
+                      // may execute the page was settled once, when it was
+                      // translated. A global (ASM) page is global across
+                      // address spaces, not across modes; a PALmode block's
+                      // key has no mode.
     bool asm_global;  // global (ASM) page: matches any ASN, like the icache
     uint32_t n_instr; // instructions in the straight-line block
     bool valid;
@@ -541,14 +542,29 @@ public:
     return (virt_pc >> 2) & kTraceIndexMask;
   }
 
-  // Virtual+ASN keyed: no translation on the dispatch hot path. A global (ASM)
-  // block matches any ASN, mirroring the icache's hit rule. flush_gen-stale
-  // blocks miss here; revalidate_flushed() resurrects them after a source-hash
-  // check.
+  // The block key, and the one rule every path that finds a block follows:
+  // lookup() (the dispatcher, the chain fills, jit_indirect and through it
+  // AArch64's computed-jump cache), record() and revalidate_flushed(). A
+  // block is the code at a virtual PC, in an address space unless its page
+  // is global (ASM, the icache's hit rule), in the processor mode it was
+  // translated in: whether that mode may execute the page was settled then
+  // (HRM 6.8.2, Table 6-8), and its chained exits were linked to blocks of
+  // the same mode. A PALmode block (PC bit 0) has no mode in its key:
+  // PALmode fetches are physical and checked by no mode (HRM 6.2), so one
+  // block serves PALcode entered from every mode.
+  static inline bool key_matches(const JitBlock &b, uint64_t virt_pc,
+                                 uint32_t asn, uint8_t cm) {
+    return b.tag == virt_pc && (b.asm_global || b.asn == asn) &&
+           ((virt_pc & 1) || b.cm == cm);
+  }
+
+  // Virtual+ASN+mode keyed: no translation on the dispatch hot path.
+  // flush_gen-stale blocks miss here; revalidate_flushed() resurrects them
+  // after a source-hash check.
   inline JitBlock *lookup(uint64_t virt_pc, uint32_t asn, uint8_t cm) {
     JitBlock &b = m_blocks[index_of(virt_pc)];
-    return (b.valid && b.flush_gen == m_flush_gen && b.tag == virt_pc &&
-            b.cm == cm && (b.asm_global || b.asn == asn))
+    return (b.valid && b.flush_gen == m_flush_gen &&
+            key_matches(b, virt_pc, asn, cm))
                ? &b
                : nullptr;
   }
@@ -782,11 +798,14 @@ public:
   // (jit_note_asn_change), so it can't be hit from another address space.
   // Only global code (ASM pages, and the superpage, which virt2phys reports
   // as global) would be left otherwise: all user-mode code would miss.
+  // A mode change moves no epoch, so the mode is in the tag: a native
+  // target's low two bits are clear, and the entry's tag is target | mode,
+  // which compiled code compares with the target ORed with the live mode.
   inline void ind_cache_fill(uint64_t target, JitBlock *b) {
-    if (!b->jit_body || (target & 1))
+    if (!b->jit_body || (target & 3))
       return;
     IndCacheEntry &e = m_ind_cache[(target >> 2) & ((1u << kIndBits) - 1)];
-    e.tag = target;
+    e.tag = target | (b->cm & 3);
     e.vgen = b->vgen;
     e.body = b->jit_body;
   }
@@ -952,11 +971,11 @@ private:
   uint64_t m_epoch_own = 0; // the epoch's home when no epoch_store was given
   uint64_t &m_epoch; // m_itb_gen + m_flush_gen, kept in step with both so
                      // compiled chain guards load one word
-  // Inline computed-jump cache (a64 emitter): target PC -> chained body of the
-  // block validated for it, valid while its epoch (m_itb_gen + m_flush_gen at
-  // validation, kept in vgen) is current; any ITB invalidate, ASN change or
-  // flush bumps the epoch. Compiled code reaches it through
-  // CAlphaCPU::m_jit_ind_base. Filled by jit_indirect,
+  // Inline computed-jump cache (a64 emitter): target PC and mode (tag =
+  // target | cm) -> chained body of the block validated for them, valid while
+  // its epoch (m_itb_gen + m_flush_gen at validation, kept in vgen) is
+  // current; any ITB invalidate, ASN change or flush bumps the epoch. Compiled
+  // code reaches it through CAlphaCPU::m_jit_ind_base. Filled by jit_indirect,
   // cleared by reclaim_code (it frees the bodies).
   struct IndCacheEntry {
     uint64_t tag, vgen;
@@ -1192,7 +1211,7 @@ private:
                                        // misses by cause
   uint64_t m_bail_link, m_jmp_attempt,
       m_jmp_hit; // windowed: link-miss bails, jit_indirect attempts/hits
-  uint64_t m_fresh_cold, m_fresh_tag, m_fresh_asn, m_fresh_phys,
+  uint64_t m_fresh_cold, m_fresh_tag, m_fresh_asn, m_fresh_mode, m_fresh_phys,
       m_fresh_hash; // windowed: record() step-4 fresh-compile reason
   uint64_t m_trace_formed, m_trace_entered, m_trace_exits,
       m_trace_stale; // windowed: trace tier activity (M1+)

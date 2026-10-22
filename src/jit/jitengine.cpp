@@ -1102,7 +1102,8 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
   m_tsc_compiled = m_tsc_interp = 0;
   m_tsc_window_start = jit_rdtsc();
   m_bail_link = m_jmp_attempt = m_jmp_hit = 0;
-  m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_phys = m_fresh_hash = 0;
+  m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_mode = m_fresh_phys =
+      m_fresh_hash = 0;
   m_trace_formed = m_trace_entered = m_trace_exits = m_trace_stale = 0;
   memset(m_term_op, 0, sizeof(m_term_op));
   memset(m_pal_func, 0, sizeof(m_pal_func));
@@ -1160,8 +1161,8 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   // Still valid + matching + flush-fresh: nothing flushed us since last seen,
   // so the code can't have changed. (flush_gen-stale must NOT take this no-hash
   // path -- post-IMB needs the hash.)
-  if (b.valid && b.flush_gen == m_flush_gen && b.tag == virt_pc &&
-      (b.asm_global || b.asn == asn) && b.phys == phys_pc) {
+  const bool key = key_matches(b, virt_pc, asn, cm);
+  if (b.valid && b.flush_gen == m_flush_gen && key && b.phys == phys_pc) {
     b.n_instr = n_instr;
     return &b;
   }
@@ -1175,16 +1176,13 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   // Only the count survives: the record below is otherwise the fresh one
   // (no links, no prefix, nothing derived from the old bytes).
   const uint32_t kept_runs =
-      (!b.code && b.tag == virt_pc && b.cm == cm && b.phys == phys_pc &&
-       (b.asm_global || b.asn == asn))
-          ? b.cold_runs
-          : 0;
+      (!b.code && key && b.phys == phys_pc) ? b.cold_runs : 0;
   // Revalidate: a flush dropped the block but kept the compiled code. If the
   // bytes the prefix was compiled from still hash the same, reuse it instead of
   // recompiling. Hash over hash_len, NOT the caller's n_instr --
   // interrupt-truncated cold passes make n vary for the same block.
-  if (b.code && b.tag == virt_pc && (b.asm_global || b.asn == asn) &&
-      b.phys == phys_pc && b.src_sum == src_hash(dram + phys_pc, b.hash_len)) {
+  if (b.code && key && b.phys == phys_pc &&
+      b.src_sum == src_hash(dram + phys_pc, b.hash_len)) {
     b.valid = true;
     b.flush_gen = m_flush_gen;
     b.n_instr = n_instr;
@@ -1211,6 +1209,8 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
     m_fresh_tag++; // a DIFFERENT block aliases this slot (cache-size lever)
   else if (!(b.asm_global || b.asn == asn))
     m_fresh_asn++; // same PC, different process (needs asn-in-index)
+  else if (!key)
+    m_fresh_mode++; // same PC, another processor mode
   else if (b.phys != phys_pc)
     m_fresh_phys++; // page remap
   else
@@ -1219,8 +1219,8 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   // The audit again (see revalidate_flushed): source words that changed with
   // the code-page map reporting nothing written since they were last known
   // good is a write that nothing told the map about.
-  if (m_nopflush_clean && m_code_map && b.code && b.tag == virt_pc &&
-      b.phys == phys_pc && m_code_map->write_gen() == b.code_gen) {
+  if (m_nopflush_clean && m_code_map && b.code && key && b.phys == phys_pc &&
+      m_code_map->write_gen() == b.code_gen) {
     static int n = 0;
     if (n++ < 20)
       printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
@@ -1274,9 +1274,10 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
   // flush_non_global() drops (valid cleared). The source-hash below is the
   // guard, matching record()'s revalidate path so don't require valid flags;
   // requiring it forced every flush_non_global'd block through an interpret
-  // pass. tag/asn/phys/hash still guard collisions, cross-process aliasing,
-  // page remaps, and self-modifying code.
-  if (!(b.code && b.tag == virt_pc && (b.asm_global || b.asn == asn)))
+  // pass. The key (tag, asn, mode) and phys/hash still guard collisions,
+  // cross-process aliasing, another mode, page remaps, and self-modifying
+  // code.
+  if (!(b.code && key_matches(b, virt_pc, asn, cm)))
     return nullptr;
 #ifdef JIT_STATS
   ++m_rev_calls;
@@ -4092,6 +4093,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   const uint32_t off_body = (uint32_t)((char *)&b->jit_body - (char *)b);
   const uint32_t off_tag = (uint32_t)((char *)&b->tag - (char *)b);
   const uint32_t off_vgen = (uint32_t)((char *)&b->vgen - (char *)b);
+  const uint32_t off_cm = (uint32_t)((char *)&b->cm - (char *)b);
   // Cached direct link: tail straight into our cached successor's body if it's
   // still live
   // -- compiled (jit_body != 0, cleared on flush/recompile) AND still maps this
@@ -4138,6 +4140,18 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
       a.mov(x86::rdx, x86::qword_ptr(x86::rax, off_tag)); // succ->tag
       a.cmp(x86::rdx, x86::r10);
       a.jne(nxt); // not this exit's target
+      if (!(b->tag & 1)) {
+        // The key's mode (CJitEngine::key_matches): a native block runs only
+        // in the mode of its key, so a native target must be of that mode. A
+        // slot is re-recorded for another mode under the same tag and epoch,
+        // and the links to it stay. A PALmode target has no mode.
+        Label pal_tgt = a.new_label();
+        a.test(x86::r10, imm(1));
+        a.jnz(pal_tgt);
+        a.cmp(x86::byte_ptr(x86::rax, off_cm), imm(b->cm));
+        a.jne(nxt);
+        a.bind(pal_tgt);
+      }
       a.cmp(x86::qword_ptr(x86::rax, off_vgen), x86::r11);
       a.jne(nxt);      // stale: revalidate via dispatcher
       a.jmp(x86::rcx); // HIT: tail in (shared frame)
@@ -4753,17 +4767,18 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
                          : 0.0);
   }
   // Fresh-compile reason (per window): tag=cache aliasing, asn=cross-process
-  // same-PC, phys=remap, hash=self-mod, cold=genuine new/warmup. Sums to the
-  // window's `recorded` growth (the churn cost).
-  const uint64_t fresh =
-      m_fresh_tag + m_fresh_asn + m_fresh_phys + m_fresh_hash + m_fresh_cold;
+  // same-PC, mode=same PC in another mode, phys=remap, hash=self-mod,
+  // cold=genuine new/warmup. Sums to the window's `recorded` growth (the
+  // churn cost).
+  const uint64_t fresh = m_fresh_tag + m_fresh_asn + m_fresh_mode +
+                         m_fresh_phys + m_fresh_hash + m_fresh_cold;
   if (fresh)
-    printf("[JIT][STATS][CPU%d] fresh-cause: tag %llu | asn %llu | phys %llu | "
-           "hash %llu | cold %llu (of %llu recompiled)\n",
+    printf("[JIT][STATS][CPU%d] fresh-cause: tag %llu | asn %llu | mode %llu | "
+           "phys %llu | hash %llu | cold %llu (of %llu recompiled)\n",
            m_cpu_id, (unsigned long long)m_fresh_tag,
-           (unsigned long long)m_fresh_asn, (unsigned long long)m_fresh_phys,
-           (unsigned long long)m_fresh_hash, (unsigned long long)m_fresh_cold,
-           (unsigned long long)fresh);
+           (unsigned long long)m_fresh_asn, (unsigned long long)m_fresh_mode,
+           (unsigned long long)m_fresh_phys, (unsigned long long)m_fresh_hash,
+           (unsigned long long)m_fresh_cold, (unsigned long long)fresh);
   if (m_trace_formed || m_trace_entered)
     printf("[JIT][STATS][CPU%d] traces: formed %llu | entered %llu | exits "
            "%llu | stale %llu (windowed)\n",
@@ -5157,7 +5172,8 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
   m_tsc_window_start = jit_rdtsc(); // next window's split denominator starts
                                     // after this report's I/O
   m_bail_link = m_jmp_attempt = m_jmp_hit = 0;
-  m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_phys = m_fresh_hash = 0;
+  m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_mode = m_fresh_phys =
+      m_fresh_hash = 0;
   m_trace_formed = m_trace_entered = m_trace_exits = m_trace_stale = 0;
   const auto stat_end = std::chrono::steady_clock::now();
   m_stat_wall_last_ns =

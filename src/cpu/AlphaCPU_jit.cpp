@@ -464,6 +464,10 @@ void CAlphaCPU::jit_run(int budget) {
     }
     const u64 start_virt = state.pc;
     const u32 start_asn = (u32)state.asn;
+    // The mode the start's fetch was checked in: the block's key (see
+    // CJitEngine::key_matches), for the lookup and for the record after the
+    // span, which may itself change the mode.
+    const u8 start_cm = (u8)state.cm;
 
     // run_until_below(): an interpreted span ends at the first
     // non-sequential PC and a compiled block leaves at its jump, so the
@@ -702,12 +706,11 @@ void CAlphaCPU::jit_run(int budget) {
     // Hot path: virtual+ASN lookup, phys-validated (skipped on a translation
     // miss).
     CJitEngine::JitBlock *b =
-        have_phys ? m_jit->lookup(start_virt, start_asn, (uint8_t)state.cm)
-                  : nullptr;
+        have_phys ? m_jit->lookup(start_virt, start_asn, start_cm) : nullptr;
     if (have_phys && !b) // lazy-flushed survivor? hash-revalidate in place (no
                          // interpreted pass)
-      b = m_jit->revalidate_flushed(start_virt, start_asn, (uint8_t)state.cm,
-                                    start_phys, (const uint8_t *)dram_ptr);
+      b = m_jit->revalidate_flushed(start_virt, start_asn, start_cm, start_phys,
+                                    (const uint8_t *)dram_ptr);
 
     // A valid block whose phys no longer matches = a page remap the virtual key
     // can't see. The cold path below re-records it; log it -- it's the smoking
@@ -1479,8 +1482,8 @@ void CAlphaCPU::jit_run(int budget) {
     // false).
     if (have_phys && !src_stale && state.pc != expected) {
       CJitEngine::JitBlock *nb =
-          m_jit->record(start_virt, start_phys, start_asn, (uint8_t)state.cm,
-                        start_asm, n, (const uint8_t *)dram_ptr);
+          m_jit->record(start_virt, start_phys, start_asn, start_cm, start_asm,
+                        n, (const uint8_t *)dram_ptr);
       // Compile only once the block has proven hot (see compile_after()) --
       // except the stall loop, which is only of use to us interpreted.
       if (!(g_stall_skip && start_virt == m_stall_pc) && !nb->compiled &&

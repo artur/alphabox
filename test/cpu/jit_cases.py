@@ -34,9 +34,6 @@ from image import R_PASS, R_SCR, R_TR
 
 M64 = (1 << 64) - 1
 UNALIGNED_REF = "cpu-fidelity: unaligned data accesses do not trap"
-# Findings of the JIT audit (lab/legacy-audit/jit/AUDIT.md), KNOWN on the
-# compiled pass until they are fixed.
-JIT01 = "JIT-01: a chained block runs in a mode it was not looked up for"
 
 # Scratch for these cases: page 2 from 0x1000 (KSEG, kernel read/write),
 # away from the other groups' bytes; R_SCR + JSCR is its address.
@@ -935,7 +932,7 @@ def g_jitmode(b):
     b.li(16, y)
     link_r17(b, 1)
     b.emit(call_pal(0x02))
-    b.trap_check(vector=0x480, exc_addr=x, known=(0, JIT01, "compiled"))
+    b.trap_check(vector=0x480, exc_addr=x)
 
 
 # --- jitsmc: code rewritten under a compiled block -------------------------------------

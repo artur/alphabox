@@ -756,21 +756,37 @@ all of them, and so do both back ends under every JIT switch, except
 for two divergences of compiled code, KNOWN on the oracle's last pass
 until they were fixed:
 
-- **A chained block runs in a mode it was not looked up for** (JIT-01,
-  both back ends). Blocks are keyed by the processor mode they were
-  translated in, because that is when the mode's right to execute the
-  page was settled, but the lookup that resurrects a block after a flush
-  does not compare the mode, nor does AArch64's inline computed-jump
-  cache. A block compiled in kernel mode is then run in user mode, and
-  its chained exits enter what they linked to in kernel mode: user mode
-  executes a page only kernel mode may, with no `IACV` (HRM Table 6-8).
-  `ALPHABOX_JIT_CHAIN=0` closes it. Only a virtual address executed in
-  two modes, with a successor the second mode may not execute, shows it;
-  correct guests never branch into code their mode cannot run.
+- **A chained block ran in a mode it was not looked up for** (JIT-01,
+  both back ends, closed 2026-10-22). Blocks are keyed by the processor
+  mode they were translated in, because that is when the mode's right to
+  execute the page was settled, but the lookup that resurrected a block
+  after a flush did not compare the mode, nor did AArch64's inline
+  computed-jump cache. A block compiled in kernel mode was then run in
+  user mode, and its chained exits entered what they linked to in kernel
+  mode: user mode executed a page only kernel mode may, with no `IACV`
+  (HRM Table 6-8). Only a virtual address executed in two modes, with a
+  successor the second mode may not execute, showed it; correct guests
+  never branch into code their mode cannot run. Now one rule
+  (`CJitEngine::key_matches`) decides on every path that finds a block:
+  the lookup, the record after an interpreted span (under the mode the
+  span started in) and the re-lookup after a flush. The chain fills and
+  `jit_indirect` go through the lookup; a chained link into a block's
+  cache slot compares that block's mode with its own, because a slot is
+  re-recorded for another mode under the same address and epoch and the
+  links to it stay; and the computed-jump cache keeps the mode in its
+  tag and compares it with the live one. A PALmode block has no mode in
+  its key (JIT-07): PALmode fetches are physical and checked by no mode
+  (HRM 6.2), and a PAL entry reached from another mode used to miss the
+  lookup and be re-hashed on every dispatch. `jitmode` passes on both
+  back ends; SRM's console log is unchanged on the AArch64, `JIT_VERIFY`
+  (107 million compiled blocks, 0 mismatches) and x86-64 lanes; OpenVMS
+  8.4 logged in on the ES40 and on the DS20E with two processors (BACKUP
+  and DIFFERENCES, no differences); Windows 2000 RC2 reached its desktop
+  on one processor and on two.
 - **AArch64's inline `HW_ST` did not tell the code-page map** (JIT-02,
-  closed 2026-10-22). The physical `HW_ST` that compiled PALcode
-  performs inline stored to DRAM without reporting the write, where the
-  helper (and the x86-64 emitter, which always calls it) does. An
+  closed 2026-10-22). Compiled PALcode stored a physical `HW_ST` to
+  DRAM inline without reporting the write, where the helper (and the
+  x86-64 emitter, which always calls it) does. An
   `IC_FLUSH` after such a store into compiled code was skipped as having
   nothing to flush, and the old instructions ran (HRM 5.2.17). The
   inline store now tests the map's bit for its page first, and a store
