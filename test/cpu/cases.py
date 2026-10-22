@@ -706,7 +706,6 @@ def g_fix(b):
 
 
 MB18_REF = "cpu-fidelity: 18.4C00 is OPCDEC, ARM C.13 makes it an MB"
-CALLPAL_EXC_REF = "CPU-02: CALL_PAL writes EXC_ADDR"
 
 
 def g_misc(b):
@@ -789,7 +788,7 @@ def g_misc(b):
     at = b.va()
     b.emit(call_pal(0x83))
     b.store(0, "linkage (R23)", at + 4)
-    b.store(1, "EXC_ADDR inside CALL_PAL", last, known=(at, CALLPAL_EXC_REF))
+    b.store(1, "EXC_ADDR inside CALL_PAL", last)
     b.emit(mem(OP["LDQ"], 0, R_TR, TR_COUNT))
     b.store(0, image.TRAP_COUNT, 1)
     b.expected_traps += 1

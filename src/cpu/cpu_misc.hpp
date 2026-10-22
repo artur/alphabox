@@ -52,9 +52,13 @@
     state.r[(state.sde ? 32 : 0) + 23] = state.pc & ~U64(0x2);                 \
   } while (0)
 
+/* CALL_PAL is not an exception: EXC_ADDR keeps the PC of the last exception
+   or interrupt (HRM 5.2.7: it is updated "when it encounters an exception or
+   interrupt"; HRM 6.8: CALL_PAL entries and exceptions are two classes). The
+   return address goes to R23 alone (HRM 6.8.1). The JIT's OP_CALL_PAL does
+   the same. */
 #define ENTER_NATIVE_CALL_PAL()                                                \
   do {                                                                         \
-    state.exc_addr = state.current_pc;                                         \
     SAVE_CALL_PAL_R23();                                                       \
     set_pc(state.pal_base | (1 << 13) | ((function & 0x80) << 5) |             \
            ((function & 0x3f) << 6) | 1);                                      \

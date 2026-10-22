@@ -1916,8 +1916,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
-    // CALL_PAL: R23 (shadow-aware) = return address, EXC_ADDR = this PC,
-    // PC = pal_base | entry offset; privileged funcs OPCDEC in user mode.
+    // CALL_PAL: R23 (shadow-aware) = return address, PC = pal_base | entry
+    // offset; privileged funcs OPCDEC in user mode. EXC_ADDR is left alone:
+    // CALL_PAL is not an exception (ENTER_NATIVE_CALL_PAL).
     if (op == OP_CALL_PAL) {
       const uint32_t func = ins & 0x1FFFFFFF;
       const uint64_t cpc = b->tag + 4 * (uint64_t)i;
@@ -1934,8 +1935,6 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b(done);
       }
       a.bind(do_vector);
-      a.mov(x11, imm(cpc));
-      a.str(x11, fld(m_off.exc_addr, 3));
       a.ldrb(w11, fld(m_off.sde, 0));
       a.lsl(w11, w11, imm(5));
       a.add(w11, w11, imm(23)); // R23 index: 23, or 55 if SDE

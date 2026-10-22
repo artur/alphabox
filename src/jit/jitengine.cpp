@@ -247,7 +247,7 @@ enum SafeOp {
   OP_JMP,    // JMP/JSR/RET (0x1a): Ra = PC+4; PC = Rb & ~3 (computed target)
   OP_HW_RET, // HW_RET (0x1e), PALmode: PC = Rb & ~2 (computed jump, the PAL
              // return)
-  OP_CALL_PAL, // CALL_PAL (0x00): save R23/exc_addr; PC = pal_base | entry
+  OP_CALL_PAL, // CALL_PAL (0x00): save R23; PC = pal_base | entry
                // offset
   // Branch-format terminators (contiguous; see is_branch). Conditional on Ra,
   // plus BR/BSR.
@@ -3207,7 +3207,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     }
 
     // CALL_PAL (0x00): vector to the PALcode entry, saving the return address
-    // in R23 and the faulting PC in EXC_ADDR (per ENTER_NATIVE_CALL_PAL).
+    // in R23. EXC_ADDR is left alone: CALL_PAL is not an exception
+    // (ENTER_NATIVE_CALL_PAL).
     if (op == OP_CALL_PAL) {
       const uint32_t func = ins & 0x1FFFFFFF;
       const uint64_t cpc = b->tag + 4 * (uint64_t)i; // CALL_PAL address
@@ -3230,8 +3231,6 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.jmp(done); // trap path exits (does not chain)
       }
       a.bind(do_vector);
-      a.mov(x86::rax, imm(cpc)); // EXC_ADDR = CALL_PAL address
-      a.mov(x86::qword_ptr(x86::rbp, m_off.exc_addr), x86::rax);
       a.movzx(x86::eax, x86::byte_ptr(x86::rbp, m_off.sde)); // SDE (0/1)
       a.shl(x86::eax, imm(5));                               // * 32
       a.add(x86::eax, imm(23)); // R23 index: 23, or 55 if SDE

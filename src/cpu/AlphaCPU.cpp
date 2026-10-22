@@ -902,28 +902,29 @@ void CAlphaCPU::write_fpcr_arch(u64 arch_val) {
 static const bool s_trace_icflush = getenv("ALPHABOX_TRACE_ICFLUSH") != nullptr;
 static std::map<uint64_t, uint64_t> s_icflush_pc;
 static std::mutex s_icflush_lock;
-static std::map<uint64_t, uint64_t> s_icflush_from; // EXC_ADDR at the flush
+static std::map<uint64_t, uint64_t> s_icflush_from; // R23 at the flush
 void CAlphaCPU::note_ic_flush_pc() {
   if (!s_trace_icflush)
     return;
   std::lock_guard<std::mutex> g(s_icflush_lock);
   const bool first = s_icflush_pc[state.current_pc]++ == 0;
-  const bool first_from = s_icflush_from[state.exc_addr]++ == 0;
+  // The caller: the PALcode's R23, which a CALL_PAL loads with its return
+  // address (CALL_PAL does not write EXC_ADDR, HRM 5.2.7).
+  const u64 from = state.r[(state.sde ? 32 : 0) + 23] & ~U64(3);
+  const bool first_from = s_icflush_from[from]++ == 0;
   // First sighting of a caller: the words before its return address, so the
   // CALL_PAL (and what surrounds it) can be read. Firmware runs identity
   // mapped in low memory; anything else is skipped rather than translated.
-  if (first_from && dram_ptr && state.exc_addr < dram_size &&
-      state.exc_addr >= 48) {
-    printf("%%CPU-I-ICFLUSH: first flush entered from exc_addr %016" PRIx64
-           "\n",
-           state.exc_addr);
-    for (uint64_t a = state.exc_addr - 48; a < state.exc_addr + 16; a += 4) {
+  if (first_from && dram_ptr && from < dram_size && from >= 48) {
+    printf("%%CPU-I-ICFLUSH: first flush entered from R23 %016" PRIx64 "\n",
+           from);
+    for (uint64_t a = from - 48; a < from + 16; a += 4) {
       uint32_t w;
       memcpy(&w, (const char *)dram_ptr + a, 4);
       printf("%%CPU-I-ICFLUSH:   %s %08llx: %08x  op=%02x ra=%02x rb=%02x "
              "fn=%04x\n",
-             a == state.exc_addr - 4 ? "->" : "  ", (unsigned long long)a, w,
-             w >> 26, (w >> 21) & 31, (w >> 16) & 31, w & 0xffff);
+             a == from - 4 ? "->" : "  ", (unsigned long long)a, w, w >> 26,
+             (w >> 21) & 31, (w >> 16) & 31, w & 0xffff);
     }
   }
   // First sighting of a flushing PC: dump the words around it NOW, while the
@@ -965,8 +966,8 @@ void CAlphaCPU::dump_ic_flush_pcs() {
     printf("%%CPU-I-ICFLUSH:   %016llx  %llu (%.1f%%)\n",
            (unsigned long long)v[i].first, (unsigned long long)v[i].second,
            tot ? 100.0 * (double)v[i].second / (double)tot : 0.0);
-  // Who entered PALcode for it: EXC_ADDR at the flush is the return address
-  // of the CALL_PAL (or the trapped PC) that led there.
+  // Who entered PALcode for it: R23 at the flush is the return address of
+  // the CALL_PAL that led there.
   {
     std::vector<std::pair<uint64_t, uint64_t>> f(s_icflush_from.begin(),
                                                  s_icflush_from.end());
@@ -975,9 +976,9 @@ void CAlphaCPU::dump_ic_flush_pcs() {
                  const std::pair<uint64_t, uint64_t> &b) {
                 return a.second > b.second;
               });
-    printf("%%CPU-I-ICFLUSH: entered from %zu distinct EXC_ADDRs\n", f.size());
+    printf("%%CPU-I-ICFLUSH: entered from %zu distinct R23s\n", f.size());
     for (size_t i = 0; i < f.size() && i < 12; ++i)
-      printf("%%CPU-I-ICFLUSH:   exc_addr %016llx  %llu (%.1f%%)\n",
+      printf("%%CPU-I-ICFLUSH:   R23 %016llx  %llu (%.1f%%)\n",
              (unsigned long long)f[i].first, (unsigned long long)f[i].second,
              tot ? 100.0 * (double)f[i].second / (double)tot : 0.0);
   }
