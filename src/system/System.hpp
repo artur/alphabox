@@ -28,6 +28,7 @@
  */
 
 #include "Chipset.hpp"
+#include "InterruptLines.hpp"
 #include "Platform.hpp"
 #include "SystemComponent.hpp"
 #include <atomic>
@@ -218,9 +219,15 @@ public:
   u64 PCI_Phys(int pcibus, u32 address) {
     return m_chipset->pci_phys(pcibus, address);
   }
-  /// A device interrupt input changes level (Chipset::interrupt).
-  void interrupt(int number, bool assert) {
-    m_chipset->interrupt(number, assert);
+  /// `source` asserts or lets go of device interrupt input `number`, as
+  /// the board's interrupt map numbers it; `line` tells apart the requests
+  /// of one source (a PCI device's functions). The input is a wire the
+  /// board ORs from everything on it, and the chipset is told that OR
+  /// (InterruptLines.hpp, Chipset::interrupt).
+  void interrupt(int number, bool assert, const void *source, int line) {
+    m_irq_lines.drive(number, source, line, assert, [this](int n, bool level) {
+      m_chipset->interrupt(n, level);
+    });
   }
   /// One interval-timer period has elapsed (Chipset::interval_tick).
   void interval_tick() { m_chipset->interval_tick(); }
@@ -448,6 +455,8 @@ private:
   }
 
   CChipset *m_chipset = nullptr; ///< the board's chipset (Chipset.hpp)
+  /// What drives each of the chipset's device interrupt inputs (interrupt).
+  CInterruptLines m_irq_lines;
   /// The chipset's physical address mask (CChipset::phys_mask), kept here
   /// so the memory path masks with a member rather than a virtual call.
   u64 m_phys_mask = 0;

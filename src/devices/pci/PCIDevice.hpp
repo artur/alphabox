@@ -145,10 +145,6 @@ protected:
   int myPCIDev;
   class CPCIBridge *myBridge = nullptr;
 
-  /// The functions whose interrupt request is asserted (do_pci_interrupt).
-  std::mutex m_irq_mutex;
-  u8 m_irq_funcs = 0;
-
   u32 std_config_data[8][64];
   u32 std_config_mask[8][64];
   bool device_at[8];

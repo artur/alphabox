@@ -529,26 +529,16 @@ bool CPCIDevice::do_pci_interrupt(int func, bool asserted) {
   if (input < 0)
     return false; // no pin, or this slot has no interrupt wiring
 
-  // Functions of one device can share an input -- a board can wire them to
-  // one line (the ES47's embedded USB) -- and the line is then the OR of
-  // their requests: one function letting go must not drop another's.
-  bool level = asserted;
-  {
-    std::lock_guard<std::mutex> lk(m_irq_mutex);
-    if (asserted)
-      m_irq_funcs |= (u8)(1u << func);
-    else
-      m_irq_funcs &= (u8)~(1u << func);
-    for (int f = 0; f < 8 && !level; f++)
-      if (f != func && (m_irq_funcs & (1u << f)) && interrupt_input(f) == input)
-        level = true;
 #ifdef DEBUG_PCI_IRQ
-    printf("PCI-IRQ: %s.%d %s slot=%d bus=%d -> input %d (level %d)\n",
-           devid_string, func, asserted ? "ASSERT  " : "DEASSERT", myPCIDev,
-           myPCIBus, input, level);
+  printf("PCI-IRQ: %s.%d %s slot=%d bus=%d -> input %d\n", devid_string, func,
+         asserted ? "ASSERT  " : "DEASSERT", myPCIDev, myPCIBus, input);
 #endif
-    cSystem->interrupt(input, level);
-  }
+  // Each function is a request of its own. The input is the OR of every
+  // function and every device that reaches it (the functions of one device
+  // a board wires to one line, as the ES47's embedded USB; devices behind a
+  // bridge whose pins rotate onto the same one), and the system keeps that
+  // OR (CSystem::interrupt).
+  cSystem->interrupt(input, asserted, this, func);
   return true;
 }
 

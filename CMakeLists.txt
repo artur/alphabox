@@ -497,6 +497,12 @@ target_include_directories(eeprom93_test PRIVATE
     $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
 add_test(NAME eeprom93 COMMAND eeprom93_test)
 
+# The wire-OR of the chipset's interrupt inputs (CSystem::interrupt).
+add_executable(irqlines_test test/unit/irqlines_test.cpp)
+target_include_directories(irqlines_test PRIVATE src/system)
+target_link_libraries(irqlines_test Threads::Threads)
+add_test(NAME irqlines COMMAND irqlines_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")

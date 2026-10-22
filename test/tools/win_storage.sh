@@ -16,19 +16,27 @@
 #             second one
 #   BRIDGE    put the controller behind a PCI-PCI bridge of this class
 #             (at pci0.3), as device BRIDGE_DEV (default 2) on its bus
+#   SHARE     with BRIDGE: a second controller of this class, with a test
+#             disk of its own (test1.img), at device BRIDGE_DEV + 4 behind
+#             the same bridge. Its INTA rotates onto the same pin as the
+#             first one's (PCI-PCI bridge spec 1.1 Table 9-1), so the two
+#             share one chipset input, and the two copies run at once.
+#   DATA_KB   size of DATA.BIN (default 2048)
+#   COPY_WAIT seconds the copy is given before the emulator stops (default 50)
 #   boots     how many boots to try (default 2): Windows installs the driver
 #             for new hardware on the first boot and may only use it on the
 #             next one.
 #   The install directory is never modified: the run works on a clone in
 #   $ALPHABOX_WORK/storage-<label> (kept, for inspection; delete it after).
 #
-# Prints, per boot, whether COPY.BIN appeared and matches DATA.BIN, and the
-# path of the last screenshot. Exit status 0 when a boot produced a match.
+# Prints, per boot, whether COPY.BIN appeared and matches DATA.BIN (on each
+# test disk), and the path of the last screenshot. Exit status 0 when a boot
+# produced a match on every test disk.
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
 WORK=${ALPHABOX_WORK:-$R/lab}
-[ $# -ge 4 ] || { sed -n '2,21p' "$0"; exit 2; }
+[ $# -ge 4 ] || { sed -n '2,29p' "$0"; exit 2; }
 LABEL=$1 BIN=$2 INST=$3 CFG=$4 BOOTS=${5:-2}
 shift $(($# < 5 ? 4 : 5))
 : "${CTRL:?set CTRL to the controller class}"
@@ -45,16 +53,25 @@ D=$WORK/storage-$LABEL
 rm -rf "$D"
 cp -c -R "$SRC" "$D" 2>/dev/null || cp -R "$SRC" "$D" || exit 2
 cd "$D" || exit 2
-python3 "$T/fat_disk.py" make test0.img --size-mb 64 --data-kb 2048 > /dev/null || exit 2
+SHARE=${SHARE:-}
+[ -n "$SHARE" ] && [ -z "${BRIDGE:-}" ] && { echo "$LABEL: SHARE needs BRIDGE"; exit 2; }
+DISKS=test0.img
+[ -n "$SHARE" ] && DISKS="test0.img test1.img"
+seed=1
+for d in $DISKS; do
+  python3 "$T/fat_disk.py" make "$d" --size-mb 64 --data-kb "${DATA_KB:-2048}" \
+    --seed $seed > /dev/null || exit 2
+  seed=$((seed + 1))
+done
 python3 - "$CFG" "$CTRL" "${CTRL_OPTS:-}" "${BRIDGE:-}" "${BRIDGE_DEV:-2}" \
-  "${IDE_DEV:-disk0.1}" "${CTRL_BUS:-0}" > storage.cfg <<'PY' || exit 2
+  "${IDE_DEV:-disk0.1}" "${CTRL_BUS:-0}" "$SHARE" > storage.cfg <<'PY' || exit 2
 import sys
-cfg, ctrl, opts, bridge, bridge_dev, ide_dev, bus = sys.argv[1:8]
+cfg, ctrl, opts, bridge, bridge_dev, ide_dev, bus, share = sys.argv[1:9]
 t = open(cfg).read()
 anchor = "  pci0.15 = ali_ide"
 assert anchor in t, "no ali_ide section to anchor on"
-def drive(name):
-    return "    %s = file\n    {\n      file = \"test0.img\";\n    }\n" % name
+def drive(name, image="test0.img"):
+    return "    %s = file\n    {\n      file = \"%s\";\n    }\n" % (name, image)
 if ctrl == "ali_ide":
     # the machine already has this controller: add the disk to it
     head = anchor + "\n  {\n"
@@ -65,6 +82,10 @@ sec = "  pci0.3 = %s\n  {\n%s%s  }\n\n" % (
     ctrl, ("    " + opts + "\n") if opts else "", drive("disk%s.0" % bus))
 if bridge:
     inner = sec.replace("  pci0.3 = ", "  pci.%s = " % bridge_dev, 1)
+    if share:
+        # device + 4: the same INTx after the bridge's rotation
+        inner += "  pci.%d = %s\n  {\n%s  }\n\n" % (
+            int(bridge_dev) + 4, share, drive("disk0.0", "test1.img"))
     inner = "".join("  " + l if l.strip() else l for l in inner.splitlines(True))
     sec = "  pci0.3 = %s\n  {\n%s  }\n\n" % (bridge, inner.rstrip("\n") + "\n")
 print(t.replace(anchor, sec + anchor, 1), end="")
@@ -143,9 +164,13 @@ for boot in $(seq 1 "$BOOTS"); do
       settle 30 2
       echo "c m d enter" >> keys
       settle 60 2
+      # With SHARE the copies run at once, so that both controllers have
+      # requests out on the shared line together.
+      copy='copy'
+      [ -n "$SHARE" ] && copy='start /b cmd /c copy'
       python3 "$T/keys_for.py" --enter \
-        'for %d in (d e f g h i) do if exist %d:\data.bin copy %d:\data.bin %d:\copy.bin' >> keys
-      sleep 50
+        "for %d in (d e f g h i) do if exist %d:\\data.bin $copy %d:\\data.bin %d:\\copy.bin" >> keys
+      sleep "${COPY_WAIT:-50}"
     else
       echo "  boot $boot: the Start menu never opened"
     fi
@@ -159,7 +184,12 @@ for boot in $(seq 1 "$BOOTS"); do
   last=$(ls fb | tail -1)
   [ -n "$last" ] && python3 "$T/ppm2png.py" "fb/$last" boot$boot.png
   printf '  boot %d: ' "$boot"
-  if python3 "$T/fat_disk.py" check test0.img COPY.BIN DATA.BIN; then
+  good=0
+  for d in $DISKS; do
+    [ "$d" = test0.img ] || printf '          %s: ' "$d"
+    python3 "$T/fat_disk.py" check "$d" COPY.BIN DATA.BIN || good=1
+  done
+  if [ $good = 0 ]; then
     ok=0
     break
   fi

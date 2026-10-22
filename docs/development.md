@@ -212,7 +212,10 @@ and transfers. It writes the emulator's pid to `emulator.pid`: profile
 | `aboot_disk.py` | A sparse disk SRM boots Linux from: boot block, BSD disklabel, aboot's `bootlx`, a `/boot` and a root partition ([linux.md](linux.md)). |
 
 `win_storage.sh` checks the copy on the host; `BRIDGE=<class>` puts the
-controller behind a PCI-PCI bridge.
+controller behind a PCI-PCI bridge, and `SHARE=<class>` adds a second
+controller with a disk of its own four devices further along the bridge's
+bus, where its interrupt pin lands on the same chipset input as the
+first's, and runs the two copies at once.
 
 `cdb_test.sh` builds an image disk, a read-only one, two RAM disks and two
 CD-ROM drives (one empty) on a SCSI bus of their own and drives them the
@@ -289,6 +292,7 @@ driver does. Each is an executable in every build directory, and `ctest
 | --- | --- |
 | `kbc_test` | The 8042 keyboard controller, keyboard and mouse (`Keyboard.cpp`): ports 60h and 64h, host keys and mouse motion, save and restore. |
 | `uart16550_test` | The 16550 UART model (`Uart16550.cpp`): the register sequences consoles and drivers make, against the data sheet's answers. |
+| `irqlines_test` | The wire-OR of the chipset's interrupt inputs (`InterruptLines.hpp`): devices and functions sharing an input, from several threads at once. |
 
 ### The original regression test
 

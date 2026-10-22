@@ -70,6 +70,8 @@ hvprobe`). Built with `-DALPHABOX_HVF=ON`. See [hypervisor.md](hypervisor.md).
 - `System`: `CSystem`, which owns memory, the device ranges, the CPU
   threads, LL/SC, console loading and the state files.
 - `SystemComponent`: the base class of every device.
+- `InterruptLines.hpp`: the chipset's device interrupt inputs as wires,
+  each the OR of every source that drives it (`CSystem::interrupt`).
 - `Configurator`: parses `es40.cfg` and builds the device graph.
 - `Port80`.
 
@@ -328,7 +330,9 @@ The rest it forwards to the board's chipset (`cSystem->chipset()`):
   `read_io`/`write_io`: on the Tsunami, the Cchip, Dchip, Pchip and TIG
   registers and unclaimed PCI space.
 - `cSystem->interrupt()` goes to the chipset's interrupt controller, and
-  `PCI_Phys()` to its DMA windows.
+  `PCI_Phys()` to its DMA windows. Each interrupt input is a wire that
+  every device on it can assert (devices behind a bridge whose pins rotate
+  onto one line, say): the chipset is told the OR of all of them.
 - RAM accesses never reach the chipset.
 
 The board row names the chipset and builds the board's own hardware.

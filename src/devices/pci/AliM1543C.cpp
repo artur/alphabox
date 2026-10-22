@@ -145,8 +145,10 @@ static s64 real_ns() {
 
 CAliM1543C::CAliM1543C(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     : CPCIDevice(cfg, c, pcibus, pcidev), pit(state.pit, steady_ns),
-      // The master's INT output: Cchip DRIR bit 55, the CPU's IRQ1.
-      pic(state.pic, [this](bool high) { cSystem->interrupt(55, high); }),
+      // The master's INT output: Cchip DRIR bit 55, the CPU's IRQ1. It is a
+      // source of its own on that input, not one of the ALi's functions.
+      pic(state.pic,
+          [this](bool high) { cSystem->interrupt(55, high, this, -1); }),
       superio(state.superio,
               [this](int ldn, u16 base) {
                 if (ldn == 3) // the parallel port's four registers

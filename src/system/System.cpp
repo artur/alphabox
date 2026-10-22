@@ -1593,6 +1593,7 @@ void CSystem::ResetChipsetState() {
   memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
   memset(cpu_lock_value, 0, sizeof(cpu_lock_value));
 
+  m_irq_lines.reset(); // the chipset's inputs read as deasserted again
   m_chipset->reset();
 }
 
