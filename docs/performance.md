@@ -674,6 +674,26 @@ list-filled bit on every transfer, which woke the controller while the CPU
 was still busy: a fast path hiding a slow one, until a driver arrived that
 did not take it.
 
+### The LDx_L window
+
+*2026-10-22.* A load or store between `LDx_L` and `STx_C` now fails the
+`STx_C` ([cpu-fidelity.md](cpu-fidelity.md), CPU-01). Compiled code pays
+for it with one store, at the first listed memory operation of a block
+and the first after an `LDx_L` in it. `ALPHABOX_LLSC_MEMOP=0` takes that
+store away, so the cost was measured inside one binary (the commit's
+JIT build), from the snapshot, three interleaved rounds each. Another
+session's builds and guests ran throughout, so both runs are
+`--busy-ok`:
+
+| ledger row | total, switch off -> on | verdict |
+| --- | --- | --- |
+| `llsc-memop-axp` | [10601, 10656, 10578] -> [10718, 10898, 10539] ms, +1.1% | inconclusive (ranges overlap) |
+| `llsc-memop-cab` | [6140, 6770, 6260] -> [7000, 6230, 6540] ms, +4.5% | inconclusive (ranges overlap) |
+
+No effect came out above the noise of a busy host (the switched-off arm
+alone spans 10% on `cab`); a run on a quiet host is still owed before a
+number is quoted. Every section computed the same results in both arms.
+
 ## One binary at a time
 
 *2026-09-19.* The per-block items, extended blocks and the exact TB index,

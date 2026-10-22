@@ -439,7 +439,9 @@ this", ARM 4.2.4), and none of the guests did: OpenVMS 8.4 on the DS20E
 with two processors (BACKUP and DIFFERENCES of `SYS$BASE_IMAGE.EXE`, no
 differences) and on the ES47 with two, Windows 2000 RC2 on two
 processors, and SRM on four (interpreter, JIT and `JIT_VERIFY`: 87
-million compiled blocks, 0 mismatches) all ran as before.
+million compiled blocks, 0 mismatches) all ran as before. What it costs
+compiled code is in [performance.md](performance.md) ("The LDx_L
+window"): nothing that a busy host's noise did not cover.
 
 **The reserved barriers `18.4800` and `18.4C00`** (CPU-06). ARM C.13
 reserves them for weaker memory barriers, and until those are defined
@@ -479,6 +481,11 @@ returns to native mode" (HRM 5.2.11): now the first `HW_RET` to native
 mode after a delivery raises `check_int`, in the interpreter and in
 compiled code. PALcode that lowers the IPL rewrites `IER`, which raised
 it anyway, so this was latency at most.
+
+With all of these, `guests_check.sh` passed Windows 2000 (desktop, clock
+within a minute, shutdown), OpenVMS on the ES40 and the ES47, and Linux,
+and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
+(749 million compiled blocks, 0 mismatches).
 
 ### Smaller ones
 
