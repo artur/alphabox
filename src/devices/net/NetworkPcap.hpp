@@ -75,6 +75,37 @@ extern void (*f_pcap_close)(pcap_t *);
 #define pcap_setfilter f_pcap_setfilter
 #define pcap_freecode f_pcap_freecode
 #define pcap_close f_pcap_close
+#else
+/* libpcap is loaded at run time too (load_libpcap): the executable is not
+ * linked against it, so it starts where libpcap is not installed. The
+ * defines remap the pcap_* names to the loaded functions. */
+const char *load_libpcap();
+
+inline decltype(&::pcap_findalldevs) f_pcap_findalldevs;
+inline decltype(&::pcap_freealldevs) f_pcap_freealldevs;
+inline decltype(&::pcap_open_live) f_pcap_open_live;
+inline decltype(&::pcap_setnonblock) f_pcap_setnonblock;
+inline decltype(&::pcap_sendpacket) f_pcap_sendpacket;
+inline decltype(&::pcap_next_ex) f_pcap_next_ex;
+inline decltype(&::pcap_geterr) f_pcap_geterr;
+inline decltype(&::pcap_compile) f_pcap_compile;
+inline decltype(&::pcap_setfilter) f_pcap_setfilter;
+inline decltype(&::pcap_freecode) f_pcap_freecode;
+inline decltype(&::pcap_close) f_pcap_close;
+inline decltype(&::pcap_setdirection) f_pcap_setdirection; // may be null
+
+#define pcap_findalldevs f_pcap_findalldevs
+#define pcap_freealldevs f_pcap_freealldevs
+#define pcap_open_live f_pcap_open_live
+#define pcap_setnonblock f_pcap_setnonblock
+#define pcap_sendpacket f_pcap_sendpacket
+#define pcap_next_ex f_pcap_next_ex
+#define pcap_geterr f_pcap_geterr
+#define pcap_compile f_pcap_compile
+#define pcap_setfilter f_pcap_setfilter
+#define pcap_freecode f_pcap_freecode
+#define pcap_close f_pcap_close
+#define pcap_setdirection f_pcap_setdirection
 #endif // _WIN32
 
 class CNetworkPcap : public CNetworkBackend {

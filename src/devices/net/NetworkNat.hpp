@@ -33,6 +33,11 @@
 
 struct Slirp;
 
+/// Load libslirp on the first call (later calls cost nothing). Null if it is
+/// loaded, else a sentence saying what is missing and which package to
+/// install.
+const char *nat_library_error();
+
 /**
  * \brief What a NAT back end is configured with: the keys of the NIC's
  * network section, as text, with the defaults of QEMU's "-netdev user".

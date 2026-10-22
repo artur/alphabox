@@ -282,6 +282,11 @@
 #cmakedefine HAVE_SDL
 #cmakedefine HAVE_SDL3
 
+/* Where pkg-config found libslirp and libpcap at build time: the last place
+   the run-time loader looks (empty if unknown) */
+#define ALPHABOX_SLIRP_LIBDIR "@ALPHABOX_SLIRP_LIBDIR@"
+#define ALPHABOX_PCAP_LIBDIR "@ALPHABOX_PCAP_LIBDIR@"
+
 /* Version number of package */
 #cmakedefine VERSION "@PACKAGE_VERSION@"
 

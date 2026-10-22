@@ -29,6 +29,9 @@
 #include "Configurator.hpp"
 #include "NetworkPcap.hpp"
 
+#include "DynLib.hpp"
+
+#include <mutex>
 #include <string>
 
 #if defined(_WIN32)
@@ -82,6 +85,56 @@ bool load_wpcap() {
          f_pcap_geterr && f_pcap_compile && f_pcap_setfilter &&
          f_pcap_freecode && f_pcap_close;
 }
+#else
+
+/// Load libpcap on the first call (later calls cost nothing). Null if it is
+/// loaded, else a sentence saying which package to install.
+const char *load_libpcap() {
+  static std::once_flag once;
+  static const char *error = nullptr;
+  std::call_once(once, [] {
+#if defined(__APPLE__)
+    // macOS ships libpcap; Homebrew's is a fallback.
+    static const char *const names[] = {"libpcap.A.dylib", "libpcap.dylib",
+                                        nullptr};
+    static const char *const dirs[] = {"/opt/homebrew/lib", "/usr/local/lib",
+                                       nullptr};
+    error = "pcap networking needs libpcap, which was not found (macOS "
+            "includes it; brew install libpcap)";
+#else
+    static const char *const names[] = {"libpcap.so.0.8", "libpcap.so.1",
+                                        nullptr};
+    static const char *const *const dirs = nullptr;
+    error = "pcap networking needs libpcap, which is not installed (apt "
+            "install libpcap0.8, or your distribution's libpcap package)";
+#endif
+    void *h = dynlib_open(names, dirs, ALPHABOX_PCAP_LIBDIR);
+    if (!h)
+      return;
+    bool ok = true;
+#define LOAD_PCAP_FN(name)                                                     \
+  ok &= (f_##name = (decltype(f_##name))dynlib_sym(h, #name)) != nullptr
+    LOAD_PCAP_FN(pcap_findalldevs);
+    LOAD_PCAP_FN(pcap_freealldevs);
+    LOAD_PCAP_FN(pcap_open_live);
+    LOAD_PCAP_FN(pcap_setnonblock);
+    LOAD_PCAP_FN(pcap_sendpacket);
+    LOAD_PCAP_FN(pcap_next_ex);
+    LOAD_PCAP_FN(pcap_geterr);
+    LOAD_PCAP_FN(pcap_compile);
+    LOAD_PCAP_FN(pcap_setfilter);
+    LOAD_PCAP_FN(pcap_freecode);
+    LOAD_PCAP_FN(pcap_close);
+#undef LOAD_PCAP_FN
+    // Optional: without it the filter leaves out the NIC's own frames.
+    f_pcap_setdirection =
+        (decltype(f_pcap_setdirection))dynlib_sym(h, "pcap_setdirection");
+    error = ok ? nullptr
+               : "the installed libpcap lacks functions Alphabox needs; "
+                 "update the libpcap package";
+  });
+  return error;
+}
 #endif // _WIN32
 
 CNetworkPcap::CNetworkPcap() : fp(nullptr), opened(false) {
@@ -100,6 +153,11 @@ bool CNetworkPcap::init(const char *devid_string, CConfigurator *cfg) {
 #if defined(_WIN32)
   if (!load_wpcap()) {
     printf("%s: failed to load wpcap.dll; is Npcap installed?\n", devid_string);
+    return false;
+  }
+#else
+  if (const char *why = load_libpcap()) {
+    printf("%s: %s.\n", devid_string, why);
     return false;
   }
 #endif
@@ -194,7 +252,7 @@ bool CNetworkPcap::init(const char *devid_string, CConfigurator *cfg) {
 #if defined(WIN32)
   sees_only_input = true; // PCAP_OPENFLAG_NOCAPTURE_LOCAL
 #else
-  sees_only_input = pcap_setdirection(fp, PCAP_D_IN) == 0;
+  sees_only_input = pcap_setdirection && pcap_setdirection(fp, PCAP_D_IN) == 0;
   if (!sees_only_input)
     printf("%s: pcap cannot capture input only on %s (%s); the filter leaves "
            "out the NIC's own frames\n",

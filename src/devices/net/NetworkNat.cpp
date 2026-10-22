@@ -20,6 +20,7 @@
 
 #include "NetworkNat.hpp"
 #include "Configurator.hpp"
+#include "DynLib.hpp"
 #include "StdAfx.hpp"
 
 // Without libslirp (HAVE_SLIRP) this file is empty and type = "nat" is
@@ -42,6 +43,78 @@ typedef slirp_ssize_t nat_ssize_t;
 #else
 typedef ssize_t nat_ssize_t;
 #endif
+
+// ---- libslirp, loaded at first use
+//
+// alphabox is not linked against libslirp (nor glib): a binary that has no
+// use for NAT starts where the library is missing. The header gives the
+// types; each call goes through a pointer filled in by nat_library_error().
+
+#define NAT_FUNCTIONS(X)                                                       \
+  X(slirp_new)                                                                 \
+  X(slirp_cleanup)                                                             \
+  X(slirp_input)                                                               \
+  X(slirp_pollfds_poll)                                                        \
+  X(slirp_add_hostfwd)                                                         \
+  X(slirp_version_string)
+
+#define NAT_DECLARE(name) static decltype(&::name) f_##name;
+NAT_FUNCTIONS(NAT_DECLARE)
+#undef NAT_DECLARE
+#if defined(NAT_NEW_API)
+static decltype(&::slirp_pollfds_fill_socket) f_slirp_pollfds_fill_socket;
+static decltype(&::slirp_handle_timer) f_slirp_handle_timer;
+#else
+static decltype(&::slirp_pollfds_fill) f_slirp_pollfds_fill;
+#endif
+#define slirp_new f_slirp_new
+#define slirp_cleanup f_slirp_cleanup
+#define slirp_input f_slirp_input
+#define slirp_pollfds_poll f_slirp_pollfds_poll
+#define slirp_add_hostfwd f_slirp_add_hostfwd
+#define slirp_version_string f_slirp_version_string
+#define slirp_pollfds_fill_socket f_slirp_pollfds_fill_socket
+#define slirp_handle_timer f_slirp_handle_timer
+#define slirp_pollfds_fill f_slirp_pollfds_fill
+
+const char *nat_library_error() {
+  static std::once_flag once;
+  static const char *error = nullptr;
+  std::call_once(once, [] {
+#if defined(__APPLE__)
+    static const char *const names[] = {"libslirp.0.dylib", nullptr};
+    static const char *const dirs[] = {"/opt/homebrew/lib", "/usr/local/lib",
+                                       nullptr};
+    error = "NAT networking needs libslirp, which is not installed (brew "
+            "install libslirp)";
+#else
+    static const char *const names[] = {"libslirp.so.0", nullptr};
+    static const char *const *const dirs = nullptr;
+    error = "NAT networking needs libslirp, which is not installed (apt "
+            "install libslirp0, or your distribution's libslirp package)";
+#endif
+    void *h = dynlib_open(names, dirs, ALPHABOX_SLIRP_LIBDIR);
+    if (!h)
+      return;
+    bool ok = true;
+#define NAT_LOAD(name)                                                         \
+  ok &= (f_##name = (decltype(f_##name))dynlib_sym(h, #name)) != nullptr;
+    NAT_FUNCTIONS(NAT_LOAD)
+#if defined(NAT_NEW_API)
+    NAT_LOAD(slirp_pollfds_fill_socket)
+    NAT_LOAD(slirp_handle_timer)
+#else
+    NAT_LOAD(slirp_pollfds_fill)
+#endif
+#undef NAT_LOAD
+    if (ok)
+      error = nullptr;
+    else
+      error = "the installed libslirp is too old for NAT networking (needs "
+              "libslirp 4.9 or newer; update the libslirp package)";
+  });
+  return error;
+}
 
 static long long now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -296,6 +369,10 @@ bool CNetworkNat::init(const char *devid_string, CConfigurator *cfg) {
 }
 
 bool CNetworkNat::start(const char *devid_string, const NatOptions &o) {
+  if (const char *why = nat_library_error()) {
+    printf("%s: %s.\n", devid_string, why);
+    return false;
+  }
   in_addr net, mask, host, dns, dhcp;
   if (!parse_net(o.net, &net, &mask)) {
     printf("%s: net = \"%s\" is not a.b.c.d/len with len 8 to 30\n",

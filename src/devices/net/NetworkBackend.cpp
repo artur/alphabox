@@ -40,8 +40,10 @@
 
 const char *network_backend_refusal(const char *type) {
   if (!type || !strcasecmp(type, "pcap")) {
-#if defined(HAVE_PCAP)
-    return nullptr;
+#if defined(HAVE_PCAP) && !defined(_WIN32)
+    return load_libpcap();
+#elif defined(HAVE_PCAP)
+    return nullptr; // Windows: CNetworkPcap::init loads wpcap.dll
 #else
     return "pcap networking not available (compiled without pcap support); "
            "type = \"udp\", \"loopback\" or \"null\" need nothing";
@@ -56,7 +58,7 @@ const char *network_backend_refusal(const char *type) {
   }
   if (!strcasecmp(type, "nat")) {
 #if defined(HAVE_SLIRP)
-    return nullptr;
+    return nat_library_error();
 #else
     return "NAT networking needs libslirp, which this build lacks (brew "
            "install libslirp, apt install libslirp-dev, then configure "

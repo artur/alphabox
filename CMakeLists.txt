@@ -135,7 +135,7 @@ if (CMAKE_GENERATOR MATCHES "Visual Studio")
 endif()
 
 find_package(Threads REQUIRED)
-target_link_libraries(alphabox Threads::Threads)
+target_link_libraries(alphabox Threads::Threads ${CMAKE_DL_LIBS})
 
 # Configuration options
 include(CheckSymbolExists)
@@ -240,7 +240,15 @@ if(WANT_PCAP)
         message(STATUS "pcap found. Networking support enabled")
         set(HAVE_PCAP 1)
         include_directories(${PCAP_INCLUDE_DIR})
-        target_link_libraries(alphabox ${PCAP_LIBRARY})
+        if(WIN32)
+            target_link_libraries(alphabox ${PCAP_LIBRARY})
+        else()
+            # Not linked: libpcap is loaded when a pcap back end is created
+            # (src/devices/net/DynLib.cpp), so the binary starts without it.
+            # Where it was found is the loader's last place to look.
+            list(GET PCAP_LIBRARY 0 _pcap_first)
+            get_filename_component(ALPHABOX_PCAP_LIBDIR "${_pcap_first}" DIRECTORY)
+        endif()
     else()
         message(STATUS "pcap not found. Networking support disabled")
     endif()
@@ -280,11 +288,12 @@ endif()
 # libslirp: the user-mode NAT network back end (type = "nat"). Found like
 # libusb, and used only if a program built for this lane links against it
 # (an x86-64 lane on an arm64 Mac would find Homebrew's arm64 build). Not
-# bundled: it brings glib, which is linked dynamically from the system.
+# bundled: it brings glib, so it is not even linked, only loaded at first use.
 if (NOT DISABLE_SLIRP STREQUAL "yes" AND NOT WIN32)
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND)
         pkg_check_modules(LIBSLIRP QUIET IMPORTED_TARGET slirp)
+        pkg_get_variable(ALPHABOX_SLIRP_LIBDIR slirp libdir)
     endif()
     if(LIBSLIRP_FOUND)
         include(CheckCXXSourceCompiles)
@@ -297,7 +306,9 @@ if (NOT DISABLE_SLIRP STREQUAL "yes" AND NOT WIN32)
         unset(CMAKE_REQUIRED_LIBRARIES)
     endif()
     if(HAVE_SLIRP)
-        target_link_libraries(alphabox PkgConfig::LIBSLIRP)
+        # Headers only: libslirp (and glib behind it) is loaded when a NAT
+        # back end is created, so the binary starts without them.
+        target_include_directories(alphabox PRIVATE ${LIBSLIRP_INCLUDE_DIRS})
         message(STATUS "libslirp found. NAT networking (type = \"nat\") enabled")
     else()
         message(STATUS "libslirp not found (or not for this architecture). NAT networking disabled")
@@ -557,10 +568,10 @@ add_test(NAME pcibridge COMMAND pcibridge_test)
 # DHCP, BOOTP, TFTP, TCP to the host, hostfwd, loss and retransmission.
 if(HAVE_SLIRP)
     add_executable(nat_test test/unit/nat_test.cpp
-        src/devices/net/NetworkNat.cpp)
+        src/devices/net/NetworkNat.cpp src/devices/net/DynLib.cpp)
     target_include_directories(nat_test PRIVATE
         $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
-    target_link_libraries(nat_test PkgConfig::LIBSLIRP Threads::Threads)
+    target_link_libraries(nat_test Threads::Threads ${CMAKE_DL_LIBS})
     add_test(NAME nat COMMAND nat_test)
 endif()
 
