@@ -485,6 +485,12 @@ CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
 void CAlphaCPU::honour_new_code_pages() {
   m_code_pages_seen = m_code_map->code_pages();
   flush_data_page_cache();
+  // Until this moment compiled code could still have stored into that page
+  // inline through a translation just dropped, unreported. Count one write,
+  // as the check_timers path does, so this flush and the next do their work
+  // and any such store is caught by the source hash.
+  if (!m_nopflush_break) // the break hook silences every report
+    m_code_map->note_write_all();
 }
 
 void CAlphaCPU::init() {

@@ -58,6 +58,7 @@
 #include <libkern/OSCacheControl.h>
 #endif
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono> // note_exec times its own stats-print I/O (excluded from the wall-clock RPCC)
 #include <cstdio>
@@ -3919,13 +3920,26 @@ void CJitEngine::compile_block(
   if (!assemble_block(b, words, plen, terminator_branch, terminator_jmp, hs,
                       &fn, &body_off, &csz))
     return;
+  // Mark the source as code first, then check that it is still what was
+  // compiled. A store by another processor is then either seen by the
+  // re-check, or made after the bits were set, and reported by its own
+  // note_write (or counted when that processor drops a cached inline-writable
+  // translation of a page that just became code: honour_new_code_pages and
+  // the check_timers path). Checked first and marked after, a store between
+  // the two was neither. The fence orders the bits before the re-check's
+  // loads; bits set for a block that is then not published cost only a
+  // slower write path for that memory.
+  if (m_code_map) // this page now holds code: writes to it must be noticed
+    m_code_map->note_code(phys, (size_t)b->n_instr * sizeof(uint32_t));
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  // What the map had counted when these words were last known good: a write
+  // reported after this was made after the bits were set.
+  const uint64_t code_gen = m_code_map ? m_code_map->write_gen() : 0;
   // The source changed while assembling (SMP self-modifying code): never
   // publish it. The unreferenced code is freed by the next reclaim.
   if (memcmp(dram + phys, source_words.data(),
              (size_t)b->n_instr * sizeof(uint32_t)) != 0)
     return;
-  if (m_code_map) // this page now holds code: writes to it must be noticed
-    m_code_map->note_code(phys, (size_t)b->n_instr * sizeof(uint32_t));
   b->code = fn;
   b->jit_body = (void *)((uint8_t *)(void *)fn +
                          body_off); // chained re-entry (past prologue)
@@ -3934,7 +3948,7 @@ void CJitEngine::compile_block(
       src_hash((const uint8_t *)source_words.data(),
                b->n_instr);     // source fingerprint (revalidate vs self-mod)
   b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
-  b->code_gen = m_code_map ? m_code_map->write_gen() : 0;
+  b->code_gen = code_gen;
   b->prefix_len = plen;
   m_code_bytes += csz; // track for the reclaim threshold (see flush())
 #ifdef JIT_STATS

@@ -797,6 +797,26 @@ until they were fixed:
   `HW_ST`; Windows 2000 RC2, whose PALcode does physical `HW_ST`s
   constantly, reached its desktop on one processor and on two.
 
+**Also from that audit**, with no result a case shows:
+
+- **The code-page map between processors** (JIT-05). A compiled block's
+  source was checked once more and only then marked as code, so a store
+  by another processor between the two was neither seen by the check nor
+  reported by the store, and a later `IMB` with nothing reported was
+  skipped with the old code published. The bits are set first now, then
+  a fence, then the check. A processor that had the page cached as
+  writable inline when it became code counts one write when an `IMB`
+  makes it drop that translation, as a timer check already did. What
+  remains: a store and its own report are not fenced from each other,
+  so a store still in its processor's store buffer while the compiler
+  checks can be missed; and a processor that still holds the page as
+  writable inline stores into it unreported until its next timer check
+  or `IMB`, so another processor's `IMB` in that window can still be
+  skipped. Closing the first needs a fence on the store path, and the
+  second a request every other processor answers before the block is
+  published; neither was added. Windows 2000 RC2 and OpenVMS 8.4 on
+  two processors, `smc_test.sh` on two and SRM on four ran as before.
+
 ## A guest's floating-point exception that is the guest's own
 
 Recorded because it looks exactly like an emulator fault and is not one
