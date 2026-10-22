@@ -8,7 +8,7 @@ jobs:
     runs-on: "ubuntu-24.04"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         submodules: recursive
 
@@ -34,13 +34,18 @@ jobs:
       env:
         MAKEFLAGS: "-j2"
 
+    - name: Run unit tests
+      working-directory: ${{runner.workspace}}/build
+      shell: bash
+      run: ctest --output-on-failure
+
     - name: Run test scripts
       working-directory: ${{runner.workspace}}/alphabox
       shell: bash
       run: ${{runner.workspace}}/alphabox/test/run
 
     - name: Upload Alphabox binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Alphabox-linux-x86-clang-${{ env.BUILD_DATE }}
         path: ${{runner.workspace}}/build/alphabox 
@@ -51,7 +56,7 @@ jobs:
     runs-on: "ubuntu-24.04"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         submodules: recursive
 
@@ -80,13 +85,18 @@ jobs:
       env:
         MAKEFLAGS: "-j2"
 
+    - name: Run unit tests
+      working-directory: ${{runner.workspace}}/build
+      shell: bash
+      run: ctest --output-on-failure
+
     - name: Run test scripts
       working-directory: ${{runner.workspace}}/alphabox
       shell: bash
       run: ${{runner.workspace}}/alphabox/test/run
 
     - name: Upload Alphabox binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Alphabox-linux-x86-gcc-${{ env.BUILD_DATE }}
         path: ${{runner.workspace}}/build/alphabox
@@ -98,7 +108,7 @@ jobs:
     continue-on-error: true
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Get current date
       id: date
@@ -133,7 +143,7 @@ jobs:
       run: file ${{runner.workspace}}/build/alphabox
 
     - name: Upload Alphabox binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Alphabox-linux-ARM-gcc-${{ env.BUILD_DATE }}
         path: ${{runner.workspace}}/build/alphabox
@@ -146,7 +156,7 @@ jobs:
     if: false
     runs-on: windows-2025
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         submodules: recursive
 
@@ -186,7 +196,7 @@ jobs:
       run: ${{runner.workspace}}\build\Release\alphabox.exe
 
     - name: Upload Alphabox Binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Alphabox-windows-x86-msvc-${{ env.BUILD_DATE }}.exe
         path: ${{runner.workspace}}\build\Release\alphabox.exe
@@ -196,7 +206,7 @@ jobs:
   osx-arm64-appleclang:
     runs-on: macos-15
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         submodules: recursive
 
@@ -208,7 +218,7 @@ jobs:
       run: cmake -E make_directory ${{runner.workspace}}/build
 
     - name: Install dependencies
-      run: brew install libpcap netcat gnu-sed
+      run: brew install libpcap libslirp netcat gnu-sed
 
     - name: Configure CMake
       shell: bash
@@ -223,8 +233,13 @@ jobs:
       env:
         MAKEFLAGS: "-j3"
 
+    - name: Run unit tests
+      working-directory: ${{runner.workspace}}/build
+      shell: bash
+      run: ctest --output-on-failure
+
     - name: Upload Alphabox Binary
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Alphabox-macos-arm64-appleclang-${{ env.BUILD_DATE }}
         path: ${{runner.workspace}}/build/alphabox

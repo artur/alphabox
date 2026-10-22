@@ -380,11 +380,15 @@ endif()
 # routines against test/fp/shim/AlphaCPU.hpp; a quoted #include looks in the
 # including file's own directory first, so they are compiled from copies
 # made at build time, away from the real AlphaCPU.hpp. Needs unsigned
-# __int128 (GCC, Clang).
+# __int128 (GCC, Clang on 64-bit hosts; not MSVC, not 32-bit ARM).
 option(ALPHABOX_FPTEST "Build the floating-point test alphabox_fptest" ON)
 set(ALPHABOX_FP_BASELINE "682932c" CACHE STRING
     "Commit whose floating-point routines alphabox_fptest compares against")
-if (ALPHABOX_FPTEST AND NOT MSVC)
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles(
+    "unsigned __int128 x = 3; int main() { return (int)(x >> 1); }"
+    ALPHABOX_HAVE_INT128)
+if (ALPHABOX_FPTEST AND ALPHABOX_HAVE_INT128)
   set(fp_cur ${CMAKE_BINARY_DIR}/fp_current_src)
   set(fp_cur_srcs)
   foreach(f AlphaCPU_ieeefloat.cpp AlphaCPU_vaxfloat.cpp)
