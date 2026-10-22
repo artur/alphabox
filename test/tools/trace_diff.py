@@ -19,7 +19,10 @@ path's MISC acknowledge, DIR reads and DIM masking,
 What is left is collapsed again as the recorder collapses (a run that
 repeats with a period of up to four lines is kept once): an interrupt in
 the middle of a polling loop breaks the recorder's collapse there, and
-taking its accesses out joins the loop again.
+taking its accesses out joins the loop again. Those registers are then not
+compared at all: a "same" says nothing about which interrupt lines were
+asserted when (the routing the console programs, in configuration space,
+is still compared).
 
 Prints, per stream, "same <n>" or "differs" with a unified diff (at most
 --max-lines lines of it, default 40), then a summary line.

@@ -248,7 +248,12 @@ in every run; leave it out with
 trace_diff.py --ignore 'csr cpu\d+ [rw] cchip (80|200|240|280|2c0|600|640|680|6c0) ' base.txt head.txt
 ```
 
-Each difference left is then a change in what the guest was told. A device
+Each difference left is then a change in what the guest was told, with one
+gap: the ignored registers are the interrupt path, so a "same" says nothing
+about which interrupt lines were asserted when. The routing the console
+programs is still compared (it is in configuration space); a change to the
+line state itself, such as a shared input's wire-OR, needs a unit test and
+a guest boot that exercises it. A device
 that depends on nothing but its accesses (the flash, an EEPROM, the I2C
 parts) can also be tested by replay: record it with `raw` in the list,
 keep the file under `test/unit/`, and have its unit test feed the writes
