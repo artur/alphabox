@@ -223,12 +223,37 @@ static void test_absent_functions() {
   d->~CTestDev();
 }
 
+/// Bus Master Enable (PCI 2.2 6.2.2, command bit 2): a function may master
+/// the bus only while it is set, each function by its own command register.
+/// The access itself (reads all ones, writes dropped) is do_pci_read and
+/// do_pci_write acting on this answer.
+static void test_bus_master() {
+  CTestDev d;
+  d.build(2);
+  CHECK_EQ(rd(d, 0, 0x04, 16) & 4, 0); // clear at reset
+  CHECK_EQ(d.bus_master(0, 0x1000, false), false);
+  CHECK_EQ(d.bus_master(0, 0x1000, true), false);
+  CHECK_EQ(d.bme_clear_count(0), 2);
+  CHECK_EQ(d.bme_clear_count(1), 0);
+  wr(d, 0, 0x04, 16, 0x0004);
+  CHECK_EQ(d.bus_master(0, 0x1000, false), true);
+  CHECK_EQ(d.bus_master(1, 0x1000, true), false); // function 1 is its own
+  CHECK_EQ(d.bme_clear_count(0), 2);              // allowed: not counted
+  CHECK_EQ(d.bme_clear_count(1), 1);
+  wr(d, 1, 0x04, 16, 0x0007);
+  CHECK_EQ(d.bus_master(1, 0x1000, true), true);
+  wr(d, 0, 0x04, 16, 0x0003); // memory and I/O on, mastering off again
+  CHECK_EQ(d.bus_master(0, 0x1000, true), false);
+  CHECK_EQ(d.bme_clear_count(0), 3);
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0); // a failure that crashes still shows
   test_masks();
   test_sizing();
   test_bounds();
   test_absent_functions();
+  test_bus_master();
   printf("pcicfg_test: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

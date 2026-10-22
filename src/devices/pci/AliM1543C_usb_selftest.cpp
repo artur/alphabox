@@ -195,7 +195,12 @@ void CAliM1543C_usb::selftest() {
 
   // Bus mastering: with the function's Bus Master Enable clear the
   // controller reads and writes no memory.
-  auto frame_no = [&] { return r32(HCCA + 0x80); };
+  // The test looks at memory as a processor would: its own bus-master read
+  // would return all ones while Bus Master Enable is clear.
+  auto frame_no = [&] {
+    return (u32)cSystem->ReadMem(cSystem->PCI_Phys(myPCIBus, HCCA + 0x80), 32,
+                                 this);
+  };
   nap_ms(5);
   const u32 f1 = frame_no();
   nap_ms(10);

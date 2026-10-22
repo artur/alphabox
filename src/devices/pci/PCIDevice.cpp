@@ -725,20 +725,22 @@ void CPCIDevice::WriteMem_Bar(int func, int bar, u32 address, int dsize,
  * 32-bit address put on the PCI bus. element_count elements of element_size
  * bytes each will be read in an endian-aware manner.
  **/
-void CPCIDevice::note_bme_clear(int func, u32 address, bool write) {
-  static const bool on = getenv("ALPHABOX_TRACE_BME") != nullptr;
-  if (!on)
-    return;
+bool CPCIDevice::bus_master(int func, u32 address, bool write) {
+  if (endian_16(*(u16 *)((u8 *)pci_state.config_data[func] + 4)) & 4)
+    return true;
+  // A function with Bus Master Enable clear does not master the bus (PCI
+  // 2.2 6.2.2): its reads come back all ones, its writes are dropped. The
+  // first is reported; with ALPHABOX_TRACE_BME so is every tenfold count.
+  static const bool trace = getenv("ALPHABOX_TRACE_BME") != nullptr;
   const u64 n = ++bme_clear_dma[func & 7];
   u64 tenfold = 1;
   while (tenfold < n)
     tenfold *= 10;
-  if (tenfold != n)
-    return;
-  diag_printf("%%PCI-W-BME: %s(%s) pci%d.%d func %d %s %08x with Bus Master "
-              "Enable clear (access %" PRIu64 ")\n",
-              myCfg->get_myName(), myCfg->get_myValue(), myPCIBus, myPCIDev,
-              func, write ? "writes" : "reads", address, n);
+  if (n == 1 || (trace && tenfold == n))
+    diag_printf("%%PCI-W-BME: %s func %d %s %08x with Bus Master Enable "
+                "clear, not performed (access %" PRIu64 ")\n",
+                devid_string, func, write ? "writes" : "reads", address, n);
+  return false;
 }
 
 void CPCIDevice::do_pci_read(int func, u32 address, void *dest,
@@ -749,8 +751,10 @@ void CPCIDevice::do_pci_read(int func, u32 address, void *dest,
   if (element_count == 0)
     return;
 
-  if (!(endian_16(*(u16 *)((u8 *)pci_state.config_data[func] + 4)) & 4))
-    note_bme_clear(func, address, false);
+  if (!bus_master(func, address, false)) {
+    memset(dest, 0xff, element_size * element_count);
+    return;
+  }
 
   // get the 64-bit system wide address
   u64 phys_addr = cSystem->PCI_Phys(myPCIBus, address);
@@ -863,8 +867,8 @@ void CPCIDevice::do_pci_write(int func, u32 address, void *source,
   if (element_count == 0)
     return;
 
-  if (!(endian_16(*(u16 *)((u8 *)pci_state.config_data[func] + 4)) & 4))
-    note_bme_clear(func, address, true);
+  if (!bus_master(func, address, true))
+    return;
 
   // get the 64-bit system wide address
   u64 phys_addr = cSystem->PCI_Phys(myPCIBus, address);

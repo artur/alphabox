@@ -82,12 +82,22 @@ public:
                                    u32 old_data, u32 new_data, u32 data){};
   void register_bar(int func, int bar, u32 data, u32 mask);
 
-  /// Bus-master access to memory, issued by function `func` of this device
-  /// (the command register that governs it is that function's).
+  /// Bus-master access to memory, issued by function `func` of this device.
+  /// That function's Bus Master Enable governs it: with the bit clear a read
+  /// returns all ones and a write is dropped (PCI 2.2 6.2.2).
   void do_pci_read(int func, u32 address, void *dest, size_t element_size,
                    size_t element_count);
   void do_pci_write(int func, u32 address, void *source, size_t element_size,
                     size_t element_count);
+
+  /// Whether function `func` may master the bus: command bit 2 (Bus Master
+  /// Enable) is set. When it is clear this counts the attempt and reports
+  /// the first one (every tenfold count too with ALPHABOX_TRACE_BME).
+  bool bus_master(int func, u32 address, bool write);
+
+  /// How many times function `func` tried to master the bus with Bus Master
+  /// Enable clear.
+  u64 bme_clear_count(int func) const { return bme_clear_dma[func & 7]; }
 
   int pci_bus() const { return myPCIBus; }
   int pci_dev() const { return myPCIDev; }
@@ -144,10 +154,6 @@ protected:
   /// forwarding windows instead of BARs 2-5, and the ROM BAR at 0x38.
   bool bridge_header(int func) const;
 
-  /// Function `func` mastering with Bus Master Enable (command bit 2) clear:
-  /// counts it and reports the first one and every tenfold count after it
-  /// (ALPHABOX_TRACE_BME).
-  void note_bme_clear(int func, u32 address, bool write);
   std::atomic<u64> bme_clear_dma[8] = {};
 
   int myPCIBus;
