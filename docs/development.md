@@ -8,6 +8,7 @@
 | `test/rom/` | the ES40 firmware regression test and its reference console log |
 | `test/tools/` | the test tools below |
 | `test/unit/` | unit tests: one model or device's source with the rest of the machine stubbed out |
+| `test/cpu/` | the instruction conformance oracle: the image builder, the cases, and a model of the instructions written from the Architecture Reference Manual |
 | `test/arc/`, `test/vms/`, `test/nt/` | configurations and firmware for the ARC, OpenVMS and Windows NT runs |
 | `test/platforms/` | real machines' console output, for platform bring-ups |
 | `docs/` | this documentation |
@@ -114,6 +115,7 @@ with SDL and pcap; on another build only the trees are compared.
 | `JIT_VERIFY` build | Every compiled block re-run by the interpreter and compared. A clean SRM boot is ~130 million blocks. |
 | `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
 | `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. |
+| `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 18,500 results from 16,000 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode), each from the interpreter and from compiled code. A second per lane (below). |
 | `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
 | `bench_image.py` | A bootable image from a list of instruction words. |
 | Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `_CALLS`, `_I2C`, `_MP`, `_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get ([headless.md](headless.md)). |
@@ -121,6 +123,50 @@ with SDL and pcap; on another build only the trees are compared.
 `JIT_VERIFY` finds disagreements between the JIT and the interpreter, not
 disagreements with the architecture; for those see
 [cpu-fidelity.md](cpu-fidelity.md).
+
+#### The instruction oracle
+
+```
+test/cpu/cpu_oracle.py <alphabox-binary> [label] [--port N] [--group G] [--passes N]
+```
+
+The expected value of every result comes from the manuals, not from the
+interpreter: `test/cpu/aarm.py` is the Architecture Reference Manual's
+pseudocode for each instruction, and the cases (`test/cpu/cases.py`) cite
+the HRM wherever the 21264 decides what the manual leaves open (a load to
+R31 takes its DTB miss, an operate into R31 is retired without executing
+and so never traps).
+
+- **The image** (`test/cpu/image.py`) replaces the console firmware: it is
+  written as the decompressed console the emulator loads, so nothing is
+  booted. A small PALcode of its own sets up the processor (kernel mode,
+  interrupts masked, the KSEG superpages, PALshadow registers), records
+  every exception it takes in a trap record and resumes after it, and
+  serves a few CALL_PALs (FPE on and off, user mode and back). The
+  results go out over COM1, which the tool reads; `exit_on_pal_halt` ends
+  the run.
+- **Both engines in one run.** Every case runs 20 times. The first pass
+  is stored apart: it is always interpreted, and on a JIT lane the last
+  pass is compiled code (the default compile threshold is 16; a
+  `JIT_VERIFY` build compiles at once and reports over 500,000
+  compiled-block executions in a run). `ENGINES DIFFER` lists the cases
+  whose two passes disagree.
+- **Verdicts.** PASS is the manual's value. KNOWN is a documented
+  divergence's value: the case names it (docs/cpu-fidelity.md, or a
+  finding of the CPU audit), and some apply to compiled code only. FAIL is
+  anything else, and so is a trap no case expected. The exit status is 0
+  when nothing failed. A KNOWN case that passes on both engines is listed,
+  so that its entry is removed with the fix.
+- **Cost.** About a second per lane (two under Rosetta), in
+  `$ALPHABOX_WORK/runs/cpu-oracle-<label>`, removed when the run passes.
+  `--port` (or `$PORT`) picks COM1's telnet port; without one a free port
+  is used.
+
+A case is a few lines of `cases.py`: load operands with `b.load`, emit the
+instruction, store each register or trap-record field to check with
+`b.store` or `b.trap_check`, giving the value from `aarm.py` or the manual.
+The registers R24 to R29 belong to the harness (checked after every
+group); a case uses R0 to R23.
 
 ### Performance
 
