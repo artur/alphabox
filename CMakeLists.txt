@@ -277,6 +277,35 @@ else()
     message(STATUS "libusb disabled. USB host passthrough disabled")
 endif()
 
+# libslirp: the user-mode NAT network back end (type = "nat"). Found like
+# libusb, and used only if a program built for this lane links against it
+# (an x86-64 lane on an arm64 Mac would find Homebrew's arm64 build). Not
+# bundled: it brings glib, which is linked dynamically from the system.
+if (NOT DISABLE_SLIRP STREQUAL "yes" AND NOT WIN32)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBSLIRP QUIET IMPORTED_TARGET slirp)
+    endif()
+    if(LIBSLIRP_FOUND)
+        include(CheckCXXSourceCompiles)
+        set(CMAKE_REQUIRED_INCLUDES ${LIBSLIRP_INCLUDE_DIRS})
+        set(CMAKE_REQUIRED_LIBRARIES ${LIBSLIRP_LDFLAGS})
+        check_cxx_source_compiles(
+            "#include <libslirp.h>\nint main() { return slirp_version_string() == nullptr; }"
+            HAVE_SLIRP)
+        unset(CMAKE_REQUIRED_INCLUDES)
+        unset(CMAKE_REQUIRED_LIBRARIES)
+    endif()
+    if(HAVE_SLIRP)
+        target_link_libraries(alphabox PkgConfig::LIBSLIRP)
+        message(STATUS "libslirp found. NAT networking (type = \"nat\") enabled")
+    else()
+        message(STATUS "libslirp not found (or not for this architecture). NAT networking disabled")
+    endif()
+else()
+    message(STATUS "libslirp disabled. NAT networking disabled")
+endif()
+
 if (DISABLE_SDL STREQUAL "yes")
     set(HAVE_SDL 0)
 else()
@@ -519,6 +548,17 @@ target_include_directories(pcibridge_test PRIVATE
     $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
 target_link_libraries(pcibridge_test Threads::Threads)
 add_test(NAME pcibridge COMMAND pcibridge_test)
+
+# The NAT network back end (libslirp) driven with hand-built guest frames:
+# DHCP, BOOTP, TFTP, TCP to the host, hostfwd, loss and retransmission.
+if(HAVE_SLIRP)
+    add_executable(nat_test test/unit/nat_test.cpp
+        src/devices/net/NetworkNat.cpp)
+    target_include_directories(nat_test PRIVATE
+        $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+    target_link_libraries(nat_test PkgConfig::LIBSLIRP Threads::Threads)
+    add_test(NAME nat COMMAND nat_test)
+endif()
 
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")

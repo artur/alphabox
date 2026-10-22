@@ -645,15 +645,23 @@ static const char *const kv_s3virge[] = {"rom", "chip", "memory", 0};
 static const char *const kv_tga[] = {"rom", "model", 0};
 static const char *const kv_radeon[] = {"rom", "chip", "memory", "model", 0};
 static const char *const kv_tulip[] = {
-    "adapter",   "mac",        "queue",  "crc",    "trace_packets",
-    "type",      "host_ip",    "bridge", "uplink", "tap_create",
-    "udp_local", "udp_remote", 0};
+    "adapter",    "mac",           "queue",     "crc",      "trace_packets",
+    "type",       "host_ip",       "bridge",    "uplink",   "tap_create",
+    "udp_local",  "udp_remote",    "net",       "host",     "dns",
+    "dhcp_start", "hostname",      "tftp_root", "bootfile", "hostfwd",
+    "restrict",   "host_loopback", "ipv6",      0};
 static const char *const kv_i8255x[] = {
-    "adapter", "mac",        "type",      "host_ip",    "bridge",
-    "uplink",  "tap_create", "udp_local", "udp_remote", 0};
+    "adapter",  "mac",        "type",       "host_ip",       "bridge",
+    "uplink",   "tap_create", "udp_local",  "udp_remote",    "net",
+    "host",     "dns",        "dhcp_start", "hostname",      "tftp_root",
+    "bootfile", "hostfwd",    "restrict",   "host_loopback", "ipv6",
+    0};
 static const char *const kv_virtio_net[] = {
-    "mac",     "type",       "host_ip",   "bridge",     "uplink",
-    "adapter", "tap_create", "udp_local", "udp_remote", 0};
+    "mac",      "type",       "host_ip",    "bridge",        "uplink",
+    "adapter",  "tap_create", "udp_local",  "udp_remote",    "net",
+    "host",     "dns",        "dhcp_start", "hostname",      "tftp_root",
+    "bootfile", "hostfwd",    "restrict",   "host_loopback", "ipv6",
+    0};
 static const char *const kv_disk_file[] = {"file",
                                            "model_number",
                                            "serial_number",

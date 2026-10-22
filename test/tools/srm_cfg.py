@@ -28,6 +28,9 @@ change it for the SRM probes:
                         cache is named after it
   --nic-udp N:P         put that NIC on the UDP backend instead: listening
                         on 127.0.0.1:N, sending to 127.0.0.1:P (net_peer.py)
+  --nic-nat TFTPDIR     put that NIC on the NAT backend instead (libslirp):
+                        BOOTP offers 10.0.2.15 and TFTP serves TFTPDIR,
+                        bootfile boot.img
   --extra-cfg FILE      configuration text added inside the machine block
                         (bridges, more PCI devices, ...)
   --ide-cfg FILE        body of the pci0.15 ali_ide block (drives)
@@ -115,6 +118,7 @@ def main():
     ap.add_argument("--platform")
     ap.add_argument("--rom")
     ap.add_argument("--nic-udp")
+    ap.add_argument("--nic-nat")
     ap.add_argument("--extra-cfg")
     ap.add_argument("--ide-cfg")
     ap.add_argument("--floppy")
@@ -212,6 +216,10 @@ def main():
             backend = ("    type = \"udp\";\n"
                        "    udp_local = \"127.0.0.1:%s\";\n"
                        "    udp_remote = \"127.0.0.1:%s\";\n") % (nic_port, peer_port)
+        elif args.nic_nat:
+            backend = ("    type = \"nat\";\n"
+                       "    tftp_root = \"%s\";\n"
+                       "    bootfile = \"boot.img\";\n") % args.nic_nat
         else:
             backend = "    type = \"null\";\n"
         extra += "\n  %s = %s\n  {\n%s  }\n" % (slots["nic"], args.nic, backend)

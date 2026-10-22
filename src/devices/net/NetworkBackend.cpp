@@ -32,6 +32,9 @@
 #endif
 
 #include "NetworkLoopback.hpp"
+#if defined(HAVE_SLIRP)
+#include "NetworkNat.hpp"
+#endif
 #include "NetworkNull.hpp"
 #include "NetworkUdp.hpp"
 
@@ -51,10 +54,19 @@ const char *network_backend_refusal(const char *type) {
     return "TAP networking is only supported on Linux";
 #endif
   }
+  if (!strcasecmp(type, "nat")) {
+#if defined(HAVE_SLIRP)
+    return nullptr;
+#else
+    return "NAT networking needs libslirp, which this build lacks (brew "
+           "install libslirp, apt install libslirp-dev, then configure "
+           "again); type = \"udp\", \"loopback\" or \"null\" need nothing";
+#endif
+  }
   if (!strcasecmp(type, "null") || !strcasecmp(type, "loopback") ||
       !strcasecmp(type, "udp"))
     return nullptr;
-  return "unknown network type: pcap, tap, udp, loopback or null";
+  return "unknown network type: pcap, tap, nat, udp, loopback or null";
 }
 
 CNetworkBackend *create_network_backend(CConfigurator *cfg) {
@@ -79,6 +91,12 @@ CNetworkBackend *create_network_backend(CConfigurator *cfg) {
   // A point-to-point link over UDP to another program; no privileges.
   if (type && strcasecmp(type, "udp") == 0)
     return new CNetworkUdp();
+
+#if defined(HAVE_SLIRP)
+  // A user-mode NAT router (libslirp): DHCP, DNS, TFTP, TCP and UDP out.
+  if (type && strcasecmp(type, "nat") == 0)
+    return new CNetworkNat();
+#endif
 
 #if defined(__linux__)
   if (type && strcasecmp(type, "tap") == 0)

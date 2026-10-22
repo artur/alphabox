@@ -74,6 +74,10 @@ static void print_version() {
   printf(" libusb");
   features++;
 #endif
+#if defined(HAVE_SLIRP)
+  printf(" libslirp");
+  features++;
+#endif
 #if defined(__linux__)
   printf(" TAP");
   features++;

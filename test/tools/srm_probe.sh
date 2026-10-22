@@ -15,6 +15,11 @@
 #   NET_PEER=N:P         with NIC: UDP backend on port N, and net_peer.py on
 #                        port P answering ARP/BOOTP/TFTP (log: peer.log);
 #                        NET_PEER_OPT="..." adds net_peer.py options
+#   NAT=1                with NIC: the NAT backend (libslirp) instead of the
+#                        null one; TFTP serves a CALL_PAL HALT image as
+#                        boot.img; with CMDS="set ewa0_protocols bootp|boot
+#                        ewa0" it ends in "HALT instruction executed"
+#                        (needs a build that lists libslirp)
 #   EXTRA_CFG=<file>     configuration text for the machine block
 #   IDE_CFG=<file>       drives for the ali_ide block
 #   FLOPPY=<image>|halt  fdc0 with this image; "halt" generates the CALL_PAL
@@ -67,6 +72,11 @@ if [ -n "${ROM:-}" ]; then
 fi
 [ -n "${NIC:-}" ] && cfg+=(--nic "$NIC")
 [ -n "${NET_PEER:-}" ] && cfg+=(--nic-udp "$NET_PEER")
+if [ "${NAT:-0}" = 1 ]; then
+  mkdir -p "$D/tftp" || exit 2
+  python3 -c 'import sys; sys.stdout.buffer.write(b"\0\0\0\0" + bytes((i * 7 + 3) & 255 for i in range(65536 + 96)))' > "$D/tftp/boot.img"
+  cfg+=(--nic-nat "$D/tftp")
+fi
 [ -n "${EXTRA_CFG:-}" ] && cfg+=(--extra-cfg "$(cd "$(dirname "$EXTRA_CFG")" && pwd)/$(basename "$EXTRA_CFG")")
 [ -n "${IDE_CFG:-}" ] && cfg+=(--ide-cfg "$IDE_CFG")
 [ "${EXIT_ON_HALT:-0}" = 1 ] && cfg+=(--exit-on-halt)

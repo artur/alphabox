@@ -992,12 +992,14 @@ static int configure_session(const string &out) {
       type_q.setQuestion("What network backend type should be used?");
       type_q.setExplanation(
           "pcap captures on a host interface (needs capture permission); "
-          "tap is a Linux TAP device (bridgeable, host-reachable); udp is a "
+          "tap is a Linux TAP device (bridgeable, host-reachable); nat is a "
+          "user-mode NAT router needing no privileges (libslirp); udp is a "
           "link to another program, one frame per datagram; loopback "
           "returns what is sent; null connects to nothing.");
       static const char *const types[][2] = {
           {"pcap", "capture on a host interface"},
           {"tap", "a Linux TAP device"},
+          {"nat", "a user-mode NAT router (DHCP, DNS, TFTP; no privileges)"},
           {"udp", "a UDP link to another program"},
           {"loopback", "a loopback plug"},
           {"null", "not connected"}};
