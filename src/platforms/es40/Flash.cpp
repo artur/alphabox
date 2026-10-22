@@ -309,8 +309,9 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       m_flash[a] = newv;
       last_dirty.store(time(nullptr));
       dirty.store(true);
-      printf("%%SRM-I-FLASH: Wrote data: 0x%02X to sector address: 0x%04X\n",
-             byte, a);
+      // One line per byte: a firmware update programs millions.
+      if (trace_on())
+        printf("%%FLS-T-TRACE: programmed %08x = %02x\n", a, newv);
     }
 
     mode = MODE_READ;
