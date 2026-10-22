@@ -52,6 +52,12 @@ first audit was made on 2026-09-18; later entries carry their dates.
   architecture without a guest: IEEE results and flags against the host
   FPU in every rounding mode, VAX results against an exact model, and hand
   cases from the manuals ([development.md](development.md)).
+- **The instruction oracle**: `test/cpu/cpu_oracle.py <binary>` runs about
+  18,500 results from 16,000 cases without firmware, each from the
+  interpreter and from compiled code, against a model written from the
+  ARM and the HRM ([development.md](development.md)). A divergence listed
+  here has a case that expects the manual's value and names the entry, so
+  the case reports KNOWN until it is fixed and PASS after.
 - **Guest programs**: `test/tools/bench_image.py` writes a bootable image
   from a list of instruction words, and `srm_probe.sh` boots one
   (`FLOPPY=<image> EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit`). A
@@ -364,6 +370,11 @@ still faults with the FPU disabled: the architecture says any of them may.
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
+| A `STx_C` succeeds after an ordinary load or store ran between it and its `LDx_L`, where HRM D.19 (Restriction 23, p. D-13) says the 21264 makes it fail; the ARM leaves it UNPREDICTABLE (4.2.4) | `System.cpp` `cpu_stx_c` | "No useful program should do this" (ARM 4.2.4). Found by the oracle (CPU-01) |
+| `CALL_PAL` writes `EXC_ADDR` with its own PC. HRM 6.8 makes CALL_PAL entries and exceptions two classes, and 5.2.7 says `EXC_ADDR` is updated "when it encounters an exception or interrupt" | `cpu_misc.hpp` `ENTER_NATIVE_CALL_PAL`, the JIT's `OP_CALL_PAL` | PALcode that reads `EXC_ADDR` inside a CALL_PAL routine would see the call, not the last exception. None known (CPU-02) |
+| `LDQ_U` to R31 (`UNOP`) is performed: translated, able to fault, and read; HRM 2.5 Table 2-6 retires it without execution. The other loads to R31 are performed too, which matches the 21264's DTB miss (HRM 2.6: "these exceptions must be dismissed by PALcode"), but a prefetch to I/O space reads the device, where the 21264 reads memory (HRM 4.2, p. 4-5). The `if (Ra != 31)` in `DO_LDBU`/`DO_LDWU`/`DO_LDL`/`DO_LDQ`/`DO_LDQ_U` guards only the first statement of the `READ_VIRT` macro | `cpu_memory.hpp`, `cpu_defs.hpp` | An `UNOP` with a stray base register can fault. Compiled code instead skips `LDQ`/`LDBU`/`LDWU` to R31 altogether (no DTB miss), so the two engines disagree where `JIT_VERIFY` cannot see it (CPU-03, CPU-05) |
+| An integer operate with R31 as its destination still traps on overflow (`ADDQ/V`...): HRM 2.5 Table 2-6 retires it at decode; ARM 14.3.2 leaves it UNPREDICTABLE | `cpu_arith.hpp` | Only hand-written code (CPU-04) |
+| The reserved barrier code point `18.4800` flushes the instruction cache and the ITB and is no memory barrier; ARM C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18, `DO_IMB` | As for `18.4C00` above (CPU-06) |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need
@@ -527,7 +538,11 @@ one processor and on two, reproducibly, where the unchanged build reaches
 the desktop.
 
 What that says is that the PALcode image we run makes the adjustment
-itself, which is what the line above always claimed. The architecture
+itself, which is what the line above always claimed. The 21264's own
+manual says so too: "If the exception was a fault or a synchronous trap,
+EXC_ADDR contains the PC of the instruction that triggered the fault or
+trap" (HRM 5.2.7, p. 5-8), and Table 6-8 lists ARITH as a synchronous
+trap. The instruction oracle checks it on every `/V` case. The architecture
 describes the PC the *operating system's* handler is entitled to. Between
 the hardware and that handler sits PALcode, and this one expects the
 trigger's own PC from the processor. Anyone revisiting this needs a guest
