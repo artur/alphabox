@@ -19,8 +19,9 @@ case starts a block of its own (image.Builder.block) so that it does.
 On an interpreter lane the two simply agree.
 
 Each result is PASS (the manual's value), KNOWN (the value of a divergence
-documented in docs/cpu-fidelity.md, which the case names; a CPU-nn name is
-a finding of the CPU audit, listed there with it) or FAIL, and so is a trap
+documented in docs/cpu-fidelity.md, which the case names; a CPU-nn or JIT-nn
+name is a finding of the CPU or the JIT audit, listed there with it) or
+FAIL, and so is a trap
 that no case expected. Exit status 0 when nothing FAILed. A KNOWN case that
 passes on both engines is listed, so its entry can go with the fix.
 """

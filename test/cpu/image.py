@@ -17,8 +17,10 @@ superpage access; only the user-mode cases (CALL_PAL 02) fill the TBs.
 
 The PALcode records every exception in a trap record (TR) and resumes:
 faults and traps at EXC_ADDR + 4 (skipping the instruction), interrupts at
-EXC_ADDR, and anything it cannot resume from (ITB miss, IACV, machine
-check, double miss, reset) ends the run through the native `fatal` path.
+EXC_ADDR after clearing SIRR, IER and ASTRR (only the JIT cases raise
+any), an IACV on the kernel-only code page in kernel mode at R17, and
+anything it cannot resume from (ITB miss, any other IACV, machine check,
+double miss, reset) ends the run through the native `fatal` path.
 """
 import struct
 
@@ -44,6 +46,9 @@ USER_CODE_VA = 0x20000000          # ITB: USER_PA, read in every mode
 USER_DATA_VA = 0x20002000          # DTB: scratch page 2, read/write in every mode
 USER_KONLY_VA = 0x20004000         # DTB: scratch page 2, kernel read/write only
 USER_FAULT_VA = 0x20006000         # DTB: scratch page 2, every mode, FOR and FOW set
+KCODE_PA = 0x1DA000                # one 8 KB page of code only kernel mode may run
+KCODE_VA = 0x20008000              # ITB: KCODE_PA, KRE only
+JPAL_SCR_PA = SCR_PA + 0x5F00      # scratch page 2: the PAL service's HW_ST/HW_LD
 IMAGE_TOP = 0x200000               # the decompressed image holds 2 MB
 BUF_A_PA = 0x400000                # first pass: always interpreted
 BUF_B_PA = 0x800000                # the other passes: compiled on a JIT lane
@@ -142,13 +147,31 @@ def build_pal(tr_pa, main_va, fatal_va):
     com.emit(hw_st(P7, P20, TR_MM_STAT))
     com.emit(hw_st(P21, P20, TR_VA))
     com.emit(lda(P22, P4, -0x680))         # an interrupt resumes where it hit
-    com.branch(OP["BEQ"], P22, "resume")
+    com.branch(OP["BEQ"], P22, "intr")
+    # An IACV on the kernel-only code page (the JIT cases' user-mode fetch
+    # from it) returns to kernel mode at R17; any other IACV is fatal.
+    com.emit(lda(P22, P4, -0x480))
+    com.branch(OP["BNE"], P22, "not_iacv")
+    com.emit(opl(0x12, 0x34, P5, 13, P22))  # SRL EXC_ADDR,#13
+    com.li(P21, KCODE_VA >> 13)
+    com.emit(opr(0x10, 0x2D, P22, P21, P22))  # CMPEQ
+    com.branch(OP["BEQ"], P22, "fatal")
+    com.emit(hw_mtpr(R31, IPR["CM"]))     # kernel mode
+    com.emit(hw_ret(17, stall=True))
+    com.label("not_iacv")
     for v in FATAL_VECTORS:
         com.emit(lda(P22, P4, -v))
         com.branch(OP["BEQ"], P22, "fatal")
     com.emit(opl(0x10, 0x20, P5, 4, P5))   # fault or trap: skip the instruction
     com.label("resume")
     com.emit(hw_ret(P5))
+    # Interrupt: no request stays pending and nothing stays enabled (the JIT
+    # cases raise a software interrupt or a kernel AST, then return here).
+    com.label("intr")
+    com.emit(hw_mtpr(R31, IPR["SIRR"]))
+    com.emit(hw_mtpr(R31, IPR["IER"]))
+    com.emit(hw_mtpr(R31, IPR["PCTX"] | 0x04))  # ASTRR
+    com.emit(hw_ret(P5, stall=True))
     com.label("fatal")
     com.li(P5, fatal_va)
     com.emit(hw_ret(P5))
@@ -169,7 +192,27 @@ def build_pal(tr_pa, main_va, fatal_va):
     cp.emit(hw_ret(P23))
 
     umode = Asm(PAL_PA + 0x5000)
-    blocks = [init, com, cp]
+    # CALL_PAL 8A: arithmetic on the PALshadow and the main registers, a
+    # physical store and load, a branch and a CMOV, all in PALmode (the JIT
+    # compiles PALmode blocks with R4-R7/R20-R23 mapped to the shadow bank).
+    #   p4 = R16 + 1; p5 = p4 * 3; p6 = p5 XOR R17; HW_ST p6; p21 = HW_LD;
+    #   R0 = p21 + p4, + 7 unless R16 <u R17;
+    #   R1 = R16 <u R17 ? 4 * p4 + p5 : p6
+    jpal = Asm(PAL_PA + 0x5800)
+    jpal.emit(opl(0x10, 0x20, 16, 1, P4))      # ADDQ R16,#1,p4
+    jpal.emit(opl(0x13, 0x20, P4, 3, P5))      # MULQ p4,#3,p5
+    jpal.emit(opr(0x11, 0x40, P5, 17, P6))     # XOR p5,R17,p6
+    jpal.li(P7, JPAL_SCR_PA)
+    jpal.emit(hw_st(P6, P7, 0))
+    jpal.emit(hw_ld(P21, P7, 0))
+    jpal.emit(opr(0x10, 0x20, P21, P4, 0))     # ADDQ p21,p4,R0
+    jpal.emit(opr(0x10, 0x1D, 16, 17, P22))    # CMPULT R16,R17,p22
+    jpal.emit(bra(OP["BNE"], P22, 1))
+    jpal.emit(opl(0x10, 0x20, 0, 7, 0))        # ADDQ R0,#7,R0
+    jpal.emit(opr(0x10, 0x22, P4, P5, 1))      # S4ADDQ p4,p5,R1
+    jpal.emit(opr(0x11, 0x24, P22, P6, 1))     # CMOVEQ p22,p6,R1
+    jpal.emit(hw_ret(P23))
+    blocks = [init, com, cp, jpal]
     for off in VECTORS:
         v = Asm(PAL_PA + off)
         v.emit(lda(P4, R31, off))
@@ -193,6 +236,39 @@ def build_pal(tr_pa, main_va, fatal_va):
             e.emit(bis(P23, P23, 0))
             e.emit(hw_mfpr(1, IPR["EXC_ADDR"]))
             e.emit(hw_ret(P23))
+        # The JIT cases' services (cases.py, group jit*). An update of an
+        # Ibox IPR returns with HW_RET/STALL, so that it "affects all
+        # instructions following the return path" (HRM D.8, Restriction 11).
+        elif func == 0x85:                 # SIRR <- R16, IER <- R17
+            e.emit(hw_mtpr(16, IPR["SIRR"]))
+            e.emit(hw_mtpr(17, IPR["IER"]))
+            e.emit(hw_ret(P23, stall=True))
+        elif func == 0x86:                 # PCTX ASTER, ASTRR <- R16, IER <- R17
+            e.emit(hw_mtpr(16, IPR["PCTX"] | 0x06))
+            e.emit(hw_mtpr(17, IPR["IER"]))
+            e.emit(hw_ret(P23, stall=True))
+        elif func == 0x87:                 # I_CTL <- R16, return to R17
+            e.emit(hw_mtpr(16, IPR["I_CTL"]))
+            e.emit(hw_ret(17, stall=True))
+        elif func == 0x88:                 # R0 <- R4 of PALmode's bank, return to R17
+            e.emit(bis(4, 4, 0))
+            e.emit(hw_ret(17))
+        elif func == 0x89:                 # PALshadow R4 <- R16
+            e.emit(bis(16, 16, P4))
+            e.emit(hw_ret(P23))
+        elif func == 0x8A:                 # the arithmetic above
+            e.emit(bra(OP["BR"], R31, (jpal.base - (e.here + 4)) // 4))
+        elif func == 0x8C:                 # IER <- R17
+            e.emit(hw_mtpr(17, IPR["IER"]))
+            e.emit(hw_ret(P23, stall=True))
+        elif func in (0x8D, 0x8E):         # 8D: HW_STL R17 -> phys R16; both IC_FLUSH
+            if func == 0x8D:
+                e.emit(hw_st(17, 16, 0, quad=False))
+            # HRM D.20: a conditional branch between IC_FLUSH and the
+            # HW_RET/STALL, which the flush waits for.
+            e.emit(hw_mtpr(R31, IPR["IC_FLUSH"]))
+            e.emit(bra(OP["BNE"], R31, 0))
+            e.emit(hw_ret(P23, stall=True))
         else:
             e.emit(lda(P4, R31, off))
             e.emit(bra(OP["BR"], R31, (cp.base - (e.here + 4)) // 4))
@@ -202,6 +278,7 @@ def build_pal(tr_pa, main_va, fatal_va):
     # The body of CALL_PAL 02: the user-mode translations, then CM = user.
     for va, pte, itb in (
             (USER_CODE_VA, USER_PA | 0xF00 | 0x10, True),
+            (KCODE_VA, KCODE_PA | 0x100 | 0x10, True),
             (USER_DATA_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0xFF10, False),
             (USER_KONLY_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0x1110, False),
             (USER_FAULT_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0xFF16, False)):
@@ -286,6 +363,7 @@ class Builder:
         self.blocks = blocks
         self.asm = Asm(CODE_PA)
         self.user = Asm(USER_CODE_VA)
+        self.kcode = Asm(KCODE_VA)
         self.pool = {}          # value -> index
         self.results = []       # (case, field, expect, mask, known)
         self.res_base = 0       # byte offset R28 currently points at
@@ -305,6 +383,15 @@ class Builder:
         for w in words:
             self.user.emit(w)
         assert self.user.here - USER_CODE_VA <= 0x2000, "user page full"
+        return va
+
+    def kcode_snippet(self, words):
+        """Place instructions in the kernel-only code page (ITB: KRE only,
+        installed by CALL_PAL 02); returns their VA."""
+        va = self.kcode.here
+        for w in words:
+            self.kcode.emit(w)
+        assert self.kcode.here - KCODE_VA <= 0x2000, "kernel code page full"
         return va
 
     def begin(self, name):
@@ -449,6 +536,8 @@ class Builder:
             struct.pack_into("<Q", img, POOL_PA + 8 * i, v)
         for i, w in enumerate(self.user.finish()):
             struct.pack_into("<I", img, USER_PA + 4 * i, w)
+        for i, w in enumerate(self.kcode.finish()):
+            struct.pack_into("<I", img, KCODE_PA + 4 * i, w)
         for p in CONSOLE_PATCHES:
             assert img[p:p + 4] == bytes(4), "a console patch lands on the image"
         self.code_words = len(code)

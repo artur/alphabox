@@ -5,12 +5,14 @@ every stored result must be.
 References: ARM = Alpha Architecture Reference Manual, 4th edition; HRM =
 21264/EV68CB-DC Hardware Reference Manual. A `known` value is a documented
 divergence: docs/cpu-fidelity.md, or a finding of lab/legacy-audit/cpu/
-AUDIT.md (CPU-nn) until it is fixed.
+AUDIT.md (CPU-nn) or lab/legacy-audit/jit/AUDIT.md (JIT-nn) until it is
+fixed. The JIT groups are in jit_cases.py.
 """
 import aarm
 import alpha_asm as A
 from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
+import jit_cases
 from image import R_SCR, R_TR, TR_COUNT
 
 M64 = (1 << 64) - 1
@@ -31,7 +33,7 @@ GROUPS = [
     ("misc", "AMASK, IMPLVER, RPCC, barriers, hints, RC/RS, OPCDEC, CALL_PAL"),
     ("mode", "user mode: privileged CALL_PAL and PALRES OPCDEC, superpage "
              "ACV, ITB/DTB fills, DTB protection, FOR/FOW, MM_STAT"),
-]
+] + jit_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
 
@@ -924,6 +926,7 @@ def g_mode(b):
 EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
         "unaligned": g_unaligned, "llsc": g_llsc, "branch": g_branch,
         "fix": g_fix, "misc": g_misc, "mode": g_mode}
+EMIT.update(jit_cases.EMIT)
 
 
 def emit(b, groups):
