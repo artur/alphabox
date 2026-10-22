@@ -1935,7 +1935,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
-    // CALL_PAL: R23 (shadow-aware) = return address, PC = pal_base | entry
+    // CALL_PAL: PALshadow R23 = return address, PC = pal_base | entry
     // offset; privileged funcs OPCDEC in user mode. EXC_ADDR is left alone:
     // CALL_PAL is not an exception (ENTER_NATIVE_CALL_PAL).
     if (op == OP_CALL_PAL) {
@@ -1954,19 +1954,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b(done);
       }
       a.bind(do_vector);
-      a.ldrb(w11, fld(m_off.sde, 0));
-      a.lsl(w11, w11, imm(5));
-      a.add(w11, w11, imm(23)); // R23 index: 23, or 55 if SDE
+      // The PALshadow R23, whatever SDE says (SAVE_CALL_PAL_R23).
       a.mov(x12, imm(ret));
-      a.add(x11, x11, imm(kRegs / 8)); // slot index from the cpu pointer
-      a.str(x12, a64::ptr(kCpu, x11, a64::lsl(3)));
-      if (regalloc.host_of(23) >= 0) { // a pinned R23 is the main bank's
-        Label shadow = a.new_label();
-        a.ldrb(w11, fld(m_off.sde, 0));
-        a.cbnz(w11, shadow);
-        a.mov(a64::x((uint32_t)regalloc.host_of(23)), x12);
-        a.bind(shadow);
-      }
+      a.str(x12, fld(kRegs + 55 * 8, 3));
       a.ldr(x9, fld(m_off.pal_base, 3));
       a.mov(x11, imm(voff));
       a.orr(x9, x9, x11);

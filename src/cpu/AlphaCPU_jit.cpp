@@ -2602,8 +2602,7 @@ void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
     break;
   case 0x11: // I_CTL (terminator; mirrors DO_HW_MTPR)
     cpu->state.i_ctl_other =
-        (value & U64(0x00000000006e2f67)) |
-        U64(0x0000000000100000); // bit 20 hardwired-on (EV6/EV68)
+        value & U64(0x00000000007e2f67); // bit 20: ST_WAIT_64K, read-write
     cpu->state.i_ctl_vptb = sext_u64_48(value & U64(0x0000ffffc0000000));
     cpu->state.i_ctl_spe = (int)((value >> 3) & 7);
     cpu->state.sde = (value >> 7) & 1;

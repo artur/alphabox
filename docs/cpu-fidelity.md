@@ -451,6 +451,20 @@ which only `18.4800` ran, is gone, and with it the line here that said
 the instruction cache with `HW_MTPR IC_FLUSH` (the interpreter's native
 OpenVMS routine does the same) and leaves the ITB alone.
 
+**The `CALL_PAL` linkage and `I_CTL`** (CPU-08, CPU-10). With
+`I_CTL[SDE<1>]` clear the return address of a `CALL_PAL` went to the
+native R23 and clobbered it; the hardware writes the PALshadow R23
+whatever `SDE` says ("PALshadow register R23 is used as the linkage
+register", HRM 6.8.1), and so do both engines now. `I_CTL<20>` was
+forced to 1 on every write; on the EV68CB it is `ST_WAIT_64K`, read-write
+and cleared by reset (HRM Table 5-11; on the EV6 that bit is
+`CALL_PAL_R23`), and it keeps what PALcode writes. The value `I_CTL`
+starts with, the SROM's 0x502086, read back `SDE<1>` set while the
+PALshadow registers stayed off until the console's first `HW_MTPR
+I_CTL`; it starts at 0x502006 now, so a read agrees with what the
+processor does. PALcode runs with `SDE` set and saves and restores
+`I_CTL` whole, so nothing a guest runs saw either.
+
 ### Smaller ones
 
 | What | Where | Consequence |

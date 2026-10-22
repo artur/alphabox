@@ -3257,12 +3257,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.jmp(done); // trap path exits (does not chain)
       }
       a.bind(do_vector);
-      a.movzx(x86::eax, x86::byte_ptr(x86::rbp, m_off.sde)); // SDE (0/1)
-      a.shl(x86::eax, imm(5));                               // * 32
-      a.add(x86::eax, imm(23)); // R23 index: 23, or 55 if SDE
       a.mov(x86::rcx, imm(ret));
-      a.mov(x86::qword_ptr(x86::rbx, x86::rax, 3),
-            x86::rcx); // r[idx] = return address
+      a.mov(x86::qword_ptr(x86::rbx, 55 * 8),
+            x86::rcx); // PALshadow R23 = return address, whatever SDE
       a.mov(x86::r10, x86::qword_ptr(x86::rbp, m_off.pal_base));
       a.or_(x86::r10, imm(voff)); // r10 = pal_base | entry offset
       a.mov(x86::qword_ptr(x86::rbp, m_off.state_pc),

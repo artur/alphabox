@@ -243,9 +243,8 @@
       break;                                                                   \
                                                                                \
     case 0x11: /* i_ctl */                                                     \
-      /* Bit 20 (CALL_PAL_R23 / ST_WAIT_64K) is hardwired-on for EV6/EV68 */   \
-      state.i_ctl_other = (state.r[REG_2] & U64(0x00000000006e2f67)) |         \
-                          U64(0x0000000000100000);                             \
+      /* Bit 20 is ST_WAIT_64K on the EV68CB, read-write (HRM Table 5-11) */   \
+      state.i_ctl_other = state.r[REG_2] & U64(0x00000000007e2f67);            \
       state.i_ctl_vptb =                                                       \
           sext_u64_48(state.r[REG_2] & U64(0x0000ffffc0000000));               \
       state.i_ctl_spe = (int)((state.r[REG_2] >> 3) & 7);                      \

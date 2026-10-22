@@ -47,9 +47,11 @@
     }                                                                          \
   } while (0)
 
+/* The linkage register is the PALshadow R23 whatever I_CTL[SDE] says (HRM
+   6.8.1: "PALshadow register R23 is used as the linkage register"). */
 #define SAVE_CALL_PAL_R23()                                                    \
   do {                                                                         \
-    state.r[(state.sde ? 32 : 0) + 23] = state.pc & ~U64(0x2);                 \
+    state.r[32 + 23] = state.pc & ~U64(0x2);                                   \
   } while (0)
 
 /* CALL_PAL is not an exception: EXC_ADDR keeps the PC of the last exception

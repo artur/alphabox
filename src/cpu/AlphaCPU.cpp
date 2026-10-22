@@ -695,7 +695,9 @@ void CAlphaCPU::init() {
 
   //  state.fpcr = U64(0x8ff0000000000000);
   state.fpen = true;
-  state.i_ctl_other = U64(0x502086);
+  // I_CTL as the SROM leaves it, SDE<1> apart: state.sde holds that, and
+  // stays clear until the console writes I_CTL, so a read says so too.
+  state.i_ctl_other = U64(0x502006);
   state.smc = 1;
 
   // SROM imitation...
@@ -780,7 +782,9 @@ void CAlphaCPU::ResetForSystemReset() {
   tbia(ACCESS_EXEC);
 
   state.fpen = true;
-  state.i_ctl_other = U64(0x502086);
+  // I_CTL as the SROM leaves it, SDE<1> apart: state.sde holds that, and
+  // stays clear until the console writes I_CTL, so a read says so too.
+  state.i_ctl_other = U64(0x502006);
   state.smc = 1;
 
   // SROM imitation...
