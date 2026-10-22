@@ -503,6 +503,14 @@ target_include_directories(irqlines_test PRIVATE src/system)
 target_link_libraries(irqlines_test Threads::Threads)
 add_test(NAME irqlines COMMAND irqlines_test)
 
+# The PCI configuration space every device inherits (CPCIDevice).
+add_executable(pcicfg_test test/unit/pcicfg_test.cpp
+    src/devices/pci/PCIDevice.cpp)
+target_include_directories(pcicfg_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(pcicfg_test Threads::Threads)
+add_test(NAME pcicfg COMMAND pcicfg_test)
+
 message(STATUS "C++ compiler flags  : ${CMAKE_CXX_FLAGS}")
 message(STATUS "C compiler flags    : ${CMAKE_C_FLAGS}")
 message(STATUS "Linker flags        : ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS}")

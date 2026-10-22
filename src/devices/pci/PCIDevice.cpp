@@ -94,6 +94,13 @@ CPCIDevice::CPCIDevice(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
   for (i = 0; i < MAX_DEV_RANGES; i++)
     dev_range_is_io[i] = false;
 
+  // The functions a device does not have are never written (ResetPCI skips
+  // them), but the state file carries all eight: they must hold zeros, not
+  // what the heap had there before.
+  memset(std_config_data, 0, sizeof(std_config_data));
+  memset(std_config_mask, 0, sizeof(std_config_mask));
+  memset(&pci_state, 0, sizeof(pci_state));
+
   myPCIBus = pcibus;
   myPCIDev = pcidev;
 
@@ -194,10 +201,24 @@ void CPCIDevice::add_hose_mem(int id, u32 base, u32 length) {
   cSystem->RegisterMemory(this, id, bus_address(false, base), length);
 }
 
+/// Whether an access of `dsize` bits at `address` stays inside a function's
+/// 256 bytes of configuration space. A configuration cycle is one
+/// doubleword with byte enables (PCI 2.2 3.2.2.3.1), so nothing on a bus
+/// asks for more; but the processor completes an unaligned access that
+/// stays within a page, and a longword at offset FDh, or a quadword at FCh,
+/// would run past this function's registers into the next function's, or
+/// past the state structure altogether.
+static bool config_in_range(u32 address, int dsize) {
+  return address < 0x100 && address + (u32)dsize / 8 <= 0x100;
+}
+
 u32 CPCIDevice::config_read(int func, u32 address, int dsize) {
   u8 *x;
 
   u32 data = 0;
+
+  if (!config_in_range(address, dsize))
+    return dsize >= 32 ? 0xffffffffu : (1u << dsize) - 1; // nothing there
 
   x = (u8 *)pci_state.config_data[func];
   x += address;
@@ -231,6 +252,9 @@ void CPCIDevice::config_write(int func, u32 address, int dsize, u32 data) {
   u32 mask = 0;
   u32 old_data = 0;
   u32 new_data = 0;
+
+  if (!config_in_range(address, dsize))
+    return; // dropped, as a write nothing claims is
 
   x = (u8 *)pci_state.config_data[func];
   x += address;
@@ -657,6 +681,8 @@ int CPCIDevice::RestoreState(FILE *f) {
   // unclaimed after a restore, every access read as unknown memory, and the
   // display driver spun on a status register forever.
   for (int func = 0; func < 8; func++) {
+    if (!device_at[func])
+      continue; // a function the device does not have maps nothing
     for (int d = 0x10; d <= 0x30; d += 4) {
       if (d > 0x24 && d != 0x30)
         continue; // BARs 0-5 at 0x10..0x24, the ROM BAR at 0x30

@@ -293,6 +293,7 @@ driver does. Each is an executable in every build directory, and `ctest
 | `kbc_test` | The 8042 keyboard controller, keyboard and mouse (`Keyboard.cpp`): ports 60h and 64h, host keys and mouse motion, save and restore. |
 | `uart16550_test` | The 16550 UART model (`Uart16550.cpp`): the register sequences consoles and drivers make, against the data sheet's answers. |
 | `irqlines_test` | The wire-OR of the chipset's interrupt inputs (`InterruptLines.hpp`): devices and functions sharing an input, from several threads at once. |
+| `pcicfg_test` | The configuration space every PCI device inherits (`PCIDevice.cpp`): write masks, BAR and ROM sizing, access sizes, accesses past a function's 256 bytes, the state file. |
 
 ### The original regression test
 
