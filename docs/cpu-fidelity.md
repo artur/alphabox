@@ -394,6 +394,16 @@ the fix the SRM console log is unchanged on the interpreter, JIT and
 `JIT_VERIFY` (768 million compiled blocks, 0 mismatches); Gentoo Linux
 logged in, compiled and ran a C program (`guests_check.sh linux`).
 
+**An operate into R31 that overflows** (CPU-04). `ADDL/V`, `ADDQ/V`,
+`SUBL/V`, `SUBQ/V`, `MULL/V` and `MULQ/V` with R31 as the destination
+took the arithmetic trap. The 21264 retires an integer operate into R31
+at decode without executing it (HRM 2.5, Table 2-6), so nothing overflows;
+the ARM leaves it UNPREDICTABLE (14.3.2). They no longer trap. Compiled
+code does not compile the `/V` forms, so the interpreter's rule is the
+only one. SRM's console log is unchanged on the interpreter, JIT and
+`JIT_VERIFY` lanes, and Windows 2000 RC2 on two processors reached its
+desktop.
+
 ### Smaller ones
 
 | What | Where | Consequence |
@@ -409,7 +419,6 @@ logged in, compiled and ran a C program (`guests_check.sh linux`).
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
 | A `STx_C` succeeds after an ordinary load or store ran between it and its `LDx_L`, where HRM D.19 (Restriction 23, p. D-13) says the 21264 makes it fail; the ARM leaves it UNPREDICTABLE (4.2.4) | `System.cpp` `cpu_stx_c` | "No useful program should do this" (ARM 4.2.4). Found by the oracle (CPU-01) |
 | `CALL_PAL` writes `EXC_ADDR` with its own PC. HRM 6.8 makes CALL_PAL entries and exceptions two classes, and 5.2.7 says `EXC_ADDR` is updated "when it encounters an exception or interrupt" | `cpu_misc.hpp` `ENTER_NATIVE_CALL_PAL`, the JIT's `OP_CALL_PAL` | PALcode that reads `EXC_ADDR` inside a CALL_PAL routine would see the call, not the last exception. None known (CPU-02) |
-| An integer operate with R31 as its destination still traps on overflow (`ADDQ/V`...): HRM 2.5 Table 2-6 retires it at decode; ARM 14.3.2 leaves it UNPREDICTABLE | `cpu_arith.hpp` | Only hand-written code (CPU-04) |
 | The reserved barrier code point `18.4800` flushes the instruction cache and the ITB and is no memory barrier; ARM C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18, `DO_IMB` | As for `18.4C00` above (CPU-06) |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 

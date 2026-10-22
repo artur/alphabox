@@ -43,6 +43,11 @@
 #define ARITH_TRAP_PRINTF(...) ((void)0)
 #endif
 
+/* The /V forms trap on overflow, except into R31: an operate with R31 as its
+   destination is retired at decode without being executed (HRM 2.5, Table
+   2-6), so it cannot overflow. The ARM leaves that case UNPREDICTABLE
+   (14.3.2). */
+
 /* addition */
 #define DO_ADDQ RCV = RAV + RBV;
 #define DO_S4ADDQ RCV = (RAV * 4) + RBV;
@@ -55,7 +60,7 @@
     RCV = rav + rbv;                                                           \
                                                                                \
     /* test for integer overflow */                                            \
-    if (((~rav ^ rbv) & (rav ^ RCV)) & Q_SIGN) {                               \
+    if (RC != 31 && (((~rav ^ rbv) & (rav ^ RCV)) & Q_SIGN)) {                 \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("ADDQ_V %016" PRIx64 " + %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \
@@ -74,7 +79,7 @@
     RCV = sext_u64_32(rav + rbv);                                              \
                                                                                \
     /* test for integer overflow */                                            \
-    if (((~rav ^ rbv) & (rav ^ RCV)) & L_SIGN) {                               \
+    if (RC != 31 && (((~rav ^ rbv) & (rav ^ RCV)) & L_SIGN)) {                 \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("ADDL_V %016" PRIx64 " + %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \
@@ -185,7 +190,7 @@ __forceinline static unsigned __int64 alpha_popcnt64(unsigned __int64 x) {
     u64 rbv = RBV;                                                             \
     u64 sr = sext_u64_32(rav) * sext_u64_32(rbv);                              \
     RCV = sext_u64_32(sr);                                                     \
-    if ((RCV ^ sr) & U64(0xffffffff00000000)) {                                \
+    if (RC != 31 && ((RCV ^ sr) & U64(0xffffffff00000000))) {                  \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("MULL_V %016" PRIx64 " * %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \
@@ -205,7 +210,7 @@ __forceinline static unsigned __int64 alpha_popcnt64(unsigned __int64 x) {
       t64 -= rbv;                                                              \
     if (Q_GETSIGN(rbv))                                                        \
       t64 -= rav;                                                              \
-    if (Q_GETSIGN(RCV) ? (t64 != X64_QUAD) : (t64 != 0)) {                     \
+    if (RC != 31 && (Q_GETSIGN(RCV) ? (t64 != X64_QUAD) : (t64 != 0))) {       \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("MULQ_V %016" PRIx64 " * %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \
@@ -227,7 +232,7 @@ __forceinline static unsigned __int64 alpha_popcnt64(unsigned __int64 x) {
     RCV = rav - rbv;                                                           \
                                                                                \
     /* test for integer overflow */                                            \
-    if (((rav ^ rbv) & (rav ^ RCV)) & Q_SIGN) {                                \
+    if (RC != 31 && (((rav ^ rbv) & (rav ^ RCV)) & Q_SIGN)) {                  \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("SUBQ_V %016" PRIx64 " - %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \
@@ -246,7 +251,7 @@ __forceinline static unsigned __int64 alpha_popcnt64(unsigned __int64 x) {
     RCV = sext_u64_32(rav - rbv);                                              \
                                                                                \
     /* test for integer overflow */                                            \
-    if (((rav ^ rbv) & (rav ^ RCV)) & L_SIGN) {                                \
+    if (RC != 31 && (((rav ^ rbv) & (rav ^ RCV)) & L_SIGN)) {                  \
       ARITH_TRAP_I(TRAP_IOV, RC);                                              \
       ARITH_TRAP_PRINTF("SUBL_V %016" PRIx64 " - %016" PRIx64 " = %016" PRIx64 \
                         " + TRAP.\n",                                          \

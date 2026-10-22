@@ -283,7 +283,7 @@ def g_trapv(b):
         b.load(ra + 1, vb_)
         b.trap_clear()
         b.emit(A.ins_op(name, ra, ra + 1, R31))
-        b.trap_check(known=(1, R31DEST_REF))
+        b.trap_check()
         b.emit(opr(0x11, 0x20, R31, R31, 2))
         b.emit(opr(0x10, 0x20, R31, R31, 2))
         b.store(2, "r31 read back", 0)
@@ -439,7 +439,6 @@ def g_mem(b):
 
 
 MT_FPCR_REF = "cpu-fidelity: MT_FPCR does not take its synchronous trap"
-R31DEST_REF = "CPU-04: an operate into R31 still traps"
 UNALIGNED_REF = "cpu-fidelity: unaligned data accesses do not trap"
 
 
