@@ -72,8 +72,6 @@
 #include <string>
 #include <vector>
 
-#include "sdl_fonts.hpp"
-
 /// Modifier set of a hotkey binding; matched exactly against the event.
 enum {
   SDL_HOTKEY_MOD_CTRL = 1u << 0,
@@ -103,11 +101,6 @@ class bx_sdl_gui_c : public bx_gui_c {
 public:
   bx_sdl_gui_c(CConfigurator *cfg);
   virtual void specific_init(unsigned x_tilesize, unsigned y_tilesize) override;
-  virtual void text_update(u8 *old_text, u8 *new_text, unsigned long cursor_x,
-                           unsigned long cursor_y, bx_vga_tminfo_t tm_info,
-                           unsigned rows) override {}
-  virtual void graphics_tile_update(u8 *snapshot, unsigned x,
-                                    unsigned y) override;
   virtual void handle_events(void) override;
   virtual void flush(void) override;
   virtual void clear_screen(void) override;
@@ -117,12 +110,6 @@ public:
                                 unsigned fwidth = 0, unsigned bpp = 8) override;
   virtual void mouse_enabled_changed_specific(bool val) override;
   virtual void exit(void) override;
-  virtual bx_svga_tileinfo_t *
-  graphics_tile_info(bx_svga_tileinfo_t *info) override;
-  virtual u8 *graphics_tile_get(unsigned x, unsigned y, unsigned *w,
-                                unsigned *h) override;
-  virtual void graphics_tile_update_in_place(unsigned x, unsigned y, unsigned w,
-                                             unsigned h) override;
   void graphics_frame_update(const u32 *pixels, unsigned w,
                              unsigned h) override;
   void main_thread_pump(void) override;
@@ -634,7 +621,6 @@ void bx_sdl_gui_c::specific_init(unsigned x_tilesize, unsigned y_tilesize) {
   this->mouse_invert_x = myCfg->get_bool_value("mouse.invert_x", false);
   this->mouse_invert_y = myCfg->get_bool_value("mouse.invert_y", false);
 
-  new_gfx_api = 1;
 }
 
 void bx_sdl_gui_c::graphics_frame_update(const u32 *pixels, unsigned width,
@@ -691,24 +677,6 @@ void bx_sdl_gui_c::present_frame(const u32 *pixels, unsigned width,
   SDL_RenderClear(sdl_renderer);
   SDL_RenderTexture(sdl_renderer, sdl_texture, NULL, NULL);
   SDL_RenderPresent(sdl_renderer);
-}
-
-void bx_sdl_gui_c::graphics_tile_update(u8 *snapshot, unsigned x, unsigned y) {
-  //
-}
-
-bx_svga_tileinfo_t *bx_sdl_gui_c::graphics_tile_info(bx_svga_tileinfo_t *info) {
-  return NULL;
-}
-
-u8 *bx_sdl_gui_c::graphics_tile_get(unsigned x0, unsigned y0, unsigned *w,
-                                    unsigned *h) {
-  return NULL;
-}
-
-void bx_sdl_gui_c::graphics_tile_update_in_place(unsigned x0, unsigned y0,
-                                                 unsigned w, unsigned h) {
-  //
 }
 
 // SDL3's scancodes are the USB HID keyboard-page usage IDs up to 0xE7, which

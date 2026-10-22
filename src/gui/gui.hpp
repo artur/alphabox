@@ -64,27 +64,6 @@
 #define GUI_LOCK_SITE const char *file = "?", int line = 0
 #endif
 
-/// VGA mode information for GUI
-typedef struct {
-  u16 start_address;
-  u8 cs_start;
-  u8 cs_end;
-  u16 line_offset;
-  u16 line_compare;
-  u8 h_panning;
-  u8 v_panning;
-  bool line_graphics;
-  bool split_hpanning;
-} bx_vga_tminfo_t;
-
-/// VGA tile information for GUI
-typedef struct {
-  u16 bpp, pitch;
-  u8 red_shift, green_shift, blue_shift;
-  u8 is_indexed, is_little_endian;
-  unsigned long red_mask, green_mask, blue_mask;
-} bx_svga_tileinfo_t;
-
 extern class bx_gui_c *bx_gui;
 
 /// A key for the guest (a BX_KEY_* code, | BX_KEY_RELEASED for a release):
@@ -107,15 +86,6 @@ public:
   bx_gui_c(void);
   virtual ~bx_gui_c();
   virtual void specific_init(unsigned x_tilesize, unsigned y_tilesize) = 0;
-  virtual void text_update(u8 *old_text, u8 *new_text, unsigned long cursor_x,
-                           unsigned long cursor_y, bx_vga_tminfo_t tm_info,
-                           unsigned rows) = 0;
-  virtual void graphics_tile_update(u8 *snapshot, unsigned x, unsigned y) = 0;
-  virtual bx_svga_tileinfo_t *graphics_tile_info(bx_svga_tileinfo_t *info);
-  virtual u8 *graphics_tile_get(unsigned x, unsigned y, unsigned *w,
-                                unsigned *h);
-  virtual void graphics_tile_update_in_place(unsigned x, unsigned y, unsigned w,
-                                             unsigned h);
   virtual void handle_events(void) = 0;
   virtual void flush(void) = 0;
   virtual void clear_screen(void) = 0;
@@ -129,20 +99,10 @@ public:
   // must live there (macOS); a no-op unless the GUI defers to it.
   virtual void main_thread_pump(void) {}
 
-  virtual u32 get_sighandler_mask() { return 0; }
-  virtual void sighandler(int sig) {}
-  virtual void beep_on(float frequency);
-  virtual void beep_off();
-  virtual void get_capabilities(u16 *xres, u16 *yres, u16 *bpp);
-
-  static void key_event(u32 key);
   static void set_text_charmap(u8 *fbuffer);
-  static void set_text_charbyte(u16 address, u8 data);
 
   void init(unsigned x_tilesize, unsigned y_tilesize);
-  void cleanup(void);
   static void mouse_enabled_changed(bool val);
-  static void init_signal_handlers();
 
   /// The gui lock: serializes the display thread's update() with the GUI's
   /// event handling and the CPUs' VGA register writes. It never times out.
@@ -153,7 +113,7 @@ public:
   void lock(GUI_LOCK_SITE);
   void unlock();
   virtual void graphics_frame_update(const u32 *pixels, unsigned width,
-                                     unsigned height);
+                                     unsigned height) = 0;
 
 protected:
   // Recursive, as the CMutex it replaces was: the thread holding it may take
@@ -166,18 +126,9 @@ protected:
   std::atomic<int> gui_lock_line{0};
   std::atomic<std::thread::id> gui_lock_owner{};
   std::atomic<int64_t> gui_lock_since_us{0};
-  static s32 make_text_snapshot(char **snapshot, u32 *length);
-
-  //  static void toggle_mouse_enable(void);
   unsigned char vga_charmap[0x2000];
   bool charmap_updated;
   bool char_changed[256];
-  bool new_gfx_api;
-  u16 host_xres;
-  u16 host_yres;
-  u16 host_pitch;
-  u8 host_bpp;
-  u8 *framebuffer;
 };
 
 #define BX_KEY_PRESSED 0x00000000
