@@ -41,7 +41,10 @@
  *   dropped, so a polling loop reads the same however long it spins.
  *
  * The lines go to ALPHABOX_RECORD_FILE (default alphabox-record.txt in the
- * working directory), complete once the emulator exits:
+ * working directory), complete once the emulator exits. The file stops
+ * growing at ALPHABOX_RECORD_MAX_MB (default 256), with a last line that
+ * says so: naming a disk controller or a video card in a guest boot would
+ * otherwise fill the host's disk.
  *
  *   <device> <who> <r|w> <space> <address> <bits> <value>
  *

@@ -84,11 +84,16 @@ struct Recorder {
   FILE *f = nullptr;
   bool raw = false;
   std::map<std::string, Stream> streams;
+  u64 written = 0;
+  u64 limit = 256 << 20; // bytes; the host's disk is shared
+  bool full = false;
 
   Recorder() {
     const char *path = getenv("ALPHABOX_RECORD_FILE");
     if (!path || !*path)
       path = "alphabox-record.txt";
+    if (const char *mb = getenv("ALPHABOX_RECORD_MAX_MB"))
+      limit = strtoull(mb, nullptr, 10) << 20;
     f = fopen(path, "w");
     if (!f) {
       printf("%%REC-W-OPEN: cannot write the access record to %s\n", path);
@@ -142,11 +147,25 @@ void note(const char *device, const char *space, u64 address, int bits,
            write ? 'w' : 'r', space, address, bits, value);
 
   std::lock_guard<std::mutex> g(r.m);
+  if (r.full)
+    return;
   Stream &s = r.streams[std::string(device) + " " + who];
   const bool drop = !r.raw && repeats(s, body);
   s.hist[s.n++ % 8] = body;
-  if (!drop)
-    fprintf(r.f, "%s %s %s\n", device, who, body);
+  if (drop)
+    return;
+  const int n = fprintf(r.f, "%s %s %s\n", device, who, body);
+  r.written += n > 0 ? (u64)n : 0;
+  if (r.written >= r.limit) {
+    r.full = true;
+    fprintf(r.f,
+            "# stopped at the size limit, %" PRIu64
+            " MB (ALPHABOX_RECORD_MAX_MB)\n",
+            r.limit >> 20);
+    printf("%%REC-W-FULL: the access record reached %" PRIu64
+           " MB and stopped (ALPHABOX_RECORD_MAX_MB)\n",
+           r.limit >> 20);
+  }
 }
 
 void note(const char *device, int index, u64 address, int bits, bool write,
