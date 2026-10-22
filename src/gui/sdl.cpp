@@ -132,6 +132,7 @@ private:
   unsigned int vid_scale = 0;
   bool vid_linear = true;
   bool vid_scale_change_enable = false;
+  bool use_keymap = false; // keyboard.use_mapping, with a keymap loaded
   double mouse_speed = 1.0;
   bool mouse_invert_x = false;
   bool mouse_invert_y = false;
@@ -608,9 +609,14 @@ void bx_sdl_gui_c::specific_init(unsigned x_tilesize, unsigned y_tilesize) {
 
   // SDL3: key repeat is handled by the OS; no SDL_EnableKeyRepeat().
 
-  // load keymap for sdl
+  // load keymap for sdl; one that is missing or has no usable entry leaves
+  // the built-in map in force rather than a keyboard that types nothing
   if (myCfg->get_bool_value("keyboard.use_mapping", false)) {
     bx_keymap->loadKeymap(convertStringToSDLKey);
+    use_keymap = bx_keymap->isKeymapLoaded();
+    if (!use_keymap)
+      printf("%%SDL-W-KEYMAP: keyboard.use_mapping is set but the keymap has "
+             "no usable entry; using the built-in US map.\n");
   }
 
   this->vid_linear = myCfg->get_bool_value("video.linear", true);
@@ -1424,7 +1430,7 @@ void bx_sdl_gui_c::handle_events(void) {
         break;
 
       // convert sym -> bochs code
-      if (!myCfg->get_bool_value("keyboard.use_mapping", false)) {
+      if (!use_keymap) {
         key_event =
             sdl_scan_to_bx_key(sdl_event.key.scancode, sdl_event.key.mod);
       } else {
@@ -1467,7 +1473,7 @@ void bx_sdl_gui_c::handle_events(void) {
         }
       }
 
-      if (!myCfg->get_bool_value("keyboard.use_mapping", false)) {
+      if (!use_keymap) {
         key_event = sdl_scan_to_bx_key(sdl_event.key.scancode);
       } else {
         BXKeyEntry *entry = bx_keymap->findHostKey(sdl_event.key.key);
@@ -1773,17 +1779,50 @@ keyTableEntry keytable[] = {
     // one final entry to mark the end
     {NULL, 0}};
 
-// function to convert key names into SDLKey values.
-// This first try will be horribly inefficient, but it only has
-// to be done while loading a keymap.  Once the simulation starts,
-
-// this function won't be called.
+// Converts a key name from a keymap file to an SDL keycode, or
+// BX_KEYMAP_UNKNOWN. Only done while loading a keymap. Keymaps written for
+// Bochs name keys the SDL 1.2 way (SDLK_a, SDLK_KP0, SDLK_BACKQUOTE ...), so
+// those names are accepted for the SDL3 ones.
 static u32 convertStringToSDLKey(const char *string) {
-  keyTableEntry *ptr;
-  for (ptr = &keytable[0]; ptr->name != NULL; ptr++) {
-    if (!strcmp(string, ptr->name))
+  static const struct {
+    const char *old_name;
+    const char *name;
+  } aliases[] = {
+      {"SDLK_BACKQUOTE", "SDLK_GRAVE"},
+      {"SDLK_QUOTE", "SDLK_APOSTROPHE"},
+      {"SDLK_QUOTEDBL", "SDLK_DBLAPOSTROPHE"},
+      {"SDLK_KP0", "SDLK_KP_0"},
+      {"SDLK_KP1", "SDLK_KP_1"},
+      {"SDLK_KP2", "SDLK_KP_2"},
+      {"SDLK_KP3", "SDLK_KP_3"},
+      {"SDLK_KP4", "SDLK_KP_4"},
+      {"SDLK_KP5", "SDLK_KP_5"},
+      {"SDLK_KP6", "SDLK_KP_6"},
+      {"SDLK_KP7", "SDLK_KP_7"},
+      {"SDLK_KP8", "SDLK_KP_8"},
+      {"SDLK_KP9", "SDLK_KP_9"},
+      {"SDLK_NUMLOCK", "SDLK_NUMLOCKCLEAR"},
+      {"SDLK_SCROLLOCK", "SDLK_SCROLLLOCK"},
+      {"SDLK_LSUPER", "SDLK_LGUI"},
+      {"SDLK_RSUPER", "SDLK_RGUI"},
+      {"SDLK_COMPOSE", "SDLK_MULTI_KEY_COMPOSE"},
+      {"SDLK_PRINT", "SDLK_PRINTSCREEN"},
+  };
+  char name[64];
+  if (!string || strlen(string) >= sizeof(name))
+    return BX_KEYMAP_UNKNOWN;
+  strcpy(name, string);
+  if (!strncmp(name, "SDLK_", 5) && name[5] >= 'a' && name[5] <= 'z' &&
+      !name[6])
+    name[5] = (char)(name[5] - 'a' + 'A');
+  for (const auto &al : aliases)
+    if (!strcmp(name, al.old_name)) {
+      strcpy(name, al.name);
+      break;
+    }
+  for (keyTableEntry *ptr = &keytable[0]; ptr->name != NULL; ptr++)
+    if (!strcmp(name, ptr->name))
       return ptr->value;
-  }
-  return 0;
+  return BX_KEYMAP_UNKNOWN;
 }
 #endif // defined(HAVE_SDL)

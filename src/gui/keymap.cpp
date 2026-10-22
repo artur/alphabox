@@ -235,66 +235,83 @@ static s32 get_next_word(char *output) {
   return 0;
 }
 
+// The most entries a keymap may hold: a real one has a few hundred.
+#define BX_KEYMAP_MAX 4096
+
+/**
+ * Read the next entry: "BX_KEY[+MODKEY] ascii hostkey", # to the end of a line
+ * a comment. Returns 0 for an entry, 1 for a line that is wrong (said so, and
+ * to be skipped) and -1 at the end of the file.
+ **/
 static s32 get_next_keymap_line(FILE *fp, char *bxsym, char *modsym, s32 *ascii,
                                 char *hostsym) {
   char line[256];
   char buf[256];
-  line[0] = 0;
   while (1) {
     lineCount++;
-    if (!fgets(line, sizeof(line) - 1, fp))
+    if (!fgets(line, sizeof(line), fp))
       return -1; // EOF
+    if (!strchr(line, '\n') && !feof(fp)) {
+      // Longer than the buffer: the rest of it is not a line of its own.
+      int c;
+      while ((c = fgetc(fp)) != EOF && c != '\n')
+        ;
+      BX_PANIC(("keymap line %d: longer than %d characters, ignored", lineCount,
+                (int)sizeof(line) - 2));
+      return 1;
+    }
     init_parse_line(line);
-    if (get_next_word(bxsym) >= 0) {
-      modsym[0] = 0;
+    if (get_next_word(bxsym) < 0)
+      continue; // blank, or only a comment
 
-      char *p;
-      if ((p = strchr(bxsym, '+')) != NULL) {
-        *p = 0;            // truncate bxsym.
-        p++;               // move one char beyond the +
-        strcpy(modsym, p); // copy the rest to modsym
-      }
-
-      if (get_next_word(buf) < 0) {
-        BX_PANIC(("keymap line %d: expected 3 columns", lineCount));
-        return -1;
-      }
-
-      if (buf[0] == '\'' && buf[2] == '\'' && buf[3] == 0) {
-        *ascii = (u8)buf[1];
-      } else if (!strcmp(buf, "space")) {
-        *ascii = ' ';
-      } else if (!strcmp(buf, "return")) {
-        *ascii = '\n';
-      } else if (!strcmp(buf, "tab")) {
-        *ascii = '\t';
-      } else if (!strcmp(buf, "backslash")) {
-        *ascii = '\\';
-      } else if (!strcmp(buf, "apostrophe")) {
-        *ascii = '\'';
-      } else if (!strcmp(buf, "none")) {
-        *ascii = -1;
-      } else {
-        BX_PANIC(("keymap line %d: ascii equivalent is \"%s\" but it must be "
-                  "char constant like 'x', or one of space,tab,return,none",
-                  lineCount, buf));
-      }
-
-      if (get_next_word(hostsym) < 0) {
-        BX_PANIC(("keymap line %d: expected 3 columns", lineCount));
-        return -1;
-      }
-
-      return 0;
+    modsym[0] = 0;
+    char *p;
+    if ((p = strchr(bxsym, '+')) != NULL) {
+      *p = 0;            // truncate bxsym.
+      p++;               // move one char beyond the +
+      strcpy(modsym, p); // copy the rest to modsym
     }
 
-    // no words on this line, keep reading.
+    if (get_next_word(buf) < 0) {
+      BX_PANIC(("keymap line %d: expected 3 columns", lineCount));
+      return 1;
+    }
+
+    const size_t blen = strlen(buf);
+    if (blen == 3 && buf[0] == '\'' && buf[2] == '\'') {
+      *ascii = (u8)buf[1];
+    } else if (!strcmp(buf, "space")) {
+      *ascii = ' ';
+    } else if (!strcmp(buf, "return")) {
+      *ascii = '\n';
+    } else if (!strcmp(buf, "tab")) {
+      *ascii = '\t';
+    } else if (!strcmp(buf, "backslash")) {
+      *ascii = '\\';
+    } else if (!strcmp(buf, "apostrophe")) {
+      *ascii = '\'';
+    } else if (!strcmp(buf, "none")) {
+      *ascii = -1;
+    } else {
+      BX_PANIC(("keymap line %d: ascii equivalent is \"%s\" but it must be "
+                "char constant like 'x', or one of space,tab,return,none",
+                lineCount, buf));
+      return 1;
+    }
+
+    if (get_next_word(hostsym) < 0) {
+      BX_PANIC(("keymap line %d: expected 3 columns", lineCount));
+      return 1;
+    }
+
+    return 0;
   }
 }
 
 /**
  * Loads the specified keymap file using convertStringToSymbol to convert
- *strings to client constants.
+ * strings to client constants. A line that is wrong is reported and skipped;
+ * the rest of the file still loads.
  **/
 void bx_keymap_c::loadKeymap(u32 stringToSymbol(const char *),
                              const char *filename) {
@@ -317,15 +334,17 @@ void bx_keymap_c::loadKeymap(u32 stringToSymbol(const char *),
 
   // Read keymap file one line at a time
   while (1) {
-    if (get_next_keymap_line(keymapFile, baseSym, modSym, &ascii, hostSym) <
-        0) {
+    const s32 r =
+        get_next_keymap_line(keymapFile, baseSym, modSym, &ascii, hostSym);
+    if (r < 0)
       break;
-    }
+    if (r > 0)
+      continue;
 
     // convert X_KEY_* symbols to values
     baseKey = convertStringToBXKey(baseSym);
     modKey = convertStringToBXKey(modSym);
-    hostKey = 0;
+    hostKey = BX_KEYMAP_UNKNOWN;
     if (stringToSymbol != NULL)
       hostKey = stringToSymbol(hostSym);
 
@@ -344,13 +363,16 @@ void bx_keymap_c::loadKeymap(u32 stringToSymbol(const char *),
       continue;
     }
 
+    if (keymapCount >= BX_KEYMAP_MAX) {
+      BX_PANIC(("keymap has more than %d entries, the rest is ignored",
+                BX_KEYMAP_MAX));
+      break;
+    }
+
     CHECK_REALLOCATION(
         keymapTable,
         realloc(keymapTable, (keymapCount + 1) * sizeof(BXKeyEntry)),
         BXKeyEntry);
-
-    if (keymapTable == NULL)
-      BX_PANIC(("Can not allocate memory for keymap table."));
 
     keymapTable[keymapCount].baseKey = baseKey;
     keymapTable[keymapCount].modKey = modKey;
@@ -388,7 +410,7 @@ u32 bx_keymap_c::convertStringToBXKey(const char *string) {
 BXKeyEntry *bx_keymap_c::findHostKey(u32 key) {
 
   // We look through the keymap table to find the searched key
-  for (u16 i = 0; i < keymapCount; i++) {
+  for (u32 i = 0; i < keymapCount; i++) {
     if (keymapTable[i].hostKey == key) {
       BX_DEBUG(("key 0x%02x matches hostKey for entry #%d", key, i));
       return &keymapTable[i];
@@ -409,7 +431,7 @@ BXKeyEntry *bx_keymap_c::findAsciiChar(u8 ch) {
   BX_DEBUG(("findAsciiChar (0x%02x)", ch));
 
   // We look through the keymap table to find the searched key
-  for (u16 i = 0; i < keymapCount; i++) {
+  for (u32 i = 0; i < keymapCount; i++) {
     if (keymapTable[i].ascii == ch) {
       BX_DEBUG(("key %02x matches ascii for entry #%d", ch, i));
       return &keymapTable[i];

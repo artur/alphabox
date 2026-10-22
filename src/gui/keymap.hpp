@@ -70,7 +70,7 @@ private:
   CConfigurator *myCfg;
 
   BXKeyEntry *keymapTable;
-  u16 keymapCount;
+  u32 keymapCount;
 };
 
 extern bx_keymap_c *bx_keymap;

@@ -452,6 +452,12 @@ target_include_directories(scancodes_test PRIVATE
     $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
 add_test(NAME scancodes COMMAND scancodes_test)
 
+# The keymap file loader, alone.
+add_executable(keymap_test test/unit/keymap_test.cpp src/gui/keymap.cpp)
+target_include_directories(keymap_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+add_test(NAME keymap COMMAND keymap_test)
+
 # The ALi M1543C's ISA core as separate models, driven through their ports
 # (the clocked ones on a clock the test moves): the 8254 timer, the 8259
 # pair, the MC146818 TOY clock, the Super I/O and ISA PnP ports.
