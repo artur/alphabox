@@ -230,13 +230,13 @@ jobs:
       run: cmake -E make_directory ${{runner.workspace}}/build
 
     - name: Install dependencies
-      run: brew install libpcap libslirp netcat gnu-sed
+      run: brew install libslirp netcat gnu-sed
 
     - name: Configure CMake
       shell: bash
       working-directory: ${{runner.workspace}}/build
       # SDL3 comes statically from the third_party/SDL submodule.
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Wall" -DPCAP_INCLUDE_DIR="$(brew --prefix libpcap)/include" -DPCAP_LIBRARY="$(brew --prefix libpcap)/lib/libpcap.dylib"
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Wall"
 
     - name: Build
       working-directory: ${{runner.workspace}}/build
