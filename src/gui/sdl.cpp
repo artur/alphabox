@@ -923,7 +923,8 @@ static bool sdl_debug_usb(const char *token, bool press, bool &handled) {
 // queue, so the whole host chain runs (the scancode to guest key map, the
 // hotkeys, the release bookkeeping), unlike the named keys, which enter at
 // the guest. <hex> is the SDL scancode (a USB HID keyboard usage, e.g. 48 for
-// Pause); <mods> is held modifiers as letters: c ctrl, a alt, s shift, g gui.
+// Pause); <mods> is held modifiers as letters: c ctrl, a alt, s shift, g gui,
+// and r for the auto-repeat of a key already down (a press event only).
 static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
   handled = !strncmp(token, "sc:", 3);
   if (!handled)
@@ -933,6 +934,7 @@ static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
   if (end == token + 3 || sc == 0 || sc >= SDL_SCANCODE_COUNT)
     return false;
   SDL_Keymod mod = 0;
+  bool repeat = false;
   if (*end == ':') {
     for (end++; *end; end++) {
       switch (*end) {
@@ -948,6 +950,9 @@ static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
       case 'g':
         mod |= SDL_KMOD_LGUI;
         break;
+      case 'r':
+        repeat = true;
+        break;
       default:
         return false;
       }
@@ -956,7 +961,7 @@ static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
     return false;
   }
   if (press)
-    for (int down = 1; down >= 0; down--) {
+    for (int down = 1; down >= (repeat ? 1 : 0); down--) {
       SDL_Event e;
       SDL_zero(e);
       e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
@@ -964,6 +969,7 @@ static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
       e.key.key = SDL_GetKeyFromScancode((SDL_Scancode)sc, mod, false);
       e.key.mod = mod;
       e.key.down = down != 0;
+      e.key.repeat = repeat;
       SDL_PushEvent(&e);
     }
   return true;
@@ -1444,6 +1450,14 @@ void bx_sdl_gui_c::handle_events(void) {
       }
 
       if (key_event == BX_KEY_UNHANDLED)
+        break;
+
+      // A held key arrives as a stream of KEY_DOWN events. The lock keys
+      // toggle on the first press only (each repeat was a toggle of its own,
+      // so a held Caps Lock flickered), and Pause sends its sequence once.
+      if (sdl_event.key.repeat &&
+          (key_event == BX_KEY_NUM_LOCK || key_event == BX_KEY_CAPS_LOCK ||
+           key_event == BX_KEY_PAUSE || key_event == BX_KEY_CTRL_BREAK))
         break;
 
       gui_guest_key(key_event);

@@ -101,7 +101,8 @@ Besides keys, the two variables take these tokens:
   enter at the guest. `<hex>` is the SDL scancode, which is the USB HID
   keyboard usage (`48` Pause, `46` Print Screen, `65` the context-menu key,
   `64` the 102nd key left of Z, `32` Non-US `#`); `<mods>` are modifiers
-  held for the event, as letters: `c` Ctrl, `a` Alt, `s` Shift, `g` GUI.
+  held for the event, as letters: `c` Ctrl, `a` Alt, `s` Shift, `g` GUI; `r`
+  sends only the auto-repeat press of a key held down.
   `sc:48:c` is Ctrl+Pause (Break), `sc:46:a` is Alt+Print Screen (SysRq).
   Pair it with `ALPHABOX_TRACE_KEYS=1`.
 - **`hmotion:DX:DY`, `hbutton:N:1|0`, `hwheel:Y`** put a host mouse event in
