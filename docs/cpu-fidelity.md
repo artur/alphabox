@@ -44,6 +44,14 @@ first audit was made on 2026-09-18; later entries carry their dates.
   take those away from a production build one at a time
   ([headless.md](headless.md)). A fault that goes with one of them is in
   it, and one that survives all three is not the JIT's compiled code.
+  Also compiled out of a verify build, and so unseen by it: on AArch64 the
+  static exits' data links, the inline computed-jump cache, the
+  conditional exit at a block's end, the memory operations' cold stubs
+  and the second-level page-cache probe, the inline `HW_LD`/`HW_ST` and
+  the gates on exits; on x86-64 the chain gates. And a block whose
+  compiled pass bails before its end (a fault, a device access) is not
+  compared at all. The instruction oracle runs these paths on the
+  production lanes (below, "The JIT").
 - **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a
   `JIT_VERIFY` build checks the JIT's inline IEEE operations against the
   interpreter over 8.5 million cases at startup.
@@ -735,6 +743,36 @@ then. The verify lane cannot see compiled code's chaining, inline memory
 paths or the `RPCC` stub (above); for those, run a production build with
 `ALPHABOX_JIT_CHAIN=0`, `ALPHABOX_JIT_INLMEM=0` and `ALPHABOX_JIT_RPCC=0`
 against one without.
+
+**The instruction oracle's JIT groups** (2026-10-22, the legacy audit's
+JIT lane; findings JIT-nn in `lab/legacy-audit/jit/AUDIT.md`) run on the
+production lanes what the verify lane cannot see: every case register
+live across chained exits and helper calls, branches whose direction
+changes once a block has compiled, faults in the middle of a compiled
+block at five positions, an interrupt at the return from PALcode,
+LDx_L/STx_C across blocks, PALmode blocks, and rewritten code before an
+`IC_FLUSH` ([development.md](development.md)). The interpreter passes
+all of them, and so do both back ends under every JIT switch, except
+for two divergences of compiled code, KNOWN on the oracle's last pass:
+
+- **A chained block runs in a mode it was not looked up for** (JIT-01,
+  both back ends). Blocks are keyed by the processor mode they were
+  translated in, because that is when the mode's right to execute the
+  page was settled, but the lookup that resurrects a block after a flush
+  does not compare the mode, nor does AArch64's inline computed-jump
+  cache. A block compiled in kernel mode is then run in user mode, and
+  its chained exits enter what they linked to in kernel mode: user mode
+  executes a page only kernel mode may, with no `IACV` (HRM Table 6-8).
+  `ALPHABOX_JIT_CHAIN=0` closes it. Only a virtual address executed in
+  two modes, with a successor the second mode may not execute, shows it;
+  correct guests never branch into code their mode cannot run.
+- **AArch64's inline `HW_ST` does not tell the code-page map** (JIT-02).
+  The physical `HW_ST` that compiled PALcode performs inline stores to
+  DRAM without reporting the write, where the helper (and the x86-64
+  emitter, which always calls it) does. An `IC_FLUSH` after such a store
+  into compiled code is skipped as having nothing to flush, and the old
+  instructions run (HRM 5.2.17). `ALPHABOX_JIT_INLMEM=0` closes it. No
+  guest is known to rewrite instructions with `HW_ST`.
 
 ## A guest's floating-point exception that is the guest's own
 

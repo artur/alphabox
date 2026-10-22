@@ -914,8 +914,8 @@ def g_jitmode(b):
     """A block at a page every mode may execute that branches to a page
     only kernel mode may (ITB KRE only), run in kernel mode until it
     compiles, then in user mode: the branch's target takes an IACV in user
-    mode (HRM 5.3: an Istream access violation; EXC_ADDR the target, a
-    fault). Compiled blocks are keyed by the mode they were translated in,
+    mode (HRM 6.8.2 Table 6-8: an Istream access violation; EXC_ADDR the
+    target, a fault). Compiled blocks are keyed by the mode they were translated in,
     because that is when the mode's right to execute was settled."""
     exit_ = A.call_pal(0x84)
     x = b.kcode_snippet([exit_])                   # kernel-only: back at R17
