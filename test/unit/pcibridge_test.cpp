@@ -392,7 +392,7 @@ static void test_secondary_reset() {
   cfg_wr(&b, 0x3e, 16, 0x0043);
   CHECK_EQ(d.resets - d0, 1);
   CHECK_EQ(inner.resets - i0, 1);
-  (void)g0;
+  CHECK_EQ(g.resets - g0, 1); // the bus behind the inner bridge too
   CHECK_EQ(inner.secondary_bus(), 0);
   CHECK_EQ(where(&g, kConfig).length, 0); // until it is numbered again
   CHECK_EQ(cfg_rd(&b, 0x19, 8), 2);       // the bridge itself keeps its numbers

@@ -250,6 +250,20 @@ void CPCIBridge::remap_windows() {
 }
 
 /**
+ * RST# on the secondary bus: every device on it, and every bus behind a
+ * bridge among them, since a bridge's secondary RST# is the OR of its
+ * primary RST# and its Secondary Bus Reset bit (PCI-to-PCI Bridge
+ * Architecture Specification 1.1 11.1.1, PDF p. 119).
+ **/
+void CPCIBridge::reset_secondary_bus() {
+  for (CPCIDevice *child : m_children) {
+    child->ResetPCI();
+    if (CPCIBridge *b = dynamic_cast<CPCIBridge *>(child))
+      b->reset_secondary_bus();
+  }
+}
+
+/**
  * Bus reset: the bus numbers clear, so everything behind the bridge drops
  * out of configuration space until the firmware numbers it again, and the
  * windows close with the command register.
@@ -323,8 +337,7 @@ void CPCIBridge::config_write_custom(int func, u32 address, int dsize,
     const u32 now = new_data >> shift;
     if ((now & BRIDGE_CONTROL_SECONDARY_RESET) &&
         !(was & BRIDGE_CONTROL_SECONDARY_RESET))
-      for (CPCIDevice *child : m_children)
-        child->ResetPCI();
+      reset_secondary_bus();
   }
 
   // Command register, windows, bridge control: firmware and guests move

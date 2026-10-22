@@ -122,6 +122,7 @@ private:
 
   void remap_children();
   void remap_windows();
+  void reset_secondary_bus();
   void set_window(int w, bool io, u32 base, u64 length, const char *what);
   u32 cfg32(u32 address) const;
   const child_range *decode(int window, u32 address) const;
