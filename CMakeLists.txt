@@ -444,6 +444,14 @@ target_include_directories(kbc_test PRIVATE
 target_link_libraries(kbc_test Threads::Threads)
 add_test(NAME kbc COMMAND kbc_test)
 
+# The host key chain without SDL: HID usage (the SDL3 scancode) to BX_KEY, and
+# the scan code tables of sets 1, 2 and 3 with the 8042's translation.
+add_executable(scancodes_test test/unit/scancodes_test.cpp
+    src/gui/scancodes.cpp src/gui/hostkeys.cpp)
+target_include_directories(scancodes_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+add_test(NAME scancodes COMMAND scancodes_test)
+
 # The ALi M1543C's ISA core as separate models, driven through their ports
 # (the clocked ones on a clock the test moves): the 8254 timer, the 8259
 # pair, the MC146818 TOY clock, the Super I/O and ISA PnP ports.

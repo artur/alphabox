@@ -47,6 +47,7 @@
 
 #include "Keyboard.hpp"
 #include "UsbKeyboard.hpp"
+#include "scancodes.hpp"
 
 bx_gui_c *bx_gui = NULL;
 
@@ -130,7 +131,27 @@ u32 get_user_key(char *key) {
   return BX_KEY_UNKNOWN;
 }
 
+// ALPHABOX_TRACE_KEYS=1: every key the GUI hands the guest, as the BX_KEY
+// number and the set 1 bytes of the make or break.
+static const bool s_trace_keys = getenv("ALPHABOX_TRACE_KEYS") != nullptr;
+
 void gui_guest_key(u32 key_event) {
+  if (s_trace_keys) {
+    const u32 k = key_event & ~(u32)BX_KEY_RELEASED;
+    std::string bytes;
+    if (k < BX_KEY_NBKEYS) {
+      const char *p = (key_event & BX_KEY_RELEASED) ? scancodes[k][0].brek
+                                                    : scancodes[k][0].make;
+      char h[4];
+      for (; *p; p++) {
+        snprintf(h, sizeof(h), "%02X ", (unsigned char)*p);
+        bytes += h;
+      }
+    }
+    printf("%%GUI-I-KEY: %s %u set1 [%s]\n",
+           (key_event & BX_KEY_RELEASED) ? "up" : "down", (unsigned)k,
+           bytes.c_str());
+  }
   if (theKeyboard)
     theKeyboard->gen_scancode(key_event);
   if (CUsbKeyboard *k = theUsbKeyboard.load())

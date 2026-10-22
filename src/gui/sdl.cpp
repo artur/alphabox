@@ -46,6 +46,7 @@
 #include "System.hpp"
 #include "VGA.hpp"
 #include "gui.hpp"
+#include "hostkeys.hpp"
 #include "keymap.hpp"
 
 //#include "AliM1543C.hpp"
@@ -63,6 +64,7 @@
 #define BX_PLUGGABLE
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cctype>
 #include <mutex>
 #include <stdlib.h>
@@ -700,238 +702,30 @@ void bx_sdl_gui_c::graphics_tile_update_in_place(unsigned x0, unsigned y0,
   //
 }
 
-static u32 sdl_scan_to_bx_key(SDL_Scancode sym) {
-  switch (sym) {
-  case SDL_SCANCODE_BACKSPACE:
-    return BX_KEY_BACKSPACE;
-  case SDL_SCANCODE_TAB:
-    return BX_KEY_TAB;
-  case SDL_SCANCODE_RETURN:
-    return BX_KEY_ENTER;
-  case SDL_SCANCODE_PAUSE:
-    return BX_KEY_PAUSE;
-  case SDL_SCANCODE_ESCAPE:
-    return BX_KEY_ESC;
-  case SDL_SCANCODE_SPACE:
-    return BX_KEY_SPACE;
-  case SDL_SCANCODE_APOSTROPHE:
-    return BX_KEY_SINGLE_QUOTE;
-  case SDL_SCANCODE_COMMA:
-    return BX_KEY_COMMA;
-  case SDL_SCANCODE_MINUS:
-    return BX_KEY_MINUS;
-  case SDL_SCANCODE_PERIOD:
-    return BX_KEY_PERIOD;
-  case SDL_SCANCODE_SLASH:
-    return BX_KEY_SLASH;
+// SDL3's scancodes are the USB HID keyboard-page usage IDs up to 0xE7, which
+// is what hid_usage_to_bx_key() (hostkeys.cpp, tested alone) is keyed by.
+static_assert(SDL_SCANCODE_A == 0x04 && SDL_SCANCODE_1 == 0x1E &&
+                  SDL_SCANCODE_RETURN == 0x28 && SDL_SCANCODE_F1 == 0x3A &&
+                  SDL_SCANCODE_PRINTSCREEN == 0x46 &&
+                  SDL_SCANCODE_PAUSE == 0x48 && SDL_SCANCODE_KP_1 == 0x59 &&
+                  SDL_SCANCODE_NONUSBACKSLASH == 0x64 &&
+                  SDL_SCANCODE_APPLICATION == 0x65 &&
+                  SDL_SCANCODE_MENU == 0x76 && SDL_SCANCODE_LCTRL == 0xE0 &&
+                  SDL_SCANCODE_RGUI == 0xE7,
+              "SDL scancodes are no longer HID usage IDs");
 
-  case SDL_SCANCODE_0:
-    return BX_KEY_0;
-  case SDL_SCANCODE_1:
-    return BX_KEY_1;
-  case SDL_SCANCODE_2:
-    return BX_KEY_2;
-  case SDL_SCANCODE_3:
-    return BX_KEY_3;
-  case SDL_SCANCODE_4:
-    return BX_KEY_4;
-  case SDL_SCANCODE_5:
-    return BX_KEY_5;
-  case SDL_SCANCODE_6:
-    return BX_KEY_6;
-  case SDL_SCANCODE_7:
-    return BX_KEY_7;
-  case SDL_SCANCODE_8:
-    return BX_KEY_8;
-  case SDL_SCANCODE_9:
-    return BX_KEY_9;
-
-  case SDL_SCANCODE_SEMICOLON:
-    return BX_KEY_SEMICOLON;
-  case SDL_SCANCODE_EQUALS:
-    return BX_KEY_EQUALS;
-
-  case SDL_SCANCODE_LEFTBRACKET:
-    return BX_KEY_LEFT_BRACKET;
-  case SDL_SCANCODE_BACKSLASH:
-    return BX_KEY_BACKSLASH;
-  case SDL_SCANCODE_NONUSBACKSLASH:
-    return BX_KEY_BACKSLASH;
-  case SDL_SCANCODE_RIGHTBRACKET:
-    return BX_KEY_RIGHT_BRACKET;
-  case SDL_SCANCODE_GRAVE:
-    return BX_KEY_GRAVE;
-
-  case SDL_SCANCODE_A:
-    return BX_KEY_A;
-  case SDL_SCANCODE_B:
-    return BX_KEY_B;
-  case SDL_SCANCODE_C:
-    return BX_KEY_C;
-  case SDL_SCANCODE_D:
-    return BX_KEY_D;
-  case SDL_SCANCODE_E:
-    return BX_KEY_E;
-  case SDL_SCANCODE_F:
-    return BX_KEY_F;
-  case SDL_SCANCODE_G:
-    return BX_KEY_G;
-  case SDL_SCANCODE_H:
-    return BX_KEY_H;
-  case SDL_SCANCODE_I:
-    return BX_KEY_I;
-  case SDL_SCANCODE_J:
-    return BX_KEY_J;
-  case SDL_SCANCODE_K:
-    return BX_KEY_K;
-  case SDL_SCANCODE_L:
-    return BX_KEY_L;
-  case SDL_SCANCODE_M:
-    return BX_KEY_M;
-  case SDL_SCANCODE_N:
-    return BX_KEY_N;
-  case SDL_SCANCODE_O:
-    return BX_KEY_O;
-  case SDL_SCANCODE_P:
-    return BX_KEY_P;
-  case SDL_SCANCODE_Q:
-    return BX_KEY_Q;
-  case SDL_SCANCODE_R:
-    return BX_KEY_R;
-  case SDL_SCANCODE_S:
-    return BX_KEY_S;
-  case SDL_SCANCODE_T:
-    return BX_KEY_T;
-  case SDL_SCANCODE_U:
-    return BX_KEY_U;
-  case SDL_SCANCODE_V:
-    return BX_KEY_V;
-  case SDL_SCANCODE_W:
-    return BX_KEY_W;
-  case SDL_SCANCODE_X:
-    return BX_KEY_X;
-  case SDL_SCANCODE_Y:
-    return BX_KEY_Y;
-  case SDL_SCANCODE_Z:
-    return BX_KEY_Z;
-
-  case SDL_SCANCODE_DELETE:
-    return BX_KEY_DELETE;
-
-    // Keypad
-  case SDL_SCANCODE_KP_0:
-    return BX_KEY_KP_INSERT;
-  case SDL_SCANCODE_KP_1:
-    return BX_KEY_KP_END;
-  case SDL_SCANCODE_KP_2:
-    return BX_KEY_KP_DOWN;
-  case SDL_SCANCODE_KP_3:
-    return BX_KEY_KP_PAGE_DOWN;
-  case SDL_SCANCODE_KP_4:
-    return BX_KEY_KP_LEFT;
-  case SDL_SCANCODE_KP_5:
-    return BX_KEY_KP_5;
-  case SDL_SCANCODE_KP_6:
-    return BX_KEY_KP_RIGHT;
-  case SDL_SCANCODE_KP_7:
-    return BX_KEY_KP_HOME;
-  case SDL_SCANCODE_KP_8:
-    return BX_KEY_KP_UP;
-  case SDL_SCANCODE_KP_9:
-    return BX_KEY_KP_PAGE_UP;
-  case SDL_SCANCODE_KP_PERIOD:
-    return BX_KEY_KP_DELETE;
-  case SDL_SCANCODE_KP_DIVIDE:
-    return BX_KEY_KP_DIVIDE;
-  case SDL_SCANCODE_KP_MULTIPLY:
-    return BX_KEY_KP_MULTIPLY;
-  case SDL_SCANCODE_KP_MINUS:
-    return BX_KEY_KP_SUBTRACT;
-  case SDL_SCANCODE_KP_PLUS:
-    return BX_KEY_KP_ADD;
-  case SDL_SCANCODE_KP_ENTER:
-    return BX_KEY_KP_ENTER;
-
-    // Arrows + Home/End pad
-  case SDL_SCANCODE_UP:
-    return BX_KEY_UP;
-  case SDL_SCANCODE_DOWN:
-    return BX_KEY_DOWN;
-  case SDL_SCANCODE_RIGHT:
-    return BX_KEY_RIGHT;
-  case SDL_SCANCODE_LEFT:
-    return BX_KEY_LEFT;
-  case SDL_SCANCODE_INSERT:
-    return BX_KEY_INSERT;
-  case SDL_SCANCODE_HOME:
-    return BX_KEY_HOME;
-  case SDL_SCANCODE_END:
-    return BX_KEY_END;
-  case SDL_SCANCODE_PAGEUP:
-    return BX_KEY_PAGE_UP;
-  case SDL_SCANCODE_PAGEDOWN:
-    return BX_KEY_PAGE_DOWN;
-
-    // Function keys
-  case SDL_SCANCODE_F1:
-    return BX_KEY_F1;
-  case SDL_SCANCODE_F2:
-    return BX_KEY_F2;
-  case SDL_SCANCODE_F3:
-    return BX_KEY_F3;
-  case SDL_SCANCODE_F4:
-    return BX_KEY_F4;
-  case SDL_SCANCODE_F5:
-    return BX_KEY_F5;
-  case SDL_SCANCODE_F6:
-    return BX_KEY_F6;
-  case SDL_SCANCODE_F7:
-    return BX_KEY_F7;
-  case SDL_SCANCODE_F8:
-    return BX_KEY_F8;
-  case SDL_SCANCODE_F9:
-    return BX_KEY_F9;
-  case SDL_SCANCODE_F10:
-    return BX_KEY_F10;
-  case SDL_SCANCODE_F11:
-    return BX_KEY_F11;
-  case SDL_SCANCODE_F12:
-    return BX_KEY_F12;
-
-    // Modifier keys
-  case SDL_SCANCODE_NUMLOCKCLEAR:
-    return BX_KEY_NUM_LOCK;
-  case SDL_SCANCODE_CAPSLOCK:
-    return BX_KEY_CAPS_LOCK;
-  case SDL_SCANCODE_SCROLLLOCK:
-    return BX_KEY_SCRL_LOCK;
-  case SDL_SCANCODE_RSHIFT:
-    return BX_KEY_SHIFT_R;
-  case SDL_SCANCODE_LSHIFT:
-    return BX_KEY_SHIFT_L;
-  case SDL_SCANCODE_RCTRL:
-    return BX_KEY_CTRL_R;
-  case SDL_SCANCODE_LCTRL:
-    return BX_KEY_CTRL_L;
-  case SDL_SCANCODE_RALT:
-    return BX_KEY_ALT_R;
-  case SDL_SCANCODE_LALT:
-    return BX_KEY_ALT_L;
-  case SDL_SCANCODE_LGUI:
-    return BX_KEY_WIN_L;
-  case SDL_SCANCODE_RGUI:
-    return BX_KEY_WIN_R;
-
-    // Misc function keys
-  case SDL_SCANCODE_PRINTSCREEN:
-    return BX_KEY_PRINT;
-  case SDL_SCANCODE_MENU:
-    return BX_KEY_MENU;
-
-  default:
-    BX_ERROR(("sdl3 scancode 0x%x not mapped", (unsigned)sym));
-    return BX_KEY_UNHANDLED;
-  }
+/**
+ * The guest key for a host key press. Ctrl+Pause is the Break key and
+ * Alt+Print Screen is SysRq, as on a real keyboard (the guest has separate
+ * codes for them); the release uses the code the press chose.
+ **/
+static u32 sdl_scan_to_bx_key(SDL_Scancode sym, SDL_Keymod mod = 0) {
+  u32 key = hid_usage_to_bx_key((unsigned)sym);
+  if (key == BX_KEY_PAUSE && (mod & SDL_KMOD_CTRL))
+    key = BX_KEY_CTRL_BREAK;
+  else if (key == BX_KEY_PRINT && (mod & SDL_KMOD_ALT))
+    key = BX_KEY_ALT_SYSREQ;
+  return key;
 }
 
 // Name -> BX key code map shared by the ALPHABOX_KEYSCRIPT and ALPHABOX_KEYPIPE
@@ -1116,6 +910,56 @@ static bool sdl_debug_usb(const char *token, bool press, bool &handled) {
   return true;
 }
 
+// "sc:<hex>[:<mods>]": a host key press and release through SDL's own event
+// queue, so the whole host chain runs (the scancode to guest key map, the
+// hotkeys, the release bookkeeping), unlike the named keys, which enter at
+// the guest. <hex> is the SDL scancode (a USB HID keyboard usage, e.g. 48 for
+// Pause); <mods> is held modifiers as letters: c ctrl, a alt, s shift, g gui.
+static bool sdl_debug_hostkey(const char *token, bool press, bool &handled) {
+  handled = !strncmp(token, "sc:", 3);
+  if (!handled)
+    return false;
+  char *end = nullptr;
+  const unsigned long sc = strtoul(token + 3, &end, 16);
+  if (end == token + 3 || sc == 0 || sc >= SDL_SCANCODE_COUNT)
+    return false;
+  SDL_Keymod mod = 0;
+  if (*end == ':') {
+    for (end++; *end; end++) {
+      switch (*end) {
+      case 'c':
+        mod |= SDL_KMOD_LCTRL;
+        break;
+      case 'a':
+        mod |= SDL_KMOD_LALT;
+        break;
+      case 's':
+        mod |= SDL_KMOD_LSHIFT;
+        break;
+      case 'g':
+        mod |= SDL_KMOD_LGUI;
+        break;
+      default:
+        return false;
+      }
+    }
+  } else if (*end) {
+    return false;
+  }
+  if (press)
+    for (int down = 1; down >= 0; down--) {
+      SDL_Event e;
+      SDL_zero(e);
+      e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+      e.key.scancode = (SDL_Scancode)sc;
+      e.key.key = SDL_GetKeyFromScancode((SDL_Scancode)sc, mod, false);
+      e.key.mod = mod;
+      e.key.down = down != 0;
+      SDL_PushEvent(&e);
+    }
+  return true;
+}
+
 static bool sdl_debug_press(const char *token, bool press) {
   bool tablet;
   const bool tablet_ok = sdl_debug_tablet(token, press, tablet);
@@ -1129,6 +973,10 @@ static bool sdl_debug_press(const char *token, bool press) {
   const bool usb_ok = sdl_debug_usb(token, press, usb);
   if (usb)
     return usb_ok;
+  bool host;
+  const bool host_ok = sdl_debug_hostkey(token, press, host);
+  if (host)
+    return host_ok;
   static const struct {
     const char *name;
     u32 key;
@@ -1312,6 +1160,11 @@ void bx_sdl_gui_c::handle_events(void) {
         else
           printf("%%SDL-W-KEYSCRIPT: unknown key \"%s\"\n", colon + 1);
       }
+      // An event listed out of order must not hold up the ones after it.
+      std::stable_sort(ks_events.begin(), ks_events.end(),
+                       [](const KScriptEvent &x, const KScriptEvent &y) {
+                         return x.t_ms < y.t_ms;
+                       });
       printf("%%SDL-I-KEYSCRIPT: %zu scripted key events armed.\n",
              ks_events.size());
     }
@@ -1515,13 +1368,10 @@ void bx_sdl_gui_c::handle_events(void) {
       if (handle_hotkey(sdl_event.key))
         break;
 
-      // Filter out ScrollLock (fullscreen toggle prev.) and invalid keys
-      if (sdl_event.key.key == SDLK_SCROLLLOCK)
-        break;
-
       // convert sym -> bochs code
       if (!myCfg->get_bool_value("keyboard.use_mapping", false)) {
-        key_event = sdl_scan_to_bx_key(sdl_event.key.scancode);
+        key_event =
+            sdl_scan_to_bx_key(sdl_event.key.scancode, sdl_event.key.mod);
       } else {
         /* use mapping */
         BXKeyEntry *entry = bx_keymap->findHostKey(sdl_event.key.key);
@@ -1548,9 +1398,6 @@ void bx_sdl_gui_c::handle_events(void) {
       break;
 
     case SDL_EVENT_KEY_UP:
-      if (sdl_event.key.key == SDLK_SCROLLLOCK)
-        break;
-
       if (sdl_event.key.scancode > SDL_SCANCODE_UNKNOWN &&
           sdl_event.key.scancode < SDL_SCANCODE_COUNT) {
         // The release of a hotkey chord key is not the guest's.
