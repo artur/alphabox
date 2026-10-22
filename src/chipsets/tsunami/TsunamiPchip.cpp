@@ -464,10 +464,10 @@ u64 CTsunami::pchip_csr_read(int num, u32 a) {
  * For a description of the PCHIP registers, see pchip_csr_read.
  **/
 void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
-  if (a == 0x800) { // SPRST: PCI reset
+  if (a == 0x800) { // SPRST: this Pchip's PCI reset (HRM 8.7)
     // Outside the lock: the devices reset drop their interrupt lines
     // through interrupt(), which takes it.
-    m_sys->reset_pci_devices();
+    m_sys->reset_pci_devices(num);
     return;
   }
   // The windows are read by device threads (pci_phys) while processors

@@ -140,7 +140,7 @@ void CTitan::port_write(int hose, u32 a, u64 data) {
     return;
   case 0x800: // SPRST: PCI reset while set
     if ((data & 1) && !(p.csr[i] & 1))
-      m_sys->reset_pci_devices();
+      m_sys->reset_pci_devices(hose);
     p.csr[i] = data & 1;
     return;
   default:

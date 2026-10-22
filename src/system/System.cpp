@@ -38,6 +38,7 @@
 #include "DPR.hpp"
 #include "Flash.hpp"
 #include "GdbStub.hpp"
+#include "PCIDevice.hpp"
 #include "StdAfx.hpp"
 #include "Tsunami.hpp"
 #if defined(__APPLE__) && defined(HAVE_SDL)
@@ -534,9 +535,12 @@ CTsunami *CSystem::tsunami() const {
   return static_cast<CTsunami *>(m_chipset);
 }
 
-void CSystem::reset_pci_devices() {
-  for (int i = 0; i < iNumComponents; i++)
-    acComponents[i]->ResetPCI();
+void CSystem::reset_pci_devices(int hose) {
+  for (int i = 0; i < iNumComponents; i++) {
+    CPCIDevice *d = dynamic_cast<CPCIDevice *>(acComponents[i]);
+    if (d && d->pci_bus() == hose)
+      d->ResetPCI();
+  }
 }
 
 /**

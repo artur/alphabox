@@ -239,8 +239,10 @@ public:
   void note_interval_tick() {
     m_tick_seq.fetch_add(1, std::memory_order_relaxed);
   }
-  /// Every device's PCI reset (a chipset's bus-reset register).
-  void reset_pci_devices();
+  /// The PCI reset of one hose (a Pchip's SPRST): RST# on that hose's bus
+  /// resets every device on it, those behind its bridges included, and
+  /// nothing on the other hoses.
+  void reset_pci_devices(int hose);
   int LoadROM();
   /// The machine's code-page map: every processor's JIT marks the pages it
   /// compiled from here, and every write path reports to it.
