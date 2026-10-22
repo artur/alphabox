@@ -76,13 +76,16 @@ void CPCIBridge::init() {
   u32 mask[64] = {};
 
   data[0x00 >> 2] = u32(m_chip.device_id) << 16 | m_chip.vendor_id;
-  data[0x04 >> 2] = 0x02900000; // medium DEVSEL, fast back-to-back
+  // Status: medium DEVSEL, fast back-to-back; the capability list bit only
+  // with a list (below). The secondary status says the same of the other
+  // side (21152 data sheet 13.1.4 and 13.1.18, PDF pp. 106 and 112).
+  data[0x04 >> 2] = 0x02800000;
   data[0x08 >> 2] = 0x06040000 | m_chip.revision; // PCI-PCI bridge
   data[0x0c >> 2] = 0x00010000;                   // type 1 header
   mask[0x04 >> 2] = 0x000003ff;
   mask[0x0c >> 2] = 0x0000ffff;
   mask[PPB_BUS_NUMBERS >> 2] = 0xffffffff;
-  data[PPB_IO >> 2] = m_chip.io32 ? 0x00000101 : 0;
+  data[PPB_IO >> 2] = 0x02800000 | (m_chip.io32 ? 0x00000101 : 0);
   mask[PPB_IO >> 2] = 0x0000f0f0;
   mask[PPB_MEMORY >> 2] = 0xfff0fff0;
   data[PPB_PREFETCH >> 2] = m_chip.pref64 ? 0x00010001 : 0;
@@ -100,7 +103,10 @@ void CPCIBridge::init() {
     data[0x04 >> 2] |= 0x00100000; // capability list
     data[PPB_CAPABILITIES >> 2] = PPB_PM_CAP;
     data[PPB_PM_CAP >> 2] = u32(m_chip.pm_capabilities) << 16 | 0x0001;
-    mask[(PPB_PM_CAP + 4) >> 2] = 0x00000103;
+    // PMCSR: the power state; PME_En only on a part that signals PME#
+    // (PMC<15:11>), read as 0 on the others (21152 data sheet 13.1.33).
+    mask[(PPB_PM_CAP + 4) >> 2] =
+        (m_chip.pm_capabilities & 0xf800) ? 0x00000103 : 0x00000003;
   }
   add_function(0, data, mask);
 

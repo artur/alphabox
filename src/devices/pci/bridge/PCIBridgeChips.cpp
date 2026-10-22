@@ -37,13 +37,16 @@ static const pci_bridge_config chips[] = {
      nullptr, 0, nullptr},
     {"dec21052", "DECchip 21052", 0x1011, 0x0021, 0x02, false, false, 0,
      nullptr, 0, nullptr},
-    {"dec21152", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0, nullptr,
-     0, nullptr},
+    // Revision 03h is the 21152-AB, the first with the power management
+    // capability at DCh: PM 1.0, no D1/D2, no PME# (21152 data sheet 13.1.5,
+    // 13.1.32; the AA, revisions 00h-02h, has no capability list).
+    {"dec21152", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0x0001,
+     nullptr, 0, nullptr},
     {"dec21153", "DECchip 21153", 0x1011, 0x0025, 0x01, true, true, 0x7e02,
      nullptr, 0, nullptr},
     {"dec21154", "DECchip 21154", 0x1011, 0x0026, 0x02, true, true, 0x7e02,
      nullptr, 0, nullptr},
-    {"de602", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0,
+    {"de602", "DECchip 21152", 0x1011, 0x0024, 0x03, true, false, 0x0001,
      "de602_port", 2, "DE602-AA"},
     // Revision unknown: the console only matches "Intel 21154-*E".
     {"de602b", "Intel 21154", 0x8086, 0xb154, 0x00, true, true, 0x7e02,

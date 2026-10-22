@@ -286,6 +286,23 @@ static void test_header() {
   CHECK_EQ(cfg_rd(&b, 0x3d, 8), 0);  // no interrupt pin
   cfg_wr(&b, 0x3c, 32, 0xffffffff);
   CHECK_EQ(cfg_rd(&b, 0x3e, 16), 0x0fff); // bridge control <11:0>
+
+  // Status: medium DEVSEL, fast back-to-back, and (revision 03h, the
+  // 21152-AB) the capability list: power management at DCh, PM 1.0, no
+  // D1/D2, no PME#, so PME_En reads 0 (13.1.4, 13.1.27-13.1.33).
+  CHECK_EQ(cfg_rd(&b, 0x06, 16), 0x0290);
+  CHECK_EQ(cfg_rd(&b, 0x1e, 16), 0x0280); // the secondary side the same
+  CHECK_EQ(cfg_rd(&b, 0x34, 8), 0xdc);
+  CHECK_EQ(cfg_rd(&b, 0xdc, 32), 0x00010001); // PM, end of list, PMC
+  cfg_wr(&b, 0xe0, 16, 0xffff);
+  CHECK_EQ(cfg_rd(&b, 0xe0, 16), 0x0003); // the power state alone
+  cfg_wr(&b, 0xe0, 16, 0);
+
+  // A 21050 has no capabilities, and its status says so (PCI 2.2 6.2.3).
+  CTestBridge old(nullptr, 4, "dec21050");
+  CHECK_EQ(cfg_rd(&old, 0x06, 16), 0x0280);
+  CHECK_EQ(cfg_rd(&old, 0x34, 8), 0);
+  CHECK_EQ(cfg_rd(&old, 0x1c, 8), 0x00); // 16-bit I/O only
 }
 
 /// Behind the bridge nothing answers configuration cycles until the bridge
