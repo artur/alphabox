@@ -816,6 +816,17 @@ until they were fixed:
   second a request every other processor answers before the block is
   published; neither was added. Windows 2000 RC2 and OpenVMS 8.4 on
   two processors, `smc_test.sh` on two and SRM on four ran as before.
+- **What a block marks as code** (JIT-04). A compiled block copied,
+  checked again, hashed and marked in the code-page map its whole
+  interpreted span, up to a dispatch batch of 2000 instructions, though
+  it compiles at most 64 and stops at its 8 KB page; past the page those
+  words are the physically next page, which is not where the code goes
+  on. A write anywhere in them made the next `IMB` real and the block
+  compile again, and that page took the slower write path. Only the
+  compiled prefix is used now. Nothing compiled ran differently: the
+  extra words only invalidated more. SRM's console log is unchanged on
+  the AArch64, `JIT_VERIFY` and x86-64 lanes, `smc_test.sh` passes on
+  both back ends, and Windows 2000 RC2 reached its desktop.
 
 ## A guest's floating-point exception that is the guest's own
 

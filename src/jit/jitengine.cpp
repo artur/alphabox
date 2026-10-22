@@ -3804,32 +3804,37 @@ void CJitEngine::compile_block(
   b->compiled = true;
 
   uint64_t phys = b->phys;
-  if (b->n_instr == 0 || phys + (uint64_t)b->n_instr * 4 > dram_size)
-    return;
-  // Compile from a snapshot of the source, not live guest RAM: another CPU can
-  // rewrite the page while this one assembles, and hashing the live bytes
-  // afterwards would stamp old code with the new bytes' fingerprint.
-  std::vector<uint32_t> source_words(b->n_instr);
-  memcpy(source_words.data(), dram + phys,
-         (size_t)b->n_instr * sizeof(uint32_t));
-  const uint32_t *words = source_words.data(); // x86 LE == Alpha LE
-
-  // PALmode blocks (PC bit 0) remap R4-7/R20-23 to the shadow bank (see RREG);
-  // reg() applies it.
-  const bool pal_block = (b->tag & 1) != 0;
-
   // Stop at the 8 KB page boundary: past it the next instruction's physical
   // address need not be phys+4 (the next virtual page maps elsewhere), so
   // words[] there would be the wrong instructions. (The page-crossing case
   // verify caught.)
   const uint64_t page_end = (phys & ~(uint64_t)0x1FFF) + 0x2000;
+  // Only what can be compiled is copied, checked, marked and hashed: at most
+  // 64 words, none past the page. n_instr is the whole span the dispatcher
+  // interpreted, up to a dispatch batch of 2000, and past the page the words
+  // that follow in DRAM are the physically next page, not where the code
+  // goes on.
+  const uint32_t n_src = (uint32_t)std::min<uint64_t>(
+      std::min<uint64_t>(b->n_instr, 64), (page_end - phys) / 4);
+  if (n_src == 0 || phys + (uint64_t)n_src * 4 > dram_size)
+    return;
+  // Compile from a snapshot of the source, not live guest RAM: another CPU can
+  // rewrite the page while this one assembles, and hashing the live bytes
+  // afterwards would stamp old code with the new bytes' fingerprint.
+  uint32_t source_words[64];
+  memcpy(source_words, dram + phys, (size_t)n_src * sizeof(uint32_t));
+  const uint32_t *words = source_words; // x86 LE == Alpha LE
+
+  // PALmode blocks (PC bit 0) remap R4-7/R20-23 to the shadow bank (see RREG);
+  // reg() applies it.
+  const bool pal_block = (b->tag & 1) != 0;
+
   uint32_t plen = 0;
   bool terminator_branch =
       false; // last instruction is a compiled terminator (sets its own PC)
   bool terminator_jmp =
       false; // ...and it's a computed jump (don't chain: targets vary)
-  while (plen < b->n_instr && plen < 64 &&
-         (phys + (uint64_t)plen * 4) < page_end) {
+  while (plen < n_src) {
     SafeOp sop = classify(words[plen], pal_block);
     if (sop == OP_NONE) { // uncompilable op ends the straight-line prefix
 #ifdef JIT_STATS
@@ -3877,8 +3882,7 @@ void CJitEngine::compile_block(
       // A not-taken conditional branch with more of the cold pass behind it
       // (n_instr ends at the branch that WAS taken) stays inside the block;
       // it needs one more instruction to fall through to.
-      if (ebb_enabled() && is_ebb_branch(sop) && plen < b->n_instr &&
-          plen < 64 && (phys + (uint64_t)plen * 4) < page_end)
+      if (ebb_enabled() && is_ebb_branch(sop) && plen < n_src)
         continue;
       terminator_branch = true;
       if (sop == OP_JMP || sop == OP_HW_RET)
@@ -3929,25 +3933,25 @@ void CJitEngine::compile_block(
   // the two was neither. The fence orders the bits before the re-check's
   // loads; bits set for a block that is then not published cost only a
   // slower write path for that memory.
+  // The compiled prefix only: what follows it runs interpreted, or in a
+  // block of its own that covers its own words.
   if (m_code_map) // this page now holds code: writes to it must be noticed
-    m_code_map->note_code(phys, (size_t)b->n_instr * sizeof(uint32_t));
+    m_code_map->note_code(phys, (size_t)plen * sizeof(uint32_t));
   std::atomic_thread_fence(std::memory_order_seq_cst);
   // What the map had counted when these words were last known good: a write
   // reported after this was made after the bits were set.
   const uint64_t code_gen = m_code_map ? m_code_map->write_gen() : 0;
   // The source changed while assembling (SMP self-modifying code): never
   // publish it. The unreferenced code is freed by the next reclaim.
-  if (memcmp(dram + phys, source_words.data(),
-             (size_t)b->n_instr * sizeof(uint32_t)) != 0)
+  if (memcmp(dram + phys, source_words, (size_t)plen * sizeof(uint32_t)) != 0)
     return;
   b->code = fn;
   b->jit_body = (void *)((uint8_t *)(void *)fn +
                          body_off); // chained re-entry (past prologue)
   b->body_off = (uint32_t)body_off; // to restore jit_body on revalidate
-  b->src_sum =
-      src_hash((const uint8_t *)source_words.data(),
-               b->n_instr);     // source fingerprint (revalidate vs self-mod)
-  b->hash_len = b->n_instr;     // freeze the hash extent (n_instr drifts)
+  b->src_sum = src_hash((const uint8_t *)source_words,
+                        plen); // source fingerprint (revalidate vs self-mod)
+  b->hash_len = plen;          // freeze the hash extent: the compiled prefix
   b->code_gen = code_gen;
   b->prefix_len = plen;
   m_code_bytes += csz; // track for the reclaim threshold (see flush())

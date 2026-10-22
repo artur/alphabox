@@ -253,9 +253,10 @@ public:
                        // entry on revalidate
     uint64_t src_sum; // hash of the source words at compile time (revalidate vs
                       // self-mod)
-    uint32_t hash_len; // word count src_sum covers -- frozen at compile time;
-                       // n_instr drifts (interrupt-truncated cold passes shrink
-                       // it), so it must NOT key the hash
+    uint32_t hash_len; // word count src_sum covers: the compiled prefix,
+                       // frozen at compile time. n_instr drifts (interrupt-
+                       // truncated cold passes shrink it), so it must NOT key
+                       // the hash
     uint64_t code_gen; // the code-page map's write count when these words were
                        // last known good. Only the audit reads it: a source
                        // change with this still current is a write nothing
