@@ -132,11 +132,19 @@ These are single runs, not a benchmark.
 
 ## Building
 
-libslirp is found with pkg-config. Install it with `brew install libslirp`
+libslirp is found with pkg-config, for its headers only: alphabox is not
+linked against it (nor glib), so the binary starts where libslirp is not
+installed. A NIC with `type = "nat"` loads the library when its back end is
+created, and without it the NIC is refused with one message naming the
+package: `apt install libslirp0` on Linux (soname `libslirp.so.0`),
+`brew install libslirp` on macOS (`libslirp.0.dylib`, looked for in the
+system search path, then `/opt/homebrew/lib` and `/usr/local/lib`). The
+directory pkg-config reported at build time is the last place tried.
+
+To build with NAT, install the development package: `brew install libslirp`
 or `apt install libslirp-dev libglib2.0-dev` (the Ubuntu 24.04 package
 needs glib's headers installed alongside) and configure again;
-`alphabox --version` lists `libslirp` when it is in. `-DDISABLE_SLIRP=yes`
+`alphabox --version` lists `libslirp` when it was compiled in (it does not load the library). `-DDISABLE_SLIRP=yes`
 builds without it. A lane for another architecture than the installed
 library (the x86-64 lane on an arm64 Mac) does not find a usable one and
-builds without. libslirp is not bundled, and links glib dynamically. It
-builds against libslirp 4.7 (Ubuntu 24.04) and 4.9 (Homebrew).
+builds without. libslirp is not bundled. It builds against libslirp 4.7 (Ubuntu 24.04) and 4.9 (Homebrew).

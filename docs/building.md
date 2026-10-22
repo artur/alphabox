@@ -12,9 +12,9 @@ CMake and a C++17 compiler. Everything else is optional:
 
 | Dependency | What it gives | Without it |
 | --- | --- | --- |
-| pcap | networking | no networking; `-DDISABLE_PCAP=yes` skips the search |
+| pcap | networking | no networking; `-DDISABLE_PCAP=yes` skips the search. Headers only at build time; libpcap is loaded when a pcap NIC is created (Linux `apt install libpcap0.8`; macOS has it) |
 | SDL3 | the graphical console | headless only; `-DDISABLE_SDL=yes` builds that on purpose |
-| libslirp | `type = "nat"`, a built-in NAT network ([networking.md](networking.md)) | `nat` is refused at startup; `-DDISABLE_SLIRP=yes` skips the search; `brew install libslirp` or `apt install libslirp-dev libglib2.0-dev` |
+| libslirp | `type = "nat"`, a built-in NAT network ([networking.md](networking.md)) | `nat` is refused at startup; `-DDISABLE_SLIRP=yes` skips the search; `brew install libslirp` or `apt install libslirp-dev libglib2.0-dev`. Headers only at build time; the library itself (`libslirp0`) is loaded when a NAT NIC is created |
 | libusb 1.0 | a host USB device passed through to the guest | no passthrough; `-DDISABLE_LIBUSB=yes` skips the search |
 | asmjit | the JIT | the interpreter only (see [JIT](#jit)) |
 

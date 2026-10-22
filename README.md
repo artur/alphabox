@@ -138,7 +138,11 @@ cmake --build build -j
 You also need an SRM console ROM image, and a VGA BIOS for the graphics
 card. Optional build dependencies
 (libpcap, libusb, and libslirp for the built-in NAT network, which needs no
-privileges) are listed in [building](docs/building.md). The [documentation](docs/README.md) covers the rest:
+privileges) are listed in [building](docs/building.md). libslirp and libpcap
+are also optional at run time: the binary starts without them, and a NIC
+that uses `type = "nat"` or the pcap back end loads its library then (on
+Linux `apt install libslirp0` or `libpcap0.8`; on macOS `brew install
+libslirp`, and macOS ships libpcap). The [documentation](docs/README.md) covers the rest:
 [building](docs/building.md), [running and configuring](docs/configuration.md),
 [the machines](docs/platforms.md), [USB](docs/usb.md),
 [headless operation](docs/headless.md) and
