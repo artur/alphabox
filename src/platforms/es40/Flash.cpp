@@ -240,13 +240,13 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
  *         |
  *         v
  *     MODE_READ <---------------------------+
- *         | write 0x5555:0xaa               |
+ *         | write 555:aa                    |
  *         v                                 |
  *     MODE_STEP1 ---------------------------+
- *         | write 0x2aaa:0x55               |
+ *         | write 2aa:55                    |
  *         v                                 |
  *     ==MODE_STEP2= ------------------------+
- * 0x80| 0xa0| 0x90| write 0x5555            |
+ * 0x80| 0xa0| 0x90| write 555               |
  *     |     |     v                         |
  *     |     | MODE_AUTOSEL (read device id)-+
  *     |     v                               |
@@ -255,13 +255,13 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
  *     |     +-------------------------------+
  *     v                                     |
  *  MODE_ERASE_STEP3 ------------------------+
- *     | write 0x5555:0xaa                   |
+ *     | write 555:aa                        |
  *     v                                     |
  *  MODE_ERASE_STEP4 ------------------------+
- *     | write 0x2aaa:0x55                   |
+ *     | write 2aa:55                        |
  *     v                                     |
  *  MODE_ERASE_STEP4 ------------------------+
- *   | write 0x30  | write 0x5555:0x10       |
+ *   | write 0x30  | write 555:10            |
  *   | anywhere    v                         |
  *   v           ERASE ENTIRE FLASH          |
  * ERASE BLOCK     |                         |
@@ -278,7 +278,10 @@ u64 CFlash::ReadMem(int index, u64 address, int dsize) {
 void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
   // Flash is mapped with 64-byte spacing, so byte index is address >> 6.
   const int a = (int)(address >> 6);
-  const int ad = a & 0xffff;
+  // The unlock and command cycles decode A10-A0 only: 555 and 2AA, A20-A11
+  // don't care (AM29F016D data sheet 21444E5, Table 9 note 4, PDF p. 21).
+  // The ES40 console writes 5555 and 2AAA, which the older data sheets give.
+  const int ad = a & 0x7ff;
   if ((unsigned)a >= (unsigned)m_flash.size())
     return;
   int &mode = m_mode[a / CHIP_SIZE];
@@ -331,7 +334,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       return;
     }
 
-    if ((ad == 0x5555) && (byte == 0xaa)) {
+    if ((ad == 0x555) && (byte == 0xaa)) {
       mode = MODE_STEP1;
       return;
     }
@@ -345,7 +348,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       return;
     }
 
-    if ((ad == 0x2aaa) && (byte == 0x55)) {
+    if ((ad == 0x2aa) && (byte == 0x55)) {
       mode = MODE_STEP2;
       return;
     }
@@ -359,7 +362,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       return;
     }
 
-    if (ad != 0x5555) {
+    if (ad != 0x555) {
       mode = MODE_READ;
       return;
     }
@@ -388,7 +391,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       return;
     }
 
-    if ((ad == 0x5555) && (byte == 0xaa)) {
+    if ((ad == 0x555) && (byte == 0xaa)) {
       mode = MODE_ERASE_STEP4;
       return;
     }
@@ -402,7 +405,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
       return;
     }
 
-    if ((ad == 0x2aaa) && (byte == 0x55)) {
+    if ((ad == 0x2aa) && (byte == 0x55)) {
       mode = MODE_ERASE_STEP5;
       return;
     }
@@ -417,7 +420,7 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
     }
 
     // Chip erase: AA/55/80/AA/55/10 at 5555
-    if ((ad == 0x5555) && (byte == 0x10)) {
+    if ((ad == 0x555) && (byte == 0x10)) {
       printf("%%SRM-I-FLASH: Erasing flash chip\n");
       memset(&m_flash[(size_t)(a / CHIP_SIZE) * CHIP_SIZE], 0xff, CHIP_SIZE);
       last_dirty.store(time(nullptr));
