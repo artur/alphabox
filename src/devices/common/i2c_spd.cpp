@@ -170,6 +170,15 @@ void Eeprom24C02::enter_word() {
   ack_seen_ = false;
 }
 
+void Eeprom24C02::enter_recv() {
+  st_ = RECV;
+  shreg_ = 0;
+  bitpos_ = 0;
+  ack_phase_ = ACK_RECV;
+  ack_pull_ = false;
+  ack_seen_ = false;
+}
+
 void Eeprom24C02::enter_xmit() {
   st_ = XMIT;
   bitpos_ = 0;
@@ -197,9 +206,7 @@ void Eeprom24C02::on_scl_rise(bool sda_line) {
     if (++bitpos_ == 8) {
       rw_ = (shreg_ & 1) != 0;
       addr_match_ = (static_cast<uint8_t>(shreg_ >> 1) == addr7_);
-      // Drive ACK during the 9th clock if we match
-      ack_pull_ = addr_match_; // ACK low
-      st_ = RECV_ACK;
+      st_ = RECV_ACK; // acknowledged from the fall of this clock
       bitpos_ = 0;
     }
     break;
@@ -210,7 +217,17 @@ void Eeprom24C02::on_scl_rise(bool sda_line) {
     if (++bitpos_ == 8) {
       if (addr_match_)
         wordptr_ = shreg_;
-      ack_pull_ = addr_match_; // ACK low
+      st_ = RECV_ACK;
+      bitpos_ = 0;
+    }
+    break;
+
+  case RECV:
+    // A data byte of a write: write-protected, so it is dropped, but the
+    // address counter moves on within its 8-byte page (5.2, PDF p. 8).
+    shreg_ = static_cast<uint8_t>((shreg_ << 1) | (sda_line ? 1 : 0));
+    if (++bitpos_ == 8) {
+      wordptr_ = static_cast<uint8_t>((wordptr_ & ~7) | ((wordptr_ + 1) & 7));
       st_ = RECV_ACK;
       bitpos_ = 0;
     }
@@ -261,9 +278,10 @@ void Eeprom24C02::on_scl_fall(bool /*sda_line*/) {
     // has to stay on the wire until the ninth clock has been taken.
     if (!ack_seen_) {
       // The fall that ends the eighth clock: a transmitter now lets go of
-      // SDA for the host's ACK/NACK on the ninth.
-      if (ack_phase_ == ACK_DATA)
-        ack_pull_ = false;
+      // SDA for the host's ACK/NACK on the ninth, and a receiver pulls it
+      // low to acknowledge. SDA changes only while SCL is low (I2C-bus
+      // specification UM10204, 3.1.3, PDF p. 8; AT24C02D 3.3, PDF p. 5).
+      ack_pull_ = ack_phase_ == ACK_DATA ? false : addr_match_;
       break;
     }
 
@@ -280,11 +298,10 @@ void Eeprom24C02::on_scl_fall(bool /*sda_line*/) {
       } else {
         enter_xmit(); // prepare first data byte
       }
-    } else if (ack_phase_ == ACK_WORD) {
-      // After word pointer ACK: expect repeated START + READ address
-      // We simply wait in ADDR for the next START (already handled in
-      // on_start()).
-      enter_addr();
+    } else if (ack_phase_ == ACK_WORD || ack_phase_ == ACK_RECV) {
+      // After the word address: a write's data bytes, or a repeated START
+      // for a read from there (on_start()).
+      enter_recv();
     } else if (ack_phase_ == ACK_DATA) {
       // After ACKing a transmitted byte: continue sending next byte
       enter_xmit();

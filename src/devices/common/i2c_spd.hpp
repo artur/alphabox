@@ -91,7 +91,13 @@ private:
   void notify_scl_fall();
 };
 
-/* ------------ Minimal read-only 24C02 for SPD (0x50-0x57) ------------ */
+/* ------------ 24C02, write-protected (SPD at 0x50-0x57) ------------ */
+/* A 2 Kbit serial EEPROM with its WP pin tied high, as an SPD EEPROM is:
+   random, current-address and sequential reads; a write's data bytes are
+   acknowledged and dropped (AT24C01D/02D data sheet 8871F, 5.5, PDF p. 10:
+   "the device will acknowledge the Device Address, Word address, and Data
+   bytes but no write cycle will occur"). Boards also stand it in, erased,
+   for parts whose contents are not known. */
 class Eeprom24C02 : public I2CDevice {
 public:
   explicit Eeprom24C02(uint8_t addr7, const std::vector<uint8_t> &image);
@@ -107,8 +113,8 @@ private:
   const uint8_t addr7_;
   std::vector<uint8_t> mem_;
 
-  enum State { IDLE, ADDR, WORD, XMIT, RECV_ACK } st_;
-  enum AckPhase { NONE, ACK_ADDR, ACK_WORD, ACK_DATA } ack_phase_;
+  enum State { IDLE, ADDR, WORD, RECV, XMIT, RECV_ACK } st_;
+  enum AckPhase { NONE, ACK_ADDR, ACK_WORD, ACK_RECV, ACK_DATA } ack_phase_;
 
   uint8_t shreg_;   // shift register
   uint8_t bitpos_;  // 0..8 (8 bits then ACK/NACK)
@@ -124,6 +130,7 @@ private:
   // Internal helpers
   void enter_addr();
   void enter_word();
+  void enter_recv();
   void enter_xmit();
   void enter_idle();
 
