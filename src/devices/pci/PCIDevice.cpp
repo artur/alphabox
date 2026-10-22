@@ -66,8 +66,6 @@ static void diag_printf(const char *fmt, ...) {
           .count();
 }
 
-#define DEBUG_PCI 0
-
 static bool pci_dma_targets_ram(CSystem *system, u64 phys_addr, size_t bytes) {
   return bytes && system->PtrToMem(phys_addr) &&
          system->PtrToMem(phys_addr + bytes - 1);
@@ -541,7 +539,7 @@ void CPCIDevice::WriteMem(int index, u64 address, int dsize, u64 data) {
         myCfg->get_myName(), myCfg->get_myValue(), func);
     return;
   }
-#if DEBUG_PCI
+#if defined(DEBUG_PCI)
   printf("[PCI::WriteMem] func=%d bar=%d addr=%08X dsize=%d data=%08X\n", func,
          bar, (uint32_t)address, dsize, (uint32_t)data);
 #endif
