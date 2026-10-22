@@ -35,7 +35,7 @@
  * Contains the code for the emulated Flash ROM devices.
  **/
 #include "Flash.hpp"
-#include "AlphaCPU.hpp"
+#include "SaveFile.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 
@@ -58,8 +58,6 @@ static const u32 flash_magic1 = 0xFF3E3FF3;
 // SRM partition CPQ signature offsets within a real ES40 flash image.
 static const u32 srm_partition_offset = 0x00010000;
 static const u32 cpq_sig_offset = 0x14;
-
-extern CAlphaCPU *cpu[4];
 
 /**
  * Constructor.
@@ -448,23 +446,16 @@ void CFlash::WriteMem(int index, u64 address, int dsize, u64 data) {
 }
 
 /**
- * Save flash contents as a raw 2 MiB image.
+ * Save flash contents as a raw image, 2 MiB per part. The old file stays
+ * until the new one is complete (save_file).
  **/
 void CFlash::SaveStateF(char *fn) {
-  FILE *ff = fopen(fn, "wb");
-  if (!ff) {
-    printf("%%FLS-F-NOSAVE: Flash could not be saved to %s\n", fn);
-    return;
-  }
-
-  const size_t n = fwrite(m_flash.data(), 1, m_flash.size(), ff);
-  fclose(ff);
-
-  if (n != m_flash.size())
-    printf("%%FLS-F-NOSAVE: Short write (%zu of %zu bytes) to %s\n", n,
-           m_flash.size(), fn);
-  else
+  if (save_file(fn, [this](FILE *f) {
+        return fwrite(m_flash.data(), 1, m_flash.size(), f) == m_flash.size();
+      }))
     printf("%%FLS-I-SAVEST: Flash saved to %s\n", fn);
+  else
+    printf("%%FLS-F-NOSAVE: Flash could not be saved to %s\n", fn);
 }
 
 void CFlash::SaveStateF() {

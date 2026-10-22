@@ -40,14 +40,12 @@
 #include "AlphaCPU.hpp"
 #include "Chipset.hpp"
 #include "DimmModel.hpp"
-#include "Serial.hpp"
+#include "SaveFile.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include <time.h>
 
 #define ToBCD(x) (((x) / 10 << 4) | ((x) % 10))
-
-extern CSerial *srl[2];
 
 /**
  * Constructor.
@@ -633,14 +631,14 @@ void CDPR::WriteMem(int index, u64 address, int dsize, u64 data) {
 }
 
 /**
- * Save state to a DPR rom file.
+ * Save state to a DPR rom file. The old file stays until the new one is
+ * complete (save_file).
  **/
 void CDPR::SaveStateF(char *fn, bool verbose) {
-  FILE *ff;
-  ff = fopen(fn, "wb");
-  if (ff) {
-    SaveState(ff);
-    fclose(ff);
+  if (save_file(fn, [this](FILE *f) {
+        SaveState(f);
+        return !ferror(f);
+      })) {
     if (verbose)
       printf("%%DPR-I-SAVEST: DPR state saved to %s\n", fn);
   } else {
