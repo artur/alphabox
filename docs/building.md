@@ -14,6 +14,7 @@ CMake and a C++17 compiler. Everything else is optional:
 | --- | --- | --- |
 | pcap | networking | no networking; `-DDISABLE_PCAP=yes` skips the search |
 | SDL3 | the graphical console | headless only; `-DDISABLE_SDL=yes` builds that on purpose |
+| libslirp | `type = "nat"`, a built-in NAT network ([networking.md](networking.md)) | `nat` is refused at startup; `-DDISABLE_SLIRP=yes` skips the search; `brew install libslirp` or `apt install libslirp-dev libglib2.0-dev` |
 | libusb 1.0 | a host USB device passed through to the guest | no passthrough; `-DDISABLE_LIBUSB=yes` skips the search |
 | asmjit | the JIT | the interpreter only (see [JIT](#jit)) |
 

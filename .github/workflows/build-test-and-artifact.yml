@@ -17,7 +17,7 @@ jobs:
       run: echo "date=$(date +'%Y-%m-%dT%H%M')" >> $GITHUB_OUTPUT
 
     - name: Install build dependencies
-      run: sudo apt -y update && sudo apt -y install libpcap-dev netcat-openbsd libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxtst-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libegl-dev
+      run: sudo apt -y update && sudo apt -y install libpcap-dev libslirp-dev libglib2.0-dev netcat-openbsd libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxtst-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libegl-dev
 
     - name: Create build environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -63,7 +63,7 @@ jobs:
       run: pip install gcovr
 
     - name: Install build dependencies
-      run: sudo apt -y update && sudo apt -y install libpcap-dev netcat-openbsd libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxtst-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libegl-dev
+      run: sudo apt -y update && sudo apt -y install libpcap-dev libslirp-dev libglib2.0-dev netcat-openbsd libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxtst-dev libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev libegl-dev
 
     - name: Create build environment
       run: cmake -E make_directory ${{runner.workspace}}/build

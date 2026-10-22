@@ -335,10 +335,11 @@ Three NIC families are available, each in any free PCI slot:
 - `virtio_net`: a paravirtual NIC, for a guest with a driver for it
   ([virtio.md](virtio.md)).
 
-Each connects to the host through one of five back ends, selected with
+Each connects to the host through one of six back ends, selected with
 `type`. Every NIC is in every build; `udp`, `loopback` and `null` need
 nothing from the host, `pcap` needs a build with libpcap (`alphabox
---version` lists PCap) and `tap` Linux. A type the build lacks, or a word
+--version` lists PCap), `nat` one with libslirp (it lists libslirp) and
+`tap` Linux. A type the build lacks, or a word
 that is no type, is refused at startup and by `--check`.
 
 - `type = "pcap"` (default): captures on an existing host interface. Set
@@ -355,6 +356,12 @@ that is no type, is refused at startup and by `--check`.
   - `host_ip = "10.0.0.1/24";`;
   - `bridge = "br0";`;
   - `uplink = "eno1";`.
+- `type = "nat"`: a user-mode NAT router built in (libslirp), so the guest
+  gets a DHCP or BOOTP lease, DNS, TFTP, the internet and the host with no
+  privileges and no host interface. Keys `net`, `host`, `dns`,
+  `dhcp_start`, `hostname`, `tftp_root`, `bootfile`, `hostfwd`, `restrict`,
+  `host_loopback` and `ipv6`; [networking.md](networking.md) has the
+  address plan, how to ssh in and the limits.
 - `type = "udp"`: a point-to-point link to another program, one Ethernet
   frame per UDP datagram (the framing of QEMU's `-netdev dgram`). Set
   `udp_local = "127.0.0.1:5555";` (where the NIC listens) and

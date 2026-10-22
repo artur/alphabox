@@ -91,7 +91,9 @@ with it. (A Windows-only MPU-401 MIDI output that ES40-Emu marks
 GPL-2.0-only was removed in October 2026 for that reason.)
 
 Built with, not part of the source: **SDL3** and **asmjit** (zlib),
-**libpcap** (BSD-3-Clause), **libusb** (LGPL-2.1-or-later), and **Npcap**
+**libpcap** (BSD-3-Clause), **libusb** (LGPL-2.1-or-later), **libslirp**
+(BSD-3-Clause, the user-mode network of QEMU; it links glib, LGPL-2.1-or-later,
+dynamically), and **Npcap**
 on Windows, which is loaded at run time and installed by the user. The VGA
 BIOS images (most of them from 86Box's ROM set) are supplied by the user
 and not distributed with Alphabox.

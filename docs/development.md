@@ -102,6 +102,9 @@ with SDL and pcap; on another build only the trees are compared.
 - `NIC=<class>` adds a NIC; `NET_PEER=<nic port>:<peer port>` puts it on a
   UDP link to `net_peer.py`, so `boot eia0`/`boot ewa0` runs a full network
   boot.
+  `NAT=1` with `NIC=` instead puts it on the NAT back end (libslirp) with a
+  CALL_PAL HALT image as `boot.img`; type `set ewa0_protocols bootp` before
+  `boot ewa0`.
 - `EXTRA_CFG=<file>` adds any configuration: bridges, more devices.
 
 ### CPU and JIT correctness

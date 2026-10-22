@@ -307,7 +307,9 @@ card. The user guide is [usb.md](usb.md).
 
 `Ethernet`, `NicAddress` (the shared default station address), and
 `NetworkBackend` with its back ends: `NetworkPcap`, `NetworkTap`,
-`NetworkUdp`, `NetworkLoopback` (a plug on the port) and `NetworkNull`.
+`NetworkUdp`, `NetworkNat` (a user-mode NAT router on libslirp, optional,
+`HAVE_SLIRP`; a worker thread and one mutex around every library call),
+`NetworkLoopback` (a plug on the port) and `NetworkNull`.
 
 ## gui/, common/ and the entry points
 

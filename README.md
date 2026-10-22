@@ -136,7 +136,9 @@ cmake --build build -j
 ```
 
 You also need an SRM console ROM image, and a VGA BIOS for the graphics
-card. The [documentation](docs/README.md) covers the rest:
+card. Optional build dependencies
+(libpcap, libusb, and libslirp for the built-in NAT network, which needs no
+privileges) are listed in [building](docs/building.md). The [documentation](docs/README.md) covers the rest:
 [building](docs/building.md), [running and configuring](docs/configuration.md),
 [the machines](docs/platforms.md), [USB](docs/usb.md),
 [headless operation](docs/headless.md) and

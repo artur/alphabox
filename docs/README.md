@@ -7,6 +7,8 @@
 - [Running and configuring](configuration.md): the machines, firmware and
   VGA BIOS images, ARC/AlphaBIOS, serial consoles, networking, sound,
   mouse and hotkeys, disk and CD images, and guest installation guides.
+- [Networking](networking.md): the NAT back end (no privileges: DHCP, DNS,
+  TFTP, the internet and the host), its address plan, keys and limits.
 - [Headless operation and debug hooks](headless.md): window-less runs,
   screen dumps, scripted keyboard and mouse input, and trace switches.
 - [Debugging a guest with gdb](debugging.md): the gdb stub, breakpoints
