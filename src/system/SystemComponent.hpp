@@ -80,6 +80,9 @@ public:
   virtual void init(){};
   virtual void start_threads(){};
   virtual void stop_threads(){};
+  /// The name ALPHABOX_RECORD selects this component's ranges by
+  /// (AccessRecord.hpp): its configuration node, unless it shares one.
+  virtual const char *record_name() const { return devid_string; }
 
   char *devid_string;
 

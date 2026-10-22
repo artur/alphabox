@@ -67,6 +67,7 @@ public:
   bool FindCpqPartition(const char *name, u32 *offset, u32 *size) const;
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
+  virtual const char *record_name() const { return "flash"; }
   /// `chips` 2 MB AM29F016 parts, one after the other on the TIG bus:
   /// the ES40 has one, the ES45 two.
   CFlash(CConfigurator *cfg, class CSystem *c, int chips = 1);

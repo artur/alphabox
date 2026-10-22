@@ -536,6 +536,11 @@ private:
   /// it first turns the scan into one comparison. A stale or torn value only
   /// costs a miss: the bounds are checked before it is used.
   int iLastMemory = -1;
+  /// Per range, whether ALPHABOX_RECORD selects its component: -1 not asked
+  /// yet (asked at the first access, when the component is complete), 0 no,
+  /// 1 yes.
+  std::atomic<signed char> aMemoryRecord[MAX_COMPONENTS];
+  void record_access(int i, u64 offset, int dsize, bool write, u64 value);
 
   class CAlphaCPU *acCPUs[kMaxCPUs];
 

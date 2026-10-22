@@ -48,6 +48,7 @@ public:
   virtual void check_state();
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
   virtual u64 ReadMem(int index, u64 address, int dsize);
+  virtual const char *record_name() const { return "dpr"; }
   virtual int SaveState(FILE *f);
   virtual int RestoreState(FILE *f);
   void SaveStateF();

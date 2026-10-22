@@ -38,6 +38,7 @@
  *
  **/
 #include "PCIDevice.hpp"
+#include "AccessRecord.hpp"
 #include "PCIBridge.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
@@ -374,6 +375,18 @@ void CPCIDevice::ResetPCI() {
   }
 }
 
+/// ALPHABOX_RECORD=pcicfg: a configuration cycle as the bus delivers it, not
+/// the device's own reads of its registers (AccessRecord.hpp).
+void CPCIDevice::record_config(int func, u32 address, int dsize, bool write,
+                               u32 value) {
+  static const bool on = access_record::selected("pcicfg");
+  if (!on)
+    return;
+  char space[8];
+  snprintf(space, sizeof(space), "f%d", func);
+  access_record::note(devid_string, space, address, dsize, write, value);
+}
+
 u64 CPCIDevice::ReadMem(int index, u64 address, int dsize) {
   int func;
   int bar;
@@ -414,8 +427,12 @@ u64 CPCIDevice::ReadMem(int index, u64 address, int dsize) {
   bar = index & 7;
   func = (index / 8) & 7;
 
-  if (bar == 7)
-    return config_read(func, (u32)address, dsize);
+  if (bar == 7) {
+    const u32 v = config_read(func, (u32)address, dsize);
+    if (access_record::g_on)
+      record_config(func, (u32)address, dsize, false, v);
+    return v;
+  }
 
   if (pci_range_is_io[func][bar] &&
       !(pci_state.config_data[func][1] & endian_32(1))) {
@@ -480,6 +497,8 @@ void CPCIDevice::WriteMem(int index, u64 address, int dsize, u64 data) {
   func = (index / 8) & 7;
 
   if (bar == 7) {
+    if (access_record::g_on)
+      record_config(func, (u32)address, dsize, true, (u32)data);
     config_write(func, (u32)address, dsize, (u32)data);
     return;
   }

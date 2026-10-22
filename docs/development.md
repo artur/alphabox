@@ -228,6 +228,32 @@ the timer, Memory Move). It takes a few seconds, needs no firmware, and is
 the first thing to run after a change to `CDisk`, the SCSI bus or the
 53C8xx.
 
+### Device access records
+
+| Tool | Purpose |
+| --- | --- |
+| `trace_diff.py` | Compares two `ALPHABOX_RECORD` files ([headless.md](headless.md)) stream by stream, one stream per device and processor. |
+
+A record is the oracle for a change to a device the guests reach through
+registers: run the same boot with the base and the changed build, with
+`ALPHABOX_RECORD` naming the device, and compare. Give both the same
+`time = "2026-01-01 00:00:00";` in `sys0` (`EXTRA_CFG=` for `srm_probe.sh`),
+or the DPR's power-up time differs. The streams of the DPR, the flash, the
+I2C controller and PCI configuration space then come out the same in every
+run of one build, on one processor or four. The Tsunami's
+registers also carry the interrupt path, which lands at a different place
+in every run; leave it out with
+
+```
+trace_diff.py --ignore 'csr cpu\d+ [rw] cchip (80|200|240|280|2c0|600|640|680|6c0) ' base.txt head.txt
+```
+
+Each difference left is then a change in what the guest was told. A device
+that depends on nothing but its accesses (the flash, an EEPROM, the I2C
+parts) can also be tested by replay: record it with `raw` in the list,
+keep the file under `test/unit/`, and have its unit test feed the writes
+and check every read.
+
 ### Builds and helpers
 
 | Tool | Purpose |

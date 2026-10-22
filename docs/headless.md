@@ -565,6 +565,25 @@ machine's firmware wants hardware that is not emulated yet (see
 | `ALPHABOX_TRACE_TOY=1` | the TOY clock: the guest's writes to its registers 00h-0Dh, selections with the NMI-disable bit, the first reads of register C |
 | `ALPHABOX_TRACE_CSR=1` | on the Tsunami boards, every access to a Cchip, Dchip, Pchip or TIG register, with the value, the processor (or `dev` for a device's DMA) and the instruction; on Marvel, see below |
 | `ALPHABOX_DUMP_MEMORY=1` | guest memory, written to `memory_000000000000.dmp` when the emulator is asked to stop |
+| `ALPHABOX_RECORD=<names>` | a record of every access to the named devices, one line each, to `ALPHABOX_RECORD_FILE` (default `alphabox-record.txt` in the working directory); see below |
+
+`ALPHABOX_RECORD` takes a comma-separated list: a device by its
+configuration node (`pci0.7`, `ali`, or `pci0.7(ali)`); `dpr`, `flash` and
+`i2c` for the board's dual-port RAM, flash and PCF8584 I2C controller;
+`pcicfg` for every PCI device's configuration space, as the bus delivers
+it; `csr` for the Tsunami's registers; and `raw` to keep every access. Without
+`raw`, a run that repeats with a period of up to four accesses is written
+once, so a polling loop records the same however long it spins. Each line
+is
+
+```
+<device> <cpuN|dev> <r|w> <range or space> <offset> <bits> <value>
+```
+
+in hex, the value being what was written or what the read returned. The
+file is complete once the emulator has exited. `test/tools/trace_diff.py`
+compares two of them ([development.md](development.md), "Device access
+records").
 
 `ALPHABOX_TRACE_UNKNOWN` gives the address, its width, and the instruction
 or device that made the access:

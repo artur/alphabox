@@ -29,6 +29,7 @@
  */
 
 #include "Tsunami.hpp"
+#include "AccessRecord.hpp"
 #include "AlphaCPU.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
@@ -41,13 +42,17 @@ namespace {
 /// access to a Cchip, Dchip, Pchip or TIG register, with the processor and
 /// the instruction that made it, or "dev" for a device's DMA. The first three
 /// from one instruction, then every power of two, as the unknown-access trace
-/// does: the console polls MISC and the TIG in loops.
+/// does: the console polls MISC and the TIG in loops. ALPHABOX_RECORD=csr
+/// records the same accesses (AccessRecord.hpp).
 bool csr_trace_on() {
   static const bool on = getenv("ALPHABOX_TRACE_CSR") != nullptr;
   return on;
 }
 
-u64 csr_trace(const char *chip, u32 off, bool write, u64 v) {
+u64 csr_trace(const char *chip, u32 off, int dsize, bool write, u64 v) {
+  static const bool record = access_record::selected("csr");
+  if (record)
+    access_record::note("csr", chip, off, dsize, write, v);
   if (!csr_trace_on())
     return v;
   static std::mutex m;
@@ -297,31 +302,31 @@ void CTsunami::ack_ipi(int ProcNum) {
 void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
                         CSystemComponent *source) {
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF)) {
-    csr_trace("cchip", (u32)a & 0xFFFFFFF, true, data);
+    csr_trace("cchip", (u32)a & 0xFFFFFFF, dsize, true, data);
     cchip_csr_write((u32)a & 0xFFFFFFF, data, source);
     return;
   }
 
   if (a >= U64(0x0000080180000000) && a <= U64(0x000008018FFFFFFF)) {
-    csr_trace("pchp0", (u32)a & 0xFFFFFFF, true, data);
+    csr_trace("pchp0", (u32)a & 0xFFFFFFF, dsize, true, data);
     pchip_csr_write(0, (u32)a & 0xFFFFFFF, data);
     return;
   }
 
   if (a >= U64(0x0000080380000000) && a <= U64(0x000008038FFFFFFF)) {
-    csr_trace("pchp1", (u32)a & 0xFFFFFFF, true, data);
+    csr_trace("pchp1", (u32)a & 0xFFFFFFF, dsize, true, data);
     pchip_csr_write(1, (u32)a & 0xFFFFFFF, data);
     return;
   }
 
   if (a >= U64(0x00000801B0000000) && a <= U64(0x00000801BFFFFFFF)) {
-    csr_trace("dchip", (u32)a & 0xFFFFFFF, true, data);
+    csr_trace("dchip", (u32)a & 0xFFFFFFF, dsize, true, data);
     dchip_csr_write((u32)a & 0xFFFFFFF, (u8)data & 0xff);
     return;
   }
 
   if (a >= U64(0x0000080100000000) && a <= U64(0x000008013FFFFFFF)) {
-    csr_trace("tig", (u32)a & 0x3FFFFFFF, true, data);
+    csr_trace("tig", (u32)a & 0x3FFFFFFF, dsize, true, data);
     tig_write((u32)a & 0x3FFFFFFF, (u8)data);
     return;
   }
@@ -486,24 +491,24 @@ void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
  **/
 u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
   if (a >= U64(0x00000801A0000000) && a <= U64(0x00000801AFFFFFFF))
-    return csr_trace("cchip", (u32)a & 0xFFFFFFF, false,
+    return csr_trace("cchip", (u32)a & 0xFFFFFFF, dsize, false,
                      cchip_csr_read((u32)a & 0xFFFFFFF, source));
 
   if (a >= U64(0x0000080180000000) && a <= U64(0x000008018FFFFFFF))
-    return csr_trace("pchp0", (u32)a & 0xFFFFFFF, false,
+    return csr_trace("pchp0", (u32)a & 0xFFFFFFF, dsize, false,
                      pchip_csr_read(0, (u32)a & 0xFFFFFFF));
 
   if (a >= U64(0x0000080380000000) && a <= U64(0x000008038FFFFFFF))
-    return csr_trace("pchp1", (u32)a & 0xFFFFFFF, false,
+    return csr_trace("pchp1", (u32)a & 0xFFFFFFF, dsize, false,
                      pchip_csr_read(1, (u32)a & 0xFFFFFFF));
 
   if (a >= U64(0x00000801B0000000) && a <= U64(0x00000801BFFFFFFF))
-    return csr_trace("dchip", (u32)a & 0xFFFFFFF, false,
+    return csr_trace("dchip", (u32)a & 0xFFFFFFF, dsize, false,
                      dchip_csr_read((u32)a & 0xFFFFFFF) *
                          U64(0x0101010101010101));
 
   if (a >= U64(0x0000080100000000) && a <= U64(0x000008013FFFFFFF))
-    return csr_trace("tig", (u32)a & 0x3FFFFFFF, false,
+    return csr_trace("tig", (u32)a & 0x3FFFFFFF, dsize, false,
                      tig_read((u32)a & 0x3FFFFFFF));
 
   if ((a >= U64(0x801fe000000) && a < U64(0x801ff000000)) ||

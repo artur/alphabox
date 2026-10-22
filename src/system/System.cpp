@@ -33,6 +33,7 @@
  */
 
 #include "System.hpp"
+#include "AccessRecord.hpp"
 #include "AlphaCPU.hpp"
 #include "DPR.hpp"
 #include "Flash.hpp"
@@ -502,6 +503,7 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   asMemories[iNumMemories] = m;
   aMemoryBounds[iNumMemories].base = base;
   aMemoryBounds[iNumMemories].end = base + length;
+  aMemoryRecord[iNumMemories].store(-1, std::memory_order_relaxed);
   iNumMemories++;
 
   // If this range carries a bulk data register, record its absolute
@@ -1035,6 +1037,8 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
         iLastMemory = i;
     }
     if (i < iNumMemories) {
+      if (access_record::g_on)
+        record_access(i, a - aMemoryBounds[i].base, dsize, true, data);
       asMemories[i]->component->WriteMem(
           asMemories[i]->index, a - aMemoryBounds[i].base, dsize, data);
       return;
@@ -1067,6 +1071,23 @@ void CSystem::WriteMem(u64 address, int dsize, u64 data,
 }
 
 /**
+ * ALPHABOX_RECORD: one access to device range i, if its component is
+ * selected (AccessRecord.hpp).
+ **/
+void CSystem::record_access(int i, u64 offset, int dsize, bool write,
+                            u64 value) {
+  const CSystemComponent *c = asMemories[i]->component;
+  signed char on = aMemoryRecord[i].load(std::memory_order_relaxed);
+  if (on < 0) {
+    on = access_record::selected(c->record_name()) ? 1 : 0;
+    aMemoryRecord[i].store(on, std::memory_order_relaxed);
+  }
+  if (on)
+    access_record::note(c->record_name(), asMemories[i]->index, offset, dsize,
+                        write, value);
+}
+
+/**
  * \brief Read 8, 4, 2 or 1 byte(s) from a 64-bit system address. This could be
  *memory, a registered device range, or what the chipset decodes itself
  *(CChipset::read_io: its registers, PCI and I/O space nothing answers in).
@@ -1091,9 +1112,13 @@ u64 CSystem::ReadMem(u64 address, int dsize, CSystemComponent *source) {
       if (i < iNumMemories)
         iLastMemory = i;
     }
-    if (i < iNumMemories)
-      return asMemories[i]->component->ReadMem(
+    if (i < iNumMemories) {
+      const u64 v = asMemories[i]->component->ReadMem(
           asMemories[i]->index, a - aMemoryBounds[i].base, dsize);
+      if (access_record::g_on)
+        record_access(i, a - aMemoryBounds[i].base, dsize, false, v);
+      return v;
+    }
 
     // Not memory and no device's: the chipset's registers, or space
     // nothing answers in.

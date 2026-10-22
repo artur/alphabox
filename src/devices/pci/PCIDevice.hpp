@@ -72,6 +72,7 @@ public:
 
   u32 config_read(int func, u32 address, int dsize);
   void config_write(int func, u32 address, int dsize, u32 data);
+  void record_config(int func, u32 address, int dsize, bool write, u32 value);
 
   virtual u32 config_read_custom(int func, u32 address, int dsize, u32 data) {
     return data;

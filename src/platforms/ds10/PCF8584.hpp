@@ -46,6 +46,7 @@ public:
   void WriteMem(int index, u64 address, int dsize, u64 data) override;
   int SaveState(FILE *f) override;
   int RestoreState(FILE *f) override;
+  const char *record_name() const override { return "i2c"; }
 
   /// The bus this controller drives, for the board to hang its parts on.
   I2CBus &bus() { return m_bus; }
