@@ -286,8 +286,7 @@
 #define DO_IMPLVER state.r[REG_3] = m_model->implver;
 
 // state.cc is wall-clock in both engines (advanced at batch boundaries by real
-// elapsed time * cpu_hz), so the live cycle count is simply state.cc; _cc_accum
-// only feeds cc_large for the legacy check_state speed-factor feedback.
+// elapsed time * cpu_hz), so the live cycle count is simply state.cc.
 // RPCC syncs the wall-clock counter at every read and never returns the same
 // value twice (see rpcc_read).
 #define DO_RPCC state.r[REG_1] = rpcc_read();

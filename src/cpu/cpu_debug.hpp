@@ -66,19 +66,18 @@
  * for invalid CALL_PAL function values. brokenpipe (alphafix) routes all of
  * these through the same `unallocated_encoding()` -> EXCP_OPCDEC path.
  *
- * The printfs are intentional diagnostic noise: if a truly missing opcode case
- * exists in es40's dispatch, the warning will surface at the host stderr even
- * though the architectural OPCDEC trap also fires. The hot path under a
- * working guest workload should never see these. */
+ * The warning is intentional diagnostic noise: if a truly missing opcode case
+ * exists in es40's dispatch, it surfaces in the output even though the
+ * architectural OPCDEC trap also fires. It is printed once per opcode and
+ * function (report_opcdec), so a guest that takes the trap on purpose does
+ * not flood the output. */
 #define UNKNOWN1                                                               \
-  printf("%%CPU-W-OPCDEC: unknown opcode %02x at pc=%016" PRIx64 "\n", opcode, \
-         state.current_pc);                                                    \
+  report_opcdec(opcode, -1);                                                   \
   GO_PAL(OPCDEC);                                                              \
   ES40_EXECUTE_END();
 
 #define UNKNOWN2                                                               \
-  printf("%%CPU-W-OPCDEC: unknown opcode %02x.%02x at pc=%016" PRIx64 "\n",    \
-         opcode, function, state.current_pc);                                  \
+  report_opcdec(opcode, function);                                             \
   GO_PAL(OPCDEC);                                                              \
   ES40_EXECUTE_END();
 

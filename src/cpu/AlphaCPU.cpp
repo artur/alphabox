@@ -28,8 +28,6 @@
  * serve the general public.
  */
 
-//#define CONSTANT_TIME_FACTOR 100
-
 /**
  * \file
  * Contains the code for the emulated DecChip 21264CB EV68 Alpha processor.
@@ -138,19 +136,13 @@ void CAlphaCPU::run() {
     std::fesetenv(FE_DFL_ENV);
 #endif
 
-    // Re-base the timing-calibration epoch to when execution actually begins:
-    // a secondary parks (wait_for_start) before the primary releases it, so
-    // leaving start_time at init time makes check_state() derive a wildly
-    // wrong cc_per_instruction (huge elapsed wall-time vs ~0 instructions).
+    // Re-base the timing epoch to when execution actually begins: a
+    // secondary parks (wait_for_start) before the primary releases it.
     start_time = std::chrono::steady_clock::now();
     next_timer_fire = start_time;
     tick_last_fire = start_time;
     cc_last_sync = host_ticks();
-    cc_large = 0;
     state.instruction_count = 0;
-    prev_icount = 0;
-    prev_cc = 0;
-    prev_time = 0;
 
   } catch (CException &e) {
     printf("Exception in CPU thread: %s.\n", e.displayText().c_str());
@@ -707,21 +699,8 @@ void CAlphaCPU::init() {
 
   myThread = nullptr;
 
-  cc_large = 0;
-  prev_cc = 0;
-  start_cc = 0;
-  prev_time = 0;
-  prev_icount = 0;
-  start_icount = 0;
-
   start_time = std::chrono::steady_clock::now();
   next_timer_fire = start_time;
-
-#if defined(CONSTANT_TIME_FACTOR)
-  cc_per_instruction = CONSTANT_TIME_FACTOR;
-#else
-  cc_per_instruction = 70;
-#endif
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 
@@ -794,21 +773,8 @@ void CAlphaCPU::ResetForSystemReset() {
 
   myThread = nullptr;
 
-  cc_large = 0;
-  prev_cc = 0;
-  start_cc = 0;
-  prev_time = 0;
-  prev_icount = 0;
-  start_icount = 0;
-
   start_time = std::chrono::steady_clock::now();
   next_timer_fire = start_time;
-
-#if defined(CONSTANT_TIME_FACTOR)
-  cc_per_instruction = CONSTANT_TIME_FACTOR;
-#else
-  cc_per_instruction = 70;
-#endif
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 
@@ -1040,6 +1006,29 @@ static double max_mips = 0.0;
  *
  * Calibrate the CPU timing loop.
  **/
+/// %CPU-W-OPCDEC (UNKNOWN1/UNKNOWN2): the first time each opcode and function
+/// raises OPCDEC. A guest that emulates an instruction through the trap, or
+/// the instruction oracle's OPCDEC cases, takes the same one again and again,
+/// and a line each time flooded the output.
+void CAlphaCPU::report_opcdec(u32 opcode, int function) {
+  static std::mutex mx;
+  static std::set<u32> seen;
+  const u32 key = (opcode << 17) | (u32)(function + 1);
+  {
+    std::lock_guard<std::mutex> g(mx);
+    if (!seen.insert(key).second)
+      return;
+  }
+  if (function < 0)
+    printf("%%CPU-W-OPCDEC: unknown opcode %02x at pc=%016" PRIx64
+           " (reported once)\n",
+           opcode, state.current_pc);
+  else
+    printf("%%CPU-W-OPCDEC: unknown opcode %02x.%02x at pc=%016" PRIx64
+           " (reported once)\n",
+           opcode, function, state.current_pc);
+}
+
 void CAlphaCPU::check_state() {
   if (myThreadDead.load())
     FAILURE(Thread, "CPU thread has died");
@@ -1054,50 +1043,6 @@ void CAlphaCPU::check_state() {
             (unsigned long long)state.instruction_count,
             (unsigned long long)state.r[26], (unsigned long long)state.r[27]);
 
-#if !defined(CONSTANT_TIME_FACTOR)
-  if (state.instruction_count > 0) {
-    // correct CPU timing loop...
-    u64 icount = state.instruction_count;
-    u64 cc = cc_large;
-    u64 time = std::chrono::duration_cast<std::chrono::microseconds>(
-                   std::chrono::steady_clock::now() - start_time)
-                   .count();
-    s64 ce = cc_per_instruction;
-
-    u64 cc_aim = time * cpu_hz / 1000000; // microsecond resolution
-    u64 ce_aim = cc_aim / icount;
-
-    s64 icount_lapse = icount - prev_icount;
-    s64 cc_diff = cc_aim - cc;
-    s64 ce_diff = (s64)((float)cc_diff / (float)icount_lapse);
-
-    s64 ce_new = ce_aim + ce_diff;
-    if (ce_new < 1)
-      ce_new = 1;
-    if (ce_new > 200)
-      ce_new = 200;
-
-    if (ce_new != ce) {
-
-      //    printf("                                     time %12" PRId64 " |
-      //    prev %12" PRId64 "  \n",time,prev_time); printf("          count
-      //    lapse %12" PRId64 " | curr %12" PRId64 " | prev %12" PRId64 "
-      //    \n",icount_lapse,icount,prev_icount); printf("cc %12" PRId64 " | aim
-      //    %12" PRId64 " | diff %12" PRId64 " | prev %12" PRId64 "
-      //    \n",cc,cc_aim,cc_diff,prev_cc); printf("ce %12" PRId64 " | aim %12"
-      //    PRId64 " | diff %12" PRId64 " | new  %12" PRId64 "
-      //    \n",ce,ce_aim,ce_diff,ce_new);
-      //    printf("==========================================================================
-      //    \n");
-      cc_per_instruction = ce_new;
-      //    printf("cpu %d speed factor: %d\n",get_cpuid(),ce_new);
-    }
-
-    prev_cc = cc;
-    prev_icount = icount;
-    prev_time = time;
-  }
-#endif
   return;
 }
 
@@ -1128,11 +1073,7 @@ void CAlphaCPU::execute() {
 #ifndef ES40_JIT
   // ---- Batch loop: execute up to 512 instructions before returning ----
   int _batch_budget = m_exec_batch;
-  u64 _cc_accum = 0;     // accumulated cycle counts (flushed every 32 insns)
   int _icount_accum = 0; // accumulated instruction count
-  const u64 _cc_per_ins = cc_per_instruction; // cache in register
-#else
-  const u64 _cc_per_ins = cc_per_instruction;
 #endif
 
 #ifndef ES40_JIT
@@ -1140,8 +1081,8 @@ void CAlphaCPU::execute() {
     const auto now = std::chrono::steady_clock::now();
 
     // Wall-clock RPCC at batch granularity - same semantics as the JIT build.
-    // The old per-instruction advance ran at cc_per_instruction rate, which
-    // lags real time while the check_state feedback converges; SRM's
+    // The old per-instruction advance ran at a cycles-per-instruction rate,
+    // which lagged real time while a feedback loop converged; SRM's
     // cycles-per-tick speed calibration measured that lag consistently and
     // locked in a low CPU speed.
     sync_cc_wallclock();
@@ -1185,11 +1126,9 @@ void CAlphaCPU::execute() {
 
 _next_instruction:
   if (--_batch_budget <= 0) {
-    // Flush remaining accumulated counters before returning. state.cc is
-    // wall-clock (advanced at batch top); _cc_accum only feeds cc_large for the
-    // legacy check_state speed-factor feedback.
+    // Flush the accumulated instruction count before returning. state.cc is
+    // wall-clock (advanced at batch top).
     state.instruction_count += _icount_accum;
-    cc_large += _cc_accum;
     return;
   }
 #endif
@@ -1278,16 +1217,12 @@ _next_instruction:
   // should be fetched from the instruction cache. Increase the cycle counter
   // if it is currently enabled.
   _icount_accum++;
-  _cc_accum += _cc_per_ins;
 
   if ((_batch_budget & 31) == 0) {
-    // Flush accumulated counters to state. state.cc is wall-clock (batch
-    // top); _cc_accum only feeds cc_large for the check_state speed-factor
-    // feedback.
+    // Flush the accumulated instruction count to state. state.cc is
+    // wall-clock (batch top).
     state.instruction_count += _icount_accum;
     _icount_accum = 0;
-    cc_large += _cc_accum;
-    _cc_accum = 0;
 
     // There are one or more active delayed irq_h interrupts. Go through the 6
     // irq_h timers, decrease them as needed, and set the interrupt if the
@@ -1316,7 +1251,6 @@ _next_instruction:
   // New unwound interpreter / future JIT path
 
   state.instruction_count++;
-  cc_large += _cc_per_ins;
   // state.cc (RPCC) is pinned to wall-clock * cpu_hz at the jit_run boundary,
   // not advanced per-instruction here - interpreter can't run RPCC ahead of
   // wall time.

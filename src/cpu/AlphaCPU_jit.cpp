@@ -684,7 +684,6 @@ void CAlphaCPU::jit_run(int budget) {
         break_seq_icache(); // the trace wrote state.pc natively; drop the stale
                             // cursor
         state.instruction_count += done;
-        cc_large += (u64)done * cc_per_instruction;
         budget -= done;
 #ifdef JIT_STATS
         cc_last_sync +=
@@ -1376,12 +1375,11 @@ void CAlphaCPU::jit_run(int budget) {
       break_seq_icache(); // compiled block wrote pc natively (no set_pc); drop
                           // the stale cursor
       // state.pc is written by the compiled block itself (next PC, or the bail
-      // PC). Account for the compiled ops: instruction count (+ cc_large for
-      // the legacy speed calibration). state.cc (RPCC) is no longer advanced
-      // per-instruction. wall-clock * cpu_hz at the jit_run boundary above, so
-      // a hot compiled loop can't run the cycle counter ahead of real time
+      // PC). Account for the compiled ops' instruction count. state.cc (RPCC)
+      // is not advanced per instruction but set from wall-clock * cpu_hz at
+      // the jit_run boundary above, so a hot compiled loop can't run the
+      // cycle counter ahead of real time
       state.instruction_count += done;
-      cc_large += (u64)done * cc_per_instruction;
       budget -= done;
 #ifdef JIT_STATS
       m_jit->note_hot_pc(start_virt, start_phys, done, (const u8 *)dram_ptr);

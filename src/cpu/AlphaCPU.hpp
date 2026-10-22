@@ -129,6 +129,7 @@ public:
 
   void set_PAL_BASE(u64 pb);
   virtual void check_state();
+  void report_opcdec(u32 opcode, int function); // %CPU-W-OPCDEC, once each
   CAlphaCPU(CConfigurator *cfg, CSystem *system);
   virtual ~CAlphaCPU();
   u64 get_r(int i, bool translate);
@@ -340,14 +341,7 @@ private:
   void parse_vmspal_off();
 
   // ... ... ...
-  u64 cc_large;
-  u64 start_icount;
-  u64 start_cc;
   std::chrono::steady_clock::time_point start_time;
-  u64 prev_icount;
-  u64 prev_cc;
-  u64 prev_time;
-  u64 cc_per_instruction;
   u64 cpu_hz;
 
   // Wall-clock-paced Cchip interval timer (b_irq<2>).  CPU 0 fires once
