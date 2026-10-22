@@ -608,6 +608,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   const uint32_t cold_idx = m_cold_base + i;
   if (m_cold_pass && (cold_idx >= kColdMax || !m_cold_used[cold_idx]))
     return;
+  if (!m_cold_pass && i == 0)
+    m_llsc_pending = true; // a block's, or a trace segment's, first instruction
 
   do {
     // MISC (0x18): prefetch and cache hints are nothing to us, but the
@@ -818,6 +820,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       m_cold_used[cold_idx] = true;
       return true;
     };
+    // A memory operation of HRM D.19's list: the first of the block, or the
+    // first after an LDx_L, clears CAlphaCPU::m_llsc_clean (m_llsc_pending).
+    // Hot pass only: the store comes before the op's branch to its cold path.
+    auto llsc_memop = [&]() {
+      if (m_cold_pass || !m_llsc_pending)
+        return;
+      m_llsc_pending = false;
+      if (g_jit_llsc_memop)
+        a.str(a64::xzr, fld(m_off.llsc_clean, 3));
+    };
     // After a 0-ok / nonzero-bail int helper: bail at this instruction.
     auto bail_if_w0 = [&]() {
       Label ok = a.new_label();
@@ -911,6 +923,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // cpu_memory.hpp).
       if (ra == 31 && op == OP_LDQ_U)
         continue;
+      if (op != OP_LDBU && op != OP_LDWU)
+        llsc_memop();
       const int size_bits = (op == OP_LDQ || op == OP_LDQ_U) ? 64
                             : (op == OP_LDL)                 ? 32
                             : (op == OP_LDWU)                ? 16
@@ -1070,6 +1084,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // Memory-format stores: MEM[Rb + disp16] = Ra.
     if (op == OP_STL || op == OP_STQ || op == OP_STB || op == OP_STW ||
         op == OP_STQ_U) {
+      if (op != OP_STB && op != OP_STW)
+        llsc_memop();
       const int size_bits = (op == OP_STQ || op == OP_STQ_U) ? 64
                             : (op == OP_STL)                 ? 32
                             : (op == OP_STW)                 ? 16
@@ -1187,6 +1203,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // forms go through the helper.
     if (op == OP_LDT || op == OP_LDS || op == OP_STT || op == OP_STS ||
         op == OP_LDF || op == OP_LDG || op == OP_STF || op == OP_STG) {
+      llsc_memop();
       const bool isload =
           (op == OP_LDT || op == OP_LDS || op == OP_LDF || op == OP_LDG);
       const bool israw = (op == OP_LDT || op == OP_STT);
@@ -1364,6 +1381,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       bail_if_w0();
       a.ldr(x0, out_slot); // already sign-extended by the helper
       mov_to_reg(ra, x0);
+      if (!m_cold_pass)
+        m_llsc_pending = true; // the helper opened the window
       continue;
     }
 

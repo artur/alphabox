@@ -416,6 +416,31 @@ R23. OpenVMS 8.4 logged in on the ES40 (JIT and interpreter lanes, the
 second with the native `vmspal` routines) and on the ES47, and Windows
 2000 RC2 reached its desktop on one processor and on two.
 
+**A load or store between `LDx_L` and `STx_C`** (CPU-01). The `STx_C`
+succeeded. On the 21264 "a store-conditional is forced to fail if there
+is an intervening memory operation between the store-conditional and its
+address-matching LDxL" (HRM D.19, Restriction 23, p. D-13). The list there
+is `LDL/Q/F/G/S/T`, `STL/Q/F/G/S/T`, `LDQ_U` (not to R31) and `STQ_U`, and
+`HW_LD`, `HW_ST`, `ECB` and `WH64` are named as not doing it; the ARM
+leaves the case UNPREDICTABLE (4.2.4). Now those operations clear a flag
+of the processor's that `LDx_L` and `HW_LD/L` set, and a `STx_C` or
+`HW_ST/C` to memory fails when it is clear. One to I/O space still always
+succeeds (HRM Table 4-1). Compiled code clears the flag with one store, at
+the first listed operation of a block and the first after an `LDx_L` in
+it: a block is entered at its top and runs straight on, so any later one
+would only store the same zero. The flag is not in the state file, so a
+`STx_C` right after a restore fails, which the architecture allows.
+
+The byte and word forms (`LDBU`, `LDWU`, `STB`, `STW`) are not in the
+HRM's list and do not fail the `STx_C` here; the HRM does not say what
+the 21264 does with them. `ALPHABOX_LLSC_MEMOP=0` turns the rule off in
+both engines. Correct code never does this ("no useful program should do
+this", ARM 4.2.4), and none of the guests did: OpenVMS 8.4 on the DS20E
+with two processors (BACKUP and DIFFERENCES of `SYS$BASE_IMAGE.EXE`, no
+differences) and on the ES47 with two, Windows 2000 RC2 on two
+processors, and SRM on four (interpreter, JIT and `JIT_VERIFY`: 87
+million compiled blocks, 0 mismatches) all ran as before.
+
 ### Smaller ones
 
 | What | Where | Consequence |
@@ -429,7 +454,6 @@ second with the native `vmspal` routines) and on the ES47, and Windows
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
 | `IMB` also invalidates the ITB, which the architecture does not require | `DO_IMB` | Performance only, and it can hide a guest's missing `IMB` after a page remap |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
-| A `STx_C` succeeds after an ordinary load or store ran between it and its `LDx_L`, where HRM D.19 (Restriction 23, p. D-13) says the 21264 makes it fail; the ARM leaves it UNPREDICTABLE (4.2.4) | `System.cpp` `cpu_stx_c` | "No useful program should do this" (ARM 4.2.4). Found by the oracle (CPU-01) |
 | The reserved barrier code point `18.4800` flushes the instruction cache and the ITB and is no memory barrier; ARM C.13 says it must act as `MB` | `AlphaCPU.cpp` opcode 0x18, `DO_IMB` | As for `18.4C00` above (CPU-06) |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 

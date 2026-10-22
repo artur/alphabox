@@ -922,6 +922,20 @@ public:
   /// chosen by the configuration class (CpuModels.cpp).
   const cpu_model *m_model = nullptr;
 
+  /// Nonzero from an LDx_L until the next memory operation of the list in
+  /// HRM D.19 (Restriction 23): LDL/LDQ/LDF/LDG/LDS/LDT, the same stores,
+  /// LDQ_U not to R31 and STQ_U. A STx_C to memory fails when it is zero,
+  /// as on the 21264. Compiled code clears it too (it reaches it from the
+  /// cpu pointer). Not in the state file: a STx_C right after a restore
+  /// fails, which the architecture allows.
+  u64 m_llsc_clean = 0;
+  /// ALPHABOX_LLSC_MEMOP=0: a memory operation between LDx_L and STx_C does
+  /// not make the STx_C fail (as before 2026-10-22); an A/B switch.
+  bool m_llsc_memop = true;
+  /// What a STx_C passes to CSystem::cpu_stx_c: did a listed memory
+  /// operation run since the LDx_L?
+  bool llsc_intervened() const { return m_llsc_memop && !m_llsc_clean; }
+
 #ifdef ES40_JIT
   // JIT block-discovery engine (per-CPU), allocated in init().
   CJitEngine *m_jit = nullptr;

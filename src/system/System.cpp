@@ -923,10 +923,11 @@ void CSystem::cpu_lock(int cpuid, u64 address, u64 value) {
  * and the store.
  **/
 u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
-                       char *dram, u64 dram_sz, CSystemComponent *source) {
+                       char *dram, u64 dram_sz, CSystemComponent *source,
+                       bool intervened) {
   u64 expected = 0;
   bool same_address = false;
-  if (!cpu_take_lock(cpuid, phys, &expected, &same_address))
+  if (!cpu_take_lock(cpuid, phys, intervened, &expected, &same_address))
     return 0; // reservation lost -> SC fails
 
   if (phys >= dram_sz) {
@@ -961,11 +962,13 @@ u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
   return ok;
 }
 
-bool CSystem::cpu_take_lock(int cpuid, u64 address, u64 *expected,
-                            bool *same_address) {
-  // I/O-space conditional stores have no cache line to watch; treat as held.
+bool CSystem::cpu_take_lock(int cpuid, u64 address, bool intervened,
+                            u64 *expected, bool *same_address) {
+  // I/O-space conditional stores have no cache line to watch and always
+  // succeed (HRM Table 4-1). One to memory fails if this CPU ran an ordinary
+  // load or store since its LDx_L (HRM D.19, Restriction 23).
   bool held = (address & CPU_LOCK_IO_MASK) ||
-              ((m_cpu_lock_flags.load() & (1u << cpuid)) &&
+              (!intervened && (m_cpu_lock_flags.load() & (1u << cpuid)) &&
                cpu_lock_matches(m_cpu_lock_address[cpuid], address));
 
   // STx_C always consumes this CPU's lock, success or fail.

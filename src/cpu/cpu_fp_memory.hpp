@@ -34,40 +34,48 @@
 
 #define DO_LDF                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   if (FREG_1 != 31) {                                                          \
     READ_VIRT_F(state.r[REG_2] + DISP_16, 32, state.f[FREG_1], vax_ldf);       \
   }
 
 #define DO_LDG                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   if (FREG_1 != 31) {                                                          \
     READ_VIRT_F(state.r[REG_2] + DISP_16, 64, state.f[FREG_1], vax_ldg);       \
   }
 
 #define DO_LDS                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   if (FREG_1 != 31) {                                                          \
     READ_VIRT_F(state.r[REG_2] + DISP_16, 32, state.f[FREG_1], ieee_lds);      \
   }
 
 #define DO_LDT                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   if (FREG_1 != 31) {                                                          \
     READ_VIRT(state.r[REG_2] + DISP_16, 64, state.f[FREG_1]);                  \
   }
 
 #define DO_STF                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   WRITE_VIRT(state.r[REG_2] + DISP_16, 32, vax_stf(state.f[FREG_1]));
 
 #define DO_STG                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   WRITE_VIRT(state.r[REG_2] + DISP_16, 64, vax_stg(state.f[FREG_1]));
 
 #define DO_STS                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   WRITE_VIRT(state.r[REG_2] + DISP_16, 32, ieee_sts(state.f[FREG_1]));
 
 #define DO_STT                                                                 \
   FPSTART;                                                                     \
+  LLSC_MEMOP                                                                   \
   WRITE_VIRT(state.r[REG_2] + DISP_16, 64, state.f[FREG_1]);

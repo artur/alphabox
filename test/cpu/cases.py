@@ -503,15 +503,13 @@ def g_unaligned(b):
     b.store(2, "r2 (not written)", sentinel)
 
 
-LLSC_ORDER_REF = "CPU-01: an intervening load or store does not fail STx_C"
-
-
 def g_llsc(b):
     """ARM 4.2.4-5: STx_C stores and returns 1 if lock_flag is still set
     and the address is in the LDx_L's 16-byte block; it always clears
     lock_flag, so a second STx_C fails. HRM D.19 (Restriction 23): on the
-    21264 a STx_C fails if any LDx, STx, LDQ_U (not to R31) or STQ_U ran
-    between it and its LDx_L. A misaligned LDx_L/STx_C takes UNALIGN."""
+    21264 a STx_C fails if an LDL/Q/F/G/S/T, STL/Q/F/G/S/T, LDQ_U (not to
+    R31) or STQ_U ran between it and its LDx_L. A misaligned LDx_L/STx_C
+    takes UNALIGN."""
     b.emit(mem(OP["LDA"], 9, R_SCR, 0x2000))         # r9 = page 1
     scr1 = b.scratch + 0x2000
     v0 = 0x1000000000000007
@@ -536,10 +534,12 @@ def g_llsc(b):
     b.emit(mem(OP["LDQ"], 4, 9, 0))
     b.store(4, "memory (unchanged)", v0 + 1)
 
+    # The operands are loaded before the LDx_L: b.load is an LDQ from the
+    # literal pool, which between LDx_L and STx_C fails the STx_C (HRM D.19).
     b.begin("LDL_L/STL_C sign extension and longword store")
     setq(8, 0x1122334480000001)
-    b.emit(mem(OP["LDL_L"], 2, 9, 8))
     b.load(3, 0xDEADBEEF0BADF00D)
+    b.emit(mem(OP["LDL_L"], 2, 9, 8))
     b.emit(mem(OP["STL_C"], 3, 9, 8))
     b.store(2, "LDL_L value", 0xFFFFFFFF80000001)
     b.store(3, "STL_C result", 1)
@@ -549,8 +549,8 @@ def g_llsc(b):
     b.begin("STQ_C to the other quadword of the LDQ_L's 16-byte block")
     setq(16, 0xAA)
     setq(24, 0xBB)
-    b.emit(mem(OP["LDQ_L"], 2, 9, 16))
     b.load(3, 0xCC)
+    b.emit(mem(OP["LDQ_L"], 2, 9, 16))
     b.emit(mem(OP["STQ_C"], 3, 9, 24))
     b.store(3, "STQ_C result", 1)
     b.emit(mem(OP["LDQ"], 4, 9, 24))
@@ -567,9 +567,46 @@ def g_llsc(b):
         b.emit(word)
         b.emit(opl(0x10, 0x20, 2, 1, 3))
         b.emit(mem(OP["STQ_C"], 3, 9, 32))
-        b.store(3, "STQ_C result", 0, known=(1, LLSC_ORDER_REF))
+        b.store(3, "STQ_C result", 0)
         b.emit(mem(OP["LDQ"], 4, 9, 32))
-        b.store(4, "memory", 0x10, known=(0x11, LLSC_ORDER_REF))
+        b.store(4, "memory", 0x10)
+    # The list includes the FP loads and stores, and LDL/LDQ whatever their
+    # destination (a load to R31 is a prefetch, HRM 2.6); LDQ_U to R31 is
+    # retired without execution (HRM 2.5) and is excluded by name.
+    for what, word, fails in (
+            ("LDT", mem(OP["LDT"], 6, 9, 128), True),
+            ("STT", mem(OP["STT"], 6, 9, 136), True),
+            ("LDL r31 (prefetch)", mem(OP["LDL"], R31, 9, 128), True),
+            ("LDQ_U r31 (UNOP)", mem(OP["LDQ_U"], R31, 9, 128), False)):
+        b.begin("LDQ_L, then %s, then STQ_C" % what)
+        setq(32, 0x10)
+        b.emit(mem(OP["LDQ_L"], 2, 9, 32))
+        b.emit(word)
+        b.emit(opl(0x10, 0x20, 2, 1, 3))
+        b.emit(mem(OP["STQ_C"], 3, 9, 32))
+        b.store(3, "STQ_C result", 0 if fails else 1)
+        b.emit(mem(OP["LDQ"], 4, 9, 32))
+        b.store(4, "memory", 0x10 if fails else 0x11)
+    # Across a branch: the operation after the LDx_L is in another block of
+    # compiled code (a taken branch alone "may" fail it too, ARM 4.2.4). An
+    # operation before the LDx_L does not count.
+    b.begin("LDQ_L, BR, LDQ, STQ_C")
+    setq(32, 0x10)
+    b.emit(mem(OP["LDQ_L"], 2, 9, 32))
+    b.emit(bra(OP["BR"], R31, 0))
+    b.emit(mem(OP["LDQ"], 6, 9, 128))
+    b.emit(opl(0x10, 0x20, 2, 1, 3))
+    b.emit(mem(OP["STQ_C"], 3, 9, 32))
+    b.store(3, "STQ_C result", 0)
+    b.begin("LDQ, LDQ_L, STQ_C")
+    setq(32, 0x10)
+    b.emit(mem(OP["LDQ"], 6, 9, 128))
+    b.emit(mem(OP["LDQ_L"], 2, 9, 32))
+    b.emit(opl(0x10, 0x20, 2, 1, 3))
+    b.emit(mem(OP["STQ_C"], 3, 9, 32))
+    b.store(3, "STQ_C result", 1)
+    b.emit(mem(OP["LDQ"], 4, 9, 32))
+    b.store(4, "memory", 0x11)
 
     for name, off in (("LDQ_L", 4), ("LDL_L", 2), ("STQ_C", 4), ("STL_C", 1)):
         b.begin("%s r2,%d(r9) (misaligned)" % (name, off))

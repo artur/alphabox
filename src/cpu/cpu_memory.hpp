@@ -42,7 +42,15 @@
    is turned into one to memory space (HRM 4.2, p. 4-5), so no device sees
    it. LDQ_U to R31 is UNOP, which the 21264 retires at decode without
    executing it (HRM 2.5, Table 2-6): no translation, no fault. Compiled
-   code follows the same rule (jit_read, bit 9 of its size argument). */
+   code follows the same rule (jit_read, bit 9 of its size argument).
+
+   LLSC_MEMOP: the memory operations HRM D.19 (Restriction 23) lists make
+   the next STx_C fail when they run between it and its LDx_L: LDL, LDQ,
+   LDF, LDG, LDS, LDT, the same stores, LDQ_U not to R31 and STQ_U. The
+   byte and word forms are not in the list, and neither are HW_LD, HW_ST,
+   ECB and WH64 (the HRM names those four as not failing it). */
+#define LLSC_MEMOP m_llsc_clean = 0;
+
 #define DO_LDBU                                                                \
   if ((REG_1 & 0x1f) != 31) {                                                  \
     READ_VIRT_F(state.r[REG_2] + DISP_16, 8, state.r[REG_1], zext_u64_8);      \
@@ -51,6 +59,7 @@
   }
 
 #define DO_LDL                                                                 \
+  LLSC_MEMOP                                                                   \
   if ((REG_1 & 0x1f) != 31) {                                                  \
     READ_VIRT_F(state.r[REG_2] + DISP_16, 32, state.r[REG_1], sext_u64_32);    \
   } else {                                                                     \
@@ -65,6 +74,7 @@
   READ_VIRT_LOCK_F(state.r[REG_2] + DISP_16, 32, state.r[REG_1], sext_u64_32);
 
 #define DO_LDQ                                                                 \
+  LLSC_MEMOP                                                                   \
   if ((REG_1 & 0x1f) != 31) {                                                  \
     READ_VIRT(state.r[REG_2] + DISP_16, 64, state.r[REG_1]);                   \
   } else {                                                                     \
@@ -75,6 +85,7 @@
 
 #define DO_LDQ_U                                                               \
   if ((REG_1 & 0x1f) != 31) {                                                  \
+    LLSC_MEMOP                                                                 \
     READ_VIRT((state.r[REG_2] + DISP_16) & ~U64(0x7), 64, state.r[REG_1]);     \
   }
 
@@ -87,17 +98,22 @@
 
 #define DO_STB WRITE_VIRT(state.r[REG_2] + DISP_16, 8, state.r[REG_1]);
 
-#define DO_STL WRITE_VIRT(state.r[REG_2] + DISP_16, 32, state.r[REG_1]);
+#define DO_STL                                                                 \
+  LLSC_MEMOP                                                                   \
+  WRITE_VIRT(state.r[REG_2] + DISP_16, 32, state.r[REG_1]);
 
 #define DO_STL_C                                                               \
   WRITE_VIRT_COND(state.r[REG_2] + DISP_16, 32, state.r[REG_1], state.r[REG_1]);
 
-#define DO_STQ WRITE_VIRT(state.r[REG_2] + DISP_16, 64, state.r[REG_1]);
+#define DO_STQ                                                                 \
+  LLSC_MEMOP                                                                   \
+  WRITE_VIRT(state.r[REG_2] + DISP_16, 64, state.r[REG_1]);
 
 #define DO_STQ_C                                                               \
   WRITE_VIRT_COND(state.r[REG_2] + DISP_16, 64, state.r[REG_1], state.r[REG_1]);
 
 #define DO_STQ_U                                                               \
+  LLSC_MEMOP                                                                   \
   WRITE_VIRT((state.r[REG_2] + DISP_16) & ~U64(0x07), 64, state.r[REG_1]);
 
 #define DO_STW WRITE_VIRT(state.r[REG_2] + DISP_16, 16, state.r[REG_1]);

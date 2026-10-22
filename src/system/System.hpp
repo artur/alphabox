@@ -427,10 +427,13 @@ public:
 
   // LDx_L: record locked range + loaded value
   void cpu_lock(int cpuid, u64 address, u64 value);
-  bool cpu_take_lock(int cpuid, u64 address, u64 *expected, bool *same_address);
+  // `intervened`: the CPU ran a memory operation between its LDx_L and this
+  // STx_C (CAlphaCPU::llsc_intervened), which fails a STx_C to memory.
+  bool cpu_take_lock(int cpuid, u64 address, bool intervened, u64 *expected,
+                     bool *same_address);
   // STx_C: consume this CPU's lock and do the conditional store (1 = success).
   u64 cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value, char *dram,
-                u64 dram_sz, CSystemComponent *source);
+                u64 dram_sz, CSystemComponent *source, bool intervened);
   // exception/interrupt: drop the lock
   void cpu_clear_lock(int cpuid);
 

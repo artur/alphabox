@@ -394,6 +394,7 @@
     state.r[REG_1] = sext_u64_32(                                              \
         state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl*/         \
     cSystem->cpu_lock(state.iProcNum, phys_address, state.r[REG_1]);           \
+    m_llsc_clean = 1;                                                          \
     break;                                                                     \
   }                                                                            \
                                                                                \
@@ -456,6 +457,7 @@
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);    \
     state.r[REG_1] = READ_PHYS_NT(64);                                         \
     cSystem->cpu_lock(state.iProcNum, phys_address, state.r[REG_1]);           \
+    m_llsc_clean = 1;                                                          \
     break;                                                                     \
   }                                                                            \
                                                                                \
@@ -502,7 +504,7 @@
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
       state.r[REG_1] =                                                         \
           cSystem->cpu_stx_c(state.iProcNum, phys_address, 32, state.r[REG_1], \
-                             dram_ptr, dram_size, this);                       \
+                             dram_ptr, dram_size, this, llsc_intervened());    \
     }                                                                          \
     break;                                                                     \
                                                                                \
@@ -536,7 +538,7 @@
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
       state.r[REG_1] =                                                         \
           cSystem->cpu_stx_c(state.iProcNum, phys_address, 64, state.r[REG_1], \
-                             dram_ptr, dram_size, this);                       \
+                             dram_ptr, dram_size, this, llsc_intervened());    \
     }                                                                          \
     break;                                                                     \
                                                                                \

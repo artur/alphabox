@@ -497,6 +497,7 @@ The switches, each for a same-binary A/B or for isolating a fault:
 | `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. |
 | `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, as before. |
 | `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
+| `ALPHABOX_LLSC_MEMOP=0` | A load or store between `LDx_L` and `STx_C` does not make the `STx_C` fail, in either engine, as before 2026-10-22 (an A/B switch; [cpu-fidelity.md](cpu-fidelity.md)). |
 | `ALPHABOX_JIT_DPC_SLOTS=64\|128` | Use only that many of level 1's 256 page-cache slots a row (the index is masked). |
 | `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe on the same page (AArch64). |
 | `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms: operands shuttled through x0/x1 as before. |

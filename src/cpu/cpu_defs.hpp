@@ -702,6 +702,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
                                     : sys_read(phys_address, size));           \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
+    m_llsc_clean = 1;                                                          \
   }
 
 #define READ_VIRT_F(va, size, dest, f)                                         \
@@ -739,6 +740,7 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
                     : sys_read(phys_address, size)));                          \
     }                                                                          \
     cSystem->cpu_lock(state.iProcNum, phys_address, dest);                     \
+    m_llsc_clean = 1;                                                          \
   }
 
 /**
@@ -788,12 +790,12 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       /* page-crossing STx_C fails, but still consumes the reservation */      \
       u64 _stc_exp = 0;                                                        \
       bool _stc_same_address = false;                                          \
-      cSystem->cpu_take_lock(state.iProcNum, phys_address, &_stc_exp,          \
+      cSystem->cpu_take_lock(state.iProcNum, phys_address, true, &_stc_exp,    \
                              &_stc_same_address);                              \
       dest = 0;                                                                \
     } else {                                                                   \
       dest = cSystem->cpu_stx_c(state.iProcNum, phys_address, size, _stc_data, \
-                                dram_ptr, dram_size, this);                    \
+                                dram_ptr, dram_size, this, llsc_intervened()); \
     }                                                                          \
   }
 

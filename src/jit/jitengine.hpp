@@ -379,6 +379,7 @@ public:
     uint32_t sir, eir, aster, astrr;
     uint32_t regs; // state.r[0]: [cpu + regs] on AArch64, x86's rbx
     uint32_t jit_epoch, jit_ind_base; // CAlphaCPU::m_jit_epoch, m_jit_ind_base
+    uint32_t llsc_clean; // CAlphaCPU::m_llsc_clean (a u64), cleared by memops
     // The cycle counter, for the inline RPCC stub. A guest that times
     // anything reads RPCC constantly -- Windows 2000 does it 16 times per
     // 100 instructions -- and a helper call spills and reloads eight
@@ -1086,6 +1087,15 @@ private:
   uint8_t m_reuse_plan[kColdMax] = {};
   uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
+  // HRM D.19: a memory operation of the list between LDx_L and STx_C fails
+  // the STx_C (CAlphaCPU::m_llsc_clean, which those operations clear). A
+  // block and each trace segment is entered at its first instruction and
+  // runs straight on (exits leave it, nothing enters midway), so the first
+  // such operation of a block, and the first after each LDx_L in it, are the
+  // only ones that need to store: on any path through the block a later one
+  // would store the same zero again. Set at the block's first instruction
+  // and after an LDx_L; emit_op's llsc_memop() stores and clears it.
+  bool m_llsc_pending = true;
   // Interpreted passes before a block compiles (ALPHABOX_JIT_COMPILE_AFTER
   // overrides). Measured on a Windows 2000 guest with interleaved boots (one
   // run per boot, arms alternating), 16 beat 2 on both workloads with no

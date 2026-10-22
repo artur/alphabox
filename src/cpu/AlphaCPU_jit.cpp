@@ -2059,6 +2059,7 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
   // Establish the LL exclusive monitor (DO_LDx_L's READ_VIRT_LOCK_F makes the
   // same cpu_lock call).
   cpu->cSystem->cpu_lock(cpu->state.iProcNum, phys, *out);
+  cpu->m_llsc_clean = 1;
   return 0;
 }
 
@@ -2400,7 +2401,8 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
   // guard, then CASes RAM or does the MMIO conditional store.
   CSystem::CLLSCDRAMGuard llsc_guard(cpu->cSystem, phys < cpu->dram_size);
   return cpu->cSystem->cpu_stx_c(cpu->state.iProcNum, phys, size_bits, value,
-                                 cpu->dram_ptr, cpu->dram_size, cpu);
+                                 cpu->dram_ptr, cpu->dram_size, cpu,
+                                 cpu->llsc_intervened());
 }
 
 /* CALL_PAL OPCDEC trap: a privileged function (< 0x40) attempted in user mode.

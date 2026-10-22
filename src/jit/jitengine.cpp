@@ -92,6 +92,13 @@ const bool g_jit_inline_mem = [] {
   return !(e && strcmp(e, "0") == 0);
 }();
 
+// ALPHABOX_LLSC_MEMOP=0: compiled memory operations do not clear the LDx_L
+// window (CAlphaCPU::m_llsc_memop has the interpreter's half); an A/B switch.
+const bool g_jit_llsc_memop = [] {
+  const char *e = getenv("ALPHABOX_LLSC_MEMOP");
+  return !(e && strcmp(e, "0") == 0);
+}();
+
 #ifdef JIT_DISASM
 // Log/error any asmjit emit failure (badly formed instruction / bad operand)
 // that the Assembler would otherwise accept and then ship as a silently
@@ -1819,6 +1826,17 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   bool islit = ((ins >> 12) & 1) != 0;
   uint32_t lit = (ins >> 13) & 0xFF;
   SafeOp op = classify(ins, pal_block);
+  if (i == 0)
+    m_llsc_pending = true; // a block's, or a trace segment's, first instruction
+  // A memory operation of HRM D.19's list: the first of the block, or the
+  // first after an LDx_L, clears CAlphaCPU::m_llsc_clean (m_llsc_pending).
+  auto llsc_memop = [&]() {
+    if (!m_llsc_pending)
+      return;
+    m_llsc_pending = false;
+    if (g_jit_llsc_memop)
+      a.mov(x86::qword_ptr(x86::rbp, m_off.llsc_clean), imm(0));
+  };
 
   do {
     // MISC (0x18) barriers/hints: emit an mfence for TRAPB/EXCB/MB/WMB (x86's
@@ -1989,6 +2007,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // reading nothing (HRM 2.6; DO_LDL and friends in cpu_memory.hpp).
       if (ra == 31 && op == OP_LDQ_U)
         continue;
+      if (op != OP_LDBU && op != OP_LDWU)
+        llsc_memop();
       const bool prefetch = ra == 31;
       const int disp = (int)(int16_t)(ins & 0xFFFF);
       const int size_bits = (op == OP_LDQ || op == OP_LDQ_U) ? 64
@@ -2111,6 +2131,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // one.
     if (op == OP_STL || op == OP_STQ || op == OP_STB || op == OP_STW ||
         op == OP_STQ_U) {
+      if (op != OP_STB && op != OP_STW)
+        llsc_memop();
       const int disp = (int)(int16_t)(ins & 0xFFFF);
       const int size_bits = (op == OP_STQ || op == OP_STQ_U) ? 64
                             : (op == OP_STL)                 ? 32
@@ -2210,6 +2232,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // jit_write's store-log).
     if (op == OP_LDT || op == OP_LDS || op == OP_STT || op == OP_STS ||
         op == OP_LDF || op == OP_LDG || op == OP_STF || op == OP_STG) {
+      llsc_memop();
       const bool isload =
           (op == OP_LDT || op == OP_LDS || op == OP_LDF || op == OP_LDG);
       const bool israw =
@@ -2444,6 +2467,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
             x86::qword_ptr(x86::rsp,
                            32)); // *out already sign-extended by the helper
       mov_to_reg(ra, x86::rax);
+      m_llsc_pending = true; // the helper opened the window
       continue;
     }
 

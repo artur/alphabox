@@ -504,6 +504,8 @@ void CAlphaCPU::init() {
     m_dpc_keep = !(e && strcmp(e, "0") == 0);
     e = getenv("ALPHABOX_JIT_UNALIGNED");
     m_jit_unaligned = !(e && strcmp(e, "0") == 0);
+    e = getenv("ALPHABOX_LLSC_MEMOP");
+    m_llsc_memop = !(e && strcmp(e, "0") == 0);
     e = getenv("ALPHABOX_JIT_DPC_SLOTS");
     const long slots = e ? atol(e) : kDpcEntries;
     m_dpc_mask = (slots == 64 || slots == 128 || slots == kDpcEntries)
@@ -644,6 +646,7 @@ void CAlphaCPU::init() {
     o.astrr = (uint32_t)((char *)&state.astrr - (char *)this);
     o.regs = (uint32_t)((char *)&state.r[0] - (char *)this);
     o.jit_epoch = (uint32_t)((char *)&m_jit_epoch - (char *)this);
+    o.llsc_clean = (uint32_t)((char *)&m_llsc_clean - (char *)this);
     o.jit_ind_base = (uint32_t)((char *)&m_jit_ind_base - (char *)this);
 #if defined(__aarch64__)
     // The AArch64 emitter addresses every guest register, shadow bank
@@ -652,7 +655,7 @@ void CAlphaCPU::init() {
     // fail to encode and quietly run in the interpreter -- measured at 6-28
     // times slower, while SRM and JIT_VERIFY still pass.
     if (o.regs + 64 * 8 > 16380 || o.jit_epoch > 32760 ||
-        o.jit_ind_base > 32760) {
+        o.jit_ind_base > 32760 || o.llsc_clean > 32760) {
       printf("%%CPU-F-JITLAYOUT: state.r at %u is out of reach of compiled "
              "code; CAlphaCPU's layout needs fixing\n",
              o.regs);
