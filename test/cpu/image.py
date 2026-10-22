@@ -277,8 +277,13 @@ class Builder:
     of the JIT's compiled code); the default, "all", from either.
     """
 
-    def __init__(self, passes):
+    def __init__(self, passes, blocks=True):
         self.passes = passes
+        # Every case starts a block of its own (block()): without that a
+        # group is one straight run of thousands of instructions, which the
+        # JIT records only from the last dispatch batch's boundary to the next
+        # branch, and the "compiled" last pass ran 8% of the cases compiled.
+        self.blocks = blocks
         self.asm = Asm(CODE_PA)
         self.user = Asm(USER_CODE_VA)
         self.pool = {}          # value -> index
@@ -304,6 +309,19 @@ class Builder:
 
     def begin(self, name):
         self.case = name
+        if self.blocks:
+            self.block()
+
+    def block(self):
+        """End the block here: BR R31 over one word. The JIT records a block
+        from a dispatch to the first instruction whose successor is not the
+        next word (a BR to the next instruction does not end it), so the
+        instructions after this start a block that is the same in every pass
+        and compiles once it has run compile_after times (16); a span that a
+        dispatch batch's budget cuts is not recorded at all. The word skipped
+        is opcode 01, which would show as an unexpected OPCDEC if run."""
+        self.asm.emit(bra(OP["BR"], R31, 1))
+        self.asm.emit(0x01 << 26)
 
     def emit(self, word):
         return self.asm.emit(word)

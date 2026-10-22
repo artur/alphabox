@@ -14,8 +14,9 @@ is about a second.
 Every case runs `passes` times (default 20). The first pass is stored
 apart from the others: on a JIT lane it is interpreted, and the last pass
 runs compiled once a block has been dispatched more than the JIT's compile
-threshold (16), so one run checks both engines against the manual. On an
-interpreter lane the two simply agree.
+threshold (16), so one run checks both engines against the manual. Every
+case starts a block of its own (image.Builder.block) so that it does.
+On an interpreter lane the two simply agree.
 
 Each result is PASS (the manual's value), KNOWN (the value of a divergence
 documented in docs/cpu-fidelity.md, which the case names; a CPU-nn name is
@@ -183,6 +184,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=120)
     ap.add_argument("--env", action="append", default=[],
                     help="KEY=VALUE for the emulator (repeatable)")
+    ap.add_argument("--no-blocks", action="store_true",
+                    help="do not start every case with a block of its own "
+                         "(the cases then mostly run interpreted on a JIT lane)")
     args = ap.parse_args()
 
     if args.list:
@@ -195,7 +199,7 @@ def main():
         print("cpu_oracle: %s is not executable" % binary)
         return 2
     groups = args.group or [g for g, _ in cases.GROUPS]
-    b = image.Builder(args.passes)
+    b = image.Builder(args.passes, blocks=not args.no_blocks)
     img = b.build(lambda bb: cases.emit(bb, groups))
 
     work = os.environ.get("ALPHABOX_WORK",
