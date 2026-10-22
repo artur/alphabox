@@ -1306,12 +1306,16 @@ void bx_sdl_gui_c::handle_events(void) {
                 (int)sdl_event.motion.xrel, (int)sdl_event.motion.yrel,
                 sdl_grab);
       if (CUsbTablet *t = theUsbTablet.load()) {
-        // The USB tablet: where the host pointer is over the window, which
-        // shows the whole guest screen.
-        int w = 0, h = 0;
-        SDL_GetWindowSize(sdl_window, &w, &h);
-        if (w > 0 && h > 0)
-          t->set_position(sdl_event.motion.x / w, sdl_event.motion.y / h,
+        // The USB tablet: where the host pointer is over the guest screen.
+        // The window may be any shape (it is resizable) and the screen is
+        // letterboxed in it, so the position is taken in the screen's own
+        // coordinates, not as a fraction of the window: a pointer over a bar
+        // clamps to the screen's edge.
+        float lx = 0, ly = 0;
+        if (sdl_renderer && res_x > 0 && res_y > 0 &&
+            SDL_RenderCoordinatesFromWindow(sdl_renderer, sdl_event.motion.x,
+                                            sdl_event.motion.y, &lx, &ly))
+          t->set_position(lx / res_x, ly / res_y,
                           sdl_mouse_button_state & 0x07);
       } else if (sdl_grab) {
         // PS/2 mouse Y is positive-up, SDL is positive-down; hence the
