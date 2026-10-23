@@ -465,9 +465,19 @@ u64 CTsunami::pchip_csr_read(int num, u32 a) {
  **/
 void CTsunami::pchip_csr_write(int num, u32 a, u64 data) {
   if (a == 0x800) { // SPRST: this Pchip's PCI reset (HRM 8.7)
-    // Outside the lock: the devices reset drop their interrupt lines
-    // through interrupt(), which takes it.
-    m_sys->reset_pci_devices(num);
+    // A write asserts RST# on this Pchip's bus and the next one deasserts
+    // it; the data is ignored. The devices are reset once, as RST# is
+    // asserted: that they stay in reset until it is deasserted is not
+    // modelled. Outside the lock: the devices reset drop their interrupt
+    // lines through interrupt(), which takes it.
+    bool asserted;
+    {
+      std::lock_guard<std::mutex> g(m_lock);
+      state.sprst[num] = !state.sprst[num];
+      asserted = state.sprst[num] != 0;
+    }
+    if (asserted)
+      m_sys->reset_pci_devices(num);
     return;
   }
   // The windows are read by device threads (pci_phys) while processors

@@ -136,7 +136,7 @@ void CTsunami::power_on_state() {
   memset(state.tig.ipcr, 0, sizeof(state.tig.ipcr));
   state.tig.ModInfo = 0;
 
-  memset(state.cf8_address, 0, sizeof(state.cf8_address));
+  memset(state.sprst, 0, sizeof(state.sprst)); // RST# deasserted
 }
 
 void CTsunami::reset() { power_on_state(); }

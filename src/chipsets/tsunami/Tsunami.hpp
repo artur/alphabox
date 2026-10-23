@@ -328,10 +328,12 @@ public:
       u64 tba[4];
     } pchip[2];
 
-    /// Unused, kept for the state file's layout. It held a PC-style
-    /// 0xCF8 configuration address, a mechanism the 21272 does not have
-    /// (its configuration space is linear, HRM 10.1.3.3).
-    u32 cf8_address[2];
+    /// Per Pchip, nonzero while its SPRST holds RST# asserted on its bus
+    /// (HRM 8.7): one write asserts it, the next deasserts it. These bytes
+    /// held a PC-style 0xCF8 configuration address, a mechanism the 21272
+    /// does not have (HRM 10.1.3.3), and have been zero since it went,
+    /// which reads as RST# deasserted: the state file layout is unchanged.
+    u32 sprst[2];
   } state;
 };
 
