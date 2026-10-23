@@ -2,3 +2,6 @@
 	path = third_party/SDL
 	url = https://github.com/libsdl-org/SDL.git
 	shallow = true
+[submodule "third_party/asmjit"]
+	path = third_party/asmjit
+	url = https://github.com/asmjit/asmjit

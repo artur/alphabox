@@ -12,20 +12,27 @@ configure step after adding a `.cpp`. Builds default to Release when no
 
 ## Prerequisites
 
-- asmjit for JIT lanes: plain clone (gitignored) in `third_party/asmjit` at
-  pin `0bd5787b54b575ed94bf32ac452153b34385c514`.
+- asmjit: the `third_party/asmjit` submodule (pin
+  `0bd5787b54b575ed94bf32ac452153b34385c514`). With it checked out the JIT
+  is the default build on x86-64 and AArch64; without it configure falls
+  back to the interpreter and says so. In a git worktree, check it out from
+  the main checkout's copy, no network:
+  `git submodule update --init --reference <repo>/third_party/asmjit third_party/asmjit`
+  (do not symlink it: the path is a submodule now).
 - SDL3: system package when found, else the `third_party/SDL` submodule
   (`git submodule update --init`). `-DDISABLE_SDL=yes` builds headless.
 
 ## Lanes
 
-Minimum for any change: an interpreter lane, a JIT lane and a headless lane
-must compile. The set kept configured on the macOS/arm64 development host:
+Minimum for any change: a JIT lane (the default), an interpreter lane and a
+headless lane must compile. Since the JIT became the default (2026-10-23) an
+interpreter lane needs `-DES40_DISABLE_ASMJIT=ON` when it is configured
+fresh; the lanes below configured before then keep their cached choice. The set kept configured on the macOS/arm64 development host:
 
 | Lane | Options | Use |
 |---|---|---|
-| `build` | `DISABLE_SDL=yes` | interpreter, headless |
-| `build-default` | (none) | interpreter with SDL |
+| `build` | `ES40_DISABLE_ASMJIT=ON`, `DISABLE_SDL=yes` | interpreter, headless: the reference engine, and the gate's interpreter SRM and OpenVMS runs |
+| `build-default` | (none) | whatever a plain configure gives: the JIT with SDL since 2026-10-23 (reconfigure from an empty directory to follow the default) |
 | `build-jit` | `ES40_DISABLE_ASMJIT=OFF` | AArch64 JIT with SDL: guest boots |
 | `build-jit-verify` | JIT, `-DJIT_VERIFY`, headless | compiled blocks checked against the interpreter (expect 0 mismatches) |
 | `build-jit-verify-sdl` | JIT, `-DJIT_VERIFY` | the same with a display |

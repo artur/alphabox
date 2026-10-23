@@ -39,6 +39,11 @@ jobs:
       shell: bash
       run: ctest --output-on-failure
 
+    - name: Run the instruction oracle (interpreted and compiled passes)
+      working-directory: ${{runner.workspace}}/alphabox
+      shell: bash
+      run: python3 test/cpu/cpu_oracle.py ${{runner.workspace}}/build/alphabox ci
+
     - name: Run test scripts
       working-directory: ${{runner.workspace}}/alphabox
       shell: bash
@@ -53,6 +58,8 @@ jobs:
         BUILD_DATE: ${{ steps.date.outputs.date }}
 
   linux-x86-gcc:
+    # The interpreter, on purpose: the JIT is the default build now, and the
+    # interpreter is the reference engine.
     runs-on: "ubuntu-24.04"
 
     steps:
@@ -76,7 +83,7 @@ jobs:
     - name: Configure CMake
       shell: bash
       working-directory: ${{runner.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-Wall" -DCMAKE_EXPORT_COMPILE_COMMANDS=1
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DES40_DISABLE_ASMJIT=ON -DCMAKE_CXX_FLAGS="-Wall" -DCMAKE_EXPORT_COMPILE_COMMANDS=1
 
     - name: Build
       working-directory: ${{runner.workspace}}/build
@@ -104,9 +111,7 @@ jobs:
         BUILD_DATE: ${{ steps.date.outputs.date }} 
 
   linux-arm64-gcc-jit:
-    # Native 64-bit ARM with the AArch64 JIT: the only job that builds the
-    # JIT (it is off by default), and the one that runs the instruction
-    # oracle on both engines.
+    # Native 64-bit ARM with the AArch64 JIT, headless.
     runs-on: "ubuntu-24.04-arm"
 
     steps:
@@ -119,10 +124,8 @@ jobs:
     - name: Install build dependencies
       run: sudo apt -y update && sudo apt -y install libpcap-dev libslirp-dev libglib2.0-dev netcat-openbsd
 
-    - name: Fetch asmjit at the pinned commit
-      run: |
-        git clone https://github.com/asmjit/asmjit third_party/asmjit
-        git -C third_party/asmjit checkout 0bd5787b54b575ed94bf32ac452153b34385c514
+    - name: Check out asmjit (the only submodule a headless build needs)
+      run: git submodule update --init third_party/asmjit
 
     - name: Create build environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -130,7 +133,7 @@ jobs:
     - name: Configure CMake
       shell: bash
       working-directory: ${{runner.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DES40_DISABLE_ASMJIT=OFF -DDISABLE_SDL=yes -DCMAKE_CXX_FLAGS="-Wall"
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DDISABLE_SDL=yes -DCMAKE_CXX_FLAGS="-Wall"
 
     - name: Build
       working-directory: ${{runner.workspace}}/build
@@ -249,6 +252,11 @@ jobs:
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: ctest --output-on-failure
+
+    - name: Run the instruction oracle (interpreted and compiled passes)
+      working-directory: ${{runner.workspace}}/alphabox
+      shell: bash
+      run: python3 test/cpu/cpu_oracle.py ${{runner.workspace}}/build/alphabox ci
 
     - name: Upload Alphabox Binary
       uses: actions/upload-artifact@v6

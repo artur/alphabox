@@ -16,10 +16,10 @@ CMake and a C++17 compiler. Everything else is optional:
 | SDL3 | the graphical console | headless only; `-DDISABLE_SDL=yes` builds that on purpose |
 | libslirp | `type = "nat"`, a built-in NAT network ([networking.md](networking.md)) | `nat` is refused at startup; `-DDISABLE_SLIRP=yes` skips the search; `brew install libslirp` or `apt install libslirp-dev libglib2.0-dev`. Headers only at build time; the library itself (`libslirp0`) is loaded when a NAT NIC is created |
 | libusb 1.0 | a host USB device passed through to the guest | no passthrough; `-DDISABLE_LIBUSB=yes` skips the search |
-| asmjit | the JIT | the interpreter only (see [JIT](#jit)) |
+| asmjit (the `third_party/asmjit` submodule) | the JIT, the default build on x86-64 and AArch64 | an interpreter build, and configure says so; `-DES40_DISABLE_ASMJIT=ON` builds the interpreter on purpose (see [JIT](#jit)) |
 
-SDL3 is bundled as a submodule and linked statically when no system SDL3
-is found:
+asmjit and SDL3 are submodules (SDL3 is linked statically when no system
+SDL3 is found):
 
 ```
 git clone --recurse-submodules https://github.com/artur/alphabox
@@ -88,15 +88,21 @@ The binary is `build\Release\alphabox.exe`.
 ## JIT
 
 The JIT translates Alpha code to host code with asmjit, and has emitters
-for **x86-64 and AArch64** (Apple Silicon, arm64 Linux). Clone asmjit at
-the pinned revision and enable the JIT:
+for **x86-64 and AArch64** (Apple Silicon, arm64 Linux). On those hosts it
+is the default build, once the asmjit submodule is checked out (a
+`--recurse-submodules` clone has it):
 
 ```
-git clone https://github.com/asmjit/asmjit third_party/asmjit
-git -C third_party/asmjit checkout 0bd5787b54b575ed94bf32ac452153b34385c514
-cmake -S . -B build-jit -DES40_DISABLE_ASMJIT=OFF
-cmake --build build-jit -j$(nproc)
+git submodule update --init third_party/asmjit
+cmake -S . -B build
+cmake --build build -j$(nproc)
 ```
+
+Without the submodule, on other hosts, and with MSVC (where the JIT has not
+been built), the default is the interpreter, and configure prints which one
+it chose. `-DES40_DISABLE_ASMJIT=ON` builds the interpreter on purpose: it is
+the reference engine the JIT is checked against. `-DES40_DISABLE_ASMJIT=OFF`
+insists on the JIT and stops if asmjit is missing.
 
 Diagnostic JIT builds, used while developing:
 
@@ -123,8 +129,8 @@ the binary ad hoc with the hypervisor entitlement. See
 
 Every change must compile in at least:
 
-- an interpreter build with the SDL3 GUI;
-- a JIT build;
+- the default build, the JIT with the SDL3 GUI;
+- an interpreter build (`-DES40_DISABLE_ASMJIT=ON`);
 - a headless build (`-DDISABLE_SDL=yes`).
 
 `test/tools/build_lanes.sh` builds every configured `build*/` directory; see

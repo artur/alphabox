@@ -14,19 +14,23 @@ the goal is the best code, not parity (see the `port-from-es40` skill).
 ## Build
 
 ```bash
+git submodule update --init third_party/asmjit   # the JIT; SDL too if no system SDL3
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 ```
 
-At least three configurations must always compile (see the `build-lanes`
-skill for the full lane set, JIT_VERIFY/JIT_STATS/x86-64 lanes, and the zsh
-word-splitting trap when configuring):
+The default build is the JIT on x86-64 and AArch64 hosts: asmjit is the
+`third_party/asmjit` submodule, pinned at
+`0bd5787b54b575ed94bf32ac452153b34385c514`. Without it checked out, on
+other hosts, and with MSVC, the default is the interpreter (configure says
+so). At least three configurations must always compile (see the
+`build-lanes` skill for the full lane set, JIT_VERIFY/JIT_STATS/x86-64
+lanes, and the zsh word-splitting trap when configuring):
 
-- an interpreter lane, with SDL3 GUI by default. SDL3 comes from the system
-  when available, else built statically from the `third_party/SDL`
+- a JIT lane, the default, with SDL3 GUI by default. SDL3 comes from the
+  system when available, else built statically from the `third_party/SDL`
   submodule (`git submodule update --init`)
-- a JIT lane — `-DES40_DISABLE_ASMJIT=OFF`; needs asmjit cloned at pin
-  `0bd5787b54b575ed94bf32ac452153b34385c514` into `third_party/asmjit`
-  (gitignored plain clone)
+- an interpreter lane — `-DES40_DISABLE_ASMJIT=ON`: the reference engine
+  that JIT_VERIFY and the oracles compare against
 - a headless lane — `-DDISABLE_SDL=yes`
 
 Without `-DCMAKE_BUILD_TYPE` the build defaults to Release. `alphabox --version`

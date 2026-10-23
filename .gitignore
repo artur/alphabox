@@ -9,7 +9,6 @@ __pycache__/
 CMakeSettings.json
 run/
 img/
-third_party/asmjit/
 # test media / transient artifacts (fetched or generated per run)
 test/vms/vms-disk.img
 test/**/*.ppm

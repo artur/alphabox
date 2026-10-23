@@ -11,9 +11,22 @@ if(NOT ALPHABOX_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
       "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
 endif()
 
-# JIT for x86-64 and AArch64 hosts (requires the asmjit sources in
-# third_party/asmjit; see README)
-option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ON)
+# The JIT (asmjit, the third_party/asmjit submodule) is the default where it
+# has an emitter, x86-64 and AArch64, and the submodule is checked out
+# (git submodule update --init third_party/asmjit). Elsewhere, and with MSVC,
+# where it has never been built, the default is the interpreter.
+# -DES40_DISABLE_ASMJIT=ON builds the interpreter anywhere; =OFF insists on
+# the JIT and stops when asmjit is missing.
+set(ALPHABOX_JIT_DEFAULT_OFF ON)
+if (NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64|ARM64)$")
+    if (EXISTS ${CMAKE_SOURCE_DIR}/third_party/asmjit/CMakeLists.txt)
+        set(ALPHABOX_JIT_DEFAULT_OFF OFF)
+    elseif (NOT DEFINED ES40_DISABLE_ASMJIT)
+        message(WARNING "asmjit is not checked out, so this is an interpreter "
+            "build; for the JIT: git submodule update --init third_party/asmjit")
+    endif()
+endif()
+option(ES40_DISABLE_ASMJIT "Disable the JIT (asmjit)" ${ALPHABOX_JIT_DEFAULT_OFF})
 # Hypervisor.framework support (`alphabox hvprobe`, `alphabox hvtest`, and
 # the ALPHABOX_HV=1 runtime; see docs/hypervisor.md): macOS on Apple silicon
 # only, needs the JIT's asmjit for the in-VM vectors, and the binary is
@@ -95,9 +108,9 @@ target_include_directories(alphabox PRIVATE
 
 if (NOT ES40_DISABLE_ASMJIT)
     if (NOT EXISTS ${CMAKE_SOURCE_DIR}/third_party/asmjit/CMakeLists.txt)
-        message(FATAL_ERROR "asmjit missing: clone it into third_party/asmjit\n"
-            "  git clone https://github.com/asmjit/asmjit third_party/asmjit\n"
-            "  git -C third_party/asmjit checkout 0bd5787b54b575ed94bf32ac452153b34385c514")
+        message(FATAL_ERROR "asmjit missing: check out the submodule\n"
+            "  git submodule update --init third_party/asmjit\n"
+            "or configure with -DES40_DISABLE_ASMJIT=ON for an interpreter build")
     endif()
     set(ASMJIT_NO_INSTALL ON)
     add_subdirectory(third_party/asmjit)
