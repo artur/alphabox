@@ -137,12 +137,13 @@ interpreter lane, two-processor boots bugchecked (`INVEXCEPTN` on CPU 1 in
 SYSINIT, 3 of 3, with and without NICs) until the vmspal routines were
 switched off: with `palcode.vms.nohle = true` the same boot logged in.
 
-The native routines replace the ES40 console's PALcode and were applied to
-any PALcode at 0x8000; this console's is a different build (V1.98-74). The
-board row now says so (`native_vmspal = false`; since the chipset split
-`vmspal_pal_base = 0`), and the boot logs in on the interpreter with no
-options (`tsu-ds20l-2cpu-int-fix`). The DS20E had the same problem (its
-packet).
+The native routines replaced the ES40 console's PALcode and were applied
+to any PALcode at 0x8000; this console's is a different build (V1.98-74).
+The board row then said so (`native_vmspal = false`; since the chipset
+split `vmspal_pal_base = 0`), and the boot logged in on the interpreter
+with no options (`tsu-ds20l-2cpu-int-fix`). The DS20E had the same problem
+(its packet). The routines were removed in October 2026
+([cpu-fidelity.md](../cpu-fidelity.md)).
 
 **Network boot (L4)** works with a DE600 at hose 0 device 3: the power-up
 `Testing ei* devices.` passes, and `boot eia0 -protocols bootp` gets its

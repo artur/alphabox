@@ -503,7 +503,6 @@ and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 | What | Where | Consequence |
 | --- | --- | --- |
 | `VA_FORM` is derived from the VPTE address on a double TB miss, where the HRM says the faulting address | `AlphaCPU.cpp`, `virt2phys` VPTE branch | Latent: shipping PALcode uses VA+PTBR, so nothing observed. New firmware reading `VA_FORM` there would compute the wrong page-table address |
-| A `STx_C` after the native `REI` can still succeed (the ARM clears lock_flag on REI, 4.2.4) | `AlphaCPU_vmspal.cpp` | Every real preemption reaches REI through an exception, which does clear it, so only a deliberate `LDx_L; REI; STx_C` sees it. The console's PALcode REI loads its frame with `LDQ`, which fails a later `STx_C` since CPU-01 |
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
@@ -684,52 +683,74 @@ boot, not a reading of the handbook: the handbook is not wrong, and neither
 is the code, and only running one of them tells you which layer you are
 looking at.
 
-### The native OpenVMS PALcode routines
+### The native OpenVMS PALcode routines (removed October 2026)
 
-`AlphaCPU_vmspal.cpp` replaces the ES40 console's OpenVMS PALcode
-(V1.98-104, at PAL_BASE 0x8000) with native routines: 49 `CALL_PAL`
-routines, the interrupt entries (device, interval timer, IPI, software,
-AST) and the TB-miss and fault entries. They run in interpreter builds on
-the ES40 only, whenever PAL_BASE is 0x8000, so on that lane they serve the
-SRM console as well as OpenVMS. JIT builds, the other boards and
-`palcode.vms.nohle = true` run the console's PALcode itself.
+Until October 2026 the interpreter replaced the ES40 console's OpenVMS
+PALcode (V1.98-104, at PAL_BASE 0x8000) with native routines,
+`AlphaCPU_vmspal.cpp`, inherited from es40: 49 `CALL_PAL` routines, the
+interrupt entries (device, interval timer, IPI, software, AST) and the
+TB-miss and fault entries. They ran in interpreter builds on the ES40 only,
+whenever PAL_BASE was 0x8000, so they served the SRM console as well as
+OpenVMS. JIT builds, the other boards and `palcode.vms.nohle = true` ran
+the console's PALcode itself. They are gone: every build runs the
+console's own PALcode, so the interpreter executes the code the JIT
+compiles and `JIT_VERIFY` checks it. `palcode.vms.nohle` is accepted and
+ignored, so that old configurations load without a warning.
 
-`test/vms/vmspal_oracle.sh` ([development.md](development.md#the-vmspal-oracle))
-compares every one of them with that PALcode doing the same work, from the
-same state, on an OpenVMS 8.4 boot with a DCL workload and SHUTDOWN: about
-35 million events a run, with the PALcode as the expected value. On
-2026-10-22 (base 932c955) the guest called 47 of the 49 routines, and all
-but `MTPR_DATFX` agreed in every compared field (PROBER and PROBEW apart
-from the PALcode's scratch temporaries); so did the interrupt and TB-miss
-entries, apart from those temporaries, from races (an interrupt arriving
-while the PALcode ran) and from the first row below. These differ, and are
-open:
+Why they went (the vmspal audit, 2026-10-22, VMSPAL-01 to -14):
+
+- **Little to gain.** About 4 s of a 39 s OpenVMS boot (10-12%) and 5-7% of
+  DCL work, on the interpreter only; the console reached `P00>>>` in the
+  same 25-26 s either way. An estimate from `test/vms/vms_ab.py` (removed
+  with them: one binary, the two arms differing only by
+  `palcode.vms.nohle`, 13 runs of 512 MB and one CPU on a host shared with
+  other work), not a `perf_ab.py` result. Of the instructions a boot, a DCL workload and SHUTDOWN execute,
+  3.3% were the PALcode doing what a native routine replaced.
+- **Two PALcode paths for one guest.** A guest difference on one lane did
+  not reproduce on the other, `JIT_VERIFY` never saw the routines, and
+  every change to exceptions, interrupts or the lock flag had to be made
+  and reasoned about twice (CPU-01, CPU-02 and CPU-15 each were). They were
+  tied to one PALcode build by its absolute addresses, its scratch layout
+  and a copy of its IER table: the DS20E's and DS20L's consoles put other
+  builds at 0x8000, and OpenVMS hung or bugchecked on those boards until
+  their rows were given the real PALcode.
+- **Their record.** Every comparison with the PALcode found guest-visible
+  bugs.
+
+The last comparison was `test/vms/vmspal_oracle.sh` (in the tree up to
+6a24457, with its patch): each native routine run with its effects
+recorded, its result kept and undone, then the PALcode run from the same
+state and the two compared, with the PALcode as the expected value, about
+35 million events on an OpenVMS 8.4 boot with a DCL workload and
+SHUTDOWN. On 2026-10-22 (base 932c955) the guest called 47 of the 49
+routines, and all but `MTPR_DATFX` agreed in every compared field (PROBER
+and PROBEW apart from the PALcode's scratch temporaries); so did the
+interrupt and TB-miss entries, apart from those temporaries, from races (an
+interrupt arriving while the PALcode ran) and from the first row below.
+The first three rows were fixed on 2026-10-23 (5afe3ef); the others were
+open when the routines were removed:
 
 | What | Where | Consequence |
 | --- | --- | --- |
-| After a nested double TB miss the DTB-miss routine takes `EXC_ADDR` for `MM_STAT` (the double-miss routine leaves `MM_STAT` in p7<63:16>, which the PALcode takes back at 0xd080): a write fault is reported as a read (R5, the MM flag, is 0; TNV or ACV is decided on the read enable), and a `STQ R31`/`STL R31` to a page that is not valid is dismissed as if it were a load to R31, so the store is skipped without a fault | `vmspal_ent_dtbm_single` | OpenVMS hits it: 115 wrong R5 values and 17 skipped stores in one boot. A skipped store of zero is lost data on a transition or paged-out page. ARM 14.3.1 |
-| `MTPR_DATFX` writes the inverse of R16<0> into bit 63 of PCB+0 (the saved KSP) instead of R16<0> into bit 63 of PCB+56 | `vmspal_call_mtpr_datfx` | The process's DAT bit is never set (the PALcode's unaligned-access handler reads it); the KSP slot is rewritten at the next SWPCTX before anything reads it. ARM 13.3.4 |
-| `MTPR_FEN` stores R16's low longword at PCB+56, not R16<0> | `vmspal_call_mtpr_fen` | None while OpenVMS passes 0 or 1. ARM 13.3.6 |
-| b_irq<0> (the Cchip's error interrupts) and b_irq<5> are never delivered, and DIR<50> stops the emulator | interrupt check in `AlphaCPU.cpp`, `vmspal_ent_ext_int` | Latent: nothing raises them today. The PALcode dispatches all six lines |
-| In the console's 1-on-1 mode the I/O-hole check tests VA bit 43 inverted, and one bound differs from the PALcode's table | `vmspal_ent_dtbm_single` | Latent: the console reaches I/O through the superpage |
-| A `STx_C` after the native `REI` can still succeed | `vmspal_call_rei` | The ARM clears lock_flag on REI (4.2.4); the PALcode's REI loads its frame with `LDQ`, which fails a later `STx_C` since CPU-01, the native one with physical reads. Only `LDx_L; REI; STx_C` sees it |
-| IPI before the interval timer when both are pending (the PALcode takes the timer first); MCES<7:5> cleared on write; MTPR_SIRR ignores R16 >= 16 instead of using R16<3:0> | `vmspal_ent_ext_int`, `vmspal_call_mtpr_mces`, `vmspal_call_mtpr_sirr` | None observed |
-
-With the first three fixed on the oracle's copy, their differences were
-gone. The full list, with the PALcode addresses compared and the proposed
-fixes, is the vmspal audit's (VMSPAL-01 to -14). What vmspal buys in speed
-is in [openvms.md](openvms.md#timings).
+| After a nested double TB miss the DTB-miss routine took `EXC_ADDR` for `MM_STAT`: a write fault was reported as a read (R5, the MM flag, 0), and a `STQ R31`/`STL R31` to a page that is not valid was dismissed as if it were a load to R31, the store skipped without a fault | `vmspal_ent_dtbm_single` | OpenVMS hit it: 115 wrong R5 values and 17 skipped stores in one boot. ARM 14.3.1 |
+| `MTPR_DATFX` wrote the inverse of R16<0> into bit 63 of PCB+0 (the saved KSP) instead of R16<0> into bit 63 of PCB+56 | `vmspal_call_mtpr_datfx` | The process's DAT bit was never set. ARM 13.3.4 |
+| `MTPR_FEN` stored R16's low longword at PCB+56, not R16<0> | `vmspal_call_mtpr_fen` | None while OpenVMS passed 0 or 1. ARM 13.3.6 |
+| b_irq<0> (the Cchip's error interrupts) and b_irq<5> were never delivered, and DIR<50> stopped the emulator | the native interrupt check | Latent: nothing raises them. The PALcode dispatches all six lines |
+| In the console's 1-on-1 mode the I/O-hole check tested VA bit 43 inverted, and one bound differed from the PALcode's table | `vmspal_ent_dtbm_single` | Latent: the console reaches I/O through the superpage |
+| A `STx_C` after the native `REI` could still succeed | `vmspal_call_rei` | The ARM clears lock_flag on REI (4.2.4); the PALcode's REI loads its frame with `LDQ`, which fails a later `STx_C` since CPU-01 |
+| IPI before the interval timer when both were pending; MCES<7:5> cleared on write; MTPR_SIRR ignored R16 >= 16 | `vmspal_ent_ext_int`, `vmspal_call_mtpr_mces`, `vmspal_call_mtpr_sirr` | None observed |
 
 Before that, a comparison restricted to `REI` (2026-10-01: the native
 routine first, its result kept and undone, then the PALcode, compared at
-the PALcode's `HW_RET`) found these, all fixed:
+the PALcode's `HW_RET`) found these, all fixed then:
 
 1. From a non-kernel mode, a DTB miss on the first frame load ran the fill
    routine, which uses p4-p7 as scratch, after the old mode had been put in
    p7. The outgoing stack pointer was then saved to PCB+0 (the kernel stack
    slot) and the incoming one loaded from a slot never updated; OpenVMS 8.4
    startup hung after `%STDRV-I-STARTUP`. The PALcode reads the old mode
-   only after its loads.
+   only after its loads. `ALPHABOX_VMSPAL_OFF`, which handed single routines
+   back to the PALcode, found it by bisection.
 2. That same branch (non-kernel to non-kernel, e.g. exec to user) did not
    re-evaluate interrupts, where the PALcode's `HW_MTPR CM` does: an AST
    for the mode entered waited for the next interrupt.
@@ -737,14 +758,24 @@ the PALcode's `HW_RET`) found these, all fixed:
    corrected-read interrupts that the PALcode's table at 0xD00 does not
    (unobservable, neither is ever raised).
 
-After the fixes, ~480000 compared `REI`s differed only where an external
-interrupt arrived while the PALcode ran. A spurious master-PIC interrupt
-(vector 7) stopped the emulator in the native interrupt entry; it is now
-dismissed after reading the in-service register, as the PALcode does.
+A spurious master-PIC interrupt (vector 7) also stopped the emulator in the
+native interrupt entry until it was dismissed, as the PALcode does.
 
-`ALPHABOX_VMSPAL_OFF` hands single `CALL_PAL` routines (or the interrupt
-entries) back to the PALcode, for bisecting a guest that misbehaves only
-with vmspal.
+Before they went, a check (2026-10-23) that the console's PALcode does not
+stall where they did not. Under heavy host load the audit had seen
+disk-bound DCL steps stall for a minute or more more often with
+`palcode.vms.nohle` than with the routines (5 of 8 runs against 1 of 7).
+Repeated with `vms_dcl.py --workload dcl` (512 MB, one CPU): on a host with
+nothing added, 2 of 10 runs stalled with the PALcode (one for good, ending
+in `-SYSTEM-F-CTRLERR`) and 2 of 3 with the routines (a minute each); with
+twelve busy loops added and the two arms run side by side, 1 of 10 with the
+PALcode (for good) and none with the routines, apart from one round in
+which both boots took about three minutes; the JIT build, which always ran
+the PALcode, 0 of 13. The stall comes with and without the routines, and
+CPU load does not bring it on, so it is not the PALcode path's
+([openvms.md](openvms.md#timings), where it is open). Only runs on the
+PALcode have failed to recover from one (2 of 20 here and 3 of 8 in the
+audit, against 0 of 20 with the routines): too few to tell from chance.
 
 ### The JIT
 

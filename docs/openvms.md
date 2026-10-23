@@ -17,9 +17,8 @@ with DECwindows is M7b in [marvel.md](platforms/marvel.md).
   [Configuration](#configuration)).
 - **Boot from the installed disk**: to the login prompt; SYSTEM logs in on
   the serial console.
-- **Interpreter build**: boots to login with the default settings (the
-  OpenVMS PALcode routines replaced natively) and with
-  `palcode.vms.nohle = true` (the real PALcode).
+- **Interpreter build**: boots to login. It runs the console's own
+  PALcode, as the JIT build does.
 - **Two and four CPUs (JIT)**: OpenVMS starts every secondary
   (`%SMP-I-CPUTRN, CPU #n has joined the active set`); `SHOW CPU` lists 0-3
   active.
@@ -212,36 +211,33 @@ benchmarks. Seconds from `boot dqa0` to the end of startup / to `Username:`.
 | JIT | 1 | 25 | 27 |
 | JIT | 2 | 26 | 28 |
 | JIT | 4 | 28 | 30 |
-| Interpreter, `palcode.vms.nohle = true` | 1 | 45 | 47 |
-| Interpreter, default (native PALcode routines) | 1 | 38 | 40 |
+| Interpreter | 1 | 45 | 47 |
 
 A DCL loop of 20000 iterations took 1.0-1.1 s of guest time on the JIT
 build and 12.3 s on the interpreter. MACRO-32 (`MACRO.EXE`, part of the base
 system) compiles, links and runs a program.
 
-What the native PALcode routines buy on the interpreter, measured on
-2026-10-22/23 with `test/vms/vms_ab.py` (one binary, the arms differing
-only by `palcode.vms.nohle`; 13 runs, 512 MB, one CPU). An estimate, not a
-`perf_ab.py` result: wall clock on a host shared with other work (load
-average 5 to 30), which is why ranges are wide.
-
-| Seconds | Native routines | `nohle` (the PALcode) |
-|---|---|---|
-| `boot dqa0` to the end of startup, median | 34.8 (33.6-86.6) | 38.9 (37.9-217.8) |
-| the four fastest boots | 33.6-35.0 | 37.9-38.9 |
-| DCL loop of 20000 iterations, median | 11.75 | 12.3 |
-| the DCL workload of `vms_dcl.py`, three undisturbed runs | 25.2-25.6 | 26.8-28.0 |
-| start to `P00>>>` (SRM) | 25.3-26.0 | 25.4-26.3 |
-
-About 4 s of a boot (10-12%) and 5-7% of DCL work. The vmspal oracle counts
-the reason it is no more: of the instructions a boot, the workload and
-SHUTDOWN execute, 3.3% are the PALcode doing what a native routine replaces
-([cpu-fidelity.md](cpu-fidelity.md), "The native OpenVMS PALcode
-routines"). Under heavy host load a disk-bound step (the BACKUP saveset)
-stalled for a minute or more in both arms, once with the native routines
-and five times with the PALcode, three of them past ten minutes, one
-ending in `-SYSTEM-F-CTRLERR`; in two the host had paged the emulator out.
-No run on a quiet host stalled.
+**Disk stalls (open).** A disk-heavy DCL step, nearly always the BACKUP
+save set of `SYS$LDR` or its listing (`vms_dcl.py`), sometimes stops for
+about a minute and then finishes, or stops for good: about 9.5 minutes
+later by the guest's clock, which keeps time with the host's, AUDIT_SERVER
+reports `%AUDSRV-E-JNLPUTFAIL` and `%RMS-E-CRE, ACP file create failed`
+every 8 s, and BACKUP `%BACKUP-E-READVERR` with `-SYSTEM-F-CTRLERR, fatal
+controller error`, while the guest goes on running. On 2026-10-23
+(`vms_dcl.py --workload dcl`, 512 MB, one CPU) it happened on the
+interpreter in 4 of 13 runs on a host with nothing added to its load (load
+average 3 to 20 from other work), one of them for good, and in 1 of 20
+runs with twelve busy-loop processes added, for good; the JIT build ran 13
+times without it, 10 of them loaded. It came both with and without the
+native PALcode routines the interpreter then had
+([cpu-fidelity.md](cpu-fidelity.md)), so the PALcode path is not its
+cause. After their removal it is the same: in three rounds of the previous
+interpreter (on the console's PALcode) and the new one side by side, at
+1 GB, the previous one stalled twice and the new one once, two of those
+stalls beginning within a minute of each other, the new one's at the end
+of startup with `%SYSTEM-F-TIMEOUT, device timeout`. Stalls come in
+clusters in time, which points at something the host does. The runs are in
+`lab/runs/novmspal-phaseA-*` and `lab/runs/vms-dcl-newold-*`.
 
 ## Graphics
 
@@ -372,13 +368,3 @@ No PAKs were loaded (`SHOW LICENSE`: none). What happens without them:
 - Fixed 2026-10-02: a 53C875 or an ISP1040 in the configuration crashed
   the system in startup (`INVEXCEPTN` in `SYSMAN`). See
   [SCSI controllers](#scsi-controllers).
-- Fixed: on the interpreter build with the native OpenVMS PALcode routines
-  (the default there), startup used to stop after `%STDRV-I-STARTUP`. The
-  native `REI` lost the old processor mode when reading the exception frame
-  took a DTB miss, saved the stack pointer of the mode being left into the
-  PCB's kernel-stack slot and loaded a stale one for the mode being entered
-  ([cpu-fidelity.md](cpu-fidelity.md)).
-- JIT builds were never affected by it: they always run the real PALcode,
-  and `palcode.vms.nohle = true` does the same on the interpreter.
-  `ALPHABOX_VMSPAL_OFF` ([headless.md](headless.md)) hands single native
-  routines back to the PALcode; bisecting with it found this one.

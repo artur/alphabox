@@ -8,7 +8,7 @@ and how the CPU, the JIT, configuration and threading fit together.
 
 | Directory | What it holds |
 | --- | --- |
-| [`cpu/`](#cpu) | the processor: interpreter, PALcode fast paths, floating point, the processor rows |
+| [`cpu/`](#cpu) | the processor: interpreter, floating point, the processor rows |
 | [`jit/`](#jit) | the translator from Alpha code to host code |
 | [`debug/`](#debug) | the gdb stub: run control, breakpoints, guest state for a debugger |
 | [`hv/`](#hv) | the experimental Hypervisor.framework runtime (macOS) |
@@ -31,7 +31,6 @@ changes. A new directory must be added to the CMake glob list and to
   The opcodes are in the `cpu_*.hpp` headers it includes.
 - `AlphaCPU_jit.cpp`: `jit_run()`, the dispatch loop between the
   interpreter and compiled blocks.
-- `AlphaCPU_vmspal.cpp`: native fast paths for OpenVMS PALcode entry points.
 - `AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`: IEEE and VAX floating
   point.
 - `CpuModel.hpp`, `CpuModels.cpp`: the processor's identity and core

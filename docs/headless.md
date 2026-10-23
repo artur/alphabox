@@ -402,18 +402,12 @@ logs the image's CRC-32 and, for a known image, its name
 | `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
 | `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates. Spots interrupt storms. |
 | `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
-| `ALPHABOX_VMSPAL_OFF=<list>` | Interpreter builds, OpenVMS PALcode: hand single native routines back to the real PALcode. |
 | `ALPHABOX_TRACE_ARITH=<n>` | Report the first `n` IEEE arithmetic traps (200 for `=1`). |
 | `ALPHABOX_TRACE_GUILOCK=1\|<ms>` | Report long waits for, and long holds of, the GUI lock. |
 
 `ALPHABOX_IRQSTATS` counts CPU interrupt entries by source, Cchip
 interval-timer ticks, 8259 edges and acknowledges per ISA IRQ, and Cchip
 DRIR rises.
-
-`ALPHABOX_VMSPAL_OFF` takes comma-separated `CALL_PAL` function numbers in
-hex (`92` = REI) and `int` (the interrupt entries); the routines are in
-`src/cpu/AlphaCPU_vmspal.cpp`. Bisecting with it is how a routine that
-diverges from the PALcode is found.
 
 ### The gdb stub
 

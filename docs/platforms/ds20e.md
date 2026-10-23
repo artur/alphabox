@@ -388,8 +388,8 @@ devices for `PLATFORM=ds20e` itself now (`SLOTS` in `srm_cfg.py`).
 
 **The interpreter must run this console's real PALcode** (2026-10-02). The
 runs above are on the JIT lane, which always runs the real PALcode. On the
-interpreter, whose native vmspal routines replace the OpenVMS PALcode
-wherever PAL_BASE is 0x8000:
+interpreter, whose native vmspal routines then replaced the OpenVMS
+PALcode wherever PAL_BASE was 0x8000:
 
 - OpenVMS hung after its banner on one processor (`tsu-ds20e-1cpu-int`)
   and bugchecked on CPU 1 with two (`tsu-ds20e-2cpu-int`);
@@ -397,11 +397,12 @@ wherever PAL_BASE is 0x8000:
   (`tsu-ds20e-1cpu-int-nohle`).
 
 Those routines were written against the ES40 console's PALcode
-(V1.98-104); this one is V1.98-79. The board row now carries
+(V1.98-104); this one is V1.98-79. The board row then carried
 `native_vmspal` (since the chipset split `vmspal_pal_base`, 0 for every
-board but the ES40), and the interpreter boots to login on two processors
-with no options (`tsu-ds20e-2cpu-int-fix`). The ES40 interpreter still uses
-the routines.
+board but the ES40), and the interpreter booted to login on two processors
+with no options (`tsu-ds20e-2cpu-int-fix`). The routines were removed in
+October 2026 ([cpu-fidelity.md](../cpu-fidelity.md)): every build runs the
+real PALcode now.
 
 ### Problems seen, and what became of them
 

@@ -277,10 +277,10 @@ or add.
   console's VMS PALcode V2.11-25 and UNIX PALcode V2.08-19 are EV7 builds
   inside the console image. The OS-visible calls are the standard ones;
   Linux uses whami, wripir, cserve 0x48/0x49 (TOY), wrmces and draina.
-  The **native vmspal fast paths** (`cpu/AlphaCPU_vmspal.cpp`) mirror the
-  EV6 VMS PALcode's internal state, so they are **off for EV7**
-  (`vmspal_pal_base` 0 on the EV7 rows); whether EV7 paths are worth
-  writing is E3 in [backlog.md](../backlog.md).
+  There are **no native PALcode fast paths**: the ES40's
+  (`cpu/AlphaCPU_vmspal.cpp`) mirrored the EV6 VMS PALcode's internal
+  state, were never on for EV7 and were removed in October 2026; whether
+  EV7 paths are worth writing is E3 in [backlog.md](../backlog.md).
 
 **What EV7z changes**: clock (1.15-1.3 GHz) and revision. Linux calls it
 EV79 and gives it CPU type 16. Real ES47 7/1300 listings print "EV7 rev
@@ -2408,10 +2408,9 @@ has no unknown access.
   it.
 - **The PID** is per processor (`CAlphaCPU::get_pid()`, its number on the
   ES47) and decides which register block and which memory are its own.
-- **vmspal and the JIT**: the `es47` row has `vmspal_pal_base` 0, so the
-  native PALcode routines are off; the JIT has no PALcode shortcuts beyond
-  them. The JIT runs the EV7 rows; the JIT_VERIFY lane's count is in
-  "Checks" below.
+- **PALcode and the JIT**: every build runs the console's PALcode, and
+  the JIT has no PALcode shortcuts. The JIT runs the EV7 rows; the
+  JIT_VERIFY lane's count is in "Checks" below.
 
 **M2, the register block** (`chipsets/marvel/`):
 
@@ -2594,7 +2593,7 @@ What it did not give yet, for M1/M5/M6 to add, and what became of each:
   (`CChipset::memory_span_bits`), the holes reading as zero.
 - **ISA devices and a few others hard-code Tsunami hose-0 addresses**
   (`0x801fc000xxx` in Serial, Keyboard, DMA, the floppy, the ALi bridge;
-  the S3's legacy window; the vmspal's PIC reads). `CPCIDevice` asks the
+  the S3's legacy window). `CPCIDevice` asks the
   chipset (`pci_space_base`); those still do not. They live only on boards
   with the ALi, and the Titan's hose 0 legacy I/O is at the same address
   (es45.md).
@@ -2736,5 +2735,5 @@ As in [TEMPLATE.md](TEMPLATE.md). Also:
 
 - The `marvel-probe` row is retired: the `es47` row runs the console on
   emulated EV7s. Nothing about Marvel goes into a Tsunami row.
-- vmspal fast paths stay off for EV7 until compared against the EV7
-  PALcode (E3 in [backlog.md](../backlog.md)).
+- No native PALcode fast paths for EV7 without a comparison against the
+  EV7 PALcode first (E3 in [backlog.md](../backlog.md)).

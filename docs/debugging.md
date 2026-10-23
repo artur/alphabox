@@ -121,9 +121,7 @@ the same thing here). Guest memory is never written, so a breakpoint works
 in ROM, in code another processor is running, and in compiled code. A
 breakpoint is an address with the low two bits ignored, and it matches in
 any mode: a breakpoint at a PAL entry (`break *0x8680`, the interrupt
-entry at PAL_BASE 0x8000) stops in PALmode. (The interpreter-only build
-replaces some of the OpenVMS PALcode's entries with native routines, and
-those entries never execute there.)
+entry at PAL_BASE 0x8000) stops in PALmode.
 
 A processor stops before it executes the instruction at the breakpoint.
 Resuming from it runs that instruction once without stopping again.

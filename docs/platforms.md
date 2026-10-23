@@ -38,9 +38,9 @@ Three layers, each added in a different way:
   `es40`). It carries the chipset, the processor and CPU count, the memory
   limits, the slot-to-interrupt wiring that the PCI code asks for, the slots
   that refuse add-in devices, the firmware image and its format, how the
-  secondary processors start, where the native PALcode routines apply, the
-  console patches, and a function that builds the board's own hardware. The
-  functions and hardware live in `platforms/<board>/`.
+  secondary processors start, the console patches, and a function that
+  builds the board's own hardware. The functions and hardware live in
+  `platforms/<board>/`.
 - **Chipset**: `chipsets/Chipset.hpp` (`CChipset`); the board row picks
   one (`CHIPSET_TSUNAMI`, `CHIPSET_TITAN`, `CHIPSET_MARVEL`):
   - the Tsunami in `chipsets/tsunami/`;
@@ -300,12 +300,6 @@ panel's PCF8574 it is a DS20E, with the thermometer alone a DS20, with
 neither an AlphaPC 264DP ([ds20.md](platforms/ds20.md)). That is how the
 DS20 row came about: the DS20E's, less one part. The name a console prints
 is a machine fact, not proof that the emulation is right.
-
-**Native shortcuts belong to one firmware.** The interpreter's native
-OpenVMS PALcode routines were written against the ES40 console's PALcode.
-The DS20E's and DS20L's consoles put their own builds at the same address,
-and OpenVMS hung or bugchecked until those boards were given the real
-PALcode (`vmspal_pal_base` in the board row, 0 for them).
 
 **Speed patches are addresses in one console.** The ES40's console
 patches, applied to the ES45's console, replaced words in its scheduler,
