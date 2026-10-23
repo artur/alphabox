@@ -34,7 +34,7 @@ must compile. The set kept configured on the macOS/arm64 development host:
 | `build-jit-stats` | JIT, `-DJIT_STATS`, headless | cold-path, bail and throughput counters |
 | `build-jit-stats-sdl` | JIT, `-DJIT_STATS` | MIPS benchmarks on Windows guests |
 | `build-jit-regprof-sdl` | JIT, `-DJIT_STATS -DJIT_REGPROF` | exec-weighted register/expansion reports |
-| `build-dbgflags-arm64` / `-x86_64` | JIT, `-DJIT_STATS -DJIT_REGPROF -DJIT_DISASM -DJIT_TRACES`, headless | keeps the rarely built debug code compiling (the trace tier is dormant) |
+| `build-dbgflags-arm64` / `-x86_64` | JIT, `-DJIT_STATS -DJIT_REGPROF -DJIT_DISASM`, headless | keeps the rarely built debug code compiling (`-DJIT_TRACES` is gone with the trace tier, 2026-10-23) |
 
 What a verify lane cannot see: the chain gates and the inline data-page-cache
 fast paths are compiled out under `JIT_VERIFY`, so changes there need guest
