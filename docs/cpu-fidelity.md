@@ -841,6 +841,13 @@ until they were fixed:
   without a measurement. SRM's console log is unchanged on the
   interpreter, AArch64 and `JIT_VERIFY` lanes, `ALPHABOX_JIT_FPTEST`
   passes, Windows 2000 RC2 reached its desktop and OpenVMS 8.4 logged in.
+- **A chained entry to the PAL reset vector** (JIT-13). The dispatcher
+  flushes the instruction cache and the compiled blocks when it enters
+  `PAL_BASE` (a firmware updater rewrote the image in place, or a
+  restart), so a computed jump there is never chained (`jit_indirect`);
+  but a static exit, a PC-relative branch in PALcode to `PAL_BASE`,
+  could be, and then skipped the flush. The dispatcher no longer fills a
+  link into it.
 
 ## A guest's floating-point exception that is the guest's own
 

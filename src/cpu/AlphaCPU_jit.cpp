@@ -1056,9 +1056,13 @@ void CAlphaCPU::jit_run(int budget) {
       // here. Now that we know this block is live and compiled, patch its
       // successor pointer so it jumps straight in instead of returning. Never
       // link into a learned idle/parked loop head: idle pacing (above) only
-      // sees passes that come back through here.
-      if (m_link_from && (!g_jit_chain || start_virt == m_idle_pc ||
-                          start_virt == m_park_pc)) {
+      // sees passes that come back through here. Nor into the PAL reset
+      // vector, whose flush (above) runs only for an entry through here;
+      // jit_indirect refuses it for computed jumps, and this for the static
+      // exits (a PC-relative branch in PALcode to PAL_BASE).
+      if (m_link_from &&
+          (!g_jit_chain || start_virt == m_idle_pc || start_virt == m_park_pc ||
+           start_virt == (state.pal_base | 1))) {
         m_jit->note_link_bail();
         m_link_from = nullptr;
       }
