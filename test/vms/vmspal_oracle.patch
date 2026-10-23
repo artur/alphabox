@@ -1,0 +1,1408 @@
+diff --color -ruN pristine/src/cpu/AlphaCPU.cpp osrc/src/cpu/AlphaCPU.cpp
+--- pristine/src/cpu/AlphaCPU.cpp	2026-10-22 20:22:33
++++ osrc/src/cpu/AlphaCPU.cpp	2026-10-22 22:09:45
+@@ -33,6 +33,20 @@
+  * Contains the code for the emulated DecChip 21264CB EV68 Alpha processor.
+  **/
+ #include "AlphaCPU.hpp"
++#include "Tsunami.hpp"
++
++// vmspal oracle: run the native entry recorded, undo it, and send the
++// processor to the PALcode's own entry from the same state.
++#define VMSO_ENTRY(kind, call, vector, extra)                                  \
++  if (vmso_idle() && !(flags & (PROBE | PROBEW))) {                            \
++    vmso_begin(kind, 0);                                                       \
++    const int _vr = (call);                                                    \
++    vmso_end_native(_vr ? state.pc : state.current_pc, _vr);                   \
++    extra;                                                                     \
++    set_pc(state.pal_base + (vector) + 1);                                     \
++    vmso_start_replay();                                                       \
++    return -1;                                                                 \
++  }
+ #include "StdAfx.hpp"
+ #ifdef ES40_JIT
+ #include "jit/jitengine.hpp"
+@@ -523,6 +537,7 @@
+   vmspal_lle_enabled = cSystem->native_pal_requested();
+   vmspal_pal_base = cSystem->platform().vmspal_pal_base;
+   parse_vmspal_off();
++  vmso_init();
+ 
+   state.iProcNum = cSystem->RegisterCPU(this);
+   // The processor's ID: its number, except where the chipset places it in
+@@ -978,6 +993,7 @@
+ #endif
+ CAlphaCPU::~CAlphaCPU() {
+   stop_threads();
++  vmso_report(true);
+   dump_ic_flush_pcs();
+ #ifdef JIT_STATS
+   dump_device_pages();
+@@ -1157,6 +1173,8 @@
+   }
+ #endif
+   state.current_pc = state.pc;
++  if (vmso && g_vmso_mode == 2)
++    vmso_boundary();
+ 
+   //--------------------------------------------------------------------------------
+   // This section skips the memory check in SRM. Set the define in config_debug
+@@ -1308,6 +1326,56 @@
+ #endif
+       }
+ 
++      // The vmspal oracle: the native interrupt entries recorded and undone,
++      // then the PALcode's interrupt entry from the same state.
++      if (vmso_idle() &&
++          ((state.eien & state.eir) || (state.sien & state.sir) ||
++           (state.asten &&
++            (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1))))) {
++        vmso_begin(VMSO_INT, VMSO_I_NONE);
++        int sub = VMSO_I_NONE, d = 0;
++        const int ei = state.eir & state.eien & 0xe;
++        if (ei) {
++          const u64 dir = cSystem->tsunami()->dir(state.iProcNum);
++          sub = (ei & 8)   ? VMSO_I_IPI
++                : (ei & 4) ? VMSO_I_TIMER
++                : (dir & U64(0x0000ffffffffff00)) ? VMSO_I_PCI
++                : (dir & (U64(1) << 55))          ? VMSO_I_PIC
++                                                  : VMSO_I_EXT_DISMISSED;
++          d = vmspal_ent_ext_int(ei);
++          if (!d)
++            sub = sub == VMSO_I_PIC ? VMSO_I_PIC_DISMISSED
++                                    : VMSO_I_EXT_DISMISSED;
++        }
++        if (!d && (state.sir & state.sien & 0xfffc)) {
++          sub = VMSO_I_SW;
++          d = vmspal_ent_sw_int(state.sir & state.sien);
++        }
++        if (!d && state.asten &&
++            (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1))) {
++          sub = VMSO_I_AST;
++          d = vmspal_ent_ast_int(state.aster & state.astrr &
++                                 ((1 << (state.cm + 1)) - 1));
++        }
++        if (!d && (state.sir & state.sien)) {
++          sub = VMSO_I_SW;
++          d = vmspal_ent_sw_int(state.sir & state.sien);
++        }
++        if (!d && (sub == VMSO_I_SW || sub == VMSO_I_AST))
++          sub = VMSO_I_NONE;
++        vmso_set_sub(sub);
++        vmso_end_native(state.pc, d);
++        GO_PAL(INTERRUPT);
++        m_int_resignal = 1;
++        seq_remaining = 0;
++        vmso_start_replay();
++#ifndef ES40_JIT
++        goto _next_instruction;
++#else
++        return;
++#endif
++      }
++
+       // irq<1>=device, irq<2>=timer, irq<3>=IPI. (Was 0x6 = device+timer
+       // only, which stranded incoming IPIs under VMS PALcode -> CPUSPINWAIT.)
+       if (state.eir & state.eien & 0xe)
+@@ -2374,6 +2442,8 @@
+   if (!sh.valid || sh.virt != (virt & sh.match_mask) ||
+       !(sh.asm_bit || sh.asn == asn))
+     return -1;
++  if (vmso)
++    vmso_tb_touch();
+   const int t = TB_INDEX_DATA;
+   const int i = state.next_tb[t];
+   state.next_tb[t] = (i + 1 == TB_ENTRIES) ? 0 : i + 1;
+@@ -2445,6 +2515,7 @@
+   if (flags & ACCESS_EXEC) {
+     state.exc_sum = 0;
+     if (state.pal_vms) {
++      VMSO_ENTRY(VMSO_IACV, vmspal_ent_iacv(flags), IACV, (void)0)
+       res = vmspal_ent_iacv(flags);
+       return res ? res : -1;
+     }
+@@ -2463,6 +2534,7 @@
+                       << 4 |
+                   (flags & ACCESS_WRITE) | 2;
+   if (state.pal_vms) {
++    VMSO_ENTRY(VMSO_DFAULT, vmspal_ent_dfault(flags), DFAULT, (void)0)
+     res = vmspal_ent_dfault(flags);
+     return res ? res : -1;
+   }
+@@ -2681,6 +2753,7 @@
+ 
+         // try to handle the ITB miss. If this needs to transfer control
+         // to the OS, it will return non-zero value.
++        VMSO_ENTRY(VMSO_ITBM, vmspal_ent_itbm(flags), ITB_MISS, (void)0)
+         if ((res = vmspal_ent_itbm(flags)))
+           return res;
+ 
+@@ -2698,6 +2771,8 @@
+ 
+         // try to handle the single miss. If this needs to transfer control
+         // to the OS, it will return non-zero value.
++        VMSO_ENTRY(VMSO_DTBM, vmspal_ent_dtbm_single(flags), DTBM_SINGLE,
++                   state.va_form_va = virt)
+         if ((res = vmspal_ent_dtbm_single(flags)))
+           return res;
+ 
+@@ -2738,6 +2813,7 @@
+         cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
+         state.exc_sum = 0;
+         if (state.pal_vms) {
++          VMSO_ENTRY(VMSO_IACV, vmspal_ent_iacv(flags), IACV, (void)0)
+           if ((res = vmspal_ent_iacv(flags)))
+             return res;
+         } else {
+@@ -2763,6 +2839,7 @@
+             ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
+             (flags & ACCESS_WRITE) | 2;
+         if (state.pal_vms) {
++          VMSO_ENTRY(VMSO_DFAULT, vmspal_ent_dfault(flags), DFAULT, (void)0)
+           if ((res = vmspal_ent_dfault(flags)))
+             return res;
+         } else {
+@@ -2791,6 +2868,7 @@
+         cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
+         state.exc_sum = 0;
+         if (state.pal_vms) {
++          VMSO_ENTRY(VMSO_IACV, vmspal_ent_iacv(flags), IACV, (void)0)
+           if ((res = vmspal_ent_iacv(flags)))
+             return res;
+         } else {
+@@ -2829,6 +2907,7 @@
+             ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
+             (flags & ACCESS_WRITE) | for_bit | fow_bit;
+         if (state.pal_vms) {
++          VMSO_ENTRY(VMSO_DFAULT, vmspal_ent_dfault(flags), DFAULT, (void)0)
+           if ((res = vmspal_ent_dfault(flags)))
+             return res;
+         } else {
+@@ -2932,6 +3011,8 @@
+ 
+ void CAlphaCPU::add_tb(u64 virt, u64 pte_phys, u64 pte_flags, int flags,
+                        int asn) {
++  if (vmso)
++    vmso_tb_touch();
+   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
+   int rw = (flags & ACCESS_WRITE) ? 1 : 0;
+   u64 match_mask = 0;
+@@ -3028,6 +3109,8 @@
+   // Keep an 8 KB data translation in the shadow (see m_tb_shadow): what the
+   // TB evicts later can then be refilled without a trap to PALcode.
+   if (t == TB_INDEX_DATA && match_mask == GH_0_MATCH) {
++    if (vmso)
++      vmso_sh_note((int)tb_shadow_index(virt));
+     STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+     old_shadow = sh;
+     sh = state.tb[t][i];
+@@ -3150,6 +3233,11 @@
+  * \param flags   ACCESS_EXEC determines which translation buffer to use.
+  **/
+ void CAlphaCPU::tbia(int flags) {
++  if (vmso) {
++    vmso_tb_touch();
++    if (!(flags & ACCESS_EXEC))
++      vmso_sh_note_all();
++  }
+   // The shadow of data translations is a translation cache too: it obeys
+   // every invalidate the TB does. Selected from flags exactly as t is below.
+   if (!(flags & ACCESS_EXEC))
+@@ -3186,6 +3274,11 @@
+  * \param flags   ACCESS_EXEC determines which translation buffer to use.
+  **/
+ void CAlphaCPU::tbiap(int flags) {
++  if (vmso) {
++    vmso_tb_touch();
++    if (!(flags & ACCESS_EXEC))
++      vmso_sh_note_all();
++  }
+   if (!(flags & ACCESS_EXEC))
+     for (int k = 0; k < kTbShadowEntries; k++)
+       if (!m_tb_shadow[k].asm_bit)
+@@ -3217,6 +3310,11 @@
+  * \param flags   ACCESS_EXEC determines which translation buffer to use.
+  **/
+ void CAlphaCPU::tbis(u64 virt, int flags) {
++  if (vmso) {
++    vmso_tb_touch();
++    if (!(flags & ACCESS_EXEC))
++      vmso_sh_note((int)tb_shadow_index(virt));
++  }
+   // Over-invalidating the shadow is always safe (it costs one PALcode
+   // refill), so match on the page alone here; tbis_d matches by ASN too.
+   if (!(flags & ACCESS_EXEC)) {
+@@ -3251,6 +3349,10 @@
+ }
+ 
+ void CAlphaCPU::tbis_d(u64 virt, int asn) {
++  if (vmso) {
++    vmso_tb_touch();
++    vmso_sh_note((int)tb_shadow_index(virt));
++  }
+   {
+     STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
+     if (sh.valid && sh.virt == (virt & sh.match_mask) &&
+diff --color -ruN pristine/src/cpu/AlphaCPU.hpp osrc/src/cpu/AlphaCPU.hpp
+--- pristine/src/cpu/AlphaCPU.hpp	2026-10-22 20:22:33
++++ osrc/src/cpu/AlphaCPU.hpp	2026-10-22 22:18:59
+@@ -50,6 +50,7 @@
+ #include "SystemComponent.hpp"
+ #include "WakeSemaphore.hpp"
+ #include "cpu_defs.hpp"
++#include "VmspalOracle.hpp"
+ #ifdef ALPHABOX_HVF
+ #include "HvRuntime.hpp"
+ #endif
+@@ -340,6 +341,30 @@
+   }
+   void parse_vmspal_off();
+ 
++public:
++  // The vmspal oracle (a lab patch: test/vms/vmspal_oracle.sh).
++  struct VmsoState;
++  VmsoState *vmso = nullptr;
++  void vmso_init();
++  bool vmso_idle() const;
++  bool vmso_call_native(int fn) const;
++  bool vmso_begin(int kind, int sub);
++  void vmso_set_sub(int sub);
++  void vmso_held(const char *what);
++  bool vmso_recording() const;
++  void vmso_end_native(u64 target, int res);
++  void vmso_start_replay();
++  void vmso_boundary();
++  void vmso_tb_touch();
++  void vmso_sh_note(int k);
++  void vmso_sh_note_all();
++  void vmso_report(bool final);
++  /// Interrupt requests that arrived (lines raised), for the oracle to tell
++  /// a race from a difference.
++  std::atomic<u32> m_vmso_irq_seq{0};
++
++private:
++
+   // ... ... ...
+   std::chrono::steady_clock::time_point start_time;
+   u64 cpu_hz;
+@@ -1705,6 +1730,7 @@
+             t, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+       if (next == 0) {
+         state.eir |= (U64(0x1) << line);
++        m_vmso_irq_seq++;
+         state.check_int = true;
+       } else {
+         state.check_timers = true;
+@@ -1724,6 +1750,7 @@
+       state.check_timers = true;
+     } else {
+       state.eir |= (U64(0x1) << number);
++      m_vmso_irq_seq++;
+       state.check_int = true;
+     }
+ #ifdef ES40_JIT
+@@ -1738,6 +1765,7 @@
+     // while the first is still being serviced): eir is already right, but
+     // check_int was consumed when the interrupt was dispatched and nothing
+     // re-polls after its REI. Re-kick it for the next dispatch boundary.
++    m_vmso_irq_seq++;
+     state.check_int = true;
+ #ifdef ES40_JIT
+     idle_wake();
+diff --color -ruN pristine/src/cpu/AlphaCPU_vmspal.cpp osrc/src/cpu/AlphaCPU_vmspal.cpp
+--- pristine/src/cpu/AlphaCPU_vmspal.cpp	2026-10-22 20:22:33
++++ osrc/src/cpu/AlphaCPU_vmspal.cpp	2026-10-22 22:18:59
+@@ -1028,14 +1028,20 @@
+     // Interprocessor interrupt (b_irq<3>, HRM 6.3.3). ack_ipi() acks it (no
+     // device deasserts the line), then vector via the OpenVMS IPINTR SCB slot.
+     // Highest b_irq => checked before timer/device.
+-    cSystem->chipset()->ack_ipi(state.iProcNum);
++    if (vmso_recording())
++      vmso_held("ack_ipi");
++    else
++      cSystem->chipset()->ack_ipi(state.iProcNum);
+     p20 = 0x610;
+     p7 = 0x16;
+     do_11670 = true;
+   } else if (ei & 0x04) {
+ 
+     // TIMER interrupt
+-    cSystem->chipset()->ack_interval_timer(state.iProcNum);
++    if (vmso_recording())
++      vmso_held("ack_interval_timer");
++    else
++      cSystem->chipset()->ack_interval_timer(state.iProcNum);
+     p6 = cSystem->tsunami()->misc();
+ 
+     p22 += U64(0x0000010000000000);
+@@ -1113,7 +1119,9 @@
+       }
+     } else {
+       p6 = p5 & U64(0x0060000000000000);
+-      if (p6)
++      if (p6 && vmso_recording())
++        vmso_held("set_dim");
++      else if (p6)
+         cSystem->tsunami()->set_dim(
+             state.iProcNum, cSystem->tsunami()->dim(state.iProcNum) & ~p6);
+       return 0;
+@@ -1346,6 +1354,7 @@
+ int CAlphaCPU::vmspal_ent_dtbm_double_3(int flags) {
+   u64 t25;
+   u64 t26;
++  vmso_held("double-miss");
+ 
+   p7 &= 0xffff;
+   p5 <<= 16;
+diff --color -ruN pristine/src/cpu/VmspalOracle.cpp osrc/src/cpu/VmspalOracle.cpp
+--- pristine/src/cpu/VmspalOracle.cpp	1970-01-01 01:00:00
++++ osrc/src/cpu/VmspalOracle.cpp	2026-10-22 23:14:49
+@@ -0,0 +1,828 @@
++/* Alphabox Alpha Emulator
++ * The vmspal differential oracle: see VmspalOracle.hpp and
++ * test/vms/vmspal_oracle.sh. Not part of a normal build.
++ */
++#include "AlphaCPU.hpp"
++#include "StdAfx.hpp"
++#include "System.hpp"
++#include "Tsunami.hpp"
++#include "VmspalOracle.hpp"
++
++#include <cinttypes>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <map>
++#include <string>
++
++thread_local VmsoLog *g_vmso_log = nullptr;
++thread_local int g_vmso_mode = 0;
++
++void vmso_note_dram(const char *base, u64 phys, int dsize) {
++  VmsoLog *L = g_vmso_log;
++  if (!L)
++    return;
++  const int bytes = dsize >= 8 ? dsize / 8 : 1;
++  const u64 q0 = phys & ~U64(7);
++  const u64 q1 = (phys + bytes - 1) & ~U64(7);
++  for (u64 q = q0; q <= q1; q += 8)
++    L->note(base, q);
++}
++
++bool vmso_note_dev(u64 addr, int dsize, u64 val, bool write) {
++  VmsoLog *L = g_vmso_log;
++  if (!L)
++    return false;
++  // The Tsunami's CSRs (Cchip, Dchip, Pchips at 801.A000.0000 to
++  // 801.BFFF.FFFF) acknowledge, mask and send interrupts: the recording run
++  // leaves them to the PALcode's run.
++  const bool csr = addr >= U64(0x801a0000000) && addr < U64(0x801c0000000);
++  const bool held = write && g_vmso_mode == 1 && csr;
++  L->dev.push_back({addr, val, dsize, write, held});
++  return held;
++}
++
++namespace {
++enum {
++  VF_PC,
++  VF_R,
++  VF_PS,
++  VF_P21,
++  VF_CM,
++  VF_ASN,
++  VF_FEN,
++  VF_CCOFF,
++  VF_IER,
++  VF_AST,
++  VF_SIR,
++  VF_LOCK,
++  VF_SIG,
++  VF_TBD,
++  VF_TBI,
++  VF_MEMG,
++  VF_MEMS,
++  VF_TIMEOUT,
++  VF_PREG,
++  NF
++};
++const char *fname[NF] = {"pc",   "regs", "ps",     "p21",  "cm",    "asn",
++                         "fen",  "cc_offset", "ier", "ast",  "sir",   "lock",
++                         "missed-signal", "dtb", "itb", "mem-guest",
++                         "mem-palscratch", "no-return",
++                         "palshadow-at-PAL-target"};
++
++struct Stat {
++  u64 n = 0, same = 0, time_only = 0, unpred_only = 0;
++  u64 insns = 0; // instructions the PALcode ran for these events
++  u64 field[NF] = {};
++  u64 race = 0;      // differing events during which an interrupt arrived
++  u64 lockflag_only = 0; // lock flag differs, a STx_C would fail after both
++  u64 dmiss = 0, dmiss_diff = 0; // events with a nested double miss
++  std::map<u64, u64> scratch;    // PAL scratch offsets that differed
++  u64 regmask = 0; // registers seen to differ (significant ones)
++  u64 umask = 0;   // registers seen to differ (UNPREDICTABLE ones)
++  int nex[NF] = {};
++  std::vector<std::string> ex;
++};
++
++const char *callname(int fn) {
++  switch (fn) {
++  case 0x01: return "CFLUSH";
++  case 0x02: return "DRAINA";
++  case 0x03: return "LDQP";
++  case 0x04: return "STQP";
++  case 0x05: return "SWPCTX";
++  case 0x06: return "MFPR_ASN";
++  case 0x07: return "MTPR_ASTEN";
++  case 0x08: return "MTPR_ASTSR";
++  case 0x0b: return "MFPR_FEN";
++  case 0x0c: return "MTPR_FEN";
++  case 0x0e: return "MFPR_IPL";
++  case 0x0f: return "MTPR_IPL";
++  case 0x10: return "MFPR_MCES";
++  case 0x11: return "MTPR_MCES";
++  case 0x12: return "MFPR_PCBB";
++  case 0x13: return "MFPR_PRBR";
++  case 0x14: return "MTPR_PRBR";
++  case 0x15: return "MFPR_PTBR";
++  case 0x16: return "MFPR_SCBB";
++  case 0x17: return "MTPR_SCBB";
++  case 0x18: return "MTPR_SIRR";
++  case 0x19: return "MFPR_SISR";
++  case 0x1a: return "MFPR_TBCHK";
++  case 0x1b: return "MTPR_TBIA";
++  case 0x1c: return "MTPR_TBIAP";
++  case 0x1d: return "MTPR_TBIS";
++  case 0x1e: return "MFPR_ESP";
++  case 0x1f: return "MTPR_ESP";
++  case 0x20: return "MFPR_SSP";
++  case 0x21: return "MTPR_SSP";
++  case 0x22: return "MFPR_USP";
++  case 0x23: return "MTPR_USP";
++  case 0x24: return "MTPR_TBISD";
++  case 0x25: return "MTPR_TBISI";
++  case 0x26: return "MFPR_ASTEN";
++  case 0x27: return "MFPR_ASTSR";
++  case 0x29: return "MFPR_VPTB";
++  case 0x2e: return "MTPR_DATFX";
++  case 0x3f: return "MFPR_WHAMI";
++  case 0x86: return "IMB";
++  case 0x8f: return "PROBER";
++  case 0x90: return "PROBEW";
++  case 0x91: return "RD_PS";
++  case 0x92: return "REI";
++  case 0x9b: return "SWASTEN";
++  case 0x9c: return "WR_PS_SW";
++  case 0x9d: return "RSCC";
++  case 0x9e: return "READ_UNQ";
++  case 0x9f: return "WRITE_UNQ";
++  }
++  return "?";
++}
++
++bool is_native_call(int fn) {
++  return *callname(fn) != '?';
++}
++
++/// Registers the ARM leaves UNPREDICTABLE after the routine (13.1: R1, R16
++/// and R17 after any MxPR, and R0 after an MTPR that returns nothing).
++u64 unpredictable_regs(int fn) {
++  const u64 r = (U64(1) << 1) | (U64(1) << 16) | (U64(1) << 17);
++  switch (fn) {
++  case 0x06: case 0x0b: case 0x0e: case 0x10: case 0x12: case 0x13:
++  case 0x15: case 0x16: case 0x19: case 0x1a: case 0x1e: case 0x20:
++  case 0x22: case 0x26: case 0x27: case 0x29: case 0x3f: // MFPR
++  case 0x07: case 0x08: case 0x0f:                       // MTPR with R0
++    return r;
++  case 0x0c: case 0x11: case 0x14: case 0x17: case 0x18: case 0x1b:
++  case 0x1c: case 0x1d: case 0x1f: case 0x21: case 0x23: case 0x24:
++  case 0x25: case 0x2e: // MTPR without a result
++    return r | 1;
++  }
++  return 0;
++}
++
++const char *intname(int s) {
++  static const char *n[] = {"IPI",        "interval timer", "PCI device",
++                            "PIC (ISA)",  "PIC dismissed",  "ext dismissed",
++                            "software",   "AST",            "none"};
++  return s >= 0 && s < 9 ? n[s] : "?";
++}
++} // namespace
++
++struct CAlphaCPU::VmsoState {
++  struct Regs {
++    u64 pc;
++    u64 r[64];
++    int cm, asn, asn0, asn1;
++    bool fpen, ppcen;
++    u32 cc_offset;
++    int alt_cm;
++    u64 exc_addr, fault_va, va_form_va, exc_sum, mm_stat;
++    int eien, slen, cren, pcen, sien, asten, sir, astrr, aster;
++    bool bIntrFlag, check_int, lock;
++    u32 rem_ins_in_page;
++  };
++  const char *path = nullptr;
++  int phase = 0; // 0 idle, 1 native recording, 2 PALcode replay
++  int kind = 0, sub = 0;
++  bool started_pal = false;
++  u64 icount = 0;
++  Regs pre{}, nat{};
++  bool nat_missed = false;
++  bool nat_llsc = false;
++  u32 irq_seq0 = 0;
++  u64 pre_llsc = 0;
++  u64 pcbb_pre = 0;
++  // translation buffer: the state before (saved at the first change in
++  // either run) and after the native run
++  bool tb_pre_valid = false, nat_tb_changed = false;
++  STBEntry tb_pre[2][TB_ENTRIES], tb_nat[2][TB_ENTRIES];
++  int next_tb_pre[2], lft_pre[2][2];
++  std::vector<std::pair<int, STBEntry>> sh_log;
++  bool sh_all = false;
++  std::vector<STBEntry> sh_copy;
++  VmsoLog nat_log, rep_log;
++  std::vector<u64> nat_final; // value after the native run, by nat_log.q
++  std::vector<VmsoLog::Dev> nat_dev;
++  std::vector<std::string> nat_events; // chipset calls held back
++  std::map<int, Stat> stats;
++  u64 events = 0;
++};
++
++void CAlphaCPU::vmso_init() {
++  const char *p = getenv("ALPHABOX_VMSPAL_ORACLE");
++  if (!p || !*p || vmspal_lle_enabled)
++    return;
++  vmso = new VmsoState;
++  vmso->path = p;
++  printf("%%CPU-I-VMSORACLE: every native OpenVMS PALcode routine is compared "
++         "with the console's PALcode; report in %s\n",
++         p);
++}
++
++bool CAlphaCPU::vmso_idle() const { return vmso && vmso->phase == 0; }
++
++bool CAlphaCPU::vmso_call_native(int fn) const {
++  return vmso && vmso->phase == 0 && is_native_call(fn);
++}
++
++static void capture(CAlphaCPU::SCPU_state &s, CAlphaCPU::VmsoState::Regs &g,
++                    bool lock) {
++  g.pc = s.pc;
++  memcpy(g.r, s.r, sizeof(g.r));
++  g.cm = s.cm;
++  g.asn = s.asn;
++  g.asn0 = s.asn0;
++  g.asn1 = s.asn1;
++  g.fpen = s.fpen;
++  g.ppcen = s.ppcen;
++  g.cc_offset = s.cc_offset;
++  g.alt_cm = s.alt_cm;
++  g.exc_addr = s.exc_addr;
++  g.fault_va = s.fault_va;
++  g.va_form_va = s.va_form_va;
++  g.exc_sum = s.exc_sum;
++  g.mm_stat = s.mm_stat;
++  g.eien = s.eien;
++  g.slen = s.slen;
++  g.cren = s.cren;
++  g.pcen = s.pcen;
++  g.sien = s.sien;
++  g.asten = s.asten;
++  g.sir = s.sir;
++  g.astrr = s.astrr;
++  g.aster = s.aster;
++  g.bIntrFlag = s.bIntrFlag;
++  g.check_int = s.check_int;
++  g.lock = lock;
++  g.rem_ins_in_page = s.rem_ins_in_page;
++}
++
++static void restore(CAlphaCPU::SCPU_state &s,
++                    const CAlphaCPU::VmsoState::Regs &g) {
++  s.pc = g.pc;
++  memcpy(s.r, g.r, sizeof(g.r));
++  s.cm = g.cm;
++  s.asn = g.asn;
++  s.asn0 = g.asn0;
++  s.asn1 = g.asn1;
++  s.fpen = g.fpen;
++  s.ppcen = g.ppcen;
++  s.cc_offset = g.cc_offset;
++  s.alt_cm = g.alt_cm;
++  s.exc_addr = g.exc_addr;
++  s.fault_va = g.fault_va;
++  s.va_form_va = g.va_form_va;
++  s.exc_sum = g.exc_sum;
++  s.mm_stat = g.mm_stat;
++  s.eien = g.eien;
++  s.slen = g.slen;
++  s.cren = g.cren;
++  s.pcen = g.pcen;
++  s.sien = g.sien;
++  s.asten = g.asten;
++  s.sir = g.sir;
++  s.astrr = g.astrr;
++  s.aster = g.aster;
++  s.bIntrFlag = g.bIntrFlag;
++  s.check_int = g.check_int;
++  s.rem_ins_in_page = g.rem_ins_in_page;
++}
++
++bool CAlphaCPU::vmso_begin(int kind, int sub) {
++  if (!vmso || vmso->phase != 0)
++    return false;
++  VmsoState &o = *vmso;
++  capture(state, o.pre, cSystem->cpu_lock_held(state.iProcNum));
++  o.pre_llsc = m_llsc_clean;
++  o.kind = kind;
++  o.sub = sub;
++  o.pcbb_pre = sys_read(state.r[32 + 21] + 0x10, 64);
++  o.irq_seq0 = m_vmso_irq_seq.load();
++  o.started_pal = state.current_pc & 1;
++  o.tb_pre_valid = false;
++  o.nat_tb_changed = false;
++  o.sh_log.clear();
++  o.sh_all = false;
++  o.nat_log.clear();
++  o.rep_log.clear();
++  o.nat_events.clear();
++  o.phase = 1;
++  g_vmso_log = &o.nat_log;
++  g_vmso_mode = 1;
++  return true;
++}
++
++void CAlphaCPU::vmso_set_sub(int sub) {
++  if (vmso)
++    vmso->sub = sub;
++}
++
++void CAlphaCPU::vmso_held(const char *what) {
++  if (vmso && vmso->phase == 1)
++    vmso->nat_events.push_back(what);
++}
++
++bool CAlphaCPU::vmso_recording() const { return vmso && vmso->phase == 1; }
++
++void CAlphaCPU::vmso_tb_touch() {
++  if (!vmso || !vmso->phase || vmso->tb_pre_valid)
++    return;
++  VmsoState &o = *vmso;
++  memcpy(o.tb_pre, state.tb, sizeof(o.tb_pre));
++  memcpy(o.next_tb_pre, state.next_tb, sizeof(o.next_tb_pre));
++  memcpy(o.lft_pre, state.last_found_tb, sizeof(o.lft_pre));
++  o.tb_pre_valid = true;
++  if (o.phase == 1)
++    o.nat_tb_changed = true;
++}
++
++void CAlphaCPU::vmso_sh_note(int k) {
++  if (vmso && vmso->phase == 1 && !vmso->sh_all)
++    vmso->sh_log.push_back({k, m_tb_shadow[k]});
++}
++
++void CAlphaCPU::vmso_sh_note_all() {
++  if (vmso && vmso->phase == 1 && !vmso->sh_all) {
++    vmso->sh_copy.assign(m_tb_shadow, m_tb_shadow + kTbShadowEntries);
++    vmso->sh_all = true;
++  }
++}
++
++/**
++ * The native routine is done: keep its result and undo it. `target` is
++ * where the processor goes next with the native result; `res` is the
++ * native entry's return value (0: a TB fill, the instruction is retried).
++ **/
++void CAlphaCPU::vmso_end_native(u64 target, int res) {
++  VmsoState &o = *vmso;
++  g_vmso_log = nullptr;
++  g_vmso_mode = 0;
++  if (o.kind != VMSO_CALL && o.kind != VMSO_INT) {
++    // a TB miss or fault entry: a fill (retried), a dismissed fault (the
++    // next instruction), or an exception
++    const int s = res == 0 ? 0 : (target == state.current_pc + 4 ? 2 : 1);
++    o.sub = s | (o.started_pal ? 8 : 0);
++  }
++  capture(state, o.nat, cSystem->cpu_lock_held(state.iProcNum));
++  o.nat.pc = target;
++  o.nat_missed = int_deliverable() && !state.check_int;
++  o.nat_llsc = m_llsc_clean != 0;
++  // memory: what the native run left, then the values before it
++  o.nat_final.resize(o.nat_log.q.size());
++  for (size_t i = 0; i < o.nat_log.q.size(); i++)
++    o.nat_final[i] = *(const u64 *)(o.nat_log.base + o.nat_log.q[i].first);
++  for (size_t i = o.nat_log.q.size(); i-- > 0;)
++    *(u64 *)(o.nat_log.base + o.nat_log.q[i].first) = o.nat_log.q[i].second;
++  o.nat_dev = o.nat_log.dev;
++  // the translation buffer and its shadow
++  if (o.nat_tb_changed) {
++    memcpy(o.tb_nat, state.tb, sizeof(o.tb_nat));
++    memcpy(state.tb, o.tb_pre, sizeof(o.tb_pre));
++    memcpy(state.next_tb, o.next_tb_pre, sizeof(o.next_tb_pre));
++    memcpy(state.last_found_tb, o.lft_pre, sizeof(o.lft_pre));
++    tb_idx_rebuild();
++  }
++  if (o.sh_all)
++    memcpy(m_tb_shadow, o.sh_copy.data(), sizeof(STBEntry) * kTbShadowEntries);
++  else
++    for (size_t i = o.sh_log.size(); i-- > 0;)
++      m_tb_shadow[o.sh_log[i].first] = o.sh_log[i].second;
++  restore(state, o.pre);
++  cSystem->cpu_set_lock_held(state.iProcNum, o.pre.lock);
++  m_llsc_clean = o.pre_llsc;
++  flush_data_page_cache();
++  dpc_context_changed();
++  seq_remaining = 0;
++}
++
++void CAlphaCPU::vmso_start_replay() {
++  VmsoState &o = *vmso;
++  o.phase = 2;
++  o.icount = 0;
++  state.pal_vms = false; // the PALcode's own run: no native routine
++  g_vmso_log = &o.rep_log;
++  g_vmso_mode = 2;
++}
++
++static std::string hx(u64 v) {
++  char b[24];
++  snprintf(b, sizeof(b), "%" PRIx64, v);
++  return b;
++}
++
++static bool same_entry(const CAlphaCPU::STBEntry &a,
++                       const CAlphaCPU::STBEntry &b) {
++  if (a.valid != b.valid)
++    return false;
++  if (!a.valid)
++    return true;
++  return a.virt == b.virt && a.phys == b.phys && a.match_mask == b.match_mask &&
++         a.keep_mask == b.keep_mask && a.asm_bit == b.asm_bit &&
++         (a.asm_bit || a.asn == b.asn) &&
++         !memcmp(a.access, b.access, sizeof(a.access)) &&
++         !memcmp(a.fault, b.fault, sizeof(a.fault));
++}
++
++/// Compare two TBs as sets of valid entries: "" when they hold the same
++/// translations, else the first differing one.
++static std::string tb_entry(const CAlphaCPU::STBEntry &e) {
++  char buf[220];
++  snprintf(buf, sizeof(buf),
++           "va %" PRIx64 "/%" PRIx64 " pa %" PRIx64 " asn %d%s acc "
++           "r%d%d%d%d w%d%d%d%d f%d%d%d",
++           e.virt, e.match_mask, e.phys, e.asn, e.asm_bit ? " asm" : "",
++           !!e.access[0][0], !!e.access[0][1], !!e.access[0][2],
++           !!e.access[0][3], !!e.access[1][0], !!e.access[1][1],
++           !!e.access[1][2], !!e.access[1][3], !!e.fault[0], !!e.fault[1],
++           !!e.fault[2]);
++  return buf;
++}
++
++/// Compare two TBs as sets of valid entries: "" when they hold the same
++/// translations, else the first entry each side has alone.
++static std::string tb_diff(const CAlphaCPU::STBEntry *n,
++                           const CAlphaCPU::STBEntry *p) {
++  std::string r;
++  for (int pass = 0; pass < 2; pass++) {
++    const CAlphaCPU::STBEntry *a = pass ? p : n, *b = pass ? n : p;
++    for (int i = 0; i < TB_ENTRIES; i++) {
++      if (!a[i].valid)
++        continue;
++      bool found = false;
++      for (int j = 0; j < TB_ENTRIES && !found; j++)
++        found = same_entry(a[i], b[j]);
++      if (!found) {
++        r += std::string(pass ? " PALcode only: " : " native only: ") +
++             tb_entry(a[i]);
++        break;
++      }
++    }
++  }
++  return r;
++}
++
++void CAlphaCPU::vmso_boundary() {
++  VmsoState &o = *vmso;
++  o.icount++;
++  const bool timeout = o.icount > 400000;
++  if (!timeout && state.pc != o.nat.pc && (state.pc & 1))
++    return;
++  g_vmso_log = nullptr;
++  g_vmso_mode = 0;
++  o.phase = 0;
++  state.pal_vms = vmspal_pal_base && state.pal_base == vmspal_pal_base &&
++                  !vmspal_lle_enabled;
++  o.events++;
++
++  const int key = o.kind * 256 + o.sub;
++  Stat &st = o.stats[key];
++  st.n++;
++  // the boundary at the native result's PC is not one of the PALcode's
++  st.insns += o.icount - 1;
++  bool diff[NF] = {};
++  std::string why;
++  const auto &N = o.nat;
++  const u64 p21 = o.pre.r[32 + 21];
++  const u64 pcbb_pre = o.pcbb_pre;
++
++  if (timeout) {
++    diff[VF_TIMEOUT] = true;
++    why += " no return within 400000 instructions;";
++  }
++  if (state.pc != N.pc) {
++    diff[VF_PC] = true;
++    why += " pc N=" + hx(N.pc) + " P=" + hx(state.pc) + ";";
++  }
++  const u64 um = o.kind == VMSO_CALL ? unpredictable_regs(o.sub) : 0;
++  u64 rm = 0, urm = 0;
++  for (int i = 0; i < 31; i++)
++    if (state.r[i] != N.r[i]) {
++      if ((um >> i) & 1)
++        urm |= U64(1) << i;
++      else
++        rm |= U64(1) << i;
++    }
++  // RSCC's R0 is a clock reading; so is the SCC the timer interrupt keeps
++  bool time_r0 = false;
++  if (o.kind == VMSO_CALL && o.sub == 0x9d && (rm & 1)) {
++    const u64 d = state.r[0] - N.r[0];
++    if (d < U64(200000000)) {
++      rm &= ~U64(1);
++      time_r0 = true;
++    }
++  }
++  if (rm) {
++    diff[VF_R] = true;
++    st.regmask |= rm;
++    for (int i = 0; i < 31; i++)
++      if ((rm >> i) & 1)
++        why += " r" + std::to_string(i) + " N=" + hx(N.r[i]) +
++               " P=" + hx(state.r[i]) + ";";
++  }
++  if (urm) {
++    st.umask |= urm;
++  }
++  if (state.r[32 + 22] != N.r[32 + 22]) {
++    diff[VF_PS] = true;
++    why += " ps(p22) N=" + hx(N.r[32 + 22]) + " P=" + hx(state.r[32 + 22]) +
++           ";";
++  }
++  if (state.r[32 + 21] != N.r[32 + 21]) {
++    diff[VF_P21] = true;
++    why += " p21 N=" + hx(N.r[32 + 21]) + " P=" + hx(state.r[32 + 21]) + ";";
++  }
++  if (state.cm != N.cm) {
++    diff[VF_CM] = true;
++    why += " cm N=" + std::to_string(N.cm) + " P=" + std::to_string(state.cm) +
++           ";";
++  }
++  if (state.asn != N.asn || state.asn0 != N.asn0 || state.asn1 != N.asn1) {
++    diff[VF_ASN] = true;
++    why += " asn N=" + std::to_string(N.asn) + "/" + std::to_string(N.asn0) +
++           "/" + std::to_string(N.asn1) + " P=" + std::to_string(state.asn) +
++           "/" + std::to_string(state.asn0) + "/" +
++           std::to_string(state.asn1) + ";";
++  }
++  if (state.fpen != N.fpen || state.ppcen != N.ppcen) {
++    diff[VF_FEN] = true;
++    why += " fen/ppce N=" + std::to_string(N.fpen) + std::to_string(N.ppcen) +
++           " P=" + std::to_string(state.fpen) + std::to_string(state.ppcen) +
++           ";";
++  }
++  bool time_cc = false;
++  if (state.cc_offset != N.cc_offset) {
++    const u32 d = (u32)(N.cc_offset - state.cc_offset);
++    if (d < 200000000u)
++      time_cc = true;
++    else {
++      diff[VF_CCOFF] = true;
++      why += " cc_offset N=" + hx(N.cc_offset) + " P=" + hx(state.cc_offset) +
++             ";";
++    }
++  }
++  if (state.eien != N.eien || state.slen != N.slen || state.cren != N.cren ||
++      state.pcen != N.pcen || state.sien != N.sien || state.asten != N.asten) {
++    diff[VF_IER] = true;
++    char b[160];
++    snprintf(b, sizeof(b),
++             " ier N=ei%x sl%x cr%x pc%x si%x ast%x P=ei%x sl%x cr%x pc%x si%x "
++             "ast%x;",
++             N.eien, N.slen, N.cren, N.pcen, N.sien, N.asten, state.eien,
++             state.slen, state.cren, state.pcen, state.sien, state.asten);
++    why += b;
++  }
++  if (state.aster != N.aster || state.astrr != N.astrr) {
++    diff[VF_AST] = true;
++    why += " aster/astrr N=" + hx(N.aster) + "/" + hx(N.astrr) +
++           " P=" + hx(state.aster) + "/" + hx(state.astrr) + ";";
++  }
++  if (state.sir != N.sir) {
++    diff[VF_SIR] = true;
++    why += " sir N=" + hx(N.sir) + " P=" + hx(state.sir) + ";";
++  }
++  // What a STx_C would do now: the lock flag, and no memory operation
++  // since the LDx_L (HRM D.19, which the PALcode's own LDQ/STQ obey and
++  // the native routines' accesses do not). The flag alone is counted apart.
++  const bool lock_p = cSystem->cpu_lock_held(state.iProcNum);
++  const bool stc_n = N.lock && o.nat_llsc, stc_p = lock_p && m_llsc_clean;
++  if (stc_n != stc_p) {
++    diff[VF_LOCK] = true;
++    why += std::string(" STx_C would ") + (stc_n ? "succeed" : "fail") +
++           " after N, " + (stc_p ? "succeed" : "fail") + " after P (flag N=" +
++           (N.lock ? "1" : "0") + " P=" + (lock_p ? "1" : "0") + ");";
++  } else if (lock_p != N.lock)
++    st.lockflag_only++;
++  const bool p_missed = int_deliverable() && !state.check_int;
++  if (o.nat_missed && !p_missed) {
++    diff[VF_SIG] = true;
++    why += " native leaves a deliverable interrupt unsignalled;";
++  }
++  // the native result continues inside the PALcode (a fault in PALmode
++  // handed to the PALcode's own fault routine, at 0xd980): the PALshadow
++  // registers are its arguments there. (After a fill they are what the miss
++  // handler left, which the interrupted PALcode cannot depend on: the
++  // hardware's handler clobbers them too.)
++  if ((N.pc & 1) && o.kind != VMSO_CALL && o.kind != VMSO_INT &&
++      (o.sub & 3) == 1 && state.pc == N.pc) {
++    static const int pr[] = {4, 5, 6, 7, 20, 23};
++    for (int k : pr)
++      if (state.r[32 + k] != N.r[32 + k]) {
++        diff[VF_PREG] = true;
++        why += " p" + std::to_string(k) + " N=" + hx(N.r[32 + k]) +
++               " P=" + hx(state.r[32 + k]) + ";";
++      }
++    if (state.r[26] != N.r[26]) {
++      diff[VF_PREG] = true;
++      why += " r26 N=" + hx(N.r[26]) + " P=" + hx(state.r[26]) + ";";
++    }
++  }
++  // translation buffers
++  if (o.tb_pre_valid || o.nat_tb_changed) {
++    for (int t = 0; t < 2; t++) {
++      const STBEntry *n = o.nat_tb_changed ? o.tb_nat[t] : o.tb_pre[t];
++      std::string d = tb_diff(n, state.tb[t]);
++      if (!d.empty()) {
++        diff[t == TB_INDEX_DATA ? VF_TBD : VF_TBI] = true;
++        why += std::string(t == TB_INDEX_DATA ? " dtb " : " itb ") + d + ";";
++      }
++    }
++  }
++  // memory: every quadword either run wrote
++  {
++    std::vector<std::pair<u64, std::pair<u64, u64>>> m; // q -> (N, P)
++    const char *base = o.nat_log.base ? o.nat_log.base : o.rep_log.base;
++    for (size_t i = 0; i < o.nat_log.q.size(); i++) {
++      const u64 q = o.nat_log.q[i].first;
++      m.push_back({q, {o.nat_final[i], *(const u64 *)(base + q)}});
++    }
++    for (const auto &e : o.rep_log.q) {
++      bool in = false;
++      for (const auto &x : o.nat_log.q)
++        in |= x.first == e.first;
++      if (!in)
++        m.push_back({e.first, {e.second, *(const u64 *)(base + e.first)}});
++    }
++    for (const auto &e : m) {
++      const u64 q = e.first, nv = e.second.first, pv = e.second.second;
++      if (nv == pv)
++        continue;
++      const bool scratch = q >= p21 && q < p21 + 0x200;
++      // the clock: the SCC kept at scratch+0xa0, a process's charged
++      // cycles at PCB+0x40
++      const bool clock = (scratch && q - p21 == 0xa0) ||
++                         ((o.kind == VMSO_CALL && o.sub == 0x05) &&
++                          (q & 0x7f) == 0x40);
++      if (clock && (u64)(pv - nv) < U64(200000000))
++        continue;
++      if (clock && (u32)(pv - nv) < 200000000u && (pv >> 32) == (nv >> 32))
++        continue;
++      diff[scratch ? VF_MEMS : VF_MEMG] = true;
++      if (scratch)
++        st.scratch[q - p21]++;
++      std::string where = scratch ? "scratch+" + hx(q - p21)
++                          : (q >= pcbb_pre && q < pcbb_pre + 0x80)
++                              ? "pcb+" + hx(q - pcbb_pre)
++                              : "pa " + hx(q);
++      why += " mem " + where + " N=" + hx(nv) + " P=" + hx(pv) + ";";
++    }
++  }
++
++  const bool race = m_vmso_irq_seq.load() != o.irq_seq0;
++  bool dmiss = false;
++  for (auto &e : o.nat_events)
++    dmiss |= e == "double-miss";
++  bool any = false;
++  for (int f = 0; f < NF; f++)
++    if (diff[f]) {
++      any = true;
++      st.field[f]++;
++    }
++  if (dmiss)
++    st.dmiss++;
++  if (!any) {
++    st.same++;
++    if (time_r0 || time_cc)
++      st.time_only++;
++    if (urm)
++      st.unpred_only++;
++  } else {
++    // keep a few examples per field
++    int f0 = 0;
++    while (!diff[f0])
++      f0++;
++    // the scratch-only differences: fewer examples
++    bool only_scratch = true;
++    for (int f = 0; f < NF; f++)
++      if (diff[f] && f != VF_MEMS)
++        only_scratch = false;
++    if (race)
++      st.race++;
++    if (dmiss)
++      st.dmiss_diff++;
++    if (st.nex[f0] < (only_scratch ? 2 : 8)) {
++      st.nex[f0]++;
++      char hdr[400];
++      snprintf(hdr, sizeof(hdr),
++               "  #%" PRIu64 " pc %" PRIx64 " ps %" PRIx64 " cm %d r16 %" PRIx64
++               " r17 %" PRIx64 " r30 %" PRIx64 " exc_addr %" PRIx64
++               " va %" PRIx64 " mm_stat %" PRIx64 ":",
++               o.events, o.pre.pc, o.pre.r[32 + 22], o.pre.cm, o.pre.r[16],
++               o.pre.r[17], o.pre.r[30], o.pre.exc_addr, o.pre.fault_va,
++               o.pre.mm_stat);
++      std::string ex = hdr + std::string(race ? " [interrupt arrived]" : "") +
++                       (dmiss ? " [double miss]" : "") + why;
++      if (!o.nat_events.empty() || !o.nat_dev.empty() ||
++          !o.rep_log.dev.empty()) {
++        ex += "\n      native io:";
++        for (auto &e : o.nat_events)
++          ex += " [" + e + "]";
++        for (auto &d : o.nat_dev)
++          ex += std::string(d.write ? " W" : " R") + (d.held ? "(held)" : "") +
++                " " + hx(d.addr) + "=" + hx(d.val);
++        ex += "\n      PALcode io:";
++        for (auto &d : o.rep_log.dev)
++          ex += std::string(d.write ? " W" : " R") + " " + hx(d.addr) + "=" +
++                hx(d.val);
++      }
++      st.ex.push_back(ex);
++    }
++  }
++  if (o.events % 20000 == 0)
++    vmso_report(false);
++}
++
++void CAlphaCPU::vmso_report(bool final) {
++  if (!vmso)
++    return;
++  VmsoState &o = *vmso;
++  FILE *f = fopen(o.path, "w");
++  if (!f)
++    return;
++  fprintf(f, "vmspal oracle: %" PRIu64 " compared events%s\n", o.events,
++          final ? " (final)" : "");
++  u64 pal = 0;
++  for (auto &kv : o.stats)
++    pal += kv.second.insns;
++  const u64 all = state.instruction_count;
++  fprintf(f,
++          "instructions: %" PRIu64 " executed, %" PRIu64
++          " of them the PALcode doing what a native routine replaces "
++          "(%.1f%%)\n",
++          all, pal, all ? 100.0 * (double)pal / (double)all : 0.0);
++  fprintf(f, "%-30s %10s %10s %10s %8s  %s\n", "routine", "compared", "same",
++          "differ", "PAL ins", "fields that differed (count)");
++  for (auto &kv : o.stats) {
++    const int kind = kv.first >> 8, sub = kv.first & 0xff;
++    const Stat &st = kv.second;
++    char name[64];
++    switch (kind) {
++    case VMSO_CALL:
++      snprintf(name, sizeof(name), "CALL_PAL %02x %s", sub, callname(sub));
++      break;
++    case VMSO_INT:
++      snprintf(name, sizeof(name), "interrupt: %s", intname(sub));
++      break;
++    default: {
++      static const char *kn[] = {"", "", "DTB miss", "ITB miss", "IACV",
++                                 "DFAULT"};
++      static const char *sn[] = {"fill", "exception", "dismissed"};
++      snprintf(name, sizeof(name), "%s %s%s", kn[kind], sn[sub & 3],
++               (sub & 8) ? " (PALmode)" : "");
++    }
++    }
++    std::string fl;
++    for (int fi = 0; fi < NF; fi++)
++      if (st.field[fi])
++        fl += std::string(fname[fi]) + "(" + std::to_string(st.field[fi]) +
++              ") ";
++    if (st.regmask) {
++      fl += "regs:";
++      for (int i = 0; i < 31; i++)
++        if ((st.regmask >> i) & 1)
++          fl += " r" + std::to_string(i);
++      fl += " ";
++    }
++    if (st.time_only)
++      fl += "[clock readings differ " + std::to_string(st.time_only) + "] ";
++    if (st.race)
++      fl += "[interrupt arrived in " + std::to_string(st.race) + "] ";
++    if (st.lockflag_only)
++      fl += "[lock flag only, STx_C fails after both: " +
++            std::to_string(st.lockflag_only) + "] ";
++    if (st.dmiss)
++      fl += "[double miss in " + std::to_string(st.dmiss) + ", " +
++            std::to_string(st.dmiss_diff) + " differing] ";
++    if (!st.scratch.empty()) {
++      fl += "[scratch:";
++      for (auto &s : st.scratch)
++        fl += " +" + hx(s.first) + "(" + std::to_string(s.second) + ")";
++      fl += "] ";
++    }
++    if (st.umask) {
++      fl += "[UNPREDICTABLE regs differ:";
++      for (int i = 0; i < 31; i++)
++        if ((st.umask >> i) & 1)
++          fl += " r" + std::to_string(i);
++      fl += "] ";
++    }
++    fprintf(f, "%-30s %10" PRIu64 " %10" PRIu64 " %10" PRIu64 " %8.1f  %s\n",
++            name, st.n, st.same, st.n - st.same,
++            st.n ? (double)st.insns / (double)st.n : 0.0, fl.c_str());
++  }
++  fprintf(f, "\nexamples (state before the routine; N = native, P = "
++             "PALcode):\n");
++  for (auto &kv : o.stats) {
++    if (kv.second.ex.empty())
++      continue;
++    const int kind = kv.first >> 8, sub = kv.first & 0xff;
++    fprintf(f, "kind %d sub %02x%s%s:\n", kind, sub,
++            kind == VMSO_CALL ? " " : "",
++            kind == VMSO_CALL ? callname(sub)
++                              : (kind == VMSO_INT ? intname(sub) : ""));
++    for (auto &e : kv.second.ex)
++      fprintf(f, "%s\n", e.c_str());
++  }
++  fclose(f);
++}
+diff --color -ruN pristine/src/cpu/VmspalOracle.hpp osrc/src/cpu/VmspalOracle.hpp
+--- pristine/src/cpu/VmspalOracle.hpp	1970-01-01 01:00:00
++++ osrc/src/cpu/VmspalOracle.hpp	2026-10-22 22:06:24
+@@ -0,0 +1,71 @@
++/* Alphabox Alpha Emulator
++ * The vmspal differential oracle (test/vms/vmspal_oracle.sh): applied as a
++ * patch to a copy of the tree, never part of a normal build.
++ *
++ * Every native OpenVMS PALcode routine (cpu/AlphaCPU_vmspal.cpp) runs first
++ * with its effects recorded: its stores to memory, its translation-buffer
++ * changes, its device accesses (the ones a second run would repeat are
++ * held back: chipset CSR writes, the interval-timer and IPI acknowledges,
++ * the PIC's acknowledge cycle, which is peeked instead). Its result is kept
++ * and undone, and the console's own PALcode then does the same work from
++ * the same state. When the PALcode returns (the first instruction boundary
++ * at the native routine's result PC, or the first one in native mode) the
++ * two results are compared. The guest goes on with the PALcode's.
++ */
++#ifndef INCLUDED_VMSPALORACLE_H
++#define INCLUDED_VMSPALORACLE_H
++
++#include "datatypes.hpp"
++#include <string>
++#include <vector>
++
++/// Stores and device accesses made while a log is active on this thread.
++struct VmsoLog {
++  const char *base = nullptr;         // DRAM, host side
++  std::vector<std::pair<u64, u64>> q; // quadword address, value before
++  struct Dev {
++    u64 addr;
++    u64 val;
++    int size;
++    bool write;
++    bool held; // a write the recording run did not perform
++  };
++  std::vector<Dev> dev;
++  void clear() {
++    q.clear();
++    dev.clear();
++  }
++  void note(const char *b, u64 qa) {
++    base = b;
++    for (const auto &e : q)
++      if (e.first == qa)
++        return;
++    q.push_back({qa, *(const u64 *)(b + qa)});
++  }
++};
++
++/// What was compared: a CALL_PAL routine (sub = its function), the
++/// interrupt entries, the TB-miss and fault entries.
++enum { VMSO_CALL = 0, VMSO_INT, VMSO_DTBM, VMSO_ITBM, VMSO_IACV, VMSO_DFAULT };
++/// The interrupt entry that delivered (or none).
++enum {
++  VMSO_I_IPI,
++  VMSO_I_TIMER,
++  VMSO_I_PCI,
++  VMSO_I_PIC,
++  VMSO_I_PIC_DISMISSED,
++  VMSO_I_EXT_DISMISSED,
++  VMSO_I_SW,
++  VMSO_I_AST,
++  VMSO_I_NONE
++};
++
++extern thread_local VmsoLog *g_vmso_log;
++/// 0 off, 1 the native routine is being recorded, 2 the PALcode replays.
++extern thread_local int g_vmso_mode;
++
++void vmso_note_dram(const char *base, u64 phys, int dsize);
++/// A device access; returns true when the write must not be performed.
++bool vmso_note_dev(u64 addr, int dsize, u64 val, bool write);
++
++#endif
+diff --color -ruN pristine/src/cpu/cpu_defs.hpp osrc/src/cpu/cpu_defs.hpp
+--- pristine/src/cpu/cpu_defs.hpp	2026-10-22 20:22:33
++++ osrc/src/cpu/cpu_defs.hpp	2026-10-22 22:06:56
+@@ -241,7 +241,13 @@
+   }
+ }
+ 
++struct VmsoLog;
++extern thread_local VmsoLog *g_vmso_log;
++void vmso_note_dram(const char *base, u64 phys, int dsize);
++
+ static inline void dram_write(char *dram_ptr, u64 phys, int dsize, u64 data) {
++  if (g_vmso_log)
++    vmso_note_dram(dram_ptr, phys, dsize);
+   char *p = dram_ptr + phys;
+   switch (dsize) {
+   case 8:
+diff --color -ruN pristine/src/cpu/cpu_misc.hpp osrc/src/cpu/cpu_misc.hpp
+--- pristine/src/cpu/cpu_misc.hpp	2026-10-22 20:22:33
++++ osrc/src/cpu/cpu_misc.hpp	2026-10-22 22:08:03
+@@ -74,6 +74,8 @@
+     if ((function == 0x00) && cSystem->exit_on_pal_halt())                     \
+       cSystem->RequestPalHaltExit(); /* main loop exits gracefully */          \
+     if (state.pal_vms && !vmspal_call_off(function)) {                         \
++      const bool _vmso = vmso_call_native(function) &&                         \
++                         vmso_begin(VMSO_CALL, function);                      \
+       switch (function) {                                                      \
+       case 0x01: /* CFLUSH */                                                  \
+         vmspal_call_cflush();                                                  \
+@@ -277,6 +279,11 @@
+                                                                                \
+       default:                                                                 \
+         ENTER_NATIVE_CALL_PAL();                                               \
++      }                                                                        \
++      if (_vmso) {                                                             \
++        vmso_end_native(state.pc, 1);                                          \
++        ENTER_NATIVE_CALL_PAL();                                               \
++        vmso_start_replay();                                                   \
+       }                                                                        \
+     } else {                                                                   \
+       ENTER_NATIVE_CALL_PAL();                                                 \
+diff --color -ruN pristine/src/devices/isa/I8259.cpp osrc/src/devices/isa/I8259.cpp
+--- pristine/src/devices/isa/I8259.cpp	2026-10-22 20:22:33
++++ osrc/src/devices/isa/I8259.cpp	2026-10-22 22:06:56
+@@ -214,8 +214,23 @@
+  * place on the data bus, including the cascade hand-off to the slave for
+  * IRQs 8-15.
+  **/
++extern thread_local int g_vmso_mode;
++
+ u8 CI8259::read_vector() {
+   std::lock_guard<std::mutex> guard(lock);
++
++  if (g_vmso_mode == 1) {
++    // the vmspal oracle's recording run: the vector, without the cycle's
++    // effects (the PALcode's run acknowledges)
++    int irq = get_irq(0);
++    if (irq < 0)
++      return (u8)(s.irq_base[0] + 7);
++    if (irq == 2) {
++      int irq2 = get_irq(1);
++      return (u8)(s.irq_base[1] + (irq2 >= 0 ? irq2 : 7));
++    }
++    return (u8)(s.irq_base[0] + irq);
++  }
+ 
+   int irq = get_irq(0);
+   int intno;
+diff --color -ruN pristine/src/system/System.cpp osrc/src/system/System.cpp
+--- pristine/src/system/System.cpp	2026-10-22 20:22:33
++++ osrc/src/system/System.cpp	2026-10-22 22:06:56
+@@ -33,6 +33,7 @@
+  */
+ 
+ #include "System.hpp"
++#include "VmspalOracle.hpp"
+ #include "AccessRecord.hpp"
+ #include "AlphaCPU.hpp"
+ #include "DPR.hpp"
+@@ -945,6 +946,8 @@
+     ok = 0; // another STx_C wrote this line since our LDx_L (ABA)
+   else if (same_address)
+   {
++    if (g_vmso_log)
++      vmso_note_dram(dram, phys, size_bits);
+     ok = dram_cas(dram, phys, expected, value, size_bits) ? 1 : 0;
+     if (ok)
+       m_code_pages.note_write(phys); // the ordinary LDx_L/STx_C pair writes
+@@ -1043,6 +1046,8 @@
+       if (i < iNumMemories)
+         iLastMemory = i;
+     }
++    if (g_vmso_log && vmso_note_dev(a, dsize, data, true))
++      return; // held back by the vmspal oracle's recording run
+     if (i < iNumMemories) {
+       if (access_record::g_on)
+         record_access(i, a - aMemoryBounds[i].base, dsize, true, data);
+@@ -1058,6 +1063,8 @@
+   }
+ 
+   p = (u8 *)memory + a;
++  if (g_vmso_log)
++    vmso_note_dram((const char *)memory, a, dsize);
+ 
+   switch (dsize) {
+   case 8:
+@@ -1124,12 +1131,17 @@
+           asMemories[i]->index, a - aMemoryBounds[i].base, dsize);
+       if (access_record::g_on)
+         record_access(i, a - aMemoryBounds[i].base, dsize, false, v);
++      if (g_vmso_log)
++        vmso_note_dev(a, dsize, v, false);
+       return v;
+     }
+ 
+     // Not memory and no device's: the chipset's registers, or space
+     // nothing answers in.
+-    return m_chipset->read_io(a, address, dsize, source);
++    const u64 v = m_chipset->read_io(a, address, dsize, source);
++    if (g_vmso_log)
++      vmso_note_dev(a, dsize, v, false);
++    return v;
+   }
+ 
+   p = (u8 *)memory + a;
+diff --color -ruN pristine/src/system/System.hpp osrc/src/system/System.hpp
+--- pristine/src/system/System.hpp	2026-10-22 20:22:33
++++ osrc/src/system/System.hpp	2026-10-22 22:06:56
+@@ -436,6 +436,16 @@
+                 u64 dram_sz, CSystemComponent *source, bool intervened);
+   // exception/interrupt: drop the lock
+   void cpu_clear_lock(int cpuid);
++  // the vmspal oracle: read and put back one CPU's lock flag
++  bool cpu_lock_held(int cpuid) const {
++    return (m_cpu_lock_flags.load() >> cpuid) & 1;
++  }
++  void cpu_set_lock_held(int cpuid, bool held) {
++    if (held)
++      m_cpu_lock_flags |= (1u << cpuid);
++    else
++      m_cpu_lock_flags &= ~(1u << cpuid);
++  }
+ 
+ private:
+   // Console loading (LoadROM), one form per function.
