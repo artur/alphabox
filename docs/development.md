@@ -51,7 +51,8 @@ diff) and the emulator's `%SYS-W-`, `%SYS-E-` and FAILURE lines, and exits
 0 only if every board reached its prompt. The machines that ship only an
 update utility (DS20L, ES45, DS25, DS15) first run it to install their
 console into the flash, as on a real machine. `boards_check.sh --diff A B`
-compares the command output of two runs.
+compares the command output of two runs. A board passes only if the
+emulator also exits with status 0.
 
 `guests_check.sh <alphabox> <label> [guest ...]` is the gate for a change
 that only a guest exercises: input, timers, disks, video, USB, sound,

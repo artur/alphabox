@@ -10,6 +10,7 @@
 # its own console firmware from roms/), starts the emulator, waits for the
 # console prompt (with a timeout, never a fixed sleep), runs `show config`
 # (and `show fru` on the EV7 boards), and stops the emulator with SIGTERM.
+# A board passes only if the emulator then exits with status 0.
 #
 # Firmware (never downloaded; roms/ is the git-ignored copy of media you own):
 #   es40                    test/rom/cl67srmrom.exe (the merge gate's console)
@@ -179,15 +180,19 @@ start_emu() {
 }
 
 # stop_emu: SIGTERM (graceful: the flash and DPR are saved), then wait for
-# it, with a bound; kills only the PID this script started.
+# it, with a bound; kills only the PID this script started. EMU_RC is its
+# exit status: 0 for a graceful exit.
+EMU_RC=0
 stop_emu() {
   [ -n "$PID" ] || return 0
-  kill -0 "$PID" 2>/dev/null || { wait "$PID" 2>/dev/null; PID=; return 0; }
-  kill "$PID" 2>/dev/null
-  local n=0
-  while kill -0 "$PID" 2>/dev/null && [ $n -lt 150 ]; do sleep 0.2; n=$((n + 1)); done
-  kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+  if kill -0 "$PID" 2>/dev/null; then
+    kill "$PID" 2>/dev/null
+    local n=0
+    while kill -0 "$PID" 2>/dev/null && [ $n -lt 150 ]; do sleep 0.2; n=$((n + 1)); done
+    kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+  fi
   wait "$PID" 2>/dev/null
+  EMU_RC=$?
   PID=
 }
 
@@ -295,6 +300,9 @@ for b in $BOARDS; do
       fail "update utility: $(tail -1 "$D/lfu.status")"; continue
     fi
     stop_emu
+    if [ "$EMU_RC" != 0 ]; then
+      fail "update utility run: exit status $EMU_RC"; continue
+    fi
     rm -f "$D/$(basename "$B_SRC")"
     cp "$D/alphabox.out" "$D/alphabox-lfu.out"
   fi
@@ -320,7 +328,12 @@ for b in $BOARDS; do
   secs=$(( $(date +%s) - t0 ))
   case $st in
   *status=prompt*no-prompt-after*) report "$b" FAIL $secs "a command did not return to the prompt: $st"; rc_all=1 ;;
-  *status=prompt*) report "$b" PASS $secs "prompt, ${cmdnames}" ;;
+  *status=prompt*)
+    if [ "$EMU_RC" = 0 ]; then
+      report "$b" PASS $secs "prompt, ${cmdnames}"
+    else
+      report "$b" FAIL $secs "prompt, ${cmdnames}; exit status $EMU_RC"; rc_all=1
+    fi ;;
   *) report "$b" FAIL $secs "no prompt within ${PTMO}s: $st"; rc_all=1 ;;
   esac
   warnings "$b" "$D"
