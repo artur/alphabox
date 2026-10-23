@@ -77,7 +77,7 @@ Upstream keeps every source in a flat `src/`; alphabox does not (reorganized
   bring it back), `storage/` (Disk, DiskController, DiskDevice, DiskFile,
   DiskRam), `video/` (S3Trio64, VGA, ibm8514a, Cirrus, the MAME shims),
   `net/` (Ethernet, NetworkBackend/Pcap/Tap).
-- CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, vmspal, FP). System and
+- CPU → `src/cpu/` (AlphaCPU*, `cpu_*.hpp`, FP). System and
   config → `src/system/` (System, SystemComponent, Configurator, Port80).
   The Tsunami chipset (upstream's System.cpp CSR code) →
   `src/chipsets/tsunami/`; firmware NVRAM (DPR, Flash) →
@@ -177,9 +177,9 @@ Pick the strategy:
      `state.pc += 4` (keeps `pc_phys`/`rem_ins_in_page` in sync).
    - `break_seq_icache()` in AlphaCPU.hpp also clears
      `state.rem_ins_in_page = 0;`.
-   - `vmspal_int_initiate_exception` has the `vmspal_exc_depth >= 3`
-     recursion guard (guard in AlphaCPU.cpp, ++/-- in
-     AlphaCPU_vmspal.cpp, member in AlphaCPU.hpp).
+   - The native OpenVMS PALcode routines (`AlphaCPU_vmspal.cpp`) were
+     removed on 2026-10-23 (every build runs the console's PALcode):
+     an upstream change to vmspal does not apply; do not bring it back.
    - `skip_memtest_hack` config option (AlphaCPU init + gated
      `0x8b000` page check in `execute()`), replaces upstream's
      `#ifdef SKIP_SRM_MEMTEST`.
@@ -205,8 +205,8 @@ Pick the strategy:
      user-confirmed 2026-07-09.
    - The interval timer fires immediately at thread start
      (`next_timer_fire = start_time`) — the old 1-second grace is
-     gone; the RTC boot tick (`toy_stored_data[0x0a] = 0x26`) and the
-     vmspal guard cover the early-boot transient.
+     gone; the RTC boot tick (`toy_stored_data[0x0a] = 0x26`) covers the
+     early-boot transient (the vmspal guard that also did went with vmspal).
    - mouse is always present/captured (no `mouse.enabled`).
 4. **Configurator allow-lists** (`kv_*[]` arrays in
    `src/system/Configurator.cpp`): any NEW config key a ported device reads

@@ -102,7 +102,7 @@ before working in an area. In short, under `src/`:
 
 | Directory | Contents |
 | --- | --- |
-| `cpu/` | `AlphaCPU*` (per-instruction interpreter, `execute()`; `jit_run()` dispatch), opcode headers, vmspal, IEEE/VAX FP, the processor rows (`CpuModels`), `ev7/` |
+| `cpu/` | `AlphaCPU*` (per-instruction interpreter, `execute()`; `jit_run()` dispatch), opcode headers, IEEE/VAX FP, the processor rows (`CpuModels`), `ev7/` |
 | `jit/` | asmjit translator: `jitengine.cpp` (x86-64), `jitemit_a64.hpp` (AArch64) |
 | `system/` | `System` (memory, device ranges, CPU threads, console loading, state files), `SystemComponent`, `Configurator` |
 | `chipsets/` | `CChipset` and its implementations: `tsunami/`, `titan/`, `marvel/` (EV7 CSRs, GIO, IO7, topology) |
