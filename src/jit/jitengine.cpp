@@ -1168,7 +1168,7 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
   // good is a write that nothing told the map about.
   if (m_nopflush_clean && m_code_map && b.code && key && b.phys == phys_pc &&
       m_code_map->write_gen() == b.code_gen) {
-    static int n = 0;
+    static std::atomic<int> n{0};
     if (n++ < 20)
       printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
              "(pc %016llx, %u words) changed while the code-page map "
@@ -1249,7 +1249,7 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
       // had said nothing was written. Some path that writes guest memory
       // does not report to it -- with the flush actually skipped, this block
       // would have run its old code.
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 20)
         printf("[JIT][CPU%d] *** NOPFLUSH AUDIT: source at phys %016llx "
                "(pc %016llx, %u words) changed while the code-page map "

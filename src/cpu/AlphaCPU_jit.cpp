@@ -322,7 +322,7 @@ void CAlphaCPU::trace_icprobe(int i, u64 va) {
   if (virt2phys(va & ~U64(3), &live, ACCESS_EXEC | FAKE, &asmb, 0) != 0)
     return; // not in the ITB: the fetch will tell
   const u64 line_phys = l.p_address + (va & ICACHE_BYTE_MASK);
-  static int n = 0;
+  static std::atomic<int> n{0};
   if (live != line_phys && n++ < 50)
     printf("[JIT][CPU%d] ICPROBE: pc=%016llx line gen %llu of %llu, line phys "
            "%016llx, live %016llx, icount=%llu\n",
@@ -641,7 +641,7 @@ void CAlphaCPU::jit_run(int budget) {
     // can't see. The cold path below re-records it; log it -- it's the smoking
     // gun for stale-chain bugs.
     if (b && b->code && b->phys != start_phys) {
-      static int n_stale = 0;
+      static std::atomic<int> n_stale{0};
       if (n_stale++ < 20)
         printf("[JIT][CPU%d] DISPATCH STALE: pc=%016llx block_phys=%016llx "
                "live_phys=%016llx vgen=%llu epoch=%llu icount=%llu\n",
@@ -1214,7 +1214,7 @@ void CAlphaCPU::jit_run(int budget) {
       if (icache_line_hits(li, start_virt)) {
         const u64 fetched =
             state.icache[li].p_address + (start_virt & ICACHE_BYTE_MASK);
-        static int nr = 0;
+        static std::atomic<int> nr{0};
         if (fetched != start_phys && nr++ < 50)
           printf("[JIT][CPU%d] ICPROBE-RECORD: pc=%016llx recorded phys "
                  "%016llx, fetched from %016llx, icount=%llu\n",
@@ -1439,7 +1439,7 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf(
             "[JIT] LOAD ADDR MISMATCH: compiled va=%016llx interp va=%016llx\n",
@@ -1469,7 +1469,7 @@ int CAlphaCPU::jit_fp_read(CAlphaCPU *cpu, u64 va, u32 fa, u32 descr) {
     const u32 i = cpu->m_jit_vlog_i++;
     if (va != cpu->m_jit_vaddr[i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] FP LOAD ADDR MISMATCH: compiled va=%016llx interp "
                "va=%016llx\n",
@@ -1660,7 +1660,7 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] LDx_L ADDR MISMATCH: compiled va=%016llx interp "
                "va=%016llx\n",
@@ -1708,7 +1708,7 @@ int CAlphaCPU::jit_read_vpte(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf(
             "[JIT] VPTE ADDR MISMATCH: compiled va=%016llx interp va=%016llx\n",
@@ -1760,7 +1760,7 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (cpu->m_jit_vreplay) {
     if (va != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf(
             "[JIT] WCHK ADDR MISMATCH: compiled va=%016llx interp va=%016llx\n",
@@ -1803,7 +1803,7 @@ int CAlphaCPU::jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
   if (cpu->m_jit_vreplay) {
     if (phys != cpu->m_jit_vaddr[cpu->m_jit_vlog_i]) {
       cpu->m_jit_vbad = true; // a wrong address replays a right value
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] HW_LD ADDR MISMATCH: compiled pa=%016llx interp "
                "pa=%016llx\n",
@@ -1843,7 +1843,7 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     const u32 i = cpu->m_jit_slog_i++;
     if (va != cpu->m_jit_slog_addr[i] || value != cpu->m_jit_slog_val[i]) {
       cpu->m_jit_vbad = true;
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] STORE MISMATCH: compiled va=%016llx val=%016llx  interp "
                "va=%016llx val=%016llx\n",
@@ -1928,7 +1928,7 @@ int CAlphaCPU::jit_write_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
     const u32 i = cpu->m_jit_slog_i++;
     if (phys != cpu->m_jit_slog_addr[i] || value != cpu->m_jit_slog_val[i]) {
       cpu->m_jit_vbad = true;
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] HW_ST STORE MISMATCH: compiled pa=%016llx val=%016llx  "
                "interp pa=%016llx val=%016llx\n",
@@ -1967,7 +1967,7 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     if (va != cpu->m_jit_slog_addr[i] ||
         (success && value != cpu->m_jit_slog_val[i])) {
       cpu->m_jit_vbad = true;
-      static int n = 0;
+      static std::atomic<int> n{0};
       if (n++ < 50)
         printf("[JIT] STx_C MISMATCH: compiled va=%016llx val=%016llx ok=%llu  "
                "interp va=%016llx val=%016llx\n",
@@ -2112,7 +2112,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
       if (cpu->virt2phys(target & ~U64(3), &live, ACCESS_EXEC | FAKE, &asmb,
                          0) == 0 &&
           live != b->phys) {
-        static int nj = 0;
+        static std::atomic<int> nj{0};
         if (nj++ < 50)
           printf("[JIT][CPU%d] ICPROBE-CHAIN: jump to %016llx enters code "
                  "compiled from %016llx, live %016llx, icount=%llu\n",
@@ -2138,7 +2138,7 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
     // Caught a stale block: the page was remapped without flushing the JIT
     // cache. Bail so the dispatcher re-records/recompiles. Rate-limited log --
     // this firing confirms the stale chain.
-    static int n = 0;
+    static std::atomic<int> n{0};
     if (n++ < 50)
       printf("[JIT][CPU%d] INDIRECT STALE: target=%016llx block_phys=%016llx "
              "-- recompiling\n",
