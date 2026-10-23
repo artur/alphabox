@@ -52,6 +52,10 @@
 #                        'serial_number = "AY12345678";')
 #   BOARDS_EXTRA_CMDS    more console commands, separated by ';' (e.g.
 #                        'show sys_serial_num')
+#   BOARDS_AFTER         how the console run ends (srm_console.py --after;
+#                        default sigterm). snap_roundtrip.sh sets sigusr1,
+#                        with ALPHABOX_SNAPSHOT and ALPHABOX_SNAPSHOT_EXIT in
+#                        the environment, to save the machine at the prompt.
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -319,7 +323,7 @@ for b in $BOARDS; do
   start_emu "$D"
   python3 -I "$T/srm_console.py" --port "$PORT" --log "$D/console.log" \
     --cmd-log "$D/cmds.txt" --timeout "$PTMO" --cmd-timeout "$CTMO" \
-    --pid "$PID" --after sigterm --exit-timeout 60 "${cmds[@]}" \
+    --pid "$PID" --after "${BOARDS_AFTER:-sigterm}" --exit-timeout 60 "${cmds[@]}" \
     > "$D/console.status" 2>&1
   stop_emu
   st=$(tr '\n' ' ' < "$D/console.status")

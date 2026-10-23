@@ -18,8 +18,15 @@ Stopping (--after, needs --pid):
   none                 leave it running (default)
   sigterm              send SIGTERM at the prompt / after the commands
   disconnect-sigterm   close the telnet connection, wait 3 s, then SIGTERM
+  sigusr1              send SIGUSR1 (a snapshot, docs/headless.md) with the
+                       connection still open, and wait for the process to
+                       end (with ALPHABOX_SNAPSHOT_EXIT=1 it exits after it)
   wait-exit            only wait for the process to end (e.g. a guest HALT
                        with exit_on_pal_halt)
+
+--wake sends a carriage return once connected, and again after every 3 s
+without output, until the prompt comes: a machine resumed from a snapshot
+(ALPHABOX_RESTORE) printed its prompt before it was saved.
 """
 import argparse
 import os
@@ -54,7 +61,10 @@ def main():
     ap.add_argument("--cmd-timeout", type=int, default=30)
     ap.add_argument("--pid", type=int)
     ap.add_argument("--after", default="none",
-                    choices=["none", "sigterm", "disconnect-sigterm", "wait-exit"])
+                    choices=["none", "sigterm", "disconnect-sigterm", "sigusr1",
+                             "wait-exit"])
+    ap.add_argument("--wake", action="store_true",
+                    help="send a carriage return until the first prompt")
     ap.add_argument("--exit-timeout", type=int, default=20)
     args = ap.parse_args()
     if args.after != "none" and not args.pid:
@@ -98,19 +108,26 @@ def main():
             out.append(b)
         return bytes(out)
 
-    def pump(secs, sink=None):
+    def pump(secs, sink=None, wake=False):
         """Read until the prompt (True), EOF/timeout (False)."""
         buf = b""
         end = time.time() + secs
+        quiet = time.time()
+        if wake:
+            s.sendall(b"\r")
         while time.time() < end:
             try:
                 d = s.recv(4096)
             except socket.timeout:
+                if wake and time.time() - quiet >= 3:
+                    s.sendall(b"\r")
+                    quiet = time.time()
                 continue
             except OSError:
                 return False
             if not d:
                 return False
+            quiet = time.time()
             d = unescape(bytes(b for b in d if b != 0))
             log.write(d)
             log.flush()
@@ -122,7 +139,7 @@ def main():
                 return True
         return False
 
-    if not pump(args.timeout):
+    if not pump(args.timeout, wake=args.wake):
         print("status=noprompt")
         return 1
     print("status=prompt")
@@ -138,6 +155,8 @@ def main():
     t0 = time.time()
     if args.after == "sigterm":
         os.kill(args.pid, signal.SIGTERM)
+    elif args.after == "sigusr1":
+        os.kill(args.pid, signal.SIGUSR1)
     elif args.after == "disconnect-sigterm":
         s.close()
         time.sleep(3)

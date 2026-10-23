@@ -31,11 +31,12 @@ gives its usage and variables.
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
 | `boards_check.sh` | Every board of `src/platforms/Platforms.cpp` to its console prompt, with its own firmware from `roms/`: `show config` (and `show fru` on the EV7 boards), a PASS/FAIL line per board, normalised console logs. |
+| `snap_roundtrip.sh` | Every board saved at its console prompt, restored and saved again: the two state files compared byte for byte, part by part, and the restored console asked the same commands again. |
 | `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console; OpenVMS on the DS20E, DS20, DS10 and DS20L when named) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
-| `srm_console.py` | Drives the console over its telnet port: waits for the prompt, runs commands, stops the emulator. |
+| `srm_console.py` | Drives the console over its telnet port: waits for the prompt (`--wake` asks a restored console for it), runs commands, stops the emulator or saves it (`--after sigusr1`). |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. |
 | `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |
 | `ev7_pal_iprs.py` | Every internal-register access in a console's PALcodes: `HW_MFPR`/`HW_MTPR` with their entry point and the bits tested or set, `HW_LD`/`HW_ST` and the EV7 registers they reach, `IMPLVER`/`AMASK`; checked against the core and the Marvel register table. `--dis` disassembles. Written for the EV7 ([platforms/marvel.md](platforms/marvel.md)); works on the ES40's console too. |
@@ -53,6 +54,24 @@ update utility (DS20L, ES45, DS25, DS15) first run it to install their
 console into the flash, as on a real machine. `boards_check.sh --diff A B`
 compares the command output of two runs. A board passes only if the
 emulator also exits with status 0.
+
+`snap_roundtrip.sh <alphabox> <label> [board ...]` checks that a machine's
+state survives a snapshot. For each board, `boards_check.sh` boots it, runs
+its commands and saves it at the prompt (`SIGUSR1`); the emulator then
+restores that file and saves it again before anything runs
+(`ALPHABOX_RESTORE_SAVE`, [headless.md](headless.md#snapshots)), and the two
+files must be the same byte for byte. The one exception is a field that
+follows the host's clock, which runs on between the two saves: the ALi's
+8254 counts and OUT bits, listed in the script with why. Where the files
+differ, `<board>.cmp` names the part (memory, system, chipset or a
+component and its class) and the offsets in it, from the map
+`ALPHABOX_SNAPSHOT_MAP` writes. Last, the emulator restores the first file
+again, the console is woken with a carriage return, and the same commands
+must print the same output. The EV7 boards are skipped unless
+`SNAP_EV7=1`: their memory array spans every processor's memory, 16 GB
+apart, up to 2^40 bytes, and a state file reads and writes all of it.
+Output goes to `$ALPHABOX_WORK/runs/snap-<label>/`, the boot to
+`boards-snap-<label>/`.
 
 `guests_check.sh <alphabox> <label> [guest ...]` is the gate for a change
 that only a guest exercises: input, timers, disks, video, USB, sound,
