@@ -49,11 +49,15 @@
  * USA.
  *
  * Per-CPU, direct-mapped cache of translation blocks. The dispatcher runs a
- * block's compiled safe-ALU prefix natively, then interprets the remainder.
+ * block's compiled prefix, which chains into the next compiled block, and
+ * interprets what is not compiled.
  *
- * Blocks are keyed by VIRTUAL PC + ASN (like the icache), so the dispatch hot
- * path needs no address translation. A TB invalidation flushes the cache (see
- * flush()); a global (ASM) block matches any ASN.
+ * Blocks are keyed by VIRTUAL PC, ASN and processor mode (key_matches; a
+ * global (ASM) block matches any ASN, as in the icache, and a PALmode block
+ * any mode), so the dispatch hot path needs no address translation: the
+ * dispatcher checks the block against the live physical address. An ITB
+ * invalidate, an ASN change, a flush and a reclaim move the epoch that every
+ * chained link is checked against.
  */
 #if !defined(INCLUDED_JITENGINE_H)
 #define INCLUDED_JITENGINE_H
@@ -674,9 +678,8 @@ public:
   // Per-op codegen, shared by compile_block and compile_trace
   // Block register allocator: maps each guest GPR to a host reg id, or -1 =
   // the state.r[] memory slot. The global pins (x86-64: R26/R16/R27/R30 ->
-  // r12/r13/r15/r14; AArch64: see jitemit_a64.hpp) are the static binding, live
-  // across the chain; dynamic block-local pool next. host_of(r) drives
-  // emit_op's operand routing either way.
+  // r12/r13/r15/r14; AArch64: see jitemit_a64.hpp) are the binding, live
+  // across the chain. host_of(r) drives emit_op's operand routing.
   struct RegAlloc {
     int host[32];  // host reg id for guest GPR r, or -1 (memory)
     int rax_holds; // guest GPR whose value currently lives in the result reg

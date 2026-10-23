@@ -1546,10 +1546,11 @@ void CJitEngine::flush() {
 #ifdef JIT_STATS
   ++m_fng_calls; // lazy: no walk to time, only the hotness it costs
 #endif
-  // The epoch bump alone no longer stops a direct static link -- those are
-  // guarded by the target's liveness, not by a counter -- and an IMB says the
-  // bytes under every block may have changed. Walking the cache is the price
-  // of the epoch-free hit path; IMB is rare (see the epoch census).
+  // The bump is all a flush does: every chained link, the static exits' data
+  // links included, is checked against the epoch, and every block proves its
+  // source words again (revalidate_flushed) before it next runs. An
+  // epoch-free static link was tried and rejected (see the AArch64
+  // emitter's emit_static_exit and docs/performance.md).
   if (m_rt && m_code_bytes >= kReclaimBytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
@@ -2431,8 +2432,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.bind(ok);
       // HW_LDL SIGN-extends the longword to canonical form (QEMU gen_hw_ld uses
       // MO_LESL; the EV68CB HRM is silent but the Alpha longword-canonical rule
-      // applies, same as LDL). NOTE: the interp's DO_HW_LDL zero-extends --
-      // that is the bug, fixed in cpu_pal.h to match this.
+      // applies, same as LDL), as the interpreter's DO_HW_LDL does.
       if (size_bits == 32)
         a.movsxd(x86::rax, x86::dword_ptr(x86::rsp, 32));
       else

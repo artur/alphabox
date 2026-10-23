@@ -532,8 +532,8 @@ Notes on some of them:
 - **`CHAIN=0`, `INLMEM=0` and `RPCC=0`** together give the production JIT
   minus what the verify lane cannot see. They are for telling such a
   fault from anything else, not for speed. `INLMEM=0` removes the inline
-  page-cache probe, probe reuse and inline physical `HW_LD`/`HW_ST` (both
-  emitters).
+  page-cache probe (both emitters), and probe reuse and the inline
+  physical `HW_LD`/`HW_ST` (AArch64; the x86-64 emitter has neither).
 
 Self-tests and diagnostics:
 
