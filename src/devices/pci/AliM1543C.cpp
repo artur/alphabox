@@ -289,6 +289,10 @@ CAliM1543C::~CAliM1543C() {
 
   if (lpt)
     fclose(lpt);
+  // A function made before the ALi goes after it (~CSystem) and finds no
+  // ALi, rather than a freed one: ~CAliM1543C_usb leaves the listener list.
+  if (theAli == this)
+    theAli = nullptr;
 }
 
 /**

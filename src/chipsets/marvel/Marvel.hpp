@@ -73,6 +73,7 @@ public:
   void reset() override;
   void save_state(FILE *f) override;
   bool restore_state(FILE *f) override;
+  void stop_watch() override;
 
   /// The board's management side for every processor's GIO port, in place
   /// of the recorder: the ES47's CMM (platforms/es47/Cmm.hpp).

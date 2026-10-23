@@ -181,6 +181,10 @@ public:
   /// Returns false when the file is truncated.
   virtual bool restore_state(FILE *f) = 0;
 
+  /// Stop a thread of the chipset's own that reads the components (a
+  /// trace's), for good: ~CSystem calls it before they are destroyed.
+  virtual void stop_watch() {}
+
 protected:
   CSystem *m_sys;
 };

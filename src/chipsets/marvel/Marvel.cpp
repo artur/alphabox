@@ -69,7 +69,11 @@ u32 CMarvel::cpu_pid(int index) const {
   return index < m_topology.count() ? m_topology.node(index).pid : (u32)index;
 }
 
-CMarvel::~CMarvel() {
+CMarvel::~CMarvel() { stop_watch(); }
+
+/// The ALPHABOX_TRACE_RBOX thread reads the processors (CEv7Csr::cpu), so
+/// it stops before they are destroyed (~CSystem), not with the chipset.
+void CMarvel::stop_watch() {
   m_rbox_watch_stop = true;
   if (m_rbox_watch.joinable())
     m_rbox_watch.join();

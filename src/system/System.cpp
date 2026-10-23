@@ -126,16 +126,23 @@ CSystem::CSystem(CConfigurator *cfg) try {
 
 /**
  * Destructor. Calls the destructors for registered devices, and
- * frees used memory.
+ * frees used memory. The components' threads are stopped already
+ * (main_sim calls stop_threads first).
  **/
 CSystem::~CSystem() {
   int i;
 
   m_gdb.reset(); // before the processors it watches go
+  m_chipset->stop_watch(); // its own thread reads the processors too
 
   printf("Freeing memory in use by system...\n");
 
-  for (i = 0; i < iNumComponents; i++)
+  // Every component, in the reverse of the order they were made: one goes
+  // before those made before it, which it may use as it goes (an ALi
+  // function before the ALi, a disk before its controller). Each takes
+  // itself out of the list (UnregisterComponent), which leaves the ones
+  // below it in place. The chipset and memory outlive them all.
+  for (i = iNumComponents - 1; i >= 0; i--)
     delete acComponents[i];
 
   for (i = 0; i < iNumMemories; i++)
@@ -143,6 +150,8 @@ CSystem::~CSystem() {
 
   free(memory);
   delete m_chipset;
+  if (theSystem == this)
+    theSystem = nullptr;
 }
 
 /**
@@ -377,8 +386,21 @@ void CSystem::RegisterComponent(CSystemComponent *component) {
   iNumComponents++;
 }
 
+/**
+ * Take a device out of the list, from its destructor. The rest keep their
+ * order. (It used to only count down, so ~CSystem's loop, which went up
+ * the list, destroyed the first half of the components and never reached
+ * the rest.)
+ **/
 void CSystem::UnregisterComponent(CSystemComponent *component) {
-  iNumComponents--;
+  for (int i = iNumComponents - 1; i >= 0; i--) {
+    if (acComponents[i] != component)
+      continue;
+    for (int j = i + 1; j < iNumComponents; j++)
+      acComponents[j - 1] = acComponents[j];
+    iNumComponents--;
+    return;
+  }
 }
 
 /**
