@@ -55,6 +55,7 @@
 #include <unordered_map>
 
 #include <thread>
+#include <typeinfo>
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
 #endif
@@ -755,6 +756,14 @@ void CSystem::Run() {
   if (const char *snap = getenv("ALPHABOX_RESTORE")) {
     printf("%%SYS-I-RESTORE: resuming from %s\n", snap);
     RestoreState(snap);
+    // ALPHABOX_RESTORE_SAVE=<file>, a test hook (test/tools/snap_roundtrip.sh):
+    // save the machine as it was restored, before anything runs, and exit.
+    // State that survives a save and a restore comes out byte for byte.
+    if (const char *again = getenv("ALPHABOX_RESTORE_SAVE")) {
+      printf("%%SYS-I-SNAPSHOT: saving the restored machine to %s\n", again);
+      SaveState(again);
+      FAILURE(Graceful, "restored machine saved, exiting as asked");
+    }
   }
 
   start_debugger();
@@ -1663,11 +1672,22 @@ void CSystem::SaveState(const char *fn) {
     fwrite(&j, 1, sizeof(int), f);
   }
 
+  // ALPHABOX_SNAPSHOT_MAP=<file>, a test hook (test/tools/snap_roundtrip.sh):
+  // where each part after the memory image begins in the file, to name the
+  // component two state files differ in.
+  FILE *map = nullptr;
+  if (const char *e = getenv("ALPHABOX_SNAPSHOT_MAP"))
+    map = fopen(e, "w");
+  if (map)
+    fprintf(map, "%ld system\n", ftell(f));
+
   // The file keeps the first four processors' locks (SSys_state).
   state.cpu_lock_flags = (int)(m_cpu_lock_flags.load() & 0xf);
   memcpy(state.cpu_lock_address, m_cpu_lock_address,
          sizeof(state.cpu_lock_address));
   fwrite(&state, sizeof(state), 1, f);
+  if (map)
+    fprintf(map, "%ld chipset\n", ftell(f));
   m_chipset->save_state(f);
 
   // components
@@ -1675,8 +1695,18 @@ void CSystem::SaveState(const char *fn) {
   //  Components should also save any non-initial memory-registrations and
   //  re-register upon restore!
   //
-  for (i = 0; i < iNumComponents; i++)
+  for (i = 0; i < iNumComponents; i++) {
+    // Several components can share a name (the ALi's functions): the class
+    // tells them apart.
+    if (map)
+      fprintf(map, "%ld %s %s\n", ftell(f), acComponents[i]->devid_string,
+              typeid(*acComponents[i]).name());
     acComponents[i]->SaveState(f);
+  }
+  if (map) {
+    fprintf(map, "%ld end\n", ftell(f));
+    fclose(map);
+  }
 
   // stdio latches its error flag, so this one check covers every write above,
   // the components' writes included.

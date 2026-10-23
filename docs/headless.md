@@ -167,10 +167,18 @@ thread stopped, as the serial console's `<BREAK>` menu does.
 | `ALPHABOX_SNAPSHOT=<file>` | Where `SIGUSR1` saves (default `autosave.axp`). |
 | `ALPHABOX_SNAPSHOT_EXIT=1` | Exit right after saving, so the disk images on exit are the ones the snapshot saw. |
 | `ALPHABOX_RESTORE=<file>` | Resume a saved machine instead of cold-booting. |
+| `ALPHABOX_RESTORE_SAVE=<file>` | A test hook, with `ALPHABOX_RESTORE`: save the restored machine to `<file>` before anything runs, and exit. |
+| `ALPHABOX_SNAPSHOT_MAP=<file>` | A test hook: each save writes to `<file>` where each part of the state file begins (the system and chipset parts, then every component with its name and class). |
 
 The disk images in the working directory must be the ones the snapshot
-was taken against. `test/tools/nt_snap.sh` uses all three to skip a
+was taken against. `test/tools/nt_snap.sh` uses the first three to skip a
 Windows boot.
+
+The two test hooks are for `test/tools/snap_roundtrip.sh`
+([development.md](development.md#test-tools)): a machine saved, restored and
+saved again must give the same file, and the map names the component where
+two files differ. A map line is `<offset> <name> <class>`; the memory image
+runs from offset 8 to the first line.
 
 `SIGTERM` (or Ctrl-C) stops the emulator gracefully: threads stopped,
 flash and DPR saved.
