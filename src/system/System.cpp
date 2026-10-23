@@ -36,11 +36,11 @@
 #include "AccessRecord.hpp"
 #include "AlphaCPU.hpp"
 #include "DPR.hpp"
+#include "DimmModel.hpp"
 #include "Flash.hpp"
 #include "GdbStub.hpp"
 #include "PCIDevice.hpp"
 #include "StdAfx.hpp"
-#include "Tsunami.hpp"
 #if defined(__APPLE__) && defined(HAVE_SDL)
 #include "gui/gui.hpp" // bx_gui->main_thread_pump()
 #endif
@@ -76,9 +76,6 @@ CSystem::CSystem(CConfigurator *cfg) try {
   if (!m_platform)
     FAILURE_1(Configuration, "Unknown platform %s",
               myCfg->get_text_value("platform", DEFAULT_PLATFORM));
-  // Decided before the processors are built, which read it (Platform.hpp).
-  if (!m_platform->vmspal_pal_base)
-    request_native_pal("this board's console PALcode is not the ES40's");
 
   iNumMemoryBits = (int)myCfg->get_num_value("memory.bits", false, 27);
   // How much memory the board holds, from its descriptor: the ES40 takes
@@ -526,13 +523,6 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
     }
   }
   return 0;
-}
-
-CTsunami *CSystem::tsunami() const {
-  if (m_chipset->kind() != CHIPSET_TSUNAMI)
-    FAILURE_1(Logic, "this machine's chipset is the %s, not the Tsunami",
-              m_chipset->name());
-  return static_cast<CTsunami *>(m_chipset);
 }
 
 void CSystem::reset_pci_devices(int hose) {
@@ -1525,9 +1515,6 @@ int CSystem::LoadROM() {
  * Initialize all devices.
  **/
 void CSystem::init() {
-  if (!m_native_pal)
-    printf("%%SYS-I-VMSPAL: vmspal PALcode replacement routines on all CPUs "
-           "(palcode.vms.nohle = true on any CPU selects native PALcode).\n");
   for (int i = 0; i < iNumComponents; i++)
     acComponents[i]->init();
 }

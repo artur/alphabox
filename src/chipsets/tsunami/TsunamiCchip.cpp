@@ -97,10 +97,10 @@ void CTsunami::cchip_csr_write(u32 a, u64 data, CSystemComponent *source) {
   CAlphaCPU *cpu = (CAlphaCPU *)source;
   if (a == 0x080 && (data & U64(0x0000000000000ff0)))
     m_sys->trace_mp("Cchip MISC write", 0x080, data);
-  // Serialize with interrupt()/ack_ipi()/ack_interval_timer() and with the
-  // other processors' reads: an unlocked IPI ack on one CPU thread could
-  // erase an IPI another CPU thread is raising (irq_h's check-then-act),
-  // hanging the sender. Nothing below calls back into the chipset.
+  // Serialize with interrupt() and with the other processors' reads: an
+  // unlocked IPI ack on one CPU thread could erase an IPI another CPU thread
+  // is raising (irq_h's check-then-act), hanging the sender. Nothing below
+  // calls back into the chipset.
   std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x000: // CSC

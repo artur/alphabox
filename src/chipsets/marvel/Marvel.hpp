@@ -63,8 +63,6 @@ public:
   void interrupt(int number, bool assert) override;
   void interval_tick() override;
   u64 interval_period_ns() const override;
-  void ack_interval_timer(int cpu) override;
-  void ack_ipi(int cpu) override;
 
   u64 pci_space_base(int hose, pci_space space) const override;
   u64 pci_phys(int hose, u32 address) override;

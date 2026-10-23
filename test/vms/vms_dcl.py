@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Boot OpenVMS 8.4 on the ES40, log in, run a timed DCL workload.
 
-  vms_dcl.py <alphabox> <label> [--port N] [--nohle] [--env VAR=value ...]
+  vms_dcl.py <alphabox> <label> [--port N] [--env VAR=value ...]
              [--workload none|dcl|full] [--shutdown] [--memory-bits N]
              [--keep]
 
 The disk is an APFS clone (cp -c) of $ALPHABOX_WORK/vms84/disk-installed.img
 in $ALPHABOX_WORK/runs/vms-dcl-<label>, deleted afterwards unless --keep.
 The machine is guests_check.sh's vms-es40 one: 1 CPU, 1 GB (--memory-bits
-29 for 512 MB), the ALi IDE disk, the console on a telnet port. --nohle
-adds palcode.vms.nohle = true to the CPU (the console's PALcode instead of
-the native vmspal routines; JIT builds always run it). --env passes
-variables to the emulator, e.g. ALPHABOX_VMSPAL_ORACLE=<file> on a build
-of test/vms/vmspal_oracle.sh.
+29 for 512 MB), the ALi IDE disk, the console on a telnet port. --env
+passes variables to the emulator.
 
 Timed, in seconds of wall clock (the host's, so a busy host shows):
   srm       emulator start to P00>>>
@@ -140,7 +137,6 @@ def main():
     ap.add_argument('alphabox')
     ap.add_argument('label')
     ap.add_argument('--port', type=int, default=22600)
-    ap.add_argument('--nohle', action='store_true')
     ap.add_argument('--env', action='append', default=[])
     ap.add_argument('--workload', default='dcl', choices=['none', 'dcl', 'full'])
     ap.add_argument('--shutdown', action='store_true')
@@ -162,7 +158,6 @@ def main():
     cached = os.path.join(CACHE, 'decompressed.rom')
     if os.path.exists(cached):
         shutil.copy(cached, os.path.join(d, 'decompressed.rom'))
-    extra = 'palcode.vms.nohle = true; ' if a.nohle else ''
     with open(os.path.join(d, 'es40.cfg'), 'w') as f:
         f.write('''sys0 = tsunami
 {
@@ -171,7 +166,7 @@ def main():
   rom.decompressed = "decompressed.rom";
   rom.flash = "flash.rom";
   rom.dpr = "dpr.rom";
-  cpu0 = ev68cb { speed = 833M; %s}
+  cpu0 = ev68cb { speed = 833M; }
   serial0 = serial { address = "127.0.0.1"; port = %d; }
   serial1 = serial { null_attach = true; }
   pci0.7 = ali { vga_console = false; }
@@ -181,7 +176,7 @@ def main():
   }
   pci0.19 = ali_usb { }
 }
-''' % (a.memory_bits, extra, a.port))
+''' % (a.memory_bits, a.port))
     env = dict(os.environ)
     env['SDL_VIDEO_DRIVER'] = 'dummy'
     for kv in a.env:
@@ -271,7 +266,6 @@ def main():
     times['load_start'] = load0
     times['load_end'] = os.getloadavg()[0]
     times['ok'] = ok
-    times['nohle'] = a.nohle
     times['memory_bits'] = a.memory_bits
     times['binary'] = binp
     with open(os.path.join(d, 'times.json'), 'w') as f:

@@ -140,12 +140,6 @@ public:
   /// neither the schedule ticks once a second (Marvel: RBOX_IT).
   virtual u64 interval_period_ns() const { return 0; }
 
-  /// The native PALcode's acknowledgements (cpu/AlphaCPU_vmspal.cpp): what
-  /// the real PALcode does by writing the chipset's registers when it takes
-  /// an interval-timer or interprocessor interrupt on processor `cpu`.
-  virtual void ack_interval_timer(int cpu) = 0;
-  virtual void ack_ipi(int cpu) = 0;
-
   // --- PCI hoses ------------------------------------------------------------
 
   /// Where `space` of PCI hose `hose` begins in physical address space.

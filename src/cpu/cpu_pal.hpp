@@ -379,8 +379,8 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
   case 0: /* longword physical */                                              \
     phys_address = state.r[REG_2] + DISP_12;                                   \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl) */       \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   case 2: /* longword physical locked */                                       \
@@ -388,8 +388,8 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
     phys_address = state.r[REG_2] + DISP_12;                                   \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);    \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl*/         \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     cSystem->cpu_lock(state.iProcNum, phys_address, state.r[REG_1]);           \
     m_llsc_clean = 1;                                                          \
     break;                                                                     \
@@ -401,23 +401,23 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
            * when the VPTE flag is set. */                                     \
     DATA_PHYS_NT(state.r[REG_2] + DISP_12, ACCESS_READ | VPTE);                \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl,) */      \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   case 8: /* longword virtual (HRM 6.4.1 TYPE 1002) -- access checked          \
            * against current mode */                                           \
     DATA_PHYS_NT(state.r[REG_2] + DISP_12, ACCESS_READ);                       \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl) */       \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   case 10: /* longword virtual check (HRM 6.4.1 TYPE 1012: WrChk) */           \
     DATA_PHYS_NT(state.r[REG_2] + DISP_12, ACCESS_READ | WRCHK);               \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl) */       \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   case 12: /* longword virtual alt (HRM 6.4.1 TYPE 1102) -- access             \
@@ -426,15 +426,15 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
             * NO_CHECK). */                                                    \
     DATA_PHYS_NT(state.r[REG_2] + DISP_12, ACCESS_READ | ALT);                 \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl) */       \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   case 14: /* longword virtual alt check (HRM TYPE 1112: WrChk/Alt) */         \
     DATA_PHYS_NT(state.r[REG_2] + DISP_12, ACCESS_READ | ALT | WRCHK);         \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
-    state.r[REG_1] = sext_u64_32(                                              \
-        state.r[REG_1]); /* HW_LDL canonical longword (vmspal hw_ldl) */       \
+    state.r[REG_1] =                                                           \
+        sext_u64_32(state.r[REG_1]); /* HW_LDL canonical longword */           \
     break;                                                                     \
                                                                                \
   default:                                                                     \

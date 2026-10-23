@@ -165,44 +165,6 @@ u64 CTsunami::pci_space_base(int hose, pci_space space) const {
   }
 }
 
-void CTsunami::set_dim(int ProcNum, u64 value) {
-  std::lock_guard<std::mutex> g(m_lock);
-  state.cchip.dim[ProcNum] = value;
-  if (ProcNum >= m_sys->get_cpu_num())
-    return;
-  if (state.cchip.drir & value & U64(0x00ffffffffffffff))
-    m_sys->get_cpu(ProcNum)->irq_h(1, true, 100);
-  else
-    m_sys->get_cpu(ProcNum)->irq_h(1, false, 0);
-  if (state.cchip.drir & value & U64(0xfc00000000000000))
-    m_sys->get_cpu(ProcNum)->irq_h(0, true, 100);
-  else
-    m_sys->get_cpu(ProcNum)->irq_h(0, false, 0);
-}
-
-/**
- * Clear the clock interrupt for a specific CPU. Used by the CPU to acknowledge
- *the interrupt.
- **/
-void CTsunami::ack_interval_timer(int ProcNum) {
-  std::lock_guard<std::mutex> g(m_lock);
-  state.cchip.misc &= ~(U64(0x10) << ProcNum);
-  m_sys->get_cpu(ProcNum)->irq_h(2, false, 0);
-}
-
-/**
- * Acknowledge an interprocessor interrupt: clear MISC<IPINTR>, drop b_irq<3>.
- **/
-void CTsunami::ack_ipi(int ProcNum) {
-  std::lock_guard<std::mutex> g(m_lock);
-  state.cchip.misc &= ~(U64(0x100) << ProcNum);
-  m_sys->get_cpu(ProcNum)->irq_h(3, false, 0);
-#ifdef DEBUG_IPI
-  printf("*** IP interrupt cleared for CPU %d (PALcode dispatch ack).\n",
-         ProcNum);
-#endif
-}
-
 /**
  * \brief Write 8, 4, 2 or 1 byte(s) to a 64-bit system address. This could be
  *memory, internal chipset registers, nothing or some device.

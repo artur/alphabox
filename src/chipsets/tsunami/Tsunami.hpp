@@ -85,8 +85,6 @@ public:
 
   void interrupt(int number, bool assert) override;
   void interval_tick() override { interrupt(-1, true); }
-  void ack_interval_timer(int cpu) override;
-  void ack_ipi(int cpu) override;
 
   u64 pci_space_base(int hose, pci_space space) const override;
   u64 pci_phys(int hose, u32 address) override;
@@ -94,29 +92,6 @@ public:
   void reset() override;
   void save_state(FILE *f) override;
   bool restore_state(FILE *f) override;
-
-  // --- For the ES40 console's native PALcode (cpu/AlphaCPU_vmspal.cpp) ----
-  // It replaces PALcode that reads these Cchip registers. Read under the
-  // lock, as the CSR path reads them: DRIR changes on device threads.
-  u64 misc() const {
-    std::lock_guard<std::mutex> g(m_lock);
-    return state.cchip.misc;
-  }
-  u64 dir(int cpu) const {
-    std::lock_guard<std::mutex> g(m_lock);
-    return state.cchip.drir & state.cchip.dim[cpu];
-  }
-  u64 dim(int cpu) const {
-    std::lock_guard<std::mutex> g(m_lock);
-    return state.cchip.dim[cpu];
-  }
-  /// Write a processor's device interrupt mask the way the Cchip register
-  /// does: under the lock that serialises with interrupt(), and re-driving
-  /// that processor's lines afterwards. The bare assignment this used to be
-  /// raced with interrupt() and left a masked line asserted until some
-  /// unrelated event happened to re-drive it. Only the native PALcode
-  /// reaches it; the CSR path always did this.
-  void set_dim(int cpu, u64 value);
 
   // --- The memory the Cchip reports (TsunamiMemory.cpp) -------------------
   const dimm_population *dimms() const override { return &m_dimms; }

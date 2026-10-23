@@ -206,11 +206,6 @@ u64 CMarvel::interval_period_ns() const {
   return (c && cpu0) ? c->interval_period_ns(cpu0->get_speed()) : 0;
 }
 
-/// The native PALcode's acknowledgements: never used on an EV7, whose board
-/// row keeps the native PALcode routines off (vmspal_pal_base 0).
-void CMarvel::ack_interval_timer(int cpu) { (void)cpu; }
-void CMarvel::ack_ipi(int cpu) { (void)cpu; }
-
 /// Hose h is PID h / 4, IO7 port h % 4 (Linux marvel_find_console_vga_hose).
 u64 CMarvel::pci_space_base(int hose, pci_space space) const {
   const u64 base = ev7::io7_base((u32)hose / 4, (u32)hose % 4);

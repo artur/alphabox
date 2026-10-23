@@ -155,8 +155,7 @@ std::string CDebugTarget::mon_ipr(int cpu) {
   std::string o = fmt("cpu%d\n", cpu);
   o += fmt("  PC         %016llx (%s)\n", (unsigned long long)s.pc,
            (s.pc & 1) ? "PALmode" : "native");
-  o += fmt("  PAL_BASE   %016llx%s\n", (unsigned long long)s.pal_base,
-           s.pal_vms ? " (OpenVMS PALcode: native routines)" : "");
+  o += fmt("  PAL_BASE   %016llx\n", (unsigned long long)s.pal_base);
   o += fmt("  EXC_ADDR   %016llx  EXC_SUM %016llx\n",
            (unsigned long long)s.exc_addr, (unsigned long long)s.exc_sum);
   o += fmt("  VA         %016llx  MM_STAT %016llx\n",

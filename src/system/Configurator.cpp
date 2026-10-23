@@ -621,6 +621,8 @@ static const char *const kv_tsunami[] = {
     "gdb.wait",    "timezone",         "serial_number",
     0,
 };
+// palcode.vms.nohle is accepted and ignored: it switched off the native
+// OpenVMS PALcode routines, which are gone, and old configurations set it.
 static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "skip_memtest_hack",
                                         "timer.max_instr_per_tick", 0};

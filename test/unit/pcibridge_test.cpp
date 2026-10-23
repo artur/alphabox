@@ -84,8 +84,6 @@ public:
   void write_io(u64, u64, int, u64, CSystemComponent *) override {}
   void interrupt(int, bool) override {}
   void interval_tick() override {}
-  void ack_interval_timer(int) override {}
-  void ack_ipi(int) override {}
   u64 pci_space_base(int hose, pci_space space) const override {
     const u64 stride = U64(0x0000000200000000) * hose;
     switch (space) {

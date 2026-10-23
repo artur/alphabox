@@ -272,18 +272,6 @@ void CTitan::interrupt(int number, bool assert) {
     drive_lines(i);
 }
 
-void CTitan::ack_interval_timer(int cpu) {
-  std::lock_guard<std::mutex> g(m_lock);
-  state.cchip.misc &= ~(U64(0x10) << cpu);
-  m_sys->get_cpu(cpu)->irq_h(2, false, 0);
-}
-
-void CTitan::ack_ipi(int cpu) {
-  std::lock_guard<std::mutex> g(m_lock);
-  state.cchip.misc &= ~(U64(0x100) << cpu);
-  m_sys->get_cpu(cpu)->irq_h(3, false, 0);
-}
-
 /**
  * DMA from a device on `hose`: the port's four windows (PciWindows.hpp),
  * subject to the 512 KB-1 MB hole when PCTL<HOLE> is set. An address no

@@ -401,20 +401,6 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
       FAILURE_2(Configuration, "the %s takes %s processors",
                 system->platform().description, board->part);
   }
-  // Native PALcode vs the vmspal replacement routines is a system-wide choice
-  // (mixing them across CPUs in SMP is unsafe), decided while the CPUs are
-  // constructed and read back in init(), which runs after all of them.
-#ifdef ES40_JIT
-  // The JIT compiles PALcode like any other guest code: no vmspal shortcuts.
-  system->request_native_pal("JIT build");
-#else
-  if (cfg->get_bool_value("palcode.vms.nohle", false)) {
-    char why[96];
-    snprintf(why, sizeof(why), "palcode.vms.nohle set on %s",
-             cfg->get_myName());
-    system->request_native_pal(why);
-  }
-#endif
 }
 
 /**
@@ -507,10 +493,6 @@ void CAlphaCPU::init() {
       myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
   tick_last_icount = 0;
   tick_seen_seq = 0;
-  // Decided for all CPUs at construction (see the constructor).
-  vmspal_lle_enabled = cSystem->native_pal_requested();
-  vmspal_pal_base = cSystem->platform().vmspal_pal_base;
-  parse_vmspal_off();
 
   state.iProcNum = cSystem->RegisterCPU(this);
   // The processor's ID: its number, except where the chipset places it in
@@ -1277,84 +1259,39 @@ _next_instruction:
     // One or more of the variables that affect interrupt status have changed,
     // and we are not currently inside PALmode. It is not certain that this
     // means we hava an interrupt to service, but we might have. This needs to
-    // be checked.
-
-    if (state.pal_vms && !(vmspal_off_ent & VMSPAL_OFF_INT)) {
-      // PALcode base is set to 0x8000; meaning OpenVMS PALcode is currently
-      // active. In this case, our VMS PALcode replacement routines are valid,
-      // and should be used as it is faster than using the original PALcode.
-
-      // irq<4> = halt / MP work request (TIG halt lines): the replacement
-      // routines don't handle it, so enter the real PALcode interrupt
-      // vector, as without them.
-      if (state.eir & state.eien & 0x10) {
-        GO_PAL(INTERRUPT);
-        m_int_resignal = 1; // DO_HW_RET
-        seq_remaining = 0;
-#ifndef ES40_JIT
-        goto _next_instruction;
-#else
-        return;
-#endif
+    // be checked; a pending one is taken at the PALcode's interrupt entry
+    // point.
+    //        if (state.eir & 8)
+    //        {
+    //          printf("%s: IP interrupt received%s...\n",devid_string,
+    //          (state.eien&8)?"(enabled)":"(masked)");
+    //        }
+    if ((state.eien & state.eir) || (state.sien & state.sir) ||
+        (state.asten &&
+         (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
+      { // ALPHABOX_IRQSTATS: what the guest is taking interrupts for
+        const u64 pend = (u64)(state.eien & state.eir);
+        for (int b = 0; b < 6; b++)
+          if (pend & (U64(1) << b))
+            g_irqstats.cpu_eir[b].fetch_add(1, std::memory_order_relaxed);
+        if (state.sien & state.sir)
+          g_irqstats.cpu_sw.fetch_add(1, std::memory_order_relaxed);
+        if (state.asten &&
+            (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
+          g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
+        g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
+        irq_trace_entry();
       }
-
-      // irq<1>=device, irq<2>=timer, irq<3>=IPI. (Was 0x6 = device+timer
-      // only, which stranded incoming IPIs under VMS PALcode -> CPUSPINWAIT.)
-      if (state.eir & state.eien & 0xe)
-        if (vmspal_ent_ext_int(state.eir & state.eien & 0xe))
-          return;
-
-      if (state.sir & state.sien & 0xfffc)
-        if (vmspal_ent_sw_int(state.sir & state.sien))
-          return;
-
-      if (state.asten &&
-          (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
-        if (vmspal_ent_ast_int(state.aster & state.astrr &
-                               ((1 << (state.cm + 1)) - 1)))
-          return;
-
-      if (state.sir & state.sien)
-        if (vmspal_ent_sw_int(state.sir & state.sien))
-          return;
-    } else
-
-    {
-
-      // PALcode base is set to an unsupported value. We have no choice but to
-      // transfer control to PALmode at the PALcode interrupt entry point.
-      //        if (state.eir & 8)
-      //        {
-      //          printf("%s: IP interrupt received%s...\n",devid_string,
-      //          (state.eien&8)?"(enabled)":"(masked)");
-      //        }
-      if ((state.eien & state.eir) || (state.sien & state.sir) ||
-          (state.asten &&
-           (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))) {
-        { // ALPHABOX_IRQSTATS: what the guest is taking interrupts for
-          const u64 pend = (u64)(state.eien & state.eir);
-          for (int b = 0; b < 6; b++)
-            if (pend & (U64(1) << b))
-              g_irqstats.cpu_eir[b].fetch_add(1, std::memory_order_relaxed);
-          if (state.sien & state.sir)
-            g_irqstats.cpu_sw.fetch_add(1, std::memory_order_relaxed);
-          if (state.asten &&
-              (state.aster & state.astrr & ((1 << (state.cm + 1)) - 1)))
-            g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
-          g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
-          irq_trace_entry();
-        }
-        GO_PAL(INTERRUPT);
-        // check_int was cleared to take this one; what is still pending is
-        // signalled again when the PALcode returns to native mode (DO_HW_RET).
-        m_int_resignal = 1;
-        seq_remaining = 0;
+      GO_PAL(INTERRUPT);
+      // check_int was cleared to take this one; what is still pending is
+      // signalled again when the PALcode returns to native mode (DO_HW_RET).
+      m_int_resignal = 1;
+      seq_remaining = 0;
 #ifndef ES40_JIT
-        goto _next_instruction;
+      goto _next_instruction;
 #else
-        return;
+      return;
 #endif
-      }
     }
   }
 
@@ -1459,11 +1396,6 @@ _next_instruction:
     function = ins & 0x1fffffff;
     OP(CALL_PAL, PAL);
 
-    //    switch (function)
-    //    {
-    //      case 0x123401: OP_FNC(vmspal_int_read_ide, NOP);
-    //      default: OP(CALL_PAL,PAL);
-    //    }
   case 0x08:
     OP(LDA, MEM);
 
@@ -2459,19 +2391,12 @@ void CAlphaCPU::irq_trace_ipr(const char *what, u32 fn, u64 val) {
 }
 
 int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
-  int res;
-
   state.exc_addr = state.current_pc;
   // An exception other than a TB miss clears the lock flag, as GO_PAL does.
   cSystem->cpu_clear_lock(state.iProcNum);
 
   if (flags & ACCESS_EXEC) {
     state.exc_sum = 0;
-    if (state.pal_vms) {
-      res = vmspal_ent_iacv(flags);
-      return res ? res : -1;
-    }
-
     set_pc(state.pal_base + IACV + 1);
     return -1;
   }
@@ -2485,11 +2410,6 @@ int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
   state.mm_stat = ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode)
                       << 4 |
                   (flags & ACCESS_WRITE) | 2;
-  if (state.pal_vms) {
-    res = vmspal_ent_dfault(flags);
-    return res ? res : -1;
-  }
-
   set_pc(state.pal_base + DFAULT + 1);
   return -1;
 }
@@ -2522,12 +2442,6 @@ int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
  *but by the debugger. If a translation can't be found through the translation
  *buffer, don't bother.
  *                  - ALT           Use alt_cm for access checks instead of cm.
- *                  - RECUR         Recursive try. We tried to find this address
- *                                  before, added a TB entry, and now it should
- *sail through.
- *                  - PROBE         Access is for a PROBER or PROBEW access;
- *Don't swap in the page if it is outswapped.
- *                  - PROBEW        Access is for a PROBEW access.
  *                  .
  * \param asm_bit Status of the ASM (address space match) bit in the
  *page-table-entry. \param ins     Instruction currently being executed.
@@ -2541,7 +2455,6 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
                          u32 ins) {
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
   int i;
-  int res;
 
   int spe = (flags & ACCESS_EXEC) ? state.i_ctl_spe : state.m_ctl_spe;
   /*
@@ -2639,96 +2552,40 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
   // try to find it in the translation buffer
   i = FindTBEntry(virt, flags);
 
-  if (i < 0) // not found, either trap to PALcode, or try to load the TB entry
-             // and try again.
+  if (i < 0) // not found: trap to PALcode
   {
     if (!forreal) // debugger-lookup of the address
       return -1;  // report failure, and don't look any further
-    if (!state.pal_vms ||
-        vmspal_exc_depth >= 3) // unknown PALcode, or the
-                               // native VMS fast-path is already nested in
-                               // exception delivery: vector through the real
-                               // PALcode instead of recursing on the host stack
-    {
+    // transfer execution to PALcode
+    state.exc_addr = state.current_pc;
+    if (flags & VPTE) {
+      // HRM 5.1.3: VA is NOT written for LD_VPTE misses
+      state.va_form_va = virt;
+      state.exc_sum = ((u64)REG_1 & 0x1f)
+                      << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
+      /*
+       * I_CTL[VA_48] selects the DTB double-miss PAL entry.
+       * state.i_ctl_va_mode packs bits [16:15] of I_CTL, so bit 0
+       * here is the architectural VA_48 bit.
+       */
+      set_pc(state.pal_base +
+             ((state.i_ctl_va_mode & 1) ? DTBM_DOUBLE_4 : DTBM_DOUBLE_3) + 1);
+    } else if (flags & ACCESS_EXEC) {
+      set_pc(state.pal_base + ITB_MISS + 1);
+    } else {
+      state.fault_va = virt;
+      state.va_form_va = virt;
+      state.exc_sum = ((u64)REG_1 & 0x1f)
+                      << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
 
-      // transfer execution to PALcode
-      state.exc_addr = state.current_pc;
-      if (flags & VPTE) {
-        // HRM 5.1.3: VA is NOT written for LD_VPTE misses
-        state.va_form_va = virt;
-        state.exc_sum = ((u64)REG_1 & 0x1f)
-                        << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
-        /*
-         * I_CTL[VA_48] selects the DTB double-miss PAL entry.
-         * state.i_ctl_va_mode packs bits [16:15] of I_CTL, so bit 0
-         * here is the architectural VA_48 bit.
-         */
-        set_pc(state.pal_base +
-               ((state.i_ctl_va_mode & 1) ? DTBM_DOUBLE_4 : DTBM_DOUBLE_3) + 1);
-      } else if (flags & ACCESS_EXEC) {
-        set_pc(state.pal_base + ITB_MISS + 1);
-      } else {
-        state.fault_va = virt;
-        state.va_form_va = virt;
-        state.exc_sum = ((u64)REG_1 & 0x1f)
-                        << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
-
-        u32 opcode = I_GETOP(ins);
-        state.mm_stat =
-            ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
-            (flags & ACCESS_WRITE);
-        set_pc(state.pal_base + DTBM_SINGLE + 1);
-      }
-
-      return -1;
-    } else // VMS PALcode
-    {
-      if (flags & RECUR) // we already tried this
-      {
-        printf("Translationbuffer RECUR lookup failed!\n");
-        return -1;
-      }
-
-      state.exc_addr = state.current_pc;
-      if (flags & VPTE) {
-
-        // try to handle the double miss. If this needs to transfer control
-        // to the OS, it will return non-zero value.
-        if ((res = vmspal_ent_dtbm_double_3(flags)))
-          return res;
-
-        // Double miss succesfully handled. Try to get the physical address
-        // again.
-        return virt2phys(virt, phys, flags | RECUR, asm_bit, ins);
-      } else if (flags & ACCESS_EXEC) {
-
-        // try to handle the ITB miss. If this needs to transfer control
-        // to the OS, it will return non-zero value.
-        if ((res = vmspal_ent_itbm(flags)))
-          return res;
-
-        // ITB miss succesfully handled. Try to get the physical address again.
-        return virt2phys(virt, phys, flags | RECUR, asm_bit, ins);
-      } else {
-        state.fault_va = virt;
-        state.exc_sum = ((u64)REG_1 & 0x1f)
-                        << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
-
-        u32 opcode = I_GETOP(ins);
-        state.mm_stat =
-            ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
-            (flags & ACCESS_WRITE);
-
-        // try to handle the single miss. If this needs to transfer control
-        // to the OS, it will return non-zero value.
-        if ((res = vmspal_ent_dtbm_single(flags)))
-          return res;
-
-        // Single miss succesfully handled. Try to get the physical address
-        // again.
-        return virt2phys(virt, phys, flags | RECUR, asm_bit, ins);
-      }
+      u32 opcode = I_GETOP(ins);
+      state.mm_stat =
+          ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
+          (flags & ACCESS_WRITE);
+      set_pc(state.pal_base + DTBM_SINGLE + 1);
     }
+
+    return -1;
   }
 
   // If we get here, the number of the matching TB entry is in i.
@@ -2760,13 +2617,8 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         state.exc_addr = state.current_pc;
         cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.exc_sum = 0;
-        if (state.pal_vms) {
-          if ((res = vmspal_ent_iacv(flags)))
-            return res;
-        } else {
-          set_pc(state.pal_base + IACV + 1);
-          return -1;
-        }
+        set_pc(state.pal_base + IACV + 1);
+        return -1;
       } else {
 
         // Handle D-stream access violation
@@ -2785,13 +2637,8 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         state.mm_stat =
             ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
             (flags & ACCESS_WRITE) | 2;
-        if (state.pal_vms) {
-          if ((res = vmspal_ent_dfault(flags)))
-            return res;
-        } else {
-          set_pc(state.pal_base + DFAULT + 1);
-          return -1;
-        }
+        set_pc(state.pal_base + DFAULT + 1);
+        return -1;
       }
     }
 
@@ -2813,13 +2660,8 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         state.exc_addr = state.current_pc;
         cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
         state.exc_sum = 0;
-        if (state.pal_vms) {
-          if ((res = vmspal_ent_iacv(flags)))
-            return res;
-        } else {
-          set_pc(state.pal_base + IACV + 1);
-          return -1;
-        }
+        set_pc(state.pal_base + IACV + 1);
+        return -1;
       } else {
 
         // handle D-stream access fault
@@ -2851,13 +2693,8 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
         state.mm_stat =
             ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
             (flags & ACCESS_WRITE) | for_bit | fow_bit;
-        if (state.pal_vms) {
-          if ((res = vmspal_ent_dfault(flags)))
-            return res;
-        } else {
-          set_pc(state.pal_base + DFAULT + 1);
-          return -1;
-        }
+        set_pc(state.pal_base + DFAULT + 1);
+        return -1;
       }
     }
   }

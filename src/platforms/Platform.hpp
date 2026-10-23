@@ -177,18 +177,6 @@ struct platform_config {
    */
   const char *(*slot_refusal)(const platform_config &board, int hose, int slot);
 
-  /**
-   * Where the PALcode lives that the interpreter may replace with its
-   * native routines (cpu/AlphaCPU_vmspal.cpp), or 0 when it may not. They
-   * were written against the ES40 console's OpenVMS PALcode, at PAL_BASE
-   * 0x8000; the DS20E's and DS20L's consoles put their own PALcode builds
-   * there too, and with the native routines OpenVMS 8.4 hangs after its
-   * banner (DS20E, one processor) or bugchecks on the second processor
-   * (DS20E, DS20L). Boards with 0 run the real PALcode, as JIT builds
-   * always do (docs/platforms/ds20e.md).
-   */
-  u64 vmspal_pal_base;
-
   /// Words patched into the decompressed console for speed, or nullptr.
   const rom_patch *console_patches;
 

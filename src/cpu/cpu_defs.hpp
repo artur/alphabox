@@ -849,9 +849,6 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
 #define FAKE 16
 #define ALT 32
 #define WRCHK 64 /* HW_LD WrChk variants: also check write protection */
-#define RECUR 128
-#define PROBE 256
-#define PROBEW 512
 
 #define FPSTART                                                                \
   if (state.fpen == 0) /* flt point disabled? */                               \

@@ -26,10 +26,9 @@ if [[ -f "/usr/local/opt/gnu-sed/libexec/gnubin/sed" ]]; then
   SED=/usr/local/opt/gnu-sed/libexec/gnubin/sed
 fi
 
-# Normalize: source paths, line numbers, $Id lines, the banner version (so
-# version bumps don't break the comparison), and the note a JIT build prints
-# about its native PALcode (the expected log is from an interpreter build).
-${SED} -i -e 's$/[^ ]*/DiskFile.cpp$DiskFile.cpp$g' -e 's/line [0-9]*/line L/g' -e '/$Id/d' -e 's/Version [0-9][0-9.]*/Version X.Y.Z/' -e '/%SYS-I-NATIVEPAL:/d' axp.log
+# Normalize: source paths, line numbers, $Id lines, and the banner version
+# (so version bumps don't break the comparison).
+${SED} -i -e 's$/[^ ]*/DiskFile.cpp$DiskFile.cpp$g' -e 's/line [0-9]*/line L/g' -e '/$Id/d' -e 's/Version [0-9][0-9.]*/Version X.Y.Z/' axp.log
 
 echo -n -e '\033[1;31m'
 diff -c axp_correct.log axp.log && echo -e '\033[1;32mdiff clean\033[0m'

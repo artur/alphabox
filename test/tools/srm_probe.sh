@@ -129,6 +129,6 @@ fi
 echo "== $LABEL: CPUs seen by SRM"
 tr -d '\000\r' < console.log | grep -aE 'CPU [0-9] speed|starting console on CPU' | sort | uniq -c | sed 's/^/  /'
 echo "== $LABEL: emulator messages"
-grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|NATIVEPAL|VMSPAL|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating' alphabox.out |
+grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating' alphabox.out |
   sort | uniq -c | head -20 | sed 's/^/  /'
 exit 0

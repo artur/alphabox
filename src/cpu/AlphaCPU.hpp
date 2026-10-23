@@ -262,94 +262,12 @@ private:
   u64 vax_fdiv(u64 s1, u64 s2, u32 ins, u32 dp);
   u64 vax_sqrt(u64 op, u32 ins, u32 dp);
 
-  /* VMS PALcode call: */
-  void vmspal_call_cflush();
-  void vmspal_call_draina();
-  void vmspal_call_ldqp();
-  void vmspal_call_stqp();
-  void vmspal_call_swpctx();
-  void vmspal_call_mfpr_asn();
-  void vmspal_call_mtpr_asten();
-  void vmspal_call_mtpr_astsr();
-  void vmspal_call_cserve();
-  void vmspal_call_mfpr_fen();
-  void vmspal_call_mtpr_fen();
-  void vmspal_call_mfpr_ipl();
-  void vmspal_call_mtpr_ipl();
-  void vmspal_call_mfpr_mces();
-  void vmspal_call_mtpr_mces();
-  void vmspal_call_mfpr_pcbb();
-  void vmspal_call_mfpr_prbr();
-  void vmspal_call_mtpr_prbr();
-  void vmspal_call_mfpr_ptbr();
-  void vmspal_call_mfpr_scbb();
-  void vmspal_call_mtpr_scbb();
-  void vmspal_call_mtpr_sirr();
-  void vmspal_call_mfpr_sisr();
-  void vmspal_call_mfpr_tbchk();
-  void vmspal_call_mtpr_tbia();
-  void vmspal_call_mtpr_tbiap();
-  void vmspal_call_mtpr_tbis();
-  void vmspal_call_mfpr_esp();
-  void vmspal_call_mtpr_esp();
-  void vmspal_call_mfpr_ssp();
-  void vmspal_call_mtpr_ssp();
-  void vmspal_call_mfpr_usp();
-  void vmspal_call_mtpr_usp();
-  void vmspal_call_mtpr_tbisd();
-  void vmspal_call_mtpr_tbisi();
-  void vmspal_call_mfpr_asten();
-  void vmspal_call_mfpr_astsr();
-  void vmspal_call_mfpr_vptb();
-  void vmspal_call_mtpr_datfx();
-  void vmspal_call_mfpr_whami();
-  void vmspal_call_imb();
-  void vmspal_call_prober();
-  void vmspal_call_probew();
-  void vmspal_call_rd_ps();
-  int vmspal_call_rei();
-  void vmspal_call_swasten();
-  void vmspal_call_wr_ps_sw();
-  void vmspal_call_rscc();
-  void vmspal_call_read_unq();
-  void vmspal_call_write_unq();
-
-  /* VMS PALcode entry: */
-  int vmspal_ent_dtbm_double_3(int flags);
-  int vmspal_ent_dtbm_single(int flags);
-  int vmspal_ent_itbm(int flags);
-  int vmspal_ent_iacv(int flags);
-  int vmspal_ent_dfault(int flags);
-  int vmspal_ent_ext_int(int ei);
-  int vmspal_ent_sw_int(int si);
-  int vmspal_ent_ast_int(int ast);
-
-  /* VMS PALcode internal: */
-  int vmspal_int_initiate_exception();
-  int vmspal_int_initiate_interrupt();
-
   // New FP helpers.....
   void write_fpcr_arch(u64 arch_val);
   u64 read_fpcr_arch() const;
 
   bool icache_enabled;
   bool skip_memtest_hack = false;
-  // Host-recursion depth of native VMS-PAL exception initiation. Nested
-  // initiations (exception while delivering an exception) fall back to the
-  // guest's real PALcode instead of recursing on the host stack.
-  int vmspal_exc_depth = 0;
-  bool vmspal_lle_enabled;
-  /// Where the PALcode the native routines replace lives (board row).
-  u64 vmspal_pal_base = U64(0x8000);
-  // ALPHABOX_VMSPAL_OFF: vmspal replacement routines that hand over to the
-  // real PALcode instead (CALL_PAL functions by number, "int").
-  u64 vmspal_off_call[4] = {0, 0, 0, 0};
-  u32 vmspal_off_ent = 0;
-  enum { VMSPAL_OFF_INT = 1 }; // the ext/sw/ast interrupt entries
-  bool vmspal_call_off(int fn) const {
-    return (vmspal_off_call[(fn >> 6) & 3] >> (fn & 63)) & 1;
-  }
-  void parse_vmspal_off();
 
   // ... ... ...
   std::chrono::steady_clock::time_point start_time;
@@ -1202,7 +1120,6 @@ public:
     int iProcNum;     /**< number of the current processor (0 in a 1-processor
                          system) */
     u64 last_tb_virt; /**< ITB_TAG staging register for ITB_PTE writes */
-    bool pal_vms; /**< True if the PALcode base is 0x8000 (=VMS PALcode base) */
     /** Timers for delayed IRQ_H[0:5] assertion. Written by whichever device
         thread raises or drops a line and counted down by the processor that
         owns them, so the countdown has to be a read-modify-write: a plain
@@ -1459,25 +1376,17 @@ inline void CAlphaCPU::flush_icache_asm() {
 }
 
 /**
- * Set the PALcode BASE register, and determine whether we're running VMS
- *PALcode.
+ * Set the PALcode BASE register.
  **/
 inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
   state.pal_base = pb;
-  bool was_vms = state.pal_vms;
-
-  // The board's console OpenVMS PALcode, which the native routines replace
-  // (Platform.hpp vmspal_pal_base: 0x8000 on the ES40).
-  state.pal_vms =
-      vmspal_pal_base && (pb == vmspal_pal_base) && !vmspal_lle_enabled;
-  // state.pal_vms = false;
 
 #ifdef DEBUG_PAL
   printf("%%CPU-I-PALSWITCH: PAL=%016" PRIx64 " p21=%016" PRIx64
          " p22=%016" PRIx64 " r22=%016" PRIx64 "\n",
          pb, state.r[53], state.r[54], state.r[22]);
-  // Dump PAL scratch area contents for non-VMS PAL
-  if (!state.pal_vms && state.r[53] != 0) {
+  // Dump PAL scratch area contents
+  if (state.r[53] != 0) {
 
     u64 scratch = U64(0x7cf420);
 
@@ -1494,7 +1403,7 @@ inline void CAlphaCPU::set_PAL_BASE(u64 pb) {
            sys_read(scratch + 0x98, 64));
     printf("%%CPU-I-PALSCR:   +0x170 SCBB= %016" PRIx64 "\n",
            sys_read(scratch + 0x170, 64));
-  } else if (!state.pal_vms && state.r[53] == 0) {
+  } else {
     printf(
         "%%CPU-W-NOP21: PAL switched but p21=0! Scratch area not available.\n");
   }
