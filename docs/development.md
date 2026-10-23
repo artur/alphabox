@@ -116,6 +116,7 @@ with SDL and pcap; on another build only the trees are compared.
 | `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
 | `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. |
 | `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, and the JIT groups), each from the interpreter and from compiled code. A second per lane (below). |
+| `test/vms/vmspal_oracle.sh` | The interpreter's native OpenVMS PALcode routines (`AlphaCPU_vmspal.cpp`) against the console's own PALcode, routine by routine, on an OpenVMS 8.4 boot (below). |
 | `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
 | `bench_image.py` | A bootable image from a list of instruction words. |
 | Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `_CALLS`, `_I2C`, `_MP`, `_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get ([headless.md](headless.md)). |
@@ -192,6 +193,56 @@ group); a case uses R0 to R23 and R30. A JIT case builds a sequence with
 `jit_cases.Seq`, which runs the words through `aarm.py` to give the
 expected registers.
 
+#### The vmspal oracle
+
+```
+test/vms/vmspal_oracle.sh [label] [vms_dcl.py options]
+```
+
+On the interpreter, `src/cpu/AlphaCPU_vmspal.cpp` replaces the ES40
+console's OpenVMS PALcode with native routines: 49 `CALL_PAL` routines,
+the interrupt entries and the TB-miss and fault entries. The oracle checks
+each against that PALcode doing the same work, with the PALcode as the
+expected value.
+
+- **The build.** The script copies the tree's tracked files as they are in
+  the working tree (an uncommitted fix is tested too) to
+  `$ALPHABOX_WORK/vmspal-oracle-build`, applies
+  `test/vms/vmspal_oracle.patch` to the copy and builds a headless
+  interpreter there. The hooks live in a patch because they sit in the
+  interpreter's hottest paths; `src/` is never changed. When the patch
+  stops applying, refresh it from a patched copy
+  (`diff -ruN <pristine>/src <patched>/src`).
+- **The guest.** `vms_dcl.py --workload full --shutdown` (below):
+  OpenVMS 8.4 on the ES40 with one CPU, login, a DCL workload, SHUTDOWN.
+  About 4 minutes; `--memory-bits 29` (512 MB) when the host is short of
+  memory.
+- **The comparison.** The native routine runs first with its effects
+  recorded (stores, TB and TB-shadow changes, the lock flag), holding back
+  what a second run would repeat (chipset CSR writes, the timer and IPI
+  acknowledges; the PIC's acknowledge cycle is peeked). Its result is kept
+  and undone, and the PALcode runs from the same state. At the first
+  instruction boundary at the native result's PC, or back in native mode,
+  the two are compared: PC, R0-R30, PS, mode, ASNs, FEN, IER, AST and
+  software interrupt state, what a `STx_C` would do, a missed interrupt
+  signal, both TBs, every quadword either run stored. The guest goes on
+  with the PALcode's result, so a difference does not propagate.
+- **The report**, `$ALPHABOX_WORK/runs/<label>-report.txt`: per routine
+  (and per outcome for the entries: fill, exception, dismissed, in
+  PALmode), the events compared, the PALcode's instructions per event and
+  the fields that differed, then up to eight examples each with the state
+  before. Its second line is the share of all executed instructions that
+  the PALcode spent on work a native routine replaces: what vmspal can
+  save at most, in instructions. Counted apart and not
+  differences: registers the ARM leaves UNPREDICTABLE after an MxPR,
+  clock readings, events during which an interrupt arrived (a race between
+  the two runs) and the PALcode's scratch temporaries, which are listed by
+  offset. The emulator also writes the table every 20000 events, so a run
+  that hangs still leaves one.
+
+What it found is in [cpu-fidelity.md](cpu-fidelity.md), "The native
+OpenVMS PALcode routines".
+
 ### Performance
 
 | Tool | Purpose |
@@ -206,6 +257,7 @@ expected registers.
 | `win_bench.sh` | Headless guest boot on a throwaway clone: final screenshot, host CPU use, per-CPU MIPS. |
 | `win_workload.sh`, `win_workload.py` | Times a CPU-bound command inside a booted Windows guest. |
 | `mips_summary.py` | Percentiles of the `JIT_STATS` throughput lines in emulator logs. |
+| `test/vms/vms_dcl.py`, `test/vms/vms_ab.py` | OpenVMS 8.4 on the ES40 booted from a clone, logged in and timed through a DCL workload; `vms_ab.py` runs it with the native OpenVMS PALcode routines and with `palcode.vms.nohle = true` on one binary, interleaved. Wall-clock times on the host as it is: an estimate, not a `perf_ab.py` result. |
 
 [performance.md](performance.md) says what bounds each workload. What each
 tool needs to be read correctly:
@@ -250,6 +302,22 @@ tool needs to be read correctly:
   integer-only over a handful of code pages, so it cannot show the FP
   path, the address path or call overhead. Prefer `nt_bench.sh` for those.
 - **`jit_profile.sh`** needs the `JIT_DISASM` lane and macOS `sample`.
+- **`vms_dcl.py`** boots `$ALPHABOX_WORK/vms84/disk-installed.img` (an
+  APFS clone, removed afterwards) on `guests_check.sh`'s `vms-es40`
+  machine and times, in host seconds: `srm` (start to `P00>>>`), `boot`
+  (`boot dqa0` to the end of startup), `username`, `login`, then each DCL
+  step to its prompt: SHOW SYSTEM, a DCL loop (`SYS$MANAGER:LOOP.COM`), a
+  MACRO-32 program, three BACKUP + DIFFERENCES of `SYS$BASE_IMAGE.EXE`, a
+  BACKUP saveset of `SYS$LDR` and its listing, SPAWN (`--workload full`
+  adds MACRO, LINK, SHOW MEMORY, SHOW DEVICE). `--nohle`, `--env`,
+  `--memory-bits`, `--shutdown`. The decompressed console is cached, so
+  `srm` does not time the decompressor.
+- **`vms_ab.py`** runs N rounds of both arms (at once, or `--sequential`
+  with the order alternating) and prints per-step medians, ranges and the
+  ratio. It waits while the host's memory pressure is critical: a guest
+  whose memory is paged out measures the host. Two 1 GB guests on a host
+  already swapping stopped making progress for minutes on 2026-10-22,
+  which is how that rule was found.
 
 ### Graphics
 

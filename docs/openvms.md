@@ -219,6 +219,30 @@ A DCL loop of 20000 iterations took 1.0-1.1 s of guest time on the JIT
 build and 12.3 s on the interpreter. MACRO-32 (`MACRO.EXE`, part of the base
 system) compiles, links and runs a program.
 
+What the native PALcode routines buy on the interpreter, measured on
+2026-10-22/23 with `test/vms/vms_ab.py` (one binary, the arms differing
+only by `palcode.vms.nohle`; 13 runs, 512 MB, one CPU). An estimate, not a
+`perf_ab.py` result: wall clock on a host shared with other work (load
+average 5 to 30), which is why ranges are wide.
+
+| Seconds | Native routines | `nohle` (the PALcode) |
+|---|---|---|
+| `boot dqa0` to the end of startup, median | 34.8 (33.6-86.6) | 38.9 (37.9-217.8) |
+| the four fastest boots | 33.6-35.0 | 37.9-38.9 |
+| DCL loop of 20000 iterations, median | 11.75 | 12.3 |
+| the DCL workload of `vms_dcl.py`, three undisturbed runs | 25.2-25.6 | 26.8-28.0 |
+| start to `P00>>>` (SRM) | 25.3-26.0 | 25.4-26.3 |
+
+About 4 s of a boot (10-12%) and 5-7% of DCL work. The vmspal oracle counts
+the reason it is no more: of the instructions a boot, the workload and
+SHUTDOWN execute, 3.3% are the PALcode doing what a native routine replaces
+([cpu-fidelity.md](cpu-fidelity.md), "The native OpenVMS PALcode
+routines"). Under heavy host load a disk-bound step (the BACKUP saveset)
+stalled for a minute or more in both arms, once with the native routines
+and five times with the PALcode, three of them past ten minutes, one
+ending in `-SYSTEM-F-CTRLERR`; in two the host had paged the emulator out.
+No run on a quiet host stalled.
+
 ## Graphics
 
 OpenVMS 8.4 configures these PCI display adapters (`SYS$SYSTEM:SYS$CONFIG.DAT`)

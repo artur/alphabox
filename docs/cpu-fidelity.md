@@ -503,7 +503,7 @@ and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 | What | Where | Consequence |
 | --- | --- | --- |
 | `VA_FORM` is derived from the VPTE address on a double TB miss, where the HRM says the faulting address | `AlphaCPU.cpp`, `virt2phys` VPTE branch | Latent: shipping PALcode uses VA+PTBR, so nothing observed. New firmware reading `VA_FORM` there would compute the wrong page-table address |
-| `lock_flag` is not cleared by `CALL_PAL REI` | `AlphaCPU_vmspal.cpp`, `cpu_pal.hpp` | Every real preemption reaches REI through an exception, which does clear it, so only a deliberate `LDx_L; REI; STx_C` sees it |
+| A `STx_C` after the native `REI` can still succeed (the ARM clears lock_flag on REI, 4.2.4) | `AlphaCPU_vmspal.cpp` | Every real preemption reaches REI through an exception, which does clear it, so only a deliberate `LDx_L; REI; STx_C` sees it. The console's PALcode REI loads its frame with `LDQ`, which fails a later `STx_C` since CPU-01 |
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
@@ -684,16 +684,45 @@ boot, not a reading of the handbook: the handbook is not wrong, and neither
 is the code, and only running one of them tells you which layer you are
 looking at.
 
-### The native OpenVMS `REI`
+### The native OpenVMS PALcode routines
 
-`vmspal_call_rei` runs in interpreter builds only; JIT builds always run
-the real PALcode. It was checked against the console's OpenVMS PALcode
-V1.98-104 by running both on every `REI` of an OpenVMS 8.4 boot and login:
-the native routine first, its result kept and undone, then the PALcode,
-compared at the PALcode's `HW_RET` (registers, PS, PC, mode, IER fields,
-AST state).
+`AlphaCPU_vmspal.cpp` replaces the ES40 console's OpenVMS PALcode
+(V1.98-104, at PAL_BASE 0x8000) with native routines: 49 `CALL_PAL`
+routines, the interrupt entries (device, interval timer, IPI, software,
+AST) and the TB-miss and fault entries. They run in interpreter builds on
+the ES40 only, whenever PAL_BASE is 0x8000, so on that lane they serve the
+SRM console as well as OpenVMS. JIT builds, the other boards and
+`palcode.vms.nohle = true` run the console's PALcode itself.
 
-That found these, all now fixed:
+`test/vms/vmspal_oracle.sh` ([development.md](development.md#the-vmspal-oracle))
+compares every one of them with that PALcode doing the same work, from the
+same state, on an OpenVMS 8.4 boot with a DCL workload and SHUTDOWN: about
+35 million events a run, with the PALcode as the expected value. On
+2026-10-22 (base 932c955) the guest called 47 of the 49 routines, and all
+but `MTPR_DATFX` agreed in every compared field (PROBER and PROBEW apart
+from the PALcode's scratch temporaries); so did the interrupt and TB-miss
+entries, apart from those temporaries, from races (an interrupt arriving
+while the PALcode ran) and from the first row below. These differ, and are
+open:
+
+| What | Where | Consequence |
+| --- | --- | --- |
+| After a nested double TB miss the DTB-miss routine takes `EXC_ADDR` for `MM_STAT` (the double-miss routine leaves `MM_STAT` in p7<63:16>, which the PALcode takes back at 0xd080): a write fault is reported as a read (R5, the MM flag, is 0; TNV or ACV is decided on the read enable), and a `STQ R31`/`STL R31` to a page that is not valid is dismissed as if it were a load to R31, so the store is skipped without a fault | `vmspal_ent_dtbm_single` | OpenVMS hits it: 115 wrong R5 values and 17 skipped stores in one boot. A skipped store of zero is lost data on a transition or paged-out page. ARM 14.3.1 |
+| `MTPR_DATFX` writes the inverse of R16<0> into bit 63 of PCB+0 (the saved KSP) instead of R16<0> into bit 63 of PCB+56 | `vmspal_call_mtpr_datfx` | The process's DAT bit is never set (the PALcode's unaligned-access handler reads it); the KSP slot is rewritten at the next SWPCTX before anything reads it. ARM 13.3.4 |
+| `MTPR_FEN` stores R16's low longword at PCB+56, not R16<0> | `vmspal_call_mtpr_fen` | None while OpenVMS passes 0 or 1. ARM 13.3.6 |
+| b_irq<0> (the Cchip's error interrupts) and b_irq<5> are never delivered, and DIR<50> stops the emulator | interrupt check in `AlphaCPU.cpp`, `vmspal_ent_ext_int` | Latent: nothing raises them today. The PALcode dispatches all six lines |
+| In the console's 1-on-1 mode the I/O-hole check tests VA bit 43 inverted, and one bound differs from the PALcode's table | `vmspal_ent_dtbm_single` | Latent: the console reaches I/O through the superpage |
+| A `STx_C` after the native `REI` can still succeed | `vmspal_call_rei` | The ARM clears lock_flag on REI (4.2.4); the PALcode's REI loads its frame with `LDQ`, which fails a later `STx_C` since CPU-01, the native one with physical reads. Only `LDx_L; REI; STx_C` sees it |
+| IPI before the interval timer when both are pending (the PALcode takes the timer first); MCES<7:5> cleared on write; MTPR_SIRR ignores R16 >= 16 instead of using R16<3:0> | `vmspal_ent_ext_int`, `vmspal_call_mtpr_mces`, `vmspal_call_mtpr_sirr` | None observed |
+
+With the first three fixed on the oracle's copy, their differences were
+gone. The full list, with the PALcode addresses compared and the proposed
+fixes, is the vmspal audit's (VMSPAL-01 to -14). What vmspal buys in speed
+is in [openvms.md](openvms.md#timings).
+
+Before that, a comparison restricted to `REI` (2026-10-01: the native
+routine first, its result kept and undone, then the PALcode, compared at
+the PALcode's `HW_RET`) found these, all fixed:
 
 1. From a non-kernel mode, a DTB miss on the first frame load ran the fill
    routine, which uses p4-p7 as scratch, after the old mode had been put in
@@ -713,9 +742,9 @@ interrupt arrived while the PALcode ran. A spurious master-PIC interrupt
 (vector 7) stopped the emulator in the native interrupt entry; it is now
 dismissed after reading the in-service register, as the PALcode does.
 
-The other native routines have not been compared this way;
-`ALPHABOX_VMSPAL_OFF` hands any `CALL_PAL` routine back to the PALcode for
-such a check.
+`ALPHABOX_VMSPAL_OFF` hands single `CALL_PAL` routines (or the interrupt
+entries) back to the PALcode, for bisecting a guest that misbehaves only
+with vmspal.
 
 ### The JIT
 
