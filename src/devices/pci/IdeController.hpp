@@ -114,6 +114,11 @@ public:
   virtual void start_threads();
   virtual void stop_threads();
 
+  /// `alphabox idetest` only: a DMA command's controller thread pauses this
+  /// long after it has looked for the bus master's Start and found none,
+  /// before it waits for it, as a host that deschedules it there would.
+  static std::atomic<int> test_start_pause_us;
+
 protected:
   /// The part's PCI function(s), and its legacy ports if it has any: the
   /// first thing init() does.
@@ -170,8 +175,11 @@ private:
   WakeSemaphore semBusMaster[2];    // bus master start/stop
   // A DMA command is parked waiting for the bus master's start bit; SRST or
   // a new command sets dma_cancel to end it (see cancel_dma_wait()).
+  // dma_start: the guest wrote Start, and neither a DMA command took it nor
+  // a Stop took it back (do_dma_transfer()).
   std::atomic_bool dma_parked[2]{};
   std::atomic_bool dma_cancel[2]{};
+  std::atomic_bool dma_start[2]{};
   std::shared_mutex mtRegisters[2]; // main registers
   std::shared_mutex mtBusMaster[2]; // busmaster registers
   std::atomic_bool StopThread{false};

@@ -140,9 +140,6 @@ void CIdeController::stop_threads() {
       semBusMaster[i].set();
       thrController[i]->join();
       thrController[i] = nullptr;
-      // A wake-up the thread did not take must not start the next DMA
-      // early once the threads run again.
-      semBusMaster[i].try_wait_for(std::chrono::milliseconds(0));
     }
   }
 }
@@ -157,6 +154,8 @@ void CIdeController::ResetPCI() {
 
   for (i = 0; i < 2; i++) {
     CONTROLLER(i).bm_status = 0;
+    // A Start no command took does not start the first one after a reset.
+    dma_start[i] = false;
     CONTROLLER(i).selected = 0;
     for (j = 0; j < 2; j++) {
       REGISTERS(i, j).error = 0;
@@ -1048,6 +1047,9 @@ void CIdeController::ide_busmaster_write(int index, u32 address, u32 data,
         // clear the status register
         CONTROLLER(index).busmaster[2] &= 0xfe;
       }
+      // A DMA command takes the Start (do_dma_transfer); a Stop takes back
+      // one no command has taken.
+      dma_start[index].store((data & 0x01) != 0);
     }
     if (data & 0x01) {
       if (g_idetrace)
@@ -2707,6 +2709,8 @@ void CIdeController::execute(int index) {
   SEL_COMMAND(index).command_cycle++;
 }
 
+std::atomic<int> CIdeController::test_start_pause_us{0};
+
 int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
                                     bool direction) {
   u8 xfer;
@@ -2716,13 +2720,30 @@ int CIdeController::do_dma_transfer(int index, u8 *buffer, u32 buffersize,
   u32 prd;
   work_done[index].store(work_queued[index].load()); // parked on the guest
 
-  // A start the guest wrote when no command waited for it is not this
-  // command's start, unless the bit is still set.
-  if (!(busmaster_byte(index, 0) & 0x01))
-    semBusMaster[index].try_wait_for(std::chrono::milliseconds(0));
+  // Wait for the guest's Start, which a driver writes after the command or
+  // before it (SFF-8038i 3.0, p.5). What this waits for is state: dma_start,
+  // which a Start sets and a Stop takes back, so a Start the guest took back
+  // before this command does not start it (IDE-10), and dma_cancel and
+  // StopThread. The semaphore only says to look again. Taking a Start is one
+  // step (the exchange), so one that lands at any moment is seen: while this
+  // thread is on its way here, between its look and its wait, or in the same
+  // wake-up as the cancel of the command before.
+  //
+  // Until 2026-10-23 the bit was looked at and the semaphore then drained of
+  // a stale start: a Start written between the two was drained with it, and
+  // the command waited for good. OpenVMS writes Start right after the
+  // command; on the interpreter, which takes longer to get from one to the
+  // other, a controller thread held up between its look and its drain (a
+  // busy host) now and then lost it, and the disk stopped until OpenVMS
+  // gave up with CTRLERR (docs/openvms.md).
   dma_cancel[index].store(false);
   dma_parked[index].store(true);
-  semBusMaster[index].wait(); // wait until the start bit is set.
+  while (!StopThread && !dma_cancel[index].load() &&
+         !dma_start[index].exchange(false)) {
+    if (const int us = test_start_pause_us.load(std::memory_order_relaxed))
+      std::this_thread::sleep_for(std::chrono::microseconds(us));
+    semBusMaster[index].wait();
+  }
   dma_parked[index].store(false);
   if (StopThread)
     throw IdeStopping(); // stop_threads woke us: the command ends here

@@ -131,6 +131,12 @@ each point checked against ATA/ATAPI-6 or SFF-8038i by `test/tools/ide_test.sh`:
 - **A software reset, or a new command, ends a DMA command still waiting
   for the bus master's Start bit**; the channel used to stay wedged after a
   driver's timeout and reset.
+- **A DMA command takes the bus master's Start whenever it is written**:
+  before the command, right after it, or while the controller is on its
+  way to the bus master. A Start taken back with Stop before a command took
+  it starts nothing. Until 2026-10-23 a Start that landed while the
+  controller was looking for one could be dropped, and the command then
+  waited for good: OpenVMS's disk stall ([openvms.md](openvms.md)).
 - **Bus master registers** read as bytes, words or dwords (a 16-bit read
   used to stop the emulator); the descriptor table pointer reads with bits
   1:0 clear; a descriptor table may have up to 8192 entries and ends at the
