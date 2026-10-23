@@ -195,7 +195,7 @@ What the record has settled:
   which is which.
 - Booting and idle are bounded by the guest's own delays, not by the
   emulator.
-- The trace tier stays dormant
+- The trace tier stays dormant, and since 2026-10-22 deleted
   (["The trace tier stays dormant"](#the-trace-tier-stays-dormant)).
 
 Open, from the record: **the layout band as a lever** (not done). If two
@@ -1821,9 +1821,11 @@ fast.
 
 ### The trace tier stays dormant
 
-`jitengine.cpp` already carries the note that traces preempt block chaining
-and measured as a net loss. The outside evidence is emphatic enough that
-this should not be revisited without a new reason:
+The tier was measured as a net loss (traces preempt block chaining) and
+kept off; on 2026-10-22 it was deleted (the JIT audit, JIT-10: its 4.5 MB
+cache per processor was still zeroed and walked), and git keeps it. The
+outside evidence is emphatic enough that this should not be revisited
+without a new reason:
 
 - IBM's production trace JIT, retrofitted from its own method JIT, reached
   **95.5%** of it on DaCapo (10.5% more code, 27% more compile time, worse

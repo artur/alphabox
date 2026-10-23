@@ -382,10 +382,12 @@ blocks to host code with asmjit:
   `JIT_VERIFY` build checks its inline IEEE operations against the
   interpreter.
 
-Blocks live in a direct-mapped cache keyed by physical PC, are chained
-directly to each other, and keep guest registers pinned in host
+Blocks live in a direct-mapped cache keyed by virtual PC, address space
+and processor mode, are checked against the live physical address, are
+chained directly to each other, and keep guest registers pinned in host
 registers. Anything hairy bails out to the interpreter. The trace tier
-(`JIT_TRACES`) is deliberately dormant.
+that once sat beside them was deleted in October 2026 (git keeps it; see
+[performance.md](performance.md), "The trace tier stays dormant").
 
 `jit_run()` in `cpu/AlphaCPU_jit.cpp` is the dispatch loop. Memory accesses
 go through the `jit_read` and `jit_write` helpers, which mirror the

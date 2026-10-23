@@ -628,81 +628,6 @@ void CAlphaCPU::jit_run(int budget) {
       }
     }
 
-    // Side-effect-free exec virt -> live physical (icache probe, else FAKE
-    // virt2phys). Re-resolves a trace segment's live mapping without a TB fill
-    // / fault; mirrors the dispatch-top resolution above.
-    auto live_exec_phys = [&](u64 v, u64 *op) -> bool {
-      v &= ~U64(3); // strip the PALmode tag bit / align -- the physical is
-                    // page-determined
-      const int li = (int)((v >> 11) & (ICACHE_ENTRIES - 1));
-      if (icache_enabled && icache_line_hits(li, v)) {
-        *op = state.icache[li].p_address + (v & ICACHE_BYTE_MASK);
-        return true;
-      }
-      bool ad;
-      return virt2phys(v, op, ACCESS_EXEC | FAKE, &ad, 0) == 0;
-    };
-
-    // Trace tier: gated lookup BEFORE the block cache. In non-debug release a
-    // hot trace runs straight through and side-exits back here with state.pc
-    // set, then `continue`; the block cache stays the universal fallback. Under
-    // JIT_VERIFY the production run is gated OFF, traces still FORM (below),
-    // but they're exercised + compared inside the block verify (next stage)
-    // rather than driving execution unchecked.
-#ifndef JIT_VERIFY
-    // Same run-gates as the block path below: a compiled trace has no
-    // per-instruction interrupt poll, so DON'T enter it while an
-    // interrupt/timer is pending (the interpreter must service it, or the CPU
-    // livelocks -> OS sanity-timer bugcheck), nor a PALmode trace without SDE,
-    // nor one that would overrun the budget.
-    auto trace_segs_live = [&](CJitEngine::TraceFragment *tf) -> bool {
-      // The head's live phys is checked by trace_ok; re-resolve each INTERIOR
-      // segment too. An interior page remapped to a different physical with
-      // IDENTICAL bytes is invisible to the source hash.
-      for (uint32_t s = 1; s < tf->n_segs; ++s) {
-        u64 sp;
-        if (!live_exec_phys(tf->segs[s].guest_pc, &sp) ||
-            sp != tf->segs[s].phys_pc) {
-          m_jit->note_trace_stale();
-          return false;
-        }
-      }
-      return true;
-    };
-    if (have_phys && m_jit->traces_enabled() && !state.check_int &&
-        !state.check_timers) {
-      CJitEngine::TraceFragment *t = m_jit->trace_lookup(start_virt, start_asn);
-      if (t && (int)t->n_instr <= budget && (!(t->head_tag & 1) || state.sde) &&
-          m_jit->trace_ok(t, start_phys, (const uint8_t *)dram_ptr) &&
-          trace_segs_live(t) && !m_debug_on.load(std::memory_order_relaxed)) {
-        m_jit_budget = budget; // ceiling for the trace (its loads/bails honor
-                               // it like a block)
-#ifdef JIT_STATS
-        const uint64_t _trace_t0 = jit_rdtsc();
-#endif
-        const u32 done = ((CJitEngine::JitFn)t->code)(this, &state.r[0]);
-#ifdef JIT_STATS
-        const uint64_t _trace_tsc = jit_rdtsc() - _trace_t0;
-#endif
-        state.r[31] = 0;
-        break_seq_icache(); // the trace wrote state.pc natively; drop the stale
-                            // cursor
-        state.instruction_count += done;
-        budget -= done;
-#ifdef JIT_STATS
-        cc_last_sync +=
-            ns_to_host_ticks(m_jit->note_exec(done, 0, _trace_tsc, 0));
-        m_jit->trace_entered();
-        if (done < (u32)t->n_instr)
-          m_jit->trace_exited(); // ran fewer than the trace's first-pass span
-                                 // -> a side-exit/underrun
-#endif
-        if (done > 0)
-          continue; // progress: re-dispatch at the trace's exit PC
-      }
-    }
-#endif
-
     // Hot path: virtual+ASN lookup, phys-validated (skipped on a translation
     // miss).
     CJitEngine::JitBlock *b =
@@ -740,72 +665,6 @@ void CAlphaCPU::jit_run(int budget) {
     {
       b->vgen = m_jit->vgen(); // phys validated + lookup proved flush-fresh:
                                // refresh the chain epoch
-      // after a block has dispatched 8x, promote it to a single-block trace (a
-      // future trace head). Dispatch-counted for now -- it undercounts chained
-      // loops, but they still surface here when a chain breaks
-      if (m_jit->traces_enabled() && ++b->hot == 8 &&
-          !m_jit->trace_lookup(start_virt, start_asn)) {
-        const CJitEngine::HelperSet hs = {(void *)&CAlphaCPU::jit_read,
-                                          (void *)&CAlphaCPU::jit_write,
-                                          (void *)&CAlphaCPU::jit_opcdec,
-                                          (void *)&CAlphaCPU::jit_hw_mfpr,
-                                          (void *)&CAlphaCPU::jit_read_phys,
-                                          (void *)&CAlphaCPU::jit_hw_mtpr,
-                                          (void *)&CAlphaCPU::jit_write_phys,
-                                          (void *)&CAlphaCPU::jit_indirect,
-                                          (void *)&CAlphaCPU::jit_read_locked,
-                                          (void *)&CAlphaCPU::jit_stc,
-                                          (void *)&CAlphaCPU::jit_misc,
-                                          (void *)&CAlphaCPU::jit_read_vpte,
-                                          (void *)&CAlphaCPU::jit_read_wchk,
-                                          (void *)&CAlphaCPU::jit_itof,
-                                          (void *)&CAlphaCPU::jit_ftoi,
-                                          (void *)&CAlphaCPU::jit_fltl,
-                                          (void *)&CAlphaCPU::jit_fp_read,
-                                          (void *)&CAlphaCPU::jit_fp_write,
-                                          (void *)&CAlphaCPU::jit_fltv};
-        // Loop/superblock FUSION: follow each block's STATIC taken branch
-        // target, growing the trace, until the chain branches back to the head
-        // (compile_trace then closes the loop) or hits a non-branch / non-live
-        // target / a non-head cycle / the segment cap. Works under verify too
-        // (b->link is only set by production chaining).
-        CJitEngine::JitBlock *blist[CJitEngine::kMaxTraceSegs] = {b};
-        u32 nb = 1;
-        for (CJitEngine::JitBlock *cur = b; nb < CJitEngine::kMaxTraceSegs;) {
-          const u32 *aw = (const u32 *)((const u8 *)dram_ptr + cur->phys);
-          const u32 lop = aw[cur->prefix_len - 1];
-          const u32 lopc = lop >> 26;
-          if (!(lopc == 0x30 || lopc == 0x34 || (lopc >= 0x38 && lopc <= 0x3f)))
-            break; // not PC-relative
-          const int64_t disp =
-              (int64_t)((uint64_t)(lop & 0x1FFFFF) << 43) >> 43;
-          const u64 spc =
-              (((cur->tag & ~U64(1)) + 4 * (u64)(cur->prefix_len - 1)) + 4 +
-               (u64)(disp * 4)) |
-              (cur->tag & 1);
-          if (spc == b->tag)
-            break; // back-edge to the head -> compile_trace closes the loop
-          CJitEngine::JitBlock *succ =
-              m_jit->lookup(spc, start_asn, (uint8_t)state.cm);
-          if (!succ || succ == b || !succ->code || succ->prefix_len == 0)
-            break;
-          u64 sp;
-          if (!live_exec_phys(spc, &sp) || sp != succ->phys)
-            break; // successor remapped since compile -> stale, don't fuse
-          bool dup = false;
-          for (u32 j = 0; j < nb; ++j)
-            if (blist[j] == succ) {
-              dup = true;
-              break;
-            }
-          if (dup)
-            break;
-          blist[nb++] = succ;
-          cur = succ;
-        }
-        m_jit->compile_trace(m_jit->trace_slot(start_virt), blist, nb,
-                             (const uint8_t *)dram_ptr, dram_size, hs);
-      }
 #ifdef JIT_VERIFY
       // Interpret the prefix (authoritative), recording each loaded value so
       // the compiled pass can replay it instead of re-reading memory. Skip the
@@ -842,185 +701,158 @@ void CAlphaCPU::jit_run(int budget) {
       u32 vn = 0; // loads recorded for replay
       u32 sn = 0; // stores recorded for the compiled-pass compare
       u64 vpc = start_virt;
-      u32 cur_len = b->prefix_len; // current interpreted block's length + start
-                                   // tag; step 3
-      u64 cur_tag = b->tag; // advances these per segment across a fused trace
-      u32 n_interp = 0; // ops the interp ran over the trace's fused span (vs
-                        // t->code's done)
+      const u32 cur_len = b->prefix_len;
+      const u64 cur_tag = b->tag;
       bool clean = true;
-      CJitEngine::TraceFragment *vtr =
-          m_jit->traces_enabled() ? m_jit->trace_lookup(start_virt, start_asn)
-                                  : nullptr;
-      if (vtr && !m_jit->trace_ok(vtr, start_phys, (const uint8_t *)dram_ptr))
-        vtr = nullptr; // stale -> verify as a plain block
-      const u32 nseg =
-          vtr ? vtr->n_segs
-              : 1; // interp the trace's full fused span; else just block b
-      for (u32 seg = 0; seg < nseg && clean; ++seg) {
-        if (vtr) {
-          cur_len = vtr->segs[seg].n_instr;
-          cur_tag = vtr->segs[seg].guest_pc;
-          vw = (const u32 *)((const u8 *)dram_ptr + vtr->segs[seg].phys_pc);
-          vpc = cur_tag;
+      for (u32 k = 0; k < cur_len; ++k) {
+        // Compute the load's effective address from the live registers BEFORE
+        // executing it (Rb may be the load's own dest), to compare against
+        // the JIT.
+        const u32 ins = vw[k];
+        const u32 opc = ins >> 26;
+        const int lra = (ins >> 21) & 0x1F;
+        // HW_LD physical (0x1b, func 0/1) is a load too: the compiled form
+        // replays through this same vlog, but its address is physical
+        // (untranslated) with a 12-bit disp. Func 5 (quad VPTE) too -- its
+        // logged va is virtual, jit_read_vpte's replay key.
+        const bool is_hwld = // forms 0,1,4,5,8,9,10,12,13 (compiled HW_LD)
+            (opc == 0x1b) && ((U64(0x373b) >> ((ins >> 12) & 0xf)) & 1);
+        // RPCC/RC/RS (MISC 0x18) and ISUM (HW_MFPR 0x19 fn 0x0d) read CPU
+        // state the verify can't re-derive; the compiled forms pull their
+        // value from this same load log (jit_misc / jit_hw_mfpr replay it),
+        // so log them like loads.
+        const u32 miscfn = (ins & 0xFFFF);
+        // Compiled misc reads: RC/RS (0xE000/0xF000) for all Ra incl. 31 (the
+        // flag-only side-effect forms compile too); RPCC (0xC000) only when
+        // it has a GPR dest (Ra!=31).
+        const bool is_miscrd =
+            (opc == 0x18) && (miscfn == 0xE000 || miscfn == 0xF000 ||
+                              (miscfn == 0xC000 && lra != 31));
+        const bool is_isum =
+            (opc == 0x19) &&
+            (((ins >> 8) & 0xff) == 0x0d); // ISUM: async interrupt-summary
+        const bool is_fpld = (opc == 0x22 || opc == 0x23 || opc == 0x20 ||
+                              opc == 0x21); // LDS/LDT/LDF/LDG: dest is f[lra]
+        // Loads/ISUM/LDS/LDT only log when they have a dest (lra!=31); the
+        // misc reads are logged regardless -- a compiled RC/RS Ra==31 still
+        // consumes a replay slot, so keep the index in sync.
+        const bool isld =
+            ((opc == 0x28 || opc == 0x29 || opc == 0x0a || opc == 0x0c ||
+              opc == 0x2a || opc == 0x2b || opc == 0x0b || is_hwld || is_isum ||
+              is_fpld) &&
+             lra != 31) ||
+            is_miscrd; // +LDBU/LDWU +LDx_L +LDQ_U +RPCC/RC/RS +ISUM +LDS/LDT
+        u64 eva = 0;
+        if (isld && !is_miscrd && !is_isum) // misc/ISUM reads have no effective
+                                            // address -- only a logged value
+        {
+          const int lrb = (ins >> 16) & 0x1F;
+          const int ldisp =
+              is_hwld ? (int)((int32_t)(ins << 20) >> 20) // HW_LD: 12-bit
+                      : (int)(int16_t)(ins & 0xFFFF);     // LDx:   16-bit
+          eva = (lrb == 31 ? (u64)0 : state.r[RREG(lrb)]) + (u64)ldisp;
+          if (opc == 0x0b)
+            eva &= ~U64(7); // LDQ_U: address forced to 8-byte alignment
         }
-        for (u32 k = 0; k < cur_len; ++k) {
-          // Compute the load's effective address from the live registers BEFORE
-          // executing it (Rb may be the load's own dest), to compare against
-          // the JIT.
-          const u32 ins = vw[k];
-          const u32 opc = ins >> 26;
-          const int lra = (ins >> 21) & 0x1F;
-          // HW_LD physical (0x1b, func 0/1) is a load too: the compiled form
-          // replays through this same vlog, but its address is physical
-          // (untranslated) with a 12-bit disp. Func 5 (quad VPTE) too -- its
-          // logged va is virtual, jit_read_vpte's replay key.
-          const bool is_hwld = // forms 0,1,4,5,8,9,10,12,13 (compiled HW_LD)
-              (opc == 0x1b) && ((U64(0x373b) >> ((ins >> 12) & 0xf)) & 1);
-          // RPCC/RC/RS (MISC 0x18) and ISUM (HW_MFPR 0x19 fn 0x0d) read CPU
-          // state the verify can't re-derive; the compiled forms pull their
-          // value from this same load log (jit_misc / jit_hw_mfpr replay it),
-          // so log them like loads.
-          const u32 miscfn = (ins & 0xFFFF);
-          // Compiled misc reads: RC/RS (0xE000/0xF000) for all Ra incl. 31 (the
-          // flag-only side-effect forms compile too); RPCC (0xC000) only when
-          // it has a GPR dest (Ra!=31).
-          const bool is_miscrd =
-              (opc == 0x18) && (miscfn == 0xE000 || miscfn == 0xF000 ||
-                                (miscfn == 0xC000 && lra != 31));
-          const bool is_isum =
-              (opc == 0x19) &&
-              (((ins >> 8) & 0xff) == 0x0d); // ISUM: async interrupt-summary
-          const bool is_fpld = (opc == 0x22 || opc == 0x23 || opc == 0x20 ||
-                                opc == 0x21); // LDS/LDT/LDF/LDG: dest is f[lra]
-          // Loads/ISUM/LDS/LDT only log when they have a dest (lra!=31); the
-          // misc reads are logged regardless -- a compiled RC/RS Ra==31 still
-          // consumes a replay slot, so keep the index in sync.
-          const bool isld =
-              ((opc == 0x28 || opc == 0x29 || opc == 0x0a || opc == 0x0c ||
-                opc == 0x2a || opc == 0x2b || opc == 0x0b || is_hwld ||
-                is_isum || is_fpld) &&
-               lra != 31) ||
-              is_miscrd; // +LDBU/LDWU +LDx_L +LDQ_U +RPCC/RC/RS +ISUM +LDS/LDT
-          u64 eva = 0;
-          if (isld && !is_miscrd &&
-              !is_isum) // misc/ISUM reads have no effective address -- only a
-                        // logged value
-          {
-            const int lrb = (ins >> 16) & 0x1F;
-            const int ldisp =
-                is_hwld ? (int)((int32_t)(ins << 20) >> 20) // HW_LD: 12-bit
-                        : (int)(int16_t)(ins & 0xFFFF);     // LDx:   16-bit
-            eva = (lrb == 31 ? (u64)0 : state.r[RREG(lrb)]) + (u64)ldisp;
-            if (opc == 0x0b)
-              eva &= ~U64(7); // LDQ_U: address forced to 8-byte alignment
+        // Stores touch memory, not GPRs, so record (addr,value) for the
+        // compiled-pass compare. Ra (lra) is the value source; Rb is the
+        // base. HW_ST physical (0x1f func 0/1) stores too, with a physical
+        // (untranslated) address and a 12-bit disp.
+        const bool is_sc =
+            (opc == 0x2e ||
+             opc == 0x2f);   // STL_C/STQ_C: store-conditional (success in Ra)
+        const bool is_hwst = // forms 0,1,4,5,12,13 (compiled HW_ST)
+            (opc == 0x1f) && ((U64(0x3033) >> ((ins >> 12) & 0xf)) & 1);
+        const bool is_fpst =
+            (opc == 0x26 || opc == 0x27 || opc == 0x24 ||
+             opc == 0x25); // STS/STT/STF/STG: value source is f[lra]
+        const bool isst = (opc == 0x2c || opc == 0x2d || opc == 0x0d ||
+                           opc == 0x0e || opc == 0x0f || is_sc || is_hwst ||
+                           is_fpst); // +STx_C +STQ_U +STS/STT
+        u64 sva = 0, sval = 0;
+        if (isst) {
+          const int srb = (ins >> 16) & 0x1F;
+          const int sdisp =
+              is_hwst ? (int)((int32_t)(ins << 20) >> 20) // HW_ST: 12-bit
+                      : (int)(int16_t)(ins & 0xFFFF);     // STx:   16-bit
+          sva = (srb == 31 ? (u64)0 : state.r[RREG(srb)]) + (u64)sdisp;
+          if (opc == 0x0f)
+            sva &= ~U64(7); // STQ_U: address forced to 8-byte alignment
+          if (is_fpst)
+            sval = (opc == 0x27)   ? state.f[lra]
+                   : (opc == 0x26) ? (u64)ieee_sts(state.f[lra])
+                   : (opc == 0x24) ? (u64)vax_stf(state.f[lra])
+                                   : vax_stg(state.f[lra]); // STT/STS/STF/STG
+          else
+            sval = (lra == 31 ? (u64)0 : state.r[RREG(lra)]);
+        }
+        // Computed jump (JMP/JSR/RET): target = Rb & ~3, taken before
+        // execute() (the jump's target uses the old Rb, even if Ra==Rb gets
+        // the return address after).
+        u64 jtgt = 0;
+        if (opc == 0x1a ||
+            opc == 0x1e) // JMP/JSR/RET (Rb & ~3) or HW_RET/HWREI (Rb & ~2)
+        {
+          const int jrb = (ins >> 16) & 0x1F;
+          const u64 jmask = (opc == 0x1e) ? ~U64(2) : ~U64(3);
+          jtgt = (jrb == 31 ? (u64)0 : state.r[RREG(jrb)]) & jmask;
+          if (opc == 0x1a)
+            jtgt |= cur_tag & 3; // DO_JMP: mode bits come from the current pc
+        }
+        execute();
+        --budget;
+        vpc += 4;
+        if (state.pc != vpc) {
+          // The terminator (a compiled branch at the last index) diverges to
+          // its target -- expected. But execute() services an async
+          // interrupt/trap at the TOP, before the instruction runs, so the
+          // interpreter can divert to a PAL handler at the terminator WITHOUT
+          // executing the branch. Accept the divergence only when state.pc is
+          // the branch's actual target; otherwise it's an interrupt/trap and
+          // the compiled block (which doesn't model interrupts -- the
+          // dispatcher's !check_int guard handles that) legitimately differs,
+          // so skip the compare instead of flagging a false mismatch.
+          bool ok_branch = false;
+          if (k == cur_len - 1 &&
+              (opc == 0x30 || opc == 0x34 || (opc >= 0x38 && opc <= 0x3f))) {
+            const int64_t bdisp =
+                (int64_t)((uint64_t)(ins & 0x1FFFFF) << 43) >> 43;
+            const u64 tgt =
+                vpc + (u64)(bdisp * 4); // vpc == branch_pc + 4 (fall-through)
+            ok_branch = (state.pc == tgt);
+          } else if (k == cur_len - 1 && (opc == 0x1a || opc == 0x1e)) {
+            ok_branch = (state.pc == jtgt); // computed jump (JMP/HW_RET)
+                                            // reached its register target
+          } else if (k == cur_len - 1 && opc == 0x00) {
+            // CALL_PAL vectored to its PALcode entry (pal_base | offset); the
+            // kernel-mode path never traps, but accept the OPCDEC vector too.
+            const u32 func = ins & 0x1FFFFFFF;
+            const u64 voff = (u64)0x2000 | ((u64)(func & 0x80) << 5) |
+                             ((u64)(func & 0x3f) << 6) | U64(1);
+            ok_branch = (state.pc == (state.pal_base | voff)) ||
+                        (state.pc == (state.pal_base | OPCDEC | U64(1)));
           }
-          // Stores touch memory, not GPRs, so record (addr,value) for the
-          // compiled-pass compare. Ra (lra) is the value source; Rb is the
-          // base. HW_ST physical (0x1f func 0/1) stores too, with a physical
-          // (untranslated) address and a 12-bit disp.
-          const bool is_sc =
-              (opc == 0x2e ||
-               opc == 0x2f);   // STL_C/STQ_C: store-conditional (success in Ra)
-          const bool is_hwst = // forms 0,1,4,5,12,13 (compiled HW_ST)
-              (opc == 0x1f) && ((U64(0x3033) >> ((ins >> 12) & 0xf)) & 1);
-          const bool is_fpst =
-              (opc == 0x26 || opc == 0x27 || opc == 0x24 ||
-               opc == 0x25); // STS/STT/STF/STG: value source is f[lra]
-          const bool isst = (opc == 0x2c || opc == 0x2d || opc == 0x0d ||
-                             opc == 0x0e || opc == 0x0f || is_sc || is_hwst ||
-                             is_fpst); // +STx_C +STQ_U +STS/STT
-          u64 sva = 0, sval = 0;
-          if (isst) {
-            const int srb = (ins >> 16) & 0x1F;
-            const int sdisp =
-                is_hwst ? (int)((int32_t)(ins << 20) >> 20) // HW_ST: 12-bit
-                        : (int)(int16_t)(ins & 0xFFFF);     // STx:   16-bit
-            sva = (srb == 31 ? (u64)0 : state.r[RREG(srb)]) + (u64)sdisp;
-            if (opc == 0x0f)
-              sva &= ~U64(7); // STQ_U: address forced to 8-byte alignment
-            if (is_fpst)
-              sval = (opc == 0x27)   ? state.f[lra]
-                     : (opc == 0x26) ? (u64)ieee_sts(state.f[lra])
-                     : (opc == 0x24) ? (u64)vax_stf(state.f[lra])
-                                     : vax_stg(state.f[lra]); // STT/STS/STF/STG
-            else
-              sval = (lra == 31 ? (u64)0 : state.r[RREG(lra)]);
-          }
-          // Computed jump (JMP/JSR/RET): target = Rb & ~3, taken before
-          // execute() (the jump's target uses the old Rb, even if Ra==Rb gets
-          // the return address after).
-          u64 jtgt = 0;
-          if (opc == 0x1a ||
-              opc == 0x1e) // JMP/JSR/RET (Rb & ~3) or HW_RET/HWREI (Rb & ~2)
-          {
-            const int jrb = (ins >> 16) & 0x1F;
-            const u64 jmask = (opc == 0x1e) ? ~U64(2) : ~U64(3);
-            jtgt = (jrb == 31 ? (u64)0 : state.r[RREG(jrb)]) & jmask;
-            if (opc == 0x1a)
-              jtgt |= cur_tag & 3; // DO_JMP: mode bits come from the current pc
-          }
-          execute();
-          --budget;
-          vpc += 4;
-          if (state.pc != vpc) {
-            // The terminator (a compiled branch at the last index) diverges to
-            // its target -- expected. But execute() services an async
-            // interrupt/trap at the TOP, before the instruction runs, so the
-            // interpreter can divert to a PAL handler at the terminator WITHOUT
-            // executing the branch. Accept the divergence only when state.pc is
-            // the branch's actual target; otherwise it's an interrupt/trap and
-            // the compiled block (which doesn't model interrupts -- the
-            // dispatcher's !check_int guard handles that) legitimately differs,
-            // so skip the compare instead of flagging a false mismatch.
-            bool ok_branch = false;
-            if (k == cur_len - 1 &&
-                (opc == 0x30 || opc == 0x34 || (opc >= 0x38 && opc <= 0x3f))) {
-              const int64_t bdisp =
-                  (int64_t)((uint64_t)(ins & 0x1FFFFF) << 43) >> 43;
-              const u64 tgt =
-                  vpc + (u64)(bdisp * 4); // vpc == branch_pc + 4 (fall-through)
-              ok_branch = (state.pc == tgt);
-            } else if (k == cur_len - 1 && (opc == 0x1a || opc == 0x1e)) {
-              ok_branch = (state.pc == jtgt); // computed jump (JMP/HW_RET)
-                                              // reached its register target
-            } else if (k == cur_len - 1 && opc == 0x00) {
-              // CALL_PAL vectored to its PALcode entry (pal_base | offset); the
-              // kernel-mode path never traps, but accept the OPCDEC vector too.
-              const u32 func = ins & 0x1FFFFFFF;
-              const u64 voff = (u64)0x2000 | ((u64)(func & 0x80) << 5) |
-                               ((u64)(func & 0x3f) << 6) | U64(1);
-              ok_branch = (state.pc == (state.pal_base | voff)) ||
-                          (state.pc == (state.pal_base | OPCDEC | U64(1)));
-            }
-            if (!ok_branch)
-              clean = false;
-            break;
-          }
-          if (isld && vn < 64) {
-            m_jit_vaddr[vn] = eva;
-            m_jit_vlog[vn] =
-                is_fpld
-                    ? state.f[lra]
-                    : state.r[RREG(
-                          lra)]; // FP dest -> f[]; shadow-aware GPR otherwise
-            vn++;
-          }
-          if (isst && sn < 64) {
-            m_jit_slog_addr[sn] = sva;
-            m_jit_slog_val[sn] = sval;
-            m_jit_slog_success[sn] =
-                is_sc
-                    ? state.r[RREG(lra)]
+          if (!ok_branch)
+            clean = false;
+          break;
+        }
+        if (isld && vn < 64) {
+          m_jit_vaddr[vn] = eva;
+          m_jit_vlog[vn] =
+              is_fpld ? state.f[lra]
+                      : state.r[RREG(
+                            lra)]; // FP dest -> f[]; shadow-aware GPR otherwise
+          vn++;
+        }
+        if (isst && sn < 64) {
+          m_jit_slog_addr[sn] = sva;
+          m_jit_slog_val[sn] = sval;
+          m_jit_slog_success[sn] =
+              is_sc ? state.r[RREG(lra)]
                     : (u64)1; // STx_C result (post-execute); ordinary store = 1
-            sn++;
-          }
+          sn++;
         }
-        if (!clean)
-          break; // fault/divergence in this segment -> stop (compare skipped)
-        n_interp += cur_len; // this segment ran fully
-        if (vtr && seg + 1 < nseg && state.pc != vtr->segs[seg + 1].guest_pc)
-          break; // path left the fused trace -> side-exit
-      } // end per-segment interp loop
+      }
       if (clean) {
         // HW_MTPR verify: a compiled block writes IPR fields directly in LIVE
         // state (its GPR writes go to jr scratch). Snapshot the writable IPR
@@ -1144,7 +976,7 @@ void CAlphaCPU::jit_run(int budget) {
         const u32 done =
             b->code(this, state.r); // also writes state.pc (the JIT's next PC)
         m_jit_vreplay = false;
-        if (!vtr && done == b->prefix_len) {
+        if (done == b->prefix_len) {
           if (state.pc != interp_pc) {
             m_jit_vbad = true;
             // Dump the JIT's source (DRAM at b->phys, vw[]) vs the icache (what
@@ -1209,93 +1041,6 @@ void CAlphaCPU::jit_run(int budget) {
           g_diag_excluded_ns =
               0; // consumed here in the verify path so jit_run's later sync
                  // doesn't double-count it
-        }
-        // verify extension: the production trace-run hook is gated off under
-        // JIT_VERIFY, so exercise the trace HERE; re-restore pre-interp state,
-        // run t->code on a 2nd scratch (replaying the same logged loads), then
-        // compare to the authoritative interp. This makes the trace's own
-        // state.pc write + frame visible to the differential harness.
-        if (m_jit->traces_enabled()) {
-          CJitEngine::TraceFragment *tr =
-              m_jit->trace_lookup(start_virt, start_asn);
-          if (tr &&
-              m_jit->trace_ok(tr, start_phys, (const uint8_t *)dram_ptr) &&
-              [&] {
-                for (uint32_t s = 1; s < tr->n_segs; ++s) {
-                  u64 sp;
-                  if (!live_exec_phys(tr->segs[s].guest_pc, &sp) ||
-                      sp != tr->segs[s].phys_pc)
-                    return false;
-                }
-                return true;
-              }()) { // verify now mirrors the production hook's interior
-                     // live-phys check
-            memcpy(state.f, f_pre, sizeof(f_pre));
-            state.sde = ictl_sde_pre;
-            state.hwe = ictl_hwe_pre;
-            state.i_ctl_spe = ictl_spe_pre;
-            state.i_ctl_va_mode = ictl_vam_pre;
-            state.i_ctl_vptb = ictl_vptb_pre;
-            state.i_ctl_other = ictl_other_pre;
-            state.cm = cm_pre;
-            dpc_context_changed();
-            state.sir = sir_pre;
-            state.aster = aster_pre;
-            state.astrr = astrr_pre;
-            state.fpen = fpen_pre;
-            state.ppcen = ppcen_pre;
-            state.fpcr = fpcr_pre;
-            state.exc_sum = exc_sum_pre;
-            memcpy(state.r, snap, sizeof(r_interp));
-            m_jit_vreplay = true;
-            m_jit_vlog_i = 0;
-            m_jit_slog_i = 0;
-            m_jit_vbad = false;
-            const u32 done_t = ((CJitEngine::JitFn)tr->code)(this, state.r);
-            m_jit_vreplay = false;
-            if (done_t != n_interp && (m_jit_vbad = true))
-              printf("[JIT][VERIFY] TRACE COUNT MISMATCH at %016llx: "
-                     "interp_span=%u trace_done=%u\n",
-                     (unsigned long long)start_virt, n_interp, done_t);
-            if (done_t == n_interp) {
-              if (state.pc != interp_pc && (m_jit_vbad = true))
-                printf("[JIT][VERIFY] TRACE PC MISMATCH at %016llx: "
-                       "interp=%016llx trace=%016llx (n=%u)\n",
-                       (unsigned long long)start_virt,
-                       (unsigned long long)interp_pc,
-                       (unsigned long long)state.pc, n_interp);
-              u64 ipr_jit_t[27];
-              cap_iprs(ipr_jit_t); // trace wrote IPRs into live state; check vs
-                                   // interp (parity with the block path)
-              for (int ii = 0; ii < 27; ii++)
-                if (ipr_jit_t[ii] != ipr_interp[ii] && (m_jit_vbad = true))
-                  printf("[JIT][VERIFY] TRACE IPR MISMATCH at %016llx slot %d: "
-                         "interp=%016llx trace=%016llx\n",
-                         (unsigned long long)start_virt, ii,
-                         (unsigned long long)ipr_interp[ii],
-                         (unsigned long long)ipr_jit_t[ii]);
-              for (int fi = 0; fi < 64; fi++)
-                if (state.f[fi] != f_interp[fi] && (m_jit_vbad = true))
-                  printf("[JIT][VERIFY] TRACE FP MISMATCH at %016llx f%d: "
-                         "interp=%016llx trace=%016llx\n",
-                         (unsigned long long)start_virt, fi,
-                         (unsigned long long)f_interp[fi],
-                         (unsigned long long)state.f[fi]);
-              if (m_jit_slog_i != n_stores_interp && (m_jit_vbad = true))
-                printf("[JIT][VERIFY] TRACE STORE COUNT MISMATCH at %016llx: "
-                       "interp=%u trace=%u\n",
-                       (unsigned long long)start_virt, n_stores_interp,
-                       m_jit_slog_i);
-              if (n_loads_interp < 64 && m_jit_vlog_i != n_loads_interp &&
-                  (m_jit_vbad = true))
-                printf("[JIT][VERIFY] TRACE LOAD COUNT MISMATCH at %016llx: "
-                       "interp=%u trace=%u\n",
-                       (unsigned long long)start_virt, n_loads_interp,
-                       m_jit_vlog_i);
-              m_jit->verify_compare(start_virt, r_interp, state.r, vw, n_interp,
-                                    m_jit_vbad);
-            }
-          }
         }
         state.pc =
             interp_pc; // restore; the block's PC write was only for the check

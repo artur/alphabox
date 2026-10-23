@@ -132,17 +132,6 @@ public:
   static constexpr int kCacheEntries = 1 << kCacheBits;
   static constexpr uint64_t kIndexMask = (uint64_t)kCacheEntries - 1;
 
-  // Trace tier (M0+): a small SECOND cache, beside m_blocks, for hot superblock
-  // heads. Only the hottest loop heads are promoted, so it stays small. Same
-  // direct-mapped, virtual+ASN-keyed shape.
-  static constexpr int kTraceBits = 12; // 4K trace heads
-  static constexpr uint64_t kTraceEntries = 1 << kTraceBits;
-  static constexpr uint64_t kTraceIndexMask = kTraceEntries - 1;
-  static constexpr uint32_t kMaxTraceSegs =
-      16; // fused blocks per trace (multi-block coherence)
-  static constexpr uint32_t kMaxTraceExits =
-      16; // guards / side-exits per trace
-
   // Reclaim executable memory once compiled code passes this many bytes, rather
   // than tearing down the asmjit runtime on every flush (see flush()). A
   // reclaim frees ALL compiled code, so the budget must hold the guest's hot
@@ -272,8 +261,6 @@ public:
     uint64_t flush_gen; // icache-flush generation at which the code bytes were
                         // last hash-validated; stale => lookup misses and
                         // revalidate_flushed() re-hashes (lazy IC_FLUSH)
-    uint32_t hot; // dispatches since record; at the promote threshold -> form a
-                  // trace
     uint32_t cold_runs; // interpreted passes since record; compiled once this
                         // reaches compile_after() (hotness threshold)
 #ifdef JIT_REGPROF
@@ -298,49 +285,6 @@ public:
     uint16_t rp_cls_bytes[kRpClasses];
     uint16_t rp_midexit_bytes, rp_exit_bytes, rp_regmem;
 #endif
-  };
-
-  // Per fused block: the source-coherence descriptor (review: multi-block
-  // traces need this). A trace spans multiple blocks/pages, so a single head
-  // tag + epoch is not enough -- trace_ok() re-hashes these on an epoch change,
-  // mirroring revalidate_flushed, and also stores what to re-form.
-  struct SourceSeg {
-    uint64_t guest_pc; // segment start virtual PC
-    uint64_t phys_pc;  // segment start physical PC (source bytes)
-    uint32_t n_instr;  // instructions in the segment (hash length)
-    bool asm_global;   // global (ASM) segment
-    uint32_t asn;      // ASN (ignored when asm_global)
-    uint64_t src_sum;  // hash of the segment's source words at build
-  };
-
-  // M4+: which guest regs are held in host registers (not yet committed to
-  // state.r[]) at a side-exit. Empty through M3 (no register cache across
-  // guards), so the side-exit needs no spill until M4.
-  struct Snapshot {
-    uint64_t dirty_gpr;
-    uint64_t dirty_fpr;
-  };
-
-  struct TraceExit {
-    uint64_t guest_pc; // resume PC handed to the block dispatcher (compile-time
-                       // constant)
-    Snapshot snap;     // M4+ (zero until then)
-  };
-
-  struct TraceFragment {
-    uint64_t head_tag; // entry virtual PC (key)
-    uint32_t asn;      // key (ignored when asm_global)
-    bool asm_global;
-    bool valid;
-    JitFn code; // single entry; null = empty slot
-    uint64_t
-        vgen; // build epoch = m_itb_gen + m_flush_gen (coherence; see trace_ok)
-    uint64_t flush_gen; // IC-flush epoch at build
-    uint32_t n_blocks, n_instr;
-    SourceSeg segs[kMaxTraceSegs];
-    uint32_t n_segs;
-    TraceExit exits[kMaxTraceExits];
-    uint32_t n_exits;
   };
 
   // Byte offsets (from the CAlphaCPU*) of the fields the inline load fast path
@@ -543,9 +487,6 @@ public:
   static inline uint64_t index_of(uint64_t virt_pc) {
     return (virt_pc >> 2) & kIndexMask;
   }
-  static inline uint64_t trace_index_of(uint64_t virt_pc) {
-    return (virt_pc >> 2) & kTraceIndexMask;
-  }
 
   // The block key, and the one rule every path that finds a block follows:
   // lookup() (the dispatcher, the chain fills, jit_indirect and through it
@@ -574,27 +515,6 @@ public:
                : nullptr;
   }
 
-  // Trace tier (M0+): the global kill-switch + the trace-cache lookup.
-  // traces_enabled() is false until M1 enables a region, so the dispatcher hook
-  // is inert (one predictable-not-taken branch) and the engine is bit-identical
-  // to the block-only build. Unlike the block lookup, this does NOT gate on
-  // flush_gen -- trace_ok() owns all staleness (so an unrelated flush
-  // re-validates instead of dropping).
-  inline bool traces_enabled() const { return m_traces_enabled; }
-  inline void set_traces_enabled(bool e) { m_traces_enabled = e; }
-
-  // the slot a head PC maps to (formation fills it). Unlike trace_lookup,
-  // returns the slot unconditionally so  the caller decides whether to (re)form
-  // into it.
-  inline TraceFragment *trace_slot(uint64_t head_pc) {
-    return &m_traces[trace_index_of(head_pc)];
-  }
-  inline void note_trace_stale() { // always defined (callable from trace_ok);
-                                   // counts only under JIT_STATS
-#ifdef JIT_STATS
-    m_trace_stale++;
-#endif
-  }
   inline void
   note_link_edge(JitBlock *src,
                  uint64_t tgt_tag) { // instrument a source block's successor
@@ -613,30 +533,6 @@ public:
     (void)tgt_tag;
 #endif
   }
-#ifdef JIT_STATS
-  inline void trace_entered() { m_trace_entered++; }
-  inline void trace_exited() {
-    m_trace_exits++;
-  } // a trace side-exited / underran its first-pass span
-#endif
-
-  // When this tier is revived, its key needs the processor mode as a block's
-  // does (JitBlock::cm): whether a mode may execute a page is settled when the
-  // page is translated, so a fragment built for one mode must not answer a
-  // lookup made in another. Nothing builds fragments today, which is the only
-  // reason this is a comment rather than a field.
-  inline TraceFragment *trace_lookup(uint64_t virt_pc, uint32_t asn) {
-    TraceFragment &t = m_traces[trace_index_of(virt_pc)];
-    return (t.valid && t.head_tag == virt_pc && (t.asm_global || t.asn == asn))
-               ? &t
-               : nullptr;
-  }
-
-  // Source-coherence check (review: per-segment, from M0). head_live_phys is
-  // the head's freshly resolved physical; on a remap/flush since build, fall
-  // back to blocks + re-form. See the .cpp.
-  bool trace_ok(TraceFragment *t, uint64_t head_live_phys, const uint8_t *dram);
-
   /// Drop one block's compiled code and every link into it, and leave it
   /// looking never-compiled. For a block the dispatcher wants to be asked
   /// about every time it runs: compiled, a loop chains to itself and spins a
@@ -675,7 +571,7 @@ public:
                      void *fltv_helper);
   void flush();
 
-  // Per-op codegen, shared by compile_block and compile_trace
+  // Per-op codegen.
   // Block register allocator: maps each guest GPR to a host reg id, or -1 =
   // the state.r[] memory slot. The global pins (x86-64: R26/R16/R27/R30 ->
   // r12/r13/r15/r14; AArch64: see jitemit_a64.hpp) are the binding, live
@@ -688,26 +584,17 @@ public:
   };
 
   // Host-architecture backend (x86-64: jitengine.cpp; AArch64:
-  // jitemit_a64.hpp). compile_block / compile_trace do the arch-neutral work
-  // (prefix scan, stats, slot bookkeeping) and call these to emit + add the
-  // native code. Return false when nothing was produced.
+  // jitemit_a64.hpp). compile_block does the arch-neutral work (prefix scan,
+  // stats, slot bookkeeping) and calls this to emit + add the native code.
+  // Returns false when nothing was produced.
   bool assemble_block(JitBlock *b, const uint32_t *words, uint32_t plen,
                       bool terminator_branch, bool terminator_jmp,
                       const HelperSet &hs, JitFn *fn, uint32_t *body_off,
                       size_t *csz);
-  bool assemble_trace(JitBlock **blocks, uint32_t n_blocks, const uint8_t *dram,
-                      const HelperSet &hs, JitFn *fn, size_t *csz);
 
   void emit_op(void *a, const uint8_t *gpa, void *done, const HelperSet &hs,
                bool pal_block, JitBlock *b, uint32_t ins, uint32_t i,
                RegAlloc &regalloc);
-
-  // compile an N-block trace into slot t (reuses emit_op per block; blocks
-  // fused with a guard -> side-exit between them). n_blocks==1 is the
-  // single-block case; the exit returns to the dispatcher.
-  void compile_trace(TraceFragment *t, JitBlock **blocks, uint32_t n_blocks,
-                     const uint8_t *dram, uint64_t dram_size,
-                     const HelperSet &hs);
 
   void flush_non_global(); // flush only !asm_global blocks (the ASM-bit-clear /
                            // ASN icache flush)
@@ -917,8 +804,6 @@ public:
   uint64_t verify_compare(uint64_t blk_virt, const uint64_t *interp,
                           const uint64_t *jit, const uint32_t *words,
                           uint32_t nwords, bool other_mismatch = false);
-  void trace_selftest(); // M0: unit-test trace_ok's source-coherence
-                         // (SMC/IMB/ITB-remap/head-remap)
 #endif
 
 #ifdef JIT_STATS
@@ -940,10 +825,6 @@ public:
 
 private:
   JitBlock m_blocks[kCacheEntries];
-  TraceFragment
-      m_traces[kTraceEntries]; // M0+: the trace tier's cache (inert until M1)
-  bool m_traces_enabled =
-      false; // global kill-switch; default OFF -> bit-identical
   int m_cpu_id;
   CCodePageMap *m_code_map = nullptr;
   const bool *m_nopflush_clean = nullptr;
@@ -1014,9 +895,9 @@ public:
 private:
   JitOffsets m_off = {}; // field offsets for the inline load fast path
   // a64 hot/cold split: memory ops record the asmjit label ids of their
-  // out-of-line slow path (indexed m_cold_base + instruction index), and
-  // assemble_block / assemble_trace re-run emit_op with m_cold_pass set to
-  // emit those paths after the epilogue, off the fall-through hot path.
+  // out-of-line slow path (indexed by instruction), and assemble_block
+  // re-runs emit_op with m_cold_pass set to emit those paths after the
+  // epilogue, off the fall-through hot path.
   // a64 shared helper-call thunk (spill caller-saved pins, blr x16, reload),
   // built lazily in the current code runtime; reclaim_code drops it.
   void *m_call_thunk = nullptr;
@@ -1092,13 +973,13 @@ private:
   // to the b.cond -- so nothing has to survive across the count update, and a
   // flag-setting instruction there later (a subs down-counter, say) cannot
   // silently break it. Only assemble_block's main pass opts in -- the cold
-  // pass and the trace builder still need the PC written where they stand.
+  // pass still needs the PC written where it stands.
   int m_pending_br_op = -1;
   int m_pending_br_ra = 31;
   bool m_defer_branch_pc = false;
   // Index of the last instruction of the block being emitted: a conditional
   // branch before it is an in-block exit, not the terminator. ~0 outside
-  // assemble_block (the cold pass and the trace builder never see one).
+  // assemble_block (the cold pass never sees one).
   uint32_t m_block_last = ~0u;
 
   static constexpr uint32_t kColdMax = 1024;
@@ -1110,16 +991,15 @@ private:
   // still applies, bit 1 = keep this probe for a later op, bit 2 = the
   // alignment is implied by the last probe's.
   uint8_t m_reuse_plan[kColdMax] = {};
-  uint32_t m_cold_base = 0;
   bool m_cold_pass = false;
   // HRM D.19: a memory operation of the list between LDx_L and STx_C fails
   // the STx_C (CAlphaCPU::m_llsc_clean, which those operations clear). A
-  // block and each trace segment is entered at its first instruction and
-  // runs straight on (exits leave it, nothing enters midway), so the first
-  // such operation of a block, and the first after each LDx_L in it, are the
-  // only ones that need to store: on any path through the block a later one
-  // would store the same zero again. Set at the block's first instruction
-  // and after an LDx_L; emit_op's llsc_memop() stores and clears it.
+  // block is entered at its first instruction and runs straight on (exits leave
+  // it, nothing enters midway), so the first such operation of a block, and the
+  // first after each LDx_L in it, are the only ones that need to store: on any
+  // path through the block a later one would store the same zero again. Set at
+  // the block's first instruction and after an LDx_L; emit_op's llsc_memop()
+  // stores and clears it.
   bool m_llsc_pending = true;
   // Interpreted passes before a block compiles (ALPHABOX_JIT_COMPILE_AFTER
   // overrides). Measured on a Windows 2000 guest with interleaved boots (one
@@ -1217,8 +1097,6 @@ private:
       m_jmp_hit; // windowed: link-miss bails, jit_indirect attempts/hits
   uint64_t m_fresh_cold, m_fresh_tag, m_fresh_asn, m_fresh_mode, m_fresh_phys,
       m_fresh_hash; // windowed: record() step-4 fresh-compile reason
-  uint64_t m_trace_formed, m_trace_entered, m_trace_exits,
-      m_trace_stale; // windowed: trace tier activity (M1+)
   uint64_t
       m_term_op[64]; // cumulative: opcode that ended a block's compiled prefix
   uint64_t

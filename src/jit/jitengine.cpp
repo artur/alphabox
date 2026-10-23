@@ -1048,16 +1048,6 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
   pin_defaults(m_pin_guest, &m_pin_adapt, &m_pin_log, &m_pin_shadow);
   memset(m_blocks, 0,
          sizeof(m_blocks)); // flush() is lazy (gen bump) -- zero the slots here
-  memset(m_traces, 0,
-         sizeof(m_traces)); // trace tier: empty until formation fills slots
-  // Trace tier kill-switch (config_debug.h JIT_TRACES). OFF by default, 1-block
-  // traces preempt block chaining = a net loss; re-enable when fusion closes
-  // loops in-trace.
-#ifdef JIT_TRACES
-  m_traces_enabled = true;
-#else
-  m_traces_enabled = false;
-#endif
   m_rt = new asmjit::JitRuntime();
 #ifdef ALPHABOX_HVF
   if (hv::enabled()) {
@@ -1105,7 +1095,6 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
   m_bail_link = m_jmp_attempt = m_jmp_hit = 0;
   m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_mode = m_fresh_phys =
       m_fresh_hash = 0;
-  m_trace_formed = m_trace_entered = m_trace_exits = m_trace_stale = 0;
   memset(m_term_op, 0, sizeof(m_term_op));
   memset(m_pal_func, 0, sizeof(m_pal_func));
   memset(m_mtpr_func, 0, sizeof(m_mtpr_func));
@@ -1121,11 +1110,6 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
     fprintf(stderr,
             "[JIT][CPU%d] could not open %s for the disassembly trace\n",
             m_cpu_id, name);
-#endif
-#ifdef JIT_VERIFY
-  if (cpu_id == 0)
-    trace_selftest(); // M0: validate trace_ok's source-coherence once
-                      // (SMC/IMB/remap)
 #endif
 }
 
@@ -1250,7 +1234,6 @@ CJitEngine::JitBlock *CJitEngine::record(uint64_t virt_pc, uint64_t phys_pc,
 #endif
   b.prefix_len = 0;
   b.compiled = false;
-  b.hot = 0; // fresh block: restart the trace-promotion counter
   b.cold_runs = kept_runs; // fresh block: restart the hotness count, unless a
                            // flush dropped this very block before it compiled
 #ifdef JIT_REGPROF
@@ -1325,109 +1308,6 @@ CJitEngine::JitBlock *CJitEngine::revalidate_flushed(uint64_t virt_pc,
   b.jit_body = (void *)((uint8_t *)(void *)b.code + b.body_off);
   return &b;
 }
-
-// Trace tier - is a looked-up trace safe to enter? (review: per-segment source
-// validation.) head_live_phys is the head's freshly resolved physical. The
-// steps mirror the block dispatcher's phys check (jit_run ~line 832) +
-// revalidate_flushed's hash:
-//   1. head remap / ASN-recycle: the head's live physical no longer matches
-//   what we built from -> stale.
-//   2. epoch fresh (nothing flushed/ITB-invalidated since build) -> enter
-//   directly.
-//   3. epoch changed -> re-hash every fused segment. Unchanged bytes => the
-//   epoch bumped for an unrelated
-//      reason (e.g. an IMB on another page): keep the trace + re-stamp. Changed
-//      bytes (SMC/remap): stale.
-// Interior coherence: the source hash here checks BYTES at the cached phys --
-// it can't see an interior page remapped to a DIFFERENT physical with identical
-// bytes. The CALLER closes that gap by re-resolving each segment's LIVE
-// physical: trace_segs_live (trace entry) + the recorder's per-successor check
-// (formation).
-bool CJitEngine::trace_ok(TraceFragment *t, uint64_t head_live_phys,
-                          const uint8_t *dram) {
-  if (t->n_segs == 0 || t->segs[0].phys_pc != head_live_phys) {
-    note_trace_stale();
-    return false;
-  } // head remap / ASN recycle
-  // A 1-block trace mirrors its head block's compiled prefix, whose length can
-  // change with NO source-byte or epoch change: a fault-truncated cold record
-  // shrinks prefix_len (n_instr oscillates), a later clean record regrows it
-  // invisibly to the hash below. If the live head block compiled a different
-  // length, the trace is stale; drop it so the dispatcher re-forms a consistent
-  // one.
-  for (uint32_t s = 0; s < t->n_segs;
-       ++s) { // ANY fused block's prefix_len can oscillate with no source/epoch
-              // change (not just the head)
-    const JitBlock &sb = m_blocks[index_of(t->segs[s].guest_pc)];
-    if (sb.valid && sb.tag == t->segs[s].guest_pc &&
-        sb.prefix_len != t->segs[s].n_instr) {
-      note_trace_stale();
-      return false;
-    }
-  }
-  if (t->vgen == m_itb_gen + m_flush_gen)
-    return true; // epoch fresh: nothing changed since build
-  for (uint32_t i = 0; i < t->n_segs; ++i) {
-    const SourceSeg &s = t->segs[i];
-    if (s.src_sum != src_hash(dram + s.phys_pc, s.n_instr)) {
-      note_trace_stale();
-      return false;
-    } // a segment's source bytes changed -> stale
-  }
-  t->vgen =
-      m_itb_gen + m_flush_gen; // all segments re-validated: re-stamp the epoch
-  t->flush_gen = m_flush_gen;
-  return true;
-}
-
-#ifdef JIT_VERIFY
-// unit-test trace_ok's source-coherence decision (SMC/IMB, ITB-remap,
-// head-remap, multi-segment) WITHOUT real traces or the emitter. Mutates
-// m_itb_gen/m_flush_gen but saves/restores; runs once at ctor when the engine
-// is fresh (counters 0, no live blocks). A FAIL here means the trace tier's
-// coherence is broken
-void CJitEngine::trace_selftest() {
-  const uint64_t save_itb = m_itb_gen, save_flush = m_flush_gen;
-  uint32_t mem[8] = {0x11111111, 0x22222222, 0x33333333, 0x44444444,
-                     0x55555555, 0x66666666, 0x77777777, 0x88888888};
-  const uint8_t *d = (const uint8_t *)mem;
-
-  TraceFragment t = {};
-  t.valid = true;
-  t.head_tag = 0x2000;
-  t.asn = 1;
-  t.n_segs = 2;
-  t.segs[0] = {0x2000, 0, 4,
-               false,  1, src_hash(d + 0, 4)}; // words[0..3] at phys 0
-  t.segs[1] = {0x2010, 16, 4,
-               false,  1,  src_hash(d + 16, 4)}; // words[4..7] at phys 16
-  t.vgen = m_itb_gen + m_flush_gen;
-
-  bool ok = true;
-  ok &= (trace_ok(&t, 0, d) ==
-         true); // 1. fresh: epoch + head-phys match -> enter
-  ok &= (trace_ok(&t, 999, d) ==
-         false); // 2. head remap / ASN-recycle: live head phys differs -> drop
-  ++m_itb_gen;   // 3. ITB-invalidate, bytes unchanged:
-  ++m_epoch;
-  ok &= (trace_ok(&t, 0, d) ==
-         true); //    epoch bumps, re-hash matches -> keep ...
-  ok &= (t.vgen ==
-         m_itb_gen + m_flush_gen); //    ... and re-stamped to the new epoch
-  mem[5] = 0xDEADBEEF;
-  ++m_flush_gen; // 4. SMC on interior seg1 + IMB (flush bump):
-  ++m_epoch;
-  ok &= (trace_ok(&t, 0, d) == false); //    re-hash mismatch -> drop
-  mem[5] = 0x66666666; // 5. restore the byte, epoch still bumped:
-  ok &= (trace_ok(&t, 0, d) == true); //    re-hash matches again -> keep
-
-  printf("[JIT][CPU%d] trace_ok self-test (SMC/IMB/ITB-remap/head-remap): %s\n",
-         m_cpu_id, ok ? "PASS" : "*** FAIL ***");
-  m_itb_gen = save_itb;
-  m_flush_gen = save_flush;
-  m_epoch = m_itb_gen + m_flush_gen;
-}
-#endif
 
 // Free ALL compiled code (delete+new of the runtime; reset()-and-reuse
 // corrupted the JitAllocator block tree) and drop every slot's now-dangling
@@ -1528,11 +1408,6 @@ void CJitEngine::reclaim_code() {
     m_blocks[i].jit_body = nullptr;
     m_blocks[i].compiled = false;
   }
-  // Traces hold JitFns into the runtime we just deleted -- drop them too, or a
-  // post-reclaim trace dispatch jumps through a freed pointer. trace_lookup
-  // keys on valid, so clearing it is enough.
-  for (int i = 0; i < kTraceEntries; ++i)
-    m_traces[i].valid = false;
 }
 
 
@@ -1584,18 +1459,6 @@ void CJitEngine::flush_non_global() {
 #ifdef JIT_STATS
   m_fng_tsc += jit_rdtsc() - fng_t0;
 #endif
-  for (int i = 0; i < kTraceEntries;
-       ++i) { // a trace spanning any !asm_global segment depends on a
-              // soft-dropped block -> drop it too
-    if (!m_traces[i].valid)
-      continue;
-    for (uint32_t s = 0; s < m_traces[i].n_segs; ++s)
-      if (!m_traces[i].segs[s].asm_global) {
-        m_traces[i].valid = false;
-        note_trace_stale();
-        break;
-      }
-  }
 }
 
 // ZAP/ZAPNOT byte-expand: g_zapnot_mask[b] has byte i = 0xFF where bit i of b
@@ -1781,9 +1644,8 @@ static uint32_t regprof_mask(const uint32_t *w, uint32_t n) {
 }
 #endif
 
-// The 3 guest GPRs kept live in the callee-saved pins r12/r13/r15.
-// compile_block uses the global hot set (RA/a0/PV); compile_trace can override
-// with the trace's own hot regs (the M2 regalloc spike).
+// The 3 guest GPRs kept live in the callee-saved pins r12/r13/r15: the
+// global hot set (RA/a0/PV).
 static const int kGlobalPins[3] = {26, 16, 27};
 
 #ifdef JIT_HOST_X64
@@ -4295,212 +4157,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 }
 #endif // JIT_HOST_X64
 
-// Compile an N-block trace. Reuses the shared emit_op for each block's per-op
-// codegen (so the body is the exact one the block path already verifies).
-// Blocks are fused with a GUARD between them: after a block's terminator (which
-// left R10 = its next PC), check R10 == the next fused block's tag; on a hit
-// fall through in-trace, on a miss SIDE-EXIT to the dispatcher at the real next
-// PC. n_blocks==1 = the single- block trace. Fills the caller-provided slot t
-// (code + per-segment source descriptors + coherence epoch).
-void CJitEngine::compile_trace(TraceFragment *t, JitBlock **blocks,
-                               uint32_t n_blocks, const uint8_t *dram,
-                               uint64_t dram_size, const HelperSet &hs) {
-  using namespace asmjit;
-  if (n_blocks == 0 || n_blocks > kMaxTraceSegs)
-    return;
-  // Validate every segment up front: a compiled prefix that fits in DRAM.
-  // (prefix_len, NOT n_instr -- ops past the prefix never passed the
-  // safe-to-compile scan; emitting them runs code PAST the terminator.)
-  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-    const JitBlock *b = blocks[bi];
-    if (b->prefix_len == 0 || b->phys + (uint64_t)b->prefix_len * 4 > dram_size)
-      return;
-  }
-
-  JitFn fn = nullptr;
-  size_t csz = 0;
-  if (!assemble_trace(blocks, n_blocks, dram, hs, &fn, &csz))
-    return;
-  uint32_t total = 0;
-  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-    JitBlock *b = blocks[bi];
-    t->segs[bi] = {b->tag,        b->phys,
-                   b->prefix_len, b->asm_global,
-                   b->asn,        src_hash(dram + b->phys, b->prefix_len)};
-    total += b->prefix_len;
-  }
-  t->code = fn;
-  t->head_tag = blocks[0]->tag;
-  t->asn = blocks[0]->asn;
-  t->asm_global = blocks[0]->asm_global;
-  t->valid = true;
-  t->vgen = m_itb_gen + m_flush_gen;
-  t->flush_gen = m_flush_gen;
-  t->n_blocks = n_blocks;
-  t->n_instr = total;
-  t->n_segs = n_blocks;
-  t->n_exits = 0;
-  m_code_bytes += csz;
-#ifdef JIT_STATS
-  m_trace_formed++;
-#endif
-}
-
-#ifdef JIT_HOST_X64
-bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
-                                const uint8_t *dram, const HelperSet &hs,
-                                JitFn *out_fn, size_t *out_csz) {
-  using namespace asmjit;
-  CodeHolder code;
-  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
-    return false;
-  x86::Assembler a(&code);
-  CallConv cc;
-  (void)cc.init(CallConvId::kCDecl, ((JitRuntime *)m_rt)->environment());
-  const uint8_t *gpa = cc.passed_order(RegGroup::kGp);
-
-  a.push(x86::rbx);
-  a.push(x86::rbp);
-  a.push(x86::r14);
-  a.push(x86::r12);
-  a.push(x86::r13);
-  a.push(x86::r15);
-#ifdef _WIN32
-  a.push(x86::rsi);
-  a.push(x86::rdi);
-#endif
-  a.sub(x86::rsp, imm(56));
-  a.mov(x86::rbp, x86::gpq(gpa[0])); // cpu
-  a.mov(x86::rbx, x86::gpq(gpa[1])); // regs
-  a.mov(x86::qword_ptr(x86::rsp, 40),
-        imm(0)); // chain count := 0 (reclaimed r14 -> stack slot)
-  a.mov(x86::r12, x86::qword_ptr(x86::rbx, 26 * 8)); // R26 (RA) pin
-  a.mov(x86::r13, x86::qword_ptr(x86::rbx, 16 * 8)); // R16 (a0) pin
-  a.mov(x86::r15, x86::qword_ptr(x86::rbx, 27 * 8)); // R27 (PV) pin
-  a.mov(x86::r14, x86::qword_ptr(x86::rbx, 30 * 8)); // R30 (SP) pin
-#ifdef _WIN32
-  a.mov(x86::rsi, x86::qword_ptr(x86::rbx, 29 * 8)); // R29 (GP) pin
-  a.mov(x86::rdi, x86::qword_ptr(x86::rbx, 0 * 8));  // R0 (v0) pin
-#endif
-
-  Label done = a.new_label(); // shared side-exit/return: EAX preset to the
-                              // instr count, state.pc live
-  Label body = a.new_label(); // loop re-entry (after the prologue; pins + count
-                              // stay live across iterations)
-  a.bind(body);
-
-  // Block register allocator: the 3 global pins (static, live across the
-  // trace). dynamic pool in future.
-  RegAlloc ra;
-  for (int r = 0; r < 32; ++r)
-    ra.host[r] = -1;
-  ra.rax_holds = -1;
-  ra.host[kGlobalPins[0]] = (int)x86::r12.id();
-  ra.host[kGlobalPins[1]] = (int)x86::r13.id();
-  ra.host[kGlobalPins[2]] = (int)x86::r15.id();
-  ra.host[30] = (int)x86::r14.id(); // SP (reclaimed r14), all platforms
-#ifdef _WIN32
-  ra.host[29] = (int)x86::rsi.id(); // GP (Win64)
-  ra.host[0] = (int)x86::rdi.id();  // v0 (Win64)
-#endif
-
-  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-    JitBlock *b = blocks[bi];
-    const uint32_t plen = b->prefix_len;
-    const uint32_t *words = (const uint32_t *)(dram + b->phys);
-    const bool pal_block = (b->tag & 1) != 0;
-
-    // Default R10 + state.pc = this block's sequential next (the fall-through
-    // exit). emit_op's branch/jump terminator overwrites both with its target;
-    // a fault bail writes the fault PC. For an intermediate block this also
-    // makes the guard below see R10 == the sequential successor when it falls
-    // through. (note: no compiled op currently READS state.pc mid-block, so
-    // default-before-emit is equivalent.)
-    a.mov(x86::r10, imm(b->tag + 4 * (uint64_t)plen));
-    a.mov(x86::qword_ptr(x86::rbp, m_off.state_pc), x86::r10);
-
-    for (uint32_t i = 0; i < plen; ++i)
-      emit_op(&a, gpa, &done, hs, pal_block, b, words[i], i, ra);
-
-    a.add(x86::qword_ptr(x86::rsp, 40), imm(plen)); // count this block
-    a.mov(x86::eax, x86::dword_ptr(
-                        x86::rsp, 40)); // EAX = instrs completed so far (preset
-                                        // for `done` -- a side-exit or return)
-
-    if (bi + 1 < n_blocks) {
-      // Guard: did this block actually flow to the next fused block? R10 = its
-      // next PC; a mismatch means the path diverged from what we fused ->
-      // side-exit to the dispatcher at the real next PC (state.pc).
-      a.mov(x86::rcx, imm(blocks[bi + 1]->tag)); // 64-bit tag may exceed imm32;
-                                                 // rcx scratch (not EAX)
-      a.cmp(x86::r10, x86::rcx);
-      a.jne(done);
-    }
-  }
-#ifndef JIT_VERIFY
-  // Loop closure: if the last block branches back to the trace head, close the
-  // loop in compiled code with the budget/interrupt gate ON the back-edge (risk
-  // #1). Verify builds omit this -> the trace runs one iteration and exits at
-  // state.pc, so the side-exit verify validates the body unchanged.
-  {
-    JitBlock *lb = blocks[n_blocks - 1];
-    const uint32_t *lw = (const uint32_t *)(dram + lb->phys);
-    const uint32_t lop = lw[lb->prefix_len - 1], lopc = lop >> 26;
-    if (lopc == 0x30 || lopc == 0x34 ||
-        (lopc >= 0x38 && lopc <= 0x3f)) { // PC-relative branch terminator
-      const int64_t disp = (int64_t)((uint64_t)(lop & 0x1FFFFF) << 43) >> 43;
-      const uint64_t tgt =
-          (((lb->tag & ~(uint64_t)1) + 4 * (uint64_t)(lb->prefix_len - 1)) + 4 +
-           (uint64_t)(disp * 4)) |
-          (lb->tag & 1);
-      if (tgt == blocks[0]->tag) { // taken target == head -> a closable loop
-        a.mov(x86::rcx, imm(blocks[0]->tag));
-        a.cmp(x86::r10, x86::rcx);
-        a.jne(done); // not looping now -> exit
-        a.mov(x86::rax, x86::qword_ptr(x86::rsp, 40));
-        a.cmp(x86::rax, x86::qword_ptr(x86::rbp, m_off.jit_budget));
-        a.jge(done); // budget ceiling
-        a.cmp(x86::byte_ptr(x86::rbp, m_off.check_int), imm(0));
-        a.jne(done); // interrupt pending
-        a.cmp(x86::byte_ptr(x86::rbp, m_off.check_timers), imm(0));
-        a.jne(done); // timer pending
-        a.jmp(body); // loop in compiled code
-      }
-    }
-  }
-#endif
-  a.bind(done);
-  a.mov(x86::qword_ptr(x86::rbx, 26 * 8),
-        x86::r12); // sync pins back to regs[] before returning
-  a.mov(x86::qword_ptr(x86::rbx, 16 * 8), x86::r13);
-  a.mov(x86::qword_ptr(x86::rbx, 27 * 8), x86::r15);
-  a.mov(x86::qword_ptr(x86::rbx, 30 * 8), x86::r14); // R30 (SP)
-#ifdef _WIN32
-  a.mov(x86::qword_ptr(x86::rbx, 29 * 8), x86::rsi); // R29 (GP)
-  a.mov(x86::qword_ptr(x86::rbx, 0 * 8), x86::rdi);  // R0 (v0)
-#endif
-  a.add(x86::rsp, imm(56));
-#ifdef _WIN32
-  a.pop(x86::rdi);
-  a.pop(x86::rsi);
-#endif
-  a.pop(x86::r15);
-  a.pop(x86::r13);
-  a.pop(x86::r12);
-  a.pop(x86::r14);
-  a.pop(x86::rbp);
-  a.pop(x86::rbx);
-  a.ret();
-
-  const size_t csz = code.code_size();
-  JitFn fn = nullptr;
-  if (!publish_code(&code, (void **)&fn))
-    return false;
-  *out_fn = fn;
-  *out_csz = csz;
-  return true;
-}
-#endif // JIT_HOST_X64
 
 #ifdef JIT_HOST_A64
 
@@ -4531,8 +4187,7 @@ void *CJitEngine::code_alloc(size_t bytes) {
 }
 #endif
 
-
-#include "jitemit_a64.hpp" // AArch64 emit_op / assemble_block / assemble_trace
+#include "jitemit_a64.hpp" // AArch64 emit_op / assemble_block
 #endif
 
 #ifdef JIT_VERIFY
@@ -4797,13 +4452,6 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
            (unsigned long long)m_fresh_asn, (unsigned long long)m_fresh_mode,
            (unsigned long long)m_fresh_phys, (unsigned long long)m_fresh_hash,
            (unsigned long long)m_fresh_cold, (unsigned long long)fresh);
-  if (m_trace_formed || m_trace_entered)
-    printf("[JIT][STATS][CPU%d] traces: formed %llu | entered %llu | exits "
-           "%llu | stale %llu (windowed)\n",
-           m_cpu_id, (unsigned long long)m_trace_formed,
-           (unsigned long long)m_trace_entered,
-           (unsigned long long)m_trace_exits,
-           (unsigned long long)m_trace_stale);
   {
     uint64_t fh[6] = {0}, mh[6] = {0},
              tm = 0; // link-fanout: thrashing source blocks + cumulative
@@ -5192,7 +4840,6 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
   m_bail_link = m_jmp_attempt = m_jmp_hit = 0;
   m_fresh_cold = m_fresh_tag = m_fresh_asn = m_fresh_mode = m_fresh_phys =
       m_fresh_hash = 0;
-  m_trace_formed = m_trace_entered = m_trace_exits = m_trace_stale = 0;
   const auto stat_end = std::chrono::steady_clock::now();
   m_stat_wall_last_ns =
       (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(

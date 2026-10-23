@@ -19,7 +19,7 @@
  *
  * Included from jitengine.cpp (JIT_HOST_A64) after the arch-neutral engine: it
  * shares classify()/SafeOp, g_zapnot_mask and the JitOffsets/HelperSet
- * contract, and provides emit_op / assemble_block / assemble_trace on asmjit's
+ * contract, and provides emit_op / assemble_block on asmjit's
  * a64 backend. It was written for this fork; it mirrors the x86-64 emitter,
  * which is ES40-Emu's (see jitengine.cpp), op for op -- same bail protocol
  * (state.pc = faulting instruction, return the chain's completed count), same
@@ -605,7 +605,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   SafeOp op = classify(ins, pal_block);
   // Cold pass (hot/cold split): emit only the slow paths recorded in the hot
   // pass; every other instruction produces nothing.
-  const uint32_t cold_idx = m_cold_base + i;
+  const uint32_t cold_idx = i;
   if (m_cold_pass && (cold_idx >= kColdMax || !m_cold_used[cold_idx]))
     return;
   if (!m_cold_pass && i == 0)
@@ -2787,7 +2787,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
   RegAlloc ra;
   a64_regalloc(ra, pal_block, m_pin_guest);
   m_cold_pass = false;
-  m_cold_base = 0;
   for (uint32_t i = 0; i < plen && i < kColdMax; ++i)
     m_cold_used[i] = false;
 #ifndef JIT_VERIFY
@@ -3269,113 +3268,6 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
 #endif
   *out_fn = fn;
   *out_body_off = (uint32_t)body_off;
-  *out_csz = csz;
-  return true;
-}
-
-bool CJitEngine::assemble_trace(JitBlock **blocks, uint32_t n_blocks,
-                                const uint8_t *dram, const HelperSet &hs,
-                                JitFn *out_fn, size_t *out_csz) {
-  using namespace asmjit;
-  CodeHolder code;
-  if (code.init(((JitRuntime *)m_rt)->environment()) != Error::kOk)
-    return false;
-  A64EmitErrors eh;
-  eh.cpu_id = m_cpu_id;
-  code.set_error_handler(&eh);
-  a64::Assembler a(&code);
-
-  a64_prologue(a, m_off.regs, m_pin_guest);
-  Label done = a.new_label();
-  Label body = a.new_label(); // loop re-entry (pins + count stay live)
-  a.bind(body);
-
-  RegAlloc ra; // allocated per segment: segments differ in PAL-ness
-  memset(m_reuse_plan, 0, sizeof(m_reuse_plan)); // no probe reuse in traces
-  m_cold_pass = false;
-  for (uint32_t i = 0; i < kColdMax; ++i)
-    m_cold_used[i] = false;
-  uint32_t cold_base = 0;
-  for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-    JitBlock *b = blocks[bi];
-    const uint32_t plen = b->prefix_len;
-    m_cold_base = cold_base; // segment-relative cold index base
-    cold_base += plen;
-    const uint32_t *words = (const uint32_t *)(dram + b->phys);
-    const bool pal_block = (b->tag & 1) != 0;
-    a64_regalloc(ra, pal_block, m_pin_guest);
-    // Default next PC = the sequential successor (terminators overwrite it).
-    a.mov(a64::x9, imm(b->tag + 4 * (uint64_t)plen));
-    a.str(a64::x9, a64_cpu_field(a, m_off.state_pc, 3));
-    for (uint32_t i = 0; i < plen; ++i)
-      emit_op(&a, nullptr, &done, hs, pal_block, b, words[i], i, ra);
-    a64_count_add(a, plen);
-    a.mov(a64::x0, a64::x27); // instrs completed so far (preset for done)
-    if (bi + 1 < n_blocks) {
-      // Guard: did this block flow into the next fused block?
-      a.mov(a64::x1, imm(blocks[bi + 1]->tag));
-      a.cmp(a64::x9, a64::x1);
-      a.b_ne(done);
-    }
-  }
-#ifndef JIT_VERIFY
-  // Loop closure (see the x86 emitter): back-edge to the head, gated.
-  {
-    JitBlock *lb = blocks[n_blocks - 1];
-    const uint32_t *lw = (const uint32_t *)(dram + lb->phys);
-    const uint32_t lop = lw[lb->prefix_len - 1], lopc = lop >> 26;
-    if (lopc == 0x30 || lopc == 0x34 || (lopc >= 0x38 && lopc <= 0x3f)) {
-      const int64_t disp = (int64_t)((uint64_t)(lop & 0x1FFFFF) << 43) >> 43;
-      const uint64_t tgt =
-          (((lb->tag & ~(uint64_t)1) + 4 * (uint64_t)(lb->prefix_len - 1)) + 4 +
-           (uint64_t)(disp * 4)) |
-          (lb->tag & 1);
-      if (tgt == blocks[0]->tag) {
-        a.mov(a64::x1, imm(blocks[0]->tag));
-        a.cmp(a64::x9, a64::x1);
-        a.b_ne(done);
-        a.ldr(a64::x1, a64_cpu_field(a, m_off.jit_budget, 3));
-        a.cmp(a64::x0, a64::x1);
-        a.b_ge(done);
-        a.ldrb(a64::w1, a64_cpu_field(a, m_off.check_int, 0));
-        a.cbnz(a64::w1, done);
-        a.ldrb(a64::w1, a64_cpu_field(a, m_off.check_timers, 0));
-        a.cbnz(a64::w1, done);
-        a.b(body);
-      }
-    }
-  }
-#endif
-  a.bind(done);
-  a64_epilogue(a, m_off.regs, m_pin_guest);
-  // Cold section for the fused segments (see assemble_block).
-  {
-    RegAlloc cra;
-    m_cold_pass = true;
-    uint32_t base = 0;
-    for (uint32_t bi = 0; bi < n_blocks; ++bi) {
-      JitBlock *b = blocks[bi];
-      const uint32_t plen = b->prefix_len;
-      const uint32_t *words = (const uint32_t *)(dram + b->phys);
-      m_cold_base = base;
-      a64_regalloc(cra, (b->tag & 1) != 0, m_pin_guest);
-      for (uint32_t i = 0; i < plen && base + i < kColdMax; ++i)
-        if (m_cold_used[base + i])
-          emit_op(&a, nullptr, &done, hs, (b->tag & 1) != 0, b, words[i], i,
-                  cra);
-      base += plen;
-    }
-    m_cold_pass = false;
-    m_cold_base = 0;
-  }
-
-  if (eh.failed)
-    return false;
-  const size_t csz = code.code_size();
-  JitFn fn = nullptr;
-  if (!publish_code(&code, (void **)&fn))
-    return false;
-  *out_fn = fn;
   *out_csz = csz;
   return true;
 }
