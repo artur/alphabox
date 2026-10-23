@@ -438,6 +438,9 @@ What was done, in order, and what is left. The plan for what is left is
      more processors (M9).
 6. **An EV5 machine** (the AlphaServer 4x00 firmware is on the CD): a
    separate project, with an EV5 core. Not started, and not in the plan.
+7. **The EV8 (21464) and Tarantula**, which never shipped: a research
+   packet with the sources, the decisions they leave and a proposed
+   staging ([ev8.md](platforms/ev8.md)). Not started.
 
 The EV7 machines were the far end of this: the processor carries its own
 memory controller and talks to I/O bridges instead of a chipset, and its
