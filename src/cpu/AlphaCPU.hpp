@@ -113,6 +113,17 @@ public:
   inline bool int_deliverable() const;
   void irq_trace_entry(); // ALPHABOX_IRQTRACE: interrupt-storm diagnosis
   void irq_trace_ipr(const char *what, u32 fn, u64 val);
+  /// HW_MFPR's value and HW_MTPR's effect on the IPR `function` names
+  /// (cpu_pal.hpp), for both engines: the interpreter's DO_HW_MFPR and
+  /// DO_HW_MTPR and compiled code's jit_hw_mfpr and jit_hw_mtpr. `jit` names
+  /// the engine in the IRQ trace.
+  inline u64 hw_mfpr(u32 function, bool jit = false);
+  inline void hw_mtpr(u32 function, u64 value, bool jit = false);
+  /// The FLTV (opcode 0x15) and FLTL (0x17) operates, for both engines
+  /// (execute() and jit_fltv, jit_fltl). False for a function code that is
+  /// none of them.
+  bool fltv_operate(u32 ins, u32 function);
+  bool fltl_operate(u32 ins, u32 function);
   int get_cpuid();
   void flush_icache();
   void note_ic_flush_pc();  // ALPHABOX_TRACE_ICFLUSH: histogram of the PC that
@@ -1010,10 +1021,10 @@ public:
   // cpu_clear_lock.
   static void jit_opcdec(CAlphaCPU *cpu, u64 cpc);
   // HW_MFPR (PALmode): return the IPR named in ins; the caller (compiled
-  // codegen) writes Ra.
+  // codegen) writes Ra. hw_mfpr() does the work.
   static u64 jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur);
   // HW_MTPR (PALmode): store value (Rb) to the side-effect-free IPR named by
-  // function.
+  // function. hw_mtpr() does the work.
   static void jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value);
   // Indirect jump (JMP/HW_RET): look up the target block; return its chained
   // re-entry or null.

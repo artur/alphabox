@@ -3,7 +3,8 @@
    (cpu_fp_operate.hpp). No include guard.
 
    The decode of opcodes 0x14 to 0x17 is a copy of the one in
-   CAlphaCPU::execute() (AlphaCPU.cpp); keep the two in step. The FPCR
+   CAlphaCPU::execute() and, for 0x15 and 0x17, CAlphaCPU::fltv_operate()
+   and fltl_operate() (AlphaCPU.cpp); keep them in step. The FPCR
    accessors are copies of the ones there too. */
 
 void CAlphaCPU::write_fpcr_arch(u64 arch_val) {

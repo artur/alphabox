@@ -1839,154 +1839,30 @@ int CAlphaCPU::jit_ftoi(CAlphaCPU *cpu, u32 fa, u32 fmt, u64 *out) {
   return 0;
 }
 
-// JIT FLTL non-arithmetic helper (static). FPCR moves, sign-copies, FP
-// conditional moves and the CVTLQ/CVTQL bit rearrangements -- mirrored verbatim
-// from cpu_fp_operate.h; classify only routes these funcs here (no FP math, no
-// /V trap forms). Returns 1 = FEN-trap bail.
+// JIT FLTL non-arithmetic helper (static): FPCR moves, sign-copies, FP
+// conditional moves and the CVTLQ/CVTQL bit rearrangements, through the
+// interpreter's own fltl_operate. classify only routes these funcs here (no
+// FP math, no /V trap forms). Returns 1 = FEN-trap bail: the interpreter
+// vectors it.
 int CAlphaCPU::jit_fltl(CAlphaCPU *cpu, u32 ins) {
   if (cpu->state.fpen == 0)
-    return 1;             // FEN trap: the interpreter vectors it
-  cpu->state.exc_sum = 0; // FPSTART
-  u64 *f = cpu->state.f;
-  const u32 fa = (ins >> 21) & 0x1f, fb = (ins >> 16) & 0x1f, fc = ins & 0x1f;
-  switch ((ins >> 5) & 0x7ff) {
-  case 0x010: // CVTLQ
-    f[fc] = sext_u64_32(((f[fb] >> 32) & 0xC0000000) |
-                        ((f[fb] >> 29) & 0x3FFFFFFF));
-    break;
-  case 0x020:
-    f[fc] = (f[fa] & FPR_SIGN) | (f[fb] & ~FPR_SIGN);
-    break; // CPYS
-  case 0x021:
-    f[fc] = ((f[fa] & FPR_SIGN) ^ FPR_SIGN) | (f[fb] & ~FPR_SIGN);
-    break;    // CPYSN
-  case 0x022: // CPYSE
-    f[fc] = (f[fa] & (FPR_SIGN | FPR_EXP)) | (f[fb] & ~(FPR_SIGN | FPR_EXP));
-    break;
-  case 0x024:
-    cpu->write_fpcr_arch(f[fa]);
-    break; // MT_FPCR
-  case 0x025:
-    f[fa] = cpu->read_fpcr_arch();
-    break; // MF_FPCR (dest = Fa)
-  case 0x02a:
-    if ((f[fa] & ~FPR_SIGN) == 0)
-      f[fc] = f[fb];
-    break; // FCMOVEQ
-  case 0x02b:
-    if ((f[fa] & ~FPR_SIGN) != 0)
-      f[fc] = f[fb];
-    break; // FCMOVNE
-  case 0x02c:
-    if ((f[fa] & FPR_SIGN) && (f[fa] & ~FPR_SIGN) != 0)
-      f[fc] = f[fb];
-    break; // FCMOVLT
-  case 0x02d:
-    if (!(f[fa] & FPR_SIGN) || (f[fa] & ~FPR_SIGN) == 0)
-      f[fc] = f[fb];
-    break; // FCMOVGE
-  case 0x02e:
-    if ((f[fa] & FPR_SIGN) || (f[fa] & ~FPR_SIGN) == 0)
-      f[fc] = f[fb];
-    break; // FCMOVLE
-  case 0x02f:
-    if (!(f[fa] & FPR_SIGN) && (f[fa] & ~FPR_SIGN) != 0)
-      f[fc] = f[fb];
-    break;      // FCMOVGT
-  case 0x030: { // CVTQL (no /V form)
-    u64 cvtql_src = f[fb];
-    f[fc] = ((cvtql_src & U64(0xC0000000)) << 32) |
-            ((cvtql_src & U64(0x3FFFFFFF)) << 29);
-    if (FPR_GETSIGN(cvtql_src) ? (cvtql_src < U64(0xFFFFFFFF80000000))
-                               : (cvtql_src > U64(0x000000007FFFFFFF)))
-      cpu->write_fpcr_arch(cpu->state.fpcr | FPCR_IOV);
-    break;
-  }
-  }
-  return 0;
+    return 1;
+  // A function code that is no operate (classify() compiles none) bails
+  // unexecuted: the interpreter takes OPCDEC.
+  return cpu->fltl_operate(ins, (ins >> 5) & 0x7ff) ? 0 : 1;
 }
 
-// JIT VAX-FP arithmetic helper (static). FLTV (0x15): mirrors the interpreter's
-// vax_* dispatch into f[fc]. FPSTART bail (return 1) if FP disabled. Returns 2
-// when the op delivered an arith trap: vax_trap GO_PALs (sets state.pc +
-// exc_sum), so exc_sum != 0 detects it and the caller honors state.pc -- the op
-// runs exactly once (no re-execute). Returns 0 on the common no-trap path.
-// Fc==31 is gated out in classify.
+// JIT VAX-FP arithmetic helper (static). FLTV (0x15) through the interpreter's
+// own fltv_operate. FPSTART bail (return 1) if FP disabled. Returns 2 when the
+// op delivered an arith trap: vax_trap GO_PALs (sets state.pc + exc_sum), so
+// exc_sum != 0 detects it and the caller honors state.pc -- the op runs
+// exactly once (no re-execute). Returns 0 on the common no-trap path. Fc==31
+// is gated out in classify.
 int CAlphaCPU::jit_fltv(CAlphaCPU *cpu, u32 ins) {
   if (cpu->state.fpen == 0)
     return 1; // FEN trap (FPSTART): op not run
-  cpu->state.exc_sum = 0;
-  u64 *f = cpu->state.f;
-  const u32 fa = (ins >> 21) & 0x1f, fb = (ins >> 16) & 0x1f, fc = ins & 0x1f;
-  const u32 fn = (ins >> 5) & 0x7ff;
-  UFP u;
-  switch (fn) {
-  case 0x0a5:
-  case 0x4a5:
-    f[fc] =
-        (cpu->vax_fcmp(f[fa], f[fb], ins) == 0) ? U64(0x4000000000000000) : 0;
-    break; // CMPGEQ
-  case 0x0a6:
-  case 0x4a6:
-    f[fc] =
-        (cpu->vax_fcmp(f[fa], f[fb], ins) < 0) ? U64(0x4000000000000000) : 0;
-    break; // CMPGLT
-  case 0x0a7:
-  case 0x4a7:
-    f[fc] =
-        (cpu->vax_fcmp(f[fa], f[fb], ins) <= 0) ? U64(0x4000000000000000) : 0;
-    break; // CMPGLE
-  case 0x03c:
-  case 0x0bc:
-    f[fc] = cpu->vax_cvtif(f[fb], ins, DT_F);
-    break; // CVTQF
-  case 0x03e:
-  case 0x0be:
-    f[fc] = cpu->vax_cvtif(f[fb], ins, DT_G);
-    break; // CVTQG
-  default:
-    switch (fn & 0x7f) {
-    case 0x000:
-      f[fc] = cpu->vax_fadd(f[fa], f[fb], ins, DT_F, false);
-      break; // ADDF
-    case 0x001:
-      f[fc] = cpu->vax_fadd(f[fa], f[fb], ins, DT_F, true);
-      break; // SUBF
-    case 0x002:
-      f[fc] = cpu->vax_fmul(f[fa], f[fb], ins, DT_F);
-      break; // MULF
-    case 0x003:
-      f[fc] = cpu->vax_fdiv(f[fa], f[fb], ins, DT_F);
-      break; // DIVF
-    case 0x01e:
-      cpu->vax_unpack_d(f[fb], &u, ins);
-      f[fc] = cpu->vax_rpack(&u, ins, DT_G);
-      break; // CVTDG
-    case 0x020:
-      f[fc] = cpu->vax_fadd(f[fa], f[fb], ins, DT_G, false);
-      break; // ADDG
-    case 0x021:
-      f[fc] = cpu->vax_fadd(f[fa], f[fb], ins, DT_G, true);
-      break; // SUBG
-    case 0x022:
-      f[fc] = cpu->vax_fmul(f[fa], f[fb], ins, DT_G);
-      break; // MULG
-    case 0x023:
-      f[fc] = cpu->vax_fdiv(f[fa], f[fb], ins, DT_G);
-      break; // DIVG
-    case 0x02c:
-      cpu->vax_unpack(f[fb], &u, ins);
-      f[fc] = cpu->vax_rpack(&u, ins, DT_F);
-      break; // CVTGF
-    case 0x02d:
-      cpu->vax_unpack(f[fb], &u, ins);
-      f[fc] = cpu->vax_rpack_d(&u, ins);
-      break; // CVTGD
-    case 0x02f:
-      f[fc] = cpu->vax_cvtfi(f[fb], ins);
-      break; // CVTGQ
-    }
-  }
+  if (!cpu->fltv_operate(ins, (ins >> 5) & 0x7ff))
+    return 1; // no operate (classify() compiles none): the interpreter OPCDECs
   return cpu->state.exc_sum
              ? 2
              : 0; // exc_sum != 0 => vax_trap GO_PAL'd -> caller honors state.pc
@@ -2415,226 +2291,34 @@ void CAlphaCPU::jit_opcdec(CAlphaCPU *cpu, u64 cpc) {
   cpu->cSystem->cpu_clear_lock(cpu->state.iProcNum);
 }
 
-/* HW_MFPR (PALmode): return the IPR selected by (ins>>8)&0xff. */
+/* HW_MFPR (PALmode): return the IPR selected by (ins>>8)&0xff, as the
+ * interpreter's DO_HW_MFPR reads it (hw_mfpr). classify() compiles only the
+ * IPRs that are pure reads. */
 u64 CAlphaCPU::jit_hw_mfpr(CAlphaCPU *cpu, u32 ins, u64 cur) {
   cpu->m_jit->note_helper(CJitEngine::HK_MFPR);
   HELPER_TIMER(cpu, CJitEngine::HK_MFPR);
-  const auto &state = cpu->state;
   const u32 function = (ins >> 8) & 0xff;
-
   // ISUM (0x0d) reads the live async interrupt-request lines (eir/slr/crr/pcr),
   // which the differential verify can't re-derive - changes between the interp
   // and compiled passes. Replay the interp value here
   if (cpu->m_jit_vreplay && function == 0x0d)
     return cpu->m_jit_vlog[cpu->m_jit_vlog_i++];
-
-  if ((function & 0xc0) == 0x40) // PCTX
-    return ((u64)state.asn << 39) | ((u64)state.astrr << 9) |
-           ((u64)state.aster << 5) | (state.fpen ? U64(0x1) << 2 : 0) |
-           (state.ppcen ? U64(0x1) << 1 : 0);
-
-  switch (function) {
-  case 0x05:
-    return state.pmpc; // PMPC
-  case 0x06:
-    return state.exc_addr; // EXC_ADDR
-  case 0x07:
-    return cpu->va_form(state.exc_addr, true); // IVA_FORM
-  case 0x08:
-  case 0x09:
-  case 0x0a:
-  case 0x0b: // IER_CM / CM / IER
-    return (((u64)state.eien) << 33) | (((u64)state.slen) << 32) |
-           (((u64)state.cren) << 31) | (((u64)state.pcen) << 29) |
-           (((u64)state.sien) << 13) | (((u64)state.asten) << 13) |
-           (((u64)state.cm) << 3);
-  case 0x0c:
-    return ((u64)state.sir) << 13; // SIRR
-  case 0x0d: {                     // ISUM (production path: read the live async
-    // interrupt-request lines; the verify replays via the m_jit_vreplay
-    // short-circuit at the top).
-    const u64 isum = (((u64)(state.eir & state.eien)) << 33) |
-                     (((u64)(state.slr & state.slen)) << 32) |
-                     (((u64)(state.crr & state.cren)) << 31) |
-                     (((u64)(state.pcr & state.pcen)) << 29) |
-                     (((u64)(state.sir & state.sien)) << 13) |
-                     (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
-                             state.astrr & (state.asten * 0x3)))
-                      << 3) |
-                     (((u64)(((U64(0x1) << (state.cm + 1)) - 1) & state.aster &
-                             state.astrr & (state.asten * 0xc)))
-                      << 7);
-    cpu->irq_trace_ipr("jISUM", function, isum);
-    return isum;
-  }
-  case 0x0f:
-    return state.exc_sum; // EXC_SUM
-  case 0x10:
-    return state.pal_base; // PAL_BASE
-  case 0x11:               // I_CTL
-    return state.i_ctl_other | (((u64)cpu->m_model->chip_id) << 24) |
-           (u64)state.i_ctl_vptb | (((u64)state.i_ctl_va_mode) << 15) |
-           (state.hwe ? U64(0x1) << 12 : 0) | (state.sde ? U64(0x1) << 7 : 0) |
-           (((u64)state.i_ctl_spe) << 3);
-  case 0x14:
-    return state.pctr_ctl; // PCTR_CTL
-  case 0x16:
-    return state.i_stat; // I_STAT
-  case 0x27:
-    return state.mm_stat; // MM_STAT
-  case 0x2a:
-    return state.dc_stat; // DC_STAT
-  case 0x2b:
-    return 0; // C_DATA
-  case 0xc0:
-    return (((u64)state.cc_offset) << 32) | (state.cc & U64(0xffffffff)); // CC
-  case 0xc2:
-    return state.fault_va; // VA
-  case 0xc3:
-    return cpu->va_form(state.va_form_va, false); // VA_FORM
-  }
   (void)cur;
-  return 0; // unknown IPR: read-zero, matching DO_HW_MFPR (classify() never
-            // compiles these)
+  return cpu->hw_mfpr(function, true);
 }
 
-/* HW_MTPR (PALmode): the IPR write selected by `function` (value = Rb). Mirrors
- * DO_HW_MTPR (cpu_pal.h) verbatim. Pure stores are verify-compared via the IPR
- * snapshot; the TB fills forward to add_tb_i/_d (idempotent, so the verify
- * double-run is safe); the check_int=true kick (IER/CM/SIRR/AST) can only force
- * an interrupt poll, never suppress one. The 0x40-7f ASN write (bit 0) is
- * excluded -- classify() never compiles it (it flushes the dpc + bumps the asn
- * epoch). */
+/* HW_MTPR (PALmode): the IPR write selected by `function` (value = Rb), as the
+ * interpreter's DO_HW_MTPR makes it (hw_mtpr). Pure stores are verify-compared
+ * via the IPR snapshot; the TB fills forward to add_tb_i/_d (idempotent, so the
+ * verify double-run is safe); the check_int=true kick (IER/CM/SIRR/AST) can
+ * only force an interrupt poll, never suppress one. classify() never compiles
+ * the 0x40-7f ASN write (bit 0: it flushes the dpc and bumps the asn epoch),
+ * PAL_BASE or VA_CTL. */
 void CAlphaCPU::jit_hw_mtpr(CAlphaCPU *cpu, u32 function, u64 value) {
   cpu->m_jit->note_helper(CJitEngine::HK_MTPR);
   HELPER_TIMER(cpu, CJitEngine::HK_MTPR);
   cpu->m_jit->note_mtpr(function);
-  // 0x40-0x7f bitmask group: ASTER/ASTRR/PPCEN/FPEN field stores (+check_int
-  // for the AST bits). The ASN write (bit 0, dpc flush + asn-epoch bump) is
-  // never compiled -- classify() routes it to OP_NONE.
-  if ((function & 0xc0) == 0x40) {
-    if (function & 2) {
-      cpu->state.aster = (int)(value >> 5) & 0xf;
-      if (cpu->int_deliverable())
-        cpu->state.check_int = true;
-    }
-    if (function & 4) {
-      cpu->state.astrr = (int)(value >> 9) & 0xf;
-      if (cpu->int_deliverable())
-        cpu->state.check_int = true;
-    }
-    if (function & 8)
-      cpu->state.ppcen = (int)(value >> 1) & 1;
-    if (function & 16)
-      cpu->state.fpen = (int)(value >> 2) & 1;
-    return;
-  }
-  switch (function) {
-  case 0x00:
-    cpu->state.last_tb_virt = value;
-    break; // ITB_TAG
-  case 0x01:
-    cpu->add_tb_i(cpu->state.last_tb_virt, value);
-    break; // ITB_PTE (ITB fill)
-  case 0x02:
-    cpu->tbiap(ACCESS_EXEC);
-    break; // ITB_IAP (process ITB invalidate)
-  case 0x03:
-    cpu->tbia(ACCESS_EXEC);
-    break; // ITB_IA (invalidate all ITB)
-  case 0x04:
-    cpu->tbis(value, ACCESS_EXEC);
-    break; // ITB_IS (single ITB invalidate)
-  case 0x13:
-    cpu->flush_icache();
-    break;   // IC_FLUSH (lazy flush + deferred reclaim)
-  case 0x0e: // HW_INT_CLR
-    cpu->state.pcr &= ~((value >> 29) & U64(0x3));
-    cpu->state.crr &= ~((value >> 31) & U64(0x1));
-    cpu->state.slr &= ~((value >> 32) & U64(0x1));
-    break;
-  case 0x24: // DTB_IS0
-    cpu->tbis_d(value, cpu->state.asn0);
-    break;
-  case 0xa4: // DTB_IS1
-    cpu->tbis_d(value, cpu->state.asn1);
-    break;
-  case 0xa3: // DTB_IA
-    cpu->tbia(ACCESS_READ);
-    break;
-  case 0x25: // DTB_ASN0
-    cpu->state.asn0 = (int)(value >> 56);
-    cpu->dpc_context_changed();
-    cpu->flush_data_page_cache();
-    break;
-  case 0xa5: // DTB_ASN1
-    cpu->state.asn1 = (int)(value >> 56);
-    cpu->flush_data_page_cache();
-    break;
-  case 0x09: // CM (current mode)
-    cpu->state.cm = (int)(value >> 3) & 3;
-    cpu->dpc_context_changed();
-    if (cpu->int_deliverable())
-      cpu->state.check_int = true;
-    cpu->irq_trace_ipr("jMTPR", function, value);
-    break;
-  case 0x0b: // IER_CM: write CM, then fall into IER
-    cpu->state.cm = (int)(value >> 3) & 3;
-    cpu->dpc_context_changed();
-    if (cpu->int_deliverable())
-      cpu->state.check_int = true;
-    [[fallthrough]];
-  case 0x0a: // IER
-    cpu->state.asten = (int)(value >> 13) & 1;
-    cpu->state.sien = (int)(value >> 13) & 0xfffe;
-    cpu->state.pcen = (int)(value >> 29) & 3;
-    cpu->state.cren = (int)(value >> 31) & 1;
-    cpu->state.slen = (int)(value >> 32) & 1;
-    cpu->state.eien = (int)(value >> 33) & 0x3f;
-    if (cpu->int_deliverable())
-      cpu->state.check_int = true; // newly enabled pending ints must be polled
-    cpu->irq_trace_ipr("jMTPR", function, value);
-    break;
-  case 0x0c: // SIRR (software interrupt request)
-    cpu->state.sir = (int)(value >> 13) & 0xfffe;
-    if (cpu->int_deliverable())
-      cpu->state.check_int = true;
-    cpu->irq_trace_ipr("jMTPR", function, value);
-    break;
-  case 0x11: // I_CTL (terminator; mirrors DO_HW_MTPR)
-    cpu->state.i_ctl_other =
-        value & U64(0x00000000007e2f67); // bit 20: ST_WAIT_64K, read-write
-    cpu->state.i_ctl_vptb = sext_u64_48(value & U64(0x0000ffffc0000000));
-    cpu->state.i_ctl_spe = (int)((value >> 3) & 7);
-    cpu->state.sde = (value >> 7) & 1;
-    cpu->state.hwe = (value >> 12) & 1;
-    cpu->state.i_ctl_va_mode = (int)(value >> 15) & 3;
-    break;
-  case 0x14:
-    cpu->state.pctr_ctl = value & U64(0xffffffffffffffdf);
-    break; // PCTR_CTL
-  case 0x20:
-    cpu->last_dtb_virt[0] = value;
-    break; // DTB_TAG0
-  case 0x21:
-    cpu->add_tb_d(cpu->last_dtb_virt[0], value, 0);
-    break; // DTB_PTE0 (DTB fill)
-  case 0x26:
-    cpu->state.alt_cm = (int)(value & 3);
-    break; // DTB_ALTMODE
-  case 0x29:
-    cpu->state.dc_ctl = value;
-    break; // DC_CTL
-  case 0xa0:
-    cpu->last_dtb_virt[1] = value;
-    break; // DTB_TAG1
-  case 0xa1:
-    cpu->add_tb_d(cpu->last_dtb_virt[1], value, 1);
-    break; // DTB_PTE1 (DTB fill)
-  case 0xc0:
-    cpu->state.cc_offset = (u32)(value >> 32);
-    break; // CC
-  }
+  cpu->hw_mtpr(function, value, true);
 }
 
 // JIT indirect-jump chaining helper (static). For a compiled JMP/HW_RET, look

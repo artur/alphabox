@@ -827,6 +827,20 @@ until they were fixed:
   extra words only invalidated more. SRM's console log is unchanged on
   the AArch64, `JIT_VERIFY` and x86-64 lanes, `smc_test.sh` passes on
   both back ends, and Windows 2000 RC2 reached its desktop.
+- **The IPR and floating-point helpers** (JIT-08). Compiled code's
+  `HW_MFPR`, `HW_MTPR`, FLTL and FLTV helpers were copies of the
+  interpreter's code by hand. They agreed line by line, and nothing
+  checked that they would go on agreeing. Both engines now call one
+  implementation: `CAlphaCPU::hw_mfpr` and `hw_mtpr` (`cpu_pal.hpp`),
+  `fltv_operate` and `fltl_operate` (`AlphaCPU.cpp`). A compiled
+  `IC_FLUSH` now records its epoch cause as an interpreted one does
+  (statistics only). The data helpers' side-effect-free translation is
+  still a copy of `virt2phys`'s: calling it with `FAKE` instead would
+  put a call on every page-cache miss and fold the `JIT_STATS` bail
+  causes (TB miss, access violation, fault) into one, which was not done
+  without a measurement. SRM's console log is unchanged on the
+  interpreter, AArch64 and `JIT_VERIFY` lanes, `ALPHABOX_JIT_FPTEST`
+  passes, Windows 2000 RC2 reached its desktop and OpenVMS 8.4 logged in.
 
 ## A guest's floating-point exception that is the guest's own
 

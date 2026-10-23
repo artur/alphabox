@@ -1751,65 +1751,12 @@ _next_instruction:
     }
     break;
 
-  case 0x15: // FLTV* instructions
+  case 0x15: // FLTV* instructions (fltv_operate, which compiled code calls too)
     function = (ins >> 5) & 0x7ff;
-    switch (function) {
-    case 0x0a5:
-    case 0x4a5:
-      OP(CMPGEQ, F12_F3);
-
-    case 0x0a6:
-    case 0x4a6:
-      OP(CMPGLT, F12_F3);
-
-    case 0x0a7:
-    case 0x4a7:
-      OP(CMPGLE, F12_F3);
-
-    case 0x03c:
-    case 0x0bc:
-      OP(CVTQF, F2_F3);
-
-    case 0x03e:
-    case 0x0be:
-      OP(CVTQG, F2_F3);
-
-    default:
-      if (function & 0x200) {
-        UNKNOWN2;
-      }
-
-      switch (function & 0x7f) {
-      case 0x000:
-        OP(ADDF, F12_F3);
-      case 0x001:
-        OP(SUBF, F12_F3);
-      case 0x002:
-        OP(MULF, F12_F3);
-      case 0x003:
-        OP(DIVF, F12_F3);
-      case 0x01e:
-        OP(CVTDG, F2_F3);
-      case 0x020:
-        OP(ADDG, F12_F3);
-      case 0x021:
-        OP(SUBG, F12_F3);
-      case 0x022:
-        OP(MULG, F12_F3);
-      case 0x023:
-        OP(DIVG, F12_F3);
-      case 0x02c:
-        OP(CVTGF, F12_F3);
-      case 0x02d:
-        OP(CVTGD, F2_F3);
-      case 0x02f:
-        OP(CVTGQ, F2_F3);
-      default:
-        UNKNOWN2;
-      }
-      break;
+    if (!fltv_operate(ins, (u32)function)) {
+      UNKNOWN2;
     }
-    break;
+    ES40_EXECUTE_END();
 
   case 0x16: // FLTI* instructions
     function = (ins >> 5) & 0x7ff;
@@ -1877,54 +1824,12 @@ _next_instruction:
     }
     break;
 
-  case 0x17: // FLTL* instructions
+  case 0x17: // FLTL* instructions (fltl_operate, which compiled code calls too)
     function = (ins >> 5) & 0x7ff;
-    switch (function) {
-    case 0x010:
-      OP(CVTLQ, F2_F3);
-
-    case 0x020:
-      OP(CPYS, F12_F3);
-
-    case 0x021:
-      OP(CPYSN, F12_F3);
-
-    case 0x022:
-      OP(CPYSE, F12_F3);
-
-    case 0x024:
-      OP(MT_FPCR, X_F1);
-
-    case 0x025:
-      OP(MF_FPCR, X_F1);
-
-    case 0x02a:
-      OP(FCMOVEQ, F12_F3);
-
-    case 0x02b:
-      OP(FCMOVNE, F12_F3);
-
-    case 0x02c:
-      OP(FCMOVLT, F12_F3);
-
-    case 0x02d:
-      OP(FCMOVGE, F12_F3);
-
-    case 0x02e:
-      OP(FCMOVLE, F12_F3);
-
-    case 0x02f:
-      OP(FCMOVGT, F12_F3);
-
-    case 0x030:
-    case 0x130:
-    case 0x530:
-      OP(CVTQL, F12_F3);
-
-    default:
+    if (!fltl_operate(ins, (u32)function)) {
       UNKNOWN2;
     }
-    break;
+    ES40_EXECUTE_END();
 
   case 0x18: // MISC* instructions
     function = (ins & 0xffff);
@@ -2167,6 +2072,134 @@ _next_instruction:
 #else
   return;
 #endif
+}
+
+/**
+ * The FLTV (opcode 0x15, VAX floating point) and FLTL (0x17) operates with
+ * function code `function`, for both engines: execute() above and compiled
+ * code's helpers (jit_fltv, jit_fltl). Each DO_ macro starts with FPSTART,
+ * which takes the FEN trap when floating point is disabled and leaves the
+ * switch. False for a function code that is no operate (the interpreter
+ * takes OPCDEC; classify() compiles none of those).
+ **/
+bool CAlphaCPU::fltv_operate(u32 ins, u32 function) {
+  UFP ufp2;
+  switch (function) {
+  case 0x0a5:
+  case 0x4a5:
+    DO_CMPGEQ;
+    break;
+  case 0x0a6:
+  case 0x4a6:
+    DO_CMPGLT;
+    break;
+  case 0x0a7:
+  case 0x4a7:
+    DO_CMPGLE;
+    break;
+  case 0x03c:
+  case 0x0bc:
+    DO_CVTQF;
+    break;
+  case 0x03e:
+  case 0x0be:
+    DO_CVTQG;
+    break;
+  default:
+    if (function & 0x200)
+      return false;
+    switch (function & 0x7f) {
+    case 0x000:
+      DO_ADDF;
+      break;
+    case 0x001:
+      DO_SUBF;
+      break;
+    case 0x002:
+      DO_MULF;
+      break;
+    case 0x003:
+      DO_DIVF;
+      break;
+    case 0x01e:
+      DO_CVTDG;
+      break;
+    case 0x020:
+      DO_ADDG;
+      break;
+    case 0x021:
+      DO_SUBG;
+      break;
+    case 0x022:
+      DO_MULG;
+      break;
+    case 0x023:
+      DO_DIVG;
+      break;
+    case 0x02c:
+      DO_CVTGF;
+      break;
+    case 0x02d:
+      DO_CVTGD;
+      break;
+    case 0x02f:
+      DO_CVTGQ;
+      break;
+    default:
+      return false;
+    }
+    break;
+  }
+  return true;
+}
+
+bool CAlphaCPU::fltl_operate(u32 ins, u32 function) {
+  switch (function) {
+  case 0x010:
+    DO_CVTLQ;
+    break;
+  case 0x020:
+    DO_CPYS;
+    break;
+  case 0x021:
+    DO_CPYSN;
+    break;
+  case 0x022:
+    DO_CPYSE;
+    break;
+  case 0x024:
+    DO_MT_FPCR;
+    break;
+  case 0x025:
+    DO_MF_FPCR;
+    break;
+  case 0x02a:
+    DO_FCMOVEQ;
+    break;
+  case 0x02b:
+    DO_FCMOVNE;
+    break;
+  case 0x02c:
+    DO_FCMOVLT;
+    break;
+  case 0x02d:
+    DO_FCMOVGE;
+    break;
+  case 0x02e:
+    DO_FCMOVLE;
+    break;
+  case 0x02f:
+    DO_FCMOVGT;
+    break;
+  case 0x030:
+  case 0x130:
+  case 0x530:
+    DO_CVTQL;
+    break;
+  default:
+    return false;
+  }
+  return true;
 }
 
 static u32 cpu_magic1 = 0x2126468C;
