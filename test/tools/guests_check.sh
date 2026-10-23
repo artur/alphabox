@@ -700,8 +700,10 @@ vms_board() {
   steps+=("send=SHOW CPU" "expect=\\$ \$@60"
           "send=WRITE SYS\$OUTPUT \"GC-HW=[\"+F\$GETSYI(\"HW_NAME\")+\"]\"" "expect=\\$ \$@60"
           "send=WRITE SYS\$OUTPUT \"GC-CPUS=\"+F\$STRING(F\$GETSYI(\"ACTIVECPU_CNT\"))" "expect=\\$ \$@60"
-          "send=BACKUP SYS\$LOADABLE_IMAGES:SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
-          "send=DIFFERENCES SYS\$LOADABLE_IMAGES:SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
+          "send=DELETE SYS\$SCRATCH:GC_COPY.EXE;*" "expect=\\$ \$@60"
+          "send=BACKUP SYS\$COMMON:[SYS\$LDR]SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
+          "send=WRITE SYS\$OUTPUT \"GC-BACKUP-DONE\"" "expect=\\$ \$@60"
+          "send=DIFFERENCES SYS\$COMMON:[SYS\$LDR]SYS\$BASE_IMAGE.EXE SYS\$SCRATCH:GC_COPY.EXE" "expect=\\$ \$@600"
           "send=WRITE SYS\$OUTPUT \"GC-DIFF-DONE\"" "expect=\\$ \$@60"
           "send=DELETE SYS\$SCRATCH:GC_COPY.EXE;*" "expect=\\$ \$@60"
           "send=SHOW ERROR" "expect=\\$ \$@60"
@@ -721,6 +723,9 @@ vms_board() {
   [ -n "$hw" ] || why="$why no HW_NAME;"
   [ "$ncpu" = "$cpus" ] || why="$why active CPUs '$ncpu' not $cpus;"
   [ "$nd" = 0 ] || why="$why DIFFERENCES sections '$nd';"
+  # BACKUP takes only the first directory of a search-list logical; a copy
+  # that selected nothing (or failed) makes the DIFFERENCES meaningless.
+  echo "$txt" | awk '/^\$ BACKUP/ {on=1} /^GC-BACKUP-DONE/ {on=0} on' | grep -aqE '%BACKUP-[WEF]-' && why="$why BACKUP warned or failed;"
   [ "$ne" = 0 ] || why="$why $ne devices with errors;"
   echo "$txt" | grep -aqE 'BUGCHECK|CPUSPINWAIT|INVEXCEPTN' && why="$why bugcheck;"
   [ -z "$why" ] || { fail "logged in, but:$why"; return 1; }
