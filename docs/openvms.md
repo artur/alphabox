@@ -217,27 +217,48 @@ A DCL loop of 20000 iterations took 1.0-1.1 s of guest time on the JIT
 build and 12.3 s on the interpreter. MACRO-32 (`MACRO.EXE`, part of the base
 system) compiles, links and runs a program.
 
-**Disk stalls (open).** A disk-heavy DCL step, nearly always the BACKUP
-save set of `SYS$LDR` or its listing (`vms_dcl.py`), sometimes stops for
-about a minute and then finishes, or stops for good: about 9.5 minutes
-later by the guest's clock, which keeps time with the host's, AUDIT_SERVER
-reports `%AUDSRV-E-JNLPUTFAIL` and `%RMS-E-CRE, ACP file create failed`
-every 8 s, and BACKUP `%BACKUP-E-READVERR` with `-SYSTEM-F-CTRLERR, fatal
-controller error`, while the guest goes on running. On 2026-10-23
-(`vms_dcl.py --workload dcl`, 512 MB, one CPU) it happened on the
-interpreter in 4 of 13 runs on a host with nothing added to its load (load
-average 3 to 20 from other work), one of them for good, and in 1 of 20
-runs with twelve busy-loop processes added, for good; the JIT build ran 13
-times without it, 10 of them loaded. It came both with and without the
-native PALcode routines the interpreter then had
-([cpu-fidelity.md](cpu-fidelity.md)), so the PALcode path is not its
-cause. After their removal it is the same: in three rounds of the previous
-interpreter (on the console's PALcode) and the new one side by side, at
-1 GB, the previous one stalled twice and the new one once, two of those
-stalls beginning within a minute of each other, the new one's at the end
-of startup with `%SYSTEM-F-TIMEOUT, device timeout`. Stalls come in
-clusters in time, which points at something the host does. The runs are in
-`lab/runs/novmspal-phaseA-*` and `lab/runs/vms-dcl-newold-*`.
+**Disk stalls (fixed 2026-10-23).** A disk-heavy DCL step, nearly always
+the BACKUP save set of `SYS$LDR` or its listing (`vms_dcl.py`), or the end
+of startup, sometimes stopped for about a minute and then finished, or
+stopped for good: about ten minutes later, by the guest's clock, which
+keeps time with the host's, OpenVMS reported `-SYSTEM-F-CTRLERR, fatal
+controller error` (`%BACKUP-E-READVERR`, `%JBC-E-WRITEERR` on
+`ACCOUNTNG.DAT`, `%SYSTEM-F-TIMEOUT`), and then `%AUDSRV-E-JNLPUTFAIL` and
+`%RMS-E-CRE` every few seconds, while the guest went on running.
+
+The IDE controller lost the bus master's Start. OpenVMS issues READ DMA or
+WRITE DMA and writes Start right after it; the command wakes the channel's
+controller thread, which then waits for Start. From 2026-10-20 (`c932414`,
+so that a stale Start is not taken for the next command) the thread looked
+at the Start bit and, finding it clear, drained its wake-up before
+waiting, and a Start that landed between the look and the drain was
+drained with it. The command then waited for good: BSY stayed set and no
+interrupt came, until OpenVMS gave up on it after 60 s and issued it again.
+A retry most likely ended the same way when its Start came before the
+thread had woken from the old wait, as both shared one wake-up, and those
+stalls never ended. On the interpreter the guest takes long enough between
+the two writes for the thread to look first; with the JIT the Start is
+nearly always there before the thread looks. A busy host, which can hold
+the thread up between its look and its drain, makes it likelier, hence
+the clusters. Stalled runs showed it: the channel's thread parked in that
+wait (`sample`), no IRQ 14 edge from the stall on (`ALPHABOX_IRQSTATS`),
+and the IDE trace (`ALPHABOX_IDETRACE`) ending in a WRITE DMA and its
+Start, then nothing for 60 s until the same command came again. The wait
+now looks at state, a Start not yet taken, a cancel or a stop, and takes
+a Start in one step, so none is lost (`test/tools/ide_test.sh`, group
+`dma-start`, fails without the fix).
+
+Counts on 2026-10-23, `vms_dcl.py --workload dcl` at 1 GB and one CPU,
+interpreter builds two to five at a time, on a host whose load average
+was 3 to 25 from other work: the last build before the fix (`07fbc7c`)
+stalled in 3 of 24 runs (one for good, one for 60 s, one with no disk
+interrupt for 285 s when it was stopped), `390cc4e` (after `c932414`,
+before this week's interrupt changes) in 3 of 10, all for good, and
+`750d9df` (just before `c932414`) in none of 8. With the fix: none of 21
+runs on the interpreter, where the disk was never silent for more than
+15 s, and none of 5 on the JIT build. The runs are in
+`lab/runs/vms-dcl-stall-*`; the earlier ones (512 MB, with and without the
+native PALcode routines) in `lab/runs/novmspal-phaseA-*`.
 
 ## Graphics
 
