@@ -8,7 +8,7 @@
 # plateau: the longest run of consecutive rate windows within 25% of each
 # other. That leaves out the idle desktop around the run and the warm-up at
 # its start, while hot code is compiled and the pin set adapts. K=V pairs
-# are passed to the emulator's environment (e.g. ALPHABOX_JIT_DPC2=0).
+# are passed to the emulator's environment (e.g. ALPHABOX_JIT_CHAIN=0).
 #
 # A rate, not a timing: for an A/B that goes in the ledger use perf_ab.py.
 set -u

@@ -638,10 +638,7 @@ public:
   // pages. Code that fits the cache pays the two instructions for nothing, and
   // code that streams past it misses anyway. Anyone retrying this needs an
   // index that costs at most one extra instruction. See docs/performance.md.
-  /// ALPHABOX_JIT_DPC_SLOTS=64|128 masks the index down, for a same-binary
-  /// A/B of the slot count.
-  u64 m_dpc_mask = kDpcMask;
-  inline u64 dpc_index(u64 va) const { return (va >> 13) & m_dpc_mask; }
+  inline u64 dpc_index(u64 va) const { return (va >> 13) & kDpcMask; }
   /// One translated page.
   ///
   /// The first two fields are the only ones compiled code reads, and it
@@ -725,19 +722,15 @@ public:
   /// 2 MB of memory per processor: the nada benchmark's stride section walks
   /// 6144 pages and ran 2.4-3x faster at 8192+ slots once evicted pages
   /// stayed cached (docs/performance.md). A full flush bumps m_dpc2_gen
-  /// instead of clearing 2 MB. ALPHABOX_JIT_DPC2=0 turns it off.
+  /// instead of clearing 2 MB.
   static constexpr int kDpc2Bits = 14;
   static constexpr int kDpc2Entries = 1 << kDpc2Bits;
   static inline u64 dpc2_index(u64 va) {
     return (va >> 13) & (u64)(kDpc2Entries - 1);
   }
-  bool m_dpc2 = true;
-  static bool dpc2_requested();
   /// A level-1 miss that level 2 can answer: copy the slot into level 1, and
   /// the caller carries on as with a hit.
   inline bool dpc_promote(int rw, u64 idx, u64 vp, int cm, int asn) {
-    if (!m_dpc2)
-      return false;
     const SDataPageCache &l2 = data_page_cache2[rw][dpc2_index(vp)];
     if (!(l2.valid && l2.gen == m_dpc2_gen && l2.virt_page == vp &&
           l2.cm == cm && l2.asn == asn))
@@ -749,8 +742,6 @@ public:
   /// After a level-1 fill: its mirror, and the same translation into level 2.
   inline void dpc_l2_put(int rw, const SDataPageCache &l1) {
     dpc_sync(rw, dpc_index(l1.virt_page));
-    if (!m_dpc2)
-      return;
     SDataPageCache &l2 = data_page_cache2[rw][dpc2_index(l1.virt_page)];
     l2 = l1;
     l2.gen = m_dpc2_gen;
@@ -865,9 +856,6 @@ public:
   /// slot of the page it evicts and of the page it inserts, whatever they
   /// hold. The default keeps what those do not touch (see add_tb).
   bool m_dpc_keep = true;
-  /// ALPHABOX_JIT_UNALIGNED=0: every unaligned load from compiled code bails
-  /// to the interpreter, instead of the read helper doing it (jit_read).
-  bool m_jit_unaligned = true;
   /// The host bytes behind a physical page for the page cache: DRAM, or
   /// device memory the system offers for direct access (a framebuffer), or
   /// 0 for everything else (MMIO: every access goes through the device).

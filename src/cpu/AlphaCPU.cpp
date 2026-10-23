@@ -79,16 +79,6 @@ thread_local CAlphaCPU *t_running_cpu = nullptr;
 
 bool CAlphaCPU::s_trace_calls = false;
 
-/// ALPHABOX_JIT_DPC2=0: no second way in the data page cache -- the A/B
-/// switch for data_page_cache2, read once.
-bool CAlphaCPU::dpc2_requested() {
-  static const bool on = [] {
-    const char *e = getenv("ALPHABOX_JIT_DPC2");
-    return !(e && e[0] == '0');
-  }();
-  return on;
-}
-
 /**
  * Report a subroutine call, the first time each call site reaches each
  * routine on each processor (ALPHABOX_TRACE_CALLS).
@@ -496,19 +486,11 @@ void CAlphaCPU::honour_new_code_pages() {
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
-  m_dpc2 = dpc2_requested();
   {
     const char *e = getenv("ALPHABOX_DPC_KEEP");
     m_dpc_keep = !(e && strcmp(e, "0") == 0);
-    e = getenv("ALPHABOX_JIT_UNALIGNED");
-    m_jit_unaligned = !(e && strcmp(e, "0") == 0);
     e = getenv("ALPHABOX_LLSC_MEMOP");
     m_llsc_memop = !(e && strcmp(e, "0") == 0);
-    e = getenv("ALPHABOX_JIT_DPC_SLOTS");
-    const long slots = e ? atol(e) : kDpcEntries;
-    m_dpc_mask = (slots == 64 || slots == 128 || slots == kDpcEntries)
-                     ? (u64)(slots - 1)
-                     : kDpcMask;
   }
   cc_last_read = 0; // the rpcc_read floor tracks state.cc: reset together
   cc_borrow = 0;
@@ -579,15 +561,14 @@ void CAlphaCPU::init() {
     o.dpc_cm = (uint32_t)((char *)&data_page_cache[0][0].cm - (char *)this);
     o.dpc_asn = (uint32_t)((char *)&data_page_cache[0][0].asn - (char *)this);
     o.dpc_stride = (uint32_t)sizeof(data_page_cache[0][0]);
-    o.dpc_mask = (uint32_t)m_dpc_mask;
+    o.dpc_mask = (uint32_t)kDpcMask;
     o.dpc_c_tag = (uint32_t)((char *)&dpc_l1[0][0].tag - (char *)this);
     o.dpc_c_write_row =
         (uint32_t)((char *)&dpc_l1[0][1] - (char *)&dpc_l1[0][0]);
     o.dpc_c_stride = (uint32_t)sizeof(dpc_l1[0]);
     o.dpc_write_row = (uint32_t)((char *)&data_page_cache[1][0] -
                                  (char *)&data_page_cache[0][0]);
-    o.dpc2_base =
-        m_dpc2 ? (uint32_t)((char *)&data_page_cache2[0][0] - (char *)this) : 0;
+    o.dpc2_base = (uint32_t)((char *)&data_page_cache2[0][0] - (char *)this);
     o.dpc2_row = (uint32_t)((char *)&data_page_cache2[1][0] -
                             (char *)&data_page_cache2[0][0]);
     o.dpc2_bits = kDpc2Bits;

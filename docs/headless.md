@@ -494,18 +494,9 @@ The switches, each for a same-binary A/B or for isolating a fault:
 | `ALPHABOX_INTERP=1` | Interpret everything; never compile. The control arm for what compiled code is worth. |
 | `ALPHABOX_JIT_NOPFLUSH=0\|2` | `0`: flush the instruction cache on every `IMB`. `2`: the audit, below. |
 | `ALPHABOX_JIT_NOPFLUSH_BREAK=1` | Do not report the processor's own stores to the code-page map, as though a write path had been forgotten. |
-| `ALPHABOX_JIT_DPC2=0` | No second level behind the data page cache: a level-1 miss goes straight to the helper. |
 | `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, as before. |
-| `ALPHABOX_JIT_UNALIGNED=0` | Every unaligned load from compiled code bails to the interpreter, instead of the read helper doing it. |
 | `ALPHABOX_LLSC_MEMOP=0` | A load or store between `LDx_L` and `STx_C` does not make the `STx_C` fail, in either engine, as before 2026-10-22 (an A/B switch; [cpu-fidelity.md](cpu-fidelity.md)). |
-| `ALPHABOX_JIT_DPC_SLOTS=64\|128` | Use only that many of level 1's 256 page-cache slots a row (the index is masked). |
-| `ALPHABOX_JIT_REUSE=0` | Every memory op probes the data page cache itself, instead of reusing the block's previous probe on the same page (AArch64). |
-| `ALPHABOX_JIT_PEEP=0` | The AArch64 operate emitter without its in-place forms: operands shuttled through x0/x1 as before. |
-| `ALPHABOX_JIT_ADAPTPIN=0` | Keep the starting pin set instead of following the registers the running code uses (AArch64). |
-| `ALPHABOX_JIT_PIN_SHADOW=1` | Let the adaptive pin set pick R4-R7 and R20-R23, the registers PALcode has shadow copies of. |
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
-| `ALPHABOX_JIT_PIN16=0` | Start with the 14 pins there were before `x20` and `x28` were freed. |
-| `ALPHABOX_JIT_PINSET=1\|2` | Experiment: start from a different pin set of 14 (AArch64). |
 | `ALPHABOX_JIT_CHAIN=0` | Compiled blocks never run on into one another, as on a JIT_VERIFY build. |
 | `ALPHABOX_JIT_INLMEM=0` | Every load and store from compiled code calls its helper, as on a JIT_VERIFY build. |
 | `ALPHABOX_JIT_RPCC=0` | `RPCC` calls its helper instead of the generated stub, as on a JIT_VERIFY build. |
@@ -516,19 +507,11 @@ Notes on some of them:
   source changed while the code-page map said nothing had.
   `ALPHABOX_JIT_NOPFLUSH_BREAK=1` exists so that `test/tools/smc_test.sh`
   can be shown to fail when the tracking is wrong.
-- **`ALPHABOX_JIT_DPC2=0`** affects AArch64 compiled code and the helpers;
-  the x86-64 emitter never probes level 2.
 - **`ALPHABOX_DPC_KEEP=0`**: see [cpu-fidelity.md](cpu-fidelity.md), "Data
   translations outlive their TB entry".
-- **`ALPHABOX_JIT_PEEP=0`** removes longword arithmetic, logical
-  immediates and byte manipulation done in place.
-- **The pin switches** are explained in [performance.md](performance.md):
-  "Sixteen pins, chosen by what runs" (`ADAPTPIN`), "Not the shadow bank"
-  (`PIN_SHADOW`) and "What a pinned register is worth" (`PINSET`).
-  `PINSET=1` gives R17, R18 and R27's slots to R13-R15, the nada
-  benchmark's hot registers. `PINSET=2` gives R9-R11, R26, R27, R29 and
-  R30's to R8, R4-R6 and R21-R23, those of Microsoft's `makecab`. Combine
-  either with `ALPHABOX_JIT_ADAPTPIN=0` to keep it.
+- **`ALPHABOX_JIT_PINLOG=1`**: the pin set follows the registers the
+  running code uses ([performance.md](performance.md), "Sixteen pins,
+  chosen by what runs").
 - **`CHAIN=0`, `INLMEM=0` and `RPCC=0`** together give the production JIT
   minus what the verify lane cannot see. They are for telling such a
   fault from anything else, not for speed. `INLMEM=0` removes the inline

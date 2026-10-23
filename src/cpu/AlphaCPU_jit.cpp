@@ -1337,10 +1337,8 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   // first here too, from DRAM; bail for the second and for a device.
   // Bailing on every one ended the chain -- makecab loads ~100k per 100M
   // instructions, and they were most of its interpreter time.
-  // ALPHABOX_JIT_UNALIGNED=0 bails on all of them, as before.
   const bool unaligned = (va & amask) != 0;
-  if (unaligned &&
-      (!cpu->m_jit_unaligned || (va & U64(0x1FFF)) + size_bits / 8 > 0x2000)) {
+  if (unaligned && (va & U64(0x1FFF)) + size_bits / 8 > 0x2000) {
     cpu->m_jit->note_bail(false, CJitEngine::BK_UNALIGNED);
     return 1;
   }

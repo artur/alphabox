@@ -171,6 +171,11 @@ either way. The names are kept in these entries because they say how the
 number was taken; an entry says when its switch is gone.
 [headless.md](headless.md) lists the hooks that actually exist.
 
+Gone on 2026-10-22, each collapsed to the path it measured as the default
+(the JIT audit, JIT-11): `ALPHABOX_JIT_PEEP`, `_REUSE`, `_PIN16`,
+`_PINSET`, `_PIN_SHADOW`, `_ADAPTPIN`, `_DPC_SLOTS`, `_DPC2` and
+`_UNALIGNED`.
+
 ## Where things stand
 
 The most recent figures in this file are those of late September 2026:

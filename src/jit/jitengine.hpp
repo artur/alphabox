@@ -305,7 +305,7 @@ public:
     // (16), and the bytes from one index to the next (32).
     uint32_t dpc_c_tag, dpc_c_write_row, dpc_c_stride;
     // The page cache's second level (CAlphaCPU::data_page_cache2), which a
-    // miss path probes: its read row from the cpu (0 when ALPHABOX_JIT_DPC2=0),
+    // miss path probes: its read row from the cpu,
     // the bytes from the read row to the write row, its index width, and
     // m_dpc2_gen.
     uint32_t dpc2_base, dpc2_row, dpc2_bits, dpc2_gen;
@@ -619,11 +619,10 @@ public:
   // set would cover clearly more of the accesses, pin_decide stages it and
   // asks for a reclaim, which installs it as it frees all code -- code
   // compiled for one set must never run under another.
-  // ALPHABOX_JIT_ADAPTPIN=0 keeps the starting set.
   static constexpr int kPinSlots = 16;
   int8_t m_pin_guest[kPinSlots];
   inline void pin_sample(const JitBlock *b, const uint8_t *dram) {
-    if (m_pin_adapt && --m_pin_countdown == 0)
+    if (--m_pin_countdown == 0)
       pin_sample_slow(b, dram);
   }
 
@@ -841,9 +840,7 @@ private:
   // Adaptive pins (see pin_sample).
   static constexpr uint32_t kPinEvery = 64;    // sample one dispatch in this
   static constexpr uint32_t kPinWindow = 4096; // samples between decisions
-  bool m_pin_adapt = true;
   bool m_pin_log = false; // ALPHABOX_JIT_PINLOG=1: print every switch
-  bool m_pin_shadow = false; // ALPHABOX_JIT_PIN_SHADOW=1: may pick R4-7/R20-23
   bool m_pin_staged = false;
   int8_t m_pin_next[kPinSlots];
   uint32_t m_pin_countdown = kPinEvery;

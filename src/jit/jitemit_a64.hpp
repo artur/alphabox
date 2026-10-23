@@ -67,25 +67,10 @@ constexpr uint32_t kA64PinHost[CJitEngine::kPinSlots] = {
     21, 22, 23, 24, 25, 26, 20, 28, 4, 5, 6, 7, 8, 13, 14, 15};
 constexpr int kA64CalleeSlots = 8;
 
-// ALPHABOX_JIT_PEEP=0: the operate emitter as it was -- operands shuttled
-// through x0/x1 and literals materialised -- for a same-binary A/B of the
-// in-place forms (docs/performance.md, "The hot path, by what it is made
-// of").
-const bool g_a64_peep = [] {
-  const char *e = getenv("ALPHABOX_JIT_PEEP");
-  return !(e && strcmp(e, "0") == 0);
-}();
-
 // ALPHABOX_JIT_RPCC=0: RPCC calls jit_misc, as on a JIT_VERIFY build,
 // instead of the inline stub. For telling a stub fault from anything else.
 const bool g_a64_rpcc_stub = [] {
   const char *e = getenv("ALPHABOX_JIT_RPCC");
-  return !(e && strcmp(e, "0") == 0);
-}();
-
-// ALPHABOX_JIT_REUSE=0: every memory op probes the page cache itself.
-const bool g_a64_reuse = [] {
-  const char *e = getenv("ALPHABOX_JIT_REUSE");
   return !(e && strcmp(e, "0") == 0);
 }();
 
@@ -117,7 +102,7 @@ void a64_plan_reuse(const uint32_t *w, uint32_t n, uint8_t *plan) {
   int32_t prev_disp = 0;
   for (uint32_t i = 0; i < n; ++i) {
     plan[i] = 0;
-    if (!g_a64_reuse || !g_jit_inline_mem)
+    if (!g_jit_inline_mem)
       continue;
     const uint32_t ins = w[i], op = ins >> 26;
     const int ra = (ins >> 21) & 0x1f, rb = (ins >> 16) & 0x1f, rc = ins & 0x1f;
@@ -418,8 +403,7 @@ void *CJitEngine::a64_dpc2_thunk(bool write_row) {
   void *&thunk = m_dpc2_thunk[write_row ? 1 : 0];
   if (thunk)
     return thunk;
-  if (!m_off.dpc2_base || m_off.dpc_stride != 64 ||
-      m_off.dpc_bias - m_off.dpc_tag != 8)
+  if (m_off.dpc_stride != 64 || m_off.dpc_bias - m_off.dpc_tag != 8)
     return nullptr;
   const uint32_t idx_bits = a64_popcount_low(m_off.dpc_mask);
   if (!idx_bits || ((1u << idx_bits) - 1u) != m_off.dpc_mask)
@@ -2147,9 +2131,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // one AND with an immediate where the mask encodes. A register selector
     // leans on AArch64's variable shifts using the count modulo 64, so
     // (pos*8) and (64-pos*8)&63 need no masking: EXTBL is lsl, lsr, and.
-    if (g_a64_peep &&
-        (op == OP_EXTL || op == OP_EXTH || op == OP_INSL || op == OP_INSH ||
-         op == OP_MSKL || op == OP_MSKH || op == OP_ZAP)) {
+    if (op == OP_EXTL || op == OP_EXTH || op == OP_INSL || op == OP_INSH ||
+        op == OP_MSKL || op == OP_MSKH || op == OP_ZAP) {
       if (rc == 31)
         continue;
       const uint32_t f = (ins >> 5) & 0x7f;
@@ -2406,9 +2389,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
       // A literal the logical instructions can take as an immediate (for
       // BIC/ORNOT/EQV, its complement): one instruction, no x1.
-      if (g_a64_peep && islit &&
-          (kind == B_AND || kind == B_ORR || kind == B_EOR || kind == B_BIC ||
-           kind == B_ORN || kind == B_EON)) {
+      if (islit && (kind == B_AND || kind == B_ORR || kind == B_EOR ||
+                    kind == B_BIC || kind == B_ORN || kind == B_EON)) {
         const bool inv = kind == B_BIC || kind == B_ORN || kind == B_EON;
         const uint64_t v = inv ? ~(uint64_t)lit : (uint64_t)lit;
         if (asmjit::arm::Utils::is_logical_imm(v, 64)) {
@@ -2489,8 +2471,8 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // the scale as a shifted operand, a literal as an immediate -- and the
     // sign extension straight into the destination. addl Ra,#lit is 2
     // instructions, s4addl Ra,Rb 2 (they were 5 and 6).
-    if (g_a64_peep && (op == OP_ADDL || op == OP_SUBL || op == OP_S4ADDL ||
-                       op == OP_S8ADDL || op == OP_S4SUBL || op == OP_S8SUBL)) {
+    if (op == OP_ADDL || op == OP_SUBL || op == OP_S4ADDL || op == OP_S8ADDL ||
+        op == OP_S4SUBL || op == OP_S8SUBL) {
       if (rc == 31)
         continue;
       const bool issub = (op == OP_SUBL || op == OP_S4SUBL || op == OP_S8SUBL);
