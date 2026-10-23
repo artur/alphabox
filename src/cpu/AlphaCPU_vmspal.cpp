@@ -369,7 +369,7 @@ void CAlphaCPU::vmspal_call_mfpr_fen() { r0 = state.fpen ? 1 : 0; }
 void CAlphaCPU::vmspal_call_mtpr_fen() {
   hw_ldq(p21 + 0x10, p4);
   state.fpen = (r16 & 1);
-  hw_stl(p4 + 0x38, r16);
+  hw_stl(p4 + 0x38, r16 & 1); // (HWPCB+56)<0> <- FEN (ARM 13.3.6)
 }
 
 /**
@@ -577,11 +577,12 @@ void CAlphaCPU::vmspal_call_mtpr_datfx() {
   u64 t;
 
   u64 u;
+  // (HWPCB+56)<63> <- R16<0> (ARM 13.3.4), not the saved KSP at HWPCB+0
   hw_ldq(p21 + 0x10, t);
-  hw_ldq(t, u);
-  u |= U64(0x1) << 0x3f;
-  u &= ~(r16 << 0x3f);
-  hw_stq(t, u);
+  hw_ldq(t + 0x38, u);
+  u &= ~(U64(0x1) << 0x3f);
+  u |= (r16 & 1) << 0x3f;
+  hw_stq(t + 0x38, u);
 }
 
 /**
@@ -1211,6 +1212,13 @@ int CAlphaCPU::vmspal_ent_dtbm_single(int flags) {
                 NULL, 0))
     return -1;
   p4 = sys_read(pte_phys, 64);
+  // A nested double miss (dtbm_double_3) leaves EXC_ADDR in p5 and MM_STAT
+  // in p7<63:16>, flagged by p7<0>, as the PALcode's double-miss handler
+  // does; take MM_STAT back, as its single-miss handler does (0xd080).
+  // Reading p5 as MM_STAT reported writes as reads, and dismissed a store
+  // of R31 to an invalid page as a prefetch (VMSPAL-01).
+  if (p7 & 1)
+    p5 = p7 >> 16;
 
   if (!test_bit_64(p4, 0)) {
     if (flags & PROBE) {
