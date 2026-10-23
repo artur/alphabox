@@ -10,6 +10,11 @@
 # its start, while hot code is compiled and the pin set adapts. K=V pairs
 # are passed to the emulator's environment (e.g. ALPHABOX_JIT_CHAIN=0).
 #
+# The snapshot must have one processor (made from es40-window.cfg; a
+# separate ALPHABOX_WORK keeps it apart from perf_ab's), and the scale must
+# make the section the longest busy stretch: about 3 s or more of guest
+# time. At scale 1 on 2026-10-23 some sections took 0.1-0.3 s.
+#
 # A rate, not a timing: for an A/B that goes in the ledger use perf_ab.py.
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
@@ -22,9 +27,16 @@ env "$@" ALPHABOX_RATE=0.25 KEEP=1 bash "$T/nt_snap.sh" run "mips-$L" "$B" "$W" 
     "$S" "$N" > /dev/null 2>&1
 python3 - "$WORK/ntsnap-mips-$L/run.log" "$L" <<'PY'
 import re, sys
+log = open(sys.argv[1], errors='replace').read()
+# One processor only: on two the guest moves the benchmark between them in
+# the middle of a section, and the second keeps busy after it, so CPU0's
+# longest plateau is not the section.
+if 'CPU1-I-RATE' in log:
+    print(f"{sys.argv[2]:28} needs a one-processor snapshot "
+          "(nt_snap.sh make ... es40-window.cfg)")
+    sys.exit(1)
 rows = [(float(a), int(b), float(c)) for a, b, c in re.findall(
-    r'CPU0-I-RATE: ([\d.]+) MIPS \((\d+) instructions in ([\d.]+) s\)',
-    open(sys.argv[1], errors='replace').read())]
+    r'CPU0-I-RATE: ([\d.]+) MIPS \((\d+) instructions in ([\d.]+) s\)', log)]
 best, run = [], []
 for r in rows:
     if r[0] > 100 and run and all(0.8 <= r[0] / x[0] <= 1.25 for x in run[-1:]) \
