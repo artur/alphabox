@@ -544,6 +544,79 @@ void t_reset_in_dma(Rig &r) {
   r.status(0);
 }
 
+// SFF-8038i 3.0 (p.5): the driver issues the DMA command, then writes
+// Start. The controller thread takes the command up in its own time, so
+// Start may land before it gets to the bus master, while it does, or after,
+// and at every moment it must start the command (a WRITE DMA of one sector
+// each time). A Start that lands just after the thread looked for one and
+// before it waits is the moment a busy host stretches: test_start_pause_us
+// holds the thread there.
+void t_start_race(Rig &r) {
+  g_group = "dma-start";
+  const u32 b = Rig::bm(0);
+  r.prd_table(kPrd, kSrc, 512, 1, 0x80);
+  auto setup = [&]() {
+    r.o32(b + 4, kPrd);
+    r.o8(b + 0, 0x00); // stopped, from memory
+    r.o8(b + 2, 0x06);
+  };
+  auto settle = [&](bool ok) {
+    if (!ok) { // SRST releases a command that waits for good
+      r.o8(r.ctlport(0), 0x04);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      r.o8(r.ctlport(0), 0x00);
+      r.wait_ready(0, 3000);
+      r.select(0, 0);
+    }
+    r.o8(b + 0, 0x00);
+    r.o8(b + 2, 0x06);
+    r.status(0);
+  };
+
+  setup();
+  CIdeController::test_start_pause_us = 20000;
+  r.issue(0, 0, 0xca, 1, 300);
+  r.alt(0); // the controller has taken the command up
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  r.o8(b + 0, 0x01); // Start, while it is held after looking for one
+  bool ok = r.wait_ready(0, 500);
+  CIdeController::test_start_pause_us = 0;
+  check(ok, "a Start that lands as the controller looks for it starts the "
+            "command");
+  settle(ok);
+
+  // A new command releases one parked for the bus master, and its Start
+  // follows at once, before the controller thread has woken for either.
+  setup();
+  r.issue(0, 0, 0xca, 1, 301); // no Start: parked
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  r.issue(0, 0, 0xca, 1, 302);
+  r.o8(b + 0, 0x01);
+  ok = r.wait_ready(0, 500);
+  check(ok, "the Start of a command that released a parked one starts it");
+  settle(ok);
+
+  // And a Start written at delays swept over the moment the controller
+  // gets to the bus master, without holding it there.
+  const int n = 2000;
+  int lost = 0;
+  for (int i = 0; i < n; i++) {
+    setup();
+    r.issue(0, 0, 0xca, 1, 200 + (i & 63));
+    r.alt(0);
+    const auto until = std::chrono::steady_clock::now() +
+                       std::chrono::nanoseconds((i % 400) * 10L);
+    while (std::chrono::steady_clock::now() < until) {
+    }
+    r.o8(b + 0, 0x01);
+    ok = r.wait_ready(0, 200);
+    lost += !ok;
+    settle(ok);
+  }
+  check(lost == 0, "a Start 0-4 us after the status read starts the command",
+        "%d of %d commands waited for Start for good", lost, n);
+}
+
 // ATA/ATAPI-6 8.46.11 (p.227): a transfer mode belongs to its drive.
 void t_transfer_mode(Rig &r) {
   g_group = "transfer-mode";
@@ -692,6 +765,8 @@ int main_idetest(int argc, char **argv) {
     t_busmaster(r);
   if (want("srst"))
     t_reset_in_dma(r);
+  if (want("dma-start"))
+    t_start_race(r);
   if (want("transfer"))
     t_transfer_mode(r);
   if (want("atapi-odd"))
