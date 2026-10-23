@@ -704,7 +704,13 @@ void CAlphaCPU::jit_run(int budget) {
       const u32 cur_len = b->prefix_len;
       const u64 cur_tag = b->tag;
       bool clean = true;
+      // Loads and stores recorded before each instruction: what a compiled
+      // pass that bails there must have consumed and made (the bail compare
+      // below).
+      u8 vn_at[64], sn_at[64];
       for (u32 k = 0; k < cur_len; ++k) {
+        vn_at[k] = (u8)vn;
+        sn_at[k] = (u8)sn;
         // Compute the load's effective address from the live registers BEFORE
         // executing it (Rb may be the load's own dest), to compare against
         // the JIT.
@@ -1041,6 +1047,60 @@ void CAlphaCPU::jit_run(int budget) {
           g_diag_excluded_ns =
               0; // consumed here in the verify path so jit_run's later sync
                  // doesn't double-count it
+        } else if (done < b->prefix_len) {
+          // The compiled pass bailed at instruction `done` (a device access,
+          // or anything else a helper hands back) while the interpreter ran
+          // the whole block. The bail protocol: the PC is that instruction's,
+          // the loads consumed and the stores made are the interpreter's
+          // before it, and nothing of it or after it was done -- so every GPR
+          // the rest of the block does not write is the interpreter's. (A
+          // CALL_PAL in the rest, whose native routine may write any
+          // register, leaves the GPRs out.)
+          const u64 bail_pc = b->tag + 4 * (u64)done;
+          if (state.pc != bail_pc && (m_jit_vbad = true))
+            printf("[JIT][VERIFY] BAIL PC MISMATCH at %016llx: bailed at %u, "
+                   "pc=%016llx, expected %016llx\n",
+                   (unsigned long long)start_virt, done,
+                   (unsigned long long)state.pc, (unsigned long long)bail_pc);
+          if (m_jit_slog_i != sn_at[done] && (m_jit_vbad = true))
+            printf("[JIT][VERIFY] BAIL STORE COUNT MISMATCH at %016llx: "
+                   "bailed at %u, interp=%u jit=%u\n",
+                   (unsigned long long)start_virt, done, (unsigned)sn_at[done],
+                   m_jit_slog_i);
+          if (n_loads_interp < 64 && m_jit_vlog_i != vn_at[done] &&
+              (m_jit_vbad = true))
+            printf("[JIT][VERIFY] BAIL LOAD COUNT MISMATCH at %016llx: "
+                   "bailed at %u, interp=%u jit=%u\n",
+                   (unsigned long long)start_virt, done, (unsigned)vn_at[done],
+                   m_jit_vlog_i);
+          u64 r_cmp[64];
+          memcpy(r_cmp, r_interp, sizeof(r_cmp));
+          for (u32 k = done; k < b->prefix_len; ++k) {
+            const u32 w = vw[k], op = w >> 26;
+            int d = -1;
+            if (op == 0x00) { // CALL_PAL: no GPR compare
+              memcpy(r_cmp, state.r, sizeof(r_cmp));
+              break;
+            }
+            if ((op >= 0x10 && op <= 0x13) || op == 0x1c)
+              d = (int)(w & 31); // operates, FTOIx: Rc
+            else if (op == 0x08 || op == 0x09 || op == 0x0a || op == 0x0b ||
+                     op == 0x0c || (op >= 0x28 && op <= 0x2b) || op == 0x2e ||
+                     op == 0x2f || op == 0x30 || op == 0x34 || op == 0x1a ||
+                     op == 0x18 || op == 0x19 || op == 0x1b || op == 0x1f)
+              d = (int)((w >> 21) & 31); // loads, STx_C, BR/BSR, JMP, MISC,
+                                         // HW_MFPR, HW_LD, HW_ST/C: Ra
+            if (d < 0 || d == 31)
+              continue;
+            r_cmp[d] = state.r[d];
+            if (d < 24 && (d & 0xc) == 0x4) // and its PALshadow copy
+              r_cmp[d + 32] = state.r[d + 32];
+          }
+          cc_last_sync +=
+              ns_to_host_ticks(m_jit->verify_compare(start_virt, r_cmp, state.r,
+                                                     vw, done + 1, m_jit_vbad) +
+                               g_diag_excluded_ns);
+          g_diag_excluded_ns = 0;
         }
         state.pc =
             interp_pc; // restore; the block's PC write was only for the check

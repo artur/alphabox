@@ -48,10 +48,13 @@ first audit was made on 2026-09-18; later entries carry their dates.
   static exits' data links, the inline computed-jump cache, the
   conditional exit at a block's end, the memory operations' cold stubs
   and the second-level page-cache probe, the inline `HW_LD`/`HW_ST` and
-  the gates on exits; on x86-64 the chain gates. And a block whose
-  compiled pass bails before its end (a fault, a device access) is not
-  compared at all. The instruction oracle runs these paths on the
-  production lanes (below, "The JIT").
+  the gates on exits; on x86-64 the chain gates. A block whose compiled
+  pass bails before its end while the interpreter runs it through (a
+  device access, say) is compared up to the bail (since 2026-10-22,
+  JIT-06): the PC, the loads and stores before it, and every GPR the rest
+  of the block does not write. A block whose interpreted pass takes a
+  trap or an interrupt (a fault) is still not compared. The instruction
+  oracle runs these paths on the production lanes (below, "The JIT").
 - **The floating-point self-test**: `ALPHABOX_JIT_FPTEST=1` on a
   `JIT_VERIFY` build checks the JIT's inline IEEE operations against the
   interpreter over 8.5 million cases at startup.
@@ -786,9 +789,9 @@ until they were fixed:
 - **AArch64's inline `HW_ST` did not tell the code-page map** (JIT-02,
   closed 2026-10-22). Compiled PALcode stored a physical `HW_ST` to
   DRAM inline without reporting the write, where the helper (and the
-  x86-64 emitter, which always calls it) does. An
-  `IC_FLUSH` after such a store into compiled code was skipped as having
-  nothing to flush, and the old instructions ran (HRM 5.2.17). The
+  x86-64 emitter, which always calls it) does. An `IC_FLUSH` after such
+  a store into compiled code was skipped as having nothing to flush, and
+  the old instructions ran (HRM 5.2.17). The
   inline store now tests the map's bit for its page first, and a store
   into a page that holds compiled code takes the helper, which reports
   it: the rule the page cache's write row already kept for virtual
