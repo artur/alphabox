@@ -245,6 +245,10 @@ def main():
     hook = row.family != rows.ROWS[rows.BOARD_ROW].family
     if hook:
         env["ALPHABOX_CPU_ANY_BOARD"] = "1"
+    # QUIESCE's timeout, long enough for the cases to tell a QUIESCE that
+    # slept from one that did not (cases.QUIESCE_TIMEOUT).
+    if row.own_instruction(cases.QUIESCE):
+        env["ALPHABOX_QUIESCE_TIMEOUT"] = str(cases.QUIESCE_TIMEOUT)
     env.update(kv.split("=", 1) for kv in args.env)
     # COM1 keeps its newest 256 KB when its reader falls behind
     # (src/devices/isa/Serial.cpp, OUT_QUEUE_MAX), and the results are about

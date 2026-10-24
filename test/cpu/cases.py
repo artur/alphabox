@@ -41,6 +41,8 @@ GROUPS = [
              "ACV, ITB/DTB fills, DTB protection, FOR/FOW, MM_STAT"),
     ("ev8", "the 21464's stateless additions: CCB, CMOV2, FCMOV2 where the "
             "row has them, MAP_ALIGN and WH64EN on every row"),
+    ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
+                "them (one processor: the timeout), AMASK bit 10"),
 ] + jit_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
@@ -1169,9 +1171,208 @@ def g_ev8(b):
     b.store(2, "f5 unchanged", 0xC008000000000000)
 
 
+# QUIESCE's timeout for the oracle's run, in cycles (ALPHABOX_QUIESCE_TIMEOUT,
+# which cpu_oracle.py sets on a row that has QUIESCE): 2**24, 21 ms at the
+# oracle's 800 MHz. A QUIESCE that slept took at least this long by RPCC; one
+# that did not is a few instructions, so the cases tell the two apart with a
+# margin no host stall reaches.
+QUIESCE_TIMEOUT = 1 << 24
+
+
+def _ldx_arm(name, ra, rb):
+    return mfc(A.MISC[name], ra, rb)
+
+
+QUIESCE = mfc(A.MISC["QUIESCE"])
+
+
+def _unwatch(b):
+    """CALL_PAL 01 with R16 = 1 (the image's FPE service, which leaves the
+    FPU on): a CALL_PAL clears watch_flag [21464 IDS p. 670; on the row every
+    CALL_PAL does, an Alphabox decision], so the next case starts clear."""
+    b.emit(mem(OP["LDA"], 16, R31, 1))
+    b.emit(call_pal(0x01))
+
+
+def _quiesce_timed(b, field, slept):
+    """QUIESCE between two RPCCs; store whether it slept: whether the cycles
+    between them reach QUIESCE_TIMEOUT."""
+    b.emit(mfc(A.MISC["RPCC"], 10))
+    b.emit(QUIESCE)
+    b.emit(mfc(A.MISC["RPCC"], 11))
+    b.emit(opr(0x10, 0x29, 11, 10, 12))            # SUBQ r11,r10,r12
+    b.emit(opl(0x12, 0x31, 12, 0x0F, 12))           # ZAPNOT: the 32-bit count
+    b.emit(mem(OP["LDAH"], 13, R31, QUIESCE_TIMEOUT >> 16))
+    b.emit(opr(0x10, 0x3D, 13, 12, 14))            # CMPULE r13,r12,r14
+    b.store(14, field, 1 if slept else 0)
+
+
+def g_quiesce(b):
+    """The 21464's LDL_ARM, LDQ_ARM and QUIESCE (docs/platforms/ev8-isa.md
+    3.1; 21464 IDS Rev 1.1k, PDF pp. 668-678) where the row has them, and
+    AMASK bit 10 that software tests first on every row. LDx_ARM loads as
+    LDL/LDQ from Rbv, with LDQ's faults [p. 669], and arms only when it did
+    not fault [p. 670]. QUIESCE sleeps while watch_flag is set: here, one
+    processor and nothing else writing, until the timeout [p. 673]; with the
+    flag clear it runs on at once, and the flag is clear after a QUIESCE
+    [p. 671], after a CALL_PAL [p. 670] and after an exception (both
+    Alphabox decisions where the IDS leaves it open)."""
+    m = {}
+    b.begin("scratch init")
+    init_scratch(b, m, at=0x300, quads=4)
+    scr = b.scratch
+
+    # AMASK bit 10, the IDS's own test: LDA R2,0x400(R31); AMASK R2,R2 [IDS
+    # p. 674] (its BEQ is a BNE: ev8-isa.md section 2).
+    b.begin("AMASK of bit 10 (SMT)")
+    b.emit(mem(OP["LDA"], 2, R31, 0x400))
+    b.emit(opr(0x11, 0x61, R31, 2, 2))
+    b.store(2, "r2", 0x400 & ~b.row.amask)
+
+    # The loads: Ra <- MEM[Rbv], sign-extended for LDL_ARM; Rb unchanged.
+    for name, size, off in (("LDQ_ARM", 8, 0x300), ("LDQ_ARM", 8, 0x318),
+                            ("LDL_ARM", 4, 0x300), ("LDL_ARM", 4, 0x304),
+                            ("LDL_ARM", 4, 0x30C)):
+        word = _ldx_arm(name, 1, 22)
+        b.begin("%s r1,(r22), r22 = scratch+%#x" % (name, off))
+        b.need(rows.Own(word))
+        b.load(1, 0x5151515151515151)
+        b.emit(mem(OP["LDA"], 22, R_SCR, off))
+        b.trap_clear()
+        b.emit(word)
+        b.trap_check()
+        _next_runs(b)
+        v = mread(m, off, size)
+        b.store(1, "r1", aarm.SEXT(v, 32) if size == 4 else v)
+        b.store(22, "r22", scr + off)
+        _unwatch(b)
+    # Ra = Rb; and R31, which LDx_ARM loads and arms with as LDx_L does.
+    word = _ldx_arm("LDQ_ARM", 22, 22)
+    b.begin("LDQ_ARM r22,(r22)")
+    b.need(rows.Own(word))
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x308))
+    b.emit(word)
+    b.store(22, "r22", mread(m, 0x308, 8))
+    _unwatch(b)
+    word = _ldx_arm("LDQ_ARM", R31, 22)
+    b.begin("LDQ_ARM r31,(r22) arms")
+    b.need(rows.Own(word))
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x300))
+    b.trap_clear()
+    b.emit(word)
+    b.trap_check()
+    _quiesce_timed(b, "QUIESCE slept (to the timeout)", True)
+
+    # QUIESCE with watch_flag clear: no sleep, nothing changed, the next
+    # instruction runs.
+    b.begin("QUIESCE with watch_flag clear")
+    b.need(rows.Own(QUIESCE))
+    b.load(20, 0x0123456789ABCDEF)
+    b.trap_clear()
+    _quiesce_timed(b, "QUIESCE slept", False)
+    b.trap_check()
+    _next_runs(b)
+    b.store(20, "r20", 0x0123456789ABCDEF)
+
+    # An arm, and nothing writes the line: QUIESCE returns at the timeout,
+    # with the flag clear, so a second one does not sleep [IDS p. 671].
+    for name in ("LDQ_ARM", "LDL_ARM"):
+        word = _ldx_arm(name, 1, 22)
+        b.begin("%s, QUIESCE, QUIESCE" % name)
+        b.need(rows.Own(word))
+        b.need(rows.Own(QUIESCE))
+        b.emit(mem(OP["LDA"], 22, R_SCR, 0x310))
+        b.emit(word)
+        b.trap_clear()
+        _quiesce_timed(b, "first QUIESCE slept (to the timeout)", True)
+        _quiesce_timed(b, "second QUIESCE slept", False)
+        b.trap_check()
+        _next_runs(b)
+        b.store(1, "r1", aarm.SEXT(mread(m, 0x310, 4), 32)
+                if name == "LDL_ARM" else mread(m, 0x310, 8))
+
+    # A CALL_PAL between them clears the flag (REI, rti, rfe, retsys and urti
+    # do [IDS p. 670]; any other may, and on the row every one does).
+    word = _ldx_arm("LDQ_ARM", 1, 22)
+    b.begin("LDQ_ARM, CALL_PAL, QUIESCE")
+    b.need(rows.Own(word))
+    b.need(rows.Own(QUIESCE))
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x300))
+    b.emit(word)
+    # The interpreter runs on from LDQ_ARM to the next jump; a branch here
+    # makes the CALL_PAL start a block, compiled on a JIT lane's last pass.
+    b.emit(bra(OP["BR"], R31, 1))
+    b.emit(opr(0x11, 0x20, R31, R31, R31))          # NOP, jumped over
+    _unwatch(b)
+    _quiesce_timed(b, "QUIESCE slept", False)
+    # An exception between them, taken and returned from by the image's own
+    # PALcode (HW_RET, no CALL_PAL), clears it too [decision].
+    b.begin("LDQ_ARM, OPCDEC, QUIESCE")
+    b.need(rows.Own(word))
+    b.need(rows.Own(QUIESCE))
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x300))
+    b.emit(word)
+    b.trap_clear()
+    at = b.va()
+    b.emit(1 << 26)                                 # opcode 01: OPCDEC
+    b.trap_check(vector=0x400, exc_addr=at)
+    _quiesce_timed(b, "QUIESCE slept", False)
+
+    # The faults are LDQ's [IDS p. 669], and a load that faults does not arm
+    # [p. 670]: a DTB miss on an unmapped address (the image resumes after
+    # it), then QUIESCE does not sleep.
+    for name in ("LDQ_ARM", "LDL_ARM"):
+        word = _ldx_arm(name, 2, 11)
+        b.begin("%s on an unmapped address, then QUIESCE" % name)
+        b.need(rows.Own(word))
+        b.need(rows.Own(QUIESCE))
+        b.load(11, 0x10000000)
+        b.load(2, 0x5151515151515151)
+        b.trap_clear()
+        at = b.va()
+        b.emit(word)
+        b.trap_check(vector=0x300, exc_addr=at, exc_sum=2 << 8,
+                     exc_sum_mask=0x1F00, va=0x10000000)
+        b.store(2, "r2 (not written)", 0x5151515151515151)
+        _quiesce_timed(b, "QUIESCE slept", False)
+    # Misaligned: LDQ's UNALIGN fault, which Alphabox, as for LDQ, takes only
+    # across a page (docs/cpu-fidelity.md, the first known divergence).
+    for name, size, off in (("LDQ_ARM", 8, 0x304), ("LDL_ARM", 4, 0x302)):
+        word = _ldx_arm(name, 2, 22)
+        b.begin("%s r2,(r22), r22 = scratch+%#x (misaligned)" % (name, off))
+        b.need(rows.Own(word))
+        b.load(2, 0x5151515151515151)
+        b.emit(mem(OP["LDA"], 22, R_SCR, off))
+        b.trap_clear()
+        at = b.va()
+        b.emit(word)
+        b.trap_check(vector=0x280, exc_addr=at, exc_sum=2 << 8,
+                     exc_sum_mask=0x1F00, va=scr + off,
+                     known=(0, UNALIGNED_REF))
+        v = mread(m, off, size)
+        b.store(2, "r2 (not written: the fault skips it)", 0x5151515151515151,
+                known=(aarm.SEXT(v, 32) if size == 4 else v, UNALIGNED_REF))
+        _unwatch(b)
+    word = _ldx_arm("LDQ_ARM", 2, 9)
+    b.start()
+    b.emit(mem(OP["LDA"], 9, R_SCR, 0x2000 - 4))    # across into page 1
+    b.begin("LDQ_ARM r2,(r9) (misaligned, crosses a page), then QUIESCE")
+    b.need(rows.Own(word))
+    b.need(rows.Own(QUIESCE))
+    b.load(2, 0x5151515151515151)
+    b.trap_clear()
+    at = b.va()
+    b.emit(word)
+    b.trap_check(vector=0x280, exc_addr=at, exc_sum=2 << 8,
+                 exc_sum_mask=0x1F00, va=scr + 0x2000 - 4)
+    b.store(2, "r2 (not written)", 0x5151515151515151)
+    _quiesce_timed(b, "QUIESCE slept", False)
+
+
 EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
         "unaligned": g_unaligned, "llsc": g_llsc, "branch": g_branch,
-        "fix": g_fix, "misc": g_misc, "mode": g_mode, "ev8": g_ev8}
+        "fix": g_fix, "misc": g_misc, "mode": g_mode, "ev8": g_ev8,
+        "quiesce": g_quiesce}
 EMIT.update(jit_cases.EMIT)
 
 
