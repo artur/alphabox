@@ -765,6 +765,9 @@ void CAlphaCPU::init() {
     m_jit = new CJitEngine((int)state.iProcNum, &m_jit_epoch);
     m_jit_ind_base = m_jit->ind_cache_base();
     m_jit->set_cpu_identity(m_model->amask, m_model->implver, m_model->ext);
+    m_jit->set_watch((m_model->ext & CPU_EXT_EV8) ? cSystem->watch_flags()
+                                                  : nullptr,
+                     1u << state.iProcNum, cSystem->watch_machine_ptr());
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
     m_jit->set_code_page_map(m_code_map);
     m_jit->set_nopflush_audit(m_nopflush_audit ? &m_flush_was_clean : nullptr);

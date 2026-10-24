@@ -1453,8 +1453,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         bail_if_w0();
       };
 #ifndef JIT_VERIFY
-      const bool st_phys =
-          (op == OP_HW_STL || op == OP_HW_STQ) && g_jit_inline_mem;
+      // Not where a processor watches (LDx_ARM): the helper tells the
+      // watches of a store, an inline one would not.
+      const bool st_phys = (op == OP_HW_STL || op == OP_HW_STQ) &&
+                           g_jit_inline_mem &&
+                           !(m_watch_machine && *m_watch_machine);
       if (m_cold_pass) { // only the physical forms record; x2 = pa
         a.bind(Label(m_cold_slow[cold_idx]));
         st_helper();
@@ -1957,6 +1960,18 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.b(done);
       }
       a.bind(do_vector);
+      if (m_watch_flags) { // LDx_ARM's watch: CALL_PAL clears it (DO_CALL_PAL)
+        Label kept = a.new_label(), again = a.new_label();
+        a.mov(x9, imm((uint64_t)(uintptr_t)m_watch_flags));
+        a.ldr(w11, a64::ptr(x9));
+        a.tbz(w11, imm(__builtin_ctz(m_watch_bit)), kept);
+        a.bind(again);
+        a.ldaxr(w11, a64::ptr(x9));
+        a.and_(w11, w11, imm(~m_watch_bit));
+        a.stlxr(w12, w11, a64::ptr(x9));
+        a.cbnz(w12, again);
+        a.bind(kept);
+      }
       // The PALshadow R23, whatever SDE says (SAVE_CALL_PAL_R23).
       a.mov(x12, imm(ret));
       a.str(x12, fld(kRegs + 55 * 8, 3));

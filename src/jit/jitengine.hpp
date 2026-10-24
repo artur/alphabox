@@ -486,6 +486,17 @@ public:
     m_implver = implver;
     m_ext = ext;
   }
+  /// LDx_ARM's watch (the 21464's; CSystem::cpu_arm_watch). `flags` is the
+  /// machine's watch_flag word and `bit` this processor's, or null on a
+  /// row without LDx_ARM: a compiled CALL_PAL clears the bit, as the
+  /// interpreter's does. `machine` says whether any processor of the
+  /// machine watches; there the AArch64 HW_ST physical forms store through
+  /// the helper, which tells the watches, rather than inline.
+  void set_watch(const void *flags, uint32_t bit, const bool *machine) {
+    m_watch_flags = flags;
+    m_watch_bit = bit;
+    m_watch_machine = machine;
+  }
   ~CJitEngine();
 
   static inline uint64_t index_of(uint64_t virt_pc) {
@@ -834,6 +845,9 @@ private:
   uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
   uint64_t m_implver = 0;
   uint32_t m_ext = 0;
+  const void *m_watch_flags = nullptr; ///< set_watch()
+  uint32_t m_watch_bit = 0;
+  const bool *m_watch_machine = nullptr;
   uint64_t m_recorded;
   uint64_t m_itb_gen =
       0; // current ITB generation (bumped on every I-stream TB invalidate)

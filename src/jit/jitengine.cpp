@@ -3106,6 +3106,14 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         a.jmp(done); // trap path exits (does not chain)
       }
       a.bind(do_vector);
+      if (m_watch_flags) { // LDx_ARM's watch: CALL_PAL clears it (DO_CALL_PAL)
+        Label kept = a.new_label();
+        a.mov(x86::r11, imm((uint64_t)(uintptr_t)m_watch_flags));
+        a.test(x86::dword_ptr(x86::r11), imm(m_watch_bit));
+        a.jz(kept);
+        a.lock().and_(x86::dword_ptr(x86::r11), imm((int32_t)~m_watch_bit));
+        a.bind(kept);
+      }
       a.mov(x86::rcx, imm(ret));
       a.mov(x86::qword_ptr(x86::rbx, 55 * 8),
             x86::rcx); // PALshadow R23 = return address, whatever SDE
