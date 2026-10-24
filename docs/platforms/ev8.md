@@ -574,13 +574,13 @@ marked today.
 | D5 | Interrupt and IPI steering to TPUs | R_INT_* "TBD" | each TPU gets its own interrupt mask and request bits; IO7 LSI/MSI targets name PID and TPU; IPIs address a TPU |
 | D6 | Processor numbers | WHAMI is PALcode's | PID x 4 + TPU, handed to the console's PALcode at entry the way the PID is today; a one-TPU chip keeps today's numbers |
 | D7 | TPU start-up | WAKEUP entry, no boot document | TPUs 1-3 start like a Marvel secondary (RBOX_SCRATCH1 polling) in EV7-compatible mode |
-| D8 | Short-vector SIMD results | per-instruction architectural results | define each from the IDS's datapath description and the existing MVI conventions; publish the table in cpu-fidelity.md |
+| D8 | Short-vector SIMD results | per-instruction architectural results | define each from the IDS's datapath description and the existing MVI conventions; publish the table in cpu-fidelity.md. Proposed in [ev8-isa.md](ev8-isa.md), 3.3 |
 | D9 | Paired single precision | the 21264-style trap shadow and denormal handling for pairs | follow the scalar IEEE rules per half, as [IDS p. 280] says, with the existing FPCR code |
-| D10 | Tarantula encodings | all | opcodes 01-06: one per group (VV, VS, SM, RM, VC, and one spare), FP-operate-like fields, a mask bit; DrainM as an 18.xxxx code |
+| D10 | Tarantula encodings | all | opcodes 01-06: one per group (VV, VS, SM, RM, VC, and one spare), FP-operate-like fields, a mask bit; DrainM as an 18.xxxx code. Encoded in [ev8-isa.md](ev8-isa.md), section 4 (integer-operate fields; DrainM 18.5000) |
 | D11 | Tarantula enable and context switch | no PALcode or OS support defined | a per-TPU vector enable, off at reset, so an OS that does not know vectors (OpenVMS) gets OPCDEC and never shares vector state between processes; a kernel that does (Linux) enables it and saves v0-v31, vl, vs, vm lazily |
 | D12 | Vector ordering | against MB/WMB and other processors | MB and WMB order vector accesses like scalar ones; within an instruction, any element order; DrainM as published |
 | D13 | Vector FP | rounding, FPCR, traps | FPCR shared with scalar FP; dynamic rounding from the FPCR; traps precise at the instruction (as published), FPCR status ORed over elements |
-| D14 | Tarantula detection | no AMASK bit | AMASK bit 3, the first free bit of the low byte reserved for standard extensions [ARM p. 204] |
+| D14 | Tarantula detection | no AMASK bit | AMASK bit 3, the first free bit of the low byte reserved for standard extensions [ARM p. 204]. Kept in [ev8-isa.md](ev8-isa.md), section 2, with the vector enable |
 | D15 | Vector TLB misses | lane TLB refill IPRs | the emulator keeps no lane TLBs: a vector access that misses raises the ordinary DTB miss for that element's VA, with the instruction's PC; the instruction restarts whole (loads and gathers are idempotent; a restarted scatter rewrites the same values) |
 | D16 | QUIESCE in the emulator | (implementation, not architecture) | watch_flag per TPU beside the LL/SC lock flags (`CSystem::cpu_lock`); a watched store from any processor or DMA clears it; the sleeping TPU's host thread waits on a condition variable with a wall-clock timeout from QUIESCE_TIMEOUT at the row's clock, never a fatal one |
 
@@ -666,7 +666,9 @@ the ES40 console-log check and the other machines are unchanged.
 Decided by the owner on 2026-10-24 ([above](#the-owners-decision-2026-10-24)).
 Each step is one packet with one question, in the interpreter first and
 the JIT after, each with the test that shows it. No step changes an
-existing row's behaviour.
+existing row's behaviour. The encodings, syntax and results S2 to S10
+implement are in [ev8-isa.md](ev8-isa.md), the contract with the nada
+toolchain.
 
 | Step | What | Engine | Test or guest | Rests on |
 | --- | --- | --- | --- | --- |
