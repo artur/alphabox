@@ -766,24 +766,26 @@ void CAlphaCPU::ResetForSystemReset() {
   seq_next_pc = 0;
 }
 
+// The thread's name is printed straight out: a five-byte buffer held
+// "cpu0" to "cpu9", and "cpu10" on put its NUL over the caller's frame. With
+// sixteen processors that was the low byte of a register CSystem::stop_threads
+// had saved there, the offset of its component count, so it counted from
+// another field and called through a null component (M11 in
+// docs/platforms/marvel.md).
 void CAlphaCPU::start_threads() {
-  char buffer[5];
   mySemaphore.try_wait_for(std::chrono::milliseconds(1));
   if (!myThread) {
-    sprintf(buffer, "cpu%d", state.iProcNum);
-    printf(" %s", buffer);
+    printf(" cpu%d", state.iProcNum);
     StopThread = false;
     myThread = std::make_unique<std::thread>([this]() { this->run(); });
   }
 }
 
 void CAlphaCPU::stop_threads() {
-  char buffer[5];
   StopThread = true;
   if (myThread) {
     mySemaphore.set();
-    sprintf(buffer, "cpu%d", state.iProcNum);
-    printf(" %s", buffer);
+    printf(" cpu%d", state.iProcNum);
     myThread->join();
     myThread = nullptr;
   }
