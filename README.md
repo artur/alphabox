@@ -95,8 +95,10 @@ that depend on them.
   Alphabox runs it in the EV7's place on the ES47, ES80 and GS1280: the
   EV7's console starts it, and OpenVMS 8.4 and Linux boot on it on the
   ES47. So far it is the EV7-compatible mode and the EV8's first new
-  instructions; its four threads per core and the Tarantula vector unit
-  are planned ([the EV8](docs/platforms/ev8.md)).
+  instructions, among them the ones it was to synchronise its threads
+  with: a processor can sleep on a lock until another one writes it, and a
+  Linux program on two emulated EV8s does. Its four threads per core and
+  the Tarantula vector unit are planned ([the EV8](docs/platforms/ev8.md)).
 
 ## What runs
 
