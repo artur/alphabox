@@ -34,10 +34,6 @@
 #   BOARDS_PROMPT_TMO    as boards_check.sh; also the bound on steps 2 and 3
 #   SNAP_KEEP=1          keep the state files and the firmware copies (they
 #                        are removed after each board otherwise)
-#   SNAP_EV7=1           run the EV7 boards (es47 es80 gs1280) too. They are
-#                        skipped by default: their memory array spans every
-#                        processor's memory, 16 GB apart, 2^35 to 2^40 bytes,
-#                        and the state file reads and writes all of it.
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -167,13 +163,6 @@ rc_all=0
 for b in $BOARDS; do
   t0=$(date +%s)
   D=$BOUT/$b
-  case $b in
-  es47 | es80 | gs1280)
-    if [ "${SNAP_EV7:-0}" != 1 ]; then
-      report "$b" SKIP 0 "a state file reads and writes the whole memory array, which on the EV7 boards spans every processor's memory, 16 GB apart (2^35 to 2^40 bytes): every page it reads becomes resident (SNAP_EV7=1 runs it anyway)"
-      continue
-    fi ;;
-  esac
   rm -f "$OUT/$b".{cmp,resume.log}
   # 1. Boot, commands, snapshot at the prompt.
   ALPHABOX_SNAPSHOT=snap1.axp ALPHABOX_SNAPSHOT_EXIT=1 \

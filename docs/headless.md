@@ -170,6 +170,13 @@ thread stopped, as the serial console's `<BREAK>` menu does.
 | `ALPHABOX_RESTORE_SAVE=<file>` | A test hook, with `ALPHABOX_RESTORE`: save the restored machine to `<file>` before anything runs, and exit. |
 | `ALPHABOX_SNAPSHOT_MAP=<file>` | A test hook: each save writes to `<file>` where each part of the state file begins (the system and chipset parts, then every component with its name and class). |
 
+A state file is version 2.2: the memory image of the whole array (zero runs
+compressed), then the system, chipset and component parts. On a board whose
+memory has holes (the EV7 boards: each processor's memory at its PID's base,
+16 GB apart) it is version 2.3: a region count, then each region's base and
+length (64 bits each) and its image in the same encoding. Every board reads
+both; a 2.3 region outside the configured memory is refused.
+
 The disk images in the working directory must be the ones the snapshot
 was taken against. `test/tools/nt_snap.sh` uses the first three to skip a
 Windows boot.

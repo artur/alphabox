@@ -1622,18 +1622,59 @@ void CSystem::ResetChipsetState() {
   m_chipset->reset();
 }
 
+/// Write `ints` ints of memory: a non-zero int is written as is; a run of
+/// zero ints as one 0 followed by the number of further zero ints (at most
+/// 0xffffffff, so longer runs continue in the next record).
+static void write_memory_image(FILE *f, const int *mem, u64 ints) {
+  const int int0 = 0;
+  for (u64 m = 0; m < ints; m++) {
+    if (mem[m]) {
+      fwrite(&(mem[m]), 1, sizeof(int), f);
+      continue;
+    }
+    unsigned int j = 0;
+    while (m + 1 < ints && !mem[m + 1] && j != 0xffffffff) {
+      m++;
+      j++;
+    }
+    fwrite(&int0, 1, sizeof(int), f);
+    fwrite(&j, 1, sizeof(int), f);
+  }
+}
+
+/// Read what write_memory_image wrote, into `ints` ints of memory.
+static void read_memory_image(FILE *f, int *mem, u64 ints) {
+  for (u64 m = 0; m < ints; m++) {
+    if (fread(&(mem[m]), sizeof(int), 1, f) != 1)
+      FAILURE(Runtime, "State file is truncated in the memory image");
+    if (!mem[m]) {
+      unsigned int j;
+      if (fread(&j, sizeof(int), 1, f) != 1)
+        FAILURE(Runtime, "State file is truncated in the memory image");
+      if (j >= ints - m)
+        FAILURE(Runtime, "State file holds more memory than memory.bits");
+      while (j--)
+        mem[++m] = 0;
+    }
+  }
+}
+
 /**
  * Save system state to a state file.
+ *
+ * Version 2.2 (every board whose memory is one range from 0): the memory
+ * image of the whole array. Version 2.3 (a board whose memory is sparse,
+ * CChipset::memory_regions: the EV7 machines): a region count, then for each
+ * region its base and length (u64 each) and its image. An image is in the
+ * same encoding in both versions.
  **/
 void CSystem::SaveState(const char *fn) {
   FILE *f;
   int i;
-  u64 m;
-  unsigned int j;
   int *mem = (int *)memory;
-  int int0 = 0;
-  const u64 memints = (U64(1) << iNumMemoryBits) / sizeof(int);
   u32 temp_32;
+  std::vector<memory_region> regions;
+  const bool sparse = m_chipset->memory_regions(regions);
 
   // Write to a temporary file and rename it into place. A save that fails
   // part-way -- out of space, or the emulator dying during the memory image,
@@ -1652,24 +1693,21 @@ void CSystem::SaveState(const char *fn) {
 
   temp_32 = 0xa1fae540; // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
   fwrite(&temp_32, sizeof(u32), 1, f);
-  temp_32 = 0x00020002; // File Format Version 2.2 (2.2: TIG IPCRs)
+  // File Format Version 2.2 (2.2: TIG IPCRs), or 2.3 (2.2 with the memory
+  // as regions)
+  temp_32 = sparse ? 0x00020003 : 0x00020002;
   fwrite(&temp_32, sizeof(u32), 1, f);
 
-  // memory: a non-zero int is written as is; a run of zero ints as one 0
-  // followed by the number of further zero ints (at most 0xffffffff, so
-  // longer runs continue in the next record).
-  for (m = 0; m < memints; m++) {
-    if (mem[m]) {
-      fwrite(&(mem[m]), 1, sizeof(int), f);
-      continue;
+  if (!sparse) {
+    write_memory_image(f, mem, (U64(1) << iNumMemoryBits) / sizeof(int));
+  } else {
+    temp_32 = (u32)regions.size();
+    fwrite(&temp_32, sizeof(u32), 1, f);
+    for (const memory_region &r : regions) {
+      fwrite(&r.base, sizeof(u64), 1, f);
+      fwrite(&r.length, sizeof(u64), 1, f);
+      write_memory_image(f, mem + r.base / sizeof(int), r.length / sizeof(int));
     }
-    j = 0;
-    while (m + 1 < memints && !mem[m + 1] && j != 0xffffffff) {
-      m++;
-      j++;
-    }
-    fwrite(&int0, 1, sizeof(int), f);
-    fwrite(&j, 1, sizeof(int), f);
   }
 
   // ALPHABOX_SNAPSHOT_MAP=<file>, a test hook (test/tools/snap_roundtrip.sh):
@@ -1734,8 +1772,6 @@ void CSystem::RestoreState(const char *fn) {
   m_code_pages.note_write_all(); // the whole of memory is about to be replaced
   FILE *f;
   int i;
-  u64 m;
-  unsigned int j;
   int *mem = (int *)memory;
   const u64 memints = (U64(1) << iNumMemoryBits) / sizeof(int);
   u32 temp_32;
@@ -1755,24 +1791,45 @@ void CSystem::RestoreState(const char *fn) {
   }
 
   if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
-      temp_32 != 0x00020002) // File Format Version 2.2 (2.2: TIG IPCRs)
-  {
+      (temp_32 != 0x00020002 && temp_32 != 0x00020003)) // 2.2: TIG IPCRs,
+  {                                                     // 2.3: memory regions
     printf("%%SYS-I-VERSION: State file %s is a different version.\n", fn);
     fclose(f);
     return;
   }
 
-  // memory (see SaveState for the zero-run encoding)
-  for (m = 0; m < memints; m++) {
-    if (fread(&(mem[m]), sizeof(int), 1, f) != 1)
+  // memory: the whole array (2.2), or the regions (2.3), in the encoding of
+  // SaveState. A 2.2 file of a board with sparse memory still restores; it
+  // writes the whole array, holes included.
+  if (temp_32 == 0x00020002) {
+    read_memory_image(f, mem, memints);
+  } else {
+    std::vector<memory_region> have;
+    if (!m_chipset->memory_regions(have))
+      FAILURE(Runtime,
+              "State file has memory regions, and this board's memory is one "
+              "range");
+    u32 count;
+    if (fread(&count, sizeof(u32), 1, f) != 1)
       FAILURE(Runtime, "State file is truncated in the memory image");
-    if (!mem[m]) {
-      if (fread(&j, sizeof(int), 1, f) != 1)
+    if (count > have.size())
+      FAILURE(Runtime, "State file has more memory regions than this board");
+    for (u32 n = 0; n < count; n++) {
+      u64 base, length;
+      if (fread(&base, sizeof(u64), 1, f) != 1 ||
+          fread(&length, sizeof(u64), 1, f) != 1)
         FAILURE(Runtime, "State file is truncated in the memory image");
-      if (j >= memints - m)
-        FAILURE(Runtime, "State file holds more memory than memory.bits");
-      while (j--)
-        mem[++m] = 0;
+      bool inside = false;
+      for (const memory_region &r : have)
+        if (base >= r.base && length <= r.length &&
+            base - r.base <= r.length - length)
+          inside = true;
+      if (!inside || length % sizeof(int) || base % sizeof(int))
+        FAILURE_2(Runtime,
+                  "State file has memory at %" PRIx64 " for %" PRIx64
+                  " bytes, which is outside this configuration's memory",
+                  base, length);
+      read_memory_image(f, mem + base / sizeof(int), length / sizeof(int));
     }
   }
 

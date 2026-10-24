@@ -55,6 +55,13 @@
 #include "StdAfx.hpp"
 #include <atomic>
 #include <cstdio>
+#include <vector>
+
+/// A range of the memory array that holds memory (CChipset::memory_regions).
+struct memory_region {
+  u64 base;   ///< address of its first byte
+  u64 length; ///< bytes, a multiple of 4
+};
 
 class CAlphaCPU;
 class CSystem;
@@ -112,6 +119,18 @@ public:
   virtual unsigned memory_span_bits(unsigned membits, int max_cpus) {
     (void)max_cpus;
     return membits;
+  }
+
+  /// Which ranges of the memory array hold memory, in address order, when
+  /// the array has holes (an EV7 machine: each processor's memory at its
+  /// PID's base). Returns false, and leaves `out` alone, when the memory is
+  /// the one range from 0 to the end of the array, as on a Tsunami or a
+  /// Titan. A state file of a board whose memory is sparse keeps only these
+  /// ranges (System.cpp, state file version 2.3). Read when a state file is
+  /// saved or restored, after memory_span_bits.
+  virtual bool memory_regions(std::vector<memory_region> &out) const {
+    (void)out;
+    return false;
   }
 
   /// A read or write of non-memory space that no registered device range

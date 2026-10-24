@@ -23,6 +23,7 @@
  * The Marvel system logic (Marvel.hpp).
  **/
 #include "StdAfx.hpp"
+#include <algorithm>
 
 #include "AlphaCPU.hpp"
 #include "Ev7.hpp"
@@ -104,11 +105,18 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
             "an EV7 holds at most 16 GB of its own memory (memory.bits 34)");
   m_memory_per_pid = U64(1) << membits;
   u64 end = m_memory_per_pid;
+  m_memory_regions.clear();
   for (int i = 0; i < max_cpus && i < m_topology.count(); i++) {
-    const u64 e = ev7::memory_base(m_topology.node(i).pid) + m_memory_per_pid;
+    const u64 b = ev7::memory_base(m_topology.node(i).pid);
+    const u64 e = b + m_memory_per_pid;
+    m_memory_regions.push_back({b, m_memory_per_pid});
     if (e > end)
       end = e;
   }
+  std::sort(m_memory_regions.begin(), m_memory_regions.end(),
+            [](const memory_region &a, const memory_region &b) {
+              return a.base < b.base;
+            });
   unsigned bits = membits;
   while ((U64(1) << bits) < end)
     bits++;
@@ -117,6 +125,13 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
          (unsigned)(m_memory_per_pid >> 20), max_cpus, max_cpus == 1 ? "" : "s",
          bits);
   return bits;
+}
+
+/// Each processor's memory, where memory_span_bits put it: the rest of the
+/// array is the holes between, which no guest instruction reaches.
+bool CMarvel::memory_regions(std::vector<memory_region> &out) const {
+  out = m_memory_regions;
+  return true;
 }
 
 void CMarvel::attach_io7(u32 pid, u8 backplane_rev, u8 io_type) {

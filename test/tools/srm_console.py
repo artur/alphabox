@@ -144,6 +144,20 @@ def main():
         return 1
     print("status=prompt")
 
+    # --wake sends a carriage return every 3 s until a prompt: a console slow
+    # to answer (an EV7's, after a restore) leaves a second prompt coming.
+    # Let the line go quiet, or that prompt ends the first command's wait.
+    if args.wake:
+        while True:
+            try:
+                d = s.recv(4096)
+            except OSError:  # a second of quiet (socket.timeout), or gone
+                break
+            if not d:
+                break
+            log.write(unescape(bytes(b for b in d if b != 0)))
+            log.flush()
+
     for c in args.cmd:
         s.sendall(c.encode() + b"\r")
         if not pump(args.cmd_timeout, cmd_log):

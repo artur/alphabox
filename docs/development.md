@@ -67,9 +67,10 @@ differ, `<board>.cmp` names the part (memory, system, chipset or a
 component and its class) and the offsets in it, from the map
 `ALPHABOX_SNAPSHOT_MAP` writes. Last, the emulator restores the first file
 again, the console is woken with a carriage return, and the same commands
-must print the same output. The EV7 boards are skipped unless
-`SNAP_EV7=1`: their memory array spans every processor's memory, 16 GB
-apart, up to 2^40 bytes, and a state file reads and writes all of it.
+must print the same output. All twelve boards run by default. On an EV7
+board the memory array spans every processor's memory, 16 GB apart, up to
+2^40 bytes, and its state file (version 2.3) keeps only the processors'
+memory, so the save and the restore do not touch the holes.
 Output goes to `$ALPHABOX_WORK/runs/snap-<label>/`, the boot to
 `boards-snap-<label>/`.
 

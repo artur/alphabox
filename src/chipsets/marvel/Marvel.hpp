@@ -55,6 +55,7 @@ public:
 
   u64 phys_mask() const override;
   unsigned memory_span_bits(unsigned membits, int max_cpus) override;
+  bool memory_regions(std::vector<memory_region> &out) const override;
 
   u64 read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) override;
   void write_io(u64 a, u64 raw, int dsize, u64 data,
@@ -102,6 +103,7 @@ private:
   static constexpr int kMaxPids = 256;
   CMarvelTopology m_topology;
   u64 m_memory_per_pid = 0;
+  std::vector<memory_region> m_memory_regions; ///< each processor's, by base
   std::unique_ptr<GioManagement> m_gio;
   std::unique_ptr<CEv7Csr> m_csr[kMaxPids];
   std::unique_ptr<CIo7> m_io7[kMaxPids];
