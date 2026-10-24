@@ -197,7 +197,17 @@ each one goes.
   machines, and `ev7`, `ev7z` or `ev8` on the EV7 machines (`ev8` is the
   cancelled 21464 in an EV7-compatible mode,
   [ev8.md](platforms/ev8.md)). A board refuses processors of the other
-  family.
+  family. An `ev8` section takes `tpus`, 1 to 4: the 21464's thread
+  processing units to list as processors. The default, 1, is one
+  processor per chip, what the EV7 console would see of a real 21464.
+  `tpus = 2` to `4` is an Alphabox construction, not the chip's
+  behaviour: TPUs 1-3 become processors with a PID and a register block
+  of their own, invented, and no memory or I/O, so that OpenVMS and Linux
+  see the threads; TPU 0 keeps the chip's PID, and TPU t's is that PID with
+  t in the lowest pair of PID bits no chip uses (PID + 2t on the ES47 and
+  ES80). Every chip of a machine has the same count, and a machine has at
+  most 32 processors, refused at startup and by `--check` with the reason
+  ([ev8.md](platforms/ev8.md), S4).
 - **Firmware**: each machine expects its own console, from the firmware
   media you own. Alphabox reads the update-bundle form, the raw form
   behind the standard Alpha ROM header, and the update utilities the

@@ -16,12 +16,14 @@ showing "what Alpha could have been": where the hardware never existed,
 fidelity means following the published design as far as it goes, and
 every gap we fill is an **Alphabox decision**, not history.
 
-**Branch**: `ev8/s1s2` · **Config**: `cpu0 = ev8` (and so every
-processor) on `platform = "es47"`, `"es80"` or `"gs1280"` · **Status**:
-research done (2026-10-23); the owner chose the path on 2026-10-24
-(option A first, then the native interface,
+**Branch**: `ev8/s1s2` to `ev8/s4` · **Config**: `cpu0 = ev8` (and so every
+processor) on `platform = "es47"`, `"es80"` or `"gs1280"`; `tpus = 2..4`
+in each to list the TPUs as processors ([S4](#s4-2026-10-25)) ·
+**Status**: research done (2026-10-23); the owner chose the path on
+2026-10-24 (option A first, then the native interface,
 [below](#the-owners-decision-2026-10-24)); S1 and S2 done the same day
-([the plan](#6-the-plan), [what they did](#s1-and-s2-2026-10-24)).
+([the plan](#6-the-plan), [what they did](#s1-and-s2-2026-10-24)), S3 too
+([S3](#s3-2026-10-24)), S4 on 2026-10-25 ([S4](#s4-2026-10-25)).
 
 Markers used below:
 
@@ -275,7 +277,8 @@ shared caches. That is what an emulator can model without a cache model.
 **Processor numbers.** R_WHOAMI holds the chip's 10-bit network address
 (EW<9:5>, NS<4:0>) [IDS p. 527]; TPU_CNFG holds the TPU number [IDS p.
 488]. How the two make the number CALL_PAL WHAMI returns is PALcode's
-choice, and no EV8 PALcode exists **[decision: D6]**.
+choice, and no EV8 PALcode exists **[decision: D6, replaced by the
+owner's numbering of 2026-10-25, [S4](#s4-2026-10-25)]**.
 
 **Interrupts.** The EV8 takes interrupts the 21364 way: requests arrive as
 network writes into the Rbox, either an interrupt ID queued for PALcode to
@@ -577,9 +580,9 @@ marked today.
 | D1 | Privileged interface | the EV8's IPRs exist only in a draft with TBDs and conflicts; no PALcode was written | **two modes**: an *EV7-compatible* EV8 (the EV7's IPRs and PALcode interface, EV8 user ISA) first; a *native* EV8 interface from the IDS later (below) |
 | D2 | Chip ID, console naming | CPU_CNFG<CHIP_ID> has no value; the Marvel console maps I_CTL<29:24> through its EV7 table | in EV7-compatible mode report an EV7z chip ID until a probe shows what the console does with an unknown one |
 | D3 | HWRPB processor type | none assigned | 18 (the next free value after EV69A, [ARM p. 807]), only where we write the HWRPB ourselves |
-| D4 | SMT exposure | how TPUs appear to an EV7 console | first one TPU per chip (S3); then each TPU listed to the console as a processor of its own through the CMM model, memory and IO7 staying with TPU 0 (S4). Whether the console accepts a processor with no memory of its own is for a probe to show |
+| D4 | SMT exposure | how TPUs appear to an EV7 console | first one TPU per chip (S3); then each TPU listed to the console as a processor of its own through the CMM model, memory and IO7 staying with TPU 0 (S4). Whether the console accepts a processor with no memory of its own is for a probe to show. S4: it does; done with `tpus = 2..4`, an Alphabox construction, the default staying one processor per chip (the owner, 2026-10-25) |
 | D5 | Interrupt and IPI steering to TPUs | R_INT_* "TBD" | each TPU gets its own interrupt mask and request bits; IO7 LSI/MSI targets name PID and TPU; IPIs address a TPU |
-| D6 | Processor numbers | WHAMI is PALcode's | PID x 4 + TPU, handed to the console's PALcode at entry the way the PID is today; a one-TPU chip keeps today's numbers |
+| D6 | Processor numbers | WHAMI is PALcode's | PID x 4 + TPU, handed to the console's PALcode at entry the way the PID is today; a one-TPU chip keeps today's numbers. **Replaced** by the owner on 2026-10-25 after S4's probe showed it wrong ([S4](#s4-2026-10-25)): TPU 0 keeps the chip's PID, TPU t is PID \| t << s, s the lowest pair of PID bits no configured chip uses |
 | D7 | TPU start-up | WAKEUP entry, no boot document | TPUs 1-3 start like a Marvel secondary (RBOX_SCRATCH1 polling) in EV7-compatible mode |
 | D8 | Short-vector SIMD results | per-instruction architectural results | define each from the IDS's datapath description and the existing MVI conventions; publish the table in cpu-fidelity.md. Proposed in [ev8-isa.md](ev8-isa.md), 3.3 |
 | D9 | Paired single precision | the 21264-style trap shadow and denormal handling for pairs | follow the scalar IEEE rules per half, as [IDS p. 280] says, with the existing FPCR code |
@@ -683,14 +686,14 @@ toolchain.
 | S1 | An `ev8` row on the ES47 board in EV7-compatible mode: IMPLVER 4, AMASK 0x1F07 (with bits for what is implemented), chip ID per D2 | interpreter, JIT (constants only) | console to `P00>>>`; OpenVMS 8.4 boots on the row; cpu_oracle cases for IMPLVER/AMASK | D1, D2; **done 2026-10-24** ([below](#s1-and-s2-2026-10-24)) |
 | S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | **done 2026-10-24**; LDx_ARM and QUIESCE are unused codes, NOPs, until S3 |
 | S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16; **done 2026-10-24** ([below](#s3-2026-10-24)) |
-| S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7 |
+| S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7; **done 2026-10-25** ([below](#s4-2026-10-25)), with the owner's numbering in place of D6 and `tpus` 1 by default: the TPUs as EV7 nodes are an Alphabox construction, the native interface (S11-S13) does them the IDS's way |
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
 | S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9 |
 | S7 | Tarantula state, VC and VV/VS groups, SaveState/RestoreState of vector state | interpreter | boot-image kernels (daxpy and the like) checked against scalar results | D10, D11, D13, D14 |
 | S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15 |
 | S9 | Tarantula under an OS: Linux enables vectors and saves them on switch | interpreter | two processes using vectors at once | D11 |
 | S10 | Tarantula in the JIT (helpers first, host SIMD later) | JIT | JIT_VERIFY extended to compare vector state; any speed claim through `perf_ab.py` | S7-S9 |
-| S11 | The native EV8 privileged interface (option B), from the IDS: its IPR table, RET for PALmode exit, IFETCHB, the HW_MFPR/HW_LD layouts, SuperPALmode, the new PALcode entry offsets, 52-bit VA and 48-bit PA, TPU groups in the TBs; every TBD and conflict settled by inference, marked | interpreter, then JIT | test/cpu cases per register and trap, written from the IDS; a native-mode `ev8n` row beside the EV7-compatible one | S1-S4 |
+| S11 | The native EV8 privileged interface (option B), from the IDS: its IPR table, RET for PALmode exit, IFETCHB, the HW_MFPR/HW_LD layouts, SuperPALmode, the new PALcode entry offsets, 52-bit VA and 48-bit PA, TPU groups in the TBs, the TPUs the IDS's way (one network node, one register window per chip, the TPU from TPU_CNFG<57:56>, started through WAKEUP); every TBD and conflict settled by inference, marked | interpreter, then JIT | test/cpu cases per register and trap, written from the IDS; a native-mode `ev8n` row beside the EV7-compatible one | S1-S4 |
 | S12 | An Alphabox PALcode for the native interface (the UNIX/Linux interface first, being the smaller) and a minimal console that builds the HWRPB and loads a kernel, on the Marvel CMM and IO7 models | PALcode in Alpha assembly, built by the project | boot-image tests of every PALcode entry; the console prompts and loads aboot or a kernel | S11 |
 | S13 | Linux on the native EV8: SMT as TPUs, then the new instructions and Tarantula under the native interface | both | Linux to a shell, SMP across TPUs, the S3-S9 tests repeated in native mode | S12, S5-S9 |
 
@@ -974,6 +977,225 @@ the console answering after the restore. `guests_check.sh` passes
 - [ev8-isa.md](ev8-isa.md) 3.1 needed no correction: its words are those
   `test/cpu/alpha_asm.py` assembles and the Linux program carries, and its
   notes are the IDS's.
+
+## S4 (2026-10-25)
+
+The 21464's thread processing units as processors of their own on the
+Marvel boards, in EV7-compatible mode: `tpus = 2..4` in each `ev8`
+section. The default stays one processor per chip. The code is in
+`chipsets/marvel/Topology.*` (the numbering), `system/Configurator.cpp`
+(`processor_tpus`: the key and its limits), `cpu/AlphaCPU.cpp` (a
+processor per TPU) and `platforms/es47/Cmm.cpp` (what the management side
+says of chips); every decision is in [cpu-fidelity.md](../cpu-fidelity.md)
+too.
+
+**What the console does with processors** (phase 1, from its code and
+[marvel.md](marvel.md)). It learns them from the CMM: the partition
+database lists each with its PID and its NS,EW coordinates, the MBM
+configuration and the FRU EEPROMs describe modules and RIMMs by an ID it
+makes from the coordinates (coord2id), and the memory assignment lists
+chunks. It addresses a processor by its PID: the 4 MB register window,
+RBOX_SCRATCH1 to start it, RBOX_IREQ to interrupt it. And it already
+handles a processor with no memory: `find_nearest_memory` (0x2f2f20)
+searches PID ^ {0, 1, 2, 3, 6, 7, 4, 5}, then the same ^ 8, ^ 16, ^ 24,
+for a PID that has some, and `start_secondary` copies the PALcode there
+and starts the processor at that memory + 0x30000. So D4 and D7 needed
+nothing of the console.
+
+**The owner's decisions of 2026-10-25.**
+
+- **The numbering, in place of D6** **[decision]**: TPU 0 keeps its chip's
+  PID, so its memory, its IO7 and the IDs the console makes from its
+  coordinates are those of the EV7 it stands in for; TPU t is the chip's
+  PID | t << s, s the lowest pair of PID bits no configured chip's PID
+  uses (`CMarvelTopology::tpu_shift`). On the ES47 and the ES80, s = 1:
+  the module field PID<2:1>, which their 2P drawers leave 0, so TPU t is
+  PID + 2t; on a GS1280, whose drawers use every PID, s = 2 with four
+  chips and 3 with eight. A chip of one TPU keeps today's number, every
+  number stays below 32 within the 32-processor limit, and a machine whose
+  chips leave no pair free is refused with the reason (none of the three
+  rows can, within 32 processors).
+- **The default, `tpus` absent, is 1** **[decision]**. On a real EV8 the
+  four TPUs share one network address (R_WHOAMI [IDS p. 527]) and differ
+  only in TPU_CNFG<57:56> [p. 488]; under the EV7 console and PALcode,
+  which have no WAKEUP entry, TPUs 1-3 would most likely never start
+  **[inference]**. So the faithful EV8 in EV7-compatible mode shows one
+  processor per chip. TPUs listed as processors, each with a PID and a
+  register window of its own, are an **Alphabox construction**, in the
+  spirit of "what Alpha could have been": the PIDs and windows of TPUs
+  1-3 are invented, while TPU 0 keeping the chip's PID matches R_WHOAMI.
+  The native interface (S11-S13) is where TPUs are done the IDS's way:
+  one network node and one register window per chip, the TPU from
+  TPU_CNFG.
+- **VCTL** (D11) is at offset 0x3F0000 of each processor's own window
+  ([ev8-isa.md](ev8-isa.md), section 2, revised); on a one-TPU chip that
+  is the address the first layout gave.
+
+**Why D6 was replaced** (the probe, phase 1). A probe build listed TPUs
+1-3 as processors with D6's numbers (PID x 4 + TPU) and no memory or IO7.
+
+- ES47, two chips of four TPUs (PIDs 0-7): `P00>>>` in 41 s; `show config`
+  lists PIDs 0-7, TPUs 1-3 with "No Local Memory" and "No Local I/O";
+  `show cpu` CPUs 0-7; the TPUs started at 30000 and 2000030000, their own
+  chip's memory, through RBOX_SCRATCH1; `init` twice brought all eight back
+  each time, HWRPB slots 0-7 valid. OpenVMS 8.4 reached DCL with SHOW CPU
+  "Active 0-7". Linux brought up eight CPUs, but with D6 TPU 0 of chip 1 is
+  PID 4, whose memory is at 128 GB: past the 32 GB Linux uses on Marvel
+  (`setup_memory`, "memory on their first node ... or 2 (marvel)"), and its
+  memory map for 128 GB took 1 GB of chip 0's 2 GB ("Mem: total 1090" of 4
+  GB). D6 cost Linux every chip's memory but the first.
+- The ES80 layout (chips 0, 1, 8, 9: D6 numbers 0-7 and 32-39, memory at
+  0, 128 GB, 1 TB and 1.125 TB): the console was content (16 processors,
+  `init` twice, HWRPB slots 0-7 and 32-39); Linux was not. aboot halted
+  right after "valid disklabel found", where the same disk boots on the
+  same layout with `ev7` rows. Beyond that, Linux's NR_CPUS is 32
+  (`kernel_max` 31), its MARVEL_MAX_PIDS is 32, and the console's GCT names
+  the second drawer's IO7 by its coordinate ID, 8 (`build_iop_hw` uses
+  coord2id; Linux takes an IO7's PE from the GCT, `marvel_io7_present`),
+  while D6 put it at PID 32.
+- The cause: D6 moves each chip's TPU 0 off the chip's own PID, so for
+  every chip but PID 0 the addresses the console forms from a PID (memory
+  at `pid2membase`, the IO7 and the register window at its PE) disagree
+  with the IDs it forms from the coordinates. The numbering that replaced
+  it, probed the same way on the ES80 layout (four chips of four TPUs):
+  `show config` gives each TPU 0 its chip's PID, Hard ID and memory, `init`
+  twice brought sixteen back (HWRPB slots 0-15), and Linux brought up 16
+  CPUs, found the IO7s at PIDs 0 and 8, and ran 16 `xz` round trips with
+  the file's MD5; OpenVMS on the ES47 reached "Active 0-7".
+
+The probe's runs: `lab/runs/boards-ev8-s4-probe1` (ES47, D6),
+`boards-ev8-s4-probe-es80` (ES80, D6), `guests-ev8-s4-probe-vms` (OpenVMS,
+D6), `ev8-s4-probe-linux-es47-31` (Linux on the ES47, D6, 2 GB per chip),
+`ev8-s4-probe-linux-es80-d6` (aboot's halt), `boards-ev8-s4-probe-es80-b`,
+`ev8-s4-probe-linux-es80-b` and `guests-ev8-s4-probe-vms-b` (the numbering
+that replaced it), and the probe build as `ev8-s4-probe/probe-build.patch`.
+
+**What a TPU is** (with `tpus` above 1).
+
+- **A processor**: a `CAlphaCPU` of its own, made from its chip's section
+  (named `cpu0.tpu1(ev8)` and so on), so its registers, IPRs, TBs, cycle
+  counter, LL/SC lock and LDx_ARM watch flag are a processor's. That is
+  Mode 2, every TPU in a TB group of its own [IDS p. 306]: to an operating
+  system four SMP processors whose only coupling is performance. Mode 3
+  (shared TBs) is the native interface's (S11). The processors are
+  numbered chip by chip, TPU 0 first.
+- **Its PID** (above) is handed to the console's PALcode in r28 at entry,
+  as an EV7's is (`ev7::xsrom_handoff`), and is what WHAMI returns and
+  what every CSR address the console forms is made of.
+- **Start-up** (D7): TPUs 1-3 are parked on their RBOX_SCRATCH1 like any
+  Marvel secondary; the console starts them at their chip's memory, and
+  `init` restarts them through the start hand-off (StartHandoff.hpp).
+- **Interrupts** (D5): each TPU's register window has its own RBOX_INT,
+  RBOX_IMASK, RBOX_IREQ and RBOX_IT, so the interval timer ticks each, an
+  IPI is a write to the target TPU's RBOX_IREQ, and an IO7 LSI or MSI goes
+  to the PID its control register names, which may be any TPU's. The GIO
+  (management) interrupt goes to the TPUs whose GIO port enables it: the
+  per-port interrupt enables in the PALcode's state word are the mask "a
+  mask register will define which TPU(s) are to receive" [IDS p. 476]
+  calls for **[decision]**.
+- **Memory and I/O** (D4) are TPU 0's. The CMM's memory assignment lists
+  a chunk per chip, and its MBM configuration and RIMM EEPROMs describe
+  chips by the coordinate ID the console reads them with, which every TPU
+  of a chip shares; TPUs 1-3 get "No Local Memory" and "No Local I/O". The
+  route between two TPUs of a chip ends in their shared Cbox, as a route
+  to itself does (bit 8, [marvel.md](marvel.md), M6a) **[decision]**.
+- **Limits.** Every chip of a machine has the same count, 1 to 4; `tpus`
+  above 1 is refused off the Marvel boards (where an `ev8` runs only
+  through the ALPHABOX_CPU_ANY_BOARD test hook); and a machine has at most
+  32 processors, refused at startup and by `alphabox run --check` with the
+  reason (a 16-chip GS1280 takes two TPUs each, not four).
+- **Raising the limit** would take: `CSystem::kMaxCPUs` and the arrays it
+  sizes (`acCPUs`, the LDx_L sequence, value and address per processor);
+  the two 32-bit masks, `m_cpu_lock_flags` and `m_cpu_watch_flags`, widened
+  to 64-bit atomics with every `1u << cpu` that builds a bit; both JITs'
+  compiled CALL_PAL, which clears the processor's watch bit with a 32-bit
+  atomic AND (`jitemit_a64.hpp`, `jitengine.cpp`); CEv7Csr's 32-entry
+  trace table. The state file keeps four processors' locks and would not
+  change. And a guest would gain little: Linux on Alpha has at most 32
+  CPUs (NR_CPUS) and Marvel PIDs below 32 (MARVEL_MAX_PIDS); OpenVMS takes
+  64.
+- **The JIT** needed nothing: compiled code reaches its own processor's
+  state and its own bits of the lock and watch words by processor number.
+- **The snapshot**: the state file holds a processor's state per TPU and
+  a register block per TPU, in the existing format (version 2.3); a
+  machine with TPUs saves and restores as one without.
+- **The tools** know the count: `BOARDS_EV8_TPUS` (boards_check.sh,
+  marvel_init_check.sh, snap_roundtrip.sh through them),
+  `GUESTS_EV8_TPUS` (guests_check.sh: SHOW CPU's active set and Linux's
+  "cpus active" must count 2 x TPUs), and es47_quiesce.py `--tpus`, which
+  runs `test/cpu/quiesce_lock.c`'s threads on every processor. Unset, they
+  write no `tpus` and expect one processor per chip.
+
+**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT), and so
+did every commit of the series. `test/unit/tpu_topology_test.cpp` checks
+the numbering on the ES47, ES80 and GS1280 layouts (every number distinct,
+below 32, TPU 0 its chip's PID, a one-TPU chip's unchanged), memory and
+the IO7 with TPU 0 only, the route between TPUs of a chip, a register
+block and an IO7 interrupt target per TPU, and the refusal of a layout
+with no pair free (10103 checks). The configurator's check mode refuses a
+16-chip GS1280 of four TPUs (64 processors) with the reason, at startup
+too, and `tpus = 5`, chips with different counts, and `tpus = 2` on the
+ES40 under the test hook; `tpus` on an `ev7` warns as an unknown key. The
+CPU oracle on the interpreter, JIT, JIT_VERIFY and x86-64 lanes, alike on
+all four: `ev68cb` and `ev7` PASS 20176, KNOWN 61, FAIL 0; `ev8` PASS
+20428, KNOWN 73, FAIL 0, S3's verdicts; JIT_VERIFY 0 mismatches;
+`quiesce_mp.py` passed on the same four lanes (`lab/runs/ev8-s4-oracle/`).
+The SRM console-log check is clean on the interpreter, JIT and JIT_VERIFY
+lanes (JIT_VERIFY: 0 mismatches, `lab/runs/ev8-s4-srm/`).
+`boards_check.sh` passes its 12 boards and three `init` checks, the same
+as main's gate run on every board (`--diff`, `lab/runs/boards-ev8-s4-boards/`).
+With `BOARDS_EV7_CPU=ev8` and no `tpus` the ES47, ES80 and GS1280 and
+their `init` checks pass, the same as S3's run on the row on all three
+(`boards-ev8-s4-boards-ev8`). With `BOARDS_EV8_TPUS=4`: the three boards
+with eight processors each in `show config` and `show cpu`, and `init`
+twice bringing back 8 (ES47), 16 (ES80, chips 0, 1, 8, 9: PIDs 0-15) and
+16 (GS1280, four chips: PIDs 0-15), every HWRPB slot valid
+(`boards-ev8-s4-boards-tpus4`); the row's reference listing (`show config`,
+`show fru`, `show cpu`, `show memory` on the three) is in
+`lab/runs/ev8-s4-reference/`. `snap_roundtrip.sh` on the ES47 with four
+TPUs per chip: the state files identical (552 MB), the console answering
+after the restore (`snap-ev8-s4-tpus4`). `guests_check.sh` passes
+`vms-es47`, `linux-es47`, `vms-es40` and `linux` on the existing rows
+(`guests-ev8-s4-guests`, `guests-ev8-s4-guests2`), and `vms-es47` and
+`linux-es47` on the `ev8` row with no `tpus`, two processors as in S3
+(`guests-ev8-s4-guests-ev8`). With `GUESTS_EV8_TPUS=4`, the ES47's two
+chips as eight processors:
+
+- OpenVMS 8.4 boots to DCL with SHOW CPU "Active 0-7"; eight DCL loops
+  spawned at once (a command procedure counting to 300000) run on all of
+  them: SHOW SYSTEM shows seven CUR, on CPUs 1 to 7, and the eighth
+  computable while CPU 0 runs the SHOW itself; SHOW CPU/FULL shows a
+  process on every CPU; each loop had 20 s of CPU time ten seconds later;
+  SHUTDOWN removes CPUs 1-7 from the active set and halts
+  (`guests-ev8-s4-guests-tpus4-vms2`).
+- Linux logs in with "cpus active: 8", runs eight `xz -1 | xz -d` round
+  trips of an 8 MB random file at once, each with the file's MD5, and
+  powers off (`guests-ev8-s4-guests-tpus4-linux`).
+- `es47_quiesce.py --tpus 4`: the lock program's eight threads, one per
+  TPU, take the lock 5000 times each the IDS's way: the count is exact
+  (40000), every thread finishes, and they executed 37725 QUIESCEs, woken
+  on every TPU mostly by another TPU's store (2340 to 4899 each) or STx_C,
+  a few by an interrupt or the timeout (`lab/runs/ev8-s4-quiesce/`).
+
+The ES80 layout (chips 0, 1, 8 and 9, four TPUs each, 2 GB per chip) ran
+Linux with this numbering in phase 1, under the probe build: 16 CPUs, the
+IO7s found at PIDs 0 and 8, 16 `xz` round trips with the file's MD5, and
+`poweroff` (`ev8-s4-probe-linux-es80-b`). Its run on the committed code
+waits for a host with the memory for it (swap above 12 GB when this was
+written).
+
+**Findings.**
+
+- The Marvel console already knows processors without memory
+  (`find_nearest_memory`, `start_secondary`), which is what made D4 cost
+  nothing; and it reads its management side by coordinate ID but forms
+  addresses from the PID, which is what made D6 wrong.
+- [ev8-isa.md](ev8-isa.md) section 2 needed a correction, made in its own
+  commit: VCTL was placed in the chip's window per TPU, which S4's
+  processors (a PID and a window each) no longer have in EV7-compatible
+  mode. The owner's layout (2026-10-25) puts it in each processor's own
+  window; the chip-window layout stays for the native interface.
 
 ## Findings
 

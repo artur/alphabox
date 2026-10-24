@@ -18,7 +18,8 @@ machine.
 
 **Config**: `platform = "es47";` (two processors), `"es80"` (up to eight)
 or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`, or `ev8`, the 21464 in
-an EV7-compatible mode, [ev8.md](ev8.md)) processors and a
+an EV7-compatible mode, [ev8.md](ev8.md), whose TPUs `tpus = 2..4` lists as
+processors of their own, [below](#ev8-s4-what-the-console-does-with-tpus-2026-10-25)) processors and a
 `serial0` for the console terminal, PCI devices as `pci<hose>.<slot>`,
 hose = PID * 4 + IO7 port · **Status**: L5 on all three rows (packets
 M0-M6 2026-10-02, M7 2026-10-03 and 10-04, the last checks 2026-10-05).
@@ -818,6 +819,45 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### EV8 S4: what the console does with TPUs (2026-10-25)
+
+An `ev8` section with `tpus = 2..4` ([ev8.md](ev8.md), S4) lists the
+21464's TPUs 1-3 to the console as processors of their own, with no
+memory and no IO7: an Alphabox construction (the default, 1, is one
+processor per chip). TPU 0 keeps the chip's PID and TPU t is the PID with
+t in the lowest pair of PID bits no chip uses: PID + 2t on the ES47 and
+ES80, in the module field their 2P drawers leave 0; above the configured
+chips' bits on a GS1280. What the console makes of them, on the ES47 with
+two chips of four TPUs and the ES80 layout with four:
+
+- **It needs nothing new.** The partition database lists every TPU at its
+  chip's coordinates with its own PID; `coord2pid` (0x2e1240), which finds
+  the PID at given coordinates, takes the lowest, TPU 0's, so an IO7 entry
+  still names its chip; `pid2id` gives every TPU its chip's Hard ID, and
+  `show config` prints each TPU as "CPU n" of its chip with "No Local
+  Memory" and "No Local I/O".
+- **Memoryless processors are the console's own case.** `find_nearest_memory`
+  (0x2f2f20) looks for memory at PID ^ {0, 1, 2, 3, 6, 7, 4, 5}, then the
+  same ^ 8, ^ 16 and ^ 24, and `start_secondary` (0x2dd410) copies the
+  PALcode into that memory and starts the processor at it + 0x30000,
+  checking only that both are in one cabinet. Every TPU finds its own
+  chip's memory first: "Starting secondary CPU 2 at address 30000",
+  "CPU 3 at address 400030000" on the ES47.
+- **The management side describes chips.** The MBM configuration, the
+  RIMM FRU EEPROMs and the memory assignment are read by the coordinate ID
+  (memconfig indexes them with `pid2id`), so the CMM model answers them
+  per chip, and every TPU of a chip has the chip's RIMMs in `show memory`
+  under TPU 0's PID. The CMM areas, GIO ports and register windows are
+  per PID, TPU or not.
+- **`init`** restarts every TPU through its RBOX_SCRATCH1 as it restarts
+  an EV7 (M11): 16 processors on the ES80 layout, twice, every HWRPB slot
+  valid.
+
+What D6, the first numbering (PID x 4 + TPU), did instead, and why it was
+replaced, is in [ev8.md](ev8.md), S4: it moved TPU 0 off its chip's PID,
+so the PID-derived memory and IO7 addresses no longer matched the
+coordinate IDs.
 
 ### M11: the secondaries `init` restarts (2026-10-24)
 

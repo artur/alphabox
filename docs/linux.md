@@ -341,7 +341,9 @@ to "es40 login:"; nothing else in the install changed. That is the
 the processors and the platform from `/proc/cpuinfo`, `date`, `poweroff`).
 `test/tools/es47_quiesce.py` boots the same install on two processors of
 the `ev8` row and builds and runs a program that waits on a lock with the
-21464's LDQ_ARM and QUIESCE ([ev8.md](platforms/ev8.md), "S3").
+21464's LDQ_ARM and QUIESCE ([ev8.md](platforms/ev8.md), "S3"); with
+`--tpus 4`, on the two chips' eight TPUs, a thread on each
+([ev8.md](platforms/ev8.md), "S4").
 
 ### What runs
 

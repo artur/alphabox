@@ -59,7 +59,9 @@ them are booted again for `marvel_init_check.sh` (ports 21612 to 21614,
 `<board>-init` lines; `BOARDS_INIT=0` skips it): `init` restarts a Marvel
 console's secondaries, which the boot alone never exercises.
 `BOARDS_EV7_CPU` gives the EV7 boards, in both scripts, another processor
-class than `ev7` (`ev7z`, `ev8`).
+class than `ev7` (`ev7z`, `ev8`), and with `ev8` `BOARDS_EV8_TPUS` each
+chip's `tpus`: the scripts then want chips x TPUs processors in `show
+config`, `show cpu` and the HWRPB ([ev8.md](platforms/ev8.md), S4).
 
 `snap_roundtrip.sh <alphabox> <label> [board ...]` checks that a machine's
 state survives a snapshot. For each board, `boards_check.sh` boots it, runs
@@ -97,8 +99,10 @@ menu. It writes
 `<guest>.log` (the console) and `<guest>.warn`, and exits 0 only if every
 guest passed. A whole run takes about 15 minutes. `GUESTS_EV7_CPU` boots
 `vms-es47` and `linux-es47` on another processor class than `ev7` (`ev7z`,
-`ev8`), and `GUESTS_EXTRA_CMDS` gives those two more commands (separated
-by `;`) before they shut down.
+`ev8`; with `ev8`, `GUESTS_EV8_TPUS` sets each chip's `tpus`, and SHOW
+CPU and Linux's "cpus active" must count every TPU), and
+`GUESTS_EXTRA_CMDS` gives those two more commands (separated by `;`)
+before they shut down.
 
 Four more guests run only when named, so the default run stays short:
 `vms-ds20e`, `vms-ds20`, `vms-ds10` and `vms-ds20l` boot the same
