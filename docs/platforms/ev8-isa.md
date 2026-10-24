@@ -7,8 +7,10 @@ its sources and the owner's plan are in [ev8.md](ev8.md); this sheet
 settles that packet's D8, D10, D13 and D14, and the instruction-level
 parts of D9, D11, D12 and D15.
 
-**Status**: draft for review, 2026-10-24. No code yet ([ev8.md](ev8.md),
-plan S2 to S10).
+**Status**: revision 1, 2026-10-24. The owner's decisions of that day and
+nada's review are applied: the vector enable is a CSR, not an instruction,
+AMASK bits 3 and 11 are decided, the 1C size order is agreed. No code yet
+([ev8.md](ev8.md), plan S2 to S10).
 
 ## 1. How to read it
 
@@ -23,13 +25,29 @@ mnemonic, the operand syntax, the bits and the valid qualifiers.
   fixed by the 21464 Internal Design Specification and was checked against
   the page cited, on the scan and not only its OCR text. **nada implements
   the final rows in its next batch** (`-mcpu=ev8`).
-- **proposed**: an Alphabox choice: all of Tarantula, DrainM's code, the
-  vector enable, the size of each 1C instruction taken from the "zz"
-  inference, every opcode 07 qualifier rule the IDS does not state per
-  instruction, PARCPL's code. **Proposed rows wait for nada's review** (and
-  the owner's).
+- **agreed**: an Alphabox choice that nada reviewed and accepted
+  (Alphabox and nada, 2026-10-24): the size order inside the 1C "zz"
+  blocks, PARCPL's code 07.08, the P-EST qualifier class, the RM syntax.
+  The assembler and the emulator implement the same thing.
+- **proposed**: an Alphabox choice nobody has accepted yet: all of
+  Tarantula, DrainM's code, the results of the 1C instructions (D8), every
+  opcode 07 qualifier rule the IDS does not state per instruction. Proposed
+  rows wait for the owner (nada has no stake in them).
 - A final encoding may carry an operation marked **[inference]** or
   **[decision]**: the bits stand; the note says how sure the meaning is.
+
+**What nada's assembler does with the sheet** (agreed, 2026-10-24):
+
+- `-mcpu=ev8` accepts every EV8 mnemonic; `-mtarantula`, only together with
+  `ev8`, accepts every Tarantula one, `drainm` included.
+- `ldl_arm` and `ldq_arm` refuse a displacement.
+- On every `-mcpu` nada also assembles `amask` (11.61) and `implver`
+  (11.6C, with the literal 1 in Rb) [ARM pp. 780, 782].
+- RM syntax stays `vgathq $vrt, $vrx($rb)`; PARCPL is at 07.08 with no
+  alias for the IDS's 07.0A; the P-EST qualifier class is accepted.
+- For readers only, no renaming: some 1C names sit close to Tarantula VS
+  names (`vsrl2` and `vssrl`, `vsll2` and `vssll`, `vsral2` and `vssra`).
+  They are different opcodes and cannot be confused by an assembler.
 
 **Markers**, as in [ev8.md](ev8.md): a bracketed source with a page is a
 fact; **[inference]** is derived from the sources but not stated in them;
@@ -65,18 +83,18 @@ traps, which is what keeps the spare space spare.
 | | EV8 | Source | Status |
 | --- | --- | --- | --- |
 | IMPLVER | 4 | [IDS p. 76] | final |
-| AMASK feature mask | 0x1F07; 0x1F0F with Tarantula | 0x1F07 [IDS p. 76]; bit 3 **[decision, D14]** | final; bit 3 proposed |
+| AMASK feature mask | 0x1F07; 0x1F0F with Tarantula | 0x1F07 [IDS p. 76]; bit 3 **[decision, D14]**, taken by the owner on 2026-10-24 | final; bit 3 decided (owner, 2026-10-24) |
 
 | AMASK bit | Meaning | Source |
 | --- | --- | --- |
 | 0 | BWX | [ARM p. 808] |
 | 1 | FIX | [ARM p. 808] |
 | 2 | CIX | [ARM p. 808] |
-| 3 | **Tarantula**: opcodes 01 to 05 and DrainM | **[decision, D14]**: the first free bit of the low byte, which the ARM reserves for standard extensions "so they can be tested with a literal" [ARM p. 204] |
+| 3 | **Tarantula**: opcodes 01 to 05 and DrainM | **[decision, D14; owner, 2026-10-24]**: the first free bit of the low byte, which the ARM reserves for standard extensions "so they can be tested with a literal" [ARM p. 204] |
 | 8 | MVI | [ARM p. 808] |
 | 9 | precise arithmetic traps: "the trap PC is the same as the instruction PC after the trapping instruction is executed" | [ARM p. 808] |
 | 10 | SMT: LDL_ARM, LDQ_ARM, QUIESCE | [IDS p. 668] |
-| 11 | set in 0x1F07, meaning not stated; "Not available" in the ARM | [IDS p. 76]; [ARM p. 808]. **[inference]**: it marks one of the EV8's new sets. **[decision]**: bit 11 covers both the 1C short-vector SIMD set and opcode 07 paired single, since the value has one unexplained bit and the EV8 implements both |
+| 11 | set in 0x1F07, meaning not stated; "Not available" in the ARM | [IDS p. 76]; [ARM p. 808]. **[inference]**: it marks one of the EV8's new sets. **[decision, owner, 2026-10-24]**: bit 11 covers both the 1C short-vector SIMD set and opcode 07 paired single, since the value has one unexplained bit and the EV8 implements both |
 | 12 | prefetch with modify intent | [ARM p. 808] |
 
 AMASK clears the bits of the extensions present: `Rc ← Rbv AND NOT mask`,
@@ -92,28 +110,39 @@ operating system lets a program use it: under an OS that never sets the
 vector enable (below) every vector instruction raises OPCDEC. Whether the
 OS supports vectors is the OS's to say (Linux: a hardware-capability bit).
 
-**The vector enable, `VCTL<VEN>`** **[decision, D11]**. Proposed:
+**The vector enable, `VCTL<VEN>`** **[decision, D11]**, the owner's
+(2026-10-24): a per-processor CSR in the chip's register window, not an
+instruction and not an IPR index.
 
-| Register | Index (EV7-compatible mode) | Fields | Access |
+| Register | Physical address | Fields | Access |
 | --- | --- | --- | --- |
-| VCTL[tpu] | 0x18 (an Ibox index) | <0> VEN: 1, the Tarantula instructions execute; 0, they raise OPCDEC (section 5). <63:1> RAZ/IGN | HW_MTPR and HW_MFPR in PALmode; written by WRVEN in kernel mode (section 4.7). Reset 0 |
+| VCTL[tpu] | `(~pid & 0x1ff) << 35 \| 0x7FFC << 20 \| (0x3F0000 + 0x40 × tpu)`, tpu 0 to 3; a one-TPU chip has only tpu 0 | 64 bits. <0> VEN: 1, the Tarantula instructions execute; 0, they raise OPCDEC (section 5). <63:1> RAZ/IGN | ordinary quadword loads and stores to that address from kernel mode. Reset 0 |
 
+- **The window** is the EV7's: 4 MB per PID, `(~n & 0x1ff) << 35 | 0x7FFC
+  << 20 | off`; PID 0 is at 0xFFF_FFC0_0000 ([marvel.md](marvel.md),
+  "Marvel's address map"). VCTL of PID 0, TPU 0 is therefore at
+  0xFFF_FFFF_0000 and TPU 1's at 0xFFF_FFFF_0040. The OS reaches it the
+  way it reaches the Rbox and Zbox controls that EV7 systems already
+  expose as CSRs; the EV7 PALcodes never touch it.
+- **The offset 0x3F0000 + 0x40 × tpu** **[decision]**: the console's CSR
+  table (`lab/docs-ev7/srm73-csr-tables.txt`, 141 rows) uses offsets below
+  0x30000 only (the highest is 0x26120) and the console takes one more
+  word, GIO_LOCK, at 0x80000; Linux names only the Rbox block
+  ([marvel.md](marvel.md)). The last 64 KB of the window is therefore
+  unclaimed. The 0x40 spacing is the 64 bytes between the IO7's port
+  registers.
+- **Lazy switching** (D11): an OS that knows vectors leaves VEN at 0 until
+  a thread first uses one; the OPCDEC tells it (section 5), it stores 1 to
+  VCTL of its processor and returns. An OS that never stores (OpenVMS)
+  keeps VEN at 0 for every process, so no vector state ever passes between
+  its processes.
 - **Not an I_CTL bit**, because I_CTL has none free: the 21264 assigns
   every bit, <63:48> the sign extension of VPTB, <47:30> VPTB, <29:24>
   CHIP_ID and each of <23:0> a named field [HRM pp. 158-160], and the EV7
   PALcodes use <47:30>, <29:24>, <23>, <19:18>, <16:15>, <14>, <9:8>, <7>
   and <0> of it ([marvel.md](marvel.md), "The EV7 PALcodes' internal registers").
-- **Index 0x18**: neither EV7 PALcode touches any index from 0x17 to 0x1F
-  (the same table: 45 registers, none there), the 21264 defines none from
-  0x18 to 0x1F, its last Ibox registers being CLR_MAP 0x15 and SLEEP 0x17
-  [HRM p. 144], and Alphabox's core decodes nothing there
-  (`src/cpu/cpu_pal.hpp`).
-- **Why a kernel-mode instruction writes it**: the EV7 PALcodes have no
-  call that reaches a new register, and Alphabox does not patch console
-  PALcode. WRVEN gives a kernel (Linux, S9) the lazy switching D11 wants;
-  an OS that never executes it (OpenVMS) keeps VEN at 0 for every process.
-- The native interface (S11) gives VCTL an index in the IDS's Ibox map;
-  open.
+- In the native interface (S11) VCTL becomes an IPR in the IDS's Ibox map,
+  with an index of its own; open.
 
 ## 3. EV8 instructions fixed by the IDS
 
@@ -196,7 +225,7 @@ places: 00 SEXTB, 01 SEXTW, 30 to 3F (CTPOP, PERR, CTLZ, CTTZ, the MVI
 packs, MIN and MAX), 70 FTOIT, 78 FTOIS [IDS pp. 662-664]. No new code is
 one of these, so nada's use of 1C (00, 01, 30 to 3F, 70, 78) is untouched.
 
-**The sizes in "zz" blocks** **[inference]**. The IDS writes four blocks
+**The sizes in "zz" blocks** **[inference, agreed]**. The IDS writes four blocks
 as `VADDzzz` and the like with the size in the low two bits, and writes
 MAX's existing block 3C to 3F the same way (`MAXzzz`) [IDS p. 663]. The
 ARM gives MAX as 3C MAXUB8, 3D MAXUW4, 3E MAXSB8, 3F MAXSW4 [ARM p. 783],
@@ -206,8 +235,10 @@ rule: PKUWB8 28, PKULW4 29, PKSWB8 2A, PKSLW4 2B; UPKUBW4 2C to UPKSWL2
 2F; VADDUL2 14 and VADDSL2 16; VSRB8 60, VSRW4 61, VSRAB8 62, VSRAW4 63;
 TMULUSB8 54 and TMULUSW4 55 [IDS pp. 662-664]. Only the 21164PC's MIN
 block, 38 MINSB8 to 3B MINUW4 [ARM p. 783], orders them otherwise. A zz
-row's block is the IDS's; which mnemonic has which code inside it is
-**proposed**.
+row's block is the IDS's; which mnemonic has which code inside it is the
+sheet's inference from MAX at 1C.3C to 1C.3F, **agreed** (Alphabox and
+nada, 2026-10-24): the assembler and the emulator implement this order.
+Only the results below stay proposed.
 
 **The results** **[decision, D8]**. The IDS names each instruction
 (Table 2-16, [IDS pp. 70-72]) and describes the multimedia unit's datapath
@@ -223,11 +254,11 @@ name unsigned and signed elements.
 | CMPLGE | `cmplge $ra, $rb, $rc` | 1C.05 | for longword i: Rc<4i+3:4i> ← 1111 or 0000; Rc<63:8> ← 0 | by analogy **[decision]** | final |
 | PERMB8 | `permb8 $ra, $rb, $rc` | 1C.08 | byte i of Rc chosen by s = Rbv<4i+3:4i>: 0-7 Rav.b[s]; 8-11 Rbv.b[s−4] (Rb's high longword); 12 sign fill, every bit = bit 7 of Rc.b[i−1] (0 for byte 0); 13 reserved (Alphabox: 0); 14 0xFF; 15 0x00 | the shifter's 16-way byte mux takes the 8 bytes of A, the 4 high bytes of B, sign extend, saturate, ones and zeros [IDS p. 221]; PERMB8 "decodes the B register inputs" [IDS p. 220] **[inference]**; the selector numbering in the figure's order **[decision]** | final |
 | GPKBLB4 | `gpkblb4 $ra, $rb, $rc` | 1C.09 | Rc.b[0..3] ← each of Rav.l[0], Rav.l[1], Rbv.l[0], Rbv.l[1] as a signed longword clamped to 0..255; Rc<63:32> ← 0 | only the name, "Graphics Pack Byte" [IDS p. 70] **[decision]** | final |
-| VADDUB8, VADDUW4, VADDSB8, VADDSW4 | `vaddub8 $ra, $rb, $rc` | 1C.10, .11, .12, .13 | Rc.e[i] ← SAT(Rav.e[i] + Rbv.e[i]) | "Saturation is required for the PADD and PSUB operations" [IDS p. 219], the Ebox chapter's names for the parallel add and subtract **[inference]** | proposed (size) |
+| VADDUB8, VADDUW4, VADDSB8, VADDSW4 | `vaddub8 $ra, $rb, $rc` | 1C.10, .11, .12, .13 | Rc.e[i] ← SAT(Rav.e[i] + Rbv.e[i]) | "Saturation is required for the PADD and PSUB operations" [IDS p. 219], the Ebox chapter's names for the parallel add and subtract **[inference]** | agreed (size) |
 | VADDUL2, VADDSL2 | as above | 1C.14, 1C.16 | the same on longwords | as above | final |
-| VSUBUB8, VSUBUW4, VSUBSB8, VSUBSW4 | | 1C.18, .19, .1A, .1B | Rc.e[i] ← SAT(Rav.e[i] − Rbv.e[i]) | as above | proposed (size) |
+| VSUBUB8, VSUBUW4, VSUBSB8, VSUBSW4 | | 1C.18, .19, .1A, .1B | Rc.e[i] ← SAT(Rav.e[i] − Rbv.e[i]) | as above | agreed (size) |
 | VSUBUL2, VSUBSL2 | | 1C.1C, 1C.1E | the same on longwords | as above | final |
-| VMINMAXUB8, VMINMAXUW4, VMINMAXSB8, VMINMAXSW4 | | 1C.20, .21, .22, .23 | running minimum and maximum, below | [IDS pp. 215-216, 219] | proposed (size) |
+| VMINMAXUB8, VMINMAXUW4, VMINMAXSB8, VMINMAXSW4 | | 1C.20, .21, .22, .23 | running minimum and maximum, below | [IDS pp. 215-216, 219] | agreed (size) |
 | VMINMAXUL2, VMINMAXSL2 | | 1C.24, 1C.26 | the same on longwords | as above | final |
 | PKUWB8 | `pkuwb8 $ra, $rb, $rc` | 1C.28 | Rc.b[i] ← SAT(Rav.w[i]), Rc.b[4+i] ← SAT(Rbv.w[i]), i = 0..3, unsigned | "Pack must detect when word->byte or longword->word overflow ... saturate" [IDS p. 220] **[inference]**; Ra fills the low half **[decision]** | final |
 | PKULW4 | | 1C.29 | Rc.w[i] ← SAT(Rav.l[i]), Rc.w[2+i] ← SAT(Rbv.l[i]), unsigned | as above | final |
@@ -237,11 +268,11 @@ name unsigned and signed elements.
 | UPKUWL2 | `upkuwl2 $rb, $rc` | 1C.2D | Rc.l[i] ← ZEXT(Rbv.w[i]), i = 0..1 | as above | final |
 | UPKSBW4 | `upksbw4 $rb, $rc` | 1C.2E | as UPKUBW4, sign-extended | as above | final |
 | UPKSWL2 | `upkswl2 $rb, $rc` | 1C.2F | as UPKUWL2, sign-extended | as above | final |
-| TADDUB8, TADDUW4, TADDSB8, TADDSW4 | | 1C.40, .41, .42, .43 | Rc ← Σ (Rav.e[i] + Rbv.e[i]) | tree ops, below | proposed (size) |
-| TSUBUB8, TSUBUW4, TSUBSB8, TSUBSW4 | | 1C.44, .45, .46, .47 | Rc ← Σ (Rav.e[i] − Rbv.e[i]) | | proposed (size) |
-| TABSERRUB8, TABSERRUW4, TABSERRSB8, TABSERRSW4 | | 1C.48, .49, .4A, .4B | Rc ← Σ \|Rav.e[i] − Rbv.e[i]\|; TABSERRUB8 equals PERR [ARM p. 227] | | proposed (size) |
-| TSQERRUB8, TSQERRUW4, TSQERRSB8, TSQERRSW4 | | 1C.4C, .4D, .4E, .4F | Rc ← Σ (Rav.e[i] − Rbv.e[i])² | | proposed (size) |
-| TMULUB8, TMULUW4, TMULSB8, TMULSW4 | | 1C.50, .51, .52, .53 | Rc ← Σ Rav.e[i] × Rbv.e[i] | | proposed (size) |
+| TADDUB8, TADDUW4, TADDSB8, TADDSW4 | | 1C.40, .41, .42, .43 | Rc ← Σ (Rav.e[i] + Rbv.e[i]) | tree ops, below | agreed (size) |
+| TSUBUB8, TSUBUW4, TSUBSB8, TSUBSW4 | | 1C.44, .45, .46, .47 | Rc ← Σ (Rav.e[i] − Rbv.e[i]) | | agreed (size) |
+| TABSERRUB8, TABSERRUW4, TABSERRSB8, TABSERRSW4 | | 1C.48, .49, .4A, .4B | Rc ← Σ \|Rav.e[i] − Rbv.e[i]\|; TABSERRUB8 equals PERR [ARM p. 227] | | agreed (size) |
+| TSQERRUB8, TSQERRUW4, TSQERRSB8, TSQERRSW4 | | 1C.4C, .4D, .4E, .4F | Rc ← Σ (Rav.e[i] − Rbv.e[i])² | | agreed (size) |
+| TMULUB8, TMULUW4, TMULSB8, TMULSW4 | | 1C.50, .51, .52, .53 | Rc ← Σ Rav.e[i] × Rbv.e[i] | | agreed (size) |
 | TMULUSB8, TMULUSW4 | | 1C.54, 1C.55 | the same, Ra's elements unsigned and Rb's signed | "Unsigned Times Signed" [IDS p. 70]; which operand is unsigned follows the name's order **[decision]** | final |
 | VMULLUW4 | `vmulluw4 $ra, $rb, $rc` | 1C.59 | Rc.w[i] ← (Rav.w[i] × Rbv.w[i])<15:0>, unsigned | "the high or low 16 bits of product from each multiplier are selected" [IDS p. 218] **[inference]** | final |
 | VMULHUW4 | | 1C.5B | Rc.w[i] ← (Rav.w[i] × Rbv.w[i])<31:16>, unsigned | as above | final |
@@ -272,7 +303,7 @@ name unsigned and signed elements.
   literal, taken modulo the element width (Rbv<2:0> for bytes, <3:0> for
   words, <4:0> for longwords).
 - Words: `pkuwb8 $1, $2, $3` = 70220503, `upksbw4 $2, $3` = 73E205C3,
-  `vaddub8 $1, $2, $3` = 70220203 (zz as proposed).
+  `vaddub8 $1, $2, $3` = 70220203 (zz as agreed).
 
 ### 3.4 Opcode 07: paired single precision
 
@@ -292,7 +323,15 @@ bits of the FP operate instruction remain the same" [IDS p. 280]:
   for an integer result), 101 /SU (/SV), 111 /SUI (/SVI). The IDS's
   two-digit code (07.10) is Fnc alone; the 11-bit function at <15:5> is
   Trp<<8 | Rnd<<6 | Fnc, and the no-qualifier form, as for every IEEE
-  instruction, has Rnd = 10: **0x080 | Fnc**. That is the base nada
+  instruction, has Rnd = 10: **0x080 | Fnc** **[inference]**. The IDS
+  gives Fnc only: Table 8-18 splits <10:5> as the function, bits <10:9>
+  "used to be SRC", and Table 8-20 prints two-digit codes [IDS pp.
+  280-283]. No full 11-bit opcode 07 code is stated anywhere in it: the
+  Fbox chapter (pp. 279-283) and the decode appendix (pp. 652-664) were
+  searched, and the appendix has no opcode 07 table, only the sentence that
+  opcodes 01 to 07 are reserved (A.6.2, p. 653). The base is the scalar
+  IEEE convention carried over to every qualifier class, P-BIT and P-EST
+  included; the example words below depend on it. It is the base nada
   packs; its qualifier letters then add and subtract as for the scalar
   instructions (`/s` +0x400, `/u` and `/v` +0x100, `/i` +0x200, `/c`
   −0x80, `/m` −0x40, `/d` +0x40).
@@ -310,7 +349,10 @@ bits of the FP operate instruction remain the same" [IDS p. 280]:
   chopped rounding only and ignore Rnd.
 - **[conflict]**: the decode appendix still lists 01 to 07 as reserved,
   raising OPCDEC [IDS p. 653]; the Fbox chapter assigns 07 [IDS pp.
-  279-280]. This sheet follows the Fbox chapter.
+  279-280], and the Ebox chapter's reserved-opcode table (Table 6-17) has
+  a row for opcode 07 reading "Codes not defined by SIMD FP extension"
+  [IDS p. 229; the row alignment is read from the OCR text]. This sheet
+  follows the Fbox chapter.
 
 **The qualifier classes** **[decision]**. The IDS gives the rounding rule
 for the estimates and the "no arithmetic exceptions" rule for the bit
@@ -322,7 +364,7 @@ each class matching a scalar instruction's set in the ARM's Table C-3
 | --- | --- | --- | --- | --- |
 | P-ARITH | PADD, PSUB, PCADD, PSUBC, PHADD, PHSUB, PHSUBR, PMUL, PMULH, PMULL, PMULHN, PMULLN | none, /U, /SU, /SUI | /C, /M, none, /D | ADDT (AXQ_ARITH) |
 | P-CMP | PCMPEQ, PCMPNEQ, PCMPLT, PCMPLE, PCMPUN, PFMAX, PFMIN | none, /SU | none only | CMPTEQ (AXQ_CMP) |
-| P-EST | PARCPL, PARCPLH, PARCPLL, PARSQRT, PARSQRTH, PARSQRTL | none, /U, /SU | none (the field is ignored, note 1) | new: the arithmetic set less /SUI, since an estimate never sets INE |
+| P-EST (agreed) | PARCPL, PARCPLH, PARCPLL, PARSQRT, PARSQRTH, PARSQRTL | none, /U, /SU | none (the field is ignored, note 1) | new: the arithmetic set less /SUI, since an estimate never sets INE |
 | P-CVT | PCVTFI | none, /V, /SV, /SVI | /C, /M, none, /D | CVTTQ (AXQ_CVTTQ) |
 | P-BIT | PMOVHH, PMOVHL, PMOVLH, PMOVLL, PCPYS, PCPYSN, PCPYSE, PCVTSP, PEXTH, PEXTL | none | none | CPYS (AXQ_NONE), but with base 0x080 \| Fnc |
 
@@ -333,17 +375,18 @@ treat them alike, as the IDS says.
 
 **The instructions** (Table 8-20, [IDS pp. 281-283]; H and L are the
 high and low halves). Status is the Fnc code's; every Class entry is
-proposed, as above, and the Base column follows from the IDS's statement
-that the other fields keep their scalar meaning.
+proposed, as above, except P-EST (agreed with nada, 2026-10-24); the Base
+column is an **[inference]** in every row, from the IDS's statement that
+the other fields keep their scalar meaning (see Trp and Rnd above).
 
-| Mnemonic | Syntax | Fnc | Base | Class | Operation | Status |
+| Mnemonic | Syntax | Fnc | Base [inference] | Class | Operation | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | PMUL | `pmul $fa, $fb, $fc` | 00 | 0x080 | ARITH | fcH ← faH × fbH, fcL ← faL × fbL | final |
 | PMULL | `pmull $fa, $fb, $fc` | 01 | 0x081 | ARITH | fcH ← faH × fbL, fcL ← faL × fbL | final |
 | PMULH | `pmulh $fa, $fb, $fc` | 02 | 0x082 | ARITH | fcH ← faH × fbH, fcL ← faL × fbH | final |
 | PMULLN | `pmulln $fa, $fb, $fc` | 05 | 0x085 | ARITH | fcH ← faH × fbL, fcL ← −(faL × fbL), negated after rounding (note 8) | final |
 | PMULHN | `pmulhn $fa, $fb, $fc` | 06 | 0x086 | ARITH | fcH ← −(faH × fbH), fcL ← faL × fbH, negated after rounding (note 8) | final |
-| PARCPL | `parcpl $fb, $fc` (Fa = $f31) | 08 | 0x088 | EST | fcH ← 1/fbH, fcL ← 1/fbL | **proposed**: the table gives 07.0A, also PARCPLL's code **[conflict]**; 08 completes the pattern of PARSQRT 0C, PARSQRTH 0D, PARSQRTL 0E |
+| PARCPL | `parcpl $fb, $fc` (Fa = $f31) | 08 | 0x088 | EST | fcH ← 1/fbH, fcL ← 1/fbL | **agreed** (Alphabox and nada, 2026-10-24, no alias): the table gives 07.0A, also PARCPLL's code **[conflict]**; 08 completes the pattern of PARSQRT 0C, PARSQRTH 0D, PARSQRTL 0E |
 | PARCPLH | `parcplh $fb, $fc` | 09 | 0x089 | EST | fcH ← 1/fbH, fcL ← 0 | final; the name **[decision]**: the table prints "PARCPH", note 1 and section 8.11.3 say PARCPLH and PARCPLx |
 | PARCPLL | `parcpll $fb, $fc` | 0A | 0x08A | EST | fcH ← 0, fcL ← 1/fbL | final |
 | PARSQRT | `parsqrt $fb, $fc` | 0C | 0x08C | EST | fcH ← 1/√fbH, fcL ← 1/√fbL | final |
@@ -399,7 +442,9 @@ leaves open, all **[decision]**:
   complement integer; out of range, the half takes the low 32 bits of the
   integer and the integer overflow is reported, as CVTTQ does at 64 bits.
 - **Compares**: exceptions as CMPTxx raises them, NEQ and UN as EQ.
-- Words: `padd $f1, $f2, $f3` = 1C221203, `padd/su $f1, $f2, $f3` =
+- Words, all depending on the 0x080 base **[inference]** (the `pmovhl` and
+  `parsqrt` ones too, whose classes have no qualifier to vary):
+  `padd $f1, $f2, $f3` = 1C221203, `padd/su $f1, $f2, $f3` =
   1C22B203, `pcmpeq $f1, $f2, $f3` = 1C221503, `pmovhl $f1, $f2, $f3` =
   1C221343, `parsqrt $f2, $f3` = 1FE21183.
 
@@ -417,7 +462,7 @@ published ([ev8.md](ev8.md), "3. Tarantula").
 | $vl | vector length, 0 to 128; an 8-bit register | [TAR p. 282]; the range **[inference]** from Fig. 1's loop bound |
 | $vs | stride, 64 bits, a signed byte distance | [TAR p. 282]; bytes **[inference]**: Fig. 1 adds `i * vs` to the byte address `Rb + off` [TAR p. 283]; signed **[decision]** |
 | $vm | mask, 128 bits, one per element | [TAR p. 282] |
-| `VCTL<VEN>` | the vector enable (section 2) | **[decision]** |
+| `VCTL<VEN>` | the vector enable, a CSR per processor (section 2); not instruction-visible state | **[decision]** |
 
 The register names are the ones agreed with nada: `$v0` is the integer
 return register in GNU as and nada, so vector registers are `$vr`. `$vl`
@@ -436,7 +481,7 @@ them all).
 | 02 | VS, vector-scalar operate | operate: Va, Rb, Fb or a literal, function, Vc | 38 |
 | 03 | SM, strided memory | memory-function: Vt, Rb, function | VLOADQ, VSTOREQ |
 | 04 | RM, random memory (gather and scatter) | memory-function: Vt, Rb, function, Vx in <4:0> | VGATHQ, VSCATQ |
-| 05 | VC, vector control | operate | SETVL, SETVS, SETVM, GETVL, GETVS, GETVM, WRVEN |
+| 05 | VC, vector control | operate | SETVL, SETVS, SETVM, GETVL, GETVS, GETVM |
 | 06 | spare | | all codes OPCDEC |
 | 18.5000 | DrainM | memory-function | DRAINM |
 
@@ -645,7 +690,7 @@ SM. Words: `vgathq $vr3, $vr1($2)` = 10620001, `vscatq $vr3, $vr1($2)` =
 ```
 
 The integer operate layout, as VV and VS: L (<12>) selects the literal
-in <20:13> for SETVL, SETVS and WRVEN; M (<11>) must be 0. Ra is always
+in <20:13> for SETVL and SETVS; M (<11>) must be 0. Ra is always
 $31; the instruction says whether <20:16> and <4:0> name integer or
 vector registers.
 
@@ -657,7 +702,6 @@ vector registers.
 | 04 | getvl | `getvl $rc` | Rc ← vl |
 | 05 | getvs | `getvs $rc` | Rc ← vs |
 | 06 | getvm | `getvm $vrc` | Vc[i] ← vm[i] (0 or 1) for i < vl; the rest UNPREDICTABLE |
-| 08 | wrven | `wrven $rb` or `wrven 1` (Ra = Rc = $31) | VEN ← Rbv<0>. Kernel mode or PALmode only; in any other mode OPCDEC. The one Tarantula instruction that executes with VEN = 0 |
 
 Only SETVM is named in the paper ("setvm v8" copies v8 into vm [TAR p.
 282]); SETVM's low-bit test follows Alpha's BLBS **[decision]**.
@@ -668,10 +712,9 @@ to avoid "data transfers back and forth" with a 20-cycle round trip [TAR
 p. 282], so no element move is defined: a scalar enters a vector through
 VS (`vsbis $vr31, $rb, $vrc` broadcasts it), and an element leaves through
 memory (a vector store is visible to later scalar loads, section 4.8).
-Codes 03, 07 and 09 to 3F are free for reductions or element moves if a
+Codes 03, 07 and 08 to 3F are free for reductions or element moves if a
 later stage wants them. Words: `setvm $vr8` = 17E8005F, `setvl $16, $1` =
-17F00001, `setvs 8` = 17E1103F, `getvl $1` = 17FF0081, `wrven $16` =
-17F0011F.
+17F00001, `setvs 8` = 17E1103F, `getvl $1` = 17FF0081.
 
 The paper's mask example [TAR p. 282] in this syntax:
 
@@ -736,18 +779,20 @@ is there. With VEN = 0 it executes all the same **[decision]**.
 - VV and VS: function codes 0E, 0F, 1A to 1F, 2F, 33 to 3F, and bits
   <15:13> of the register form (room for narrower element types);
 - SM and RM: function codes 02 to 3F and bits <15:12>;
-- VC: function codes 03, 07, 09 to 3F;
+- VC: function codes 03, 07, 08 to 3F;
 - opcode 18: every unassigned code (the barrier group's 5400 to 7C00 for
   further barriers).
 
 ### 4.10 Count
 
 Counting an operation once across its VV and VS forms and its Q and T
-types, the set has 45: 33 operate operations, 4 memory instructions, 7
-control instructions and DrainM. That equals the paper's "45 new
-instructions (not counting data-type variations)" [TAR p. 282], but the
-paper never published its list, so the match proves nothing. As
-mnemonics there are 92: 42 VV, 38 VS, 2 SM, 2 RM, 7 VC and DRAINM.
+types, the set has 44: 33 operate operations, 4 memory instructions, 6
+control instructions and DrainM. The paper counts "45 new instructions
+(not counting data-type variations)" [TAR p. 282]; with the vector enable
+a CSR and not an instruction (section 2) the sheet is one short, and the
+paper never published its list, so neither a match nor a miss proves
+anything. As mnemonics there are 91: 42 VV, 38 VS, 2 SM, 2 RM, 6 VC and
+DRAINM.
 
 ## 5. Exceptions and context
 
@@ -792,15 +837,17 @@ can touch 128 pages, more than a small TB holds, and the paper made each
 lane TLB at least 8-way for that reason [TAR p. 286]. S8 must show that
 such an instruction completes.
 
-**OPCDEC with VEN = 0.** Every instruction in opcodes 01 to 05 except
-WRVEN raises OPCDEC, with EXC_ADDR the instruction's PC. An OS that knows
-vectors reads the opcode at that PC: 01 to 05 with VEN off means "vector
-unit disabled", so it gives the thread its vector state, executes `wrven
-1` and returns to the instruction; with VEN on, an OPCDEC there is a
-genuinely unused code and the program gets SIGILL. An OS that does not
-know vectors never sets VEN and delivers the illegal-instruction signal
-on the first vector instruction, so no vector state ever passes between
-its processes. Vector instructions in PALmode are UNPREDICTABLE: PALcode
+**OPCDEC with VEN = 0.** Every Tarantula instruction, all of opcodes 01
+to 05, raises OPCDEC with VEN = 0, with no exception, and EXC_ADDR is the
+instruction's PC. An OS that knows vectors reads the opcode at that PC: 01
+to 05 with VEN off means "vector unit disabled", so it gives the thread its
+vector state, stores 1 to its processor's VCTL (section 2) with a quadword
+store and returns to the instruction; with VEN on, an OPCDEC there is a
+genuinely unused code and the program gets SIGILL. An OS that does not know
+vectors never sets VEN and delivers the illegal-instruction signal on the
+first vector instruction, so no vector state ever passes between its
+processes. DrainM, which is not in opcodes 01 to 05, executes whatever VEN
+is (section 4.8). Vector instructions in PALmode are UNPREDICTABLE: PALcode
 must not use them.
 
 **What must be saved** (D11). PALcode saves nothing: no HWPCB field holds
@@ -844,43 +891,38 @@ to the calling standard.
 
 ## 6. Open points
 
-For nada and the owner, each with the proposal it would replace:
+Settled by the owner and nada on 2026-10-24 (points 1 to 5, 9) and still
+open (6, 7, 8, 10 to 14; 7, 8 and 11 are the owner's alone, nada has no
+stake in them). Each point is given with the proposal it would replace:
 
-1. **RM syntax**: `vgathq $vrt, $vrx($rb)` puts a vector register where
-   nada's parser expects a displacement. The alternative is three
-   operands, `vgathq $vrt, $vrx, $rb`; the encoding is the same either
-   way.
-2. **Run-time detection in nada**: nada leaves out `amask` and `implver`
-   (its `doc/asm-spec.md` 6.6). `-mcpu=ev8` and `-mtarantula` let the
-   assembler accept the instructions, but a program that must run on
-   other Alphas needs `amask` to test bits 3, 10 and 11 first (11.61,
-   [ARM p. 780]; IMPLVER is 11.6C, [ARM p. 782]).
-3. **PARCPL's code**: 07.08, proposed against the IDS's 07.0A, which the
-   table also gives PARCPLL; and PARCPLH for the table's "PARCPH". If nada
-   wants the table's spelling as well, an alias costs nothing.
-4. **The P-EST qualifier class** is new for nada (none, /U, /SU, no
-   rounding letter). Its alternative is CMP's set (none, /SU), which
-   reuses a class but cannot ask for underflow without software
-   completion.
-5. **AMASK bit 11** for both new EV8 sets, and bit 3 for Tarantula: the
-   owner's to confirm.
+1. **RM syntax** (agreed): `vgathq $vrt, $vrx($rb)` puts a vector register
+   where a displacement goes. The alternative, three operands `vgathq
+   $vrt, $vrx, $rb`, has the same encoding; nada keeps the first.
+2. **Run-time detection in nada** (settled): nada assembles `amask` (11.61)
+   and `implver` (11.6C, the literal 1 in Rb) on every `-mcpu`, so a program
+   that must run on other Alphas tests bits 3, 10 and 11 first [ARM pp.
+   780, 782].
+3. **PARCPL's code** (agreed): 07.08, against the IDS's 07.0A, which the
+   table also gives PARCPLL; PARCPLH for the table's "PARCPH". No alias.
+4. **The P-EST qualifier class** (agreed): none, /U, /SU, no rounding
+   letter.
+5. **AMASK bit 11** for both new EV8 sets, and bit 3 for Tarantula: decided
+   by the owner, 2026-10-24.
 6. **The 1C results** (D8) are all proposed; GPKBLB4 and PERMB8's
    selector values rest on the least evidence, VMINMAX's layout on a
-   datapath description.
+   datapath description. The size order inside the zz blocks is agreed.
 7. **Masked-off elements**: UNPREDICTABLE plus an explicit merge, or
    left unchanged as Alphabox implements anyway. The second is easier to
    program and costs a third read port in hardware that will never exist.
 8. **Vector booleans** are the integer 1, not the scalar compares' 2.0
    nor paired single's 1.0.
-9. **WRVEN** is a privileged instruction outside PALcode, which no Alpha
-   has had. It exists because the EV7 PALcodes cannot reach a new
-   register; with the native interface (S12) Alphabox's own PALcode could
-   offer a CALL_PAL instead, as WRFEN is for floating point, and WRVEN
-   could then be retired or kept.
+9. **VCTL's offset** (decided): 0x3F0000 + 0x40 × tpu in the EV7 window
+   (section 2), chosen because no console table or Linux name uses it. It
+   is listed so that a later look at a console's CSR table can reopen it.
 10. **The quiesce registers** in EV7-compatible mode: not reachable, the
     timer fixed at 10240 cycles with both enables on (section 3.1). A test
-    that wants another timeout would need an index (0x19 is free by the
-    same evidence as 0x18).
+    that wants another timeout would need a register of its own (a CSR
+    beside VCTL's would do).
 11. **Vector arithmetic traps** report the next PC (trap style, as AMASK
     bit 9 defines); the paper says only that the faulting instruction's PC
     is provided. A fault-style report (own PC, nothing written) would let
@@ -896,6 +938,7 @@ For nada and the owner, each with the proposal it would replace:
     shows the cost matters.
 14. **The IDS's own errors** this sheet works around, for the record:
     the AMASK test branching the wrong way [IDS p. 674], the paired single
-    high half's field boundaries [IDS p. 280], PARCPL's duplicate code
+    high half's field boundaries [IDS p. 280], the decode appendix calling
+    opcode 07 reserved [IDS p. 653], PARCPL's duplicate code
     [IDS p. 281], and the conflicting reset of QUIESCE_TIMEOUT's enables
     [IDS pp. 511, 678].

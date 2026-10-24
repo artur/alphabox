@@ -209,8 +209,11 @@ is not available.
 
 **Paired single precision (opcode 07).** "A graphics instruction set has
 been added to the Alpha architecture (ECO 118)" [IDS p. 279]: two IEEE
-singles in one 64-bit FP register (high: sign <63>, exponent <62:54>,
-fraction <53:32>; low: sign <31>, exponent <30:23>, fraction <22:0>), in
+singles in one 64-bit FP register (high: sign <63>, exponent <62:55>,
+fraction <54:32>; low: sign <31>, exponent <30:23>, fraction <22:0>; the
+IDS's Table 8-19 misprints the high half as exponent <62:54> and fraction
+<53:32>, nine and 22 bits, against the low half's layout and PCVTSP's
+packing [IDS p. 280]; [ev8-isa.md](ev8-isa.md), 3.4), in
 the FP operate format with a 6-bit function in <10:5> [IDS p. 280]. All
 four rounding modes; IEEE exceptions raised per half and ORed, FPCR and
 trap control as for scalar FP [IDS p. 280]. The 36 instructions, with
@@ -577,10 +580,10 @@ marked today.
 | D8 | Short-vector SIMD results | per-instruction architectural results | define each from the IDS's datapath description and the existing MVI conventions; publish the table in cpu-fidelity.md. Proposed in [ev8-isa.md](ev8-isa.md), 3.3 |
 | D9 | Paired single precision | the 21264-style trap shadow and denormal handling for pairs | follow the scalar IEEE rules per half, as [IDS p. 280] says, with the existing FPCR code |
 | D10 | Tarantula encodings | all | opcodes 01-06: one per group (VV, VS, SM, RM, VC, and one spare), FP-operate-like fields, a mask bit; DrainM as an 18.xxxx code. Encoded in [ev8-isa.md](ev8-isa.md), section 4 (integer-operate fields; DrainM 18.5000) |
-| D11 | Tarantula enable and context switch | no PALcode or OS support defined | a per-TPU vector enable, off at reset, so an OS that does not know vectors (OpenVMS) gets OPCDEC and never shares vector state between processes; a kernel that does (Linux) enables it and saves v0-v31, vl, vs, vm lazily |
+| D11 | Tarantula enable and context switch | no PALcode or OS support defined | a per-TPU vector enable, off at reset, a CSR in each EV7's register window (owner, 2026-10-24; [ev8-isa.md](ev8-isa.md), section 2), so an OS that does not know vectors (OpenVMS) gets OPCDEC and never shares vector state between processes; a kernel that does (Linux) enables it and saves v0-v31, vl, vs, vm lazily |
 | D12 | Vector ordering | against MB/WMB and other processors | MB and WMB order vector accesses like scalar ones; within an instruction, any element order; DrainM as published |
 | D13 | Vector FP | rounding, FPCR, traps | FPCR shared with scalar FP; dynamic rounding from the FPCR; traps precise at the instruction (as published), FPCR status ORed over elements |
-| D14 | Tarantula detection | no AMASK bit | AMASK bit 3, the first free bit of the low byte reserved for standard extensions [ARM p. 204]. Kept in [ev8-isa.md](ev8-isa.md), section 2, with the vector enable |
+| D14 | Tarantula detection | no AMASK bit | AMASK bit 3 (decided, owner, 2026-10-24), the first free bit of the low byte reserved for standard extensions [ARM p. 204]. Kept in [ev8-isa.md](ev8-isa.md), section 2, with the vector enable |
 | D15 | Vector TLB misses | lane TLB refill IPRs | the emulator keeps no lane TLBs: a vector access that misses raises the ordinary DTB miss for that element's VA, with the instruction's PC; the instruction restarts whole (loads and gathers are idempotent; a restarted scatter rewrites the same values) |
 | D16 | QUIESCE in the emulator | (implementation, not architecture) | watch_flag per TPU beside the LL/SC lock flags (`CSystem::cpu_lock`); a watched store from any processor or DMA clears it; the sleeping TPU's host thread waits on a condition variable with a wall-clock timeout from QUIESCE_TIMEOUT at the row's clock, never a fatal one |
 
