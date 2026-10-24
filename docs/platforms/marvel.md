@@ -63,7 +63,11 @@ On the ES47 in particular:
   (2026-10-05, `lab/es47-q1/console-run1.log`, `console-run2.log`);
 - `show fru` lists every FRU with part and serial numbers, including the
   VRMs, power supplies and fans, the system serial number is set, and
-  `boot` prints no management-interface error (M10, 2026-10-20).
+  `boot` prints no management-interface error (M10, 2026-10-20);
+- Linux 7.0.1 (Gentoo's minimal CD) runs on the UNIX PALcode: the live
+  CD's shell on one and two EV7s, and the ES40's install to a login on two
+  here and on four on the `gs1280` row (E2, 2026-10-24,
+  [linux.md](../linux.md)).
 
 ## Where the code is
 
@@ -106,8 +110,6 @@ From [backlog.md](../backlog.md), where the order of work is:
 | Gap | Plan |
 | --- | --- |
 | `AMASK`: nothing executes it, so it stays the EV68's (the internal registers were checked in E1). `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24 | AMASK left: an inference |
-| The UNIX PALcode under an operating system (it runs from a boot image since E1) | E2, Linux on the ES47 |
-| The IO7's MSIs (`MSI_CTL`) and `INT_PND`/`INT_CLR`/`MISC_PND` | M8, with Linux |
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
@@ -508,7 +510,12 @@ where Linux has RBX_IREQ_OFF/RBX_INTA_OFF.
   cpu_hz / ((n + 1) * 2^17).
 - **TOY/RTC**: not a chip the OS reaches. Linux emulates port 0x70 as an
   index latch and reads or writes through **`cserve` 0x49 (GET_TOY) / 0x48
-  (PUT_TOY)**, on the boot CPU only (`__marvel_access_rtc`). The console
+  (PUT_TOY)**, on the boot CPU only (`__marvel_access_rtc`), passing every
+  byte through `bin2bcd` (writes through `bcd2bin`): the values are binary,
+  and register B must say BCD for Linux's MC146818 code to decode them.
+  The CMM model's register B reads 0x02 since E2 (2026-10-24; 0x06 before,
+  which Linux read as 2038 and month 16); OpenVMS reads the values as
+  binary either way. The console
   has `toy_read`/`toy_write`/`rtc_read_pb`. At the start it was a guess
   that the time comes from the CMM/MBM over GIO (the strings show no
   M1543C RTC use). M4 found it: an MC146818 image in the CMM's memory,
@@ -635,7 +642,7 @@ protocols, but they are not Alpha code (the MBM runs its own OS, with an
 | --- | --- | --- |
 | OpenVMS | 7.3-1 (ES47/ES80/GS1280 support added), 7.3-2, 8.2-8.4 | `lab/ALPHA084.ISO` (8.4) |
 | Tru64 UNIX | 5.1B (5.1A with a patch kit, **[guess]**) | none here |
-| Linux | `arch/alpha` MARVEL machvec, still in mainline; Matt Turner's 2026 SMP fixes were tested on an ES47 | none here; E2 in [backlog.md](../backlog.md) |
+| Linux | `arch/alpha` MARVEL machvec, still in mainline; Matt Turner's 2026 SMP fixes were tested on an ES47 | Gentoo's minimal CD (Linux 7.0.1, the ES40's media): its live shell on one and two EV7s, the ES40's install on two (es47) and four (gs1280), with the CD's `gentoo_nolsa` kernel and one byte changed; [linux.md](../linux.md), "Linux on the ES47" (E2, 2026-10-24) |
 
 These support claims are general knowledge, not from the documents in
 `lab/docs-ev7`, except Linux. Check them against the OS SPDs before

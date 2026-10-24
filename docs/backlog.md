@@ -24,7 +24,7 @@ EV7 an EV7 is around the core, and that is where the model is thin:
 | --- | --- | --- |
 | Internal registers the EV7 PALcodes use | done (E1): 45 registers in the OpenVMS PALcode, 43 in the UNIX one, all 21264 registers, none EV7-only; the core implements each with the fields the code uses (marvel.md, "The EV7 PALcodes' internal registers") | nothing left. Index 0x2d (M_FIX), M_CTL<5:4> and VA_CTL<3> stay inferences |
 | `AMASK`, `IMPLVER` | IMPLVER is 3, the value the Alpha Architecture Reference Manual gives the 21364 (4th ed., Table D-4); until 2026-10-24 it was the EV68's 2. AMASK is the EV68's: no document lists the 21364's, and neither PALcode nor the console executes either (E1) | AMASK left: an inference |
-| UNIX PALcode | runs from a boot image (`unix_pal_probe.py`, E1): SWPPAL, a dozen calls, TB misses, CFLUSH, the clock interrupt. Never under an operating system | **E2**: Linux on the ES47 (below) |
+| UNIX PALcode | runs Linux on the ES47 (E2, 2026-10-24, [linux.md](linux.md)): Gentoo's live CD and the ES40's install, one to four EV7s, the IO7's LSIs with EOI_DAT, the clock, IPIs, the TOY through cserve. It has no `CALL_PAL WTINT`, which Linux patches out itself | done |
 | Native PALcode fast paths | none: the ES40's, which mirrored its VMS PALcode V1.98-104 and were never on for EV7, were removed in October 2026 ([cpu-fidelity.md](cpu-fidelity.md)) | **E3**: measure OpenVMS MIPS on the ES47 against the ES40 first; write EV7 paths only if the gap is worth it |
 | Cbox, Bbox, Zbox, pads, OCLA registers | read back a configured state; writes kept, nothing acts on them. The PALcodes reach 55 registers, all modelled: at reset, in the whole-cache CFLUSH and in the error logout (E1) | nothing more without a guest that uses them |
 | Performance counters, ProfileMe | not modelled (as on the 21264 here) | left |
@@ -36,7 +36,7 @@ EV7 an EV7 is around the core, and that is where the model is thin:
 
 | Gap | To close it |
 | --- | --- |
-| IO7: MSIs (`MSI_CTL`), `INT_PND`/`INT_CLR`/`MISC_PND` | **M8**, driven by Linux, whose `sys_marvel.c` uses them |
+| IO7: MSIs (`MSI_CTL`), `INT_PND`/`INT_CLR`/`MISC_PND` | **M8**, done by Linux (2026-10-24): it writes MSI_CTL with the target PID and reads it back, and enables an MSI only for a device whose MSI the console turned on, which none is (`arch/alpha` has no MSI support, and the CD's kernel has `CONFIG_PCI_MSI` off); the pending registers, MSI_PND/MSI_CLR and POx_MSI_WBASE it never touches, nor does the UNIX PALcode ([linux.md](linux.md)). Nothing to model until a guest reads them |
 | IO7: data mover, error reporting | left (no guest uses them; errors are never raised) |
 | CMM: FRU EEPROMs, fans, power, VRMs, the console data log | done by **M10** (2026-10-20): answers built from the console's own decoders; `show fru`, `show power` and `boot` are clean on the ES47. The EEPROMs' contents are invented ([marvel.md](platforms/marvel.md), M10) |
 | CMM: a GS1280's power supply tray (0x090e), cabinet control panel and PBM EEPROMs | left: only the GS1280 asks; its FRUs print "-" |
@@ -128,7 +128,13 @@ gate.
    driver. Linux on the ES40 first (the easy half), then Marvel. The
    ES40 half runs ([linux.md](linux.md), 2026-10-20): Gentoo's CD to a
    shell, an install that boots from disk on one and on two processors,
-   and four emulator bugs fixed on the way.
+   and four emulator bugs fixed on the way. The ES47 half runs too
+   (2026-10-24): the CD's live shell on one and two EV7s and the ES40's
+   install on two and on four (the GS1280 row; a two-drawer ES47 is past
+   what the CD's kernel can map), with the CD's Marvel kernel and one byte
+   changed for a Linux bug. Two emulator bugs fixed: the TOY's register B,
+   and instruction-cache lines that outlived another processor's IMB. M8
+   needed no change. Left: the Radeon with Mesa's r100 driver (phase 2).
 4. **E3**: OpenVMS MIPS on the EV7 against the ES40, and native PALcode
    paths if the gap is large.
 5. **M10, the CMM's FRU and environment answers**. Done (2026-10-20):

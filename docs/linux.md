@@ -1,9 +1,10 @@
 # Linux
 
-Linux/Alpha on the emulated ES40 (backlog E2, its first half; Linux on the
-ES47 comes next). With no real Alpha to compare against, a second
-operating system is the best test the emulator has, and Linux found four
-bugs in it on its first boot.
+Linux/Alpha on the emulated ES40 (backlog E2, its first half) and on the
+ES47 ([below](#linux-on-the-es47), its second half). With no real Alpha
+to compare against, a second operating system is the best test the
+emulator has, and Linux found four bugs in it on its first boot on the
+ES40 and one more on the ES47.
 
 | | |
 | --- | --- |
@@ -20,6 +21,7 @@ bugs in it on its first boot.
 | [Guest-side quirks](#guest-side-quirks) | messages that are Linux's, not the emulator's |
 | [What was fixed](#what-was-fixed) | the four bugs, and how the first was found |
 | [Installing to a disk](#installing-to-a-disk) | a disk SRM boots, with no network |
+| [Linux on the ES47](#linux-on-the-es47) | the same CD and install on Marvel's EV7s: the configuration, what runs, four processors, the quirks, the fixes, the MSIs |
 | [Open](#open) | what has not been tried |
 
 ## Booting the install CD
@@ -272,6 +274,235 @@ serial console. Stop the emulator instead, or set `bootdef_dev` and
 The image after the install holds 1.5 GB of the host's disk; the guest
 sees 1.3 GB used of 3.8 GB.
 
+## Linux on the ES47
+
+The same CD and the same install run on the emulated ES47 (`es47`, two
+EV7s, Marvel; 2026-10-24). This is the first operating system on the
+EV7's UNIX PALcode, and Marvel's interrupt path as Linux programs it.
+
+| | |
+| --- | --- |
+| What it reaches | the live CD's root shell on the console terminal with one and with two EV7s; the ES40's install, with the CD's Marvel kernel, to a login on two, where gcc builds and runs a program and `poweroff` halts to SRM; the same install on four EV7s of the `gs1280` row. A four-processor ES47 (two drawers) and the live CD on four: Linux's limits, [below](#four-processors) |
+| Kernel | the CD's `gentoo_nolsa`, with one byte changed (`test/tools/es47_linux.sh`, [below](#guest-side-quirks-on-marvel)) |
+| Console | the SRM console terminal (`console=srm0`): Marvel has no 16550, and the terminal is the CMM's, as for OpenVMS |
+| JIT_VERIFY | two EV7s, the installed disk from `boot` to a login and `poweroff`: 1.4 and 1.6 billion compiled blocks on the two processors checked against the interpreter, no mismatch |
+| Fixed on the way | the CMM's TOY register B said binary, and Linux's Marvel RTC code needs it to say BCD; a processor kept old code in its 2 KB instruction-cache lines past another one's `IMB` ([below](#what-was-fixed-on-the-es47)) |
+
+### The configuration
+
+The ES47's OpenVMS machine ([marvel.md](platforms/marvel.md), M7a) with
+the CD on the embedded CMD 649, where the console boots it (`dqa0`), and
+a boot disk beside it (`dqa1`):
+
+```
+sys0 = tsunami
+{
+  platform = "es47";
+  memory.bits = 30;                # per processor: 29 with two
+  rom.srm = ".../roms/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE";
+  rom.nvram = "cmm_nvram.bin";
+  cpu0 = ev7 { speed = 1000M; }    # and cpu1
+  pci2.2 = cmd649
+  {
+    disk0.0 = file { file = "install-alpha-minimal-20260426T153103Z.iso";
+                     read_only = true; cdrom = true; model_number = "CD-W216E"; }
+    disk0.1 = file { file = "es47-boot.img"; }
+  }
+  serial0 = serial { address = "127.0.0.1"; port = 23200; }
+}
+```
+
+The boot disk comes from the CD: `test/tools/es47_linux.sh bootdisk <iso>
+es47-boot.img` (bsdtar, gzip, python3 and e2fsprogs on the host). Its
+`etc/aboot.conf` line 0 boots the CD's `gentoo_nolsa` kernel and initrd
+with the CD's own arguments, `cdroot` (the live root is still the CD),
+`console=srm0` and `epoch=2000`. At `P00>>>`:
+
+```
+P00>>> set os_type unix
+P00>>> init
+P00>>> boot dqa1 -flags 0
+```
+
+aboot switches to the console's UNIX PALcode itself ("switching to OSF/1
+PALcode version 2.8"), and the boot works the same without `set os_type
+unix` and `init` (the four-processor runs, the `linux-es47` check). The
+environment is not kept here: no run wrote `cmm_nvram.bin`, so a `set` is
+gone at the next start (open, below). The live CD logs in as root on
+`srm0` by itself.
+
+**The installed disk.** `test/tools/es47_linux.sh retarget <iso> <clone>`
+changes a clone of the ES40's install (`lab/linux/disk`) for Marvel: the
+same kernel into `/boot/vmlinuz`, aboot line 0 `root=/dev/sda2
+console=srm0 epoch=2000`, and a getty on `srm0` for the one on `ttyS0`.
+On the CMD 649 as `dqa0` (`disk0.0`, no CD), `boot dqa0 -flags 0` comes up
+to "es40 login:"; nothing else in the install changed. That is the
+`linux-es47` check of `test/tools/guests_check.sh` (log in, `uname -a`,
+the processors and the platform from `/proc/cpuinfo`, `date`, `poweroff`).
+
+### What runs
+
+From the kernel's log and `/proc`:
+
+- "Booting GENERIC on Marvel variation Marvel/EV7 using machine vector
+  MARVEL/EV7 from SRM"; `cpu model EV7`, `platform string hp AlphaServer
+  ES47 7/1000`, cycle frequency 1000000000, timer frequency 953.67 Hz.
+  The tick is each EV7's RBOX_IT at the rate the console set (cpu_hz /
+  (8 * 2^17)); 1024 Hz is only the kernel's HZ.
+- "Found an IO7 at PID 0" from the GCT, three hoses (hose 3, the AGP
+  port, is the one the console turns off with no card in it), "Initializing
+  interrupts for IO7 at PE 0", "Interrupts reported to CPU at PE 0".
+- `pata_cmd64x` on LSI 0x45, IRQ 85 (16 + 0x45), as the console set it:
+  the CD (`sr0`), the boot disk or the install (`sda`).
+  The UNIX PALcode takes the IO7's interrupt and ends it with EOI_DAT, as
+  the OpenVMS one does (M5).
+- The clock from the TOY through `cserve` 0x49 ("setting system clock to
+  2026-10-24T09:24:06 UTC"), `hwclock -r`; local time read as UTC, as on
+  the ES40 ([above](#guest-side-quirks)).
+- Two EV7s: "SMP: 2 CPUs probed", "Brought up 1 node, 2 CPUs", the tick
+  and IPIs counted on both in `/proc/interrupts`; two `xz -1 | xz -d`
+  round trips of an 8 MB random file, run at once, each gave the same
+  MD5. Linux sends the device interrupts to PID 0; PID 1 has no IO7, so
+  `marvel_smp_callin` redirects nothing.
+- `uname -m` alpha, "EV7 Marvel"; the live CD's autoconfig names the
+  machine: "Detected 2 EV7 CPU(s) in a hp AlphaServer ES47 7/1000 system".
+
+### Four processors
+
+An ES47 holds up to two 2P drawers (User Information, "An ES47 system
+supports up to two 2P drawers"), so four EV7s are the `es80` row's first
+two drawers, PIDs 0, 1, 8 and 9, with memory at 0, 16 GB, 256 GB and
+272 GB. Linux cannot run there with 512 MB per processor, nor the live CD
+on any Marvel with memory above 32 GB; both are Linux's:
+
+- **The memory map.** "Kernel panic - not syncing: Failed to allocate
+  2000158720 bytes for node 0 memory map". The CD's kernel has no
+  `SPARSEMEM`, so one `struct page` array covers 0 to 272 GB, and no
+  512 MB region holds its 1.9 GB. `setup_memory` limits Marvel to its
+  first 32 GB for this very reason, but only through `max_low_pfn`: the
+  node still spans every memory cluster the HWRPB lists, and so does the
+  array; `mem=` does not help either. After the panic the boot processor
+  waits for the secondaries to halt (`common_shutdown_1`), which never
+  started, and spins.
+- **The initrd.** aboot loads the initrd at the top of memory, above
+  32 GB on any Marvel with more than two processors' memory; Linux moves
+  it below its limit with a top-down allocation that lands above it again
+  (`move_initrd`, called before `memblock_set_bottom_up`), and drops it:
+  "initrd extends beyond end of memory ... disabling initrd". The live CD
+  then has no root ("VFS: Unable to mount root fs").
+
+So four processors were run on the `gs1280` row's 8P drawer, PIDs 0 to 3
+(memory at 0, 16, 32 and 48 GB, a 390 MB memory map), from the installed
+disk, which needs no initrd: "SMP: 4 CPUs probed", "Brought up 1 node, 4
+CPUs", `cpus active: 4`, IPIs on all four, and four `xz -1 | xz -d`
+round trips of an 8 MB random file, run at once, each gave the file's
+MD5. The first try stopped with "Instruction fault 4" in
+`arch_cpu_idle`: the emulator's, fixed ([below](#what-was-fixed-on-the-es47)).
+One run that typed `init` first came up with three: the console printed
+"CPU 3 failed to take jump address part 0" as it restarted its
+secondaries (open, below).
+
+### Guest-side quirks on Marvel
+
+These are Linux's (or the CD's), and a real ES47 would show them too:
+
+- **`/boot/gentoo` cannot load**: it is built with
+  `ALPHA_LEGACY_START_ADDRESS` (0x310000), inside the memory the Marvel
+  console keeps, so aboot refuses it ("Busy (Reserved)"). The kernel's
+  Kconfig help says such a kernel cannot run on Marvel; `gentoo_nolsa` is
+  the CD's kernel without it. The ES40's install has the first one.
+- **Every kernel on the CD oopses in `vgacon_startup`** when the console
+  is not a graphics one ("Unable to handle kernel paging request at
+  virtual address 0"). `setup_arch` registers the VGA console
+  unconditionally; on Marvel, `marvel_ioremap` returns NULL for the legacy
+  VGA memory at 0xb8000 while no console VGA hose is known
+  (`marvel_find_console_vga_hose` sets one only for a CTB of TERM_TYPE 3,
+  a graphics console), and `vgacon_startup` reads through that NULL (its
+  memory probe, `scr_readw`). On the ES40 the same `ioremap` gives an
+  address on hose 0, the probe finds no memory there, and Linux takes the
+  dummy console ("Console: colour dummy device 80x25", as on the ES47 with
+  the byte changed). Linux has no parameter that keeps vgacon off, so
+  `es47_linux.sh` sets `vgacon_screen_info.orig_video_lines` to 0 in a
+  copy of the kernel: `vgacon_startup` takes its "no VGA" path, and the
+  console is the dummy one ("Console: colour dummy device 80x25"). A
+  graphics console on the Radeon would avoid it (phase 2).
+- **`console=srm`, not `srm`**: the SRM console's tty is `srm0`, and the
+  live CD's `fixinittab` runs `agetty` on the name the kernel line gives,
+  so with `console=srm` its getty respawns until init disables it.
+  `console=srm0` works for both (`setup.c` matches the `console=srm`
+  prefix).
+- **"i8042: i8042 controller selftest timeout"**: Marvel has no keyboard
+  controller; Linux's Marvel I/O routines answer port 0x60 and 0x64 with 0
+  (`marvel_ioread8`).
+- **"FIXME: disabling master aborts"**, once per hose, is Linux's own
+  `printk` in `io7_init_hose`.
+- **The epoch**: the TOY's year is 26, which `init_rtc_epoch` takes for
+  the NT epoch (2006), as on the ES40; `epoch=2000` on the kernel line.
+- **The live CD's `/usr/portage` mount fails** ("mount point does not
+  exist"), on the ES40 as well.
+
+### What was fixed on the ES47
+
+**A processor kept old code past another one's `IMB`.** Four EV7s
+stopped with "Instruction fault 4" at `arch_cpu_idle+0x8`. The EV7 UNIX
+PALcode has no `CALL_PAL WTINT` (its slot at 0x42f80 goes to the OPCDEC
+path), so the first processor to idle traps on it; Linux overwrites the
+call with `mov 0,$0` and runs `IMB` on that processor only (`traps.c`,
+`do_entIF`). The boot processor had run `copy_thread`, in the same 2 KB
+instruction-cache line, before the patch, executed the old call from that
+line, trapped, found the patched word and died. A real 21264 keeps old
+code too (its Icache is not coherent, EV68CB/DC HRM 4.5.1), but only in
+the 64-byte blocks it fetched. Every processor's `IMB` now drops every
+other processor's lines ([cpu-fidelity.md](cpu-fidelity.md)), which is
+more coherent than the hardware and allowed. With one and two processors
+it had not shown.
+
+**The TOY's register B said binary.** The first boot printed "Using epoch
+1980 for rtc year 38", "hctosys: unable to read the hardware clock", and
+OpenRC's `hwclock` failed. Linux reads the Marvel TOY through `cserve`
+GET_TOY, and `__marvel_rtc_io` (`core_marvel.c`) passes every byte it
+returns through `bin2bcd`, register B included; the MC146818 code then
+honours register B's DM bit (`RTC_ALWAYS_BCD` is 0, `asm/io.h`). So Linux
+decodes the CMM's binary TOY right only if register B says BCD. The CMM
+model kept 0x06 there (24-hour, binary): Linux read the BCD 0x26 of 2026
+as 38 and the month as 16. Register B is now 0x02, with the values still
+binary; OpenVMS reads them as binary and ignores DM (`vms-es47`: SHOW
+TIME the host's date and time, as before). The UNIX PALcode's GET_TOY
+(0x4acc8 in the decompressed console) returns the CMM's byte as it is.
+
+### What Linux uses of the IO7's interrupt registers (M8)
+
+An `ALPHABOX_TRACE_IO7=1` run (two EV7s, the CD to its shell) lists every
+IO7 register Linux and the UNIX PALcode touched, which agrees with
+`sys_marvel.c` and `core_marvel.c`:
+
+- **LSI_CTL** (0x310000): at `init_io7_irqs` every implemented one (0-0x5f,
+  0x74, 0x75) is written with the boot processor's PID in <22:14> and the
+  enable clear, and read back; afterwards `io7_enable_irq` and
+  `io7_disable_irq` set and clear <24> with a read back, twice for every
+  interrupt (`handle_level_irq` masks and unmasks). The model already did
+  this.
+- **MSI_CTL[16]** (0x314000): written at init with the PID in <22:14> and
+  read back, nothing else. The enable path (`io7_enable_irq` for an IRQ at
+  0x80 + 16 or above) runs only for a device whose MSI the console had
+  turned on (`marvel_map_irq` reads the device's MSI capability). Alpha
+  has no MSI support of its own in Linux (no `arch/alpha` MSI hooks, and
+  the CD's kernel has `CONFIG_PCI_MSI` off), so no driver turns one on,
+  and the console turns on none. The model holds what is written, which
+  is all Linux asks.
+- **HLT_CTL, HPI_CTL, CRD_CTL, STV_CTL, HEI_CTL**: read, the target PID put
+  in <32:24> (`io7_redirect_irq`), written and read back once.
+- **EOI_DAT** of the device's port: written by the UNIX PALcode at the end
+  of each interrupt, as by OpenVMS's.
+- **Never touched**, by Linux or by the UNIX PALcode: INT_PND, INT_CLR
+  and INT_EOI (0x318000-0x319880), MISC_PND and MISC_CLR, MSI_PND and
+  MSI_CLR, the MSI window (POx_MSI_WBASE), and PO7_SCRATCH, which the
+  OpenVMS PALcode reads as its vector block (M5). Linux names them in
+  `core_marvel.h` and reads none.
+
+So M8 needs no change to the model: it closes with this list. The
+pending registers stay unmodelled until a guest reads them.
+
 ## Open
 
 - Four processors, and why two parallel jobs were slower than they
@@ -284,4 +515,11 @@ sees 1.3 GB used of 3.8 GB.
 - A graphics card's framebuffer driver (the kernel has `tgafb`,
   `radeonfb`, `pm2fb`); the text console works (above).
 - SCSI: the kernel has the Symbios driver as a module.
-- Linux on the ES47 (E2's second half), with the MSIs (M8).
+- On the ES47: the console's environment is not kept (no `cmm_nvram.bin`
+  is ever written, `set os_type unix` is gone at the next start), and one
+  run with four processors lost the fourth when `init` restarted the
+  secondaries ("CPU 3 failed to take jump address part 0", the host busy
+  at the time). Neither was looked into.
+- On the ES47: a graphical console on the Radeon 7500 with the Mesa r100
+  driver (phase 2); it would also keep `vgacon` from faulting without the
+  patched byte.
