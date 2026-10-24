@@ -560,6 +560,15 @@ target_include_directories(irqlines_test PRIVATE src/system)
 target_link_libraries(irqlines_test Threads::Threads)
 add_test(NAME irqlines COMMAND irqlines_test)
 
+# The processor rows (CpuModels.cpp) against their sources: IMPLVER is the
+# Alpha Architecture Reference Manual's Table D-4.
+add_executable(cpumodels_test test/unit/cpumodels_test.cpp
+    src/cpu/CpuModels.cpp)
+target_include_directories(cpumodels_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(cpumodels_test Threads::Threads)
+add_test(NAME cpumodels COMMAND cpumodels_test)
+
 # The PCI configuration space every device inherits (CPCIDevice).
 add_executable(pcicfg_test test/unit/pcicfg_test.cpp
     src/devices/pci/PCIDevice.cpp)

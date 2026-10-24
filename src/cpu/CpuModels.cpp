@@ -43,11 +43,13 @@ static const cpu_model models[] = {
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
      CPU_FAMILY_EV6, 64, 64, 0},
-    // 21364 (EV7): the EV68 core, so the same IMPLVER and extensions
-    // [inference: no document lists the 21364's AMASK, Linux has no EV7
-    // case, and neither the console nor its two PALcodes execute AMASK or
-    // IMPLVER (E1, docs/platforms/marvel.md)] and 64 KB L1 caches. The chip ID is what the console's PALcode turns
-    // into the processor type and revision it reports (0x3ea94 in the
+    // 21364 (EV7): the EV68 core, so the same extensions [inference: no
+    // document lists the 21364's AMASK, and neither the console nor its two
+    // PALcodes execute AMASK (E1, docs/platforms/marvel.md)], IMPLVER 3, the
+    // value the Alpha Architecture Reference Manual assigns the 21364/EV7
+    // and EV79 [ARM 4th ed., Table D-4], and 64 KB L1 caches. The chip ID
+    // is what the console's PALcode turns into the processor type and
+    // revision it reports (0x3ea94 in the
     // decompressed SRM V7.3-1): I_CTL<29:24>, plus bit 19 of CSR 0x28020 when
     // the chip ID is 2, indexes a table of (minor, 15) pairs, minor = index
     // + 1, and the console names minor 1-5 "EV7 rev 1.0", "2.0", "2.1",
@@ -56,7 +58,7 @@ static const cpu_model models[] = {
     // console listings print 1.50 MB for revision 2 parts
     // (docs/platforms/marvel.md): six ways enabled, which the console reads
     // back from BBOX_CTL.
-    {"ev7", "21364 (EV7)", 2, 15, 3, 2,
+    {"ev7", "21364 (EV7)", 2, 15, 3, 3,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
      CPU_FAMILY_EV7, 64, 64, 1536},
@@ -66,7 +68,7 @@ static const cpu_model models[] = {
     // gives the chip ID]. The console reports it as type 15 (show cpu:
     // "Type Major 15, Minor 5"): Linux's EV79_CPU, 16, is not what this
     // console hands on, and the rows's type is for messages.
-    {"ev7z", "21364 (EV7z)", 4, 15, 5, 2,
+    {"ev7z", "21364 (EV7z)", 4, 15, 5, 3,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
      CPU_FAMILY_EV7, 64, 64, 1792},

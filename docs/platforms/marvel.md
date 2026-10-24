@@ -105,7 +105,7 @@ From [backlog.md](../backlog.md), where the order of work is:
 
 | Gap | Plan |
 | --- | --- |
-| `AMASK` and `IMPLVER`: nothing executes them, so they stay the EV68's (the internal registers were checked in E1) | left: an inference |
+| `AMASK`: nothing executes it, so it stays the EV68's (the internal registers were checked in E1). `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24 | AMASK left: an inference |
 | The UNIX PALcode under an operating system (it runs from a boot image since E1) | E2, Linux on the ES47 |
 | The IO7's MSIs (`MSI_CTL`) and `INT_PND`/`INT_CLR`/`MISC_PND` | M8, with Linux |
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
@@ -178,9 +178,12 @@ PALcode reset path we ran uses EV6 IPR numbers throughout). In detail:
   section). **known** (both images scanned whole).
 
 Neither PALcode nor anything else in the console executes AMASK or
-IMPLVER, and Linux has no EV7 case for either, so nothing settles them
-**[inference: IMPLVER 2 and the EV68's AMASK; OpenVMS 8.4 runs with
-them]**; checked in E1, below.
+IMPLVER, and Linux has no EV7 case for either. The Alpha Architecture
+Reference Manual settles IMPLVER: Table D-4 (4th ed., Appendix D.3) gives
+3 for the 21364/EV7 and EV79, and the rows return 3 since 2026-10-24
+(the EV68's 2 before; OpenVMS 8.4 and Linux run with either). AMASK stays
+**[inference: the EV68's; OpenVMS 8.4 and Linux run with it]**; checked
+in E1, below.
 
 **What differs.** Each item below is something an EV7 model had to change
 or add.
@@ -410,7 +413,7 @@ not follow that base.
 
 **What stays inferred:**
 
-- AMASK and IMPLVER (above).
+- AMASK (above). IMPLVER is the ARM's (Table D-4) since 2026-10-24.
 - Index 0x2d is not in the 21264 manual's table; the original es40 code
   calls it M_FIX. Both the ES40's and the EV7's PALcode write it at
   reset, the EV7's with 2 only on a chip ID 0 part. The core drops the

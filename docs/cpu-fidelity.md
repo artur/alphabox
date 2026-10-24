@@ -507,7 +507,7 @@ and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
-| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` or `IMPLVER` ([marvel.md](platforms/marvel.md), E1). It matters the day a row is added for a part that does not |
+| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. It matters the day a row is added for a part that does not |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need
@@ -520,7 +520,15 @@ other code is a change no physically-keyed bookkeeping can see.
 
 **`AMASK`**: no document lists the 21364's AMASK, and neither EV7 PALcode
 nor the ES47 console executes `AMASK` or `IMPLVER` (E1), so the EV7 rows'
-value is an inference (`CpuModels.cpp` marks it as one).
+value is an inference (`CpuModels.cpp` marks it as one). Their `IMPLVER`
+is not: the Alpha Architecture Reference Manual (4th ed., Table D-4) gives
+3 for the 21364/EV7 and EV79, which the rows return since 2026-10-24. Two
+of Linux's three uses of `implver()` test for `IMPLVER_EV6` (2) only, so
+on an EV7 Linux takes the other path, as on a real one: `fpu.h`'s
+`swcr_update_status` does not merge the FPCR's accrued exception flags
+into the software control word, and `xor.h` picks the measured fastest
+`xor` routine instead of forcing the prefetching one. The third,
+`ELF_PLATFORM`, tests for EV5 and then `AMASK`.
 
 ## What was checked and found correct
 

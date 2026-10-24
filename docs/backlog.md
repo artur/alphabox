@@ -23,7 +23,7 @@ EV7 an EV7 is around the core, and that is where the model is thin:
 | Part | State | To close it |
 | --- | --- | --- |
 | Internal registers the EV7 PALcodes use | done (E1): 45 registers in the OpenVMS PALcode, 43 in the UNIX one, all 21264 registers, none EV7-only; the core implements each with the fields the code uses (marvel.md, "The EV7 PALcodes' internal registers") | nothing left. Index 0x2d (M_FIX), M_CTL<5:4> and VA_CTL<3> stay inferences |
-| `AMASK`, `IMPLVER` | the EV68's; neither PALcode nor the console executes either (E1), and no document lists them | left: an inference |
+| `AMASK`, `IMPLVER` | IMPLVER is 3, the value the Alpha Architecture Reference Manual gives the 21364 (4th ed., Table D-4); until 2026-10-24 it was the EV68's 2. AMASK is the EV68's: no document lists the 21364's, and neither PALcode nor the console executes either (E1) | AMASK left: an inference |
 | UNIX PALcode | runs from a boot image (`unix_pal_probe.py`, E1): SWPPAL, a dozen calls, TB misses, CFLUSH, the clock interrupt. Never under an operating system | **E2**: Linux on the ES47 (below) |
 | Native PALcode fast paths | none: the ES40's, which mirrored its VMS PALcode V1.98-104 and were never on for EV7, were removed in October 2026 ([cpu-fidelity.md](cpu-fidelity.md)) | **E3**: measure OpenVMS MIPS on the ES47 against the ES40 first; write EV7 paths only if the gap is worth it |
 | Cbox, Bbox, Zbox, pads, OCLA registers | read back a configured state; writes kept, nothing acts on them. The PALcodes reach 55 registers, all modelled: at reset, in the whole-cache CFLUSH and in the error logout (E1) | nothing more without a guest that uses them |
