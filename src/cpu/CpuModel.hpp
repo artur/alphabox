@@ -54,6 +54,15 @@ enum cpu_family {
   CPU_FAMILY_EV7, ///< 21364: an EV68 core with Rbox, Zbox and Cbox on chip
 };
 
+/// What an opcode 18 function code with no instruction does. The Alpha
+/// Architecture Reference Manual allows a trap or a no-op; the 21264 (and
+/// so every EV6 and EV7 row) completes it as a no-op, the 21164 trapped
+/// (docs/cpu-fidelity.md). A family with instructions of its own in that
+/// space (the EV8) answers for itself.
+inline bool cpu_family_unused_misc_is_nop(cpu_family f) {
+  return f == CPU_FAMILY_EV6 || f == CPU_FAMILY_EV7;
+}
+
 struct cpu_model {
   const char *name; ///< configuration class, e.g. "ev68cb"
   const char *part; ///< the part, for messages, e.g. "21264CB (EV68CB)"

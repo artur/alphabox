@@ -1778,6 +1778,12 @@ _next_instruction:
     case 0xFC00:
       OP(WH64EN, NOP);
     default:
+      // No instruction here. The 21264 completes it as a no-op, where the
+      // 21164 trapped; the architecture allows both (cpu-fidelity.md).
+      // The JIT leaves these words to this switch.
+      if (cpu_family_unused_misc_is_nop(m_model->family)) {
+        ES40_EXECUTE_END();
+      }
       UNKNOWN2;
     }
     break;

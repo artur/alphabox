@@ -771,6 +771,24 @@ def g_misc(b):
         b.trap_clear()
         b.emit(mfc(code))
         b.trap_check()
+    # An opcode 18 function with no instruction is a NOP on the 21264
+    # (21464 IDS p.676; docs/cpu-fidelity.md): no trap, Ra and the memory
+    # at Rb untouched, the next instruction runs.
+    b.begin("unused 18.xxxx functions are NOPs")
+    b.load(21, 0x0123456789ABCDEF)
+    b.load(22, 0x5A5A5A5A12345678)
+    for code in (0x0001, 0x0200, 0x0800, 0x1000, 0x2000, 0x3C00, 0x5000,
+                 0x6000, 0x7C00, 0x9000, 0xB000, 0xD000, 0xE400, 0xEC00,
+                 0xF400, 0xFE00, 0xFFFF):
+        b.trap_clear()
+        b.emit(mfc(code, 21, 22))
+        b.trap_check()
+        b.emit(mem(OP["STQ"], 22, R_SCR, 0x200))    # next instruction runs
+        b.emit(mem(OP["LDQ"], 23, R_SCR, 0x200))
+        b.store(23, "18.%04X: next instruction ran" % code,
+                0x5A5A5A5A12345678)
+        b.store(21, "18.%04X: Ra unchanged" % code, 0x0123456789ABCDEF)
+        b.store(22, "18.%04X: Rb unchanged" % code, 0x5A5A5A5A12345678)
     # RC/RS: Ra <- intr_flag, then clear/set it (ARM 4.12).
     b.begin("RS, RS, RC, RC")
     b.emit(mfc(A.MISC["RS"], 7, R31))

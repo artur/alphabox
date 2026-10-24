@@ -498,6 +498,24 @@ within a minute, shutdown), OpenVMS on the ES40 and the ES47, and Linux,
 and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 (749 million compiled blocks, 0 mismatches).
 
+### Unused opcode 18 function codes are NOPs (2026-10-24)
+
+An `18.xxxx` function code with no instruction completes as a NOP on every
+processor row (all are the EV6 family or the EV7), in the interpreter and,
+because the JIT leaves those words to the interpreter, in compiled code:
+no trap, no register or memory change, the next instruction runs. It was
+OPCDEC before.
+
+The Alpha Architecture Reference Manual allows either. The source for the
+choice is the 21464 Internal Design Specification (Rev 1.1k, PDF page 676):
+a Compaq engineer tried every `18.xxxx` code on hardware, and "most of the
+unused ones trap (illegal instruction trap) on the 21164, but are NOPs on
+the 21064 and the 21264". It is one engineer's test and it says "most": which
+codes trapped on the 21164 is not recorded, so here all of them are NOPs.
+The rule is a property of the processor family (`cpu_family_unused_misc_is_nop`
+in `CpuModel.hpp`), so a later EV8 row can define instructions of its own in
+that space. `test/cpu` (group `misc`) checks a spread of codes.
+
 ### Smaller ones
 
 | What | Where | Consequence |
