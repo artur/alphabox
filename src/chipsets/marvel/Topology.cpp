@@ -46,7 +46,8 @@ void es47_default_coordinates(int index, u8 *ns, u8 *ew) {
  *   <4>      the entry is valid: a processor sits at that PID
  *   <8>      required, with <4> and <10>, in a processor's route to itself,
  *            or OpenVMS prints "bad route IPR for self" [guess: the route
- *            ends in the local Cbox]
+ *            ends in the local Cbox]; set too in the route between two TPUs
+ *            of one EV8 chip, which share their Cbox [decision]
  *   <10>     the route is enabled (without it the destination is
  *            unreachable for OpenVMS)
  *   <12>     with <13>: the E/W hop goes to the higher coordinate (1) or
@@ -96,20 +97,59 @@ int ring_step(const std::vector<u8> &present, u8 from, u8 to) {
 
 } // namespace
 
-void CMarvelTopology::build(const marvel_layout *layout, int ncpus) {
+u32 CMarvelTopology::chip_pid(const marvel_layout *layout, int index) {
+  u8 ns, ew;
+  if (layout)
+    layout->coordinates(index, &ns, &ew);
+  else
+    es47_default_coordinates(index, &ns, &ew);
+  const u32 systype = layout ? layout->cmm_systype : 0x11;
+  return coord2id((systype & 0xff) == 1, ns, ew);
+}
+
+/**
+ * The bits the chips' PIDs leave free (docs/platforms/ev8.md, S4: the
+ * owner's numbering of 2026-10-25). TPU 0 keeps the chip's PID; the others
+ * go where no chip's PID has a bit, so each TPU's number names a processor
+ * the console's PID fields can hold and no chip's: on the ES47 and the ES80
+ * the module field <2:1>, which a 2P drawer leaves 0; on a GS1280, whose
+ * drawers use every PID of their 8, the bits above the configured chips'.
+ */
+int CMarvelTopology::tpu_shift(const marvel_layout *layout, int nchips) {
+  u32 used = 0;
+  for (int c = 0; c < nchips; c++)
+    used |= chip_pid(layout, c);
+  for (int s = 0; s + 1 < kPidBits; s++)
+    if (!((used >> s) & 3))
+      return s;
+  return -1;
+}
+
+bool CMarvelTopology::build(const marvel_layout *layout, int nchips, int tpus) {
   m_layout = layout;
   m_systype = layout ? layout->cmm_systype : 0x11;
-  const bool gs = (m_systype & 0xff) == 1;
+  m_tpus = tpus < 1 ? 1 : tpus > kMaxTpus ? kMaxTpus : tpus;
+  m_shift = m_tpus > 1 ? tpu_shift(layout, nchips) : 0;
   m_nodes.clear();
-  for (int i = 0; i < ncpus; i++) {
+  if (m_shift < 0)
+    return false;
+  const bool gs = (m_systype & 0xff) == 1;
+  for (int c = 0; c < nchips; c++) {
     ev7_node n;
     if (layout)
-      layout->coordinates(i, &n.ns, &n.ew);
+      layout->coordinates(c, &n.ns, &n.ew);
     else
-      es47_default_coordinates(i, &n.ns, &n.ew);
-    n.pid = coord2id(gs, n.ns, n.ew);
-    m_nodes.push_back(n);
+      es47_default_coordinates(c, &n.ns, &n.ew);
+    n.chip = (u32)c;
+    n.chip_pid = coord2id(gs, n.ns, n.ew);
+    // The TPUs sit where their chip sits: one router, one Cbox [IDS p. 46].
+    for (int t = 0; t < m_tpus; t++) {
+      n.tpu = (u32)t;
+      n.pid = tpu_pid(n.chip_pid, n.tpu, m_shift);
+      m_nodes.push_back(n);
+    }
   }
+  return true;
 }
 
 const ev7_node *CMarvelTopology::by_pid(u32 pid, int present) const {
@@ -128,9 +168,24 @@ u32 CMarvelTopology::max_pid(int present) const {
 }
 
 bool CMarvelTopology::has_io7(u32 pid) const {
+  const ev7_node *n = by_pid(pid, count());
+  if (!n || n->tpu)
+    return false;
   if (m_layout)
-    return m_layout->has_io7(pid);
-  return pid == 0; // the ES47: its one IO7, on PID 0
+    return m_layout->has_io7(n->chip_pid);
+  return n->chip_pid == 0; // the ES47: its one IO7, on PID 0
+}
+
+bool CMarvelTopology::has_memory(u32 pid, int present) const {
+  const ev7_node *n = by_pid(pid, present);
+  return n && !n->tpu;
+}
+
+const ev7_node *CMarvelTopology::chip_by_pid(u32 chip_pid, int present) const {
+  for (int i = 0; i < present && i < count(); i++)
+    if (m_nodes[(size_t)i].chip_pid == chip_pid && !m_nodes[(size_t)i].tpu)
+      return &m_nodes[(size_t)i];
+  return nullptr;
 }
 
 /**
@@ -152,8 +207,8 @@ u32 CMarvelTopology::route(u32 from, u32 to, int present) const {
   if (!a || !b)
     return 0;
   u32 r = R_VALID | R_ENABLED | (u32)b->ns << 20 | (u32)b->ew << 16;
-  if (a == b)
-    return r | R_LOCAL;
+  if (a == b || (a->ns == b->ns && a->ew == b->ew))
+    return r | R_LOCAL; // itself, or another TPU of its chip
   // The coordinates that have processors, per axis: the cables close each
   // row and column into a ring (a torus on a GS1280), and OpenVMS's walk
   // wraps the same way, between the lowest and highest coordinate present.

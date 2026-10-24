@@ -37,7 +37,17 @@
  */
 CMarvel::CMarvel(CSystem *sys) : CChipset(sys), m_gio(new GioRecorder()) {
   const platform_config &row = sys->platform();
-  m_topology.build(row.marvel, row.max_cpus);
+  // The row's count is of chips: a block for every PID its layout can hold.
+  // An EV8 chip's TPUs are processors of their own, each with its register
+  // block, numbered in the PID bits the configured chips leave free
+  // (Topology.hpp; docs/platforms/ev8.md, S4), so those chips are the ones
+  // laid out.
+  const int tpus = sys->tpus_per_chip();
+  const int chips =
+      tpus > 1 ? std::min(sys->processor_chips(), row.max_cpus) : row.max_cpus;
+  if (!m_topology.build(row.marvel, chips, tpus))
+    FAILURE(Configuration, "the processor chips' PIDs leave no pair of bits "
+                           "free for their TPUs' numbers");
   for (int i = 0; i < m_topology.count(); i++) {
     const u32 pid = m_topology.node(i).pid;
     if (pid >= (u32)kMaxPids)
@@ -106,8 +116,12 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
   m_memory_per_pid = U64(1) << membits;
   u64 end = m_memory_per_pid;
   m_memory_regions.clear();
-  for (int i = 0; i < max_cpus && i < m_topology.count(); i++) {
-    const u64 b = ev7::memory_base(m_topology.node(i).pid);
+  // A chip's memory is its TPU 0's (D4): the other TPUs have none.
+  for (int i = 0; i < m_topology.count(); i++) {
+    const ev7_node &n = m_topology.node(i);
+    if (n.tpu || (int)n.chip >= max_cpus)
+      continue;
+    const u64 b = ev7::memory_base(n.pid);
     const u64 e = b + m_memory_per_pid;
     m_memory_regions.push_back({b, m_memory_per_pid});
     if (e > end)
@@ -120,10 +134,16 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
   unsigned bits = membits;
   while ((U64(1) << bits) < end)
     bits++;
-  printf("%%MVL-I-MEMORY: %u MB per processor, each at its PID's base "
-         "(%d processor%s, the array spans %u bits).\n",
-         (unsigned)(m_memory_per_pid >> 20), max_cpus, max_cpus == 1 ? "" : "s",
-         bits);
+  if (m_topology.tpus() > 1)
+    printf("%%MVL-I-MEMORY: %u MB per chip, at its TPU 0's PID's base (%d "
+           "chips of %d TPUs, the array spans %u bits).\n",
+           (unsigned)(m_memory_per_pid >> 20), max_cpus, m_topology.tpus(),
+           bits);
+  else
+    printf("%%MVL-I-MEMORY: %u MB per processor, each at its PID's base "
+           "(%d processor%s, the array spans %u bits).\n",
+           (unsigned)(m_memory_per_pid >> 20), max_cpus,
+           max_cpus == 1 ? "" : "s", bits);
   return bits;
 }
 

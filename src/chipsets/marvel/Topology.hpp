@@ -41,6 +41,18 @@
  * console in turn reads the PID's fields as the place on the module <0>,
  * the module in its drawer <2:1>, the drawer <4:3> and the cabinet <7:5>
  * (coord2cpu, coord2mod, coord2drawer, coord2rack).
+ *
+ * An EV8 (21464) chip in EV7-compatible mode has up to four thread
+ * processing units (TPUs), each listed to the console as a processor of its
+ * own (docs/platforms/ev8.md, S4: decisions D4, D5, D7, and the numbering
+ * the owner chose on 2026-10-25 in place of D6). They share the chip's
+ * place in the mesh, and its memory and IO7 stay with TPU 0. TPU 0 keeps
+ * the chip's PID, so its memory, its IO7 and the IDs the console makes from
+ * the coordinates are what an EV7 there would have; TPU t is the PID
+ * `chip PID | t << s`, s the lowest pair of PID bits no configured chip
+ * uses (tpu_shift): the module field on the ES47 and ES80, whose 2P drawers
+ * leave it 0. That number is the PID the console's PALcode is handed and
+ * forms every CSR address from. A chip of one TPU keeps its PID.
  **/
 #if !defined(INCLUDED_MARVEL_TOPOLOGY_H_)
 #define INCLUDED_MARVEL_TOPOLOGY_H_
@@ -71,16 +83,49 @@ struct marvel_layout {
   u8 (*io_drawer)(u32 pid);
 };
 
-/// One EV7: its PID and its coordinates.
+/// One processor: its PID (the console's processor number) and its
+/// coordinates, and on an EV8 which chip and TPU it is.
 struct ev7_node {
   u32 pid;
   u8 ns, ew;
+  u32 chip = 0;     ///< the chip's index in the layout
+  u32 chip_pid = 0; ///< the chip's own PID, from its coordinates
+  u32 tpu = 0;      ///< 0 on an EV7; 0-3 on an EV8
 };
+
+/// The most TPUs an EV8 chip has [21464 IDS Rev 1.1k, PDF p. 46].
+constexpr int kMaxTpus = 4;
+
+/// The console's PIDs are 8 bits (its coordinates' fields, coord2id).
+constexpr int kPidBits = 8;
+
+/// The PID of TPU `tpu` of the chip with PID `chip_pid`, the TPU number in
+/// the free bit pair at `shift` (tpu_shift): TPU 0 is the chip's own PID
+/// [decision: the owner's, 2026-10-25, docs/platforms/ev8.md, S4].
+constexpr u32 tpu_pid(u32 chip_pid, u32 tpu, int shift) {
+  return chip_pid | tpu << shift;
+}
 
 class CMarvelTopology {
 public:
-  /// The first `ncpus` processors of `layout` (nullptr: an ES47's two).
-  void build(const marvel_layout *layout, int ncpus);
+  /// The first `nchips` processor chips of `layout` (nullptr: an ES47's
+  /// two), with `tpus` TPUs each (1 for an EV7): nchips * tpus processors,
+  /// chip by chip, TPU 0 first. With more than one TPU the chips are the
+  /// configured ones, whose PIDs decide where the TPU numbers go; returns
+  /// false, with no processors, when they leave no bit pair free.
+  bool build(const marvel_layout *layout, int nchips, int tpus = 1);
+
+  /// The PID of chip `index` of `layout` (nullptr: the ES47's).
+  static u32 chip_pid(const marvel_layout *layout, int index);
+  /// Where the TPU numbers of the first `nchips` chips of `layout` go: the
+  /// lowest bit s such that bits s and s + 1 are clear in every one of
+  /// their PIDs, so TPU t of each is its PID | t << s and no two
+  /// processors share one (ES47 and ES80: 1, the module field, which their
+  /// 2P drawers leave 0; a GS1280 of 4 chips 2, of 8 chips 3). -1 when no
+  /// pair is free within the console's 8-bit PID.
+  static int tpu_shift(const marvel_layout *layout, int nchips);
+  /// The bit tpu_shift chose (0 with one TPU per chip).
+  int shift() const { return m_shift; }
 
   int count() const { return (int)m_nodes.size(); }
   const ev7_node &node(int index) const { return m_nodes[(size_t)index]; }
@@ -90,7 +135,20 @@ public:
   /// The largest PID among the first `present` processors.
   u32 max_pid(int present) const;
   u32 cmm_systype() const { return m_systype; }
+  /// TPUs per chip (1 on an EV7).
+  int tpus() const { return m_tpus; }
+  /// Whether the processor with PID `pid` has an IO7 on its I/O port: the
+  /// layout's chip does, and the processor is its TPU 0 (D4).
   bool has_io7(u32 pid) const;
+  /// Whether the processor with PID `pid`, among the first `present`, has
+  /// memory of its own: TPU 0 of each chip (D4).
+  bool has_memory(u32 pid, int present) const;
+  /// TPU 0 of the chip whose own PID is `chip_pid`, among the first
+  /// `present` processors, or nullptr. The management side's descriptions
+  /// of modules, RIMMs and FRUs are of chips: the console reads them by the
+  /// ID it makes from a processor's coordinates (coord2id), which every TPU
+  /// of a chip shares.
+  const ev7_node *chip_by_pid(u32 chip_pid, int present) const;
 
   /// The console's coord2id: a GS1280 numbers the processors of a drawer
   /// across all four modules, an ES47/ES80 its 2P drawers along the ring.
@@ -112,6 +170,8 @@ public:
 
 private:
   std::vector<ev7_node> m_nodes;
+  int m_tpus = 1;
+  int m_shift = 0;
   u32 m_systype = 0x11;
   const marvel_layout *m_layout = nullptr;
 };

@@ -729,7 +729,10 @@ void CEs47Cmm::mbm_configuration(u32 mbm_ip, u8 *c) {
     u8 *mod = c + m * 0x34;
     bool here = false;
     for (u32 k = 0; k < 2; k++) {
-      if (!mv->topology().by_pid(base + 2 * m + k, present()))
+      // A chip, by the ID the console reads this table with (memconfig:
+      // pid2id, from the coordinates): an EV8's TPUs share their chip's,
+      // and its RIMMs are TPU 0's (D4).
+      if (!mv->topology().chip_by_pid(base + 2 * m + k, present()))
         continue;
       here = true;
       u8 *cpu = mod + 8 + k * 0x18;
@@ -752,22 +755,29 @@ void CEs47Cmm::mbm_configuration(u32 mbm_ip, u8 *c) {
 void CEs47Cmm::memory_assignment(u8 *a) {
   memset(a, 0, kNvramSize);
   CMarvel *mv = marvel();
+  const CMarvelTopology &t = mv->topology();
   const int cpus = present();
+  // The processors with memory: every EV7, an EV8 chip's TPU 0 (D4).
+  std::vector<u32> owners;
+  for (int i = 0; i < cpus && i < t.count(); i++)
+    if (t.has_memory(t.node(i).pid, cpus))
+      owners.push_back(t.node(i).pid);
   const u64 each = mv->memory_per_pid();
-  const u64 total = each * (u64)cpus;
+  const u64 total = each * (u64)owners.size();
   put32(a, (u32)total);
   put32(a + 4, (u32)(total >> 32));
   put32(a + 8, 1);
   u8 *g = a + 0xc;
   g[0] = 0;
-  g[1] = (u8)cpus;
+  g[1] = (u8)owners.size();
   u8 *chunk = g + 4;
-  for (int i = 0; i < cpus; i++, chunk += 16) {
-    const u64 base = ev7::memory_base(mv->topology().node(i).pid);
+  for (u32 pid : owners) {
+    const u64 base = ev7::memory_base(pid);
     put32(chunk, (u32)base);
     put32(chunk + 4, (u32)(base >> 32));
     put32(chunk + 8, (u32)each);
     put32(chunk + 12, (u32)(each >> 32));
+    chunk += 16;
   }
 }
 
@@ -944,7 +954,7 @@ bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
     // RIMM r of processor pid0 + place: the MBM configuration lists RIMMs
     // 0-4 of each processor (mbm_configuration).
     const u32 place = index >= 12, r = (index - 2) % 10;
-    if (r >= 5 || !mv->topology().by_pid(pid0 + place, present()))
+    if (r >= 5 || !mv->topology().chip_by_pid(pid0 + place, present()))
       return false;
     const u64 rimm = mv->memory_per_pid() / 4;
     image[0x04] = 0x97; // 9 row bits, 7 column bits

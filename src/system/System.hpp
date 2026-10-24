@@ -393,6 +393,14 @@ public:
 
   CAlphaCPU *get_cpu(int cpunum) { return acCPUs[cpunum]; };
   int get_cpu_num() { return iNumCPUs; };
+  /// Thread processing units per processor chip: 1, or up to 4 for the
+  /// 21464 on the Marvel boards, each a processor (CConfigurator::
+  /// processor_tpus; docs/platforms/ev8.md, S4). Known from construction,
+  /// before the processors exist.
+  int tpus_per_chip() const { return m_tpus; }
+  /// How many processor chips the configuration describes (its processor
+  /// sections), known with tpus_per_chip().
+  int processor_chips() const { return m_chips; }
 
   virtual ~CSystem();
   unsigned int iNumMemoryBits;
@@ -559,6 +567,8 @@ private:
   std::atomic<u32> m_tick_seq{0}; // interval-tick sequence
 
   int iNumCPUs;
+  int m_tpus = 1;  ///< tpus_per_chip()
+  int m_chips = 0; ///< processor_chips()
   // ABA guard: a per-cache-line STx_C sequence number. The value compare in
   // cpu_stx_c cannot see another CPU writing a different value and putting the
   // old one back between our LDx_L and STx_C; a changed sequence can.
@@ -566,8 +576,10 @@ private:
   std::atomic<u32> m_ll_seq[kLLBuckets];
   std::atomic<u8> m_ll_lock[kLLBuckets]; // seq check + CAS + bump, per bucket
 public:
-  /// The most processors any board takes (a GS1280's 16 here; the arrays
-  /// below are indexed by the processor's number).
+  /// The most processors a machine has (a GS1280's 16 chips here, or eight
+  /// EV8 chips of four TPUs; the arrays below are indexed by the
+  /// processor's number, and the lock and watch flags are a bit each in a
+  /// 32-bit word).
   static constexpr int kMaxCPUs = 32;
 
 private:
