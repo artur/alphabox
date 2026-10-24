@@ -38,6 +38,7 @@
 #include "StdAfx.hpp"
 
 #include "Gio.hpp"
+#include "StartHandoff.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -139,11 +140,23 @@ private:
   /// RBOX_SCRATCH1 written: the XSROM's wait for a start address, served
   /// for a processor that is still parked.
   void scratch_written(u64 v);
+  /// RBOX_SCRATCH1 read and written, with the start hand-off's order
+  /// (StartHandoff.hpp); `lk` holds m_lock.
+  u64 read_scratch(std::unique_lock<std::mutex> &lk);
+  void write_scratch(u64 v);
   u64 reg(u32 off) const;
+  /// ALPHABOX_TRACE_MP: report an access to the start registers.
+  void trace_mp(const char *what, u32 off, u64 v);
+  void trace_mp_read(u64 v, long long waited_us, bool in_time);
+  u64 m_mp_seen[32] = {};
+  bool m_mp_seen_valid[32] = {};
 
   CSystem *m_sys;
   u32 m_pid;
+  mutable std::atomic<CAlphaCPU *> m_cpu{nullptr}; ///< cpu(), once found
   std::mutex m_lock;
+  /// RBOX_SCRATCH1's start hand-off between processors (StartHandoff.hpp).
+  CStartHandoff m_handoff;
   /// Every named register's contents (the table in Ev7Csr.cpp).
   std::map<u32, u64> m_regs;
   CGioPort m_gio;

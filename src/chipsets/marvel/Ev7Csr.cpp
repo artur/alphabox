@@ -316,7 +316,33 @@ void trace_csr(u32 pid, u32 off, bool write, u64 v) {
          n > 3 ? " (repeated)" : "", pc);
 }
 
+/// ALPHABOX_TRACE_MP on Marvel: microseconds since the first line, so the
+/// start protocol's hand-offs between processors can be timed.
+long long mp_us() {
+  static const auto t0 = std::chrono::steady_clock::now();
+  return (long long)std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - t0)
+      .count();
+}
+
 } // namespace
+
+/// ALPHABOX_TRACE_MP: an access to this processor's start registers
+/// (RBOX_SCRATCH1, RBOX_IREQ), by whom, and where this processor is.
+void CEv7Csr::trace_mp(const char *what, u32 off, u64 v) {
+  CAlphaCPU *self = cpu();
+  char by[48] = "device";
+  if (t_running_cpu)
+    snprintf(by, sizeof(by), "cpu%d pc %" PRIx64, t_running_cpu->get_cpuid(),
+             t_running_cpu->get_pc());
+  printf("%%MVL-T-MP: %10lld us %s PID %u %s %s %016" PRIx64, mp_us(), by,
+         m_pid, reg_name(off), what, v);
+  if (self && self != t_running_cpu)
+    printf(" (PID %u %s pc %" PRIx64 " icount %" PRIu64 ")", m_pid,
+           self->get_waiting() ? "parked" : "running", self->get_pc(),
+           (u64)self->state.instruction_count);
+  printf("\n");
+}
 
 CEv7Csr::CEv7Csr(CSystem *sys, u32 pid, GioManagement *gio)
     : m_sys(sys), m_pid(pid), m_gio(pid, gio) {
@@ -324,9 +350,13 @@ CEv7Csr::CEv7Csr(CSystem *sys, u32 pid, GioManagement *gio)
 }
 
 CAlphaCPU *CEv7Csr::cpu() const {
+  if (CAlphaCPU *c = m_cpu.load(std::memory_order_acquire))
+    return c;
   for (int i = 0; i < m_sys->get_cpu_num(); i++)
-    if (m_sys->get_cpu(i)->get_pid() == m_pid)
+    if (m_sys->get_cpu(i)->get_pid() == m_pid) {
+      m_cpu.store(m_sys->get_cpu(i), std::memory_order_release);
       return m_sys->get_cpu(i);
+    }
   return nullptr;
 }
 
@@ -366,6 +396,7 @@ void CEv7Csr::reset() {
   m_lines = 0;
   m_start_hi = 0;
   m_start_hi_valid = false;
+  m_handoff.reset();
   m_sync_waiting = true; // nothing held: the first broadcast goes through
   m_sync_held = false;
 }
@@ -376,9 +407,12 @@ u64 CEv7Csr::reg(u32 off) const {
 }
 
 u64 CEv7Csr::read(u32 off, int dsize) {
-  std::lock_guard<std::mutex> g(m_lock);
+  std::unique_lock<std::mutex> lk(m_lock);
   u64 v;
   switch (off) {
+  case RBOX_SCRATCH1:
+    v = read_scratch(lk);
+    break;
   case GIO_CFG:
     v = m_gio.read_cfg();
     break;
@@ -465,6 +499,8 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
   case RBOX_IREQ:
     // A request to this processor: the bits appear in its RBOX_INT. The
     // register itself reads back what was last written.
+    if (CSystem::trace_mp_on() && (data & ~INT_SYNC))
+      trace_mp("write =", off, data);
     m_regs[RBOX_IREQ] = data;
     if (data & INT_SYNC) {
       if (m_sync_waiting)
@@ -478,8 +514,7 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     update_irq();
     return;
   case RBOX_SCRATCH1:
-    m_regs[RBOX_SCRATCH1] = data;
-    scratch_written(data);
+    write_scratch(data);
     return;
   case RBOX_IT:
     m_regs[RBOX_IT] = data;
@@ -628,6 +663,84 @@ void CEv7Csr::update_irq() {
   for (int l = 0; l < 6; l++)
     if (changed & (1 << l))
       c->irq_h(l, (lines >> l) & 1, 0);
+}
+
+/**
+ * The start hand-off (StartHandoff.hpp). The console's 50 reads for the echo
+ * have no delay between them: a few microseconds of the host's time here,
+ * where on the machine a read of another EV7's register goes out through the
+ * router while the secondary goes round a local polling loop. When `init`
+ * restarted four processors, the secondaries, polling in their PALcode's
+ * loop (0x390e4) since the console halted them, answered 7 to 16 us after
+ * the console's write; its 50 reads lasted 9 to 44 us, and a start was lost
+ * whenever they ended first (ALPHABOX_TRACE_MP, docs/platforms/marvel.md,
+ * M11). The hand-off keeps the hardware's order: a processor polling its
+ * register sees what another processor writes there before that processor's
+ * next read of it returns.
+ */
+u64 CEv7Csr::read_scratch(std::unique_lock<std::mutex> &lk) {
+  CAlphaCPU *self = cpu();
+  CAlphaCPU *by = t_running_cpu;
+  if (self && by == self) {
+    const u64 v = m_regs[RBOX_SCRATCH1];
+    m_handoff.owner_read(v, self->state.instruction_count);
+    if (CSystem::trace_mp_on())
+      trace_mp_read(v, 0, true);
+    return v;
+  }
+  long long waited = 0;
+  bool in_time = true;
+  if (self && by && m_handoff.open()) {
+    const auto t0 = std::chrono::steady_clock::now();
+    // Not while the owner is parked (scratch_written answers for it) or the
+    // machine is being reset; a processor being stopped is let go by the
+    // bound.
+    in_time = m_handoff.remote_read(lk, by->get_cpuid(), [&] {
+      return !self->get_waiting() && !m_sys->IsSystemResetRequested();
+    });
+    waited = (long long)std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::steady_clock::now() - t0)
+                 .count();
+    if (!in_time)
+      printf("%%MVL-W-START: PID %u did not look at its RBOX_SCRATCH1 within "
+             "a second of another processor's write; the reads go on.\n",
+             m_pid);
+  }
+  const u64 v = m_regs[RBOX_SCRATCH1];
+  if (CSystem::trace_mp_on())
+    trace_mp_read(v, waited, in_time);
+  return v;
+}
+
+void CEv7Csr::write_scratch(u64 v) {
+  CAlphaCPU *self = cpu();
+  if (CSystem::trace_mp_on() &&
+      (t_running_cpu != self || v != m_regs[RBOX_SCRATCH1]))
+    trace_mp("write =", RBOX_SCRATCH1, v);
+  m_regs[RBOX_SCRATCH1] = v;
+  if (self && t_running_cpu == self)
+    m_handoff.owner_wrote();
+  else if (self && !self->get_waiting()) // a parked one is answered below
+    m_handoff.remote_wrote(self->state.instruction_count);
+  scratch_written(v);
+}
+
+/// ALPHABOX_TRACE_MP: a read of RBOX_SCRATCH1. A poll repeats one read, so a
+/// reader's first read of each value is reported, with how long it waited
+/// for the owner to look.
+void CEv7Csr::trace_mp_read(u64 v, long long waited_us, bool in_time) {
+  const int who = t_running_cpu ? t_running_cpu->get_cpuid() : 0;
+  if (who < 0 || who >= 32)
+    return;
+  if (m_mp_seen_valid[who] && m_mp_seen[who] == v && !waited_us)
+    return;
+  m_mp_seen[who] = v;
+  m_mp_seen_valid[who] = true;
+  char what[64] = "read ->";
+  if (waited_us)
+    snprintf(what, sizeof(what), "read (waited %lld us%s) ->", waited_us,
+             in_time ? "" : ", gave up");
+  trace_mp(what, RBOX_SCRATCH1, v);
 }
 
 /**

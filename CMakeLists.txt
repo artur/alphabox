@@ -560,6 +560,13 @@ target_include_directories(irqlines_test PRIVATE src/system)
 target_link_libraries(irqlines_test Threads::Threads)
 add_test(NAME irqlines COMMAND irqlines_test)
 
+# The start hand-off through an EV7's RBOX_SCRATCH1 (StartHandoff.hpp): the
+# console's start of a secondary against a secondary the host holds up.
+add_executable(start_handoff_test test/unit/start_handoff_test.cpp)
+target_include_directories(start_handoff_test PRIVATE src/chipsets/marvel)
+target_link_libraries(start_handoff_test Threads::Threads)
+add_test(NAME start_handoff COMMAND start_handoff_test)
+
 # The processor rows (CpuModels.cpp) against their sources: IMPLVER is the
 # Alpha Architecture Reference Manual's Table D-4.
 add_executable(cpumodels_test test/unit/cpumodels_test.cpp
