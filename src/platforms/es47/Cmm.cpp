@@ -471,7 +471,16 @@ void CEs47Cmm::window_op(u32 pid, Port &p, u64 control) {
 // --- The TOY -----------------------------------------------------------------
 
 /// The MC146818 registers 0-9 in the CMM's memory, from the host clock and
-/// what the console set: binary, 24-hour (register B = 0x06).
+/// what the console set: the values binary, 24-hour, register B = 0x02.
+///
+/// Register B says BCD (DM, <2>, clear) although the values are binary.
+/// Linux's Marvel code is the oracle (core_marvel.c, __marvel_rtc_io): it
+/// passes every byte GET_TOY returns through bin2bcd, register B included,
+/// and its MC146818 code honours DM (RTC_ALWAYS_BCD is 0, asm/io.h). Only
+/// with DM clear does it decode the binary TOY right; with DM set (0x06,
+/// as the model had it) it took the BCD 0x26 of 2026 for 38 and the month
+/// for 16, and could not read the clock. OpenVMS reads the values as
+/// binary and does not look at DM (checked: vms-es47, SHOW TIME).
 void CEs47Cmm::refresh_toy(u32 pid) {
   u8 *t = mem_at(pid, area(CMarvelTopology::place(pid)) + A_TOY);
   if (t[11] & 0x80)
@@ -498,7 +507,7 @@ void CEs47Cmm::refresh_toy(u32 pid) {
   // and nothing else [inference: the divider bits an MC146818 has there
   // (0x26) made OpenVMS wait for ever].
   t[10] = (host_us % 1000000) >= 998000 ? 0x80 : 0;
-  t[11] = (t[11] & 0x70) | 0x06;
+  t[11] = (t[11] & 0x70) | 0x02;
   t[12] = 0;
   t[13] = 0x80; // register D: the battery is good
 }
