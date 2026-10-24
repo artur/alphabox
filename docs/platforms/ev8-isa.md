@@ -111,31 +111,48 @@ vector enable (below) every vector instruction raises OPCDEC. Whether the
 OS supports vectors is the OS's to say (Linux: a hardware-capability bit).
 
 **The vector enable, `VCTL<VEN>`** **[decision, D11]**, the owner's
-(2026-10-24): a per-processor CSR in the chip's register window, not an
-instruction and not an IPR index.
+(2026-10-24): a per-processor CSR in the processor's register window, not
+an instruction and not an IPR index. Where in the window is the owner's
+decision of 2026-10-25 **[decision]**: at offset 0x3F0000 of each
+processor's own window, the 4 MB block of its own PID. It replaces the
+first layout (2026-10-24), one window per chip with a VCTL per TPU at
+0x3F0000 + 0x40 × tpu, which S4 made wrong for EV7-compatible mode: there
+each TPU listed as a processor has a PID and a window of its own
+([ev8.md](ev8.md), S4).
 
 | Register | Physical address | Fields | Access |
 | --- | --- | --- | --- |
-| VCTL[tpu] | `(~pid & 0x1ff) << 35 \| 0x7FFC << 20 \| (0x3F0000 + 0x40 × tpu)`, tpu 0 to 3; a one-TPU chip has only tpu 0 | 64 bits. <0> VEN: 1, the Tarantula instructions execute; 0, they raise OPCDEC (section 5). <63:1> RAZ/IGN | ordinary quadword loads and stores to that address from kernel mode. Reset 0 |
+| VCTL | `(~pid & 0x1ff) << 35 \| 0x7FFC << 20 \| 0x3F0000`, pid the processor's own PID (what WHAMI returns): on a chip of several TPUs, each TPU's own | 64 bits. <0> VEN: 1, the Tarantula instructions execute; 0, they raise OPCDEC (section 5). <63:1> RAZ/IGN | ordinary quadword loads and stores to that address from kernel mode. Reset 0 |
 
 - **The window** is the EV7's: 4 MB per PID, `(~n & 0x1ff) << 35 | 0x7FFC
   << 20 | off`; PID 0 is at 0xFFF_FFC0_0000 ([marvel.md](marvel.md),
-  "Marvel's address map"). VCTL of PID 0, TPU 0 is therefore at
-  0xFFF_FFFF_0000 and TPU 1's at 0xFFF_FFFF_0040. The OS reaches it the
-  way it reaches the Rbox and Zbox controls that EV7 systems already
-  expose as CSRs; the EV7 PALcodes never touch it.
-- **The offset 0x3F0000 + 0x40 × tpu** **[decision]**: the console's CSR
-  table (`lab/docs-ev7/srm73-csr-tables.txt`, 141 rows) uses offsets below
+  "Marvel's address map"). VCTL of PID 0 is therefore at 0xFFF_FFFF_0000
+  and VCTL of PID 2 at 0xFFF_FFFF_0000 - 2 × 0x8_0000_0000 =
+  0xFEF_FFFF_0000; on the ES47 with `tpus = 4` PID 2 is TPU 1 of the chip
+  with PID 0 ([ev8.md](ev8.md), S4), so each TPU's VCTL is in a window of
+  its own. A processor finds its own from its WHAMI alone, as it finds its
+  RBOX registers. The OS reaches it the way it reaches the Rbox and Zbox
+  controls that EV7 systems already expose as CSRs; the EV7 PALcodes never
+  touch it.
+- **On a one-TPU chip** (the `ev8` row's default) the processor's own
+  window is its chip's window and its TPU is TPU 0, so this layout and the
+  chip-window layout of 2026-10-24 give the same address, 0x3F0000 in the
+  chip's window.
+- **The offset 0x3F0000** **[decision]**: the console's CSR table
+  (`lab/docs-ev7/srm73-csr-tables.txt`, 141 rows) uses offsets below
   0x30000 only (the highest is 0x26120) and the console takes one more
   word, GIO_LOCK, at 0x80000; Linux names only the Rbox block
   ([marvel.md](marvel.md)). The last 64 KB of the window is therefore
-  unclaimed. The 0x40 spacing is the 64 bytes between the IO7's port
-  registers.
+  unclaimed.
+- **The 0x40 × tpu spacing** stays for the native interface (S11) only,
+  where a chip has one window for its four TPUs: VCTL[tpu] at 0x3F0000 +
+  0x40 × tpu there, the 64 bytes between the IO7's port registers, unless
+  S11 makes VCTL an IPR (below).
 - **Lazy switching** (D11): an OS that knows vectors leaves VEN at 0 until
   a thread first uses one; the OPCDEC tells it (section 5), it stores 1 to
-  VCTL of its processor and returns. An OS that never stores (OpenVMS)
-  keeps VEN at 0 for every process, so no vector state ever passes between
-  its processes.
+  the VCTL in its own processor's window (the PID WHAMI returns, offset
+  0x3F0000) and returns. An OS that never stores (OpenVMS) keeps VEN at 0
+  for every process, so no vector state ever passes between its processes.
 - **Not an I_CTL bit**, because I_CTL has none free: the 21264 assigns
   every bit, <63:48> the sign extension of VPTB, <47:30> VPTB, <29:24>
   CHIP_ID and each of <23:0> a named field [HRM pp. 158-160], and the EV7
@@ -916,9 +933,11 @@ stake in them). Each point is given with the proposal it would replace:
    program and costs a third read port in hardware that will never exist.
 8. **Vector booleans** are the integer 1, not the scalar compares' 2.0
    nor paired single's 1.0.
-9. **VCTL's offset** (decided): 0x3F0000 + 0x40 × tpu in the EV7 window
-   (section 2), chosen because no console table or Linux name uses it. It
-   is listed so that a later look at a console's CSR table can reopen it.
+9. **VCTL's offset** (decided): 0x3F0000 in each processor's own EV7
+   window (section 2; the owner, 2026-10-25, in place of 0x3F0000 + 0x40 ×
+   tpu in the chip's, which stays for the native interface), chosen
+   because no console table or Linux name uses it. It is listed so that a
+   later look at a console's CSR table can reopen it.
 10. **The quiesce registers** in EV7-compatible mode: not reachable, the
     timer fixed at 10240 cycles with both enables on (section 3.1). A test
     that wants another timeout would need a register of its own (a CSR
