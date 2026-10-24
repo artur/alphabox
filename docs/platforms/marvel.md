@@ -642,7 +642,7 @@ protocols, but they are not Alpha code (the MBM runs its own OS, with an
 | --- | --- | --- |
 | OpenVMS | 7.3-1 (ES47/ES80/GS1280 support added), 7.3-2, 8.2-8.4 | `lab/ALPHA084.ISO` (8.4) |
 | Tru64 UNIX | 5.1B (5.1A with a patch kit, **[guess]**) | none here |
-| Linux | `arch/alpha` MARVEL machvec, still in mainline; Matt Turner's 2026 SMP fixes were tested on an ES47 | Gentoo's minimal CD (Linux 7.0.1, the ES40's media): its live shell on one and two EV7s, the ES40's install on two (es47) and four (gs1280), with the CD's `gentoo_nolsa` kernel and one byte changed; [linux.md](../linux.md), "Linux on the ES47" (E2, 2026-10-24) |
+| Linux | `arch/alpha` MARVEL machvec, still in mainline; Matt Turner's 2026 SMP fixes were tested on an ES47 | Gentoo's minimal CD (Linux 7.0.1, the ES40's media): its live shell on one and two EV7s, the ES40's install on two (es47) and four (gs1280, and the es80 layout with 2 GB or more per EV7), with the CD's `gentoo_nolsa` kernel and one byte changed; [linux.md](../linux.md), "Linux on the ES47" (E2, 2026-10-24) |
 
 These support claims are general knowledge, not from the documents in
 `lab/docs-ev7`, except Linux. Check them against the OS SPDs before

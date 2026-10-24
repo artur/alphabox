@@ -372,18 +372,27 @@ From the kernel's log and `/proc`:
 An ES47 holds up to two 2P drawers (User Information, "An ES47 system
 supports up to two 2P drawers"), so four EV7s are the `es80` row's first
 two drawers, PIDs 0, 1, 8 and 9, with memory at 0, 16 GB, 256 GB and
-272 GB. Linux cannot run there with 512 MB per processor, nor the live CD
-on any Marvel with memory above 32 GB; both are Linux's:
+272 GB. Linux runs there from the installed disk with **2 GB or more per
+processor**, and not with 1 GB or less; the live CD cannot boot on any
+Marvel with memory above 32 GB:
 
-- **The memory map.** "Kernel panic - not syncing: Failed to allocate
-  2000158720 bytes for node 0 memory map". The CD's kernel has no
-  `SPARSEMEM`, so one `struct page` array covers 0 to 272 GB, and no
-  512 MB region holds its 1.9 GB. `setup_memory` limits Marvel to its
-  first 32 GB for this very reason, but only through `max_low_pfn`: the
-  node still spans every memory cluster the HWRPB lists, and so does the
-  array; `mem=` does not help either. After the panic the boot processor
-  waits for the secondaries to halt (`common_shutdown_1`), which never
-  started, and spins.
+- **The memory map needs 2 GB per processor.** The CD's kernel has no
+  `SPARSEMEM`, so one `struct page` array covers 0 to 272 GB, about
+  1.9 GB that must fit in one processor's memory. `setup_memory` limits
+  Marvel to its first 32 GB for this very reason, but only through
+  `max_low_pfn`: the node still spans every memory cluster the HWRPB
+  lists, and so does the array; `mem=` does not help either. With 512 MB
+  or 1 GB per processor: "Kernel panic - not syncing: Failed to allocate
+  2003828736 bytes for node 0 memory map" (2000158720 at 512 MB), after
+  which the boot processor waits for secondaries that never started, and
+  spins. With 2 GB and with 4 GB per processor (`memory.bits = 31` and
+  `32`, the installed disk, 2026-10-24): "SMP: 4 CPUs probed", "Brought
+  up 1 node, 4 CPUs", `cpus active: 4`, four parallel `xz` round trips
+  with the file's MD5, and `poweroff` back to `P00>>>`
+  (`lab/runs/linux-es80-mem-*`). Real ES47s had 512 MB to 8 GB per
+  processor, so this is a configuration a real machine could have had
+  either way. On Alpha `grep -c processor /proc/cpuinfo` prints 0; the
+  "cpus active" line counts them.
 - **The initrd.** aboot loads the initrd at the top of memory, above
   32 GB on any Marvel with more than two processors' memory; Linux moves
   it below its limit with a top-down allocation that lands above it again
@@ -391,7 +400,7 @@ on any Marvel with memory above 32 GB; both are Linux's:
   "initrd extends beyond end of memory ... disabling initrd". The live CD
   then has no root ("VFS: Unable to mount root fs").
 
-So four processors were run on the `gs1280` row's 8P drawer, PIDs 0 to 3
+Four processors were first run on the `gs1280` row's 8P drawer, PIDs 0 to 3
 (memory at 0, 16, 32 and 48 GB, a 390 MB memory map), from the installed
 disk, which needs no initrd: "SMP: 4 CPUs probed", "Brought up 1 node, 4
 CPUs", `cpus active: 4`, IPIs on all four, and four `xz -1 | xz -d`
