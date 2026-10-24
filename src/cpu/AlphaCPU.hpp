@@ -157,7 +157,10 @@ public:
   void set_PAL_BASE(u64 pb);
   virtual void check_state();
   void report_opcdec(u32 opcode, int function); // %CPU-W-OPCDEC, once each
-  CAlphaCPU(CConfigurator *cfg, CSystem *system);
+  /// The processor a configuration section describes; `tpu` > 0 for the
+  /// other thread processing units of an EV8 chip, which share its section
+  /// (docs/platforms/ev8.md, S4).
+  CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu = 0);
   virtual ~CAlphaCPU();
   u64 get_r(int i, bool translate);
 
@@ -1347,6 +1350,9 @@ public:
   /// class, away from what compiled code addresses.
   u32 get_pid() const { return m_pid; }
   void set_pid(u32 pid) { m_pid = pid; }
+  /// Which thread processing unit of its chip this processor is: 0, or 1-3
+  /// on an EV8 with TPUs (docs/platforms/ev8.md, S4).
+  int get_tpu() const { return m_tpu; }
 
   /// The guest debugger (src/debug, docs/debugging.md). While a gdb is
   /// attached m_debug_on is set and the dispatcher asks m_debug, before
@@ -1357,6 +1363,7 @@ public:
 
 private:
   u32 m_pid = 0;
+  int m_tpu = 0;
 
   // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ----------------------
   // docs/platforms/ev8.md (S3, D16) and docs/cpu-fidelity.md. At the end of

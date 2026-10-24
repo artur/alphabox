@@ -45,6 +45,8 @@
 #include "Topology.hpp"
 #include "ToySeed.hpp"
 
+#include <algorithm>
+
 namespace {
 
 /// One 2P drawer: the module's two processors at NS 0 and 1 (a real ES47's
@@ -153,8 +155,14 @@ int marvel_pci_interrupt(int hose, int slot, int intx, int func) {
 /// the same two fields, and a configuration check has no chipset.
 const char *marvel_slot_refusal(const platform_config &board, int hose,
                                 int slot) {
+  // With TPUs, the configured chips decide where their numbers go.
   CMarvelTopology topology;
-  topology.build(board.marvel, board.max_cpus);
+  const int tpus = CConfigurator::machine_tpus();
+  topology.build(board.marvel,
+                 tpus > 1
+                     ? std::min(CConfigurator::machine_chips(), board.max_cpus)
+                     : board.max_cpus,
+                 tpus);
   const u32 pid = (u32)hose / 4;
   if (hose < 0 || !topology.by_pid(pid, topology.count()) ||
       !topology.has_io7(pid))

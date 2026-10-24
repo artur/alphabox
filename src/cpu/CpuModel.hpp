@@ -101,6 +101,10 @@ struct cpu_model {
   u32 ext;                  ///< CPU_EXT_*: instructions beyond the family's
   u16 icache_kb, dcache_kb; ///< on-chip L1 caches
   u16 l2_kb;                ///< on-chip L2 (0: off chip, as on the EV6)
+  /// Thread processing units per chip: 1, or the 21464's 4 [IDS p. 46]. A
+  /// row with more than one takes the `tpus` key, 1 by default; with more,
+  /// each TPU is a processor of its own (docs/platforms/ev8.md, S4).
+  u8 max_tpus;
 };
 
 /// Architecture extension bits, as AMASK reports them [ARM D-4]. The EV8's

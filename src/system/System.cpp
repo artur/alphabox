@@ -91,6 +91,11 @@ CSystem::CSystem(CConfigurator *cfg) try {
               m_platform->min_memory_bits, m_platform->max_memory_bits,
               m_platform->description);
   m_exit_on_pal_halt = myCfg->get_bool_value("exit_on_pal_halt", false);
+  // The processor chips' thread processing units, which the chipset lays
+  // out before any processor exists: an EV8's TPUs on a Marvel board, 1
+  // everywhere else (docs/platforms/ev8.md, S4). Refuses more than
+  // kMaxCPUs processors.
+  m_tpus = myCfg->processor_tpus(&m_chips);
 
   // The board's chipset: everything that is neither memory nor a device
   // range goes to it (Chipset.hpp).
@@ -453,13 +458,17 @@ int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
   // (cpu_lock_address[n], m_ll_seq_snap[n]), so a fifth cpuN block in the
   // configuration used to write outside the arrays with -1. Refuse it the
   // way an impossible memory size is refused.
+  // A board's count is of processor chips; each of an EV8's TPUs is a
+  // processor (tpus_per_chip).
   const int board_max =
       m_platform && m_platform->max_cpus > 0 ? m_platform->max_cpus : 4;
   const int hard_max = (int)(sizeof(acCPUs) / sizeof(acCPUs[0]));
-  const int limit = board_max < hard_max ? board_max : hard_max;
+  const int limit =
+      board_max * m_tpus < hard_max ? board_max * m_tpus : hard_max;
   if (iNumCPUs >= limit)
     FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
-              limit, m_platform ? m_platform->description : "unknown board");
+              limit / m_tpus,
+              m_platform ? m_platform->description : "unknown board");
   acCPUs[iNumCPUs] = cpu;
   iNumCPUs++;
   // LDx_ARM and QUIESCE (the 21464's): from here on every processor's

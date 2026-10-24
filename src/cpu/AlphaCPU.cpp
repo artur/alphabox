@@ -376,8 +376,17 @@ uint64_t CAlphaCPU::hv_run_loop(void *self) {
 /**
  * Constructor.
  **/
-CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
-    : CSystemComponent(cfg, system) {
+CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
+    : CSystemComponent(cfg, system), m_tpu(tpu) {
+  // TPUs 1-3 of an EV8 chip share TPU 0's section: their own name, for
+  // messages and the state file's map ("cpu0.tpu1(ev8)").
+  if (tpu > 0) {
+    char name[96];
+    snprintf(name, sizeof(name), "%s.tpu%d(%s)", cfg->get_myName(), tpu,
+             cfg->get_myValue());
+    free(devid_string);
+    CHECK_ALLOCATION(devid_string = strdup(name));
+  }
 #ifdef ALPHABOX_HVF
   // Under ALPHABOX_HV=1 the compiled code lives in the VM allocator's
   // memory, which our stage-1 entries mark executable INSIDE the VM and

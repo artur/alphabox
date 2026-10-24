@@ -67,6 +67,7 @@
 #include "Sym53C8xx.hpp"
 #include "System.hpp"
 #include "Tga.hpp"
+#include "Topology.hpp"
 #include "Tulip.hpp"
 #include "VirtioBlk.hpp"
 #include "VirtioNet.hpp"
@@ -80,7 +81,9 @@ static bool s_check = false;
 static int s_check_errors = 0;
 static int s_check_warnings = 0;
 static bool s_check_gui = false; ///< a gui section was seen
-static int s_check_cpus = 0;     ///< processors in the machine section
+static int s_check_cpus = 0;     ///< processor chips in the machine section
+static int s_check_tpus = 1;     ///< TPUs per chip (processor_tpus)
+static int s_check_chips = 0;    ///< processor chips (processor_tpus)
 static const platform_config *s_check_platform = nullptr;
 
 void CConfigurator::set_check_mode(bool on) {
@@ -89,7 +92,94 @@ void CConfigurator::set_check_mode(bool on) {
   s_check_warnings = 0;
   s_check_gui = false;
   s_check_cpus = 0;
+  s_check_tpus = 1;
+  s_check_chips = 0;
   s_check_platform = nullptr;
+}
+
+int CConfigurator::machine_tpus() {
+  if (s_check)
+    return s_check_tpus;
+  return theSystem ? theSystem->tpus_per_chip() : 1;
+}
+
+int CConfigurator::machine_chips() {
+  if (s_check)
+    return s_check_chips;
+  return theSystem ? theSystem->processor_chips() : 0;
+}
+
+/**
+ * The 21464's TPUs (docs/platforms/ev8.md, S4). Each processor section is a
+ * chip. An EV8 is one processor by default, as the EV7 console would see a
+ * real one: the four TPUs share the chip's network address (R_WHOAMI, IDS
+ * p. 527), and the console's PALcode has no WAKEUP entry to start TPUs 1-3
+ * [inference]. `tpus = 2..4` lists TPUs 1-3 to the console as processors of
+ * their own, each with a PID and a register block the chip does not have:
+ * an Alphabox construction [decision, the owner's, 2026-10-25], so that
+ * OpenVMS and Linux see the threads. Only the Marvel boards list them: their
+ * console learns its processors from the management side (the CMM), which
+ * can name every TPU. On another board an EV8 runs only through the
+ * ALPHABOX_CPU_ANY_BOARD test hook, and is one processor there.
+ **/
+int CConfigurator::processor_tpus(int *chips_out) {
+  const platform_config *board =
+      find_platform(get_text_value("platform", DEFAULT_PLATFORM));
+  const bool lists_tpus = board && board->chipset == CHIPSET_MARVEL;
+  int chips = 0, tpus = 0;
+  const char *first = nullptr;
+  for (CConfigurator *c : pChildren) {
+    const cpu_model *m = find_cpu_model(c->myValue);
+    if (!m)
+      continue;
+    chips++;
+    int t = 1;
+    if (m->max_tpus > 1) {
+      const u64 n = c->get_num_value("tpus", false, 1);
+      if (n < 1 || n > m->max_tpus)
+        FAILURE_4(Configuration, "%s: tpus = %d: a %s has 1 to %d TPUs",
+                  c->myName, (int)n, m->part, (int)m->max_tpus);
+      if (n > 1 && !lists_tpus)
+        FAILURE_2(Configuration,
+                  "%s: tpus = %d: the TPUs are listed to the console as "
+                  "processors of their own on the EV7 boards only (ES47, "
+                  "ES80, GS1280); elsewhere an ev8 is one processor",
+                  c->myName, (int)n);
+      t = (int)n;
+    }
+    if (tpus && t != tpus)
+      FAILURE_4(Configuration,
+                "%s has %d TPUs and %s %d: every processor chip of a machine "
+                "has the same number (tpus)",
+                c->myName, t, first, tpus);
+    tpus = t;
+    if (!first)
+      first = c->myName;
+  }
+  if (!tpus)
+    tpus = 1;
+  // TPU t of a chip is its PID with t in the lowest pair of PID bits no
+  // chip's PID uses (CMarvelTopology::tpu_shift); a machine whose chips use
+  // every pair has no numbers for them. Past the board's chip count the
+  // processor count is refused below, or by the board's own limit.
+  if (tpus > 1 && board && chips <= board->max_cpus &&
+      CMarvelTopology::tpu_shift(board->marvel, chips) < 0)
+    FAILURE_2(Configuration,
+              "%d chips of %d TPUs: their PIDs leave no pair of bits free, "
+              "and a TPU's processor number is its chip's PID with the TPU "
+              "in such a pair (docs/platforms/ev8.md, S4). Configure fewer "
+              "chips",
+              chips, tpus);
+  if (chips * tpus > CSystem::kMaxCPUs)
+    FAILURE_4(Configuration,
+              "%d processor chips of %d TPUs each are %d processors, and "
+              "Alphabox runs at most %d: its per-processor masks (the "
+              "LDx_L/STx_C lock flags, the LDx_ARM watch flags) are 32 bits "
+              "wide. Configure fewer chips, or fewer TPUs (tpus)",
+              chips, tpus, chips * tpus, CSystem::kMaxCPUs);
+  if (chips_out)
+    *chips_out = chips;
+  return tpus;
 }
 
 int CConfigurator::check_errors() { return s_check_errors; }
@@ -626,6 +716,13 @@ static const char *const kv_tsunami[] = {
 static const char *const kv_ev68cb[] = {"speed", "palcode.vms.nohle",
                                         "skip_memtest_hack",
                                         "timer.max_instr_per_tick", 0};
+// The 21464's: its TPUs per chip (processor_tpus).
+static const char *const kv_ev8[] = {"speed",
+                                     "palcode.vms.nohle",
+                                     "skip_memtest_hack",
+                                     "timer.max_instr_per_tick",
+                                     "tpus",
+                                     0};
 static const char *const kv_serial[] = {"port",     "action",   "address",
                                         "disabled", "raw_mode", "null_attach",
                                         "wait",     "log",      0};
@@ -722,7 +819,7 @@ classinfo classes[] = {
     // is what differs.
     {"ev7", c_ev68cb, ON_CS, kv_ev68cb},
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
-    {"ev8", c_ev68cb, ON_CS, kv_ev68cb},
+    {"ev8", c_ev68cb, ON_CS, kv_ev8},
     {"ali", c_ali, IS_PCI, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
     {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_cmd649},
@@ -1189,6 +1286,9 @@ void CConfigurator::check_device() {
     s_check_platform = find_platform(name);
     if (!s_check_platform)
       FAILURE_1(Configuration, "Unknown platform %s", name);
+    // As CSystem's constructor: the processor chips' TPUs, and at most
+    // kMaxCPUs processors.
+    s_check_tpus = processor_tpus(&s_check_chips);
     if (const char *serial = get_text_value("serial_number", (const char *)0)) {
       if (s_check_platform->chipset != CHIPSET_MARVEL)
         cfg_msg(true,
@@ -1276,9 +1376,17 @@ void CConfigurator::create_device(int pcibus, int pcidev, int idebus,
           .board_devices(this, (CSystem *)myDevice);
     break;
 
-  case c_ev68cb:
-    myDevice = new CAlphaCPU(this, (CSystem *)pParent->get_device());
+  case c_ev68cb: {
+    CSystem *sys = (CSystem *)pParent->get_device();
+    myDevice = new CAlphaCPU(this, sys);
+    // An EV8 chip's other TPUs, processors of their own, numbered after
+    // TPU 0 (docs/platforms/ev8.md, S4: D4, D6).
+    const cpu_model *m = find_cpu_model(myValue);
+    const int tpus = m && m->max_tpus > 1 ? sys->tpus_per_chip() : 1;
+    for (int t = 1; t < tpus; t++)
+      new CAlphaCPU(this, sys, t);
     break;
+  }
 
   case c_ali:
     myDevice =

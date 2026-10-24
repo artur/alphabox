@@ -135,6 +135,24 @@ public:
   /// Check mode: whether a machine section was found.
   static bool check_found_system();
 
+  /**
+   * On a machine section: how many thread processing units each of its
+   * processor chips has, and in *chips how many chips its processor
+   * sections describe. A part whose row has TPUs (the 21464's four) reads
+   * `tpus` from its section, 1 to the row's count, 1 by default; more than
+   * one only on a board that lists TPUs to its console as processors (the
+   * Marvel boards). Every other part is one TPU. Refuses chips that differ
+   * in their count, chips whose PIDs leave no bit pair for the TPUs'
+   * numbers, and a machine of more than CSystem::kMaxCPUs processors
+   * (docs/platforms/ev8.md, S4).
+   **/
+  int processor_tpus(int *chips);
+  /// TPUs per chip of the machine being built, or checked: 1 until its
+  /// machine section has been read.
+  static int machine_tpus();
+  /// Its processor chips: 0 until then.
+  static int machine_chips();
+
   /// The resolved tree in the configuration syntax, values quoted.
   void dump(FILE *f, int depth = 0);
 
