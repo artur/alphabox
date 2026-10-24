@@ -82,7 +82,10 @@ enum : u32 {
   /// encodings and results Alphabox implements are docs/platforms/ev8-isa.md].
   /// Each stage of the plan (docs/platforms/ev8.md, section 6) decodes more
   /// of them under this flag, and the row's AMASK reports a feature only
-  /// once every instruction it names executes. None is decoded yet (S1).
+  /// once every instruction it names executes. S2: CCB (18.EC00), CMOV2
+  /// (11.68) and FCMOV2 (17.068); WH64EN and MAP_ALIGN are the core's
+  /// already. LDL_ARM, LDQ_ARM and QUIESCE are no instructions of the row
+  /// until S3, so the unused-18.xxxx rule above completes them as no-ops.
   CPU_EXT_EV8 = 0x0001,
 };
 

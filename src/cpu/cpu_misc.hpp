@@ -104,4 +104,7 @@
 #define DO_ECB ;     /* cache hint: no effect */
 #define DO_WH64 ;    /* write hint: no effect */
 #define DO_WH64EN ;  /* write hint enable: no effect */
-
+// CCB (21464, CPU_EXT_EV8): CleanCacheBlk, give up ownership of the block
+// and keep a shared copy, "a hint with no architectural effect on data"
+// [21464 IDS Rev 1.1k, PDF pp. 411, 661].
+#define DO_CCB ;

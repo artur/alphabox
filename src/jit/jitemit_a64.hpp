@@ -586,7 +586,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   int rc = ins & 0x1F;
   bool islit = ((ins >> 12) & 1) != 0;
   uint32_t lit = (ins >> 13) & 0xFF;
-  SafeOp op = classify(ins, pal_block);
+  SafeOp op = classify(ins, pal_block, m_ext);
   // Cold pass (hot/cold split): emit only the slow paths recorded in the hot
   // pass; every other instruction produces nothing.
   const uint32_t cold_idx = i;
@@ -2650,6 +2650,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       break;
     case OP_IMPLVER: // Rc = IMPLVER, this processor's implementation version
       a.mov(x0, imm(m_implver));
+      break;
+    case OP_CMOV2: // Rc = Ra: CMOV2's predicate is clear outside the pair
+      op1_x0();
       break;
 
     case OP_CMPEQ:

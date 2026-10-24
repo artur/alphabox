@@ -379,6 +379,17 @@ def UNPKBW(_a, b):
             | (field(b, 31, 24) << 48)), False
 
 
+# --- the 21464's additions (not in the ARM) --------------------------------
+# 21464 Internal Design Specification Rev 1.1k, PDF pp. 73-74, as
+# docs/platforms/ev8-isa.md 3.2 reads it: the second half of a split CMOV
+# copies Rbv when its first operand's predicate bit is set and that
+# operand's value otherwise; executed from memory the bit is clear, so
+# Rc <- Rav (FCMOV2: Fc <- Fav).
+
+def CMOV2(a, _b):
+    return u64(a), False
+
+
 # --- 4.11 Miscellaneous --------------------------------------------------------
 
 

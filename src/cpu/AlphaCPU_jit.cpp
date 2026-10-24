@@ -1649,7 +1649,8 @@ int CAlphaCPU::jit_ftoi(CAlphaCPU *cpu, u32 fa, u32 fmt, u64 *out) {
 }
 
 // JIT FLTL non-arithmetic helper (static): FPCR moves, sign-copies, FP
-// conditional moves and the CVTLQ/CVTQL bit rearrangements, through the
+// conditional moves (FCMOV2 too, on a row with CPU_EXT_EV8) and the
+// CVTLQ/CVTQL bit rearrangements, through the
 // interpreter's own fltl_operate. classify only routes these funcs here (no
 // FP math, no /V trap forms). Returns 1 = FEN-trap bail: the interpreter
 // vectors it.

@@ -52,6 +52,7 @@
 
 #include "jitengine.hpp"
 
+#include "CpuModel.hpp"
 #include "System.hpp" // CCodePageMap: which pages code was compiled from
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
@@ -174,7 +175,8 @@ enum SafeOp {
   OP_BIC,
   OP_ORNOT,
   OP_EQV,
-  OP_CMOV, // INTL (0x11) conditional moves CMOVxx: Rc = cond(Ra) ? op2 : Rc
+  OP_CMOV,  // INTL (0x11) conditional moves CMOVxx: Rc = cond(Ra) ? op2 : Rc
+  OP_CMOV2, // INTL (0x11) CMOV2 (21464, CPU_EXT_EV8): Rc = Ra
   OP_AMASK,
   OP_IMPLVER, // INTL (0x11) CPU feature probes: Rc = op2 & ~CPU_AMASK / Rc =
               // CPU_IMPLVER
@@ -324,8 +326,10 @@ static bool host_has_popcnt() {
 // Safe = goto-free, register-only operate-format ops (no trap, memory, or
 // branch). pal_block enables PALmode-only ops (HW_MFPR): outside PALmode they'd
 // OPCDEC, so only compile them when the block is PALmode (the dispatcher keys
-// blocks by PC bit 0).
-SafeOp classify(uint32_t ins, bool pal_block) {
+// blocks by PC bit 0). ext is the processor row's cpu_model::ext: a word that
+// is an instruction only on some rows (the EV8's) compiles only on those, and
+// elsewhere stays the interpreter's (OPCDEC, or the unused-18.xxxx rule).
+SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
   uint32_t opcode = ins >> 26;
   uint32_t func = (ins >> 5) & 0x7F;
   switch (opcode) {
@@ -399,6 +403,9 @@ SafeOp classify(uint32_t ins, bool pal_block) {
       if (((ins >> 21) & 0x1f) != 31)
         return OP_NONE;
       return OP_AMASK;
+    // CMOV2 (the 21464's): Rc = Ra; elsewhere OPCDEC.
+    case 0x68:
+      return (ext & CPU_EXT_EV8) ? OP_CMOV2 : OP_NONE;
     case 0x6c:
       return OP_IMPLVER; // IMPLVER: Rc = implementation version constant
     }
@@ -492,7 +499,8 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     const uint32_t f17 = (ins >> 5) & 0x7ff;
     const bool ok = f17 == 0x010 || (f17 >= 0x020 && f17 <= 0x022) ||
                     f17 == 0x024 || f17 == 0x025 ||
-                    (f17 >= 0x02a && f17 <= 0x02f) || f17 == 0x030;
+                    (f17 >= 0x02a && f17 <= 0x02f) || f17 == 0x030 ||
+                    (f17 == 0x068 && (ext & CPU_EXT_EV8)); // FCMOV2 (21464)
     if (!ok)
       return OP_NONE;
     // f31-dest gate (interp zeroes f[31] per instr): MF_FPCR writes f[Fa];
@@ -631,6 +639,11 @@ SafeOp classify(uint32_t ins, bool pal_block) {
     case 0xF800:
     case 0xFC00:
       return OP_NOP; // WH64, WH64EN
+    // CCB (the 21464's cache hint); elsewhere an unused code.
+    case 0xEC00:
+      if (ext & CPU_EXT_EV8)
+        return OP_NOP;
+      break;
     // RPCC/RC/RS read time-varying / consumed state into Ra; the verify
     // log+replays the read so the two passes agree. RC/RS also side-effect the
     // soft-interrupt flag, so the Ra==31 (no GPR dest, flag-only) forms are
@@ -1654,7 +1667,7 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
   int rc = ins & 0x1F;
   bool islit = ((ins >> 12) & 1) != 0;
   uint32_t lit = (ins >> 13) & 0xFF;
-  SafeOp op = classify(ins, pal_block);
+  SafeOp op = classify(ins, pal_block, m_ext);
   if (i == 0)
     m_llsc_pending = true; // a block's, or a trace segment's, first instruction
   // A memory operation of HRM D.19's list: the first of the block, or the
@@ -3513,6 +3526,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     case OP_IMPLVER: // Rc = IMPLVER, this processor's implementation version
       a.mov(x86::rax, imm(m_implver));
       break;
+    case OP_CMOV2: // Rc = Ra: CMOV2's predicate is clear outside the pair
+      op1_rax();
+      break;
 
     case OP_CMPEQ:
       op1_rax();
@@ -3659,7 +3675,7 @@ void CJitEngine::compile_block(
   bool terminator_jmp =
       false; // ...and it's a computed jump (don't chain: targets vary)
   while (plen < n_src) {
-    SafeOp sop = classify(words[plen], pal_block);
+    SafeOp sop = classify(words[plen], pal_block, m_ext);
     if (sop == OP_NONE) { // uncompilable op ends the straight-line prefix
 #ifdef JIT_STATS
       const uint32_t bop = words[plen] >> 26;
@@ -3717,7 +3733,7 @@ void CJitEngine::compile_block(
   // The scan may stop right after a branch it meant to run through (an
   // uncompilable op next): that branch is then the terminator after all.
   if (!terminator_branch && plen > 0 &&
-      is_branch(classify(words[plen - 1], pal_block)))
+      is_branch(classify(words[plen - 1], pal_block, m_ext)))
     terminator_branch = true;
 
   if (plen == 0)

@@ -7,6 +7,10 @@ PALcode-reserved formats (HW_MFPR, HW_MTPR, HW_LD, HW_ST, HW_RET) and the
 internal processor register numbers are the 21264/EV68CB Hardware Reference
 Manual's (chapter 6.4 and Table 5-1).
 
+The 21464's (EV8's) additions are its Internal Design Specification's (Rev
+1.1k), as docs/platforms/ev8-isa.md fixes them for Alphabox and the nada
+toolchain: CMOV2, FCMOV2, MAP_ALIGN, CCB, LDL_ARM, LDQ_ARM and QUIESCE.
+
 Nothing here knows what an instruction does: that is aarm.py's job.
 """
 
@@ -136,6 +140,8 @@ IOP = {
     "CMOVLT": (0x11, 0x44), "CMOVGE": (0x11, 0x46), "EQV": (0x11, 0x48),
     "AMASK": (0x11, 0x61), "CMOVLE": (0x11, 0x64), "CMOVGT": (0x11, 0x66),
     "IMPLVER": (0x11, 0x6C),
+    # the 21464's second half of a split CMOV (ev8-isa.md 3.2)
+    "CMOV2": (0x11, 0x68),
     # 12: shifts and byte manipulation
     "MSKBL": (0x12, 0x02), "EXTBL": (0x12, 0x06), "INSBL": (0x12, 0x0B),
     "MSKWL": (0x12, 0x12), "EXTWL": (0x12, 0x16), "INSWL": (0x12, 0x1B),
@@ -162,12 +168,16 @@ IOP = {
 FTOI = {"FTOIT": (0x1C, 0x70), "FTOIS": (0x1C, 0x78)}
 ITOF = {"ITOFS": (0x14, 0x004), "ITOFF": (0x14, 0x014), "ITOFT": (0x14, 0x024)}
 CPYS = (0x17, 0x020)   # CPYS Fa,Fb,Fc; CPYS F31,F31,F31 is FNOP
+FCMOV2 = (0x17, 0x068)  # the 21464's FCMOV second half (ev8-isa.md 3.2)
+MAP_ALIGN = opr(0x11, 0x40, R31, R31, R31)  # XOR R31,R31,R31 (ev8-isa.md 3.2)
 
-# Miscellaneous (opcode 18) function codes.
+# Miscellaneous (opcode 18) function codes; the last four are the 21464's
+# (ev8-isa.md 3.1).
 MISC = {
     "TRAPB": 0x0000, "EXCB": 0x0400, "MB": 0x4000, "WMB": 0x4400,
     "FETCH": 0x8000, "FETCH_M": 0xA000, "RPCC": 0xC000, "RC": 0xE000,
     "ECB": 0xE800, "RS": 0xF000, "WH64": 0xF800, "WH64EN": 0xFC00,
+    "LDL_ARM": 0xB000, "LDQ_ARM": 0xB400, "QUIESCE": 0xB800, "CCB": 0xEC00,
 }
 
 

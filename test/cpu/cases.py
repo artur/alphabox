@@ -39,6 +39,8 @@ GROUPS = [
     ("misc", "AMASK, IMPLVER, RPCC, barriers, hints, RC/RS, OPCDEC, CALL_PAL"),
     ("mode", "user mode: privileged CALL_PAL and PALRES OPCDEC, superpage "
              "ACV, ITB/DTB fills, DTB protection, FOR/FOW, MM_STAT"),
+    ("ev8", "the 21464's stateless additions: CCB, CMOV2, FCMOV2 where the "
+            "row has them, MAP_ALIGN and WH64EN on every row"),
 ] + jit_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
@@ -794,12 +796,17 @@ def g_misc(b):
     # (21464 IDS p.676; docs/cpu-fidelity.md): no trap, Ra and the memory
     # at Rb untouched, the next instruction runs. A row that traps them, or
     # has an instruction at one of these codes, skips it (rows.py).
+    # 18.B000, 18.B400 and 18.B800 are the 21464's LDL_ARM, LDQ_ARM and
+    # QUIESCE and 18.EC00 its CCB (docs/platforms/ev8-isa.md 3.1): unused
+    # codes on every other row, and on the EV8 row the first three are too
+    # until plan S3 implements them, with AMASK bit 10 clear (an Alphabox
+    # decision, docs/cpu-fidelity.md).
     b.begin("unused 18.xxxx functions are NOPs")
     b.load(21, 0x0123456789ABCDEF)
     b.load(22, 0x5A5A5A5A12345678)
     for code in (0x0001, 0x0200, 0x0800, 0x1000, 0x2000, 0x3C00, 0x5000,
-                 0x6000, 0x7C00, 0x9000, 0xB000, 0xD000, 0xE400, 0xEC00,
-                 0xF400, 0xFE00, 0xFFFF):
+                 0x6000, 0x7C00, 0x9000, 0xB000, 0xB400, 0xB800, 0xD000,
+                 0xE400, 0xEC00, 0xF400, 0xFE00, 0xFFFF):
         with b.part("unused 18.%04X is a NOP" % code):
             b.need(rows.UNUSED_MISC_NOP)
             b.need(rows.Unused(mfc(code, 21, 22)))
@@ -822,8 +829,9 @@ def g_misc(b):
     b.store(9, "first RC", 1)
     b.store(10, "second RC", 0)
     # OPCDEC (HRM Table 6-8): opcodes 01-07; the PALRES opcodes outside
-    # PALmode with I_CTL[HWE] clear; unimplemented functions of 14 and 1C;
-    # CALL_PAL 40-7F, above BF.
+    # PALmode with I_CTL[HWE] clear; unimplemented functions of 11, 14, 17
+    # and 1C (11.68 and 17.068 are the 21464's CMOV2 and FCMOV2, so a row
+    # that has them skips those two: group ev8); CALL_PAL 40-7F, above BF.
     b.emit(bra(OP["BR"], 12, 0))                    # r12 = next address
     illegal = [("opcode %02x" % op, op << 26) for op in range(1, 8)]
     illegal += [("HW_MFPR in kernel mode", A.hw_mfpr(13, A.IPR["EXC_ADDR"])),
@@ -833,6 +841,8 @@ def g_misc(b):
                 ("HW_ST in kernel mode", A.hw_st(R31, R_SCR, 0x100, typ=2)),
                 ("1C.002", opr(0x1C, 0x02, R31, 1, 13)),
                 ("1C.7F", opr(0x1C, 0x7F, R31, 1, 13)),
+                ("11.68", opr(0x11, 0x68, 1, 2, 13)),
+                ("17.068", fop(0x17, 0x068, 1, 2, 13)),
                 ("14.001", fop(0x14, 0x001, 1, R31, 13)),
                 ("14.7FF", fop(0x14, 0x7FF, 1, R31, 13)),
                 ("CALL_PAL 40", call_pal(0x40)),
@@ -967,9 +977,201 @@ def g_mode(b):
     b.store(3, "r3", 0x0102030405060708)
 
 
+# The example words of docs/platforms/ev8-isa.md (3.1, 3.2), which the nada
+# toolchain assembles: the encodings here must be the same.
+EV8_WORDS = [
+    (mfc(A.MISC["LDQ_ARM"], 1, 2), 0x6022B400),
+    (mfc(A.MISC["LDL_ARM"], 1, 2), 0x6022B000),
+    (mfc(A.MISC["QUIESCE"]), 0x63FFB800),
+    (mfc(A.MISC["CCB"], R31, 3), 0x63E3EC00),
+    (mfc(A.MISC["WH64EN"], R31, 3), 0x63E3FC00),
+    (A.ins_op("CMOV2", 1, 2, 1), 0x44220D01),
+    (fop(*A.FCMOV2, 1, 2, 1), 0x5C220D01),
+    (A.MAP_ALIGN, 0x47FF081F),
+]
+EV8_VALS = [0, 0xFFFFFFFFFFFFFFFF, 0x0123456789ABCDEF, 0x8000000000000000]
+
+
+def _next_runs(b, reg=23):
+    """After the instruction under test: the next one runs."""
+    b.emit(mem(OP["LDA"], reg, R31, 0x55))
+    b.store(reg, "next instruction ran", 0x55)
+
+
+def _ev8_cmov2(b, ra, rb, rc, a, bv, rc_init, lit=False):
+    """CMOV2 Ra, Rb|#lit, Rc: Rc <- Rav, every other register unchanged."""
+    word = A.ins_op("CMOV2", ra, bv if lit else rb, rc, lit)
+    b.start()
+    vals = {}
+    for r, v in ((ra, a), (None if lit else rb, bv), (rc, rc_init)):
+        if r is not None and r != R31 and r not in vals:
+            b.load(r, v)
+            vals[r] = v
+    b.begin("CMOV2 r%d,%s,r%d (a=%s b=%s)" % (
+        ra, ("#%d" % bv) if lit else "r%d" % rb, rc, _h(a), _h(bv)))
+    b.need(rows.Own(word))
+    b.trap_clear()
+    b.emit(word)
+    b.trap_check()
+    _next_runs(b)
+    want = dict(vals)
+    if rc != R31:
+        want[rc] = aarm.CMOV2(vals.get(ra, 0), None)[0]
+    for r in sorted(want):
+        b.store(r, "r%d" % r, want[r])
+
+
+def _ev8_fcmov2(b, fa, fb, fc, a, bv, fc_init):
+    """FCMOV2 Fa, Fb, Fc: Fc <- Fav, every other register unchanged."""
+    word = fop(*A.FCMOV2, fa, fb, fc)
+    b.start()
+    vals = {}
+    for f, v in ((fa, a), (fb, bv), (fc, fc_init)):
+        if f != R31 and f not in vals:
+            b.load(1, v)
+            b.emit(fop(*A.ITOF["ITOFT"], 1, R31, f))
+            vals[f] = v
+    b.begin("FCMOV2 f%d,f%d,f%d (a=%s b=%s)" % (fa, fb, fc, _h(a), _h(bv)))
+    b.need(rows.Own(word))
+    b.trap_clear()
+    b.emit(word)
+    b.trap_check()
+    _next_runs(b)
+    want = dict(vals)
+    if fc != R31:
+        want[fc] = vals.get(fa, 0)       # F31 reads as +0.0
+    for f in sorted(want):
+        b.emit(fop(*A.FTOI["FTOIT"], f, R31, 2))
+        b.store(2, "f%d" % f, want[f])
+
+
+def g_ev8(b):
+    """The 21464's (EV8's) instructions that keep no state of their own
+    (docs/platforms/ev8-isa.md 3.1 and 3.2; 21464 IDS Rev 1.1k, PDF pp.
+    72-75, 411, 661). CCB, CMOV2 and FCMOV2 run where the row has them
+    (rows.Own): elsewhere 18.EC00 is an unused code and 11.68 and 17.068
+    raise OPCDEC (group misc). MAP_ALIGN and WH64EN are the core's and run
+    on every row. Each case checks the result, that nothing traps, that the
+    other registers are unchanged and that the next instruction runs."""
+    for word, want in EV8_WORDS:
+        assert word == want, "%08x, ev8-isa.md gives %08x" % (word, want)
+
+    def ccb(ra, rb):
+        return mfc(A.MISC["CCB"], ra, rb)
+
+    # CCB: "a hint with no architectural effect on data" [IDS pp. 411, 661].
+    b.begin("CCB (r22): memory, Rb, the next instruction")
+    b.need(rows.Own(ccb(R31, 22)))
+    b.load(20, 0x0123456789ABCDEF)
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x280))
+    b.emit(mem(OP["STQ"], 20, 22, 0))
+    b.trap_clear()
+    b.emit(ccb(R31, 22))
+    b.trap_check()
+    _next_runs(b)
+    b.emit(mem(OP["LDQ"], 21, 22, 0))
+    b.store(21, "memory at Rb", 0x0123456789ABCDEF)
+    b.store(22, "Rb", b.scratch + 0x280)
+    b.begin("CCB with Ra = r21 leaves Ra")
+    b.need(rows.Own(ccb(21, 22)))
+    b.load(21, 0xFEDCBA9876543210)
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x280))
+    b.trap_clear()
+    b.emit(ccb(21, 22))
+    b.trap_check()
+    b.store(21, "Ra", 0xFEDCBA9876543210)
+    # Unmapped, as the hints of group mem: CCB shares ECB's predecode (IIX)
+    # [IDS p. 661; ARM 4.11.3] [inference].
+    b.begin("CCB on an unmapped address")
+    b.need(rows.Own(ccb(R31, 11)))
+    b.load(11, 0x10000000)
+    b.trap_clear()
+    b.emit(ccb(R31, 11))
+    b.trap_check()
+    _next_runs(b)
+
+    # WH64EN, the core's on every row [ARM 4.11.11; IDS p. 661]: the block's
+    # contents become UNPREDICTABLE, so only Rb and the flow are checked.
+    b.begin("WH64EN (r22): Rb, the next instruction")
+    b.emit(mem(OP["LDA"], 22, R_SCR, 0x2C0))
+    b.trap_clear()
+    b.emit(mfc(A.MISC["WH64EN"], R31, 22))
+    b.trap_check()
+    _next_runs(b)
+    b.store(22, "Rb", b.scratch + 0x2C0)
+
+    # MAP_ALIGN, XOR R31,R31,R31, in the last slot of an aligned block of
+    # eight instructions, where it starts a map chunk [IDS p. 75]: a NOP.
+    b.begin("MAP_ALIGN in the last slot of an aligned half-block")
+    b.load(20, 0x5A5A5A5AA5A5A5A5)
+    b.trap_clear()
+    while (b.asm.here & 0x1F) != 0x1C:
+        b.emit(opr(0x11, 0x20, R31, R31, R31))      # NOP
+    b.emit(A.MAP_ALIGN)
+    b.trap_check()
+    _next_runs(b)
+    b.store(20, "r20", 0x5A5A5A5AA5A5A5A5)
+
+    # CMOV2 [IDS pp. 73-74]: the IDS's own form copies Rc to Rc; every
+    # other form copies Ra; Rb and the literal are never read.
+    for a in EV8_VALS:
+        _ev8_cmov2(b, 1, 2, 1, a, 0x1122334455667788, None)   # Rc = Ra
+        _ev8_cmov2(b, 3, 4, 5, a, 0x1122334455667788, 0xCAFEBABEDEADBEEF)
+        _ev8_cmov2(b, 6, 7, 7, a, 0x1122334455667788, None)   # Rc = Rb
+        _ev8_cmov2(b, 8, 8, 8, a, a, None)                   # Ra = Rb = Rc
+        _ev8_cmov2(b, 10, 0x99, 11, a, 0x99, 0x0F0F0F0F0F0F0F0F, lit=True)
+        _ev8_cmov2(b, R31, 12, 13, a, a, 0xCAFEBABEDEADBEEF)  # Rc <- 0
+        _ev8_cmov2(b, 14, 15, R31, a, 0x1122334455667788, None)
+    # The JIT forwards the value an operate leaves in its result register
+    # (rax, x0) to the next instruction's Ra: CMOV2 reading it, and the
+    # next one reading CMOV2's.
+    b.start()
+    b.load(1, 0x0000000100000002)
+    b.load(2, 0x0000001000000020)
+    b.load(4, 0x7777777777777777)
+    b.load(5, 0x5555555555555555)
+    word = A.ins_op("CMOV2", 3, 4, 5)
+    b.begin("ADDQ r1,r2,r3; CMOV2 r3,r4,r5; ADDQ r5,#1,r6")
+    b.need(rows.Own(word))
+    b.emit(opr(0x10, 0x20, 1, 2, 3))
+    b.emit(word)
+    b.emit(opl(0x10, 0x20, 5, 1, 6))
+    b.store(5, "r5", 0x0000001100000022)
+    b.store(6, "r6", 0x0000001100000023)
+    b.store(4, "r4", 0x7777777777777777)
+
+    # FCMOV2, the same in the FP registers.
+    fv = [0, 0x8000000000000000, 0x7FF8000000000001, 0x400921FB54442D18]
+    for a in fv:
+        _ev8_fcmov2(b, 1, 2, 1, a, 0x3FF0000000000000, None)   # Fc = Fa
+        _ev8_fcmov2(b, 3, 4, 5, a, 0x3FF0000000000000, 0xC000000000000000)
+        _ev8_fcmov2(b, 6, 7, 7, a, 0x3FF0000000000000, None)   # Fc = Fb
+        _ev8_fcmov2(b, R31, 8, 9, a, a, 0xC000000000000000)    # Fc <- +0
+        _ev8_fcmov2(b, 10, 11, R31, a, 0x3FF0000000000000, None)
+    # An FP operate instruction, so FEN with the FPU disabled, as FCMOVxx
+    # (HRM Table 6-8) [inference: the IDS says nothing of it].
+    word = fop(*A.FCMOV2, 3, 4, 5)
+    b.start()
+    for f, v in ((3, 0x4000000000000000), (5, 0xC008000000000000)):
+        b.load(1, v)
+        b.emit(fop(*A.ITOF["ITOFT"], 1, R31, f))
+    b.begin("FCMOV2 with FPE clear takes FEN")
+    b.need(rows.Own(word))
+    b.emit(opr(0x11, 0x20, R31, R31, 16))
+    b.emit(call_pal(0x01))                          # FPE off
+    b.trap_clear()
+    at = b.va()
+    b.emit(word)
+    b.trap_check(vector=0x200, exc_addr=at)
+    b.emit(mem(OP["LDA"], 16, R31, 1))
+    b.emit(call_pal(0x01))                          # FPE on
+    b.emit(fop(*A.FTOI["FTOIT"], 5, R31, 2))
+    b.store(2, "f5 unchanged", 0xC008000000000000)
+
+
 EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
         "unaligned": g_unaligned, "llsc": g_llsc, "branch": g_branch,
-        "fix": g_fix, "misc": g_misc, "mode": g_mode}
+        "fix": g_fix, "misc": g_misc, "mode": g_mode, "ev8": g_ev8}
 EMIT.update(jit_cases.EMIT)
 
 

@@ -63,6 +63,14 @@
   if (state.r[REG_1])                                                          \
     state.r[REG_3] = V_2;
 
+// CMOV2 (21464, CPU_EXT_EV8): the second half of a CMOVxx, which the 21464
+// splits at Icache fill time. Its first operand's predicate bit says
+// whether to take Rbv, and is set only between the two halves; executed
+// from memory it is clear, so Rc <- Rav, and the CMOV2 Rc,Rb,Rc the chip
+// makes copies Rc to Rc [21464 IDS Rev 1.1k, PDF pp. 73-74;
+// docs/platforms/ev8-isa.md 3.2].
+#define DO_CMOV2 state.r[REG_3] = state.r[REG_1];
+
 #define DO_SLL state.r[REG_3] = state.r[REG_1] << (V_2 & 63);
 #define DO_SRA                                                                 \
   state.r[REG_3] =                                                             \

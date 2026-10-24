@@ -522,7 +522,7 @@ void CAlphaCPU::init() {
   if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum, &m_jit_epoch);
     m_jit_ind_base = m_jit->ind_cache_base();
-    m_jit->set_cpu_identity(m_model->amask, m_model->implver);
+    m_jit->set_cpu_identity(m_model->amask, m_model->implver, m_model->ext);
     m_jit->set_dpc_flush_counter(&m_stat_dpc_flushes);
     m_jit->set_code_page_map(m_code_map);
     m_jit->set_nopflush_audit(m_nopflush_audit ? &m_flush_was_clean : nullptr);
@@ -1515,6 +1515,11 @@ _next_instruction:
       OP(CMOVLE, R12_R3);
     case 0x66:
       OP(CMOVGT, R12_R3);
+    case 0x68: // CMOV2, the 21464's; elsewhere unused and OPCDEC
+      if (m_model->ext & CPU_EXT_EV8) {
+        OP(CMOV2, R12_R3);
+      }
+      UNKNOWN2;
     case 0x6c:
       OP(IMPLVER, X_R3);
     default:
@@ -1784,10 +1789,19 @@ _next_instruction:
       OP(WH64, NOP);
     case 0xFC00:
       OP(WH64EN, NOP);
+    case 0xEC00: // CCB, the 21464's; elsewhere an unused code
+      if (m_model->ext & CPU_EXT_EV8) {
+        OP(CCB, NOP);
+      }
+      [[fallthrough]];
     default:
       // No instruction here. The 21264 completes it as a no-op, where the
       // 21164 trapped; the architecture allows both (cpu-fidelity.md).
-      // The JIT leaves these words to this switch.
+      // The JIT leaves these words to this switch. On the EV8 row the
+      // 21464's LDL_ARM, LDQ_ARM and QUIESCE (18.B000, 18.B400, 18.B800)
+      // are such codes until they are implemented (plan S3), with AMASK
+      // bit 10 clear: they complete as no-ops, as on the 21264 [21464 IDS
+      // p. 676], an Alphabox decision (docs/cpu-fidelity.md).
       if (cpu_family_unused_misc_is_nop(m_model->family)) {
         ES40_EXECUTE_END();
       }
@@ -2124,6 +2138,11 @@ bool CAlphaCPU::fltl_operate(u32 ins, u32 function) {
   case 0x130:
   case 0x530:
     DO_CVTQL;
+    break;
+  case 0x068: // FCMOV2, the 21464's; elsewhere unused and OPCDEC
+    if (!(m_model->ext & CPU_EXT_EV8))
+      return false;
+    DO_FCMOV2;
     break;
   default:
     return false;

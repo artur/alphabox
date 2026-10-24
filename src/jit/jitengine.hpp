@@ -478,10 +478,13 @@ public:
   /// engine compiles for (CpuModel.hpp; CAlphaCPU::init). Both emitters
   /// (x86-64 in jitengine.cpp, AArch64 in jitemit_a64.hpp) hold them as
   /// immediates, and every engine belongs to one CPU, so a machine whose
-  /// processors differ still gets the right values.
-  void set_cpu_identity(uint64_t amask, uint64_t implver) {
+  /// processors differ still gets the right values. ext is the row's
+  /// cpu_model::ext: the instructions classify() compiles only on rows that
+  /// have them (the EV8's).
+  void set_cpu_identity(uint64_t amask, uint64_t implver, uint32_t ext) {
     m_amask = amask;
     m_implver = implver;
+    m_ext = ext;
   }
   ~CJitEngine();
 
@@ -830,6 +833,7 @@ private:
   const bool *m_nopflush_clean = nullptr;
   uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
   uint64_t m_implver = 0;
+  uint32_t m_ext = 0;
   uint64_t m_recorded;
   uint64_t m_itb_gen =
       0; // current ITB generation (bumped on every I-stream TB invalidate)

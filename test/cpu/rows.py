@@ -21,6 +21,8 @@ skipped:
     Builder finds these itself from the words a case emits (word_needs);
   - Unused(word): `word` encodes no instruction of the row's own (Row.own),
     for a case that expects OPCDEC or a no-op from it;
+  - Own(word): `word` is one of the row's own instructions, for a case of
+    that instruction (the EV8's, cases.py group ev8);
   - UNUSED_MISC_NOP: the row completes an unused 18.xxxx code as a no-op.
 """
 import os
@@ -46,6 +48,34 @@ class Unused:
         return hash(("Unused", self.word))
 
 
+class Own:
+    """A need: `word` is an instruction of the row's own."""
+
+    def __init__(self, word):
+        self.word = word & 0xFFFFFFFF
+
+    def __eq__(self, other):
+        return isinstance(other, Own) and other.word == self.word
+
+    def __hash__(self):
+        return hash(("Own", self.word))
+
+
+def function_of(word):
+    """The function field of an instruction word, as the ARM's Table C-1
+    writes codes: the 16 bits of opcode 18 (oo.ffff), the 11 of the
+    floating-point operate opcodes 14-17 (oo.fff), the 7 of the integer
+    operate opcodes 10-13 and 1C (oo.ff); None for the other formats."""
+    op = word >> 26
+    if op == 0x18:
+        return word & 0xFFFF
+    if 0x14 <= op <= 0x17:
+        return (word >> 5) & 0x7FF
+    if 0x10 <= op <= 0x13 or op == 0x1C:
+        return (word >> 5) & 0x7F
+    return None
+
+
 class Row:
     def __init__(self, name, part, family, implver, amask, source,
                  unused_misc_nop=True, ext=(), own=None):
@@ -62,10 +92,10 @@ class Row:
         # that or a trap.
         self.unused_misc_nop = unused_misc_nop
         # The instructions the row has beyond the 21264's, as
-        # {(opcode, function): mnemonic}: the function is the 16-bit field
-        # of opcode 18, the 7-bit field of an operate opcode, or None for
-        # all of an opcode. Empty on the EV6 family and the EV7; the EV8's
-        # are in docs/platforms/ev8-isa.md.
+        # {(opcode, function): mnemonic}: the function is function_of()'s
+        # (16 bits for opcode 18, 11 for opcodes 14-17, 7 for the integer
+        # operates), or None for all of an opcode. Empty on the EV6 family
+        # and the EV7; the EV8's are in docs/platforms/ev8-isa.md.
         self.own = own or {}
 
     def has(self, ext):
@@ -73,7 +103,7 @@ class Row:
 
     def own_instruction(self, word):
         op = word >> 26
-        for key in ((op, None), (op, word & 0xFFFF), (op, (word >> 5) & 0x7F)):
+        for key in ((op, None), (op, function_of(word))):
             if key in self.own:
                 return self.own[key]
         return None
@@ -85,6 +115,10 @@ class Row:
             if m:
                 return "%08x is an instruction of this row (%s)" % (need.word, m)
             return None
+        if isinstance(need, Own):
+            if self.own_instruction(need.word):
+                return None
+            return "%08x is no instruction of this row" % need.word
         if need == UNUSED_MISC_NOP:
             return None if self.unused_misc_nop else (
                 "unused 18.xxxx codes are not no-ops on this row")
@@ -116,10 +150,15 @@ ROWS = {r.name: r for r in (
     # EV7's core and PALcode interface, the EV8's identity and extensions.
     # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 comes
     # with S3, bit 11 with S5 and S6, bit 3 (Tarantula) with S7 and S8.
+    # Its own instructions are those it executes so far (S2); 18.B000,
+    # 18.B400 and 18.B800 (LDL_ARM, LDQ_ARM, QUIESCE) are unused 18.xxxx
+    # codes until S3.
     Row("ev8", "21464 (EV8)", "EV7", 4, _EV68,
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
-        ext={"EV8"}),
+        ext={"EV8"},
+        own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
+             (0x17, 0x068): "FCMOV2"}),
 )}
 
 # The ES40's processor (src/platforms/Platforms.cpp): a row of another

@@ -63,6 +63,14 @@
 
 /* conditional moves */
 
+/* FCMOV2 (21464, CPU_EXT_EV8): the second half of a split FCMOVxx, as CMOV2
+ * (cpu_logical.hpp): executed from memory, Fc <- Fav [21464 IDS Rev 1.1k,
+ * PDF pp. 73-74]. An FP operate instruction, so FEN applies, as to FCMOVxx
+ * [inference: the IDS says nothing of it]. */
+#define DO_FCMOV2                                                              \
+  FPSTART;                                                                     \
+  state.f[FREG_3] = state.f[FREG_1];
+
 /* FCMOVEQ: move if equal to zero */
 #define DO_FCMOVEQ                                                             \
   FPSTART;                                                                     \
