@@ -35,6 +35,7 @@ passes on both engines is listed, so its entry can go with the fix.
 """
 import argparse
 import os
+import re
 import shutil
 import signal
 import socket
@@ -237,9 +238,6 @@ def main():
     work = os.environ.get("ALPHABOX_WORK",
                           os.path.join(HERE, "..", "..", "lab"))
     workdir = os.path.join(os.path.abspath(work), "runs", "cpu-oracle-" + args.label)
-    shutil.rmtree(workdir, ignore_errors=True)
-    os.makedirs(workdir)
-    image.write_rom(os.path.join(workdir, "oracle.rom"), img)
 
     port = args.port or free_port()
     env = {}
@@ -248,7 +246,21 @@ def main():
     if hook:
         env["ALPHABOX_CPU_ANY_BOARD"] = "1"
     env.update(kv.split("=", 1) for kv in args.env)
-    text, emu, secs = run(binary, workdir, row.name, port, env, args.timeout)
+    # COM1 keeps its newest 256 KB when its reader falls behind
+    # (src/devices/isa/Serial.cpp, OUT_QUEUE_MAX), and the results are about
+    # 550 KB: a reader the host stalls loses some (%SRL-W-DROPPED). That is
+    # the host, not the processor, so the image runs once more.
+    for attempt in (1, 2):
+        shutil.rmtree(workdir, ignore_errors=True)
+        os.makedirs(workdir)
+        image.write_rom(os.path.join(workdir, "oracle.rom"), img)
+        text, emu, secs = run(binary, workdir, row.name, port, env, args.timeout)
+        dropped = re.search(r"(\d+) bytes of output dropped", emu)
+        if not dropped:
+            break
+        print("  CPU ORACLE: COM1 dropped %s bytes of results, its reader fell "
+              "behind (host load)%s" % (dropped.group(1), ", running again"
+                                        if attempt == 1 else ""))
     with open(os.path.join(workdir, "serial.txt"), "w") as f:
         f.write(text)
 
@@ -270,13 +282,18 @@ def main():
         tail = text[text.index("@@FATAL"):].split()
         print("  FATAL: an exception the image cannot resume from:", " ".join(tail[1:8]))
         print("  (count, vector, EXC_ADDR, EXC_SUM, MM_STAT, VA, total)")
+        print("  CPU ORACLE: FAIL")
         print("  run directory: %s" % workdir)
         return 1
     first, last = parse(text)
     if first is None:
-        print("  no results: the image did not finish (see %s)" % workdir)
+        if dropped:
+            print("  no results: COM1 dropped some, twice (see %s)" % workdir)
+        else:
+            print("  no results: the image did not finish (see %s)" % workdir)
         for ln in emu.splitlines()[-8:]:
             print("   |", ln)
+        print("  CPU ORACLE: FAIL")
         return 1
 
     mism = [ln for ln in emu.splitlines() if "MISMATCH" in ln]

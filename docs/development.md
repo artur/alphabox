@@ -212,7 +212,10 @@ and so never traps).
 - **Cost.** Under a second per lane (about 1.2 s under Rosetta), in
   `$ALPHABOX_WORK/runs/cpu-oracle-<label>`, removed when the run passes.
   `--port` (or `$PORT`) picks COM1's telnet port; without one a free port
-  is used.
+  is used. The results, about 550 KB, come back over COM1, which keeps
+  only its newest 256 KB when its reader falls behind: a run that lost
+  some (`%SRL-W-DROPPED`, a host too busy to read) is run once more, and
+  fails if it loses some again.
 - **Any processor row.** `--cpu` names the row (`ev68cb`, the default,
   `ev7`, `ev7z`, `ev8`; `--list` shows them). The board is always the ES40:
   plain instructions do not depend on it, and the image replaces the
