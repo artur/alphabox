@@ -32,7 +32,10 @@ Three layers, each added in a different way:
   established, and the EV7 and EV7z. `cpu/ev7/` holds what that family
   changes: the physical address map and the state the XSROM hands the
   console. The JIT emits code per processor. A board takes processors of
-  one family and refuses the other.
+  one family and refuses the other, except under the CPU oracle's test
+  hook (`ALPHABOX_CPU_ANY_BOARD`), which runs any row on the ES40. Each
+  row has a model in `test/cpu/rows.py`, which the oracle checks against
+  `CpuModels.cpp`.
 - **Board**: a row per machine in `platforms/Platform.hpp` and
   `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
   `es40`). It carries the chipset, the processor and CPU count, the memory

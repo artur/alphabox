@@ -68,7 +68,9 @@ first audit was made on 2026-09-18; later entries carry their dates.
   interpreter and from compiled code, against a model written from the
   ARM and the HRM ([development.md](development.md)). A divergence listed
   here has a case that expects the manual's value and names the entry, so
-  the case reports KNOWN until it is fixed and PASS after.
+  the case reports KNOWN until it is fixed and PASS after. `--cpu` runs it
+  on any processor row: the EV7 rows give the EV68CB's verdicts, with
+  their own IMPLVER (3).
 - **Guest programs**: `test/tools/bench_image.py` writes a bootable image
   from a list of instruction words, and `srm_probe.sh` boots one
   (`FLOPPY=<image> EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit`). A

@@ -1,0 +1,253 @@
+"""The processor rows the oracle can test (cpu_oracle.py --cpu), and what
+the cases need to know of each: the identity software reads (IMPLVER, the
+AMASK feature mask), the architecture extensions that mask says the part
+has, and what an opcode 18 function code with no instruction does.
+
+The values are the manuals', with the same citations as the emulator's own
+table of rows, src/cpu/CpuModels.cpp. The two must agree: check_source()
+reads that file and CpuModel.hpp and lists every difference, and a
+difference fails the run. A row the emulator gains (the EV8,
+docs/platforms/ev8.md, S1) is added here with it.
+
+Every row runs on the ES40, whose console the image replaces: the image's
+PALcode is the 21264's (image.py), which is the core of every row (the EV6
+family, the EV7, and the EV8 in its EV7-compatible mode). A row of another
+family than the board's is started through the ALPHABOX_CPU_ANY_BOARD
+test hook (docs/headless.md).
+
+What a case needs of a row (Builder.need, image.py), and so when it is
+skipped:
+  - an extension ("BWX", "FIX", "CIX", "MVI", "PREFETCH"): its AMASK bit.
+    Builder finds these itself from the words a case emits (word_needs);
+  - Unused(word): `word` encodes no instruction of the row's own (Row.own),
+    for a case that expects OPCDEC or a no-op from it;
+  - UNUSED_MISC_NOP: the row completes an unused 18.xxxx code as a no-op.
+"""
+import os
+import re
+
+# AMASK bits [ARM 4th ed. p. 808]: the names are CpuModel.hpp's.
+AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
+              "TRAP": 0x0200, "PREFETCH": 0x1000}
+
+UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
+
+
+class Unused:
+    """A need: `word` is not an instruction of the row's own."""
+
+    def __init__(self, word):
+        self.word = word & 0xFFFFFFFF
+
+    def __eq__(self, other):
+        return isinstance(other, Unused) and other.word == self.word
+
+    def __hash__(self):
+        return hash(("Unused", self.word))
+
+
+class Row:
+    def __init__(self, name, part, family, implver, amask, source,
+                 unused_misc_nop=True, own=None):
+        self.name = name
+        self.part = part
+        self.family = family          # CpuModel.hpp's cpu_family, without CPU_FAMILY_
+        self.implver = implver
+        self.amask = amask
+        self.source = source
+        # cpu_family_unused_misc_is_nop: the 21264 completes an 18.xxxx code
+        # with no instruction as a no-op [21464 IDS p. 676]; the ARM allows
+        # that or a trap.
+        self.unused_misc_nop = unused_misc_nop
+        # The instructions the row has beyond the 21264's, as
+        # {(opcode, function): mnemonic}: the function is the 16-bit field
+        # of opcode 18, the 7-bit field of an operate opcode, or None for
+        # all of an opcode. Empty on the EV6 family and the EV7; the EV8's
+        # are in docs/platforms/ev8-isa.md.
+        self.own = own or {}
+
+    def has(self, ext):
+        return bool(self.amask & AMASK_BITS[ext])
+
+    def own_instruction(self, word):
+        op = word >> 26
+        for key in ((op, None), (op, word & 0xFFFF), (op, (word >> 5) & 0x7F)):
+            if key in self.own:
+                return self.own[key]
+        return None
+
+    def lacks(self, need):
+        """Why a case with this need cannot run on the row, or None."""
+        if isinstance(need, Unused):
+            m = self.own_instruction(need.word)
+            if m:
+                return "%08x is an instruction of this row (%s)" % (need.word, m)
+            return None
+        if need == UNUSED_MISC_NOP:
+            return None if self.unused_misc_nop else (
+                "unused 18.xxxx codes are not no-ops on this row")
+        if not self.has(need):
+            return "no %s (AMASK bit %d clear)" % (
+                need, AMASK_BITS[need].bit_length() - 1)
+        return None
+
+    def describe(self):
+        return "%s: %s, IMPLVER %d, AMASK %#x, unused 18.xxxx %s" % (
+            self.name, self.part, self.implver, self.amask,
+            "no-ops" if self.unused_misc_nop else "trap")
+
+
+_EV68 = AMASK_BITS["BWX"] | AMASK_BITS["FIX"] | AMASK_BITS["CIX"] | \
+    AMASK_BITS["MVI"] | AMASK_BITS["TRAP"] | AMASK_BITS["PREFETCH"]
+
+ROWS = {r.name: r for r in (
+    Row("ev68cb", "21264CB (EV68CB)", "EV6", 2, _EV68,
+        "21264CB HRM 2.15: AMASK feature mask 0x1307, IMPLVER 2"),
+    Row("ev7", "21364 (EV7)", "EV7", 3, _EV68,
+        "IMPLVER 3: ARM 4th ed., Table D-4 (21364/EV7); AMASK: the EV68 "
+        "core's, an inference (src/cpu/CpuModels.cpp)"),
+    Row("ev7z", "21364 (EV7z)", "EV7", 3, _EV68,
+        "the EV7's core and values (src/cpu/CpuModels.cpp)"),
+)}
+
+# The ES40's processor (src/platforms/Platforms.cpp): a row of another
+# family needs the test hook to run on its board.
+BOARD_ROW = "ev68cb"
+
+
+def word_needs(word):
+    """The extension an instruction word belongs to [ARM 4th ed., Appendix
+    C and 4.2, 4.6.5, 4.10, 4.13, 4.4.7-9, 4.11], or None."""
+    op = word >> 26
+    if op in (0x0A, 0x0C, 0x0D, 0x0E):        # LDBU LDWU STW STB
+        return "BWX"
+    if op == 0x14:                            # ITOFx, SQRTx
+        return "FIX"
+    if op == 0x1C:
+        fn = (word >> 5) & 0x7F
+        if fn in (0x00, 0x01):                # SEXTB SEXTW
+            return "BWX"
+        if fn in (0x30, 0x32, 0x33):          # CTPOP CTLZ CTTZ
+            return "CIX"
+        if fn == 0x31 or 0x34 <= fn <= 0x3F:  # PERR, UNPK/PK, MIN/MAX
+            return "MVI"
+        if fn in (0x70, 0x78):                # FTOIT FTOIS
+            return "FIX"
+    if op == 0x22 and (word >> 21) & 31 == 31:  # LDS F31: prefetch, modify intent
+        return "PREFETCH"
+    return None
+
+
+# --- the emulator's table -------------------------------------------------------
+
+_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                    "src", "cpu")
+
+
+def _strip_comments(text):
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def _split_top(s):
+    """Split on commas outside string literals."""
+    out, cur, q = [], "", False
+    for ch in s:
+        if ch == '"':
+            q = not q
+        if ch == "," and not q:
+            out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def read_source(src=_SRC):
+    """The emulator's rows as {name: {field: value}} and the families
+    whose unused 18.xxxx codes are no-ops, from CpuModels.cpp and
+    CpuModel.hpp. Raises ValueError when they cannot be read."""
+    hpp = _strip_comments(open(os.path.join(src, "CpuModel.hpp")).read())
+    cpp = _strip_comments(open(os.path.join(src, "CpuModels.cpp")).read())
+    bits = {m.group(1): int(m.group(2), 16) for m in re.finditer(
+        r"#define\s+AMASK_(\w+)\s+U64\((0x[0-9a-fA-F]+)\)", hpp)}
+    st = re.search(r"struct\s+cpu_model\s*{(.*?)};", hpp, re.S)
+    if not st:
+        raise ValueError("no struct cpu_model in CpuModel.hpp")
+    fields = []
+    for decl in st.group(1).split(";"):
+        decl = decl.strip()
+        if not decl:
+            continue
+        m = re.match(r"(?:const\s+)?\w+\s*\*?\s*(.*)$", decl, re.S)
+        fields += [n.strip().lstrip("*").strip() for n in m.group(1).split(",")]
+    rule = re.search(r"cpu_family_unused_misc_is_nop\s*\(\s*cpu_family\s+(\w+)\s*\)"
+                     r"\s*{\s*return\s+([^;]*);\s*}", hpp)
+    if not rule:
+        raise ValueError("cannot read cpu_family_unused_misc_is_nop")
+    var, expr = rule.group(1), rule.group(2).strip()
+    term = r"%s\s*==\s*CPU_FAMILY_(\w+)" % var
+    if not re.fullmatch(r"%s(\s*\|\|\s*%s)*" % (term, term), expr):
+        raise ValueError("cpu_family_unused_misc_is_nop is not a list of "
+                         "families; teach rows.read_source its new form")
+    nop_families = set(re.findall(term, expr))
+    tab = re.search(r"cpu_model\s+models\[\]\s*=\s*{(.*?)};", cpp, re.S)
+    if not tab:
+        raise ValueError("no models[] table in CpuModels.cpp")
+    out = {}
+    for ent in re.findall(r"{([^{}]*)}", tab.group(1)):
+        vals = _split_top(ent)
+        if len(vals) != len(fields):
+            raise ValueError("a row of %d values for %d fields: %s" % (
+                len(vals), len(fields), ent.strip()))
+        row = dict(zip(fields, vals))
+        row["name"] = row["name"].strip('"')
+        row["part"] = row["part"].strip('"')
+        row["implver"] = int(row["implver"], 0)
+        mask = 0
+        for t in row["amask"].split("|"):
+            t = t.strip()
+            mask |= bits[t[len("AMASK_"):]] if t.startswith("AMASK_") else int(t, 0)
+        row["amask"] = mask
+        row["family"] = row["family"].replace("CPU_FAMILY_", "")
+        out[row["name"]] = row
+    return out, nop_families, bits
+
+
+def check_source(src=_SRC):
+    """Lines that say where this table and the emulator's disagree (empty
+    when they agree), or None when the emulator's source is not here."""
+    if not os.path.exists(os.path.join(src, "CpuModels.cpp")):
+        return None
+    try:
+        theirs, nop_families, bits = read_source(src)
+    except (ValueError, KeyError, OSError) as e:
+        return ["src/cpu/CpuModels.cpp cannot be read: %s" % e]
+    diffs = []
+    for name, value in sorted(AMASK_BITS.items()):
+        if bits.get(name) != value:
+            diffs.append("AMASK_%s: %s here, %s in CpuModel.hpp" % (
+                name, hex(value), hex(bits[name]) if name in bits else "none"))
+    for name in sorted(set(ROWS) | set(theirs)):
+        if name not in theirs:
+            diffs.append("%s: a row here, not in CpuModels.cpp" % name)
+            continue
+        if name not in ROWS:
+            diffs.append("%s: a row of CpuModels.cpp with no model here" % name)
+            continue
+        mine, t = ROWS[name], theirs[name]
+        for fld in ("part", "family", "implver", "amask"):
+            a, b = getattr(mine, fld), t[fld]
+            if a != b:
+                fmt = "%#x" if fld == "amask" else "%s"
+                diffs.append("%s: %s %s here, %s in CpuModels.cpp" % (
+                    name, fld, fmt % a, fmt % b))
+        nop = t["family"] in nop_families
+        if mine.unused_misc_nop != nop:
+            diffs.append("%s: unused 18.xxxx codes %s here, %s by "
+                         "cpu_family_unused_misc_is_nop" % (
+                             name, "no-ops" if mine.unused_misc_nop else "trap",
+                             "no-ops" if nop else "trap"))
+    return diffs

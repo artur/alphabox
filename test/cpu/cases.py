@@ -7,12 +7,18 @@ References: ARM = Alpha Architecture Reference Manual, 4th edition; HRM =
 divergence: docs/cpu-fidelity.md, or a finding of lab/legacy-audit/cpu/
 AUDIT.md (CPU-nn) or lab/legacy-audit/jit/AUDIT.md (JIT-nn) until it is
 fixed. The JIT groups are in jit_cases.py.
+
+What a case expects of the processor (IMPLVER, AMASK) is the row's
+(b.row, rows.py), and a case that needs what the row lacks is skipped
+(image.Builder): the extensions are found from the words a case emits, the
+rest it asks for with b.need().
 """
 import aarm
 import alpha_asm as A
 from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
 import jit_cases
+import rows
 from image import R_SCR, R_TR, TR_COUNT
 
 M64 = (1 << 64) - 1
@@ -111,6 +117,7 @@ def _h(v):
 
 def op_case(b, name, a, bv, ra, rb, rc, lit=False, rc_init=None):
     """One integer operate instruction; the destination is stored."""
+    b.start()                   # the operand loads are the case's
     regs = {}
     if ra != R31:
         b.load(ra, a)
@@ -258,6 +265,7 @@ def g_trapv(b):
                 if rc == R31:     # ARM 14.3.2: UNPREDICTABLE whether it traps
                     rc = 1 + (rc + 3) % 23
                 regs = {ra: a}
+                b.start()
                 b.load(ra, a)
                 if rb != ra:
                     b.load(rb, bv)
@@ -292,6 +300,7 @@ def g_trapv(b):
         for a in (0x7FFFFFFF, 0x7FFFFFFFFFFFFFFF, 0x80000000):
             for lit in (1, 0xFF):
                 ra, rb, rc = _regs(distinct_only=True)
+                b.start()
                 b.load(ra, a)
                 res, ovf = aarm.operate(name, a, lit)
                 b.begin("%s r%d,#%d,r%d (a=%s)" % (name, ra, lit, rc, _h(a)))
@@ -494,6 +503,7 @@ def g_unaligned(b):
         mwrite(m, q, 8, before[0])
         mwrite(m, q + 8, 8, before[1])
     # Crossing into the next page: Alphabox traps here, as the 21264 does.
+    b.start()
     b.emit(mem(OP["LDA"], 9, R_SCR, 0x2000))         # r9 = page 1
     b.begin("LDQ r2,-4(r9) (misaligned, crosses a page)")
     b.load(2, sentinel)
@@ -748,12 +758,12 @@ def g_misc(b):
     b.begin("AMASK #-1 and #0xff")
     b.load(1, M64)
     b.emit(A.ins_op("AMASK", R31, 1, 2))
-    b.store(2, "AMASK -1", aarm.AMASK(0, M64)[0])
+    b.store(2, "AMASK -1", aarm.AMASK(0, M64, b.row.amask)[0])
     b.emit(A.ins_op("AMASK", R31, 0xFF, 3, lit=True))
-    b.store(3, "AMASK #0xff", aarm.AMASK(0, 0xFF)[0])
+    b.store(3, "AMASK #0xff", aarm.AMASK(0, 0xFF, b.row.amask)[0])
     b.begin("IMPLVER")
     b.emit(A.ins_op("IMPLVER", R31, 1, 4, lit=True))
-    b.store(4, "IMPLVER", aarm.EV68CB_IMPLVER)
+    b.store(4, "IMPLVER", b.row.implver)
     # RPCC returns all of CC: the offset written to CC<63:32> (HRM 5.1.1).
     b.begin("RPCC")
     b.emit(mfc(A.MISC["RPCC"], 5, R31))
@@ -773,22 +783,26 @@ def g_misc(b):
         b.trap_check()
     # An opcode 18 function with no instruction is a NOP on the 21264
     # (21464 IDS p.676; docs/cpu-fidelity.md): no trap, Ra and the memory
-    # at Rb untouched, the next instruction runs.
+    # at Rb untouched, the next instruction runs. A row that traps them, or
+    # has an instruction at one of these codes, skips it (rows.py).
     b.begin("unused 18.xxxx functions are NOPs")
     b.load(21, 0x0123456789ABCDEF)
     b.load(22, 0x5A5A5A5A12345678)
     for code in (0x0001, 0x0200, 0x0800, 0x1000, 0x2000, 0x3C00, 0x5000,
                  0x6000, 0x7C00, 0x9000, 0xB000, 0xD000, 0xE400, 0xEC00,
                  0xF400, 0xFE00, 0xFFFF):
-        b.trap_clear()
-        b.emit(mfc(code, 21, 22))
-        b.trap_check()
-        b.emit(mem(OP["STQ"], 22, R_SCR, 0x200))    # next instruction runs
-        b.emit(mem(OP["LDQ"], 23, R_SCR, 0x200))
-        b.store(23, "18.%04X: next instruction ran" % code,
-                0x5A5A5A5A12345678)
-        b.store(21, "18.%04X: Ra unchanged" % code, 0x0123456789ABCDEF)
-        b.store(22, "18.%04X: Rb unchanged" % code, 0x5A5A5A5A12345678)
+        with b.part("unused 18.%04X is a NOP" % code):
+            b.need(rows.UNUSED_MISC_NOP)
+            b.need(rows.Unused(mfc(code, 21, 22)))
+            b.trap_clear()
+            b.emit(mfc(code, 21, 22))
+            b.trap_check()
+            b.emit(mem(OP["STQ"], 22, R_SCR, 0x200))    # next instruction runs
+            b.emit(mem(OP["LDQ"], 23, R_SCR, 0x200))
+            b.store(23, "18.%04X: next instruction ran" % code,
+                    0x5A5A5A5A12345678)
+            b.store(21, "18.%04X: Ra unchanged" % code, 0x0123456789ABCDEF)
+            b.store(22, "18.%04X: Rb unchanged" % code, 0x5A5A5A5A12345678)
     # RC/RS: Ra <- intr_flag, then clear/set it (ARM 4.12).
     b.begin("RS, RS, RC, RC")
     b.emit(mfc(A.MISC["RS"], 7, R31))
@@ -818,6 +832,7 @@ def g_misc(b):
                 ("CALL_PAL 100", call_pal(0x100))]
     for nm, word in illegal:
         b.begin("%s raises OPCDEC" % nm)
+        b.need(rows.Unused(word))
         b.trap_clear()
         at = b.va()
         b.emit(word)
@@ -836,6 +851,7 @@ def g_misc(b):
     # instruction, bit 0 clear from native mode; CALL_PAL is not an
     # exception, so EXC_ADDR keeps the last exception's PC (HRM 5.2.7).
     b.begin("CALL_PAL 83: linkage and EXC_ADDR")
+    b.need(rows.Unused(0x01 << 26))
     b.trap_clear()
     last = b.va()
     b.emit(0x01 << 26)                              # OPCDEC: EXC_ADDR = here
@@ -874,11 +890,12 @@ def g_mode(b):
         b.emit(mem(OP["LDA"], 17, 17, 8))       # r17 = after the CALL_PAL
         b.emit(call_pal(0x02))
 
-    # A store and a load through the DTB, in user mode.
+    # A store and a load through the DTB, in user mode. (A case places its
+    # user-mode code after begin(), so that the code is the case's.)
+    b.begin("user mode: STQ/LDQ/STL/LDBU through the DTB")
     snip = b.user_snippet([
         mem(OP["STQ"], 1, 9, 0x10), mem(OP["LDQ"], 2, 9, 0x10),
         mem(OP["STL"], 1, 9, 0x18), mem(OP["LDBU"], 3, 9, 0x19), exit_])
-    b.begin("user mode: STQ/LDQ/STL/LDBU through the DTB")
     b.li(9, ud)
     b.load(1, 0x0102030405060708)
     b.trap_clear()
@@ -889,14 +906,14 @@ def g_mode(b):
     b.emit(mem(OP["LDQ"], 4, R_SCR, 0x4010))
     b.store(4, "memory, through KSEG", 0x0102030405060708)
     # RPCC, AMASK and the unprivileged CALL_PAL linkage in user mode.
+    b.begin("user mode: RPCC, AMASK, CALL_PAL 83")
     snip = b.user_snippet([mfc(A.MISC["RPCC"], 5, R31),
                            A.ins_op("AMASK", R31, 0xFF, 6, lit=True),
                            call_pal(0x83), exit_])
-    b.begin("user mode: RPCC, AMASK, CALL_PAL 83")
     enter(snip)
     b.emit(opl(0x12, 0x34, 5, 32, 5))
     b.store(5, "RPCC<63:32>", 0x12345678)
-    b.store(6, "AMASK #0xff", aarm.AMASK(0, 0xFF)[0])
+    b.store(6, "AMASK #0xff", aarm.AMASK(0, 0xFF, b.row.amask)[0])
     b.store(0, "linkage", snip + 12)
     # Traps from user mode: one instruction, then back.
     cases = [
@@ -919,8 +936,8 @@ def g_mode(b):
          uf + 3, (0x0A << 4) | 4, 5),
     ]
     for nm, word, vec, va, mmstat, reg in cases:
-        snip = b.user_snippet([word, exit_])
         b.begin("user mode: %s" % nm)
+        snip = b.user_snippet([word, exit_])
         b.load(10, page2)
         b.li(11, uk)
         b.li(12, uf)

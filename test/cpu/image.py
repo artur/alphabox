@@ -22,9 +22,11 @@ any), an IACV on the kernel-only code page in kernel mode at R17, and
 anything it cannot resume from (ITB miss, any other IACV, machine check,
 double miss, reset) ends the run through the native `fatal` path.
 """
+import contextlib
 import struct
 
 import alpha_asm as A
+import rows
 from alpha_asm import (IPR, OP, R31, Asm, bra, call_pal, hw_ld, hw_mfpr,
                        hw_mtpr, hw_ret, hw_st, jmp, mem, opl, opr)
 
@@ -352,10 +354,20 @@ class Builder:
     documented divergence: that value is reported as KNOWN rather than
     FAIL. Scope "compiled" accepts it from the last pass only (a divergence
     of the JIT's compiled code); the default, "all", from either.
+
+    The cases are for one processor row (rows.py). A case runs only where
+    the row has what it needs: the extension of every word it emits
+    (rows.word_needs), and whatever it asks for with need(). Elsewhere
+    everything the case emitted is taken back and its results are counted
+    in `skipped`; part() does the same for a span inside a case. So a case
+    that may be skipped must leave nothing a later case relies on.
     """
 
-    def __init__(self, passes, blocks=True):
+    def __init__(self, passes, blocks=True, row=None):
         self.passes = passes
+        self.row = row or rows.ROWS[rows.BOARD_ROW]
+        self.skipped = []       # (case or part, why, results not run)
+        self._spans = []        # the open case, then its open parts
         # Every case starts a block of its own (block()): without that a
         # group is one straight run of thousands of instructions, which the
         # JIT records only from the last dispatch batch's boundary to the next
@@ -394,10 +406,74 @@ class Builder:
         assert self.kcode.here - KCODE_VA <= 0x2000, "kernel code page full"
         return va
 
+    def start(self):
+        """The next case begins here, before its begin(): what a case emits
+        ahead of the block begin() starts (operand loads at the end of the
+        previous block) is still its own, and goes with it if skipped."""
+        self._close_all()
+        self._open(None)
+
     def begin(self, name):
+        if len(self._spans) != 1 or self._spans[0]["name"] is not None:
+            self._close_all()
+            self._open(name)
+        self._spans[0]["name"] = name
         self.case = name
         if self.blocks:
             self.block()
+
+    @contextlib.contextmanager
+    def part(self, name):
+        """A span of the current case that is skipped on its own when the
+        row lacks what it needs, the rest of the case still running."""
+        assert self._spans, "a part outside a case"
+        self._open(name)
+        depth = len(self._spans)
+        yield
+        assert len(self._spans) == depth
+        self._close()
+
+    def need(self, what):
+        """The case (or part) being emitted needs `what` of the row
+        (rows.py: an extension, rows.Unused(word), rows.UNUSED_MISC_NOP)."""
+        assert self._spans, "a need outside a case"
+        self._spans[-1]["needs"].add(what)
+
+    def _open(self, name):
+        self._spans.append({
+            "name": name, "needs": set(), "asm": len(self.asm.words),
+            "fixups": len(self.asm.fixups), "user": len(self.user.words),
+            "kcode": len(self.kcode.words), "results": len(self.results),
+            "pool": len(self.pool), "traps": self.expected_traps,
+            "res_base": self.res_base})
+
+    def _close(self):
+        s = self._spans.pop()
+        needs = set(s["needs"])
+        for asm, n in ((self.asm, s["asm"]), (self.user, s["user"]),
+                       (self.kcode, s["kcode"])):
+            needs.update(filter(None, map(rows.word_needs, asm.words[n:])))
+        why = sorted(filter(None, (self.row.lacks(n) for n in needs)))
+        if not why:
+            return
+        # Take back everything the span emitted and declared.
+        here = self.asm.base + 4 * s["asm"]
+        del self.asm.words[s["asm"]:]
+        del self.asm.fixups[s["fixups"]:]
+        for lab in [k for k, v in self.asm.labels.items() if v >= here]:
+            del self.asm.labels[lab]
+        del self.user.words[s["user"]:]
+        del self.kcode.words[s["kcode"]:]
+        self.skipped.append((s["name"], "; ".join(why),
+                             len(self.results) - s["results"]))
+        del self.results[s["results"]:]
+        self.pool = {v: i for v, i in self.pool.items() if i < s["pool"]}
+        self.expected_traps = s["traps"]
+        self.res_base = s["res_base"]
+
+    def _close_all(self):
+        while self._spans:
+            self._close()
 
     def block(self):
         """End the block here: BR R31 over one word. The JIT records a block
@@ -502,6 +578,7 @@ class Builder:
         self.res_base = 0
 
         emit_cases(self)
+        self._close_all()
 
         self.case = "harness"
         a.emit(ldq(0, R_TR, TR_TOTAL))
@@ -528,6 +605,14 @@ class Builder:
 
         img = bytearray(IMAGE_TOP)
         pal = build_pal(TR_PA, kseg(a.labels["main"]), kseg(a.labels["fatal"]))
+        # What the cases kept, the row has; anything else is the image's own
+        # (print_hex's STB is BWX), and a row without it cannot be tested.
+        lacks = sorted({self.row.lacks(n) for n in filter(None, map(
+            rows.word_needs, list(code) + list(pal.values()) + self.user.words
+            + self.kcode.words))} - {None})
+        if lacks:
+            raise ValueError("the image itself needs what row %s lacks: %s"
+                             % (self.row.name, "; ".join(lacks)))
         for addr, w in pal.items():
             struct.pack_into("<I", img, addr, w)
         for i, w in enumerate(code):

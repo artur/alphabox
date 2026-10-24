@@ -37,7 +37,7 @@ belongs in the packet's **Findings**.
 
 | Layer | Files | Add by |
 | --- | --- | --- |
-| Processor | `src/cpu/CpuModel.hpp`, `src/cpu/CpuModels.cpp` | a table row (identity, extensions) for a part of the EV6 family; a different family needs a core, which is a separate project |
+| Processor | `src/cpu/CpuModel.hpp`, `src/cpu/CpuModels.cpp`, `test/cpu/rows.py` | a table row (identity, extensions) for a part of the EV6 family, and the same row's model in `rows.py` (the CPU oracle fails while the two differ; `cpu_oracle.py --cpu <row>` then tests the row on the ES40); a different family needs a core, which is a separate project |
 | Chipset | `src/chipsets/Chipset.hpp` (`CChipset`), `src/chipsets/tsunami/` | a `CChipset` implementation in `src/chipsets/<name>/` and a `chipset_kind`; only needed for a machine whose chipset is not Tsunami |
 | Board | `src/platforms/Platform.hpp`, `src/platforms/Platforms.cpp`, `src/platforms/<board>/` | a table row (chipset, processors, memory limits, slots, interrupt wiring, firmware image and format, secondary start, board hardware) and the board's own functions and parts in its directory, declared in `Boards.hpp` |
 

@@ -2,14 +2,22 @@
 """Instruction conformance test of the Alpha CPU against the Architecture
 Reference Manual (the oracle of docs/development.md, "Test tools").
 
-    cpu_oracle.py <alphabox-binary> [label] [--port N] [--passes N]
-                  [--group G ...] [--verbose] [--keep]
+    cpu_oracle.py <alphabox-binary> [label] [--cpu ROW] [--port N]
+                  [--passes N] [--group G ...] [--verbose] [--keep]
 
 It builds an image of test cases (cases.py) whose expected results come
 from aarm.py, a model written from the manual, boots it on the emulator in
 place of the console firmware (image.py), reads every result back over
 COM1, and compares. No firmware is needed and nothing else is booted: a run
 is about a second.
+
+The processor is a row of the emulator's (--cpu, default ev68cb, the ES40's
+own), always on the ES40 board: plain instructions do not depend on the
+board, and a row of another family (the EV7's) is let onto it by the
+ALPHABOX_CPU_ANY_BOARD test hook. What the cases expect of the row (IMPLVER,
+AMASK, the extensions, the unused opcode 18 rule) is rows.py's, which is
+checked against src/cpu/CpuModels.cpp first; a case that needs what the
+row lacks is skipped and counted (SKIP).
 
 Every case runs `passes` times (default 20). The first pass is stored
 apart from the others: on a JIT lane it is interpreted, and the last pass
@@ -39,6 +47,7 @@ sys.path.insert(0, HERE)
 
 import cases  # noqa: E402
 import image  # noqa: E402
+import rows  # noqa: E402
 
 CFG = """sys0 = tsunami
 {
@@ -49,7 +58,7 @@ CFG = """sys0 = tsunami
   rom.dpr = "dpr.rom";
   exit_on_pal_halt = true;
 
-  cpu0 = ev68cb
+  cpu0 = %(cpu)s
   {
     speed = 800M;
   }
@@ -57,7 +66,7 @@ CFG = """sys0 = tsunami
   serial0 = serial
   {
     address = "127.0.0.1";
-    port = %d;
+    port = %(port)d;
   }
 
   pci0.7 = ali
@@ -75,10 +84,10 @@ def free_port():
     return p
 
 
-def run(binary, workdir, port, env_extra, timeout):
+def run(binary, workdir, cpu, port, env_extra, timeout):
     """Boot the image; return (serial text, emulator output, seconds)."""
     with open(os.path.join(workdir, "es40.cfg"), "w") as f:
-        f.write(CFG % port)
+        f.write(CFG % {"cpu": cpu, "port": port})
     env = dict(os.environ)
     env.update(env_extra)
     out = open(os.path.join(workdir, "alphabox.out"), "wb")
@@ -173,6 +182,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("binary")
     ap.add_argument("label", nargs="?", default="cpu")
+    ap.add_argument("--cpu", default=rows.BOARD_ROW, metavar="ROW",
+                    help="the processor row (default %(default)s; see --list)")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "0")),
                     help="COM1 telnet port (default: $PORT, else a free one)")
     ap.add_argument("--passes", type=int, default=20)
@@ -193,15 +204,35 @@ def main():
     if args.list:
         for g, doc in cases.GROUPS:
             print("%-10s %s" % (g, doc))
+        print()
+        for r in rows.ROWS.values():
+            print("--cpu %s" % r.describe())
         return 0
+
+    row = rows.ROWS.get(args.cpu)
+    if row is None:
+        print("cpu_oracle: no model of a row %s in test/cpu/rows.py (rows: %s)"
+              % (args.cpu, ", ".join(rows.ROWS)))
+        return 2
+    diffs = rows.check_source()
+    if diffs:
+        print("cpu_oracle: test/cpu/rows.py and src/cpu/CpuModels.cpp disagree:")
+        for d in diffs:
+            print("  %s" % d)
+        print("  CPU ORACLE: FAIL")
+        return 1
 
     binary = os.path.abspath(args.binary)
     if not os.access(binary, os.X_OK):
         print("cpu_oracle: %s is not executable" % binary)
         return 2
     groups = args.group or [g for g, _ in cases.GROUPS]
-    b = image.Builder(args.passes, blocks=not args.no_blocks)
-    img = b.build(lambda bb: cases.emit(bb, groups))
+    b = image.Builder(args.passes, blocks=not args.no_blocks, row=row)
+    try:
+        img = b.build(lambda bb: cases.emit(bb, groups))
+    except ValueError as e:
+        print("cpu_oracle: %s" % e)
+        return 2
 
     work = os.environ.get("ALPHABOX_WORK",
                           os.path.join(HERE, "..", "..", "lab"))
@@ -211,8 +242,13 @@ def main():
     image.write_rom(os.path.join(workdir, "oracle.rom"), img)
 
     port = args.port or free_port()
-    env = dict(kv.split("=", 1) for kv in args.env)
-    text, emu, secs = run(binary, workdir, port, env, args.timeout)
+    env = {}
+    # The ES40 takes the EV6 family; another row needs the test hook.
+    hook = row.family != rows.ROWS[rows.BOARD_ROW].family
+    if hook:
+        env["ALPHABOX_CPU_ANY_BOARD"] = "1"
+    env.update(kv.split("=", 1) for kv in args.env)
+    text, emu, secs = run(binary, workdir, row.name, port, env, args.timeout)
     with open(os.path.join(workdir, "serial.txt"), "w") as f:
         f.write(text)
 
@@ -220,6 +256,16 @@ def main():
           "%d passes, %.1f s" % (args.label, len(b.results),
                                  len({r[0] for r in b.results}),
                                  b.code_words, args.passes, secs))
+    print("  row %s%s" % (row.describe(), "" if diffs is not None else
+                          " (src/cpu/CpuModels.cpp not found: not checked)"))
+    if hook and ("%%CPU-W-ANYBOARD: a %s on" % row.part) not in emu:
+        print("  the emulator did not say it runs a %s (%%CPU-W-ANYBOARD)"
+              % row.part)
+        for ln in emu.splitlines()[-8:]:
+            print("   |", ln)
+        print("  CPU ORACLE: FAIL")
+        print("  run directory: %s" % workdir)
+        return 1
     if "@@FATAL" in text:
         tail = text[text.index("@@FATAL"):].split()
         print("  FATAL: an exception the image cannot resume from:", " ".join(tail[1:8]))
@@ -265,6 +311,17 @@ def main():
         print("  %-10s PASS %d  KNOWN %d  FAIL %d" % (
             tag, counts.get((tag, "PASS"), 0), counts.get((tag, "KNOWN"), 0),
             counts.get((tag, "FAIL"), 0)))
+    # Skipped results are not run on this row, in either pass.
+    why = {}
+    for name, reason, n in b.skipped:
+        ent = why.setdefault(reason, [0, 0, name])
+        ent[0] += 1
+        ent[1] += n
+    print("  SKIP %d results (%d cases or parts) that need what row %s lacks"
+          % (sum(n for _, _, n in b.skipped), len(b.skipped), row.name))
+    for reason, (ncase, nres, first) in sorted(why.items()):
+        print("    SKIP %d results, %d cases or parts (the first: %s): %s" % (
+            nres, ncase, first, reason))
     shown = 0
     for tag, (case, fld, expect, mask, known), val in fails:
         if shown < 60:

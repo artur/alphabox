@@ -381,13 +381,11 @@ def UNPKBW(_a, b):
 
 # --- 4.11 Miscellaneous --------------------------------------------------------
 
-# 21264/EV68CB HRM 2.15: AMASK feature mask 0x1307, IMPLVER 2.
-EV68CB_AMASK = 0x1307
-EV68CB_IMPLVER = 2
 
-
-def AMASK(_a, b):  # 4.11.1: Rc <- Rbv AND NOT CPU_feature_mask
-    return b & u64(~EV68CB_AMASK), False
+# The CPU feature mask and the IMPLVER value are the processor's: rows.py
+# has them for each row the oracle runs.
+def AMASK(_a, b, cpu_feature_mask):  # 4.11.1: Rc <- Rbv AND NOT CPU_feature_mask
+    return b & u64(~cpu_feature_mask), False
 
 
 # --- 2.2 / 4.10.18-19: floating register images and the FIX moves ----------

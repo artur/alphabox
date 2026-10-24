@@ -693,6 +693,10 @@ toolchain.
 Binutils knows none of the new instructions, so test programs carry them
 as `.long` words until a small assembler patch exists (out of tree).
 
+The CPU oracle runs any row on the ES40 board (`cpu_oracle.py --cpu`,
+[development.md](../development.md)), so the S1 to S10 cases run with
+`--cpu ev8` once the row exists and has its model in `test/cpu/rows.py`.
+
 ## Findings
 
 2026-10-23:

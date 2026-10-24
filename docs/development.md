@@ -8,7 +8,7 @@
 | `test/rom/` | the ES40 firmware regression test and its reference console log |
 | `test/tools/` | the test tools below |
 | `test/unit/` | unit tests: one model or device's source with the rest of the machine stubbed out |
-| `test/cpu/` | the instruction conformance oracle: the image builder, the cases, and a model of the instructions written from the Architecture Reference Manual |
+| `test/cpu/` | the instruction conformance oracle: the image builder, the cases, a model of the instructions written from the Architecture Reference Manual, and the processor rows it runs |
 | `test/arc/`, `test/vms/`, `test/nt/` | configurations and firmware for the ARC, OpenVMS and Windows NT runs |
 | `test/platforms/` | real machines' console output, for platform bring-ups |
 | `docs/` | this documentation |
@@ -136,7 +136,7 @@ with SDL and pcap; on another build only the trees are compared.
 | `JIT_VERIFY` build | Every compiled block re-run by the interpreter and compared. A clean SRM boot is ~130 million blocks. |
 | `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
 | `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. |
-| `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, and the JIT groups), each from the interpreter and from compiled code. A second per lane (below). |
+| `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, and the JIT groups), each from the interpreter and from compiled code, on any processor row (`--cpu`). A second per lane (below). |
 | `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
 | `bench_image.py` | A bootable image from a list of instruction words. |
 | Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `_CALLS`, `_I2C`, `_MP`, `_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get ([headless.md](headless.md)). |
@@ -148,7 +148,7 @@ disagreements with the architecture; for those see
 #### The instruction oracle
 
 ```
-test/cpu/cpu_oracle.py <alphabox-binary> [label] [--port N] [--group G] [--passes N]
+test/cpu/cpu_oracle.py <alphabox-binary> [label] [--cpu ROW] [--port N] [--group G] [--passes N]
 ```
 
 The expected value of every result comes from the manuals, not from the
@@ -204,6 +204,34 @@ and so never traps).
   `$ALPHABOX_WORK/runs/cpu-oracle-<label>`, removed when the run passes.
   `--port` (or `$PORT`) picks COM1's telnet port; without one a free port
   is used.
+- **Any processor row.** `--cpu` names the row (`ev68cb`, the default,
+  `ev7`, `ev7z`; `--list` shows them). The board is always the ES40:
+  plain instructions do not depend on it, and the image replaces the
+  console, so a row of another family (the EV7's, whose own boards need
+  the Marvel console) runs there through the `ALPHABOX_CPU_ANY_BOARD`
+  test hook ([headless.md](headless.md)), which the tool sets; the
+  emulator's `%CPU-W-ANYBOARD` line is checked to name the row's part.
+  Every row the oracle can run has the 21264's core, which its PALcode
+  is written for.
+- **What is row-specific** is in `test/cpu/rows.py`: IMPLVER, the AMASK
+  feature mask and so the extensions (BWX, FIX, CIX, MVI, prefetch with
+  modify intent), whether an unused 18.xxxx code is a no-op
+  (`cpu_family_unused_misc_is_nop`), and the instructions a row has
+  beyond the 21264's (none yet; the EV8's will be). The values are the
+  manuals', as `src/cpu/CpuModels.cpp` gives them, and every run first
+  reads that file and `CpuModel.hpp` and fails if the two tables differ,
+  so a row added to the emulator is added to `rows.py` with it.
+- **SKIP.** A case runs only where the row has what it needs: the
+  extension of every word it emits (found from the words themselves),
+  and what it asks for with `b.need()` (an encoding that must be unused,
+  the 18.xxxx no-op rule); `b.part()` does the same for a span inside a
+  case. Elsewhere the builder takes back everything the case emitted, and
+  the run prints its results as `SKIP`, by reason. Today no row lacks
+  anything, so every row runs every case. The image's own code needs BWX
+  (its printer stores bytes), so a row without it is refused. A case that
+  may be skipped must not leave anything a later case relies on, and its
+  setup belongs to it: a case that loads operands before `b.begin()`
+  calls `b.start()` first.
 
 A case is a few lines of `cases.py`: load operands with `b.load`, emit the
 instruction, store each register or trap-record field to check with

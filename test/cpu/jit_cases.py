@@ -30,6 +30,7 @@ import aarm
 import alpha_asm as A
 from alpha_asm import OP, R31, bra, call_pal, fop, jmp, mem, mfc, opl, opr
 import image
+import rows
 from image import R_PASS, R_SCR, R_TR
 
 M64 = (1 << 64) - 1
@@ -681,6 +682,7 @@ def fault_case(b, rng, kind, pos, E, T, pre):
         word = A.ins_op("ADDQ/V", 10, 15, 11)
     else:
         word = 0x01 << 26
+        b.need(rows.Unused(word))
     # On the edge passes the instruction faults and does nothing (the
     # PALcode skips it); ADDQ/V is a trap, which writes its result first.
     if kind == "ovf":
@@ -914,11 +916,11 @@ def g_jitmode(b):
     target, a fault). Compiled blocks are keyed by the mode they were translated in,
     because that is when the mode's right to execute was settled."""
     exit_ = A.call_pal(0x84)
+    b.begin("jitmode: a block compiled in kernel mode, entered in user mode")
     x = b.kcode_snippet([exit_])                   # kernel-only: back at R17
     y = b.user.here
     y = b.user_snippet([bra(OP["BR"], R31, (x - (y + 4)) // 4)])
     noop = b.user_snippet([exit_])
-    b.begin("jitmode: a block compiled in kernel mode, entered in user mode")
     # the ITB entries (CALL_PAL 02 installs them; user mode, straight back)
     b.li(16, noop)
     link_r17(b, 1)
