@@ -506,7 +506,7 @@ and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 | `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
-| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below) |
+| The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below); another processor's `IMB` drops the lines since 2026-10-24 |
 | `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. It matters the day a row is added for a part that does not |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
@@ -517,6 +517,21 @@ invalidates every one of them with a single store instead of a walk. It
 must invalidate them, whatever else a flush decides to skip: the lines are
 tagged by virtual address, so code mapped at an address that has held
 other code is a change no physically-keyed bookkeeping can see.
+
+Since 2026-10-24 an `IMB` on one processor also drops every other
+processor's lines, at its next dispatch batch (the interpreter build: its
+next timer check), through `g_icache_flush` (`AlphaCPU.hpp`). The 21264's
+Icache is not coherent ("Icache coherence is not maintained by hardware",
+EV68CB/DC HRM 4.5.1), but it keeps old code only in 64-byte blocks it had
+fetched; a 2 KB line kept far more, until the processor's own `IMB`. Linux
+on four EV7s died of it: the first processor to idle traps on `CALL_PAL
+WTINT` (the EV7 UNIX PALcode has none), Linux patches the call out of
+`arch_cpu_idle` and runs `IMB` on that processor only (`traps.c`,
+`do_entIF`), and the boot processor, which had run `copy_thread` in the
+same 2 KB, executed the old call, trapped, found the patched word and
+stopped with "Instruction fault 4" ([linux.md](linux.md)). Seeing another
+processor's change at that processor's `IMB` is more coherent than the
+hardware, which the architecture allows.
 
 **`AMASK`**: no document lists the 21364's AMASK, and neither EV7 PALcode
 nor the ES47 console executes `AMASK` or `IMPLVER` (E1), so the EV7 rows'

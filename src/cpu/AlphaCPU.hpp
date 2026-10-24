@@ -71,6 +71,22 @@ bool alpha_valid_va_form(u64 virt, bool va48);
 // pages are shared, so new code loaded by one CPU must invalidate the others.
 inline std::atomic<u64> g_jit_code_flush{0};
 
+// Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB), whether or
+// not it found code written. Each CPU compares it at its periodic check (the
+// JIT's dispatch batch, the interpreter's timer check) and drops its own
+// instruction-cache lines when another CPU flushed. The 21264's Icache is
+// not coherent either ("Icache coherence is not maintained by hardware",
+// EV68CB/DC HRM 4.5.1), but its blocks are 64 bytes: a processor keeps old
+// code only where it fetched those very bytes. A line here is 2 KB, so a
+// processor that ran anything near a patched instruction kept the old one
+// past the writer's IMB, until its own. Linux patches CALL_PAL WTINT out of
+// arch_cpu_idle on the first processor that traps on it, with an IMB there
+// only (traps.c, do_entIF); with four EV7s the boot processor, which had run
+// copy_thread in the same 2 KB, then trapped on the old instruction and
+// died (docs/linux.md). Seeing another processor's change at its IMB is more
+// coherent than the hardware, which the architecture allows.
+inline std::atomic<u64> g_icache_flush{0};
+
 /// Number of entries in the Instruction Cache
 #define ICACHE_ENTRIES 1024
 // Size of Instruction Cache entries in DWORDS (instructions)
@@ -517,6 +533,23 @@ public:
     // state.pc natively, so pc_phys/rem_ins_in_page are stale after a
     // native pass and the next interpreted fetch must retranslate.
     state.rem_ins_in_page = 0;
+  }
+
+  /// g_icache_flush at this CPU's last look, or at its own flush.
+  u64 m_icache_flush_seen = 0;
+  /// Another CPU flushed its instruction cache (g_icache_flush): drop this
+  /// CPU's lines too, as flush_icache does, so that the next fetch reads
+  /// what that CPU wrote before its IMB.
+  inline void honour_remote_icache_flush() {
+    const u64 f = g_icache_flush.load(std::memory_order_relaxed);
+    if (f == m_icache_flush_seen)
+      return;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    m_icache_flush_seen = f;
+    ++state.icache_gen;
+    state.next_icache = 0;
+    state.last_found_icache = 0;
+    break_seq_icache();
   }
 
   // Data page translation cache: direct-mapped by virtual page (kDpcEntries
@@ -1334,6 +1367,8 @@ inline void CAlphaCPU::flush_icache() {
   state.next_icache = 0; // old version, may be relied on elsewhere
   state.last_found_icache = 0;
   break_seq_icache();
+  // Every other CPU drops its lines at its next check (g_icache_flush).
+  m_icache_flush_seen = ++g_icache_flush;
   // What CAN be skipped is the compiled block cache below, because a block is
   // validated against the live physical address on every dispatch and against
   // its source words whenever a flush has been seen. A remap therefore misses

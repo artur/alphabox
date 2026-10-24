@@ -344,8 +344,10 @@ void CAlphaCPU::jit_run(int budget) {
     dbg_dump_state();
   }
   // Another CPU flushed its instruction cache (IC_FLUSH / IMB after loading
-  // or changing code): drop this CPU's compiled blocks too. Lazy -- unchanged
-  // blocks are re-hashed and kept.
+  // or changing code): drop this CPU's instruction-cache lines, which the
+  // interpreter fetches from (g_icache_flush), and its compiled blocks too.
+  // Lazy -- unchanged blocks are re-hashed and kept.
+  honour_remote_icache_flush();
   if (m_jit) {
     const u64 cf = g_jit_code_flush.load(std::memory_order_relaxed);
     if (cf != m_jit_code_seen) {

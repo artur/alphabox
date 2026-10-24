@@ -1195,6 +1195,9 @@ _next_instruction:
     // wall-clock (batch top).
     state.instruction_count += _icount_accum;
     _icount_accum = 0;
+    // Another CPU's IMB (AlphaCPU.hpp, g_icache_flush); the JIT build looks
+    // at the start of each dispatch batch instead.
+    honour_remote_icache_flush();
 
     // There are one or more active delayed irq_h interrupts. Go through the 6
     // irq_h timers, decrease them as needed, and set the interrupt if the
