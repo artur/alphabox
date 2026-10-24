@@ -630,6 +630,7 @@ The Marvel chipset ([platforms/marvel.md](platforms/marvel.md)) has its own:
 | `ALPHABOX_TRACE_CSR=1` | every access to a modelled EV7 register, named, with the instruction that made it |
 | `ALPHABOX_TRACE_IO7=1` | every access to an IO7 register, named, with the instruction and its return address |
 | `ALPHABOX_TRACE_RBOX=<ms>` | any processor that leaves an enabled interrupt pending that long (default 200) |
+| `ALPHABOX_TRACE_MP=1` | how the console starts the other processors: each write of a processor's RBOX_SCRATCH1 that changes it or comes from another processor, each reader's first read of a value (and how long it waited for the start hand-off), and each RBOX_IREQ request but the clock rendezvous; with the time in microseconds, who made the access, and where the processor is |
 | `ALPHABOX_GIO_LOG=<file>` | the console's transactions with its management side (the CMM on the ES47), written to `<file>` |
 | `ALPHABOX_TRACE_CMM=1` | on the ES47, also each change of the PALcode's state word sent to the CMM |
 | `ALPHABOX_EV7_START_SECONDARIES=1` | a test hook: start the parked secondaries at once, as the console would |

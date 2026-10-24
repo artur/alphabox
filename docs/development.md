@@ -31,6 +31,7 @@ gives its usage and variables.
 | `srm_run.sh` | SRM boot to `P00>>>` for one build: console-log diff against `test/rom/axp_correct.log`, JIT_VERIFY mismatch count, emit errors. |
 | `srm_probe.sh` | SRM on a variant of the test machine: CPUs, memory, drives, a NIC, extra configuration, console commands, exit paths. |
 | `boards_check.sh` | Every board of `src/platforms/Platforms.cpp` to its console prompt, with its own firmware from `roms/`: `show config` (and `show fru` on the EV7 boards), a PASS/FAIL line per board, normalised console logs. |
+| `marvel_init_check.sh` | The EV7 boards with more processors (es47 2, es80 and gs1280 4): `init` twice, and every secondary started again each time, counted in the console's messages, the HWRPB's processor slots and `show cpu`. `boards_check.sh` runs it after its boards. |
 | `snap_roundtrip.sh` | Every board saved at its console prompt, restored and saved again: the two state files compared byte for byte, part by part, and the restored console asked the same commands again. |
 | `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console; OpenVMS on the DS20E, DS20, DS10 and DS20L when named) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
@@ -53,7 +54,10 @@ diff) and the emulator's `%SYS-W-`, `%SYS-E-` and FAILURE lines, and exits
 update utility (DS20L, ES45, DS25, DS15) first run it to install their
 console into the flash, as on a real machine. `boards_check.sh --diff A B`
 compares the command output of two runs. A board passes only if the
-emulator also exits with status 0.
+emulator also exits with status 0. After the boards, the EV7 boards among
+them are booted again for `marvel_init_check.sh` (ports 21612 to 21614,
+`<board>-init` lines; `BOARDS_INIT=0` skips it): `init` restarts a Marvel
+console's secondaries, which the boot alone never exercises.
 
 `snap_roundtrip.sh <alphabox> <label> [board ...]` checks that a machine's
 state survives a snapshot. For each board, `boards_check.sh` boots it, runs

@@ -407,9 +407,12 @@ CPUs", `cpus active: 4`, IPIs on all four, and four `xz -1 | xz -d`
 round trips of an 8 MB random file, run at once, each gave the file's
 MD5. The first try stopped with "Instruction fault 4" in
 `arch_cpu_idle`: the emulator's, fixed ([below](#what-was-fixed-on-the-es47)).
-One run that typed `init` first came up with three: the console printed
-"CPU 3 failed to take jump address part 0" as it restarted its
-secondaries (open, below).
+Runs that typed `init` first came up one or two short: the console
+printed "CPU 3 failed to take jump address part 0" as it restarted its
+secondaries, and Linux probed only the processors it had started. That
+was the emulator's: a secondary answered the console's start after the
+console had stopped waiting, fixed 2026-10-24 ([marvel.md](platforms/marvel.md),
+M11).
 
 ### Guest-side quirks on Marvel
 
@@ -525,10 +528,8 @@ pending registers stay unmodelled until a guest reads them.
   `radeonfb`, `pm2fb`); the text console works (above).
 - SCSI: the kernel has the Symbios driver as a module.
 - On the ES47: the console's environment is not kept (no `cmm_nvram.bin`
-  is ever written, `set os_type unix` is gone at the next start), and one
-  run with four processors lost the fourth when `init` restarted the
-  secondaries ("CPU 3 failed to take jump address part 0", the host busy
-  at the time). Neither was looked into.
+  is ever written, `set os_type unix` is gone at the next start). Not
+  looked into.
 - On the ES47: a graphical console on the Radeon 7500 with the Mesa r100
   driver (phase 2); it would also keep `vgacon` from faulting without the
   patched byte.

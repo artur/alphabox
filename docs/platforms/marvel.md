@@ -78,6 +78,7 @@ On the ES47 in particular:
 | The `ev7` and `ev7z` rows | `cpu/CpuModels.cpp` |
 | The chipset (`CMarvel`): decode, memory per PID | `chipsets/marvel/Marvel.*` |
 | Each EV7's 4 MB register block (`CEv7Csr`): Rbox interrupts, timer, start protocol, routes | `chipsets/marvel/Ev7Csr.*` |
+| The start hand-off's order through RBOX_SCRATCH1 (M11) | `chipsets/marvel/StartHandoff.hpp` |
 | The GIO port to the management processor | `chipsets/marvel/Gio.*` |
 | The IO7 and its four hoses | `chipsets/marvel/Io7.*` |
 | The processors' topology and routes (`CMarvelTopology`) | `chipsets/marvel/Topology.*` |
@@ -100,6 +101,9 @@ Traces, all off by default:
   each LSI goes to;
 - `ALPHABOX_TRACE_RBOX=<ms>`: an EV7 leaving an enabled interrupt pending
   that long (M7b);
+- `ALPHABOX_TRACE_MP=1`: the start registers, RBOX_SCRATCH1 and RBOX_IREQ,
+  timed in microseconds, with who made each access and where the
+  processor it belongs to is (M11);
 - `ALPHABOX_EV7_START_SECONDARIES=1`: a test hook that starts PID 1 as the
   console would (M1-M3).
 
@@ -755,6 +759,7 @@ or moved lines of code, **[guess]**.
 | M8 | IO7 MSIs and pending registers, driven by Linux | | | planned ([backlog.md](../backlog.md), with E2) |
 | M9 | Partitions, I/O drawers, several IO7s on the GS1280, 32 processors, the route table's I/O entries | | | planned |
 | M10 | The CMM's FRU and environment answers | ~250 | L3 | done 2026-10-20: `show fru`, `show power`, `boot` clean on the ES47 |
+| M11 | The secondaries `init` restarts: the start hand-off | ~150 | L5 | done 2026-10-24: every processor back after `init` |
 
 What each packet was to contain:
 
@@ -812,6 +817,122 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### M11: the secondaries `init` restarts (2026-10-24)
+
+**Result**: `init` on a Marvel console brings every processor back. Before,
+on four-processor layouts, the console often printed "CPU n failed to
+take jump address part 0" as it restarted its secondaries, and the
+operating system booted after it came up short (Linux "SMP: 2 CPUs
+probed" of four). The start at power-up never failed.
+
+Each run boots to `P00>>>` and types `init` twice; a start is one
+secondary at one `init`.
+
+| Layout | Before: runs, starts lost (first / second `init`) | After: runs, starts lost |
+| --- | --- | --- |
+| `gs1280`, 4 processors | 10, 27 of 60 (8 / 19); every run lost one | 20, 0 of 120; and 5, 0 of 30 |
+| `es80`, 4 processors (PIDs 0, 1, 8, 9) | 10, 28 of 60 (9 / 19); 9 runs lost one | 20, 0 of 120; and 5, 0 of 30 |
+| `gs1280`, 16 processors | 3, 60 of 90 (31 / 29) | 5, 0 of 150; and 2, 0 of 60, exiting with status 0 (below) |
+
+The twenty runs on each four-processor layout were made with the first
+version of the fix (below); the five, and the sixteen-processor runs,
+with the one committed. The host's load average ran from 4 to 167 during
+them.
+
+**Found on the way: the exit with eleven processors or more.** With
+sixteen the emulator died of a segmentation fault when it was stopped, on
+main's binary as with the hand-off, with or without `init` (a boot to
+`P00>>>` and SIGTERM was enough). `CSystem::stop_threads` counted its
+components from 0x428180, a console spinlock's address, and called
+through a null one (macOS crash reports `alphabox-base-2026-10-24-150859`
+and `alphabox-fix2-2026-10-24-150928`). A watchpoint on the count never
+fired: the count was right, and the loop read another field. Its
+register for the count's offset, 0x503e0, held 0x50300, so it read
+`m_cpu_lock_address[11]`. `CAlphaCPU::start_threads` and `stop_threads`
+printed the thread's name through `char buffer[5]` and `sprintf`, and
+"cpu10" on put its NUL over the low byte of the register its caller had
+saved. The name is printed directly now.
+
+Runs in `lab/runs/marvel-init-before/`, `marvel-init-after/`,
+`-after2/` and `-after3/` (the host's load average and memory pressure
+are in each `results.txt`). With
+the hand-off, OpenVMS 8.4 on the `es80` row with four processors, booted
+after `set os_type openvms` and `init` from a clone of the installed disk
+(M7), has 0, 1, 8 and 9 active; Linux on the `gs1280` row with four after
+`set os_type unix` and `init` probes four, "Brought up 1 node, 4 CPUs"
+(`lab/runs/marvel-init-os4/`).
+
+**How the console starts a secondary** (`start_secondary`, 0x2dd410 in
+SRM V7.3-1): it copies its PALcode into the secondary's memory, writes
+0xf1 and the address's upper 24 bits to the secondary's RBOX_SCRATCH1,
+and reads the register back until it holds the echo, 0xf2 (0x2dd628):
+at most 50 times, with nothing between the reads but `read_ev7_csr`,
+about 45 instructions. With no echo it prints "failed to take jump
+address part 0" and gives that processor up; with it, it writes 0xf3 and
+the lower 24 bits and waits, by the clock this time (50 sleeps of 100
+ms), for the processor to join.
+
+- At power-up the secondaries are parked in the emulator, and
+  `CEv7Csr::scratch_written` answers in the writer's own thread: the echo
+  is there at the first read.
+- At `init` the primary's PALcode (0x3f390) leaves code 1 in every
+  present processor's mailbox and writes RBOX_IREQ<22> to each PID, its
+  own included. The primary goes back to the PALcode's reset entry, and
+  each secondary parks itself in the PALcode's own loop on its
+  RBOX_SCRATCH1 (0x390a0, the XSROM's protocol, polling at 0x390e4): a
+  running processor, which answers from its own host thread, about 20
+  seconds later when the restarted console gets to it.
+
+**What the trace showed** (`ALPHABOX_TRACE_MP`, new for Marvel with this
+packet, `lab/runs/marvel-init-trace1/`). In 12 starts of two runs, each
+secondary was in that loop when the write came; it read the 0xf1 4 to 13
+us after it and wrote the echo 7 to 16 us after it. The console's 50
+reads lasted between 9 and 44 us. Where they ended first, the start was
+lost (two of the twelve, echoes at 9 and 12 us). On the machine the
+margin is wide: the secondary's read is a local one, a few cycles round
+its loop, and the console's goes through the router and back
+**[inference: no latency figure for a remote CSR read was found]**. Here
+both are the same call into `CEv7Csr` on two host threads, contending for
+one lock, and a thread the host delays by microseconds loses. The second
+`init` of a run lost more than the first (table) **[guess: the console's
+code is compiled by then, and its 50 reads are over sooner]**.
+
+**The fix: the start hand-off** (`chipsets/marvel/StartHandoff.hpp`,
+`CEv7Csr::read_scratch`). The order the hardware's timing gives is kept:
+while a processor polls its RBOX_SCRATCH1, a value another processor
+writes there is seen by the owner's next read before that processor's
+next read of the register returns. A remote read waits, without the
+register block's lock, until the owner has read or written the register
+since the reader's previous read. The owner counts as polling when its
+last two reads returned the same value with no write since, and it has
+run less than a million of its own instructions since the last; a write
+to a register nobody polls changes nothing, and a parked processor is
+answered as before. One second in all
+bounds the waits for one written value (`%MVL-W-START` if it runs out),
+so an owner that stopped polling cannot hold the console. With the
+hand-off, the console's first read returns once the secondary has looked
+and its next once it has answered, whatever the host does to either
+thread meanwhile; `test/unit/start_handoff_test.cpp` checks that against
+a secondary held up 200 ms as the console writes, and the same without
+the hand-off as the control, which loses every time.
+
+A first version timed the owner's reads with the host's clock. Every
+turn of a secondary's loop then read the clock under its register
+block's lock, the lock CPU 0 also takes to deliver each processor's
+clock tick (`CEv7Csr::interval_tick`). With sixteen secondaries polling,
+CPU 0 waited for those locks in 901 of 914 samples (`sample` of the
+process, `lab/runs/marvel-init-hang16/`), and `init` did not finish in
+300 s. The owner's instruction count, which costs nothing to read,
+replaced the clock.
+
+**The check**: `test/tools/marvel_init_check.sh` boots the `es47` with
+two processors and the `es80` and `gs1280` with four, types `init`
+twice, and wants each secondary started each time, no "failed to take
+jump address", and as many processors in the HWRPB's slots with flags
+0x1cc (what Linux counts) and in `show cpu` as configured.
+`boards_check.sh` runs it after the twelve boards (`<board>-init` lines;
+`BOARDS_INIT=0` skips it).
 
 ### M10: the CMM's FRU and environment answers (2026-10-20)
 
