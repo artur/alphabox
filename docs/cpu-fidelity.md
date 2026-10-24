@@ -1,7 +1,10 @@
 # How faithful the processor is
 
 Alphabox emulates an Alpha 21264 of the EV68CB kind; the EV7 (21364) rows
-of the Marvel machines run the same core. This file records where it does
+of the Marvel machines run the same core, and so does the EV8 (21464) row,
+in an EV7-compatible mode with the 21464's own instructions added stage by
+stage ([below](#the-ev8-row-what-it-implements-and-what-alphabox-decided-2026-10-24)).
+This file records where it does
 not match that processor, because a list of known divergences is worth
 more than a belief that there are none. It says what a guest can and
 cannot be used to test here, and it stops the same question being asked
@@ -70,7 +73,8 @@ first audit was made on 2026-09-18; later entries carry their dates.
   here has a case that expects the manual's value and names the entry, so
   the case reports KNOWN until it is fixed and PASS after. `--cpu` runs it
   on any processor row: the EV7 rows give the EV68CB's verdicts, with
-  their own IMPLVER (3).
+  their own IMPLVER (3), and the EV8 row the same with IMPLVER 4 and the
+  cases of its own instructions (group `ev8`), which the other rows skip.
 - **Guest programs**: `test/tools/bench_image.py` writes a bootable image
   from a list of instruction words, and `srm_probe.sh` boots one
   (`FLOPPY=<image> EXIT_ON_HALT=1 CMDS="boot dva0" AFTER=wait-exit`). A
@@ -503,7 +507,8 @@ and Windows 2000 on two processors reached its desktop on `JIT_VERIFY`
 ### Unused opcode 18 function codes are NOPs (2026-10-24)
 
 An `18.xxxx` function code with no instruction completes as a NOP on every
-processor row (all are the EV6 family or the EV7), in the interpreter and,
+processor row (the EV6 family, the EV7, and the EV8 row, which is of the
+EV7 family), in the interpreter and,
 because the JIT leaves those words to the interpreter, in compiled code:
 no trap, no register or memory change, the next instruction runs. It was
 OPCDEC before.
@@ -515,8 +520,48 @@ unused ones trap (illegal instruction trap) on the 21164, but are NOPs on
 the 21064 and the 21264". It is one engineer's test and it says "most": which
 codes trapped on the 21164 is not recorded, so here all of them are NOPs.
 The rule is a property of the processor family (`cpu_family_unused_misc_is_nop`
-in `CpuModel.hpp`), so a later EV8 row can define instructions of its own in
-that space. `test/cpu` (group `misc`) checks a spread of codes.
+in `CpuModel.hpp`). An instruction a row adds in that space is decoded
+before the rule applies: the EV8 row's CCB (18.EC00) is one, and its
+LDL_ARM, LDQ_ARM and QUIESCE are unused codes until they are implemented
+([below](#the-ev8-row-what-it-implements-and-what-alphabox-decided-2026-10-24)).
+`test/cpu` (group `misc`) checks a spread of codes.
+
+### The EV8 row: what it implements and what Alphabox decided (2026-10-24)
+
+The `ev8` row is the 21464 in EV7-compatible mode (option A of
+[ev8.md](platforms/ev8.md), decision D1): the EV7's privileged interface
+(IPRs, `HW_RET`, the 44-bit physical address, the CSR window), so the EV7
+console and both EV7 PALcodes run unchanged, with the 21464's identity and
+user-visible instructions on top. A real 21464 had a different privileged
+interface ([ev8.md](platforms/ev8.md), "The PALcode interface"); this one
+is the published EV8 as user code and an operating system see it. The
+encodings and results are [ev8-isa.md](platforms/ev8-isa.md)'s. IDS is the
+*21464 Internal Design Specification*, Rev 1.1k, by PDF page.
+
+| What | The `ev8` row | Basis |
+| --- | --- | --- |
+| Family | `CPU_FAMILY_EV7`, so the ES47, ES80 and GS1280 take it and the Tsunami and Titan boards refuse it; `cpu_model::ext` = `CPU_EXT_EV8` says what the EV8 adds | **Alphabox decision** (D1): the family is what decides the address map, the start-up and the interrupts, all the EV7's in this mode |
+| `IMPLVER` | 4 | [IDS p. 76] |
+| `AMASK` | 0x1307: BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent (bits 0-2, 8, 9, 12), the core's | of the IDS's 0x1F07 [IDS p. 76] the row reports only what it executes, so software that tests `AMASK` never uses a missing feature: **Alphabox decision**. Bit 10 (SMT) comes with LDx_ARM and QUIESCE (S3), the instructions software tests it for [IDS pp. 668, 674]; bit 11 with the 1C SIMD set and paired single, which it covers by the owner's decision, once both are in (S5 and S6); bit 3, Tarantula's, when its instructions execute (S7 and S8) |
+| Chip ID, processor type | chip ID 4, the EV7z's: the console calls it "EV7 rev 3.0", type 15 minor 5 | **Alphabox decision** (D2): the IDS gives CPU_CNFG<CHIP_ID> no value [IDS p. 487], and the console names the processor from its EV7 table |
+| Caches | L1 64 KB each, L2 3 MB; the console shows 1.75 MB | [IDS pp. 42-43]; `BBOX_CTL` has seven 256 KB ways, all an EV7 console can count (`Ev7Csr.cpp`): **Alphabox decision** to keep the IDS's size in the row |
+| CCB (18.EC00) | a no-op, which no address faults | "a hint with no architectural effect on data" [IDS pp. 411, 661]; no fault as for ECB, whose predecode it shares **[inference]** |
+| CMOV2 (11.68) | Rc <- Rav, Rb or the literal unread | its predicate is clear outside the pair, so the CMOV2 Rc,Rb,Rc the chip makes copies Rc to Rc [IDS pp. 73-74]; Rc <- Rav for Ra != Rc **[inference]** |
+| FCMOV2 (17.068) | Fc <- Fav; FEN with the FPU disabled | as CMOV2 [IDS pp. 73-74]; the FEN fault of every FP operate instruction but FNOP **[inference]**: the IDS says nothing of it |
+| WH64EN, MAP_ALIGN | no-ops, on every row as before | [ARM 4.11.11]; MAP_ALIGN is `XOR R31,R31,R31` [IDS p. 75] |
+| LDL_ARM, LDQ_ARM, QUIESCE (18.B000, 18.B400, 18.B800) | no-ops until S3: Ra is not written | **Alphabox decision**: until S3 they are no instructions of the row, so the row's rule for unused codes applies, the 21264's [IDS p. 676]; `AMASK` bit 10 is clear, and software must test it first [IDS pp. 668, 674-675], so a program that follows the IDS never runs them, and one that does not gets what an EV7 gives it |
+| The other codes | decoded exactly: 11.68, 17.068 and 18.EC00 only | **Alphabox decision**. The IDS's decode tables use don't-care bits, so on a 21464 every `18.xxxx` code is some instruction (18.D000 decodes as RPCC, 18.E400 as RC, 18.F400 as RS) [IDS p. 661], 11.68 to 11.6B and 11.78 to 11.7B are CMOV2 [IDS p. 655], and opcode 17 is decoded on the low bits of its function, so more codes than 17.068 are FCMOV2 [IDS p. 660]. The row keeps the core's rule for codes that are no instruction (unused 18.xxxx no-ops, OPCDEC elsewhere), as the owner chose for S2 |
+| Rows without `CPU_EXT_EV8` | unchanged: 11.68 and 17.068 raise OPCDEC, 18.EC00 is an unused code (a no-op) | |
+
+The EV7 console never executes `IMPLVER` or `AMASK`; OpenVMS 8.4 and
+Linux do, and take the same paths for 4 as for the EV7's 3
+([ev8.md](platforms/ev8.md), "S1 and S2").
+
+Both JITs compile CCB, CMOV2 and FCMOV2 on the `ev8` row only:
+`classify()` takes the row's `ext` (`set_cpu_identity`), and on the other
+rows the words stay the interpreter's. `test/cpu` group `ev8` checks each
+instruction where the row has it (`rows.Own`), and groups `misc` and `ev8`
+what the other rows do with the same words.
 
 ### Smaller ones
 
@@ -527,7 +572,7 @@ that space. `test/cpu` (group `misc`) checks a spread of codes.
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below); another processor's `IMB` drops the lines since 2026-10-24 |
-| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. It matters the day a row is added for a part that does not |
+| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. The EV8 row has the same set; its own instructions are gated by the row (`CPU_EXT_EV8`), not by `AMASK`, which reports each of them only once its stage is done (above). It matters the day a row is added for a part that lacks one of the set |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need

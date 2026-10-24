@@ -16,10 +16,12 @@ showing "what Alpha could have been": where the hardware never existed,
 fidelity means following the published design as far as it goes, and
 every gap we fill is an **Alphabox decision**, not history.
 
-**Branch**: `docs/ev8` · **Config**: none yet · **Status**: research done
-(2026-10-23); the owner chose the path on 2026-10-24 (option A first, then
-the native interface, [below](#the-owners-decision-2026-10-24)). No code
-yet ([the plan](#6-the-plan)).
+**Branch**: `ev8/s1s2` · **Config**: `cpu0 = ev8` (and so every
+processor) on `platform = "es47"`, `"es80"` or `"gs1280"` · **Status**:
+research done (2026-10-23); the owner chose the path on 2026-10-24
+(option A first, then the native interface,
+[below](#the-owners-decision-2026-10-24)); S1 and S2 done the same day
+([the plan](#6-the-plan), [what they did](#s1-and-s2-2026-10-24)).
 
 Markers used below:
 
@@ -151,7 +153,8 @@ the EV7's ([marvel.md](marvel.md), E1; `cpu/CpuModels.cpp`). The ARM's
 Table D-4 lists **3 for the 21364/EV7 and EV79** [ARM p. 809], and GCC's
 driver uses 3 for the EV7 family [GCC]. That inference can now be replaced
 by a source; whether to change the row (OpenVMS and the console run with
-2 today) is the owner's call, and outside this packet.
+2 today) is the owner's call, and outside this packet. (Done: the rows
+return 3 since 2026-10-24.)
 
 ### New instructions
 
@@ -173,12 +176,13 @@ design team's own; Appendix B calls the LDx_ARM/QUIESCE codes "proposed"
 
 The IDS notes that Matt Reilly tried every unused 18.xxxx code: most trap
 on the 21164 "but are NOPs on the 21064 and the 21264" [IDS p. 676].
-Alphabox raises OPCDEC for them (`UNKNOWN2` in the opcode 0x18 decode of
-`cpu/AlphaCPU.cpp`). The ARM allows either (unused function codes of
-opcodes assigned in Version 5 are UNPREDICTABLE, not UNDEFINED [ARM p.
-803]), so this is not a bug, but it is a known difference from a real
-21264 worth one line in [cpu-fidelity.md](../cpu-fidelity.md) **[for the
-owner]**.
+Alphabox raised OPCDEC for them when this packet was written; since
+2026-10-24 they are NOPs on every row, as on the 21264
+([cpu-fidelity.md](../cpu-fidelity.md)). The ARM allows either (unused
+function codes of opcodes assigned in Version 5 are UNPREDICTABLE, not
+UNDEFINED [ARM p. 803]). The 21464's own decode tables use don't-care
+bits, so on it no 18.xxxx code is unused: 18.D000 is RPCC, 18.E400 RC
+[IDS p. 661] (a finding of S2, [below](#s1-and-s2-2026-10-24)).
 
 **The short-vector SIMD set (opcode 1C).** The IDS lists the mnemonics
 [IDS pp. 70-72] and decodes them [IDS pp. 662-664]:
@@ -676,8 +680,8 @@ toolchain.
 | Step | What | Engine | Test or guest | Rests on |
 | --- | --- | --- | --- | --- |
 | S0 | Decide D1-D16 (this packet) | | | done 2026-10-24: A, then B; D2-D16 as proposed |
-| S1 | An `ev8` row on the ES47 board in EV7-compatible mode: IMPLVER 4, AMASK 0x1F07 (with bits for what is implemented), chip ID per D2 | interpreter, JIT (constants only) | console to `P00>>>`; OpenVMS 8.4 boots on the row; cpu_oracle cases for IMPLVER/AMASK | D1, D2 |
-| S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | |
+| S1 | An `ev8` row on the ES47 board in EV7-compatible mode: IMPLVER 4, AMASK 0x1F07 (with bits for what is implemented), chip ID per D2 | interpreter, JIT (constants only) | console to `P00>>>`; OpenVMS 8.4 boots on the row; cpu_oracle cases for IMPLVER/AMASK | D1, D2; **done 2026-10-24** ([below](#s1-and-s2-2026-10-24)) |
+| S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | **done 2026-10-24**; LDx_ARM and QUIESCE are unused codes, NOPs, until S3 |
 | S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16 |
 | S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7 |
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
@@ -696,6 +700,127 @@ as `.long` words until a small assembler patch exists (out of tree).
 The CPU oracle runs any row on the ES40 board (`cpu_oracle.py --cpu`,
 [development.md](../development.md)), so the S1 to S10 cases run with
 `--cpu ev8` once the row exists and has its model in `test/cpu/rows.py`.
+
+## S1 and S2 (2026-10-24)
+
+**The row** (S1). `ev8` in `cpu/CpuModels.cpp`, the part "21464 (EV8)":
+IMPLVER 4 [IDS p. 76], AMASK 0x1307, chip ID 4 with type 15 minor 5 (D2),
+L1 caches of 64 KB and a 3 MB L2 [IDS pp. 42-43]. Its family is
+`CPU_FAMILY_EV7`: in EV7-compatible mode the address map, the start-up and
+the interrupts are the EV7's, and those are what the family decides
+(`cpu/CpuModel.hpp`). So the board check (`CAlphaCPU`'s constructor, and
+the configurator's check mode) takes it on the ES47, ES80 and GS1280 and
+refuses it on the Tsunami and Titan boards, with no test hook. What the
+EV8 adds is a new field, `cpu_model::ext` = `CPU_EXT_EV8`, which the
+decoders test; each later stage decodes more of the 21464's instructions
+under it. A native EV8 (S11) would be a family of its own. Both JIT back
+ends already took IMPLVER and AMASK from the row (`set_cpu_identity`).
+`alphabox configure` offers `ev8` on the EV7 boards, at 1400 MHz by
+default, the IDS's clock [IDS p. 42].
+
+**AMASK, stage by stage** **[decision]**. The row reports only what it
+executes, so that software testing AMASK never uses a missing feature:
+
+| Bits | Feature | Reported |
+| --- | --- | --- |
+| 0-2, 8, 9, 12 | BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent | now: the core's, 0x1307 |
+| 10 | SMT: LDL_ARM, LDQ_ARM, QUIESCE | with S3, the instructions software tests it for [IDS pp. 668, 674]; S4 brings the TPUs its name describes |
+| 11 | the 1C SIMD set and paired single (owner, 2026-10-24) | once both execute, after S5 and S6 |
+| 3 | Tarantula (D14) | once its instructions execute, after S7 and S8 |
+
+The IDS's full 0x1F07 (0x1F0F with Tarantula) is reached when all of them
+are on.
+
+**The harmless additions** (S2), on the `ev8` row only, as
+[ev8-isa.md](ev8-isa.md) 3.1 and 3.2 give them: CCB (18.EC00) is a no-op,
+which no address faults (as ECB, **[inference]**); CMOV2 (11.68) copies Ra
+to Rc, which for the CMOV2 Rc,Rb,Rc the chip makes is Rc to Rc; FCMOV2
+(17.068) the same in the FP registers, with the FEN fault of an FP operate
+instruction when the FPU is disabled (**[inference]**: the IDS says nothing
+of it). WH64EN and MAP_ALIGN were no-ops on every row already. Both JITs
+compile the three on the row only: `classify()` takes the row's `ext`,
+and elsewhere the words stay the interpreter's. On the other rows nothing
+changed: 11.68 and 17.068 raise OPCDEC, 18.EC00 is an unused code.
+
+**LDL_ARM, LDQ_ARM and QUIESCE until S3** **[decision]**: no-ops. Until S3
+they are no instructions of the row, so the row's rule for an unused
+18.xxxx code applies, the 21264's [IDS p. 676]. AMASK bit 10 is clear and
+software must test it before using them [IDS pp. 668, 674-675], so a
+program that follows the IDS never runs them, and one that does not gets
+what an EV7, or a real 21264, gives it (Ra is not written). The IDS's own
+designers wanted the codes to trap on older processors and gave that up
+because the 21264 ignores them [IDS pp. 675-676]; a trap here, for a row
+that is a 21264 core underneath, would be neither the old processors'
+behaviour nor the 21464's.
+
+**What the console and the operating systems make of it.** The row looks
+to all three like an EV7z, and IMPLVER 4 changes nothing they do. Where
+each executes IMPLVER and AMASK was found with a build that printed every
+such instruction (its PC, mode and result; not committed), on both rows.
+
+- The ES47 console reaches `P00>>>`; `show config` prints each processor as
+  "1.75 MB Cache EV7 rev 3.0, 1000 MHz" and `show cpu` "Type Major 15,
+  Minor 5", as for an `ev7z` row; the ES80 and GS1280 the same; `init`
+  restarts every processor (es47 2, es80 and gs1280 4). The row's
+  reference listing is in `lab/runs/ev8-s1-reference/`. The console
+  executes neither IMPLVER nor AMASK, as E1 found by reading
+  ([marvel.md](marvel.md)).
+- OpenVMS 8.4 (the M7 installed disk, a clone) boots to DCL on both
+  processors. `SHOW CPU/FULL` reads "Type: EV7 (21364), Minor = 5", from
+  the HWRPB the console wrote; on the `ev7` row it reads Minor = 3, and
+  nothing else differs. OpenVMS executes IMPLVER at three places: in its
+  primary bootstrap (VA 0x20078478), at 0x6A988 during the boot, and in
+  the executive at 0xFFFFFFFF80012178, half a million times in a boot,
+  beside an AMASK; every AMASK it executes tests BWX. On the `ev7` row the
+  same places run about as often, so it takes no other path for 4 than
+  for 3.
+- Linux on the ES47 logs in; `uname -a` ends "alpha EV7 Marvel" and
+  `/proc/cpuinfo` says "cpu model: EV7", "cpu variation: 7", "L2 cache:
+  1792K, 7-way", the same as on the `ev7` row but for the BogoMIPS
+  measured. Linux executes IMPLVER at one place, followed by an AMASK of
+  CIX: `ELF_PLATFORM`, computed for each program it starts, which for any
+  IMPLVER above 1 with CIX present is "ev67", on both rows; the other
+  AMASK is `ELF_HWCAP`, 0x1307 on both. The FPU and xor paths that test
+  for IMPLVER 2 did not run.
+
+**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT). The CPU
+oracle, on every one of them: `ev68cb` and
+`ev7` PASS 20171, KNOWN 61, FAIL 0, with 211 results skipped (the EV8's
+words); `ev8` PASS 20372, KNOWN 61, FAIL 0, with 10 skipped (the cases
+that need 11.68, 17.068 and 18.EC00 unused); JIT_VERIFY 0 mismatches.
+main's own oracle gives the same verdicts on this branch's binaries as on
+main's (PASS 20138, KNOWN 61). A deliberately wrong CMOV2 in the JIT
+failed 26 results of the compiled pass on both back ends. The SRM
+console-log check is clean on the interpreter, JIT and JIT_VERIFY lanes
+(JIT_VERIFY: 0 mismatches); `boards_check.sh` passes its 12 boards and
+three `init` checks, with `--diff` against main the same on every board
+(the DS15's measured clock once printed 787 MHz under host load, and 1000
+MHz again on a second run). `guests_check.sh` passes `vms-es47`,
+`linux-es47`, `vms-es40` and `linux` on the existing rows, and
+`vms-es47` and `linux-es47` on the `ev8` row (`GUESTS_EV7_CPU=ev8`, with
+`SHOW CPU/FULL` and `cat /proc/cpuinfo` added through
+`GUESTS_EXTRA_CMDS`).
+
+**Findings.**
+
+- The IDS's decode tables use don't-care bits, so a 21464 has no unused
+  18.xxxx code: 18.D000 decodes as RPCC, 18.E400 as RC, 18.F400 as RS
+  [IDS p. 661]; 11.68 to 11.6B and 11.78 to 11.7B are CMOV2 [IDS p. 655];
+  opcode 17 is decoded on the low bits of its function, so more codes than
+  17.068 are FCMOV2 [IDS p. 660]. The row decodes the exact codes and keeps
+  the core's rule for the rest **[decision]**; S3 has the same choice to
+  make for LDx_ARM (18.B000 to 18.B3FF are LDL_ARM in that table).
+- The probe D2 asked for, what the console does with a chip ID its table
+  does not name (two builds not committed, the `ev8` row with chip ID 5 and
+  0x3F, on the ES47): it still reaches `P00>>>`. Chip ID 5 prints "EV7,
+  1000 MHz" with no revision and `show cpu` "Type Major 15, Minor 0"; 0x3F
+  prints "EV79" and "Type Major 16, Minor 0", Linux's EV79_CPU. The row
+  keeps chip ID 4, "EV7 rev 3.0", as D2 proposed; nothing in the console
+  calls for another value.
+- [ev8-isa.md](ev8-isa.md) sections 1 to 3 needed no correction for S1
+  and S2: its example words are what `test/cpu/alpha_asm.py` assembles, and
+  the oracle checks that they agree.
 
 ## Findings
 

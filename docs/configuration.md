@@ -194,8 +194,10 @@ All of them boot OpenVMS 8.4; [platforms.md](platforms.md) says how far
 each one goes.
 
 - **Processors**: `cpu0` to `cpu<n>` are `ev68cb` on the Tsunami and Titan
-  machines, and `ev7` or `ev7z` on the EV7 machines. A board refuses
-  processors of the other family.
+  machines, and `ev7`, `ev7z` or `ev8` on the EV7 machines (`ev8` is the
+  cancelled 21464 in an EV7-compatible mode,
+  [ev8.md](platforms/ev8.md)). A board refuses processors of the other
+  family.
 - **Firmware**: each machine expects its own console, from the firmware
   media you own. Alphabox reads the update-bundle form, the raw form
   behind the standard Alpha ROM header, and the update utilities the

@@ -17,7 +17,8 @@ The three share one console image. EV7z is a processor row, not a
 machine.
 
 **Config**: `platform = "es47";` (two processors), `"es80"` (up to eight)
-or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`) processors and a
+or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`, or `ev8`, the 21464 in
+an EV7-compatible mode, [ev8.md](ev8.md)) processors and a
 `serial0` for the console terminal, PCI devices as `pci<hose>.<slot>`,
 hose = PID * 4 + IO7 port · **Status**: L5 on all three rows (packets
 M0-M6 2026-10-02, M7 2026-10-03 and 10-04, the last checks 2026-10-05).

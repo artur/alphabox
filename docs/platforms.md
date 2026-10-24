@@ -29,7 +29,8 @@ Three layers, each added in a different way:
 - **Processor**: a row per part in `cpu/CpuModel.hpp` and
   `cpu/CpuModels.cpp`, chosen by the configuration class, with its core
   family (EV6 or EV7). The rows are the EV68CB, whose values are
-  established, and the EV7 and EV7z. `cpu/ev7/` holds what that family
+  established, the EV7 and EV7z, and the EV8 (21464), an EV7-family row
+  with instructions of its own ([ev8.md](platforms/ev8.md)). `cpu/ev7/` holds what that family
   changes: the physical address map and the state the XSROM hands the
   console. The JIT emits code per processor. A board takes processors of
   one family and refuses the other, except under the CPU oracle's test
@@ -181,7 +182,7 @@ notes. The full map of `src/` is [source-layout.md](source-layout.md).
 ```
 src/
   cpu/                 the Alpha core, common to every family
-    CpuModels.cpp      rows: EV68CB, EV7, EV7z
+    CpuModels.cpp      rows: EV68CB, EV7, EV7z, EV8
     ev7/               only what EV7 changes: 44-bit physical addresses,
                        PID, the state the XSROM leaves
   chipsets/

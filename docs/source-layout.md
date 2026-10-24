@@ -34,7 +34,8 @@ changes. A new directory must be added to the CMake glob list and to
 - `AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`: IEEE and VAX floating
   point.
 - `CpuModel.hpp`, `CpuModels.cpp`: the processor's identity and core
-  family, one row per part (EV68CB, EV7, EV7z).
+  family, one row per part (EV68CB, EV7, EV7z, EV8), and what a row adds
+  to its family's core (`CPU_EXT_EV8`).
 - `diag_rpcc.hpp`: cycle counter diagnostics.
 - `ev7/`: what the EV7 family changes. `Ev7.hpp` is its 44-bit address map
   with the PID encoding; `Ev7Reset.cpp` sets the registers the XSROM hands

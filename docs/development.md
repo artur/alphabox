@@ -58,6 +58,8 @@ emulator also exits with status 0. After the boards, the EV7 boards among
 them are booted again for `marvel_init_check.sh` (ports 21612 to 21614,
 `<board>-init` lines; `BOARDS_INIT=0` skips it): `init` restarts a Marvel
 console's secondaries, which the boot alone never exercises.
+`BOARDS_EV7_CPU` gives the EV7 boards, in both scripts, another processor
+class than `ev7` (`ev7z`, `ev8`).
 
 `snap_roundtrip.sh <alphabox> <label> [board ...]` checks that a machine's
 state survives a snapshot. For each board, `boards_check.sh` boots it, runs
@@ -93,7 +95,10 @@ tesseract (without it `arc` fails), and `netbsd` for the installer's
 menu. It writes
 `$ALPHABOX_WORK/runs/guests-<label>/<guest>.png` (the last frame),
 `<guest>.log` (the console) and `<guest>.warn`, and exits 0 only if every
-guest passed. A whole run takes about 15 minutes.
+guest passed. A whole run takes about 15 minutes. `GUESTS_EV7_CPU` boots
+`vms-es47` and `linux-es47` on another processor class than `ev7` (`ev7z`,
+`ev8`), and `GUESTS_EXTRA_CMDS` gives those two more commands (separated
+by `;`) before they shut down.
 
 Four more guests run only when named, so the default run stays short:
 `vms-ds20e`, `vms-ds20`, `vms-ds10` and `vms-ds20l` boot the same
@@ -140,7 +145,7 @@ with SDL and pcap; on another build only the trees are compared.
 | `JIT_VERIFY` build | Every compiled block re-run by the interpreter and compared. A clean SRM boot is ~130 million blocks. |
 | `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
 | `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. |
-| `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, and the JIT groups), each from the interpreter and from compiled code, on any processor row (`--cpu`). A second per lane (below). |
+| `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, the EV8's additions, and the JIT groups), each from the interpreter and from compiled code, on any processor row (`--cpu`). A second per lane (below). |
 | `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
 | `bench_image.py` | A bootable image from a list of instruction words. |
 | Bring-up traces | `ALPHABOX_TRACE_UNKNOWN`, `_CALLS`, `_I2C`, `_MP`, `_FLASH`, `ALPHABOX_DUMP_MEMORY`: what a firmware asked for and did not get ([headless.md](headless.md)). |
@@ -209,7 +214,7 @@ and so never traps).
   `--port` (or `$PORT`) picks COM1's telnet port; without one a free port
   is used.
 - **Any processor row.** `--cpu` names the row (`ev68cb`, the default,
-  `ev7`, `ev7z`; `--list` shows them). The board is always the ES40:
+  `ev7`, `ev7z`, `ev8`; `--list` shows them). The board is always the ES40:
   plain instructions do not depend on it, and the image replaces the
   console, so a row of another family (the EV7's, whose own boards need
   the Marvel console) runs there through the `ALPHABOX_CPU_ANY_BOARD`
@@ -220,8 +225,9 @@ and so never traps).
 - **What is row-specific** is in `test/cpu/rows.py`: IMPLVER, the AMASK
   feature mask and so the extensions (BWX, FIX, CIX, MVI, prefetch with
   modify intent), whether an unused 18.xxxx code is a no-op
-  (`cpu_family_unused_misc_is_nop`), and the instructions a row has
-  beyond the 21264's (none yet; the EV8's will be). The values are the
+  (`cpu_family_unused_misc_is_nop`), its extensions (`cpu_model::ext`),
+  and the instructions a row has beyond the 21264's (the EV8 row's CCB,
+  CMOV2 and FCMOV2 so far, which group `ev8` checks). The values are the
   manuals', as `src/cpu/CpuModels.cpp` gives them, and every run first
   reads that file and `CpuModel.hpp` and fails if the two tables differ,
   so a row added to the emulator is added to `rows.py` with it.
@@ -230,8 +236,9 @@ and so never traps).
   and what it asks for with `b.need()` (an encoding that must be unused,
   the 18.xxxx no-op rule); `b.part()` does the same for a span inside a
   case. Elsewhere the builder takes back everything the case emitted, and
-  the run prints its results as `SKIP`, by reason. Today no row lacks
-  anything, so every row runs every case. The image's own code needs BWX
+  the run prints its results as `SKIP`, by reason: the EV8's instructions
+  on the other rows (`rows.Own`), and on the EV8 row the cases that need
+  those words to be unused (`rows.Unused`). The image's own code needs BWX
   (its printer stores bytes), so a row without it is refused. A case that
   may be skipped must not leave anything a later case relies on, and its
   setup belongs to it: a case that loads operands before `b.begin()`
