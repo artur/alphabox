@@ -32,14 +32,15 @@ hardware: it has to work under a real Alpha operating system.
 ## What is this?
 
 Not a generic Alpha emulator. Alphabox emulates specific, real machines
-(the AlphaServer ES40 first, and now ten of them, from the DS10 to the
+(the AlphaServer ES40 first, and now eleven of them, from the DS10 to the
 GS1280) well enough that their original firmware, operating systems and
 device drivers take them for the real thing:
 
 - OpenVMS 8.4, Tru64 UNIX, Linux, NetBSD, Windows 2000, and the 64-bit Windows
   Microsoft built on the Alpha and never shipped
 - the EV68 (21264) on the Tsunami and Titan chipsets, and the EV7 (21364)
-  with its on-chip router, up to sixteen of them
+  with its on-chip router, up to sixteen of them; and the beginnings of the
+  EV8 (21464), the Alpha Compaq cancelled before it was built
 - the cards' own VGA BIOSes, and Windows' own drivers for Symbios, QLogic,
   S3, Cirrus, ATI, 3Dlabs and DEC hardware
 - Direct3D on graphics chips from 1998, USB 2.0, SMP
@@ -89,6 +90,13 @@ that depend on them.
 - **Sixteen EV7s booting OpenVMS.** The ES47 (two EV7s), ES80 (eight) and
   GS1280 (sixteen) boot OpenVMS 8.4 from an installed disk, through a
   management-processor protocol HP never documented.
+- **The Alpha that was never built.** Compaq cancelled the EV8 in June
+  2001, late in its design. Following its internal design specification,
+  Alphabox runs it in the EV7's place on the ES47, ES80 and GS1280: the
+  EV7's console starts it, and OpenVMS 8.4 and Linux boot on it on the
+  ES47. So far it is the EV7-compatible mode and the EV8's first new
+  instructions; its four threads per core and the Tarantula vector unit
+  are planned ([the EV8](docs/platforms/ev8.md)).
 
 ## What runs
 
@@ -104,7 +112,7 @@ Every guest below with media in the lab is booted and checked by
 | OpenVMS 8.4 | Installs from its CD and boots to login on every emulated machine, with up to sixteen CPUs; DECwindows on the Permedia 2 and the Radeon 7500 ([notes](docs/openvms.md), [installation guide](https://github.com/lenticularis39/axpbox/wiki/OpenVMS-installation-guide)) |
 | Windows NT / 2000 | Installs and runs through AlphaBIOS, on up to two CPUs, with each graphics card's own driver from the installation media ([installation guide](https://web.archive.org/web/20260705122517/https://www.zx.net.nz/computers/dec/axpemu-es40.shtml)) |
 | Windows "Whistler" 64-bit (AXP64, build 2210) | Installs and runs through AlphaBIOS, on up to two CPUs |
-| Linux | Gentoo's install CD boots to a shell, and a system installed from it boots from disk to a login on one or two CPUs, where gcc works; serial or VGA console ([notes](docs/linux.md)) |
+| Linux | Gentoo's install CD boots to a shell, and a system installed from it boots from disk to a login, where gcc works: on the ES40 with one or two CPUs, on a serial or VGA console, and on the ES47, ES80 and GS1280 with two or four EV7s ([notes](docs/linux.md)) |
 | Tru64 UNIX | Boots |
 | NetBSD | Boots; the 10.2 install CD boots to its installer ([installation guide](https://github.com/lenticularis39/axpbox/wiki/NetBSD-9.2-install-guide)) |
 

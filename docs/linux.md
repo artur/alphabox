@@ -282,7 +282,7 @@ EV7's UNIX PALcode, and Marvel's interrupt path as Linux programs it.
 
 | | |
 | --- | --- |
-| What it reaches | the live CD's root shell on the console terminal with one and with two EV7s; the ES40's install, with the CD's Marvel kernel, to a login on two, where gcc builds and runs a program and `poweroff` halts to SRM; the same install on four EV7s of the `gs1280` row. A four-processor ES47 (two drawers) and the live CD on four: Linux's limits, [below](#four-processors) |
+| What it reaches | the live CD's root shell on the console terminal with one and with two EV7s; the ES40's install, with the CD's Marvel kernel, to a login on two, where gcc builds and runs a program and `poweroff` halts to SRM; the same install on four EV7s of the `gs1280` row, and of the `es80` row (a four-processor ES47, two drawers) with 2 GB or more per processor. The live CD on more than two: a limit of Linux's, [below](#four-processors) |
 | Kernel | the CD's `gentoo_nolsa`, with one byte changed (`test/tools/es47_linux.sh`, [below](#guest-side-quirks-on-marvel)) |
 | Console | the SRM console terminal (`console=srm0`): Marvel has no 16550, and the terminal is the CMM's, as for OpenVMS |
 | JIT_VERIFY | two EV7s, the installed disk from `boot` to a login and `poweroff`: 1.4 and 1.6 billion compiled blocks on the two processors checked against the interpreter, no mismatch |
