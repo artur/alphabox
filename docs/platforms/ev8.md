@@ -16,9 +16,10 @@ showing "what Alpha could have been": where the hardware never existed,
 fidelity means following the published design as far as it goes, and
 every gap we fill is an **Alphabox decision**, not history.
 
-**Branch**: `docs/ev8` · **Config**: none yet · **Status**: research only
-(2026-10-23). No code, no runs. The work items are proposals for the owner
-([Proposed staging](#6-proposed-staging)).
+**Branch**: `docs/ev8` · **Config**: none yet · **Status**: research done
+(2026-10-23); the owner chose the path on 2026-10-24 (option A first, then
+the native interface, [below](#the-owners-decision-2026-10-24)). No code
+yet ([the plan](#6-the-plan)).
 
 Markers used below:
 
@@ -640,6 +641,19 @@ cost is a PALcode and a console of our own. C is worth it only as a quick
 way to see TPUs as processors under OpenVMS before A's interrupt-steering
 decisions are made.
 
+### The owner's decision (2026-10-24)
+
+- **A first**: an EV8 row on the ES47 in EV7-compatible mode, with D as its
+  test bench (S1-S10).
+- **Then B, as planned work, not an option**: the native EV8 interface from
+  the IDS (S11-S13). Where the IDS is a draft (TBDs, conflicts, empty
+  chapters), the gap is filled by what can be inferred from the IDS's own
+  context, the EV7's interface it grew from and the published papers, each
+  marked **[inference]** or **[decision]** in the code and in
+  [cpu-fidelity.md](../cpu-fidelity.md).
+- **D2-D16**: the proposals in section 4 stand unless a stage shows one
+  does not work; a stage that changes one says so.
+
 What "done" would mean for A, in the ladder's terms: L0 builds; L1-L2 the
 Marvel console starts and prompts on the EV8 row; L3 `show config` prints
 what D2 decided (there is no real listing to match); L4 the conformance
@@ -647,17 +661,18 @@ cases pass in the interpreter and the JIT (JIT_VERIFY at 0 mismatches);
 L5 OpenVMS boots, and Linux runs programs using the new instructions; L6
 the ES40 console-log check and the other machines are unchanged.
 
-## 6. Proposed staging
+## 6. The plan
 
-For the owner to decide; each step is one packet with one question, in
-the interpreter first and the JIT after, each with the test that shows
-it. No step changes an existing row's behaviour.
+Decided by the owner on 2026-10-24 ([above](#the-owners-decision-2026-10-24)).
+Each step is one packet with one question, in the interpreter first and
+the JIT after, each with the test that shows it. No step changes an
+existing row's behaviour.
 
 | Step | What | Engine | Test or guest | Rests on |
 | --- | --- | --- | --- | --- |
-| S0 | Decide D1-D16 (this packet) | | | |
+| S0 | Decide D1-D16 (this packet) | | | done 2026-10-24: A, then B; D2-D16 as proposed |
 | S1 | An `ev8` row on the ES47 board in EV7-compatible mode: IMPLVER 4, AMASK 0x1F07 (with bits for what is implemented), chip ID per D2 | interpreter, JIT (constants only) | console to `P00>>>`; OpenVMS 8.4 boots on the row; cpu_oracle cases for IMPLVER/AMASK | D1, D2 |
-| S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs, and the unused 18.xxxx rule for this row | both | cpu_oracle cases; JIT_VERIFY | |
+| S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | |
 | S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16 |
 | S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7 |
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
@@ -666,7 +681,9 @@ it. No step changes an existing row's behaviour.
 | S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15 |
 | S9 | Tarantula under an OS: Linux enables vectors and saves them on switch | interpreter | two processes using vectors at once | D11 |
 | S10 | Tarantula in the JIT (helpers first, host SIMD later) | JIT | JIT_VERIFY extended to compare vector state; any speed claim through `perf_ab.py` | S7-S9 |
-| S11 | The native EV8 interface (option B) | both | its own packet | D1 and everything above |
+| S11 | The native EV8 privileged interface (option B), from the IDS: its IPR table, RET for PALmode exit, IFETCHB, the HW_MFPR/HW_LD layouts, SuperPALmode, the new PALcode entry offsets, 52-bit VA and 48-bit PA, TPU groups in the TBs; every TBD and conflict settled by inference, marked | interpreter, then JIT | test/cpu cases per register and trap, written from the IDS; a native-mode `ev8n` row beside the EV7-compatible one | S1-S4 |
+| S12 | An Alphabox PALcode for the native interface (the UNIX/Linux interface first, being the smaller) and a minimal console that builds the HWRPB and loads a kernel, on the Marvel CMM and IO7 models | PALcode in Alpha assembly, built by the project | boot-image tests of every PALcode entry; the console prompts and loads aboot or a kernel | S11 |
+| S13 | Linux on the native EV8: SMT as TPUs, then the new instructions and Tarantula under the native interface | both | Linux to a shell, SMP across TPUs, the S3-S9 tests repeated in native mode | S12, S5-S9 |
 
 Binutils knows none of the new instructions, so test programs carry them
 as `.long` words until a small assembler patch exists (out of tree).
