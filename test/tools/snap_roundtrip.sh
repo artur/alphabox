@@ -167,6 +167,7 @@ for b in $BOARDS; do
   # 1. Boot, commands, snapshot at the prompt.
   ALPHABOX_SNAPSHOT=snap1.axp ALPHABOX_SNAPSHOT_EXIT=1 \
     ALPHABOX_SNAPSHOT_MAP=snap1.map BOARDS_AFTER=sigusr1 BOARDS_KEEP=1 \
+    BOARDS_INIT=0 \
     "$T/boards_check.sh" "$BIN" "snap-$LABEL" "$b" > "$OUT/$b.boards.txt" 2>&1
   if ! grep -q "^PASS $b " "$OUT/$b.boards.txt" || [ ! -f "$D/snap1.axp" ]; then
     report "$b" FAIL $(( $(date +%s) - t0 )) "no snapshot at the prompt: $(grep -m1 "$b" "$OUT/$b.boards.txt")"

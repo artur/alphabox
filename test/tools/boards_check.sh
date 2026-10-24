@@ -10,7 +10,10 @@
 # its own console firmware from roms/), starts the emulator, waits for the
 # console prompt (with a timeout, never a fixed sleep), runs `show config`
 # (and `show fru` on the EV7 boards), and stops the emulator with SIGTERM.
-# A board passes only if the emulator then exits with status 0.
+# A board passes only if the emulator then exits with status 0. After the
+# boards, each EV7 board checked is booted again with more processors (es47
+# 2, es80 and gs1280 4) for marvel_init_check.sh: `init` twice, and every
+# processor restarted each time. Its lines are `PASS|FAIL <board>-init ...`.
 #
 # Firmware (never downloaded; roms/ is the git-ignored copy of media you own):
 #   es40                    test/rom/cl67srmrom.exe (the merge gate's console)
@@ -33,6 +36,8 @@
 #   <board>.cmds.log   the commands' output alone, normalised
 #   <board>.warn       the %SYS-W-/%SYS-E-/FAILURE lines the emulator printed
 #   <board>/           the run directory (config, alphabox.out, flash)
+#   <board>-init.log, <board>-init/
+#                      the EV7 boards' `init` check (marvel_init_check.sh)
 #   summary.txt        the PASS/FAIL lines
 # The emulator's %SYS-W-/%SYS-E-/FAILURE lines are also listed under each
 # board (counted, at most 12 distinct). Exit 0 only if every board reached its
@@ -52,6 +57,7 @@
 #                        'serial_number = "AY12345678";')
 #   BOARDS_EXTRA_CMDS    more console commands, separated by ';' (e.g.
 #                        'show sys_serial_num')
+#   BOARDS_INIT=0        skip the EV7 boards' `init` check
 #   BOARDS_AFTER         how the console run ends (srm_console.py --after;
 #                        default sigterm). snap_roundtrip.sh sets sigusr1,
 #                        with ALPHABOX_SNAPSHOT and ALPHABOX_SNAPSHOT_EXIT in
@@ -345,4 +351,17 @@ for b in $BOARDS; do
     rm -f "$D/$(basename "$B_SRC")" "$D"/*-decompressed.rom "$D"/decompressed.rom
   fi
 done
+
+# The Marvel consoles' `init`, which halts and starts the secondaries again:
+# every processor must come back (marvel_init_check.sh).
+if [ "${BOARDS_INIT:-1}" != 0 ]; then
+  mv=
+  for b in $BOARDS; do case $b in es47|es80|gs1280) mv="$mv $b" ;; esac; done
+  if [ -n "$mv" ]; then
+    BOARDS_PORT_BASE=$BASE BOARDS_PROMPT_TMO=$PTMO BOARDS_MIN_FREE_GB=$MINFREE \
+      ALPHABOX_WORK=$WORK ALPHABOX_ROMS=$ROMS "$T/marvel_init_check.sh" "$BIN" "$LABEL" $mv
+    [ $? = 0 ] || rc_all=1
+    cat "$OUT/init-summary.txt" >> "$OUT/summary.txt"
+  fi
+fi
 exit $rc_all
