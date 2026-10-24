@@ -16,6 +16,10 @@
 #   vms-es47  OpenVMS 8.4 on the ES47 (EV7): log in to DCL, SHOW TIME
 #   linux     Gentoo on the ES40: log in, uname -a, date, compile and run a
 #             tiny C program
+#   linux-es47  the same install on the ES47's two EV7s, with the CD's kernel
+#             for Marvel (linux/disk/gentoo-es47.img, made by
+#             test/tools/es47_linux.sh retarget): log in, uname -a, the
+#             processors and the machine Linux found, date, poweroff
 #   arc       the AlphaBIOS/ARC console from a programmed flash: its menu
 #   netbsd    the NetBSD/alpha install CD: the installer's menu
 # Not in the default list (they add about 12 minutes), named when needed:
@@ -66,7 +70,7 @@ ROMS=${ALPHABOX_ROMS:-$R/roms}
 BASE=${GUESTS_PORT_BASE:-21950}
 BTMO=${GUESTS_BOOT_TMO:-900}
 MINFREE=${GUESTS_MIN_FREE_GB:-3}
-ALL="w2k w2k-beta xp64 vms-es40 vms-es47 linux arc netbsd"
+ALL="w2k w2k-beta xp64 vms-es40 vms-es47 linux linux-es47 arc netbsd"
 # guests that run only when named; they follow ALL in the port numbering
 EXTRA="vms-ds20e vms-ds20 vms-ds10 vms-ds20l"
 
@@ -746,7 +750,7 @@ for g in $GUESTS; do
            [ "${GUESTS_KEEP:-0}" = 1 ] || rm -rf "$D"; }
   D=$OUT/$g
   case $g in
-  w2k|w2k-beta|xp64|vms-es40|vms-es47|linux|arc|netbsd|vms-ds20e|vms-ds20|vms-ds10|vms-ds20l) ;;
+  w2k|w2k-beta|xp64|vms-es40|vms-es47|linux|linux-es47|arc|netbsd|vms-ds20e|vms-ds20|vms-ds10|vms-ds20l) ;;
   *) echo "FAIL $g 0 unknown guest"; rc_all=1; continue ;;
   esac
   check_free; case $? in
@@ -847,6 +851,44 @@ for g in $GUESTS; do
          [ -n "$gt" ] && [ $dm -le 5 ]; then
         stop_emu; report "$g" PASS "$(secs)" "login, uname -a, date (${gt:0:5}, host local time within ${dm} min), gcc compile and run, poweroff"
       else fail "logged in, but uname/date/gcc output not as expected (date '$gt')"; continue; fi
+    else fail "console dialogue: $SG_RESULT"; continue; fi ;;
+  linux-es47)
+    src=$WORK/linux
+    rm -rf "$D"; mkdir -p "$D"
+    cp -c "$src/disk/gentoo-es47.img" "$D/disk.img" ||
+      { fail "no image $src/disk/gentoo-es47.img (test/tools/es47_linux.sh retarget)"; continue; }
+    # the ES47's two EV7s, 512 MB each; the disk on the CMD 649 (dqa0, sda)
+    {
+      echo 'sys0 = tsunami'; echo '{'
+      echo '  platform = "es47";'; echo '  memory.bits = 29;'
+      echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
+      echo '  rom.nvram = "cmm_nvram.bin";'
+      echo '  cpu0 = ev7 { speed = 1000M; }'; echo '  cpu1 = ev7 { speed = 1000M; }'
+      echo '  pci2.2 = cmd649 { disk0.0 = file { file = "disk.img"; } }'
+      echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
+      echo '}'
+    } > "$D/es40.cfg"
+    # No `set os_type unix` and `init`: aboot switches to the UNIX PALcode
+    # itself, and the console keeps no environment here (docs/linux.md)
+    steps=("expect=P00>>>@600" "send=boot dqa0 -flags 0" "expect=login: @$BTMO" "send=root"
+           "expect=Password: @60" "send=alphabox" "expect=# \$@120"
+           "send=uname -a; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
+           "send=grep -E 'cpus active|platform string' /proc/cpuinfo; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
+           "send=date; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
+           "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
+    if serial_guest "$g" "$PORT" "${steps[@]}"; then
+      # the date against the host's local time, as for linux above
+      gt=$(grep -a -o "$(date '+%a %b %e') [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]* $(date +%Y)" "$D/console.log" | head -1)
+      gt=$(echo "$gt" | grep -o '[0-9][0-9]:[0-9][0-9]:[0-9][0-9]' | head -1)
+      gm=$(( 10#${gt:0:2} * 60 + 10#${gt:3:2} )); hm=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
+      dm=$(( gm > hm ? gm - hm : hm - gm )); [ $dm -gt 720 ] && dm=$((1440 - dm))
+      txt=$(tr -d '\r\000' < "$D/console.log")
+      if echo "$txt" | grep -aq 'Linux es40 [0-9].* EV7 Marvel' &&
+         echo "$txt" | grep -aqE 'cpus active[[:space:]]*: 2' &&
+         echo "$txt" | grep -aq 'platform string.*AlphaServer ES47' &&
+         [ -n "$gt" ] && [ $dm -le 5 ]; then
+        stop_emu; report "$g" PASS "$(secs)" "login, uname -a (EV7 Marvel), 2 CPUs active, ES47, date (${gt:0:5}, host local time within ${dm} min), poweroff"
+      else fail "logged in, but uname/cpuinfo/date output not as expected (date '$gt')"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
   arc)
     src=$WORK/xp64-installed
