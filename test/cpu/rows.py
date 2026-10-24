@@ -30,7 +30,7 @@ import re
 
 # AMASK bits [ARM 4th ed. p. 808]: the names are CpuModel.hpp's.
 AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
-              "TRAP": 0x0200, "PREFETCH": 0x1000}
+              "TRAP": 0x0200, "SMT": 0x0400, "PREFETCH": 0x1000}
 
 UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
 
@@ -148,17 +148,17 @@ ROWS = {r.name: r for r in (
         "the EV7's core and values (src/cpu/CpuModels.cpp)"),
     # The 21464 in EV7-compatible mode (docs/platforms/ev8.md, D1): the
     # EV7's core and PALcode interface, the EV8's identity and extensions.
-    # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 comes
-    # with S3, bit 11 with S5 and S6, bit 3 (Tarantula) with S7 and S8.
-    # Its own instructions are those it executes so far (S2); 18.B000,
-    # 18.B400 and 18.B800 (LDL_ARM, LDQ_ARM, QUIESCE) are unused 18.xxxx
-    # codes until S3.
-    Row("ev8", "21464 (EV8)", "EV7", 4, _EV68,
+    # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 with
+    # LDx_ARM and QUIESCE (S3), bit 11 with S5 and S6, bit 3 (Tarantula)
+    # with S7 and S8. Its own instructions are those it executes so far
+    # (S2, S3).
+    Row("ev8", "21464 (EV8)", "EV7", 4, _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
         ext={"EV8"},
         own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
-             (0x17, 0x068): "FCMOV2"}),
+             (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
+             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),
 )}
 
 # The ES40's processor (src/platforms/Platforms.cpp): a row of another

@@ -83,6 +83,31 @@
 
 #define DO_LDQ_L READ_VIRT_LOCK(state.r[REG_2] + DISP_16, 64, state.r[REG_1]);
 
+/* LDL_ARM, LDQ_ARM (21464, CPU_EXT_EV8; docs/platforms/ev8-isa.md 3.1): a
+   load from Rbv, with no displacement (the low 16 bits are the function),
+   faulting as LDQ does [21464 IDS Rev 1.1k, PDF p. 669] -- here as this
+   core's LDQ, so unaligned only across a page (docs/cpu-fidelity.md) -- and
+   then, only when it did not fault [p. 670], the watch on the line it read
+   (watch_arm). As LDx_L, always performed, whatever Ra [inference, "as
+   similar as possible to the LDx_L instructions", p. 669]; a memory
+   operation for a pending STx_C as LDQ is [inference]. The arm comes before
+   the read and both under the LL/SC reader guard, as LDx_L's lock: a store
+   or a device write the read does not see clears the flag. */
+#define READ_VIRT_ARM(va, size, dest, f)                                       \
+  {                                                                            \
+    LLSC_MEMOP                                                                 \
+    pbc = false;                                                               \
+    DATA_PHYS(va, ACCESS_READ, (size / 8) - 1);                                \
+    CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);    \
+    watch_arm(phys_address);                                                   \
+    dest =                                                                     \
+        f((phys_address < dram_size ? dram_read(dram_ptr, phys_address, size)  \
+                                    : sys_read(phys_address, size)));          \
+  }
+#define DO_LDL_ARM                                                             \
+  READ_VIRT_ARM(state.r[REG_2], 32, state.r[REG_1], sext_u64_32);
+#define DO_LDQ_ARM READ_VIRT_ARM(state.r[REG_2], 64, state.r[REG_1], (u64));
+
 #define DO_LDQ_U                                                               \
   if ((REG_1 & 0x1f) != 31) {                                                  \
     LLSC_MEMOP                                                                 \

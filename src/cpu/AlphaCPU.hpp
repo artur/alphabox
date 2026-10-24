@@ -214,6 +214,26 @@ public:
   virtual void stop_threads();
   void ResetForSystemReset();
 
+  /// LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8; docs/platforms/ev8.md,
+  /// S3): this processor's watch_flag cleared (CSystem::cpu_watch_hit), or
+  /// something needs it now (an interrupt raised for it, stopping it, the
+  /// Marvel start hand-off). Any thread. Ends a QUIESCE in progress.
+  using WatchWake = ::WatchWake;
+  void quiesce_wake(WatchWake why);
+  /// Something changed that a QUIESCE in progress decides on (an interrupt
+  /// raised, a flush asked for): let it look.
+  void quiesce_notify() {
+    if (m_quiescing.load()) {
+      std::lock_guard<std::mutex> g(m_quiesce_mx);
+      m_quiesce_cv.notify_all();
+    }
+  }
+  /// CSystem::watch_mark_gen() as of this processor's last flush of its
+  /// page cache (CSystem::cpu_watch_settled).
+  u64 watch_gen_seen() const {
+    return m_watch_gen_seen.load(std::memory_order_acquire);
+  }
+
 private:
   // The guest debugger parks and steps the processor, reads its TBs and
   // moves its clock on after a stop (src/debug/DebugTarget.cpp).
@@ -823,6 +843,10 @@ public:
   inline u64 dpc_host_base_w(u64 phys) const {
     if (m_nopflush && m_code_map && m_code_map->holds_code(phys))
       return 0;
+    // A page an LDx_ARM watched (the 21464's): its stores take the helper,
+    // which tells the watches (CSystem::cpu_note_store_watch).
+    if (cSystem->watch_machine() && cSystem->watch_page(phys))
+      return 0;
     return dpc_host_base(phys);
   }
   /// A store landed in DRAM at phys: tell the map, so that the next IMB
@@ -830,6 +854,7 @@ public:
   inline void note_dram_write(u64 phys) {
     if (m_code_map && !m_nopflush_break)
       m_code_map->note_write(phys);
+    cSystem->cpu_note_store_watch((int)state.iProcNum, phys, false);
   }
   /// A page became a code page after this processor had already cached it
   /// as inline-writable. Drop those cached translations; the refill will
@@ -843,7 +868,11 @@ public:
   void request_dpc_flush() {
     m_dpc_flush_req.store(true, std::memory_order_release);
     state.check_timers = true;
+    quiesce_notify(); // a processor asleep in QUIESCE flushes there
   }
+  /// The flush request above, honoured on this processor's thread: drop the
+  /// cached translations and note what the maps had marked by then.
+  void honour_dpc_flush_request();
   u64 m_stat_dpc_flushes = 0; // flush_data_page_cache() calls (JIT_STATS)
   inline void flush_data_page_cache() {
     ++m_stat_dpc_flushes;
@@ -877,6 +906,7 @@ public:
   /// cpu pointer). Not in the state file: a STx_C right after a restore
   /// fails, which the architecture allows.
   u64 m_llsc_clean = 0;
+
   /// Set when an interrupt is delivered, which clears check_int: the next
   /// HW_RET to native mode raises check_int again, so whatever is still
   /// pending is looked at then, as the 21264 signals it again "when the
@@ -1327,6 +1357,41 @@ public:
 
 private:
   u32 m_pid = 0;
+
+  // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ----------------------
+  // docs/platforms/ev8.md (S3, D16) and docs/cpu-fidelity.md. At the end of
+  // the class, away from what compiled code addresses. watch_flag
+  // and the watched address are CSystem's (cpu_arm_watch), beside the load
+  // lock; what is here is the sleep. QUIESCE waits on m_quiesce_cv, with
+  // m_quiescing set under m_quiesce_mx, and every waker clears the flag (or
+  // raises what it raises) before it looks at m_quiescing: the check and the
+  // sleep cannot miss it.
+  /// LDx_ARM: arm the watch on `phys`, the address just translated, unless
+  /// an interrupt is pending [21464 IDS Rev 1.1k, PDF p. 678] or it is not
+  /// memory [decision]. Called inside the LL/SC reader guard, before the
+  /// read.
+  void watch_arm(u64 phys);
+  /// QUIESCE: sleep while watch_flag is set, at most the quiesce timeout.
+  void quiesce();
+  /// Processor 0 drives the machine's interval timer from its own loop
+  /// (jit_run, execute()): fire it if it is due. QUIESCE does it too, so
+  /// a long quiesce does not hold the clock up.
+  void interval_timer_poll(std::chrono::steady_clock::time_point now);
+  void quiesce_report(); // ALPHABOX_TRACE_QUIESCE=1, when the CPU goes away
+  std::mutex m_quiesce_mx;
+  std::condition_variable m_quiesce_cv;
+  std::atomic<bool> m_quiescing{false};
+  std::atomic<int> m_quiesce_why{WATCH_NONE}; ///< what cleared the flag
+  std::atomic<u64> m_watch_gen_seen{0};       ///< see watch_gen_seen()
+  u64 m_quiesce_ns = 0; ///< the timeout: QUIESCE_TIMEOUT cycles at cpu_hz
+  struct {
+    u64 arms = 0, arm_int = 0, arm_io = 0; ///< LDx_ARMs; refused, and why
+    u64 no_flag = 0;   ///< QUIESCEs with watch_flag clear: no sleep
+    u64 unsettled = 0; ///< ... with another processor's flush outstanding
+    u64 sleeps = 0;    ///< QUIESCEs that slept
+    u64 woke[WATCH_CAUSES] = {};
+    u64 slept_ns = 0;
+  } m_qs;
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow
@@ -1676,6 +1741,7 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
 #ifdef ES40_JIT
     idle_wake(); // after the flags: a sleeper that missed them is notified
 #endif
+    quiesce_notify(); // a QUIESCE looks at what is pending for it now
 
     return;
   }
@@ -1689,6 +1755,7 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
 #ifdef ES40_JIT
     idle_wake();
 #endif
+    quiesce_notify();
     return;
   }
 

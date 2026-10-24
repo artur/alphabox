@@ -334,6 +334,7 @@ void CSystem::init_code_page_map() {
   if (m_code_page_bits) { // a memory resize: the old maps sized the old DRAM
     free_guest_memory(m_code_page_bits, m_code_page_bytes);
     free_guest_memory(m_code_line_bits, m_code_line_bytes);
+    free_guest_memory(m_watch_page_bits, m_code_page_bytes);
   }
   const size_t page_bytes =
       ((size_t)1 << (iNumMemoryBits - CCodePageMap::kPageShift)) / 8 + 1;
@@ -345,6 +346,11 @@ void CSystem::init_code_page_map() {
   CHECK_ALLOCATION(lb);
   m_code_page_bits = pb;
   m_code_line_bits = lb;
+  // The pages LDx_ARM has watched (watch_page), one bit each like the code
+  // pages, and from the same allocator for the same reason.
+  m_watch_page_bits = (u8 *)alloc_guest_memory(page_bytes);
+  CHECK_ALLOCATION(m_watch_page_bits);
+  m_watch_pages = (u64)1 << (iNumMemoryBits - CCodePageMap::kPageShift);
   m_code_page_bytes = page_bytes;
   m_code_line_bytes = line_bytes;
   m_code_pages.init(this, (u64)1 << iNumMemoryBits, pb, lb);
@@ -456,6 +462,10 @@ int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
               limit, m_platform ? m_platform->description : "unknown board");
   acCPUs[iNumCPUs] = cpu;
   iNumCPUs++;
+  // LDx_ARM and QUIESCE (the 21464's): from here on every processor's
+  // stores, and DMA, look at the watch flags.
+  if (cpu->model().ext & CPU_EXT_EV8)
+    m_watch_machine = true;
   return iNumCPUs - 1;
 }
 
@@ -980,6 +990,8 @@ u64 CSystem::cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value,
   if (ok)
     m_ll_seq[b].fetch_add(1, std::memory_order_relaxed);
   m_ll_lock[b].store(0, std::memory_order_release);
+  if (ok) // a successful STx_C clears another processor's watch (LDx_ARM)
+    cpu_note_store_watch(cpuid, phys, true);
   return ok;
 }
 
@@ -1008,6 +1020,69 @@ bool CSystem::cpu_take_lock(int cpuid, u64 address, bool intervened,
  **/
 void CSystem::cpu_clear_lock(int cpuid) {
   m_cpu_lock_flags &= ~(1u << cpuid); // atomic fetch_and
+  // The watch too: an exception or interrupt between LDx_ARM and QUIESCE
+  // may itself have armed elsewhere, and the IDS clears the flag at the
+  // returns that follow one (CALL_PAL REI, rti, rfe, retsys, urti) [21464
+  // IDS Rev 1.1k, PDF p. 670]; an implementation may clear it for reasons of
+  // its own. The TB-miss fills, which GO_PAL leaves the lock alone for, leave
+  // it too [decision].
+  cpu_clear_watch(cpuid);
+}
+
+// --- LDx_ARM / QUIESCE (the 21464's; docs/platforms/ev8.md, S3) ----------
+static_assert(CSystem::kMaxCPUs <= 32, "one watch flag bit per processor");
+
+void CSystem::cpu_arm_watch(int cpuid, u64 address) {
+  cpu_watch_mark_page(address);
+  m_cpu_watch_address[cpuid] = address;
+  // Sequentially consistent, and before the caller reads the line: a store
+  // the read does not see sees the flag (cpu_note_store_watch's fence).
+  m_cpu_watch_flags.fetch_or(1u << cpuid, std::memory_order_seq_cst);
+}
+
+void CSystem::cpu_watch_hit(u64 phys, size_t bytes, u32 mask, int why) {
+  const u64 first = (phys & m_phys_mask) & ~U64(63);
+  const u64 last = ((phys & m_phys_mask) + bytes - 1) & ~U64(63);
+  for (int i = 0; i < iNumCPUs && mask; i++) {
+    const u32 bit = 1u << i;
+    if (!(mask & bit))
+      continue;
+    mask &= ~bit;
+    const u64 line = m_cpu_watch_address[i] & m_phys_mask & ~U64(63);
+    if (line < first || line > last)
+      continue;
+    if (m_cpu_watch_flags.fetch_and(~bit, std::memory_order_seq_cst) & bit)
+      acCPUs[i]->quiesce_wake((WatchWake)why);
+  }
+}
+
+/// The first watch on a page: from now on no processor may store into it
+/// inline (CAlphaCPU::dpc_host_base_w), so each drops what it cached, as
+/// for a page that becomes code (request_code_page_flush).
+void CSystem::cpu_watch_mark_page(u64 phys) {
+  const u64 pg = phys >> CCodePageMap::kPageShift;
+  if (!m_watch_page_bits || pg >= m_watch_pages)
+    return;
+  const u8 bit = (u8)(1u << (pg & 7));
+  if (__atomic_fetch_or(&m_watch_page_bits[pg >> 3], bit, __ATOMIC_ACQ_REL) &
+      bit)
+    return;
+  m_watch_mark_gen.fetch_add(1, std::memory_order_acq_rel);
+  for (int i = 0; i < iNumCPUs; i++)
+    acCPUs[i]->request_dpc_flush();
+}
+
+bool CSystem::cpu_watch_settled(int self) {
+  const u64 gen = watch_mark_gen();
+  bool settled = true;
+  for (int i = 0; i < iNumCPUs; i++) {
+    if (i == self || acCPUs[i]->get_waiting() ||
+        acCPUs[i]->watch_gen_seen() >= gen)
+      continue;
+    acCPUs[i]->request_dpc_flush();
+    settled = false;
+  }
+  return settled;
 }
 
 /** Model the EV68 invalidating probe for every reservation line touched by
@@ -1029,6 +1104,15 @@ void CSystem::cpu_clear_external_locks(u64 address, size_t bytes) {
   }
   if (clear_mask)
     m_cpu_lock_flags.fetch_and(~clear_mask, std::memory_order_relaxed);
+  // And the watches (LDx_ARM): a device write is another agent's store
+  // [21464 IDS Rev 1.1k, PDF p. 670]. Inside the DMA writer guard, so an
+  // LDx_ARM, which takes the reader side, arms and reads wholly before or
+  // after the transfer.
+  if (m_watch_machine) {
+    const u32 w = m_cpu_watch_flags.load(std::memory_order_seq_cst);
+    if (w)
+      cpu_watch_hit(address, bytes, w, WATCH_DMA);
+  }
 }
 
 /**
@@ -1617,6 +1701,7 @@ void CSystem::ResetChipsetState() {
   m_cpu_lock_flags = 0;
   memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
   memset(cpu_lock_value, 0, sizeof(cpu_lock_value));
+  m_cpu_watch_flags.store(0);
 
   m_irq_lines.reset(); // the chipset's inputs read as deasserted again
   m_chipset->reset();
@@ -1836,6 +1921,9 @@ void CSystem::RestoreState(const char *fn) {
   if (fread(&state, sizeof(state), 1, f) != 1 || !m_chipset->restore_state(f))
     FAILURE(Runtime, "State file is truncated in the system state");
   m_cpu_lock_flags = (u32)state.cpu_lock_flags.load() & 0xf;
+  // Not in the file: every watch (LDx_ARM) is clear after a restore, a
+  // wake-up the IDS allows [21464 IDS Rev 1.1k, PDF pp. 670, 674].
+  m_cpu_watch_flags.store(0);
   memset(m_cpu_lock_address, 0, sizeof(m_cpu_lock_address));
   memcpy(m_cpu_lock_address, state.cpu_lock_address,
          sizeof(state.cpu_lock_address));

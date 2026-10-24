@@ -73,6 +73,10 @@
   } else {                                                                     \
     if ((function == 0x00) && cSystem->exit_on_pal_halt())                     \
       cSystem->RequestPalHaltExit(); /* main loop exits gracefully */          \
+    /* LDx_ARM's watch (the 21464's): REI, rti, rfe, retsys and urti clear     \
+       it, any other CALL_PAL may [21464 IDS Rev 1.1k, PDF p. 670]; all do     \
+       here [decision]. Compiled CALL_PALs too (both JITs). */                 \
+    cSystem->cpu_clear_watch(state.iProcNum);                                  \
     ENTER_NATIVE_CALL_PAL();                                                   \
   }
 
@@ -108,3 +112,5 @@
 // and keep a shared copy, "a hint with no architectural effect on data"
 // [21464 IDS Rev 1.1k, PDF pp. 411, 661].
 #define DO_CCB ;
+// QUIESCE (21464, CPU_EXT_EV8): sleep while watch_flag is set (quiesce()).
+#define DO_QUIESCE quiesce();

@@ -474,6 +474,233 @@ void CAlphaCPU::honour_new_code_pages() {
     m_code_map->note_write_all();
 }
 
+void CAlphaCPU::honour_dpc_flush_request() {
+  if (!m_dpc_flush_req.exchange(false, std::memory_order_acq_rel))
+    return;
+  // Read before the flush: a page watched after this is another request.
+  const u64 watch_gen = cSystem->watch_mark_gen();
+  flush_data_page_cache();
+  if (m_code_map) {
+    // Until this moment compiled code could still have stored into that page
+    // inline through the translation just dropped. Count one write, so the
+    // next flush does its work and any such store is caught by the source
+    // hash rather than assumed away.
+    if (!m_nopflush_break) // the break hook silences every report
+      m_code_map->note_write_all();
+    m_code_pages_seen = m_code_map->code_pages();
+  }
+  m_watch_gen_seen.store(watch_gen, std::memory_order_release);
+}
+
+/**
+ * Processor 0's part of the machine's interval timer, from its dispatch loop
+ * (jit_run, the interpreter's execute()) and from a QUIESCE that sleeps.
+ **/
+void CAlphaCPU::interval_timer_poll(std::chrono::steady_clock::time_point now) {
+  if (state.iProcNum != 0 || now < next_timer_fire)
+    return;
+  const u64 period_ns = theAli ? theAli->get_interval_period_ns()
+                               : cSystem->chipset()->interval_period_ns();
+  if (period_ns) {
+    // Count-preserving, paced catch-up: the schedule advances one period
+    // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
+    // the guests' tick-counted clocks (VMS never resyncs) stay true to wall
+    // time. Repayment is paced to >= half a period between fires (max 2x
+    // nominal, never a burst - burst/compressed ticks skew RPCC-vs-tick
+    // calibrations). Backlog beyond 1s (debugger pause, host sleep) is
+    // dropped.
+    // Repay gaps are modulated (tick_next_gap_ns).
+    if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
+      cSystem->interval_tick();
+      tick_last_fire = now;
+      tick_gap_ns = tick_next_gap_ns(period_ns);
+      next_timer_fire += std::chrono::nanoseconds(period_ns);
+      if (now - next_timer_fire > std::chrono::seconds(1))
+        next_timer_fire = now;
+    }
+  } else {
+    cSystem->interval_tick();
+    tick_last_fire = now;
+    // No period yet. With the ALi, once a second until its timer is
+    // programmed; a chipset that sets the period itself (Marvel's RBOX_IT)
+    // is looked at again within a millisecond, so its first tick is not a
+    // second late.
+    next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
+                                    : std::chrono::nanoseconds(1000000));
+  }
+}
+
+// --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ------------------------
+// docs/platforms/ev8.md (S3, D16) and docs/cpu-fidelity.md. IDS is the 21464
+// Internal Design Specification, Rev 1.1k, by PDF page.
+
+static const bool s_trace_quiesce = getenv("ALPHABOX_TRACE_QUIESCE") != nullptr;
+
+void CAlphaCPU::watch_arm(u64 phys) {
+  ++m_qs.arms;
+  const int id = (int)state.iProcNum;
+  // "If an interrupt is pending to a quiesced TPU, any attempted setting of
+  // the watch_flag by a LDx_ARM fails" [IDS p. 678]: one the processor would
+  // take, in whatever mode (int_deliverable) [decision]. The flag is left
+  // clear rather than as an earlier LDx_ARM left it: this one is the latest.
+  if (int_deliverable()) {
+    ++m_qs.arm_int;
+    cSystem->cpu_clear_watch(id);
+    return;
+  }
+  // Only memory is watched: nothing tells a processor of a store to I/O
+  // space [decision]. Not armed, so a QUIESCE after it does not sleep.
+  if (phys >= dram_size) {
+    ++m_qs.arm_io;
+    cSystem->cpu_clear_watch(id);
+    return;
+  }
+  m_quiesce_why.store(WATCH_NONE, std::memory_order_relaxed);
+  cSystem->cpu_arm_watch(id, phys);
+}
+
+void CAlphaCPU::quiesce_wake(WatchWake why) {
+  if (why == WATCH_OTHER) // the processor is wanted: its watch ends here
+    cSystem->cpu_clear_watch((int)state.iProcNum);
+  int none = WATCH_NONE;
+  m_quiesce_why.compare_exchange_strong(none, (int)why);
+  quiesce_notify();
+}
+
+/**
+ * QUIESCE: "IF (watch_flag != 0) THEN start QUIESCE_TIMER, suspend program
+ * execution, resume execution when watch_flag==0" [IDS p. 672]. The host
+ * thread waits on a condition variable, with a wall-clock bound, and never
+ * fails: the timeout is part of the instruction [IDS pp. 673, 678], and a
+ * host that sleeps longer only makes it end late. The wait ends, with
+ * watch_flag clear, for
+ *   - another processor's store or successful STx_C, or a device's write,
+ *     in the watched line (CSystem::cpu_watch_hit) [IDS p. 670];
+ *   - an interrupt the processor would take (irq_h notifies): "If an
+ *     interrupt is directed to a quiesced TPU, the watch_flag is cleared"
+ *     [IDS p. 677], in any mode [decision], and a delayed interrupt on its
+ *     way (check_timers) as one;
+ *   - the timeout (m_quiesce_ns), and anything that needs the thread
+ *     (stop_threads, a reset, the Marvel start hand-off: quiesce_wake).
+ * Processor 0 fires the machine's interval timer from here while it sleeps,
+ * so its sleep does not hold back the clock of the others, and is woken by
+ * its own tick like any other interrupt. A wait slice of a millisecond at
+ * most keeps anything not listed from waiting longer than that.
+ * Execution resumes at the next instruction; an interrupt is taken there
+ * [IDS p. 673].
+ **/
+void CAlphaCPU::quiesce() {
+  const int id = (int)state.iProcNum;
+  if (!cSystem->cpu_watch_armed(id)) {
+    ++m_qs.no_flag; // "the second one never quiesces" [IDS p. 671]
+    return;
+  }
+#ifdef ES40_JIT
+  // Compiled code stores inline through cached translations, and a page
+  // watched only now may still be cached as writable by another processor:
+  // its stores there would not be seen. Until every processor has dropped
+  // those, do not sleep; the QUIESCE fails, which it may [IDS p. 671].
+  honour_dpc_flush_request(); // our own, so that we count as settled
+  if (!cSystem->cpu_watch_settled(id)) {
+    ++m_qs.unsettled;
+    cSystem->cpu_clear_watch(id);
+    return;
+  }
+#endif
+  using namespace std::chrono;
+  const auto t0 = steady_clock::now();
+  const auto timeout_at = t0 + nanoseconds(m_quiesce_ns);
+  int why = WATCH_NONE;
+  {
+    std::unique_lock<std::mutex> lk(m_quiesce_mx);
+    m_quiescing.store(true);
+    for (;;) {
+      if (!cSystem->cpu_watch_armed(id)) {
+        why = m_quiesce_why.exchange(WATCH_NONE);
+        if (why == WATCH_NONE)
+          why = WATCH_OTHER;
+        break;
+      }
+      if (state.check_timers) {
+        // What execute() does with it before an instruction: a flush asked
+        // for is done here, and a delayed interrupt counting down is one
+        // that is coming.
+        state.check_timers = false;
+        honour_dpc_flush_request();
+        bool delayed = false;
+        for (int j = 0; j < 6; j++)
+          if (state.irq_h_timer[j].load(std::memory_order_relaxed) > 0)
+            delayed = true;
+        if (delayed) {
+          state.check_timers = true;
+          why = WATCH_INTERRUPT;
+          break;
+        }
+      }
+      if (int_deliverable()) {
+        why = WATCH_INTERRUPT;
+        break;
+      }
+      if (StopThread || cSystem->IsSystemResetRequested()) {
+        why = WATCH_OTHER;
+        break;
+      }
+      const auto now = steady_clock::now();
+      if (now >= timeout_at) {
+        why = WATCH_TIMEOUT;
+        break;
+      }
+      auto until = timeout_at;
+      if (state.iProcNum == 0) {
+        auto tick = next_timer_fire;
+        if (tick_last_fire + nanoseconds(tick_gap_ns) > tick)
+          tick = tick_last_fire + nanoseconds(tick_gap_ns);
+        if (now >= tick) {
+          // Our own tick is due: fire it, outside the lock (irq_h on this
+          // processor takes it), and look again.
+          lk.unlock();
+          interval_timer_poll(now);
+          lk.lock();
+          continue;
+        }
+        if (tick < until)
+          until = tick;
+      }
+      if (now + milliseconds(1) < until)
+        until = now + milliseconds(1);
+      m_quiesce_cv.wait_until(lk, until);
+    }
+    m_quiescing.store(false);
+  }
+  // "By definition, the watch_flag is clear at the end of the quiescent
+  // period" [IDS p. 673].
+  cSystem->cpu_clear_watch(id);
+  m_quiesce_why.store(WATCH_NONE, std::memory_order_relaxed);
+  ++m_qs.sleeps;
+  ++m_qs.woke[why];
+  m_qs.slept_ns +=
+      (u64)duration_cast<nanoseconds>(steady_clock::now() - t0).count();
+}
+
+void CAlphaCPU::quiesce_report() {
+  if (!s_trace_quiesce || !(m_model->ext & CPU_EXT_EV8))
+    return;
+  printf("%%CPU-I-QUIESCE: CPU%d LDx_ARM %llu (refused: interrupt pending "
+         "%llu, not memory %llu); QUIESCE slept %llu, %.3f ms in all, woken "
+         "by store %llu, STx_C %llu, DMA %llu, interrupt %llu, timeout %llu, "
+         "other %llu; did not sleep: flag clear %llu, unsettled %llu\n",
+         (int)state.iProcNum, (unsigned long long)m_qs.arms,
+         (unsigned long long)m_qs.arm_int, (unsigned long long)m_qs.arm_io,
+         (unsigned long long)m_qs.sleeps, m_qs.slept_ns / 1e6,
+         (unsigned long long)m_qs.woke[WATCH_STORE],
+         (unsigned long long)m_qs.woke[WATCH_STC],
+         (unsigned long long)m_qs.woke[WATCH_DMA],
+         (unsigned long long)m_qs.woke[WATCH_INTERRUPT],
+         (unsigned long long)m_qs.woke[WATCH_TIMEOUT],
+         (unsigned long long)m_qs.woke[WATCH_OTHER],
+         (unsigned long long)m_qs.no_flag, (unsigned long long)m_qs.unsettled);
+}
+
 void CAlphaCPU::init() {
   memset(&state, 0, sizeof(state));
   tb_idx_rebuild();
@@ -498,6 +725,21 @@ void CAlphaCPU::init() {
       myCfg->get_num_value("timer.max_instr_per_tick", false, 0);
   tick_last_icount = 0;
   tick_seen_seq = 0;
+  // QUIESCE's timeout (the 21464's): QUIESCE_TIMEOUT, whose reset value is
+  // 10240 cycles [21464 IDS Rev 1.1k, PDF pp. 510-511, 678], at this
+  // processor's clock. In EV7-compatible mode no IPR sets it, and the timer
+  // works as from power-up [decision, D16]. ALPHABOX_QUIESCE_TIMEOUT=<cycles>
+  // replaces it, for tests (docs/headless.md); 0 makes every QUIESCE end at
+  // once, as "a timeout value of 0" would [p. 673].
+  {
+    static const u64 cycles = [] {
+      const char *e = getenv("ALPHABOX_QUIESCE_TIMEOUT");
+      u64 v = e && *e ? strtoull(e, nullptr, 0) : 10240;
+      return v > (U64(1) << 40) ? (U64(1) << 40) : v;
+    }();
+    m_quiesce_ns =
+        (u64)((__uint128_t)cycles * 1000000000u / (cpu_hz ? cpu_hz : 1));
+  }
 
   state.iProcNum = cSystem->RegisterCPU(this);
   // The processor's ID: its number, except where the chipset places it in
@@ -783,6 +1025,7 @@ void CAlphaCPU::start_threads() {
 
 void CAlphaCPU::stop_threads() {
   StopThread = true;
+  quiesce_wake(WATCH_OTHER); // a QUIESCE ends at once: the thread is wanted
   if (myThread) {
     mySemaphore.set();
     printf(" cpu%d", state.iProcNum);
@@ -958,6 +1201,7 @@ void dump_device_pages();
 CAlphaCPU::~CAlphaCPU() {
   stop_threads();
   dump_ic_flush_pcs();
+  quiesce_report();
 #ifdef JIT_STATS
   dump_device_pages();
 #endif
@@ -1068,39 +1312,7 @@ void CAlphaCPU::execute() {
 
     // Poll the wall-clock Cchip interval timer once per execute() batch
     // (~512 instructions) rather than every 32;
-    if (state.iProcNum == 0) {
-      if (now >= next_timer_fire) {
-        const u64 period_ns = theAli ? theAli->get_interval_period_ns()
-                                     : cSystem->chipset()->interval_period_ns();
-        if (period_ns) {
-          // Count-preserving, paced catch-up: the schedule advances one period
-          // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
-          // the guests' tick-counted clocks (VMS never resyncs) stay true to
-          // wall time. Repayment is paced to >= half a period between fires
-          // (max 2x nominal, never a burst - burst/compressed ticks skew
-          // RPCC-vs-tick calibrations). Backlog beyond 1s (debugger pause, host
-          // sleep) is dropped.
-          // Repay gaps are modulated (tick_next_gap_ns).
-          if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
-            cSystem->interval_tick();
-            tick_last_fire = now;
-            tick_gap_ns = tick_next_gap_ns(period_ns);
-            next_timer_fire += std::chrono::nanoseconds(period_ns);
-            if (now - next_timer_fire > std::chrono::seconds(1))
-              next_timer_fire = now;
-          }
-        } else {
-          cSystem->interval_tick();
-          tick_last_fire = now;
-          // No period yet. With the ALi, once a second until its timer is
-          // programmed; a chipset that sets the period itself (Marvel's
-          // RBOX_IT) is looked at again within a millisecond, so its first
-          // tick is not a second late.
-          next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
-                                          : std::chrono::nanoseconds(1000000));
-        }
-      }
-    }
+    interval_timer_poll(now);
   }
 
 _next_instruction:
@@ -1211,20 +1423,9 @@ _next_instruction:
     // timer reaches 0. Batch to reduce memory ops.
     if (state.check_timers) {
       state.check_timers = false;
-      if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
-        // The direct range changed, or a page became a code page (see
-        // CSystem::request_code_page_flush).
-        flush_data_page_cache();
-        if (m_code_map) {
-          // Until this moment compiled code could still have stored into
-          // that page inline through the translation just dropped. Count
-          // one write, so the next flush does its work and any such store
-          // is caught by the source hash rather than assumed away.
-          if (!m_nopflush_break) // the break hook silences every report
-            m_code_map->note_write_all();
-          m_code_pages_seen = m_code_map->code_pages();
-        }
-      }
+      // The direct range changed, or a page became a code page (see
+      // CSystem::request_code_page_flush) or a watched one (LDx_ARM).
+      honour_dpc_flush_request();
       for (int j = 0; j < 6; j++)
         count_down_irq(j, 32);
     }
@@ -1246,14 +1447,7 @@ _next_instruction:
     // direct framebuffer window could move or be withdrawn while compiled
     // code still wrote through a cached translation to where it used to
     // be, and the code-page broadcast never reached the other processors.
-    if (m_dpc_flush_req.exchange(false, std::memory_order_acq_rel)) {
-      flush_data_page_cache();
-      if (m_code_map) {
-        if (!m_nopflush_break) // the break hook silences every report
-          m_code_map->note_write_all();
-        m_code_pages_seen = m_code_map->code_pages();
-      }
-    }
+    honour_dpc_flush_request();
     for (int ti = 0; ti < 6; ti++)
       count_down_irq(ti, 1);
   }
@@ -1793,15 +1987,29 @@ _next_instruction:
       if (m_model->ext & CPU_EXT_EV8) {
         OP(CCB, NOP);
       }
-      [[fallthrough]];
+      goto unused_misc;
+    // LDL_ARM, LDQ_ARM, QUIESCE, the 21464's; elsewhere unused codes. The
+    // JIT leaves them to this switch, and ends its block before them.
+    case 0xB000:
+      if (m_model->ext & CPU_EXT_EV8) {
+        OP(LDL_ARM, MEM);
+      }
+      goto unused_misc;
+    case 0xB400:
+      if (m_model->ext & CPU_EXT_EV8) {
+        OP(LDQ_ARM, MEM);
+      }
+      goto unused_misc;
+    case 0xB800:
+      if (m_model->ext & CPU_EXT_EV8) {
+        OP(QUIESCE, NOP);
+      }
+      goto unused_misc;
     default:
+    unused_misc:
       // No instruction here. The 21264 completes it as a no-op, where the
       // 21164 trapped; the architecture allows both (cpu-fidelity.md).
-      // The JIT leaves these words to this switch. On the EV8 row the
-      // 21464's LDL_ARM, LDQ_ARM and QUIESCE (18.B000, 18.B400, 18.B800)
-      // are such codes until they are implemented (plan S3), with AMASK
-      // bit 10 clear: they complete as no-ops, as on the 21264 [21464 IDS
-      // p. 676], an Alphabox decision (docs/cpu-fidelity.md).
+      // The JIT leaves these words to this switch.
       if (cpu_family_unused_misc_is_nop(m_model->family)) {
         ES40_EXECUTE_END();
       }

@@ -68,11 +68,13 @@ int main() {
   check_row("ev7z", CPU_FAMILY_EV7, 3);   // 21364/EV79
   check_row("ev8", CPU_FAMILY_EV7, 4, CPU_EXT_EV8); // 21464/EV8
   // The EV8 reports only what it implements of the IDS's 0x1F07: never
-  // more, and the bits of every stage not yet done are clear (S3: bit 10,
-  // S5-S6: bit 11, Tarantula: bit 3).
+  // more, and the bits of every stage not yet done are clear (S5-S6: bit
+  // 11, Tarantula: bit 3). Bit 10 (SMT) is set since S3, with LDx_ARM and
+  // QUIESCE: 0x1707.
   if (const cpu_model *m = find_cpu_model("ev8")) {
     CHECK_EQ(m->amask & ~U64(0x1F07), 0);
-    CHECK_EQ(m->amask & U64(0x0C08), 0);
+    CHECK_EQ(m->amask & U64(0x0808), 0);
+    CHECK_EQ(m->amask, 0x1707);
   }
   CHECK_EQ(find_cpu_model("ev5") == nullptr, 1);
   printf("cpumodels: %d checks, %d failures\n", checks, failures);

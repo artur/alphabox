@@ -122,6 +122,22 @@ struct SConfig {
 class CSystem;
 class CGdbStub; // the guest debugger's gdb server (src/debug)
 
+/// Why a processor's watch_flag (LDx_ARM, QUIESCE: the 21464's) cleared,
+/// as ALPHABOX_TRACE_QUIESCE counts it: another processor's store or
+/// successful STx_C, a device's write, an interrupt for it, the quiesce
+/// timeout, or anything else that needs the processor (stopping it, the
+/// Marvel start hand-off).
+enum WatchWake {
+  WATCH_NONE,
+  WATCH_STORE,
+  WATCH_STC,
+  WATCH_DMA,
+  WATCH_INTERRUPT,
+  WATCH_TIMEOUT,
+  WATCH_OTHER,
+  WATCH_CAUSES
+};
+
 class CCodePageMap {
 public:
   static constexpr int kPageShift = 13; // the Alpha's 8 KB page
@@ -422,8 +438,83 @@ public:
   // STx_C: consume this CPU's lock and do the conditional store (1 = success).
   u64 cpu_stx_c(int cpuid, u64 phys, int size_bits, u64 value, char *dram,
                 u64 dram_sz, CSystemComponent *source, bool intervened);
-  // exception/interrupt: drop the lock
+  // exception/interrupt: drop the lock (and the watch, below)
   void cpu_clear_lock(int cpuid);
+
+  /// LDx_ARM and QUIESCE, the 21464's (CPU_EXT_EV8; docs/platforms/ev8.md,
+  /// S3 and decision D16): a watch_flag per processor beside its load lock,
+  /// and the physical address its LDx_ARM loaded. The watched range is the
+  /// lock range, a 64-byte line (cpu_lock_matches), as the IDS requires
+  /// [21464 IDS Rev 1.1k, PDF p. 670]. Another processor's store, successful
+  /// STx_C or DMA write anywhere in it clears the flag and wakes a processor
+  /// sleeping in QUIESCE (CAlphaCPU::quiesce_wake). The flags are not in the
+  /// state file: a restore leaves every one clear, which is a wake-up the IDS
+  /// allows (software tests its lock again after QUIESCE).
+  ///
+  /// Arm: called by processor `cpuid` on its own thread, inside the LL/SC
+  /// reader guard (CLLSCDRAMGuard) and before it reads the line, so that a
+  /// DMA write is wholly before the arm and the read, or clears the flag.
+  void cpu_arm_watch(int cpuid, u64 address);
+  bool cpu_watch_armed(int cpuid) const {
+    return m_cpu_watch_flags.load(std::memory_order_seq_cst) & (1u << cpuid);
+  }
+  /// The processor's own reasons: QUIESCE ending, CALL_PAL, an exception.
+  void cpu_clear_watch(int cpuid) {
+    if (m_cpu_watch_flags.load(std::memory_order_relaxed) & (1u << cpuid))
+      m_cpu_watch_flags.fetch_and(~(1u << cpuid), std::memory_order_seq_cst);
+  }
+  /// A store by processor `by` landed in memory at `phys` (`stc`: a
+  /// successful STx_C). A processor's own store leaves its own flag alone:
+  /// the IDS names another processor's [p. 670] [inference]. The fence
+  /// pairs with cpu_arm_watch's: either the store is seen by the arming
+  /// processor's read of the line, or the arm is seen here.
+  void cpu_note_store_watch(int by, u64 phys, bool stc) {
+    if (!m_watch_machine)
+      return;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const u32 others =
+        m_cpu_watch_flags.load(std::memory_order_relaxed) & ~(1u << by);
+    if (others)
+      cpu_watch_hit(phys, 1, others, stc ? WATCH_STC : WATCH_STORE);
+  }
+  /// The machine has a processor with LDx_ARM and QUIESCE (RegisterCPU):
+  /// only then do stores look at the flags.
+  bool watch_machine() const { return m_watch_machine; }
+  const bool *watch_machine_ptr() const { return &m_watch_machine; }
+  const std::atomic<u32> *watch_flags() const { return &m_cpu_watch_flags; }
+  /// Is `phys` on a page some processor has watched? Compiled code never
+  /// stores into such a page inline (CAlphaCPU::dpc_host_base_w), so every
+  /// store to it passes cpu_note_store_watch. Pages stay marked, as code
+  /// pages do (CCodePageMap).
+  bool watch_page(u64 phys) const {
+    const u64 pg = phys >> CCodePageMap::kPageShift;
+    return m_watch_page_bits && pg < m_watch_pages &&
+           (__atomic_load_n(&m_watch_page_bits[pg >> 3], __ATOMIC_ACQUIRE) &
+            (1u << (pg & 7)));
+  }
+  /// Bumped when a page becomes watched; each processor records the value
+  /// it had read when it last dropped its cached translations
+  /// (CAlphaCPU::honour_dpc_flush_request).
+  u64 watch_mark_gen() const {
+    return m_watch_mark_gen.load(std::memory_order_acquire);
+  }
+  /// May processor `self` sleep? Not while another running processor may
+  /// still hold an inline-writable translation of a page marked since it
+  /// last flushed: its stores there would not be seen. Asks such a processor
+  /// to flush again.
+  bool cpu_watch_settled(int self);
+
+private:
+  /// Clear the flags in `mask` whose line [phys, phys + bytes) touches,
+  /// and wake those processors (`why`: a WatchWake).
+  void cpu_watch_hit(u64 phys, size_t bytes, u32 mask, int why);
+  void cpu_watch_mark_page(u64 phys);
+  std::atomic<u32> m_cpu_watch_flags{0};
+  u64 m_cpu_watch_address[32] = {};
+  bool m_watch_machine = false;
+  u8 *m_watch_page_bits = nullptr; // init_code_page_map
+  u64 m_watch_pages = 0;
+  std::atomic<u64> m_watch_mark_gen{0};
 
 private:
   // Console loading (LoadROM), one form per function.

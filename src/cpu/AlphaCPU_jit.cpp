@@ -367,39 +367,7 @@ void CAlphaCPU::jit_run(int budget) {
 
   // Drive the Cchip interval timer once per dispatch batch (CPU0 only), not
   // once per instruction the way the in-execute() poll did.
-  if (state.iProcNum == 0) {
-    if (now >= next_timer_fire) {
-      const u64 period_ns = theAli ? theAli->get_interval_period_ns()
-                                   : cSystem->chipset()->interval_period_ns();
-      if (period_ns) {
-        // Count-preserving, paced catch-up: the schedule advances one period
-        // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
-        // the guests' tick-counted clocks (VMS never resyncs) stay true to wall
-        // time. Repayment is paced to >= half a period between fires (max 2x
-        // nominal, never a burst - burst/compressed ticks skew RPCC-vs-tick
-        // calibrations). Backlog beyond 1s (debugger pause, host sleep) is
-        // dropped.
-        // Repay gaps are modulated (tick_next_gap_ns).
-        if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
-          cSystem->interval_tick();
-          tick_last_fire = now;
-          tick_gap_ns = tick_next_gap_ns(period_ns);
-          next_timer_fire += std::chrono::nanoseconds(period_ns);
-          if (now - next_timer_fire > std::chrono::seconds(1))
-            next_timer_fire = now;
-        }
-      } else {
-        cSystem->interval_tick();
-        tick_last_fire = now;
-        // No period yet. With the ALi, once a second until its timer is
-        // programmed; a chipset that sets the period itself (Marvel's
-        // RBOX_IT) is looked at again within a millisecond, so its first
-        // tick is not a second late.
-        next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
-                                        : std::chrono::nanoseconds(1000000));
-      }
-    }
-  }
+  interval_timer_poll(now);
 
   // Instruction-paced interval-tick envelope (timer.max_instr_per_tick; off by
   // default), for every CPU. Not under the firmware/VMS PALcode (base 0x8000,

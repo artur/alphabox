@@ -84,8 +84,8 @@ enum : u32 {
   /// of them under this flag, and the row's AMASK reports a feature only
   /// once every instruction it names executes. S2: CCB (18.EC00), CMOV2
   /// (11.68) and FCMOV2 (17.068); WH64EN and MAP_ALIGN are the core's
-  /// already. LDL_ARM, LDQ_ARM and QUIESCE are no instructions of the row
-  /// until S3, so the unused-18.xxxx rule above completes them as no-ops.
+  /// already. S3: LDL_ARM (18.B000), LDQ_ARM (18.B400) and QUIESCE
+  /// (18.B800), with one TPU per chip, and AMASK bit 10.
   CPU_EXT_EV8 = 0x0001,
 };
 
@@ -104,15 +104,17 @@ struct cpu_model {
 };
 
 /// Architecture extension bits, as AMASK reports them [ARM D-4]. The EV8's
-/// bits 3 (Tarantula), 10 (SMT: LDx_ARM, QUIESCE) and 11 (its SIMD and
-/// paired-single sets) get their names with the stage that implements them
-/// (docs/platforms/ev8-isa.md, section 2).
+/// bits 3 (Tarantula) and 11 (its SIMD and paired-single sets) get their
+/// names with the stage that implements them (docs/platforms/ev8-isa.md,
+/// section 2); bit 10 has its with S3.
 #define AMASK_BWX U64(0x0001)      ///< byte and word access
 #define AMASK_FIX U64(0x0002)      ///< square root and FP conversions
 #define AMASK_CIX U64(0x0004)      ///< count extension
 #define AMASK_MVI U64(0x0100)      ///< multimedia instructions
 #define AMASK_TRAP U64(0x0200)     ///< precise trap reporting
 #define AMASK_PREFETCH U64(0x1000) ///< prefetch with modify intent
+/// SMT: LDL_ARM, LDQ_ARM and QUIESCE [21464 IDS Rev 1.1k, PDF p. 668]
+#define AMASK_SMT U64(0x0400)
 
 /// The part named `name`, or nullptr.
 const cpu_model *find_cpu_model(const char *name);

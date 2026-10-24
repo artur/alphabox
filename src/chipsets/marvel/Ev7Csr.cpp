@@ -720,8 +720,12 @@ void CEv7Csr::write_scratch(u64 v) {
   m_regs[RBOX_SCRATCH1] = v;
   if (self && t_running_cpu == self)
     m_handoff.owner_wrote();
-  else if (self && !self->get_waiting()) // a parked one is answered below
+  else if (self && !self->get_waiting()) { // a parked one is answered below
     m_handoff.remote_wrote(self->state.instruction_count);
+    // The hand-off waits for the owner to look: one asleep in QUIESCE (the
+    // 21464's) looks now.
+    self->quiesce_wake(WATCH_OTHER);
+  }
   scratch_written(v);
 }
 
