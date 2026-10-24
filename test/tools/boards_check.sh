@@ -58,6 +58,9 @@
 #   BOARDS_EXTRA_CMDS    more console commands, separated by ';' (e.g.
 #                        'show sys_serial_num')
 #   BOARDS_INIT=0        skip the EV7 boards' `init` check
+#   BOARDS_EV7_CPU       the EV7 boards' processor class (default ev7; ev7z,
+#                        or ev8, the 21464 in EV7-compatible mode), for the
+#                        boards and their `init` check
 #   BOARDS_AFTER         how the console run ends (srm_console.py --after;
 #                        default sigterm). snap_roundtrip.sh sets sigusr1,
 #                        with ALPHABOX_SNAPSHOT and ALPHABOX_SNAPSHOT_EXIT in
@@ -150,7 +153,7 @@ board_info() {
     B_DEV="$ali
   pci0.13 = ali_ide { }" ;;
   es47|es80|gs1280) B_SRC=$FW/GS1280/SRM_V7_3.EXE; B_KIND=ev7; B_BITS=29
-    B_CPUS=2; B_CPU=ev7; B_DPR=0
+    B_CPUS=2; B_CPU=${BOARDS_EV7_CPU:-ev7}; B_DPR=0
     B_DEV='  pci2.2 = cmd649 { }
   pci2.3 = uss344 { port1 = "tablet"; port2 = "keyboard"; }' ;;
   *) return 1 ;;

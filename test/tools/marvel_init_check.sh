@@ -4,9 +4,9 @@
 # usage: marvel_init_check.sh <alphabox-binary> <label> [board[:cpus] ...]
 #
 # Boards (default es47:2 es80:4 gs1280:4): each is booted to P00>>> with that
-# many ev7 processors and boards_check.sh's other EV7 settings (512 MB per
-# processor, the CMD 649 and the USS-344 at pci2.2 and pci2.3), and `init` is
-# typed MARVEL_INIT_INITS times. At `init` the console halts its secondaries
+# many processors (ev7, or BOARDS_EV7_CPU) and boards_check.sh's other EV7
+# settings (512 MB per processor, the CMD 649 and the USS-344 at pci2.2 and
+# pci2.3), and `init` is typed MARVEL_INIT_INITS times. At `init` the console halts its secondaries
 # and starts each again through its RBOX_SCRATCH1 (docs/platforms/marvel.md,
 # "The start hand-off"); a secondary that does not answer in time is left out
 # of the machine the operating system is given. A run passes when, after each
@@ -32,6 +32,8 @@
 #                          gs1280, past boards_check.sh's twelve
 #   BOARDS_PROMPT_TMO      seconds to wait for each prompt (default 600)
 #   BOARDS_MIN_FREE_GB     stop if the data volume has less free (default 3)
+#   BOARDS_EV7_CPU         the processor class (default ev7; ev7z, or ev8,
+#                          the 21464 in EV7-compatible mode)
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -44,6 +46,7 @@ PTMO=${BOARDS_PROMPT_TMO:-600}
 MINFREE=${BOARDS_MIN_FREE_GB:-3}
 INITS=${MARVEL_INIT_INITS:-2}
 RUNS=${MARVEL_INIT_RUNS:-1}
+CPU=${BOARDS_EV7_CPU:-ev7}
 
 [ $# -ge 2 ] || { sed -n '2,4p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -175,7 +178,7 @@ for spec in $BOARDS; do
       echo '  memory.bits = 29;'
       echo '  rom.srm = "SRM_V7_3.EXE";'
       echo '  rom.nvram = "cmm_nvram.bin";'
-      for ((i = 0; i < n; i++)); do echo "  cpu$i = ev7 { speed = 1000M; }"; done
+      for ((i = 0; i < n; i++)); do echo "  cpu$i = $CPU { speed = 1000M; }"; done
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '  serial1 = serial { null_attach = true; }'
       echo '  pci2.2 = cmd649 { }'

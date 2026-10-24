@@ -61,6 +61,12 @@
 #                        900; the Windows guests take 2 to 5 minutes)
 #   GUESTS_MIN_FREE_GB   stop if the data volume has less free (default 3)
 #   GUESTS_KEEP=1        keep the run directories (clones included)
+#   GUESTS_EV7_CPU       the processor class of vms-es47 and linux-es47
+#                        (default ev7; ev7z, or ev8, the 21464 in
+#                        EV7-compatible mode)
+#   GUESTS_EXTRA_CMDS    more commands for vms-es47 and linux-es47, after
+#                        their own and before the shutdown, separated by ';'
+#                        (e.g. 'SHOW CPU/FULL' or 'cat /proc/cpuinfo')
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -638,6 +644,19 @@ serial_guest() {
   case $SG_RESULT in ok*) return 0 ;; *) return 1 ;; esac
 }
 
+# extra_steps vms|linux: GUESTS_EXTRA_CMDS as more steps of the dialogue
+extra_steps() {
+  local c cmds=()
+  IFS=';' read -r -a cmds <<< "${GUESTS_EXTRA_CMDS:-}"
+  for c in ${cmds[@]+"${cmds[@]}"}; do # bash 3.2: an empty array is unset
+    c=${c#"${c%%[! ]*}"}
+    [ -n "$c" ] || continue
+    if [ "$1" = vms ]; then steps+=("send=$c" "expect=\\$ \$@120")
+    else steps+=("send=$c; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@120"); fi
+  done
+}
+EV7CPU=${GUESTS_EV7_CPU:-ev7}
+
 # the DCL dialogue shared by both OpenVMS guests
 vms_steps() { # vms_steps <boot-device> <boot-timeout> [prompt-regex]
   echo "expect=${3:-P00>>>}@240"   # the DS10 console's prompt has no P00
@@ -806,15 +825,16 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 30;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo '  cpu0 = ev7 { speed = 1000M; }'; echo '  cpu1 = ev7 { speed = 1000M; }'
+      echo "  cpu0 = $EV7CPU { speed = 1000M; }"; echo "  cpu1 = $EV7CPU { speed = 1000M; }"
       echo '  pci2.1 = sym53c895 { disk0.0 = file { file = "disk.img"; } }'
       echo '  pci0.1 = dec21143 { type = "null"; }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '}'
     } > "$D/es40.cfg"
     steps=(); while IFS= read -r l; do steps+=("$l"); done < <(vms_steps dka0 "$BTMO")
-    steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW CPU" "expect=\\$ \$@60"
-            "send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
+    steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW CPU" "expect=\\$ \$@60")
+    extra_steps vms
+    steps+=("send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       d=$(date +%e-%b-%Y | tr a-z A-Z | sed 's/^ //')
       if grep -aqE "(^|[^0-9])0?$d" "$D/console.log"; then
@@ -863,7 +883,7 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 29;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo '  cpu0 = ev7 { speed = 1000M; }'; echo '  cpu1 = ev7 { speed = 1000M; }'
+      echo "  cpu0 = $EV7CPU { speed = 1000M; }"; echo "  cpu1 = $EV7CPU { speed = 1000M; }"
       echo '  pci2.2 = cmd649 { disk0.0 = file { file = "disk.img"; } }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '}'
@@ -874,8 +894,9 @@ for g in $GUESTS; do
            "expect=Password: @60" "send=alphabox" "expect=# \$@120"
            "send=uname -a; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
            "send=grep -E 'cpus active|platform string' /proc/cpuinfo; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
-           "send=date; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
-           "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
+           "send=date; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60")
+    extra_steps linux
+    steps+=("send=sync; poweroff" "expect=halted CPU|P00>>>@180")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       # the date against the host's local time, as for linux above
       gt=$(grep -a -o "$(date '+%a %b %e') [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]* $(date +%Y)" "$D/console.log" | head -1)
