@@ -521,8 +521,8 @@ the 21064 and the 21264". It is one engineer's test and it says "most": which
 codes trapped on the 21164 is not recorded, so here all of them are NOPs.
 The rule is a property of the processor family (`cpu_family_unused_misc_is_nop`
 in `CpuModel.hpp`). An instruction a row adds in that space is decoded
-before the rule applies: the EV8 row's CCB (18.EC00) is one, and its
-LDL_ARM, LDQ_ARM and QUIESCE are unused codes until they are implemented
+before the rule applies: the EV8 row's CCB (18.EC00), LDL_ARM, LDQ_ARM and
+QUIESCE (18.B000, 18.B400, 18.B800) are
 ([below](#the-ev8-row-what-it-implements-and-what-alphabox-decided-2026-10-24)).
 `test/cpu` (group `misc`) checks a spread of codes.
 
@@ -542,14 +542,17 @@ encodings and results are [ev8-isa.md](platforms/ev8-isa.md)'s. IDS is the
 | --- | --- | --- |
 | Family | `CPU_FAMILY_EV7`, so the ES47, ES80 and GS1280 take it and the Tsunami and Titan boards refuse it; `cpu_model::ext` = `CPU_EXT_EV8` says what the EV8 adds | **Alphabox decision** (D1): the family is what decides the address map, the start-up and the interrupts, all the EV7's in this mode |
 | `IMPLVER` | 4 | [IDS p. 76] |
-| `AMASK` | 0x1307: BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent (bits 0-2, 8, 9, 12), the core's | of the IDS's 0x1F07 [IDS p. 76] the row reports only what it executes, so software that tests `AMASK` never uses a missing feature: **Alphabox decision**. Bit 10 (SMT) comes with LDx_ARM and QUIESCE (S3), the instructions software tests it for [IDS pp. 668, 674]; bit 11 with the 1C SIMD set and paired single, which it covers by the owner's decision, once both are in (S5 and S6); bit 3, Tarantula's, when its instructions execute (S7 and S8) |
+| `AMASK` | 0x1707: BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent (bits 0-2, 8, 9, 12), the core's, and SMT (bit 10) since S3 | of the IDS's 0x1F07 [IDS p. 76] the row reports only what it executes, so software that tests `AMASK` never uses a missing feature: **Alphabox decision**. Bit 10 (SMT) came with LDx_ARM and QUIESCE (S3), the instructions software tests it for [IDS pp. 668, 674], although the row has one TPU per chip until S4; bit 11 with the 1C SIMD set and paired single, which it covers by the owner's decision, once both are in (S5 and S6); bit 3, Tarantula's, when its instructions execute (S7 and S8) |
 | Chip ID, processor type | chip ID 4, the EV7z's: the console calls it "EV7 rev 3.0", type 15 minor 5 | **Alphabox decision** (D2): the IDS gives CPU_CNFG<CHIP_ID> no value [IDS p. 487], and the console names the processor from its EV7 table |
 | Caches | L1 64 KB each, L2 3 MB; the console shows 1.75 MB | [IDS pp. 42-43]; `BBOX_CTL` has seven 256 KB ways, all an EV7 console can count (`Ev7Csr.cpp`): **Alphabox decision** to keep the IDS's size in the row |
 | CCB (18.EC00) | a no-op, which no address faults | "a hint with no architectural effect on data" [IDS pp. 411, 661]; no fault as for ECB, whose predecode it shares **[inference]** |
 | CMOV2 (11.68) | Rc <- Rav, Rb or the literal unread | its predicate is clear outside the pair, so the CMOV2 Rc,Rb,Rc the chip makes copies Rc to Rc [IDS pp. 73-74]; Rc <- Rav for Ra != Rc **[inference]** |
 | FCMOV2 (17.068) | Fc <- Fav; FEN with the FPU disabled | as CMOV2 [IDS pp. 73-74]; the FEN fault of every FP operate instruction but FNOP **[inference]**: the IDS says nothing of it |
 | WH64EN, MAP_ALIGN | no-ops, on every row as before | [ARM 4.11.11]; MAP_ALIGN is `XOR R31,R31,R31` [IDS p. 75] |
-| LDL_ARM, LDQ_ARM, QUIESCE (18.B000, 18.B400, 18.B800) | no-ops until S3: Ra is not written | **Alphabox decision**: until S3 they are no instructions of the row, so the row's rule for unused codes applies, the 21264's [IDS p. 676]; `AMASK` bit 10 is clear, and software must test it first [IDS pp. 668, 674-675], so a program that follows the IDS never runs them, and one that does not gets what an EV7 gives it |
+| LDL_ARM, LDQ_ARM (18.B000, 18.B400) | Ra <- MEM[Rbv], LDL_ARM's sign-extended; no displacement; the faults are LDQ's, here this core's (misaligned only across a page, [above](#unaligned-data-accesses-do-not-trap)); then, if it did not fault, the watch on the 64-byte line read and watch_flag set | [IDS pp. 669-670]. The line is the LDx_L lock range, which the IDS requires the watched range to be [p. 670]. Performed whatever Ra, as LDx_L, and a memory operation for a pending STx_C, as LDQ: **[inference]** from "as similar as possible to the LDx_L instructions" [p. 669]. Fails to arm while an interrupt the processor would take is pending, in any mode [p. 678; the mode, **Alphabox decision**]; an address outside memory is never armed (**Alphabox decision**: nothing tells a processor of a store to I/O space) |
+| What clears watch_flag | another processor's store or successful STx_C, a device's DMA write, in the line; an interrupt the processor would take; the timeout; every CALL_PAL; every exception or interrupt that clears the load lock (not the TB-miss fills); stopping the processor's thread, a reset, a remote write to its RBOX_SCRATCH1 (the Marvel start hand-off) | stores, STx_C, the timeout and REI, rti, rfe, retsys, urti [IDS p. 670]; the interrupt [p. 677]. **Alphabox decisions**: every CALL_PAL, where the IDS leaves the others UNPREDICTABLE [p. 670], so no PALcode's function codes need knowing; the exceptions, which "may" clear it for implementation-specific reasons; the processor's own store does not (**[inference]**: the IDS names another processor's). WH64 changes no data here, so it clears nothing [p. 671] |
+| QUIESCE (18.B800) | with watch_flag clear, nothing; set, the host thread waits on a condition variable until it clears, bounded by QUIESCE_TIMEOUT (10240 cycles at the configured clock); never a trap, in any mode | [IDS pp. 668, 672-673, 678]; 10240 cycles as from power-up, since no IPR sets it in EV7-compatible mode (**Alphabox decision**, D16, [ev8.md](platforms/ev8.md)). A wake-up on the host's timer comes late, never early: the timeout is a minimum. Processor 0 fires the machine's interval timer from inside the wait. The QUIESCE does not sleep while another running processor may still store into a newly watched page through a translation cached as inline-writable (compiled code); it then fails, which the IDS allows [p. 671] |
+| After a snapshot | every watch_flag clear | not in the state file (no format change): a wake-up the IDS allows, since software tests its lock again after QUIESCE [p. 674]. **Alphabox decision** |
 | The other codes | decoded exactly: 11.68, 17.068 and 18.EC00 only | **Alphabox decision**. The IDS's decode tables use don't-care bits, so on a 21464 every `18.xxxx` code is some instruction (18.D000 decodes as RPCC, 18.E400 as RC, 18.F400 as RS) [IDS p. 661], 11.68 to 11.6B and 11.78 to 11.7B are CMOV2 [IDS p. 655], and opcode 17 is decoded on the low bits of its function, so more codes than 17.068 are FCMOV2 [IDS p. 660]. The row keeps the core's rule for codes that are no instruction (unused 18.xxxx no-ops, OPCDEC elsewhere), as the owner chose for S2 |
 | Rows without `CPU_EXT_EV8` | unchanged: 11.68 and 17.068 raise OPCDEC, 18.EC00 is an unused code (a no-op) | |
 
@@ -562,6 +565,18 @@ Both JITs compile CCB, CMOV2 and FCMOV2 on the `ev8` row only:
 rows the words stay the interpreter's. `test/cpu` group `ev8` checks each
 instruction where the row has it (`rows.Own`), and groups `misc` and `ev8`
 what the other rows do with the same words.
+
+LDL_ARM, LDQ_ARM and QUIESCE are the interpreter's in every build: a
+block ends before each. Compiled code keeps the watch's rules in two
+places: a compiled CALL_PAL clears the processor's watch_flag on the
+`ev8` row, and no compiled store goes into a watched page inline (the
+page cache refuses such a page as writable, as it does a code page, and
+on a machine with an `ev8` processor the AArch64 HW_ST physical forms take
+the helper), so every store into a watched line passes the code that
+clears the flags. Group `quiesce` checks the instructions with one
+processor; `test/cpu/quiesce_mp.py` the wake-ups by another processor's
+store and STx_C, by an interrupt and by DMA
+([development.md](development.md)).
 
 ### Smaller ones
 

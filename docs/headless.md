@@ -650,6 +650,20 @@ The CPU oracle sets it to run a row's instructions without its console
 processor keeps its row's identity and the board everything else, so no
 console or operating system runs this way.
 
+### LDx_ARM and QUIESCE (the `ev8` row)
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_QUIESCE_TIMEOUT=<cycles>` | a test hook: QUIESCE's timeout, in processor cycles at the configured clock, for the 10240 the 21464 resets QUIESCE_TIMEOUT to (decimal, or hex with `0x`; at most 2^40). `0` makes every QUIESCE end at once, as the IDS says a timeout of 0 would. Off by default; in EV7-compatible mode no IPR sets the timeout |
+| `ALPHABOX_TRACE_QUIESCE=1` | when an `ev8` processor goes away (the emulator exits), one line, `%CPU-I-QUIESCE`: its LDx_ARMs and how many were refused (an interrupt pending, an address outside memory), the QUIESCEs that slept and for how long in all, what woke them (another processor's store, a successful STx_C, a device's DMA, an interrupt, the timeout, anything else that needed the processor), and the QUIESCEs that did not sleep (watch_flag clear; another processor still holding an inline-writable translation of a newly watched page) |
+
+The timeout hook is what lets a test tell a wake-up by a store or an
+interrupt from the timeout: at the default, 10240 cycles, a QUIESCE ends
+within about ten microseconds whatever happens. `test/cpu/cpu_oracle.py`
+sets 2^24 for a row that has QUIESCE, and `test/cpu/quiesce_mp.py` 2^28
+([development.md](development.md)). How the wait works:
+[ev8.md](platforms/ev8.md), "S3".
+
 ## Hypervisor runtime
 
 Builds with `-DALPHABOX_HVF=ON` only ([hypervisor.md](hypervisor.md)):

@@ -339,6 +339,9 @@ On the CMD 649 as `dqa0` (`disk0.0`, no CD), `boot dqa0 -flags 0` comes up
 to "es40 login:"; nothing else in the install changed. That is the
 `linux-es47` check of `test/tools/guests_check.sh` (log in, `uname -a`,
 the processors and the platform from `/proc/cpuinfo`, `date`, `poweroff`).
+`test/tools/es47_quiesce.py` boots the same install on two processors of
+the `ev8` row and builds and runs a program that waits on a lock with the
+21464's LDQ_ARM and QUIESCE ([ev8.md](platforms/ev8.md), "S3").
 
 ### What runs
 

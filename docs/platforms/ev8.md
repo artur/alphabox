@@ -682,7 +682,7 @@ toolchain.
 | S0 | Decide D1-D16 (this packet) | | | done 2026-10-24: A, then B; D2-D16 as proposed |
 | S1 | An `ev8` row on the ES47 board in EV7-compatible mode: IMPLVER 4, AMASK 0x1F07 (with bits for what is implemented), chip ID per D2 | interpreter, JIT (constants only) | console to `P00>>>`; OpenVMS 8.4 boots on the row; cpu_oracle cases for IMPLVER/AMASK | D1, D2; **done 2026-10-24** ([below](#s1-and-s2-2026-10-24)) |
 | S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | **done 2026-10-24**; LDx_ARM and QUIESCE are unused codes, NOPs, until S3 |
-| S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16 |
+| S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16; **done 2026-10-24** ([below](#s3-2026-10-24)) |
 | S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7 |
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
 | S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9 |
@@ -724,7 +724,7 @@ executes, so that software testing AMASK never uses a missing feature:
 | Bits | Feature | Reported |
 | --- | --- | --- |
 | 0-2, 8, 9, 12 | BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent | now: the core's, 0x1307 |
-| 10 | SMT: LDL_ARM, LDQ_ARM, QUIESCE | with S3, the instructions software tests it for [IDS pp. 668, 674]; S4 brings the TPUs its name describes |
+| 10 | SMT: LDL_ARM, LDQ_ARM, QUIESCE | since S3 (0x1707), the instructions software tests it for [IDS pp. 668, 674]; S4 brings the TPUs its name describes |
 | 11 | the 1C SIMD set and paired single (owner, 2026-10-24) | once both execute, after S5 and S6 |
 | 3 | Tarantula (D14) | once its instructions execute, after S7 and S8 |
 
@@ -742,7 +742,7 @@ compile the three on the row only: `classify()` takes the row's `ext`,
 and elsewhere the words stay the interpreter's. On the other rows nothing
 changed: 11.68 and 17.068 raise OPCDEC, 18.EC00 is an unused code.
 
-**LDL_ARM, LDQ_ARM and QUIESCE until S3** **[decision]**: no-ops. Until S3
+**LDL_ARM, LDQ_ARM and QUIESCE until S3** **[decision]** (S3 implements them, [below](#s3-2026-10-24)): no-ops. Until S3
 they are no instructions of the row, so the row's rule for an unused
 18.xxxx code applies, the 21264's [IDS p. 676]. AMASK bit 10 is clear and
 software must test it before using them [IDS pp. 668, 674-675], so a
@@ -821,6 +821,159 @@ MHz again on a second run). `guests_check.sh` passes `vms-es47`,
 - [ev8-isa.md](ev8-isa.md) sections 1 to 3 needed no correction for S1
   and S2: its example words are what `test/cpu/alpha_asm.py` assembles, and
   the oracle checks that they agree.
+
+## S3 (2026-10-24)
+
+LDL_ARM, LDQ_ARM and QUIESCE on the `ev8` row, one TPU per chip, across
+processors and DMA (D16); AMASK bit 10 on, 0x1707. Every other row keeps
+18.B000, 18.B400 and 18.B800 as unused codes, no-ops. The code is in
+`cpu/cpu_memory.hpp` (`READ_VIRT_ARM`), `cpu/AlphaCPU.cpp` (`watch_arm`,
+`quiesce`) and `system/System.cpp` (`cpu_arm_watch` and its neighbours);
+every decision below is in [cpu-fidelity.md](../cpu-fidelity.md) too.
+
+**What the IDS settles.**
+
+- LDx_ARM writes Ra with the loaded value (sign-extended for LDL_ARM) and
+  arms only "when [it] is executed without faulting" [IDS pp. 669-670]:
+  a DTB miss, an access violation or an alignment fault leaves the watch as
+  it was, and the fault is LDQ's, reported for va. Here that is this
+  core's LDQ, which takes the alignment fault only across a page
+  ([cpu-fidelity.md](../cpu-fidelity.md), the first known divergence).
+- QUIESCE is not privileged: the instructions "may be used either in
+  PALmode or in normal mode" [IDS p. 668], and QUIESCE has no exceptions
+  [p. 672]. The Linux program below runs both in user mode.
+- An interrupt directed to a quiesced processor clears watch_flag, and an
+  LDx_ARM does not arm while one is pending [IDS pp. 677-678]; REI, rti,
+  rfe, retsys and urti clear it, the other CALL_PALs may [p. 670]; the
+  quiescent period ends with the flag clear [p. 673]; a second QUIESCE never
+  sleeps [p. 671].
+
+**What Alphabox decided or inferred** (the gaps the IDS leaves).
+
+- The watched range is the 64-byte line the LDx_L lock watches, which the
+  IDS requires it to be [p. 670].
+- A processor's own store to its watched line does not clear its flag
+  **[inference]**: the IDS names "Processor A ... in Processor B" [p. 670].
+- LDx_ARM is performed whatever Ra, as LDx_L, and counts as a memory
+  operation for a pending STx_C, as LDQ **[inference]**, "as similar as
+  possible to the LDx_L instructions" [p. 669].
+- "An interrupt pending" is one the processor would take outside PALmode
+  (enabled in IER), in any mode **[decision]**; it ends a QUIESCE and
+  refuses an arm. An LDx_ARM to an address outside memory does not arm
+  **[decision]**: no store there can be seen.
+- Every CALL_PAL clears the flag **[decision]**, so no PALcode's function
+  codes have to be known (REI is OpenVMS's, rti, retsys and urti the
+  UNIX PALcode's), and so does every exception or interrupt that clears
+  the load lock, all but the TB-miss fills **[decision]**.
+- The timeout is QUIESCE_TIMEOUT's reset value, 10240 cycles, at the
+  processor's configured clock (10.2 us at the ES47's 1000 MHz, 7.3 us at
+  the 1400 MHz `alphabox configure` gives the row) **[decision, D16]**.
+  `ALPHABOX_QUIESCE_TIMEOUT` changes it, for tests ([headless.md](../headless.md)).
+
+**How the wait works.** watch_flag is a bit per processor in
+`CSystem::m_cpu_watch_flags`, beside the load-lock flags, with the
+address it watches. LDx_ARM publishes the flag (a sequentially consistent
+read-modify-write) and then reads the line, both inside the LL/SC reader
+guard; every store from another processor (the interpreter's, the JIT's
+helpers', a successful STx_C) fences and then looks at the flags, and a
+DMA write looks at them inside the writer guard before the transfer. So a
+release is either seen by the LDx_ARM's own read, and software does not
+QUIESCE, or it clears the flag. A store that clears one wakes that
+processor. QUIESCE, with the flag set, waits on the processor's condition
+variable under its own mutex, the flag tested under the mutex and every
+waker clearing the flag before it looks whether anyone sleeps: no wake-up
+is lost. The wait ends at the timeout at the latest (a host that sleeps
+makes it end late, never fail), and at once for an interrupt the
+processor would take (`irq_h` notifies it: devices, the interval timer,
+IPIs), a delayed interrupt on its way, `stop_threads` (exit, SIGTERM, a
+snapshot, the BREAK menu, a reset) and a reset request, and a write by
+another processor to its RBOX_SCRATCH1 (the start hand-off of `init`, M11).
+Processor 0 drives the machine's interval timer from its own loop, so it
+fires its ticks from inside the wait and is woken by its own. Anything
+else is looked at within a millisecond.
+
+Compiled code stores into memory through translations it caches, and
+does not look at the flags. So a page an LDx_ARM has watched is, like a
+page that holds compiled code, never cached as inline-writable; the first
+watch on a page asks every processor to drop its cached translations, and
+a QUIESCE does not sleep until every running processor has (it fails
+instead, which the IDS allows, and the guest tries again). Pages stay
+marked.
+
+**The snapshot.** The flags are not in the state file. A machine stopped
+for a snapshot ends every QUIESCE, and a restore leaves every flag clear:
+a wake-up the IDS allows, since software tests its lock again after a
+QUIESCE [p. 674]. No format change.
+
+**The JIT.** Both back ends leave the three instructions to the
+interpreter (a block ends before each; QUIESCE's wait is the
+interpreter's). A compiled CALL_PAL on the row clears the flag, and on a
+machine with an `ev8` processor the AArch64 HW_ST physical forms store
+through the helper. JIT_VERIFY: 0 mismatches.
+
+**The tests.**
+
+- `test/cpu` group `quiesce` (`--cpu ev8`; skipped elsewhere but for AMASK
+  bit 10's test): the loads, their faults, QUIESCE with the flag clear,
+  QUIESCE to the timeout and a second one, the arm cleared by a CALL_PAL
+  (compiled, in the last pass) and by an exception. A compiled CALL_PAL
+  without the clear failed its case in the last pass, on both back ends.
+- `test/cpu/quiesce_mp.py`: two `ev8` processors on the ES40 through the
+  test hook, the image's own PALcode, processor 1 started through the
+  dual-port RAM as the ES40's console starts one; timeout 2^28 cycles.
+  Processor 1 waits on a lock the IDS's way while processor 0 releases it
+  2^24 cycles (21 ms) later: woken by the store, by the STx_C, by an IPI
+  (taken at 0x680), and by a sym53c810's SCRIPTS Memory Move into the lock
+  (DMA, through a direct-mapped PCI window), each after the release and
+  long before the timeout; with nobody writing, at the timeout (336 ms).
+  `ALPHABOX_TRACE_QUIESCE` counts one wake-up of each cause. Passed on the
+  interpreter, JIT, JIT_VERIFY and x86-64 lanes.
+- Linux on the ES47 with two `ev8` processors (`test/tools/es47_quiesce.py`,
+  a clone of the installed disk): `test/cpu/quiesce_lock.c`, built by the
+  guest's gcc with the two instructions as `.long` words, runs two threads
+  pinned to the two processors, each taking a lock 20000 times the IDS's
+  way and holding it a little: the count is exact (40000), both finish,
+  and the threads executed 4277 and 3792 QUIESCEs. `ALPHABOX_TRACE_QUIESCE`
+  counted 3778 and 4266 wake-ups by the other processor's store, 6 and 4 by
+  its STx_C, 3 by an interrupt and 2 by the timeout; `poweroff` halts.
+  Run kept in `lab/runs/ev8-s3-linux/`.
+
+**What the operating systems make of bit 10.** Linux reports it to
+programs: the program's `AT_HWCAP`, Linux's `ELF_HWCAP` (the AMASK of
+every bit), reads 0x1707, where S1 found 0x1307. Its other AMASK, of CIX
+for `ELF_PLATFORM` (S1), does not look at bit 10, and Linux boots, logs
+in and powers off as before. Every AMASK OpenVMS 8.4 executes tests BWX
+(S1), so bit 10 changes nothing it does; it boots to DCL on the row as
+before, and `SHOW CPU/FULL` still reads "EV7 (21364), Minor = 5".
+
+**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT). The CPU
+oracle on the interpreter, JIT, JIT_VERIFY and x86-64 lanes, alike on
+all four: `ev68cb` and `ev7` PASS 20176, KNOWN 61, FAIL 0, SKIP 286 (S2's
+20171 and 211, and group `quiesce`: AMASK bit 10's case and the harness's
+checks run, its other 75 results skipped); `ev8` PASS 20428, KNOWN 73, FAIL
+0, SKIP 22; JIT_VERIFY 0 mismatches. `quiesce_mp.py` passed on the same
+four lanes. The SRM console-log check is clean on the interpreter, JIT and
+JIT_VERIFY lanes (JIT_VERIFY: 0 mismatches); `boards_check.sh` passes its
+12 boards and three `init` checks, the same as main's gate run on every
+board (`--diff`); with `BOARDS_EV7_CPU=ev8` the ES47, ES80 and GS1280 and
+their `init` checks (the GS1280's on four processors) pass, the same as
+S1's run on the row but for the `show cpu` that run added;
+`snap_roundtrip.sh` on the ES47 with the row: the state files identical,
+the console answering after the restore. `guests_check.sh` passes
+`vms-es47` and `linux-es47` on the `ev8` row, and `vms-es47`,
+`linux-es47`, `vms-es40` and `linux` on the existing rows.
+
+**Findings.**
+
+- On the x86-64 JIT (under Rosetta), processor 0, spinning in one
+  compiled loop, dropped its cached translations after the first watch on
+  a page only when it left the loop, and processor 1's QUIESCEs failed
+  until then (4952 times in one run of `quiesce_mp.py`; once on AArch64):
+  the price of the first arm on a page, never a lost wake-up.
+- [ev8-isa.md](ev8-isa.md) 3.1 needed no correction: its words are those
+  `test/cpu/alpha_asm.py` assembles and the Linux program carries, and its
+  notes are the IDS's.
 
 ## Findings
 

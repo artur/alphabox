@@ -230,7 +230,8 @@ and so never traps).
   modify intent), whether an unused 18.xxxx code is a no-op
   (`cpu_family_unused_misc_is_nop`), its extensions (`cpu_model::ext`),
   and the instructions a row has beyond the 21264's (the EV8 row's CCB,
-  CMOV2 and FCMOV2 so far, which group `ev8` checks). The values are the
+  CMOV2 and FCMOV2, which group `ev8` checks, and LDL_ARM, LDQ_ARM and
+  QUIESCE, group `quiesce`). The values are the
   manuals', as `src/cpu/CpuModels.cpp` gives them, and every run first
   reads that file and `CpuModel.hpp` and fails if the two tables differ,
   so a row added to the emulator is added to `rows.py` with it.
@@ -254,6 +255,28 @@ The registers R24 to R29 belong to the harness (checked after every
 group); a case uses R0 to R23 and R30. A JIT case builds a sequence with
 `jit_cases.Seq`, which runs the words through `aarm.py` to give the
 expected registers.
+
+**QUIESCE.** On a row that has it the oracle sets the quiesce timeout to
+2^24 cycles (`ALPHABOX_QUIESCE_TIMEOUT`, [headless.md](headless.md)), and
+group `quiesce` reads RPCC around each QUIESCE: one that slept took the
+timeout, one that did not a few instructions. With one processor nothing
+else writes, so an armed QUIESCE ends at the timeout. What other
+processors and devices do is `test/cpu/quiesce_mp.py`'s:
+
+```
+test/cpu/quiesce_mp.py <alphabox-binary> [label] [--cpu ROW] [--port N]
+```
+
+two processors of the row on the ES40 (the same hook and image PALcode;
+processor 0 starts processor 1 through the dual-port RAM's start word),
+the timeout at 2^28 cycles. Processor 1 waits on a lock, as the 21464 IDS
+writes the loop; processor 0 releases it 2^24 cycles later with a store,
+then with a STx_C; then nobody writes; then processor 0 sends an
+interprocessor interrupt; then a sym53c810's SCRIPTS Memory Move writes
+the lock (DMA). Each wait must end after the release and before the
+timeout (the third at it), and `ALPHABOX_TRACE_QUIESCE` must count one
+wake-up of each cause. About a second. The Linux side is
+`test/tools/es47_quiesce.py` ([ev8.md](platforms/ev8.md), "S3").
 
 ### Performance
 
