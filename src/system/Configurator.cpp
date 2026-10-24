@@ -1207,9 +1207,15 @@ void CConfigurator::check_device() {
     // As CAlphaCPU's constructor and CSystem::RegisterCPU.
     const cpu_model *cpu = find_cpu_model(myValue);
     const cpu_model *takes = find_cpu_model(board().cpu_model);
-    if (cpu && takes && takes->family != cpu->family)
-      FAILURE_2(Configuration, "the %s takes %s processors",
-                board().description, takes->part);
+    if (cpu && takes && takes->family != cpu->family) {
+      if (!cpu_any_board())
+        FAILURE_2(Configuration, "the %s takes %s processors",
+                  board().description, takes->part);
+      cfg_msg(true,
+              "%%CPU-W-ANYBOARD: a %s on the %s, which takes %s processors "
+              "(the ALPHABOX_CPU_ANY_BOARD test hook)\n",
+              cpu->part, board().description, takes->part);
+    }
     if (++s_check_cpus > board().max_cpus)
       FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
                 board().max_cpus, board().description);

@@ -397,9 +397,14 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system)
   // has neither of those for a Marvel console to find.
   {
     const cpu_model *board = find_cpu_model(system->platform().cpu_model);
-    if (board && board->family != m_model->family)
-      FAILURE_2(Configuration, "the %s takes %s processors",
-                system->platform().description, board->part);
+    if (board && board->family != m_model->family) {
+      if (!cpu_any_board())
+        FAILURE_2(Configuration, "the %s takes %s processors",
+                  system->platform().description, board->part);
+      printf("%%CPU-W-ANYBOARD: a %s on the %s, which takes %s processors "
+             "(the ALPHABOX_CPU_ANY_BOARD test hook)\n",
+             m_model->part, system->platform().description, board->part);
+    }
   }
 }
 

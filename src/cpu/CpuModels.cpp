@@ -80,3 +80,11 @@ const cpu_model *find_cpu_model(const char *name) {
       return &m;
   return nullptr;
 }
+
+bool cpu_any_board() {
+  static const bool on = [] {
+    const char *e = getenv("ALPHABOX_CPU_ANY_BOARD");
+    return e && *e && strcmp(e, "0") != 0;
+  }();
+  return on;
+}

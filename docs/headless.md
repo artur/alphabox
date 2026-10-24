@@ -16,7 +16,7 @@ variable the binary reads.
 | [Guest diagnostics](#guest-diagnostics) | where a guest is stuck, interrupts, [the gdb stub](#the-gdb-stub), arithmetic traps, the GUI lock |
 | [Timing and idle](#timing-and-idle) | idle pacing, delay loops, the rate report |
 | [JIT builds](#jit-builds) | the JIT's switches, self-tests and traces |
-| [Bring-up traces](#bring-up-traces) | what a firmware asked for and did not get |
+| [Bring-up traces](#bring-up-traces) | what a firmware asked for and did not get; [a processor row on another board](#processor-rows) |
 | [Hypervisor runtime](#hypervisor-runtime) | the `-DALPHABOX_HVF=ON` switches |
 
 ## Running without a display
@@ -637,6 +637,17 @@ The Marvel chipset ([platforms/marvel.md](platforms/marvel.md)) has its own:
 The CSR and IO7 traces print the first three of each repeated access, then
 every power of two. `ALPHABOX_TRACE_RBOX` tells a guest's `CPUSPINWAIT`
 caused by an interrupt not raised from one not taken.
+
+### Processor rows
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_CPU_ANY_BOARD=1` | a test hook: a board takes a processor row of another core family than its own (an `ev7` on the ES40), where it would refuse the configuration; `%CPU-W-ANYBOARD` says so at startup, and `alphabox run --check` reports it as a warning |
+
+The CPU oracle sets it to run a row's instructions without its console
+(`test/cpu/cpu_oracle.py --cpu`, [development.md](development.md)). The
+processor keeps its row's identity and the board everything else, so no
+console or operating system runs this way.
 
 ## Hypervisor runtime
 

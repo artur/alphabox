@@ -87,4 +87,11 @@ struct cpu_model {
 /// The part named `name`, or nullptr.
 const cpu_model *find_cpu_model(const char *name);
 
+/// A test hook, ALPHABOX_CPU_ANY_BOARD=1: a board takes a processor of
+/// another core family than its own. The CPU oracle (test/cpu) uses it to
+/// run any row's instructions on the ES40, whose console it replaces; no
+/// firmware or guest can run that way. Off by default, as every check that
+/// refuses such a processor stays.
+bool cpu_any_board();
+
 #endif // !defined(INCLUDED_CPUMODEL_H_)
