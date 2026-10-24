@@ -567,6 +567,17 @@ target_include_directories(start_handoff_test PRIVATE src/chipsets/marvel)
 target_link_libraries(start_handoff_test Threads::Threads)
 add_test(NAME start_handoff COMMAND start_handoff_test)
 
+# The 21464's TPUs as processors on the Marvel boards: their numbers on each
+# layout, memory and IO7 with TPU 0, a register block and interrupt target
+# per TPU (Topology.cpp; docs/platforms/ev8.md, S4).
+add_executable(tpu_topology_test test/unit/tpu_topology_test.cpp
+    src/chipsets/marvel/Topology.cpp src/platforms/es80/Es80.cpp
+    src/platforms/gs1280/Gs1280.cpp)
+target_include_directories(tpu_topology_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(tpu_topology_test Threads::Threads)
+add_test(NAME tpu_topology COMMAND tpu_topology_test)
+
 # The processor rows (CpuModels.cpp) against their sources: IMPLVER is the
 # Alpha Architecture Reference Manual's Table D-4.
 add_executable(cpumodels_test test/unit/cpumodels_test.cpp

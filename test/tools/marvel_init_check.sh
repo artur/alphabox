@@ -34,6 +34,12 @@
 #   BOARDS_MIN_FREE_GB     stop if the data volume has less free (default 3)
 #   BOARDS_EV7_CPU         the processor class (default ev7; ev7z, or ev8,
 #                          the 21464 in EV7-compatible mode)
+#   BOARDS_EV8_TPUS        with ev8: each chip's TPUs, 1 to 4, written as its
+#                          `tpus` (unset: no key, the row's one processor
+#                          per chip). Each TPU is a processor
+#                          (docs/platforms/ev8.md, S4): a board of n chips
+#                          is checked for n * TPUs processors, and [:cpus]
+#                          counts chips.
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -47,6 +53,10 @@ MINFREE=${BOARDS_MIN_FREE_GB:-3}
 INITS=${MARVEL_INIT_INITS:-2}
 RUNS=${MARVEL_INIT_RUNS:-1}
 CPU=${BOARDS_EV7_CPU:-ev7}
+TPUS=1; CPUOPT=
+if [ "$CPU" = ev8 ] && [ -n "${BOARDS_EV8_TPUS:-}" ]; then
+  TPUS=$BOARDS_EV8_TPUS; CPUOPT=" tpus = $TPUS;"
+fi
 
 [ $# -ge 2 ] || { sed -n '2,4p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -132,7 +142,7 @@ nr, size, off = hdr
 def flags(i):  # the slot's flags: hwpcb[16], then flags
     v = q(hwrpb + off + i * size + 0x80)
     return v[0] if v else 0
-valid = [i for i in range(min(nr, 64)) if (flags(i) & 0x1cc) == 0x1cc]
+valid = [i for i in range(min(nr, 256)) if (flags(i) & 0x1cc) == 0x1cc]
 if len(valid) != ncpu:
     bad.append("HWRPB: %d processors valid (%s), not %d" %
                (len(valid), " ".join(map(str, valid)), ncpu))
@@ -178,7 +188,7 @@ for spec in $BOARDS; do
       echo '  memory.bits = 29;'
       echo '  rom.srm = "SRM_V7_3.EXE";'
       echo '  rom.nvram = "cmm_nvram.bin";'
-      for ((i = 0; i < n; i++)); do echo "  cpu$i = $CPU { speed = 1000M; }"; done
+      for ((i = 0; i < n; i++)); do echo "  cpu$i = $CPU { speed = 1000M;$CPUOPT }"; done
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '  serial1 = serial { null_attach = true; }'
       echo '  pci2.2 = cmd649 { }'
@@ -188,7 +198,7 @@ for spec in $BOARDS; do
     ( cd "$D" && exec "$BIN" run es40.cfg ) \
       > >(head -c 30000000 > "$D/alphabox.out") 2>&1 &
     PID=$!
-    st=$(drive "$PORT" "$D/console.log" "$n" "$INITS" 2>&1 | tail -1)
+    st=$(drive "$PORT" "$D/console.log" $((n * TPUS)) "$INITS" 2>&1 | tail -1)
     if kill -0 "$PID" 2>/dev/null; then
       kill "$PID" 2>/dev/null
       k=0

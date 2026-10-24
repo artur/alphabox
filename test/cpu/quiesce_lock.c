@@ -1,16 +1,18 @@
-/* Two threads contending a spin lock the 21464 IDS's way (Rev 1.1k, PDF
+/* Threads contending a spin lock the 21464 IDS's way (Rev 1.1k, PDF
  * p. 674): try the lock with LDQ_L/STQ_C; while it is busy, LDQ_ARM it,
  * QUIESCE if it is still taken, and look again. Built on the guest with its
  * own gcc (gcc -O2 -pthread quiesce_lock.c), Linux on an Alphabox ES47 with
  * the `ev8` row (docs/platforms/ev8.md, S3). Binutils knows neither
  * instruction, so they are words: LDQ_ARM $1,($2) = 0x6022B400 and QUIESCE
  * = 0x63FFB800 (docs/platforms/ev8-isa.md 3.1), and both are used only when
- * AMASK says bit 10 (SMT) is there, as the IDS requires. Each thread is
- * pinned to a processor of its own; each adds 1 to a shared count, inside
- * the lock, `n` times, and holds the lock a while each time so that the
- * other one waits. Prints the counts, the QUIESCEs each executed, the AMASK
- * test and Linux's AT_HWCAP (its ELF_HWCAP: ~AMASK(-1)), and
- * "QTEST PASS" when the count is exact and both threads finished.
+ * AMASK says bit 10 (SMT) is there, as the IDS requires. Each of the
+ * `threads` (two by default; one per processor, its TPUs included, with S4's
+ * `tpus`) is pinned to a processor of its own, 0, 1, ...; each adds 1 to a
+ * shared count, inside the lock, `n` times, and holds the lock a while each
+ * time so that the others wait. Usage: quiesce_lock [n [hold [threads]]].
+ * Prints the counts, the QUIESCEs each executed, the AMASK test and Linux's
+ * AT_HWCAP (its ELF_HWCAP: ~AMASK(-1)), and "QTEST PASS" when the count is
+ * exact and every thread finished.
  * Alphabox's ALPHABOX_TRACE_QUIESCE=1 tells what woke each QUIESCE. */
 #define _GNU_SOURCE
 #include <pthread.h>
@@ -104,26 +106,40 @@ static void *run(void *arg) {
   return NULL;
 }
 
+#define MAX_THREADS 32
+
 int main(int argc, char **argv) {
+  int threads = 2;
   if (argc > 1)
     n = atol(argv[1]);
   if (argc > 2)
     hold = atol(argv[2]);
+  if (argc > 3)
+    threads = atoi(argv[3]);
+  if (threads < 1 || threads > MAX_THREADS)
+    threads = 2;
   smt = amask(0x400) == 0;
   printf("AMASK(0x400) = %#lx: %s; AT_HWCAP = %#lx\n", amask(0x400),
          smt ? "SMT, LDQ_ARM and QUIESCE used" : "no SMT, a plain spin",
          (long)getauxval(AT_HWCAP));
-  struct worker w[2] = {{0, 0, 0}, {1, 0, 0}};
-  pthread_t t[2];
-  for (int i = 0; i < 2; i++)
+  struct worker w[MAX_THREADS];
+  pthread_t t[MAX_THREADS];
+  for (int i = 0; i < threads; i++) {
+    w[i].cpu = i;
+    w[i].done = w[i].quiesces = 0;
     pthread_create(&t[i], NULL, run, &w[i]);
-  for (int i = 0; i < 2; i++)
+  }
+  int ok = 1;
+  for (int i = 0; i < threads; i++) {
     pthread_join(t[i], NULL);
-  const int ok = shared_count == 2 * n && w[0].done == n && w[1].done == n;
-  printf("count %ld of %ld; thread 0 (cpu 0) %ld, %ld QUIESCEs; thread 1 "
-         "(cpu 1) %ld, %ld QUIESCEs\n",
-         shared_count, 2 * n, w[0].done, w[0].quiesces, w[1].done,
-         w[1].quiesces);
+    ok = ok && w[i].done == n;
+  }
+  ok = ok && shared_count == threads * n;
+  printf("count %ld of %ld", shared_count, threads * n);
+  for (int i = 0; i < threads; i++)
+    printf("; thread %d (cpu %d) %ld, %ld QUIESCEs", i, w[i].cpu, w[i].done,
+           w[i].quiesces);
+  printf("\n");
   printf("QTEST %s\n", ok ? "PASS" : "FAIL");
   return ok ? 0 : 1;
 }

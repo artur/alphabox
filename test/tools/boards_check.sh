@@ -10,7 +10,9 @@
 # its own console firmware from roms/), starts the emulator, waits for the
 # console prompt (with a timeout, never a fixed sleep), runs `show config`
 # (and `show fru` on the EV7 boards), and stops the emulator with SIGTERM.
-# A board passes only if the emulator then exits with status 0. After the
+# A board passes only if the emulator then exits with status 0, and an EV7
+# board only if show config lists as many processors as it has (two chips,
+# each of BOARDS_EV8_TPUS TPUs with ev8). After the
 # boards, each EV7 board checked is booted again with more processors (es47
 # 2, es80 and gs1280 4) for marvel_init_check.sh: `init` twice, and every
 # processor restarted each time. Its lines are `PASS|FAIL <board>-init ...`.
@@ -61,6 +63,11 @@
 #   BOARDS_EV7_CPU       the EV7 boards' processor class (default ev7; ev7z,
 #                        or ev8, the 21464 in EV7-compatible mode), for the
 #                        boards and their `init` check
+#   BOARDS_EV8_TPUS      with ev8: each chip's TPUs, 1 to 4, written as its
+#                        `tpus` (unset: no key, one processor per chip, the
+#                        row's default); each TPU is a processor
+#                        (docs/platforms/ev8.md, S4), so the boards have two
+#                        chips and chips * TPUs processors
 #   BOARDS_AFTER         how the console run ends (srm_console.py --after;
 #                        default sigterm). snap_roundtrip.sh sets sigusr1,
 #                        with ALPHABOX_SNAPSHOT and ALPHABOX_SNAPSHOT_EXIT in
@@ -175,8 +182,10 @@ write_cfg() {
       echo '  rom.flash = "flash.rom";'
       [ "$B_DPR" = 1 ] && echo '  rom.dpr = "dpr.rom";'
     fi
+    local tpus=
+    [ "$B_CPU" = ev8 ] && [ -n "${BOARDS_EV8_TPUS:-}" ] && tpus=" tpus = $BOARDS_EV8_TPUS;"
     for ((i = 0; i < B_CPUS; i++)); do
-      echo "  cpu$i = $B_CPU { speed = 1000M; }"
+      echo "  cpu$i = $B_CPU { speed = 1000M;$tpus }"
     done
     echo "  serial0 = serial { address = \"127.0.0.1\"; port = $port; }"
     echo '  serial1 = serial { null_attach = true; }'
@@ -339,11 +348,21 @@ for b in $BOARDS; do
   normalise "$D" < "$D/console.log" | head -c 400000 > "$OUT/$b.log"
   normalise "$D" < "$D/cmds.txt" | head -c 400000 > "$OUT/$b.cmds.log"
   secs=$(( $(date +%s) - t0 ))
+  # An EV7 board's show config has a "PID n  CPU m" line per processor: as
+  # many as the configuration has, chips x TPUs with ev8.
+  listed=; want=
+  if [ "$B_KIND" = ev7 ]; then
+    want=$B_CPUS
+    [ "$B_CPU" = ev8 ] && want=$((B_CPUS * ${BOARDS_EV8_TPUS:-1}))
+    listed=$(grep -a -c -E '^PID [0-9]+[[:space:]]+CPU [0-9]+' "$OUT/$b.cmds.log")
+  fi
   case $st in
   *status=prompt*no-prompt-after*) report "$b" FAIL $secs "a command did not return to the prompt: $st"; rc_all=1 ;;
   *status=prompt*)
-    if [ "$EMU_RC" = 0 ]; then
-      report "$b" PASS $secs "prompt, ${cmdnames}"
+    if [ -n "$want" ] && [ "$listed" != "$want" ]; then
+      report "$b" FAIL $secs "prompt, ${cmdnames}; show config lists $listed processors, not $want"; rc_all=1
+    elif [ "$EMU_RC" = 0 ]; then
+      report "$b" PASS $secs "prompt, ${cmdnames}${want:+; $listed processors}"
     else
       report "$b" FAIL $secs "prompt, ${cmdnames}; exit status $EMU_RC"; rc_all=1
     fi ;;

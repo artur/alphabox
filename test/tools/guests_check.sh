@@ -64,6 +64,11 @@
 #   GUESTS_EV7_CPU       the processor class of vms-es47 and linux-es47
 #                        (default ev7; ev7z, or ev8, the 21464 in
 #                        EV7-compatible mode)
+#   GUESTS_EV8_TPUS      with ev8: each chip's TPUs, 1 to 4, written as its
+#                        `tpus` (unset: no key, one processor per chip);
+#                        each TPU is a processor (docs/platforms/ev8.md, S4),
+#                        and SHOW CPU's active set and Linux's "cpus active"
+#                        must count 2 * TPUs
 #   GUESTS_EXTRA_CMDS    more commands for vms-es47 and linux-es47, after
 #                        their own and before the shutdown, separated by ';'
 #                        (e.g. 'SHOW CPU/FULL' or 'cat /proc/cpuinfo')
@@ -656,6 +661,18 @@ extra_steps() {
   done
 }
 EV7CPU=${GUESTS_EV7_CPU:-ev7}
+# The ES47's two chips; with ev8 and GUESTS_EV8_TPUS each of that many TPUs,
+# each a processor (docs/platforms/ev8.md, S4).
+EV7OPT=; EV7N=2
+if [ "$EV7CPU" = ev8 ] && [ -n "${GUESTS_EV8_TPUS:-}" ]; then
+  EV7OPT=" tpus = $GUESTS_EV8_TPUS;"; EV7N=$((2 * GUESTS_EV8_TPUS))
+fi
+# How many processors an OpenVMS SHOW CPU's "Active" set holds ("0-7",
+# "0,1,8,9", "0-3,8-11").
+vms_active_count() { # vms_active_count <console log>
+  tr -d '\r\000' < "$1" | sed -n 's/^ *Active  *\([0-9][0-9,-]*\) *$/\1/p' | tail -1 |
+    tr ',' '\n' | awk -F- 'NF==2 {n += $2 - $1 + 1; next} NF==1 && $1 != "" {n++} END {print n + 0}'
+}
 
 # the DCL dialogue shared by both OpenVMS guests
 vms_steps() { # vms_steps <boot-device> <boot-timeout> [prompt-regex]
@@ -825,7 +842,7 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 30;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo "  cpu0 = $EV7CPU { speed = 1000M; }"; echo "  cpu1 = $EV7CPU { speed = 1000M; }"
+      echo "  cpu0 = $EV7CPU { speed = 1000M;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = 1000M;$EV7OPT }"
       echo '  pci2.1 = sym53c895 { disk0.0 = file { file = "disk.img"; } }'
       echo '  pci0.1 = dec21143 { type = "null"; }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
@@ -837,9 +854,10 @@ for g in $GUESTS; do
     steps+=("send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       d=$(date +%e-%b-%Y | tr a-z A-Z | sed 's/^ //')
-      if grep -aqE "(^|[^0-9])0?$d" "$D/console.log"; then
-        stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW CPU, SHUTDOWN"
-      else fail "logged in, but SHOW TIME output not as expected"; continue; fi
+      na=$(vms_active_count "$D/console.log")
+      if grep -aqE "(^|[^0-9])0?$d" "$D/console.log" && [ "$na" = "$EV7N" ]; then
+        stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW CPU ($na active), SHUTDOWN"
+      else fail "logged in, but SHOW TIME or SHOW CPU output not as expected ($na active, not $EV7N)"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
   vms-ds20e) vms_board "$g" ds20e 2 DS20/PC264SRM.ROM pci0.5 pci0.6 "" || continue ;;
   vms-ds20) vms_board "$g" ds20 2 DS20/PC264SRM.ROM pci0.5 pci0.6 "" || continue ;;
@@ -883,7 +901,7 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 29;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo "  cpu0 = $EV7CPU { speed = 1000M; }"; echo "  cpu1 = $EV7CPU { speed = 1000M; }"
+      echo "  cpu0 = $EV7CPU { speed = 1000M;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = 1000M;$EV7OPT }"
       echo '  pci2.2 = cmd649 { disk0.0 = file { file = "disk.img"; } }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '}'
@@ -905,10 +923,10 @@ for g in $GUESTS; do
       dm=$(( gm > hm ? gm - hm : hm - gm )); [ $dm -gt 720 ] && dm=$((1440 - dm))
       txt=$(tr -d '\r\000' < "$D/console.log")
       if echo "$txt" | grep -aq 'Linux es40 [0-9].* EV7 Marvel' &&
-         echo "$txt" | grep -aqE 'cpus active[[:space:]]*: 2' &&
+         echo "$txt" | grep -aqE "cpus active[[:space:]]*: $EV7N\$" &&
          echo "$txt" | grep -aq 'platform string.*AlphaServer ES47' &&
          [ -n "$gt" ] && [ $dm -le 5 ]; then
-        stop_emu; report "$g" PASS "$(secs)" "login, uname -a (EV7 Marvel), 2 CPUs active, ES47, date (${gt:0:5}, host local time within ${dm} min), poweroff"
+        stop_emu; report "$g" PASS "$(secs)" "login, uname -a (EV7 Marvel), $EV7N CPUs active, ES47, date (${gt:0:5}, host local time within ${dm} min), poweroff"
       else fail "logged in, but uname/cpuinfo/date output not as expected (date '$gt')"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
   arc)

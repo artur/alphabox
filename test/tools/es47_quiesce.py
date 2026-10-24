@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Linux on the ES47 with two `ev8` processors: a user program that waits
-on a lock with LDQ_ARM and QUIESCE (docs/platforms/ev8.md, S3).
+"""Linux on the ES47 with two `ev8` chips: a user program whose threads,
+one per processor, wait on a lock with LDQ_ARM and QUIESCE
+(docs/platforms/ev8.md, S3; across TPUs, S4).
 
     es47_quiesce.py <alphabox-binary> <label> [--port N] [--cpu ROW]
-                    [--args "N HOLD"]
+                    [--tpus T] [--args "N HOLD"]
+
+--tpus writes each chip's `tpus` (the row's default, one processor per
+chip, when absent), and the program runs a thread on each of the 2 * T
+processors, each taking the lock N times.
 
 A clone (cp -c) of the installed disk ($ALPHABOX_WORK/linux/disk/
 gentoo-es47.img, test/tools/es47_linux.sh retarget) gets
@@ -96,6 +101,7 @@ def main():
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "23790")))
     ap.add_argument("--cpu", default="ev8")
     ap.add_argument("--args", default="20000 200")
+    ap.add_argument("--tpus", type=int, default=0)
     args = ap.parse_args()
     work = os.path.abspath(os.environ.get("ALPHABOX_WORK", os.path.join(REPO, "lab")))
     roms = os.path.abspath(os.environ.get("ALPHABOX_ROMS", os.path.join(REPO, "roms")))
@@ -111,6 +117,8 @@ def main():
                 "sif /root/quiesce_lock.c uid 0", "sif /root/quiesce_lock.c gid 0"):
         subprocess.check_call([dbg, "-w", "-R", cmd, part],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ncpu = 2 * (args.tpus or 1)
+    tpus = " tpus = %d;" % args.tpus if args.tpus else ""
     with open(os.path.join(d, "es40.cfg"), "w") as f:
         f.write("""sys0 = tsunami
 {
@@ -118,12 +126,12 @@ def main():
   memory.bits = 29;
   rom.srm = "%s/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE";
   rom.nvram = "cmm_nvram.bin";
-  cpu0 = %s { speed = 1000M; }
-  cpu1 = %s { speed = 1000M; }
+  cpu0 = %s { speed = 1000M;%s }
+  cpu1 = %s { speed = 1000M;%s }
   pci2.2 = cmd649 { disk0.0 = file { file = "disk.img"; } }
   serial0 = serial { address = "127.0.0.1"; port = %d; }
 }
-""" % (roms, args.cpu, args.cpu, args.port))
+""" % (roms, args.cpu, tpus, args.cpu, tpus, args.port))
     env = dict(os.environ, ALPHABOX_TRACE_QUIESCE="1", SDL_VIDEO_DRIVER="dummy")
     out = open(os.path.join(d, "alphabox.out"), "wb")
     t0 = time.time()
@@ -150,7 +158,7 @@ def main():
              "echo GC-DONE-$?", r"GC-DONE-[0-9]", 60, "cpuinfo")
         step("gcc -O2 -pthread -o /root/quiesce_lock /root/quiesce_lock.c; "
              "echo GC-DONE-$?", r"GC-DONE-0", 300, "gcc")
-        step("/root/quiesce_lock %s; echo GC-DONE-$?" % args.args,
+        step("/root/quiesce_lock %s %d; echo GC-DONE-$?" % (args.args, ncpu),
              r"GC-DONE-[0-9]", 900, "run")
         step("sync; poweroff", r"halted CPU|P00>>>", 180, "poweroff")
         result = "PASS"
@@ -177,8 +185,8 @@ def main():
                  for m in [re.search(r"woken by store (\d+)", ln)] if m)
     if result == "PASS" and not ("QTEST PASS" in con and stores > 0):
         result = "FAIL"
-    summary = ["== es47_quiesce %s: %s, two %s, %.0f s" % (
-        args.label, result, args.cpu, secs)] + ["  " + s for s in steps] + \
+    summary = ["== es47_quiesce %s: %s, two %s chips, %d processors, %.0f s" % (
+        args.label, result, args.cpu, ncpu, secs)] + ["  " + s for s in steps] + \
         ["  guest: " + ln for ln in lines] + ["  emulator: " + ln for ln in rep]
     open(os.path.join(d, "summary.txt"), "w").write("\n".join(summary) + "\n")
     print("\n".join(summary))
