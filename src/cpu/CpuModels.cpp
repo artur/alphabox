@@ -21,7 +21,7 @@
 /**
  * \file
  * The Alpha processors of the EV6 family this emulator implements, and the
- * EV7 parts built on its core.
+ * EV7 and EV8 parts built on its core.
  *
  * The EV68CB is here because its values are established: the ES40 console
  * prints "Alpha EV68CB pass 4.0" from them, and the regression logs would
@@ -42,7 +42,7 @@ static const cpu_model models[] = {
     {"ev68cb", "21264CB (EV68CB)", 0x21, 12, 6, 2,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV6, 64, 64, 0},
+     CPU_FAMILY_EV6, CPU_EXT_NONE, 64, 64, 0},
     // 21364 (EV7): the EV68 core, so the same extensions [inference: no
     // document lists the 21364's AMASK, and neither the console nor its two
     // PALcodes execute AMASK (E1, docs/platforms/marvel.md)], IMPLVER 3, the
@@ -61,7 +61,7 @@ static const cpu_model models[] = {
     {"ev7", "21364 (EV7)", 2, 15, 3, 3,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV7, 64, 64, 1536},
+     CPU_FAMILY_EV7, CPU_EXT_NONE, 64, 64, 1536},
     // EV7z, the same core at 1.15-1.3 GHz. A real ES47 7/1300's show
     // config calls it "EV7 rev 3.0" with 1.75 MB of cache: minor 5, which
     // only chip ID 4 reaches in the console's table [inference: no document
@@ -71,7 +71,26 @@ static const cpu_model models[] = {
     {"ev7z", "21364 (EV7z)", 4, 15, 5, 3,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV7, 64, 64, 1792},
+     CPU_FAMILY_EV7, CPU_EXT_NONE, 64, 64, 1792},
+    // 21464 (EV8) in EV7-compatible mode (docs/platforms/ev8.md, decision D1
+    // and option A): the EV7's privileged interface, so the EV7 console and
+    // its PALcodes run unchanged, with the 21464's identity and, as the
+    // stages add them, its instructions (CPU_EXT_EV8). IMPLVER 4 [21464 IDS
+    // Rev 1.1k, PDF p. 76]. AMASK: the IDS's mask is 0x1F07 [IDS p. 76], and
+    // the row reports only what it implements, so that software testing
+    // AMASK never uses a missing feature: the EV68 core's 0x1307 today; bit
+    // 10 (SMT) with LDx_ARM and QUIESCE (S3), bit 11 with the SIMD and
+    // paired-single sets (S5 and S6), bit 3 with Tarantula (S7, S8)
+    // [decision; docs/cpu-fidelity.md]. Chip ID 4, the EV7z's, which the
+    // console names "EV7 rev 3.0", type 15 minor 5 [decision D2: the IDS
+    // gives CPU_CNFG<CHIP_ID> no value, p. 487, and the console turns
+    // I_CTL<29:24> into a name through its EV7 table]. L1 64 KB each and a
+    // 3 MB L2 [IDS pp. 42-43], of which BBOX_CTL, seven 256 KB ways, shows
+    // the console 1.75 MB (chipsets/marvel/Ev7Csr.cpp).
+    {"ev8", "21464 (EV8)", 4, 15, 5, 4,
+     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP |
+         AMASK_PREFETCH,
+     CPU_FAMILY_EV7, CPU_EXT_EV8, 64, 64, 3072},
 };
 
 const cpu_model *find_cpu_model(const char *name) {

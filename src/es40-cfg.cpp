@@ -596,11 +596,15 @@ static int configure_session(const string &out) {
   if (marvel) {
     MultipleChoiceQuestion model_q;
     model_q.setKey("cpu.model");
-    model_q.setQuestion("Which EV7 should the processors be?");
-    model_q.setExplanation("ev7z is the faster part of the same core, which "
-                           "the console names EV7 rev 3.0.");
+    model_q.setQuestion("Which processor should the machine have?");
+    model_q.setExplanation(
+        "ev7z is the faster part of the same core, which the console names "
+        "EV7 rev 3.0. ev8 is the cancelled 21464 in EV7-compatible mode: "
+        "the EV7's console and PALcode, the 21464's identity and "
+        "instructions (docs/platforms/ev8.md).");
     model_q.addAnswer("ev7", "ev7", "21364 (EV7)");
     model_q.addAnswer("ev7z", "ev7z", "21364 (EV7z)");
+    model_q.addAnswer("ev8", "ev8", "21464 (EV8)");
     model_q.setDefault("ev7");
     cpu_class = model_q.ask();
   }
@@ -612,7 +616,11 @@ static int configure_session(const string &out) {
   mhz_q.setExplanation("This only changes the CPU speed reported to the OS; "
                        "not the speed of the emulation.");
   mhz_q.setRange(10, 2000);
-  mhz_q.setDefault(marvel ? (cpu_class == "ev7z" ? "1300" : "1000") : "800");
+  // The EV8's design clock is 1.4 GHz [21464 IDS Rev 1.1k, PDF p. 42].
+  mhz_q.setDefault(!marvel               ? "800"
+                   : cpu_class == "ev7z" ? "1300"
+                   : cpu_class == "ev8"  ? "1400"
+                                         : "1000");
   mhz_q.ask();
 
   // The memory test skip patches the ES40's own console.

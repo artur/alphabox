@@ -35,6 +35,15 @@
  * (router, memory controllers, the management port) are the Marvel
  * chipset's (chipsets/marvel/).
  *
+ * The EV8 (21464) is a row of the EV7 family too, in what
+ * docs/platforms/ev8.md calls EV7-compatible mode: the EV7's privileged
+ * interface (IPRs, HW_RET, the 44-bit physical address, the CSR window), so
+ * the EV7 console and its PALcodes run unchanged, with the 21464's
+ * user-visible instructions on top. Those are the row's extensions
+ * (cpu_model::ext, CPU_EXT_*), which the decoder tests; the family stays
+ * what the board and the PALcode see. A native EV8 (the IDS's own IPRs and
+ * PALcode interface, plan S11) would be a family of its own.
+ *
  * Every value here is read by the firmware or the operating system, so a
  * wrong one is visible: the console prints the processor's name from the
  * chip identification, and guests choose code paths from the architecture
@@ -51,17 +60,31 @@
 /// from.
 enum cpu_family {
   CPU_FAMILY_EV6, ///< 21264 and its shrinks (EV6, EV67, EV68)
-  CPU_FAMILY_EV7, ///< 21364: an EV68 core with Rbox, Zbox and Cbox on chip
+  CPU_FAMILY_EV7, ///< 21364: an EV68 core with Rbox, Zbox and Cbox on chip;
+                  ///< and the 21464 in EV7-compatible mode
 };
 
 /// What an opcode 18 function code with no instruction does. The Alpha
 /// Architecture Reference Manual allows a trap or a no-op; the 21264 (and
 /// so every EV6 and EV7 row) completes it as a no-op, the 21164 trapped
-/// (docs/cpu-fidelity.md). A family with instructions of its own in that
-/// space (the EV8) answers for itself.
+/// (docs/cpu-fidelity.md). An instruction a row adds in that space (the
+/// EV8's, CPU_EXT_EV8) is decoded before this rule applies, so the rule
+/// covers only the codes that are no instruction of the row; a native EV8
+/// family would answer for itself.
 inline bool cpu_family_unused_misc_is_nop(cpu_family f) {
   return f == CPU_FAMILY_EV6 || f == CPU_FAMILY_EV7;
 }
+
+/// Instructions a row has beyond its family's core (cpu_model::ext).
+enum : u32 {
+  CPU_EXT_NONE = 0,
+  /// The 21464's (EV8's) user-visible additions [21464 IDS Rev 1.1k; the
+  /// encodings and results Alphabox implements are docs/platforms/ev8-isa.md].
+  /// Each stage of the plan (docs/platforms/ev8.md, section 6) decodes more
+  /// of them under this flag, and the row's AMASK reports a feature only
+  /// once every instruction it names executes. None is decoded yet (S1).
+  CPU_EXT_EV8 = 0x0001,
+};
 
 struct cpu_model {
   const char *name; ///< configuration class, e.g. "ev68cb"
@@ -69,14 +92,18 @@ struct cpu_model {
   u8 chip_id;       ///< I_CTL<29:24>, which the console turns into a name
   u8 type_major;    ///< processor type reported to software [ARM D-1..3]
   u8 type_minor;    ///< revision within the type
-  u8 implver;       ///< IMPLVER result: 2 EV6 family, 3 EV7 [ARM D-4]
+  u8 implver;       ///< IMPLVER: 2 EV6 family, 3 EV7 [ARM D-4], 4 EV8 [IDS]
   u64 amask;        ///< architecture extensions this part implements
   cpu_family family;
+  u32 ext;                  ///< CPU_EXT_*: instructions beyond the family's
   u16 icache_kb, dcache_kb; ///< on-chip L1 caches
   u16 l2_kb;                ///< on-chip L2 (0: off chip, as on the EV6)
 };
 
-/// Architecture extension bits, as AMASK reports them [ARM D-4].
+/// Architecture extension bits, as AMASK reports them [ARM D-4]. The EV8's
+/// bits 3 (Tarantula), 10 (SMT: LDx_ARM, QUIESCE) and 11 (its SIMD and
+/// paired-single sets) get their names with the stage that implements them
+/// (docs/platforms/ev8-isa.md, section 2).
 #define AMASK_BWX U64(0x0001)      ///< byte and word access
 #define AMASK_FIX U64(0x0002)      ///< square root and FP conversions
 #define AMASK_CIX U64(0x0004)      ///< count extension

@@ -465,10 +465,6 @@ public:
   /// The computed-jump cache, for compiled code to reach from the cpu.
   void *ind_cache_base() { return m_ind_cache; }
 
-  /// The identity AMASK and IMPLVER report, from the processor this engine
-  /// compiles for (CpuModel.hpp). Compiled code holds them as immediates,
-  /// and every engine belongs to one CPU, so a machine whose processors
-  /// differ still gets the right values.
   /// The machine's code-page map (CSystem). Every page a block is compiled
   /// from is marked in it, which is what lets an IMB with nothing to flush
   /// cost nothing -- see CAlphaCPU::flush_icache.
@@ -478,6 +474,11 @@ public:
   /// flush can be reported as the missed write it would have been.
   void set_nopflush_audit(const bool *p) { m_nopflush_clean = p; }
 
+  /// The identity AMASK and IMPLVER report, from the processor row this
+  /// engine compiles for (CpuModel.hpp; CAlphaCPU::init). Both emitters
+  /// (x86-64 in jitengine.cpp, AArch64 in jitemit_a64.hpp) hold them as
+  /// immediates, and every engine belongs to one CPU, so a machine whose
+  /// processors differ still gets the right values.
   void set_cpu_identity(uint64_t amask, uint64_t implver) {
     m_amask = amask;
     m_implver = implver;

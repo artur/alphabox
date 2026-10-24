@@ -718,10 +718,11 @@ static const char *const kv_gui_sdl[] = {
 classinfo classes[] = {
     {"tsunami", c_tsunami, N_P | IS_CS | HAS_PCI, kv_tsunami},
     {"ev68cb", c_ev68cb, ON_CS, kv_ev68cb},
-    // The EV7 parts are the same CPU class: the row (CpuModels.cpp) is what
-    // differs.
+    // The EV7 and EV8 parts are the same CPU class: the row (CpuModels.cpp)
+    // is what differs.
     {"ev7", c_ev68cb, ON_CS, kv_ev68cb},
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
+    {"ev8", c_ev68cb, ON_CS, kv_ev68cb},
     {"ali", c_ali, IS_PCI, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
     {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_cmd649},

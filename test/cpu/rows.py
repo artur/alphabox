@@ -6,8 +6,8 @@ has, and what an opcode 18 function code with no instruction does.
 The values are the manuals', with the same citations as the emulator's own
 table of rows, src/cpu/CpuModels.cpp. The two must agree: check_source()
 reads that file and CpuModel.hpp and lists every difference, and a
-difference fails the run. A row the emulator gains (the EV8,
-docs/platforms/ev8.md, S1) is added here with it.
+difference fails the run. A row the emulator gains is added here with it,
+as the EV8's was (docs/platforms/ev8.md, S1).
 
 Every row runs on the ES40, whose console the image replaces: the image's
 PALcode is the 21264's (image.py), which is the core of every row (the EV6
@@ -48,13 +48,15 @@ class Unused:
 
 class Row:
     def __init__(self, name, part, family, implver, amask, source,
-                 unused_misc_nop=True, own=None):
+                 unused_misc_nop=True, ext=(), own=None):
         self.name = name
         self.part = part
         self.family = family          # CpuModel.hpp's cpu_family, without CPU_FAMILY_
         self.implver = implver
         self.amask = amask
         self.source = source
+        # cpu_model::ext: the CPU_EXT_* flags, without CPU_EXT_.
+        self.ext = frozenset(ext)
         # cpu_family_unused_misc_is_nop: the 21264 completes an 18.xxxx code
         # with no instruction as a no-op [21464 IDS p. 676]; the ARM allows
         # that or a trap.
@@ -92,9 +94,11 @@ class Row:
         return None
 
     def describe(self):
-        return "%s: %s, IMPLVER %d, AMASK %#x, unused 18.xxxx %s" % (
+        own = sorted(self.own.values())
+        return "%s: %s, IMPLVER %d, AMASK %#x, unused 18.xxxx %s%s" % (
             self.name, self.part, self.implver, self.amask,
-            "no-ops" if self.unused_misc_nop else "trap")
+            "no-ops" if self.unused_misc_nop else "trap",
+            ", and " + " ".join(own) if own else "")
 
 
 _EV68 = AMASK_BITS["BWX"] | AMASK_BITS["FIX"] | AMASK_BITS["CIX"] | \
@@ -108,6 +112,14 @@ ROWS = {r.name: r for r in (
         "core's, an inference (src/cpu/CpuModels.cpp)"),
     Row("ev7z", "21364 (EV7z)", "EV7", 3, _EV68,
         "the EV7's core and values (src/cpu/CpuModels.cpp)"),
+    # The 21464 in EV7-compatible mode (docs/platforms/ev8.md, D1): the
+    # EV7's core and PALcode interface, the EV8's identity and extensions.
+    # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 comes
+    # with S3, bit 11 with S5 and S6, bit 3 (Tarantula) with S7 and S8.
+    Row("ev8", "21464 (EV8)", "EV7", 4, _EV68,
+        "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
+        "0x1F07 (p. 76), the bits whose instructions the row has",
+        ext={"EV8"}),
 )}
 
 # The ES40's processor (src/platforms/Platforms.cpp): a row of another
@@ -212,6 +224,9 @@ def read_source(src=_SRC):
             mask |= bits[t[len("AMASK_"):]] if t.startswith("AMASK_") else int(t, 0)
         row["amask"] = mask
         row["family"] = row["family"].replace("CPU_FAMILY_", "")
+        row["ext"] = frozenset(
+            t.strip()[len("CPU_EXT_"):] for t in row["ext"].split("|")
+            if t.strip() not in ("CPU_EXT_NONE", "0"))
         out[row["name"]] = row
     return out, nop_families, bits
 
@@ -238,12 +253,15 @@ def check_source(src=_SRC):
             diffs.append("%s: a row of CpuModels.cpp with no model here" % name)
             continue
         mine, t = ROWS[name], theirs[name]
-        for fld in ("part", "family", "implver", "amask"):
+        for fld in ("part", "family", "implver", "amask", "ext"):
             a, b = getattr(mine, fld), t[fld]
             if a != b:
-                fmt = "%#x" if fld == "amask" else "%s"
+                if fld == "amask":
+                    a, b = hex(a), hex(b)
+                elif fld == "ext":
+                    a, b = (" | ".join(sorted(x)) or "none" for x in (a, b))
                 diffs.append("%s: %s %s here, %s in CpuModels.cpp" % (
-                    name, fld, fmt % a, fmt % b))
+                    name, fld, a, b))
         nop = t["family"] in nop_families
         if mine.unused_misc_nop != nop:
             diffs.append("%s: unused 18.xxxx codes %s here, %s by "

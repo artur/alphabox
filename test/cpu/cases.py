@@ -761,6 +761,15 @@ def g_misc(b):
     b.store(2, "AMASK -1", aarm.AMASK(0, M64, b.row.amask)[0])
     b.emit(A.ins_op("AMASK", R31, 0xFF, 3, lit=True))
     b.store(3, "AMASK #0xff", aarm.AMASK(0, 0xFF, b.row.amask)[0])
+    # Each bit on its own: cleared where the row has the feature [ARM
+    # 4.11.1, D-4]. The EV8's bits 3 (Tarantula), 10 (SMT) and 11 (its SIMD
+    # and paired-single sets) stay set until the stage that implements them
+    # (docs/platforms/ev8-isa.md, section 2), on every row today.
+    b.begin("AMASK of each feature bit")
+    for bit in (0, 1, 2, 3, 8, 9, 10, 11, 12):
+        b.load(5, 1 << bit)
+        b.emit(A.ins_op("AMASK", R31, 5, 6))
+        b.store(6, "AMASK bit %d" % bit, aarm.AMASK(0, 1 << bit, b.row.amask)[0])
     b.begin("IMPLVER")
     b.emit(A.ins_op("IMPLVER", R31, 1, 4, lit=True))
     b.store(4, "IMPLVER", b.row.implver)

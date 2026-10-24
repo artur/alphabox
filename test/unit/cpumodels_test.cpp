@@ -22,7 +22,11 @@
  * software reads to tell one part from another, against their sources.
  * IMPLVER is the Alpha Architecture Reference Manual's Table D-4 (4th ed.,
  * Appendix D.3): 2 for the 21264 family (EV6, EV67, EV68x), 3 for the
- * 21364 (EV7, EV79). Both engines execute IMPLVER from the row
+ * 21364 (EV7, EV79); 4 for the 21464 (EV8), which the ARM does not list,
+ * is its Internal Design Specification's (Rev 1.1k, PDF p. 76). The EV8
+ * row is of the EV7 family (its EV7-compatible mode), so the EV7 boards
+ * take it, and has the EV8's extensions. Both engines execute IMPLVER from
+ * the row
  * (cpu_misc.hpp, and the JIT's set_cpu_identity), so the row is what a
  * guest sees. Built with every lane as `cpumodels_test`; exit status 0 when
  * every check passes.
@@ -45,20 +49,31 @@ static int checks = 0, failures = 0;
     }                                                                          \
   } while (0)
 
-/// One row: present, of its family, with the IMPLVER of Table D-4.
-static void check_row(const char *name, cpu_family family, int implver) {
+/// One row: present, of its family, with the IMPLVER of Table D-4 and the
+/// extensions beyond its family's core.
+static void check_row(const char *name, cpu_family family, int implver,
+                      u32 ext = CPU_EXT_NONE) {
   const cpu_model *m = find_cpu_model(name);
   CHECK_EQ(m != nullptr, 1);
   if (!m)
     return;
   CHECK_EQ(m->family, family);
   CHECK_EQ(m->implver, implver);
+  CHECK_EQ(m->ext, ext);
 }
 
 int main() {
   check_row("ev68cb", CPU_FAMILY_EV6, 2); // 21264/EV68x
   check_row("ev7", CPU_FAMILY_EV7, 3);    // 21364/EV7
   check_row("ev7z", CPU_FAMILY_EV7, 3);   // 21364/EV79
+  check_row("ev8", CPU_FAMILY_EV7, 4, CPU_EXT_EV8); // 21464/EV8
+  // The EV8 reports only what it implements of the IDS's 0x1F07: never
+  // more, and the bits of every stage not yet done are clear (S3: bit 10,
+  // S5-S6: bit 11, Tarantula: bit 3).
+  if (const cpu_model *m = find_cpu_model("ev8")) {
+    CHECK_EQ(m->amask & ~U64(0x1F07), 0);
+    CHECK_EQ(m->amask & U64(0x0C08), 0);
+  }
   CHECK_EQ(find_cpu_model("ev5") == nullptr, 1);
   printf("cpumodels: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
