@@ -303,6 +303,11 @@ beside RESET (+0xB00), FAULT_RESET and IP_RESET [IDS p. 499], and a
 reference to a "background for booting" document with a "Suspending
 TPUs" section [IDS p. 511]. The initialization chapter is empty [IDS p.
 583]. How TPUs 1-3 come out of reset is unknown **[decision: D7]**.
+Chapter 22 has a later entry table, with TPU_RESTART at 0xA80 ("another
+TPU has requested a restart") and MILD_RESET at 0xB00 [IDS pp. 631-634],
+and the "Suspending TPUs" remark points to secondary TPUs parked with
+LDQ_ARM and QUIESCE [IDS p. 511]; the native track follows both
+([ev8-native.md](ev8-native.md), sections 1.5 and 1.7, N11 and N17).
 
 **The cycle counter** is per TPU: CC[tpu], index 0xB8-0xBB, COUNT <31:4>
 incrementing every 16th cycle, OFFSET <63:32> for the OS [IDS pp.
@@ -353,11 +358,11 @@ This is where the EV8 leaves the 21264 behind:
 
 | | 21264 / EV7 (what Alphabox implements) | 21464 |
 | --- | --- | --- |
-| HW_MFPR / HW_MTPR | opcodes 0x19 / 0x1D, index in <15:8> | opcodes 0x19 / 0x1D, 8-bit index in <12:5> (MSB selects Ibox or Mbox), reader and writer classes in <24:21> and <4:0> [IDS pp. 571-573] |
+| HW_MFPR / HW_MTPR | opcodes 0x19 / 0x1D, index in <15:8> | opcodes 0x19 / 0x1D, 8-bit index in <12:5> (MSB selects Ibox or Mbox), the reader class in <24:21>; <4:0> is HW_MFPR's destination Rc and HW_MTPR's writer class [IDS pp. 571-573, 650] ([ev8-native.md](ev8-native.md), 1.2, N3) |
 | HW_LD / HW_ST | 0x1B / 0x1F, 12-bit displacement | 0x1B / 0x1F, type <15:13> (physical, VPTE, virtual, write check, alternate mode), length <12:11>, 11-bit displacement [IDS pp. 569-570] |
 | Return from PALmode | HW_RET (0x1E) | the ordinary RET; GPR<1:0> selects normal, PALmode or SuperPALmode; HW_RET is gone [IDS p. 573]. Opcode 1E is IFETCHB [IDS p. 650] |
 | Modes | PALmode | PALmode and SuperPALmode, entered by a PNMI event [IDS pp. 573-574] |
-| Shadow registers | eight in PALmode | **[conflict]**: "given the lack of shadow registers in the 21464" [IDS p. 500], against a "shadow register replacement process in PALmode" for R24/R25 [IDS p. 574] |
+| Shadow registers | eight in PALmode | two, S0 and S1, by a position-dependent overlay of R22-R25 in PALmode [IDS p. 580], which settles the apparent conflict between "the lack of shadow registers in the 21464" [IDS p. 500] and a "shadow register replacement process" [IDS p. 574] ([ev8-native.md](ev8-native.md), 1.3) |
 | DTB single miss | return PC in EXC_ADDR | in DTBMS_RET_ADDR (0xA6/0xA7); DTBM_SINGLE does not write EXC_ADDR [IDS pp. 483-484] |
 
 Main IPR indexes, from Table 16-1's binary fields [IDS pp. 478-479]:
@@ -398,7 +403,10 @@ DTBM_DOUBLE_ALT 0x180, FEN 0x200, UNALIGN 0x280, DTBM_SINGLE 0x300,
 DFAULT 0x380, OPCDEC 0x400, IACV 0x480, MCHK 0x500, ITB_MISS 0x580, ARITH
 0x600, INTERRUPT 0x680, MT_FPCR 0x700, IMCHK 0x780, DTBM_SINGLE_CONS
 0x800, ITB_MISS_CONS 0x880, BAD_JUMP_IVA 0x900, FAULT_RESET 0x980, WAKEUP
-0xA00, IP_RESET 0xA80, RESET 0xB00. The thirteen from 0x100 to 0x700
+0xA00, IP_RESET 0xA80, RESET 0xB00 (chapter 16; chapter 22's later table
+names 0x980 FAST_RESET, 0xA80 TPU_RESTART, 0xB00 MILD_RESET and adds
+DST_NXM at 0xB80 [IDS pp. 633-634]: [ev8-native.md](ev8-native.md),
+1.5). The thirteen from 0x100 to 0x700
 keep the 21264's offsets; the 21264's RESET/WAKEUP at 0x780 [21264 HRM,
 EV68CB edition, PDF p. 198] becomes IMCHK. PALcode must follow sixteen
 restrictions, mostly IFETCHB placement around IPR writes [IDS pp.
@@ -581,7 +589,7 @@ marked today.
 | D2 | Chip ID, console naming | CPU_CNFG<CHIP_ID> has no value; the Marvel console maps I_CTL<29:24> through its EV7 table | in EV7-compatible mode report an EV7z chip ID until a probe shows what the console does with an unknown one |
 | D3 | HWRPB processor type | none assigned | 18 (the next free value after EV69A, [ARM p. 807]), only where we write the HWRPB ourselves |
 | D4 | SMT exposure | how TPUs appear to an EV7 console | first one TPU per chip (S3); then each TPU listed to the console as a processor of its own through the CMM model, memory and IO7 staying with TPU 0 (S4). Whether the console accepts a processor with no memory of its own is for a probe to show. S4: it does; done with `tpus = 2..4`, an Alphabox construction, the default staying one processor per chip (the owner, 2026-10-25) |
-| D5 | Interrupt and IPI steering to TPUs | R_INT_* "TBD" | each TPU gets its own interrupt mask and request bits; IO7 LSI/MSI targets name PID and TPU; IPIs address a TPU |
+| D5 | Interrupt and IPI steering to TPUs | R_INT_* "TBD" | each TPU gets its own interrupt mask and request bits; IO7 LSI/MSI targets name PID and TPU; IPIs address a TPU. For the EV7-compatible row (S4, where each TPU has a PID of its own); the native track revises the IO7 part (N22: an IO7 target names a chip) |
 | D6 | Processor numbers | WHAMI is PALcode's | PID x 4 + TPU, handed to the console's PALcode at entry the way the PID is today; a one-TPU chip keeps today's numbers. **Replaced** by the owner on 2026-10-25 after S4's probe showed it wrong ([S4](#s4-2026-10-25)): TPU 0 keeps the chip's PID, TPU t is PID \| t << s, s the lowest pair of PID bits no configured chip uses |
 | D7 | TPU start-up | WAKEUP entry, no boot document | TPUs 1-3 start like a Marvel secondary (RBOX_SCRATCH1 polling) in EV7-compatible mode |
 | D8 | Short-vector SIMD results | per-instruction architectural results | define each from the IDS's datapath description and the existing MVI conventions; publish the table in cpu-fidelity.md. Proposed in [ev8-isa.md](ev8-isa.md), 3.3 |
@@ -699,6 +707,11 @@ toolchain.
 
 Binutils knows none of the new instructions, so test programs carry them
 as `.long` words until a small assembler patch exists (out of tree).
+
+The native track (S11 to S13, and the Marvel model in 21464 mode between
+S11 and S12) is planned in [ev8-native.md](ev8-native.md), with its
+decisions N1 to N31 (accepted by the owner on 2026-10-25) and the stages
+refined.
 
 The CPU oracle runs any row on the ES40 board (`cpu_oracle.py --cpu`,
 [development.md](../development.md)), so the S1 to S10 cases run with

@@ -10,8 +10,8 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 
 **Status**: plan, 2026-10-25; N1 to N31 accepted as proposed by the owner
 the same day. No code yet. The owner's decisions that
-frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S3
-done, S4 in progress), then the native interface as planned work, gaps
+frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
+done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
 TPU per chip by default, `tpus = 2..4` an Alphabox construction, and the
 native track the place where TPUs are done the IDS's way (2026-10-25).
@@ -299,9 +299,9 @@ HW_INT_CLR described [IDS pp. 479, 513-514]:
   ASTs (OpenVMS's) tests them itself on its return paths. Linux uses no
   ASTs, so the UNIX PALcode is unaffected; the bit IER_CM<ASTEN> of the
   21264 is not carried over.
-- **The vector enable.** In EV7-compatible mode VCTL[tpu] is a CSR at
-  0x3F0000 + 0x40 x tpu of each processor's window ([ev8-isa.md](ev8-isa.md),
-  section 2). **[decision, N8]**: in the native interface VCTL becomes the
+- **The vector enable.** In EV7-compatible mode VCTL is a CSR at offset
+  0x3F0000 of each processor's own window ([ev8-isa.md](ev8-isa.md),
+  section 2; the owner, 2026-10-25). **[decision, N8]**: in the native interface VCTL becomes the
   Ibox IPR 0xAC (`1 0101 100`, the PAL_BASE group), per TPU, VEN <0>,
   reset 0, read and written by HW_MFPR and HW_MTPR; the CSR offset is not
   decoded on an `ev8n` row. The OS sets it through a PALcode call
@@ -672,7 +672,7 @@ where the EV7 has the register, the IDS's own prose giving the mapping:
 | ZBOXn_* (two controllers) [IDS pp. 528-567] | Zbox0 0x10000-0x14110, Zbox1 0x16000-0x1A110 | the same blocks **[inference]**: the same controller family (Tarantula reuses the EV8's Zbox [TAR p. 284], and the EV8's register names are the 21364's) |
 | GIO_CNFG, GIO_ADDR, GIO_DATA [IDS pp. 472-474] | GIO_CFG 0x100, GIO_CTL 0x120, GIO_DAT 0x110 | the same (section 2.5) |
 | (Cbox, Bbox, pads, OCLA) | 0xE000, 0x1C000, 0x20000, 0x24000 | kept, unused by our PALcode (the EV7 PALcode's error path is what reads them) |
-| VCTL (EV7-compatible mode, 0x3F0000 + 0x40 x tpu) | | not decoded: an IPR in the native interface (N8); the block holds the per-TPU masks |
+| VCTL (EV7-compatible mode, 0x3F0000 of each processor's window) | | not decoded: an IPR in the native interface (N8); the block holds the per-TPU masks |
 
 The registers the model only stores (configuration, timers, errors,
 performance, DRAM timing) answer as configured and clean, as the EV7's
@@ -1271,7 +1271,7 @@ interleave and S9 after S13's toolchain.
 ## Findings
 
 On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
-(neither edited here; the coordinator applies what holds):
+(applied to ev8.md by the coordinator on 2026-10-25):
 
 - **The shadow-register conflict is settled** by the IDS itself: two
   shadow registers, S0 and S1, with a position-dependent overlay of
