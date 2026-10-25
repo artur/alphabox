@@ -7,7 +7,8 @@ References: ARM = Alpha Architecture Reference Manual, 4th edition; HRM =
 divergence: docs/cpu-fidelity.md, or a finding of lab/legacy-audit/cpu/
 AUDIT.md (CPU-nn) or lab/legacy-audit/jit/AUDIT.md (JIT-nn) until it is
 fixed. The JIT groups are in jit_cases.py, the native EV8's in
-ev8n_cases.py, Tarantula's in tarantula_cases.py.
+ev8n_cases.py, Tarantula's in tarantula_cases.py, the EV8's 1C SIMD set in
+simd_cases.py.
 
 What a case expects of the processor (IMPLVER, AMASK) is the row's
 (b.row, rows.py), and a case that needs what the row lacks is skipped
@@ -21,6 +22,7 @@ from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
 import jit_cases
 import rows
+import simd_cases
 import tarantula_cases
 from image import R_SCR, R_TR, TR_COUNT
 
@@ -46,7 +48,8 @@ GROUPS = [
             "row has them, MAP_ALIGN and WH64EN on every row"),
     ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
                 "them (one processor: the timeout), AMASK bit 10"),
-] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS
+] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS + \
+    simd_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
 
@@ -1381,6 +1384,7 @@ EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
 EMIT.update(jit_cases.EMIT)
 EMIT.update(ev8n_cases.EMIT)
 EMIT.update(tarantula_cases.EMIT)
+EMIT.update(simd_cases.EMIT)
 
 
 def emit(b, groups):

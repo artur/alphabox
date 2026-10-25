@@ -33,10 +33,18 @@ skipped:
     01-05, group tarantula, tarantula_cases.py). Not found from the words:
     the other groups' OPCDEC cases emit opcodes 01-07 on every row, and on
     a Tarantula row they still raise OPCDEC, its vector enable being 0
-    outside group tarantula.
+    outside group tarantula;
+  - EV8 and NOT_EV8: the row has the EV8's additions (CPU_EXT_EV8), or
+    lacks them, for the cases of the 21464's sets and for the cases that
+    expect OPCDEC from the same words everywhere else (groups simd,
+    paired): one reason for all of them, where Own(word) and Unused(word)
+    would give one per word. Those groups check that the words are the
+    row's own (Row.own) themselves.
 """
 import os
 import re
+
+import alpha_asm
 
 # AMASK bits [ARM 4th ed. p. 808]: the names are CpuModel.hpp's.
 AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
@@ -46,6 +54,8 @@ UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
 PAL21264 = "the 21264's PALcode interface"
 NATIVE8 = "the 21464's PALcode interface"
 TARANTULA = "Tarantula"
+EV8 = "the EV8's additions"
+NOT_EV8 = "a row without the EV8's additions"
 
 
 class Unused:
@@ -142,6 +152,13 @@ class Row:
         if need == TARANTULA:
             return None if "TARANTULA" in self.ext else (
                 "no Tarantula (CPU_EXT_TARANTULA)")
+        if need == EV8:
+            return None if "EV8" in self.ext else (
+                "no EV8 additions (CPU_EXT_EV8)")
+        if need == NOT_EV8:
+            return None if "EV8" not in self.ext else (
+                "the row has the EV8's additions (CPU_EXT_EV8): these words "
+                "are its instructions")
         if need == UNUSED_MISC_NOP:
             return None if self.unused_misc_nop else (
                 "unused 18.xxxx codes are not no-ops on this row")
@@ -157,6 +174,14 @@ class Row:
             "no-ops" if self.unused_misc_nop else "trap",
             ", and " + " ".join(own) if own else "")
 
+
+# The EV8's own instructions, those the `ev8` and `ev8n` rows execute: S2's
+# and S3's (ev8-isa.md 3.1, 3.2) and S5's short-vector SIMD set under 1C
+# (3.3, alpha_asm.SIMD1C; simd_cases.py).
+_EV8_OWN = {(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
+            (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
+            (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}
+_EV8_OWN.update({(0x1C, f): n for n, f in alpha_asm.SIMD1C.items()})
 
 _EV68 = AMASK_BITS["BWX"] | AMASK_BITS["FIX"] | AMASK_BITS["CIX"] | \
     AMASK_BITS["MVI"] | AMASK_BITS["TRAP"] | AMASK_BITS["PREFETCH"]
@@ -174,14 +199,12 @@ ROWS = {r.name: r for r in (
     # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 with
     # LDx_ARM and QUIESCE (S3), bit 11 with S5 and S6, bit 3 (Tarantula)
     # with S7 and S8. Its own instructions are those it executes so far
-    # (S2, S3); Tarantula's (S7) are found by the need TARANTULA instead.
+    # (S2, S3, S5: _EV8_OWN); Tarantula's (S7) are found by the need
+    # TARANTULA instead.
     Row("ev8", "21464 (EV8)", "EV7", 4, _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
-        ext={"EV8", "TARANTULA"},
-        own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
-             (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
-             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),
+        ext={"EV8", "TARANTULA"}, own=_EV8_OWN),
     # The 21464 on its own privileged interface (docs/platforms/ev8-native.md,
     # S11, N16): a family of its own, the `ev8` row's user instructions and
     # AMASK. The image runs an EV8 PALcode of its own on it (image.py,
@@ -191,10 +214,7 @@ ROWS = {r.name: r for r in (
         _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: the ev8 row's "
         "(ev8-native.md, N16)",
-        ext={"EV8", "TARANTULA"},
-        own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
-             (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
-             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),
+        ext={"EV8", "TARANTULA"}, own=_EV8_OWN),
 )}
 
 # The ES40's processor (src/platforms/Platforms.cpp): a row of another
