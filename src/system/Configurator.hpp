@@ -152,8 +152,6 @@ public:
   static int machine_tpus();
   /// Its processor chips: 0 until then.
   static int machine_chips();
-  /// Its processors' core family (cpu_family): -1 until then.
-  static int machine_family();
   /// Whether a Marvel machine is in 21464 mode: its processors are native
   /// EV8s (docs/platforms/ev8-native.md, section 2).
   static bool machine_21464_mode();

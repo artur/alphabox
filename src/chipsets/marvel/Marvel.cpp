@@ -113,11 +113,6 @@ void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
 
 u64 CMarvel::phys_mask() const { return m_map->phys_mask(); }
 
-CAlphaCPU *CMarvel::processor(int index) const {
-  return index >= 0 && index < m_sys->get_cpu_num() ? m_sys->get_cpu(index)
-                                                    : nullptr;
-}
-
 /**
  * memory.bits is each processor's memory; PID n's begins at
  * map().memory_base(n), 16 GB apart, so the array spans from 0 to the end of

@@ -111,8 +111,6 @@ public:
   /// otherwise (each EV7, and each listed TPU of an EV7-compatible EV8, has
   /// a block of its own).
   int tpus_per_block() const { return m_21464 ? m_topology.tpus() : 1; }
-  /// Processor `index` of the configuration, or nullptr.
-  CAlphaCPU *processor(int index) const;
   /// A processor's interrupt queue has room again: the IO7s send what it
   /// refused (21464 mode, N21). Called with no register block locked.
   void resend_iids();

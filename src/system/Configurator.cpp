@@ -113,8 +113,6 @@ int CConfigurator::machine_chips() {
   return theSystem ? theSystem->processor_chips() : 0;
 }
 
-int CConfigurator::machine_family() { return s_machine_family; }
-
 bool CConfigurator::machine_21464_mode() {
   // Only the Marvel boards ask: a native EV8 elsewhere runs through the
   // test hook, on the board's own chipset.
