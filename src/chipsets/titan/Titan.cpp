@@ -188,10 +188,10 @@ u64 CTitan::read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) {
         {"PCI 0 configuration", "PCI 1 configuration", "PCI 2 configuration",
          "PCI 3 configuration"}};
     m_sys->trace_unknown(what[space][hose], a, dsize, false, 0, source);
-    // Nothing answers: a configuration or I/O read is master-aborted and
-    // reads as all ones. Memory reads as zero, as on the Tsunami.
-    if (space == PCI_SPACE_MEM)
-      return 0;
+    // Nothing answers: the read is master-aborted and reads as all ones, in
+    // every space. Linux's err_titan.c treats a master abort in memory
+    // space as the No-DEVSEL case; the all-ones data is the Typhoon Pchip's
+    // (HRM 8.8.2.1, PDF p. 216) [inference: no 21274 manual here].
     return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
   }
 

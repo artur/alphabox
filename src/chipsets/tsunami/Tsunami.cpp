@@ -315,7 +315,8 @@ void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
 
   if (a >= U64(0x80000000000) && a < U64(0x80100000000)) {
 
-    // Unused PCI memory space
+    // Unused PCI memory space: nothing claims the write, the Pchip
+    // master-aborts it and the data is dropped (HRM 8.8.2.1, PDF p. 216).
     m_sys->trace_unknown("PCI 0 memory", a, dsize, true, data, source);
     u64 paddr = a & U64(0xffffffff);
     if (paddr > 0xb8fff || paddr < 0xb8000) { // skip legacy video
@@ -330,7 +331,8 @@ void CTsunami::write_io(u64 a, u64 address, int dsize, u64 data,
 
   if (a >= U64(0x80200000000) && a < U64(0x80300000000)) {
 
-    // Unused PCI memory space
+    // Unused PCI memory space: master-aborted and dropped, as on hose 0.
+    m_sys->trace_unknown("PCI 1 memory", a, dsize, true, data, source);
     if (source) {
       printf("Write to unknown memory %" PRIx64 " on PCI 1 from %s   \n",
              a & U64(0xffffffff), source->devid_string);
@@ -492,12 +494,13 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
 
   if (a >= U64(0x800000c0000) && a < U64(0x800000e0000)) {
 
-    // The option ROM window with nothing shadowed into it. It reads as
-    // zero, but it is worth tracing: this is where the console looks for
-    // a video BIOS, and a card that fails to answer here is a card the
-    // console will never bring up.
+    // The option ROM window with nothing shadowed into it. Nothing
+    // answers, so the read is master-aborted and reads as all ones like
+    // any other unclaimed PCI memory read; it is worth tracing: this is
+    // where the console looks for a video BIOS, and a card that fails to
+    // answer here is a card the console will never bring up.
     m_sys->trace_unknown("PCI ROM BIOS", a, dsize, false, 0, source);
-    return 0;
+    return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
   }
 
   if (a >= U64(0x801fc000000) && a < U64(0x801fe000000)) {
@@ -529,7 +532,8 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
 
   if (a >= U64(0x80000000000) && a < U64(0x80100000000)) {
 
-    // Unused PCI memory space
+    // Unused PCI memory space: no b_devsel_l, so the Pchip master-aborts
+    // the read and returns all ones (HRM 8.8.2.1, PDF p. 216), as for I/O.
     m_sys->trace_unknown("PCI 0 memory", a, dsize, false, 0, source);
     u64 paddr = a & U64(0xffffffff);
     if (paddr > 0xb8fff || paddr < 0xb8000) { // skip legacy video
@@ -541,19 +545,20 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
                a & U64(0xffffffff));
     }
 
-    return 0;
+    return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
   }
 
   if (a >= U64(0x80200000000) && a < U64(0x80300000000)) {
 
-    // Unused PCI memory space
+    // Unused PCI memory space: master-aborted, all ones, as on hose 0.
+    m_sys->trace_unknown("PCI 1 memory", a, dsize, false, 0, source);
     if (source) {
       printf("Read from unknown memory %" PRIx64 " on PCI 1 from %s   \n",
              a & U64(0xffffffff), source->devid_string);
     } else
       printf("Read from unknown memory %" PRIx64 " on PCI 1   \n",
              a & U64(0xffffffff));
-    return 0;
+    return (dsize >= 64) ? ~U64(0) : ((U64(1) << dsize) - 1);
   }
 
 #if defined(DEBUG_UNKMEM)

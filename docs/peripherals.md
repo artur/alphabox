@@ -908,6 +908,13 @@ Found and fixed, each with what the driver was doing:
   says "present and ready" to every question: 18M status reads per boot.
   An idle bus floats high; the read now returns all ones and the probe
   finds no port.
+- **Unclaimed PCI memory read 00h instead of FFh.** The same rule for
+  memory space (TSU-09): a read no device claims, in the option ROM window
+  or anywhere else in a hose's memory space, is master-aborted and returns
+  all ones on the Tsunami and the Titan (the Marvel I/O7 model still
+  reads zero there, listed in the audit's TSU-09 row).
+  A console looking for a video BIOS finds no 55AA signature in either
+  value; what changes is a card that is not there reading as an empty bus.
 - **The UART did not identify its FIFO.** IIR bits 7:6 now reflect FCR
   bit 0, so a driver sees a 16550 rather than a 16450 (an interrupt and
   two register reads per character otherwise); FCR bit 1 flushes the

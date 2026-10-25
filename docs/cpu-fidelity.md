@@ -144,6 +144,9 @@ emulator. And the alignment trap no longer claims an access violation in
 from `CSystem::ReadMem` instead of a machine check, so firmware or an OS
 probing a bus for a device that is not there sees a plain read, and a
 guest's machine-check handling cannot be exercised in Alphabox at all.
+(Inside a PCI hose's memory, I/O and configuration spaces the read is a
+master abort and returns all ones, as the Pchip does: HRM 8.8.2.1, PDF
+p. 216. Only an address outside every PCI space reaches this entry.)
 
 ### A busy-wait is handed the time it is waiting for
 
