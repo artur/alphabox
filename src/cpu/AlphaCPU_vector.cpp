@@ -211,8 +211,51 @@ void CAlphaCPU::tarantula(u32 ins) {
     GO_PAL(OPCDEC);
     return;
   }
-  // The groups' instructions follow in their own commits: until then
-  // every one raises OPCDEC with VEN = 1 too.
+  if (op == 0x05) {
+    tarantula_vc(ins);
+    return;
+  }
+  // VV and VS follow in their own commits: until then OPCDEC.
   (void)fnc;
   GO_PAL(OPCDEC);
+}
+
+/**
+ * VC, vector control (4.7). Ra is not used (it must be 31, and is ignored,
+ * 4.3); <20:16> and <4:0> name integer or vector registers as each
+ * instruction says.
+ **/
+void CAlphaCPU::tarantula_vc(u32 ins) {
+  tarantula::State &v = *m_vec;
+  const u32 rb = I_GETRB(ins), rc = I_GETRC(ins);
+  switch ((ins >> 5) & 0x3f) {
+  case 0x00: { // SETVL: vl <- MIN(Rbv unsigned, 128); Rc <- vl
+    const u64 b = RBV;
+    v.vl = b > tarantula::kMaxVl ? tarantula::kMaxVl : b;
+    if (rc != 31)
+      state.r[REG_3] = v.vl;
+    break;
+  }
+  case 0x01: // SETVS: vs <- Rbv, the literal zero-extended
+    v.vs = RBV;
+    break;
+  case 0x02: // SETVM: vm[i] <- Vb[i]<0> below vl, 0 above (as BLBS tests)
+    for (int i = 0; i < kElems; i++)
+      v.set_mask(i, (u64)i < v.vl && (v.vr[rb][i] & 1));
+    break;
+  case 0x04: // GETVL
+    if (rc != 31)
+      state.r[REG_3] = v.vl;
+    break;
+  case 0x05: // GETVS
+    if (rc != 31)
+      state.r[REG_3] = v.vs;
+    break;
+  case 0x06: // GETVM: Vc[i] <- vm[i] below vl; the rest UNPREDICTABLE
+    // (Alphabox: unchanged, 4.3)
+    if (rc != 31)
+      for (u64 i = 0; i < v.vl; i++)
+        v.vr[rc][i] = v.mask((int)i) ? 1 : 0;
+    break;
+  }
 }
