@@ -226,14 +226,23 @@ and so never traps).
   some (`%SRL-W-DROPPED`, a host too busy to read) is run once more, and
   fails if it loses some again.
 - **Any processor row.** `--cpu` names the row (`ev68cb`, the default,
-  `ev7`, `ev7z`, `ev8`; `--list` shows them). The board is always the ES40:
+  `ev7`, `ev7z`, `ev8`, `ev8n`; `--list` shows them). The board is always the ES40:
   plain instructions do not depend on it, and the image replaces the
   console, so a row of another family (the EV7's, whose own boards need
   the Marvel console) runs there through the `ALPHABOX_CPU_ANY_BOARD`
   test hook ([headless.md](headless.md)), which the tool sets; the
   emulator's `%CPU-W-ANYBOARD` line is checked to name the row's part.
   Every row the oracle can run has the 21264's core, which its PALcode
-  is written for.
+  is written for, but `ev8n`, the 21464 on its own privileged interface:
+  for it the image has an EV8 PALcode (`image.build_pal8`) with the same
+  services, so the other groups run there as on `ev8`; the cases of the
+  21264's PALcode interface (its PALshadow bank, I_CTL<SDE>, ASTs) are
+  skipped (`rows.PAL21264`), and group `ev8n` (`test/cpu/ev8n_cases.py`)
+  checks the 21464's: IPRs, HW_LD/HW_ST, modes and RET, the shadow
+  registers, the entries, superpages, TB groups, 64 KB pages
+  ([ev8-native.md](platforms/ev8-native.md), S11). Its cases run PALmode
+  snippets through the PALcode's CALL_PAL 91 (`b.pal8_call`). The oracle
+  runs `ev8n` with one TPU.
 - **What is row-specific** is in `test/cpu/rows.py`: IMPLVER, the AMASK
   feature mask and so the extensions (BWX, FIX, CIX, MVI, prefetch with
   modify intent), whether an unused 18.xxxx code is a no-op
@@ -286,6 +295,13 @@ the lock (DMA). Each wait must end after the release and before the
 timeout (the third at it), and `ALPHABOX_TRACE_QUIESCE` must count one
 wake-up of each cause. About a second. The Linux side is
 `test/tools/es47_quiesce.py` ([ev8.md](platforms/ev8.md), "S3").
+
+**The native EV8's TPUs.** `test/cpu/tpu_mp.py <alphabox-binary> [label]
+[--port N]` boots one `ev8n` chip of four TPUs on the ES40 (the same hook,
+the EV8 PALcode): every TPU must reset at PAL_BASE + 0xB00 with its own
+TPU_ID, TPUs 1-3 parked with LDQ_ARM and QUIESCE until TPU 0 stores a start
+address in their mailboxes, and each must read CPU_CNFG, a per-chip IPR,
+as TPU 0 wrote it and VCTL, a per-TPU one, as its own. Under a second.
 
 ### Performance
 

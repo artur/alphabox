@@ -664,6 +664,15 @@ sets 2^24 for a row that has QUIESCE, and `test/cpu/quiesce_mp.py` 2^28
 ([development.md](development.md)). How the wait works:
 [ev8.md](platforms/ev8.md), "S3".
 
+### The native EV8 (the `ev8n` row)
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_TRACE_EV8=1` | a line, `%CPU-I-EV8`, for each DTB_PTE written with VALID clear (the first fifty of each processor): the PTE, the tag, the PC. The chip would hang there (Restriction 9); Alphabox makes no entry and counts it (decision N10, [ev8-native.md](platforms/ev8-native.md)) |
+
+On `ev8n` QUIESCE's timeout is the QUIESCE_TIMEOUT IPR's, which PALcode
+sets; `ALPHABOX_QUIESCE_TIMEOUT` does not apply.
+
 ## Hypervisor runtime
 
 Builds with `-DALPHABOX_HVF=ON` only ([hypervisor.md](hypervisor.md)):

@@ -588,12 +588,70 @@ processor; `test/cpu/quiesce_mp.py` the wake-ups by another processor's
 store and STx_C, by an interrupt and by DMA
 ([development.md](development.md)).
 
+### The native EV8 (`ev8n`): what it implements and what Alphabox decided (2026-10-25)
+
+The `ev8n` row is the 21464 on its own privileged interface, the IDS's
+(stage S11 of [ev8-native.md](platforms/ev8-native.md), whose decisions
+N1 to N31 the owner accepted on 2026-10-25). No firmware or operating
+system exists for it yet: the CPU oracle runs it on the ES40 through
+`ALPHABOX_CPU_ANY_BOARD`, with a PALcode of the image's own. Its user
+instructions and AMASK are the `ev8` row's; what differs is everything
+PALcode sees. The code is `cpu/cpu_pal_ev8.hpp` and `cpu/AlphaCPU_ev8.cpp`.
+IDS is the *21464 Internal Design Specification*, Rev 1.1k, by PDF page.
+
+| What | The `ev8n` row | Basis |
+| --- | --- | --- |
+| Family, row | `CPU_FAMILY_EV8`, a family of its own; IMPLVER 4, AMASK 0x1707, type 18 minor 0, chip ID 0, `CPU_EXT_EV8`; no board takes it | **Alphabox decisions** N16 and D3 |
+| Modes | PC<1:0>: 00 normal, 01 PALmode, 11 SuperPALmode; EXC_ADDR and DTBMS_RET_ADDR carry them | [IDS pp. 484-485, 573-574] |
+| SuperPALmode | entered by a RET with Rb<1:0> = 11, behaves as PALmode; no PNMI is ever raised (no PALmode timeout, no TPU restart) | **decision N1** |
+| Jumps in PALmode | every jump-format instruction takes the new mode from Rb<1:0>; the link of every jump, BR and BSR included, keeps the mode bits; Rb<1:0> = 10 is normal mode | **decision N2**; BR and JMP/RET as BSR and JSR, one rule for one instruction with several hints **[inference]**; 10 **[decision]**: no mode has the encoding |
+| Jumps in normal mode | Rb<1:0> ignored, no RET raises the mode; a target outside the virtual address space (no enabled superpage's, not sign-extended for I_CTL<VA_SIZE>) takes BAD_JUMP_IVA at the jump, which does not complete | [IDS pp. 573, 629-630, 633]; a branch or a sequential walk out of the space is IACV [p. 630] |
+| HW_MFPR, HW_MTPR | 0x19 with Rc <4:0> the destination, 0x1D with Rb <20:16> the source, the index <12:5>; the reader and writer classes ignored | **decision N3**; the classes order a pipeline that an emulator retiring in order does not have **[inference]** |
+| HW_LD, HW_ST | the types 000, 010 (loads), 100, 101 (loads), 110, 111 (loads), the four lengths, the 11-bit displacement, the address forced to the data size, no alignment trap | [IDS pp. 569-570]; 001 and 011 OPCDEC (**decision N4**); a load-only type on a store OPCDEC **[decision]**: an unassigned code |
+| IFETCHB (0x1E) | a no-op in PALmode | an emulator that executes in order and commits every write at once has nothing to wait for **[inference]** |
+| The PALcode forms outside PALmode | 0x19, 0x1B, 0x1D, 0x1E, 0x1F raise OPCDEC (no HWE) | **[inference]**: the 21464's I_CTL has no HWE [IDS pp. 489-490] |
+| Shadow registers | S0 and S1, integer only, per TPU, by position: operand A and the destination R24/R25, operand B R22/R23 | [IDS p. 580]; integer only **decision N5**; per TPU **[inference]** |
+| CMOV in PALmode | a native CMOV (followed by `bis $31,$31,$31`) executes as the chip splits it, so its Rc's old value is read as operand B; a legacy CMOV's Rc is not replaced at all | [IDS pp. 574-575, 580]; the consequence for Rc = R22 or R23 (the value kept is S0 or S1) **[inference]**, as for Restriction 13's R24 and R25 |
+| CALL_PAL | the target PAL_BASE<47:15> \| 0x2000 \| function<7> << 12 \| function<5:0> << 6 \| PC<1> \| 1; S1 gets the return PC with the caller's mode; EXC_ADDR is not written; the 21264's OPCDEC rule for privileged and unassigned functions | [IDS pp. 149, 499]; S1 and EXC_ADDR **[inference]** (Table 22-3 does not list CALL_PAL); the OPCDEC rule **[inference]** |
+| IPR field selects | each register's low index bits select the fields a write changes (I_CTL, M_CTL, I_MODE, M_MODE, I_PCTX, M_PCTX, CC); any of a register's indexes reads all of it | [IDS pp. 482-509]; the reads **[inference]**: the IDS gives one index range per register |
+| CPU_BASE, VCTL | CPU_BASE 0xAB, the chip's number <9:0>, read-only; VCTL 0xAC, VEN <0>, per TPU, stored (no vectors yet) | **decisions N6, N8** |
+| IER_CM, SIRR, ISUM, HW_INT_CLR | 0xB0-0xB3, the 21264's layouts without ASTEN; IER_CM<CM>, I_MODE<CURRENT> and M_MODE<CURRENT> one field; no AST registers | **decision N7**; the 21464 has no AST registers [IDS pp. 491-492] |
+| CC | MFPR reads OFFSET, COUNT and ENABLE; RPCC reads OFFSET and the count's 32 bits, as on the other rows | MFPR is "TBD" [IDS p. 482]: **decision N7**. RPCC's low four bits are the counter's, where the register has RAZ and ENABLE [p. 483] **[decision]**: RPCC as on the 21264 (N7), and the JIT's inline RPCC stays the other rows' |
+| PAL_BASE | <47:15>, a physical address; <51:48> read zero | **decision N6** |
+| DTB_PTE0/1, DTB_TAG0/1 | one entry: a PTE write at either index writes it, and the second of a pair replaces the first's entry; a fill of a page its TPU group already holds replaces it | **decision N9**; the replacement of any such entry **[decision]**, as on the other rows (two matching entries are the chip's "multiple matches" [p. 578]) |
+| A PTE with VALID clear, or from R31 | no entry; counted, and traced with `ALPHABOX_TRACE_EV8` | the chip hangs [IDS pp. 505, 578]: **decision N10** |
+| ITB_IS | shares its storage with ITB_TAG, so a write to it is a tag too | [IDS p. 495] |
+| IC_FLUSH, IC_FLUSH_ASM | the whole instruction cache | "this group's blocks" [p. 493]: the cache has no group tag here, and flushing more is invisible **[inference]** |
+| Performance registers | read zero, writes ignored | **[decision]**: nothing is counted (chapter 19) |
+| An index the table lacks | reads zero, the write ignored, a warning once | **[decision]**, as on the other rows (`UNKNOWN_IPR`) |
+| Reset values | zero, but QUIESCE_TIMEOUT 0x2800, TPU_CNFG<TPU_ID>, CPU_BASE, CHIP_ID 0, DC_CTL<SET_EN> 11, PAL_BASE the loader's | Table 16-1 classes them as initialized, with no value: **[decision]**; QUIESCE_TIMEOUT [IDS p. 511]; SET_EN "at least one set must be enabled" [p. 501] **[inference]** |
+| Entries | chapter 22's: DTBM_DOUBLE, DTBM_DOUBLE_ALT, FEN, UNALIGN, DTBM_SINGLE, DFAULT, OPCDEC, IACV, ITB_MISS, ARITH, INTERRUPT, MT_FPCR, DTBM_SINGLE_CONS, ITB_MISS_CONS, BAD_JUMP_IVA, MILD_RESET (0xB00, power-up); never MCHK, IMCHK, DST_NXM, FAST_RESET, WAKEUP, TPU_RESTART | **decision N11** [IDS pp. 633-634]; machine checks are never raised on any row (above) |
+| What an entry writes | Table 22-3: DTBM_SINGLE(_CONS) DTBMS_RET_ADDR, not EXC_ADDR; ARITH and MT_FPCR the next instruction's PC; EXC_SUM's register fields the instruction's <25:21>, <20:16>, <4:0>; M_STAT<OPCODE> the plain opcode; a HW_LD/PTE writes no VA | [IDS pp. 483-486, 510-511, 633]; EXC_SUM<SET_*> read zero **[decision]**: the core sets the FPCR's bits itself, as on the other rows |
+| MT_FPCR outside PALmode | traps to its entry after writing the FPCR | [IDS pp. 581, 630]; the 21264 rows do not take theirs (below) |
+| Console mode | I_MODE<CONSOLE> and M_MODE<CONSOLE> send the ITB and DTB misses to the _CONS entries | [IDS pp. 491, 508] |
+| Double miss | M_CTL<DBL_ALT> picks DTBM_DOUBLE_ALT; a bad VA sign is DFAULT with M_STAT<ACV> | **decision N12** |
+| Translation | Appendix C's superpages (SPE52, SPE43, SPE32) checked first, to bit 63, then the sign for VA_SIZE; 52-bit VA with 64 KB pages, every other VA_SIZE/PAGE_SIZE combination as 43-bit VA and 8 KB pages; VA_FORM and IVA_FORM in their three formats; the superpage enables per TPU | **decisions N13, N14** [IDS pp. 489-490, 497-498, 507, 512-513, 688-695] |
+| Big-endian | M_CTL<BIG_ENDIAN> stored and read back, nothing inverted | **decision N15** |
+| TB entries | the tag VA<51:13> (fewer bits with a granularity hint), ASN or ASM, and the TPU group of the fill; with 64 KB pages the PFN is PA<47:16> and the hints are 8, 64 and 512 such pages | [IDS pp. 305-307, 495-496, 504-506] |
+| ITB_IM, DTB_IM | the IDS's modes 00, 01, 03, 05, 0D, 10, 16, and every other value read as bits: <0> this group, <1> ASM entries, <2> non-ASM entries, <3> this ASN, <4> the write pointer | [IDS pp. 494, 502-503]; the bits **[inference]**: they give the IDS's seven exactly. ITB_IM's "this group" is I_PCTX's, where its text says M_PCTX's and ITB_IS's says I_PCTX's [pp. 494-495, **conflict**] **[inference]** |
+| **A TB per TPU** | each TPU keeps a TB of its own, its entries tagged with the group of the fill; a TPU_GRP write shows the new group's entries only | **[decision]**: the chip's TPUs share one TB [IDS p. 46], and sharing it would put a lock or a cross-thread invalidation on every lookup and fill of four host threads, and on the data page cache in front of them. Mode 2 (every TPU in a group of its own, N25's for Linux) is exact |
+| **Divergence: Mode 3** | TPUs in one group do not see each other's fills, and an invalidation reaches only the writer's TB | on the chip a group's entries serve all its TPUs, and an invalidation by mode "all groups" reaches every group [IDS pp. 306, 494]. Software that invalidates on every TPU it changes a translation for sees no difference but in the misses it takes |
+| QUIESCE | QUIESCE_TIMEOUT decides: TIMEOUT cycles at the clock with TIMEOUT_EN, no timeout without; WATCH_EN clear, no store clears watch_flag | [IDS pp. 510-511]; **decision N17** follows the register (enables 0 at reset); `ALPHABOX_QUIESCE_TIMEOUT` is the `ev8` row's and does not apply |
+| TPUs | four per chip by default, each a processor with its own registers and per-TPU IPRs; the per-chip CPU_CNFG, DC_CTL and CPU_BASE shared; every TPU of every chip resets at PAL_BASE + 0xB00 with its TPU_ID; off the Marvel boards each TPU is one of the board's processors | [IDS pp. 46, 477-481, 488]; all at 0xB00 **decision N17** |
+| The JIT | PALmode code interpreted, never compiled; CALL_PAL, JMP/JSR/RET/JSR_CO and MT_FPCR the interpreter's; normal-mode loads and stores compiled, their helpers translating by the 21464's rules (`ev8_superpage`, the group's TB entries) | **[decision]** (part of N16): the 21464's forms through helpers once the interpreter's are proven; the jumps for BAD_JUMP_IVA |
+| The state file | the native IPRs after the core's block, for this family only | **[decision]**: no other row's format changes |
+
+`test/cpu` group `ev8n` checks the table's rows with one TPU (the image's
+EV8 PALcode, `image.build_pal8`, runs PALmode snippets through a CALL_PAL
+of its own), and `test/cpu/tpu_mp.py` the four TPUs
+([development.md](development.md)).
+
 ### Smaller ones
 
 | What | Where | Consequence |
 | --- | --- | --- |
 | `VA_FORM` is derived from the VPTE address on a double TB miss, where the HRM says the faulting address | `AlphaCPU.cpp`, `virt2phys` VPTE branch | Latent: shipping PALcode uses VA+PTBR, so nothing observed. New firmware reading `VA_FORM` there would compute the wrong page-table address |
-| `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it |
+| `MT_FPCR` does not take its synchronous trap (HRM 6.7.3) | `cpu_fp_operate.hpp` | PALcode bookkeeping hung on that trap never runs. Nothing we boot needs it. The native EV8 (`ev8n`) takes the 21464's (above) |
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below); another processor's `IMB` drops the lines since 2026-10-24 |

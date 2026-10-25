@@ -9,7 +9,9 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 [ev8-isa.md](ev8-isa.md); the Marvel machines are [marvel.md](marvel.md).
 
 **Status**: plan, 2026-10-25; N1 to N31 accepted as proposed by the owner
-the same day. No code yet. The owner's decisions that
+the same day. S11, the native interface on an `ev8n` row, done the same
+day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode, is
+next. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -1271,6 +1273,146 @@ is independent of the native track.
 Order: S4, then S11, S11b, S12a, S12b, S13, with S5 and S6 free to
 interleave and S9 after S13's toolchain.
 
+## S11 (2026-10-25)
+
+The 21464's own privileged interface on a row of its own, `ev8n`
+(`CPU_FAMILY_EV8`, N16), as section 1 describes it, interpreted, with
+normal-mode code compiled. No board takes the row yet (that is S11b);
+the CPU oracle runs it on the ES40 through `ALPHABOX_CPU_ANY_BOARD`. The
+code is `cpu/cpu_pal_ev8.hpp` (the IPRs) and `cpu/AlphaCPU_ev8.cpp`
+(modes, jumps, CALL_PAL, HW_LD/HW_ST, the entries, translation, the TB,
+the reset); every decision and divergence is in
+[cpu-fidelity.md](../cpu-fidelity.md), "The native EV8".
+
+**What is implemented**, section by section:
+
+- **1.1 Modes**: PC<1:0>; RET's transitions of Table 17-5; SuperPALmode
+  as PALmode, no PNMI (N1); in PALmode every jump's mode from Rb<1:0> and
+  every link, BR and BSR included, with the mode bits (N2). Two
+  **[decision]**s beyond N2: Rb<1:0> = 10 is normal mode (no mode has the
+  encoding), and a jump into normal mode whose target is outside the
+  virtual address space takes BAD_JUMP_IVA at the jump, which does not
+  complete, as Table 22-2 has it [IDS p. 629].
+- **1.2 The PALcode instructions**: HW_MFPR's Rc (N3), HW_MTPR's Rb, the
+  classes ignored; HW_LD and HW_ST with every type and length, the 11-bit
+  displacement, forced alignment; 001 and 011 OPCDEC (N4), and the
+  load-only types on a store OPCDEC **[decision]**; IFETCHB a no-op; the
+  forms OPCDEC outside PALmode; MT_FPCR outside PALmode traps to its entry
+  [IDS pp. 581, 630].
+- **1.3 Shadow registers**: S0 and S1 by position, integer only (N5), per
+  TPU (each TPU is a `CAlphaCPU`; state.r[56] and [57]); a native CMOV in
+  PALmode executes as the chip splits it, a legacy CMOV's Rc unreplaced;
+  CALL_PAL writes S1, not EXC_ADDR.
+- **1.4 The IPRs**: every index of both tables with its selects,
+  read-only and write-1-to-clear fields and reset values (zero where the
+  IDS gives none, **[decision]**; DC_CTL<SET_EN> 11 **[inference]**);
+  CPU_BASE, VCTL, IER_CM/SIRR/ISUM/HW_INT_CLR (N6-N8), DTB_PTE0/1 as one
+  entry (N9), an invalid PTE dropped and traced (N10, `ALPHABOX_TRACE_EV8`),
+  CC (N7); the performance registers read zero and ignore writes
+  **[decision]**: nothing is counted. Any index of a register reads all of
+  it **[inference]**; ITB_IS shares ITB_TAG's storage [IDS p. 495].
+- **1.5 The entries**: chapter 22's (N11), power-up at 0xB00, the IPRs
+  each writes (Table 22-3), DTBMS_RET_ADDR for the single miss, the _CONS
+  entries, M_CTL<DBL_ALT> (N12), BAD_JUMP_IVA, CALL_PAL's target with
+  PC<1> and the OPCDEC rule.
+- **1.6 Memory management**: 52-bit VA and 48-bit PA, 8 KB and 64 KB
+  pages, N13's fallback, Appendix C's superpages and sign-check order
+  (N14), per-TPU enables, the TB match with a TPU group per entry, ITB_IM
+  and DTB_IM by mode, ITB_IS and DTB_IS, IC_FLUSH (the whole I-cache,
+  **[inference]**), granularity hints with the 64 KB shift, VA_FORM and
+  IVA_FORM in the three formats, BIG_ENDIAN stored (N15). The modes' value
+  list (00, 01, 03, 05, 0D, 10, 16) is read as bits **[inference]**, which
+  gives the IDS's seven and a meaning to every other value; ITB_IM's "this
+  group" is I_PCTX's, where its text says M_PCTX's [IDS p. 494,
+  **conflict**] **[inference]**.
+- **1.7 TPUs**: TPU_CNFG<TPU_ID>; per-chip CPU_CNFG, DC_CTL and CPU_BASE
+  shared by a chip's TPUs, everything else per TPU; every TPU of every
+  chip at PAL_BASE + 0xB00 at reset (N17); QUIESCE_TIMEOUT as the
+  register says (N17): TIMEOUT cycles with TIMEOUT_EN, no timeout without;
+  WATCH_EN clear, no store clears the flag [IDS p. 511]; WAKEUP and
+  TPU_RESTART never raised. The `tpus` key defaults to 4 on the row; off
+  the Marvel boards each TPU is one of the board's processors (the ES40's
+  four).
+
+**The TB-sharing decision** **[decision]**: each TPU keeps a TB of its
+own, its entries tagged with the group of the fill, `valid` meaning
+present and of the current group, so the lookup (`FindTBEntry`, the data
+page cache, the JIT's helpers) is the other rows' and takes no lock. A
+TB shared by four host threads would need a lock or cross-thread
+invalidation on every lookup and fill, and on the page cache in front of
+them. Mode 2 (N25's) is exact; Mode 3 sharing, a fill seen by every TPU
+of the group and an "all groups" invalidation reaching the others, is a
+divergence, recorded in [cpu-fidelity.md](../cpu-fidelity.md).
+
+**The JIT** (part of N16): PALmode code is never recorded or compiled on
+the row (a PALmode start is interpreted like an untranslated one), so the
+21464's forms, shadow registers and mode bits are the interpreter's
+alone. Normal-mode code compiles as on the `ev8` row but for CALL_PAL,
+the jump-format instructions (their BAD_JUMP_IVA check) and MT_FPCR (its
+trap), which end a block **[decision]**. The load and store helpers ask
+`ev8_superpage` for Appendix C's superpages and sign check, and behind
+it find the group's TB entries with their own masks: compiled loads and
+stores translate by the 21464's rules, and do not merely bail (a
+deliberately wrong SPE result in the helper failed 50 results of the
+compiled pass). Traps from compiled code reach the 21464's entries
+through the interpreter, which re-executes a bailed instruction.
+
+**The tests**:
+
+- `test/cpu/image.py` has an EV8 PALcode (`build_pal8`) beside the
+  21264's, with the same services on the 21464's IPRs, RET, IFETCHB and
+  two shadow registers (R1-R5 spilled into the trap record), a reset
+  record of the IPRs and the entry, TPUs 1-3 parked; `alpha_asm.py` has
+  the forms (`hw_mfpr8`, `hw_mtpr8`, `hw_ld8`, `hw_st8`, `ifetchb`, `ret`)
+  and section 3.5's IPR names (`IPR8`). The existing groups run on `ev8n`
+  as on `ev8`; those of the 21264's PALcode interface (PALshadow bank,
+  SDE, ASTs: six cases, 52 results) are skipped there.
+- Group `ev8n` (`test/cpu/ev8n_cases.py`, 524 results): the reset entry
+  and 26 IPRs' reset values; every IPR's writes by select and read-back,
+  read-only and W1C fields, CM shared by three registers, IER_CM, SIRR
+  and ISUM; HW_MFPR's Rc and HW_MTPR's Rb with classes set; HW_LD/HW_ST
+  of every length, physical and virtual types, displacements to -0x400,
+  forced alignment, Alt with ALT = user (DFAULT), types 001, 011 and the
+  load-only types on a store (OPCDEC), the double miss and DBL_ALT; RET
+  and JSR through PALmode, SuperPALmode and back, CALL_PAL and OPCDEC in
+  SuperPALmode (mode 11 in S1 and EXC_ADDR), RET with 10, a normal-mode
+  RET that cannot raise the mode, BAD_JUMP_IVA three ways; S0 and S1 in
+  every position, legacy and native CMOVs; CALL_PAL's S1; ARITH, DTBM_SINGLE
+  from normal mode and PALmode, the _CONS entries, ITB_MISS's IVA_FORM,
+  DFAULT for a bad sign, UNALIGN, MT_FPCR, OPCDEC of the forms, IFETCHB;
+  the three superpages, SPE52 disabled, the 21264's SEG48 form and a
+  52-bit address failing the sign check; a group-1 fill not seen from
+  group 0, the seven DTB_IM and ITB_IM modes over four entries, DTB_IS,
+  ITB_IS, invalid PTEs; a 64 KB page, GH 1 on 64 KB (512 KB) and on 8 KB
+  (64 KB) pages, VA_FORM with 52-bit VA and with reduced page tables. The
+  normal-mode loads and stores run compiled on a JIT lane's last pass.
+- `test/cpu/tpu_mp.py`: one chip of four TPUs, each resetting at 0xB00
+  with its TPU_ID, TPUs 1-3 parked and released by a store to their
+  mailboxes; CPU_CNFG seen alike by all four, VCTL and PAL_TEMP1 each
+  TPU's own.
+
+**The proofs**. Every lane built and passed `ctest` (the interpreter,
+the AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT), and
+so did every commit of the series. The CPU oracle on the interpreter, JIT,
+JIT_VERIFY and x86-64 lanes, alike on all four: `ev68cb` and `ev7` PASS
+20180, KNOWN 61, FAIL 0; `ev8` PASS 20432, KNOWN 73, FAIL 0 (main's
+verdicts and four results more, the harness's register check after the
+new group); `ev8n` PASS 20906, KNOWN 70, FAIL 0, SKIP 74 (the 21264
+PALcode interface's 52 and the 22 the `ev8` row skips; group `ev8n` is 528
+of the results, and the MT_FPCR trap the other rows know as a divergence
+passes). main's own oracle (8d6d95b's `test/cpu`) on this branch's
+binaries gives main's verdicts exactly: PASS 20176 and KNOWN 61, PASS
+20428 and KNOWN 73. JIT_VERIFY: 0 mismatches. `quiesce_mp.py` and
+`tpu_mp.py` passed on the same four lanes (`lab/runs/ev8-s11-oracle/`).
+The SRM console-log check is clean on the interpreter, JIT and JIT_VERIFY
+lanes (JIT_VERIFY: 0 mismatches). `boards_check.sh` passes its 12 boards
+and three `init` checks, with `--diff` against main and against main's
+gate run (ev8s4) the same on every board; with `BOARDS_EV7_CPU=ev8` the
+ES47, ES80 and GS1280 and their `init` checks pass, the same as the gate's
+run on the row. `guests_check.sh` passes `vms-es47`, `linux-es47`,
+`vms-es40` and `linux` (`lab/runs/ev8-s11-proof/`). No guest runs on
+`ev8n` (none exists until S13).
+
 ## Findings
 
 On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
@@ -1306,6 +1448,20 @@ On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
 - **D5's IO7 part does not carry over** to the native track (N22): the
   IO7's target field names a PID only. D5 as written stays right for the
   EV7-compatible row's S4, where it is Alphabox's construction anyway.
+
+S11 (2026-10-25):
+
+- **1.7 said a QUIESCE after the native reset sleeps until a store or an
+  interrupt**: with WATCH_EN clear, as it resets, a store does not wake it
+  [IDS p. 511]; corrected in its own commit. N17 ("QUIESCE_TIMEOUT as the
+  register says") stands, and its parking sets WATCH_EN.
+- **ITB_IM's modes say "the current TPUGRP field in M_PCTX"** where
+  ITB_IS says I_PCTX's [IDS pp. 494-495] **[conflict]**: I_PCTX's is used
+  for the ITB, which PALcode writes alike anyway.
+- **The I_CTL and M_CTL selects** write REDUCED_PT (and M_CTL's DBL_ALT)
+  only with 11, as their lists give the fields [IDS pp. 489, 506]; a
+  PALcode that sets DBL_ALT with the 10 select does not.
+- [ev8-isa.md](ev8-isa.md) needed no correction.
 
 ## Rules
 
