@@ -1507,7 +1507,10 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       // the helper. The helper reports a store into code to the code-page
       // map, so that the next IC_FLUSH or IMB is not skipped as having
       // nothing to flush (HRM 5.2.17; the write row of the page cache keeps
-      // virtual stores off such pages the same way).
+      // virtual stores off such pages the same way). The bit is read before
+      // the store, so a page that becomes code meanwhile is the case of a
+      // translation cached before it did: its marker's request reaches this
+      // processor's next MB, which counts a write (JIT-05).
       if (st_phys) {
         Label st_slow = a.new_label(), st_done = a.new_label();
         a.and_(x11, x2, imm(~(uint64_t)(size_bits / 8 - 1)));

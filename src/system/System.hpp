@@ -138,6 +138,10 @@ enum WatchWake {
   WATCH_CAUSES
 };
 
+/// JIT-05's A/B switches (AlphaCPU.cpp, System.cpp), read once at startup.
+extern const bool g_jit05_mb;
+extern const int g_jit05_fence;
+
 class CCodePageMap {
 public:
   static constexpr int kPageShift = 13; // the Alpha's 8 KB page
@@ -168,7 +172,28 @@ public:
             (1u << (ln & 7)));
   }
   /// A guest store or a DMA transfer landed at phys.
+  ///
+  /// The store is made before this runs, and a compiler marks lines, fences
+  /// and re-checks its source (CJitEngine::compile_block): without a fence
+  /// here too, the store could still be in this processor's store buffer
+  /// when the re-check looks, and the line bit read here could be the old
+  /// one, so that neither saw the other (JIT-05, window 1). A fence between
+  /// the store and the line bit makes the two a Dekker pair. It is paid
+  /// only for a page whose bit is already set: a page that becomes code
+  /// while this store is in flight has its marker ask every processor to
+  /// drop its cached translations, after the bit, and the writer's MB
+  /// (CAlphaCPU::memory_barrier), which the ARM's sequence for a code change
+  /// requires before its flag, honours that request and counts a write; the
+  /// marker's fence and re-check pair with that MB instead, and note_code
+  /// is serialised so a later marker's re-check comes after the requests.
+  /// ALPHABOX_JIT05_FENCE: 0 no fence, 1 (the default) as above, 2 a fence
+  /// on every store (A/B switch).
   void note_write(u64 phys) {
+    if (g_jit05_fence) {
+      if (g_jit05_fence == 1 && !holds_code(phys))
+        return;
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
     if (holds_code_line(phys)) {
       m_gen.fetch_add(1, std::memory_order_release);
       if (m_trace)

@@ -251,6 +251,11 @@ void CSystem::operator delete(void *p) noexcept {
 }
 #endif
 
+const int g_jit05_fence = [] {
+  const char *e = getenv("ALPHABOX_JIT05_FENCE");
+  return e && *e ? atoi(e) : 1;
+}();
+
 void CCodePageMap::init(CSystem *sys, u64 dram_bytes, void *page_bits,
                         void *line_bits) {
   m_sys = sys;
