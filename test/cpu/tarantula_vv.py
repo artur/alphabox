@@ -58,6 +58,12 @@ M64 = (1 << 64) - 1
 WIN_PA = 0xFFFFFC00000
 VCTL_PA = WIN_PA + 0x3F0000
 PEEK_PA = WIN_PA + 0x3F8000
+# The native EV8's: PID 0's block in the 21464 mode's map (N18), which the
+# processor's window follows on that row (AlphaCPU_vector.cpp); the ES40
+# folds both maps' addresses into one.
+WIN8_PA = 0xFFFFFFC00000
+VCTL8_PA = WIN8_PA + 0x3F0000
+PEEK8_PA = WIN8_PA + 0x3F8000
 
 DATA_PA = 0x1E8000            # results, inputs (past the EV8 PAL's snippets)
 N1, N3, N4 = 128, 100, 300
@@ -206,7 +212,7 @@ def build(ev8n):
     a.label("main")
     a.li(image.R_UART, uart)
     a.li(D, kseg(DATA_PA))
-    a.li(W, seg | PEEK_PA)
+    a.li(W, seg | (PEEK8_PA if ev8n else PEEK_PA))
     # VEN = 1.
     if ev8n:
         snips = Asm(image.PAL8_SNIP_PA)

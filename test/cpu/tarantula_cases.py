@@ -42,11 +42,17 @@ M64 = (1 << 64) - 1
 R_TAB, R_WIN, R_LINK = 14, 15, 23
 I8 = A.IPR8
 
-# PID 0's EV7 register window (cpu/ev7/Ev7.hpp csr_base): VCTL and the
-# hook's register window in it (src/cpu/Tarantula.hpp).
+# PID 0's EV7 register window (cpu/ev7/Ev7.hpp, kEv7Map.csr_base): VCTL
+# and the hook's register window in it (src/cpu/Tarantula.hpp).
 WIN_PA = 0xFFFFFC00000
 VCTL_PA = WIN_PA + 0x3F0000
 PEEK_PA = WIN_PA + 0x3F8000
+# The native EV8's: PID 0's block in the 21464 mode's map (N18), which the
+# processor's window follows on that row (AlphaCPU_vector.cpp); the ES40
+# folds both maps' addresses into one.
+WIN8_PA = 0xFFFFFFC00000
+VCTL8_PA = WIN8_PA + 0x3F0000
+PEEK8_PA = WIN8_PA + 0x3F8000
 
 GROUPS = [("tarantula", "Tarantula (ev8-isa.md 4): OPCDEC for 01-06 with VEN "
                         "0 and on every other row, VCTL, VC, every VV and VS "
@@ -448,7 +454,7 @@ def harness(g):
     b.begin("tarantula: the harness, VCTL")
     b.need(rows.TARANTULA)
     b.li(R_TAB, kseg(image.TAB_PA))
-    b.li(R_WIN, g.seg | PEEK_PA)
+    b.li(R_WIN, g.seg | (PEEK8_PA if g.ev8n else PEEK_PA))
     a = b.asm
     a.branch(OP["BR"], R31, "t_over")
     # t_fill: $vr(r16)[i] <- tab[r17 + ((r18 + i x r19) mod 64)], i < 128.
@@ -506,7 +512,7 @@ def harness(g):
         # (N8), so a store of 0 there leaves VEN 1.
         b.begin("tarantula: ev8n: a store to the CSR's address is not VCTL")
         b.need(rows.TARANTULA)
-        b.li(1, g.seg | VCTL_PA)
+        b.li(1, g.seg | VCTL8_PA)
         b.emit(stq(R31, 1, 0))
         g.read_ven("VCTL (the IPR) after the store", 1)
         g.setvl(5)

@@ -966,6 +966,8 @@ void CAlphaCPU::init() {
   // of the state above, which is the 21264's.
   if (m_ev8n)
     ev8_init();
+  // Tarantula's state (the `ev8` and `ev8n` rows), cleared, VEN 0.
+  tarantula_init();
 
   printf("%s(%d): $Id$\n", devid_string, state.iProcNum);
   if (state.iProcNum == 0 && m_max_instr_per_tick)
@@ -1041,6 +1043,8 @@ void CAlphaCPU::ResetForSystemReset() {
   seq_offset = 0;
   seq_remaining = 0;
   seq_next_pc = 0;
+  // Tarantula: every register clear and VCTL<VEN> 0, as at power-up.
+  tarantula_reset();
 }
 
 // The thread's name is printed straight out: a five-byte buffer held
@@ -2313,6 +2317,21 @@ _next_instruction:
 
   case 0x3f:
     OP(BGT, COND);
+
+  // Tarantula (CPU_EXT_TARANTULA; docs/platforms/ev8-isa.md, section 4) on
+  // the `ev8` and `ev8n` rows (AlphaCPU_vector.cpp); on every other row
+  // opcodes 01-06 raise OPCDEC as before, as the ARM reserves them.
+  case 0x01:
+  case 0x02:
+  case 0x03:
+  case 0x04:
+  case 0x05:
+  case 0x06:
+    if (m_vec) {
+      tarantula(ins);
+      ES40_EXECUTE_END();
+    }
+    UNKNOWN1;
 
   default:
     UNKNOWN1;

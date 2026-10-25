@@ -66,10 +66,16 @@ int main() {
   check_row("ev68cb", CPU_FAMILY_EV6, 2); // 21264/EV68x
   check_row("ev7", CPU_FAMILY_EV7, 3);    // 21364/EV7
   check_row("ev7z", CPU_FAMILY_EV7, 3);   // 21364/EV79
-  check_row("ev8", CPU_FAMILY_EV7, 4, CPU_EXT_EV8); // 21464/EV8
+  // 21464/EV8, with Tarantula since S7 (docs/platforms/ev8.md)
+  check_row("ev8", CPU_FAMILY_EV7, 4, CPU_EXT_EV8 | CPU_EXT_TARANTULA);
   // The native EV8 (ev8-native.md, N16): a family of its own, the `ev8`
   // row's user instructions and AMASK, type 18, chip ID 0, four TPUs.
-  check_row("ev8n", CPU_FAMILY_EV8, 4, CPU_EXT_EV8);
+  check_row("ev8n", CPU_FAMILY_EV8, 4, CPU_EXT_EV8 | CPU_EXT_TARANTULA);
+  // AMASK bit 3 (Tarantula, D14) stays clear until its memory instructions
+  // execute (S8): the row reports only what it implements.
+  for (const char *r : {"ev8", "ev8n"})
+    if (const cpu_model *m = find_cpu_model(r))
+      CHECK_EQ(m->amask & 0x8, 0);
   if (const cpu_model *m = find_cpu_model("ev8n")) {
     const cpu_model *e = find_cpu_model("ev8");
     CHECK_EQ(m->amask, e ? e->amask : 0);

@@ -97,6 +97,15 @@ enum : u32 {
   /// already. S3: LDL_ARM (18.B000), LDQ_ARM (18.B400) and QUIESCE
   /// (18.B800), with one TPU per chip, and AMASK bit 10.
   CPU_EXT_EV8 = 0x0001,
+  /// Tarantula, the vector extension proposed for the EV8 [Espasa et al.,
+  /// ISCA 2002; the encodings and rules are docs/platforms/ev8-isa.md,
+  /// section 4]: the vector state and opcodes 01-06, which raise OPCDEC on
+  /// every row without it, as the ARM reserves them. A flag of its own
+  /// beside CPU_EXT_EV8, since Tarantula was "a follow-on candidate to the
+  /// EV8" and has an AMASK bit of its own (bit 3, D14) [decision]. S7: the
+  /// state, VCTL, VC, VV and VS; AMASK bit 3 waits for the memory
+  /// instructions (S8).
+  CPU_EXT_TARANTULA = 0x0002,
 };
 
 struct cpu_model {

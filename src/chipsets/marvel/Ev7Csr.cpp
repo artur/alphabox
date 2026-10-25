@@ -514,6 +514,21 @@ u64 CEv7Csr::reg(u32 off) const {
 }
 
 u64 CEv7Csr::read(u32 off, int dsize) {
+  // VCTL, Tarantula's vector enable, on a processor that has it in
+  // EV7-compatible mode (the `ev8` row): VEN <0>, <63:1> RAZ
+  // (docs/platforms/ev8-isa.md, section 2). On any other row the offset is
+  // an unknown register, as before, and in 21464 mode it is TPU 0's
+  // R_INT_MASK (N22): the native EV8's VCTL is the IPR 0xAC (N8). The
+  // processor keeps the value; no lock of this block is needed.
+  if (!m_21464 && off == tarantula::kVctlOffset) {
+    CAlphaCPU *c = cpu();
+    if (c && c->vctl_is_csr()) {
+      const u64 v = c->vctl_csr_read();
+      if (trace_csr_on())
+        trace_csr(m_pid, off, false, v, m_21464);
+      return dsize == 32 ? (v & 0xffffffff) : v;
+    }
+  }
   std::unique_lock<std::mutex> lk(m_lock);
   u64 v;
   if (m_21464) {
@@ -571,6 +586,15 @@ u64 CEv7Csr::read(u32 off, int dsize) {
 }
 
 void CEv7Csr::write(u32 off, int dsize, u64 data) {
+  if (!m_21464 && off == tarantula::kVctlOffset) { // VCTL (read() above)
+    CAlphaCPU *c = cpu();
+    if (c && c->vctl_is_csr()) {
+      if (trace_csr_on())
+        trace_csr(m_pid, off, true, data, m_21464);
+      c->vctl_csr_write(data);
+      return;
+    }
+  }
   if (m_21464 && off == RBOX_INTQ) {
     // R_INT_QUE: a write removes the head [IDS p. 528], and an IO7 whose
     // IID the full queue refused sends it again (N21), outside this lock:

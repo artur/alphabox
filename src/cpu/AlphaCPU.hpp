@@ -43,11 +43,13 @@
 #include <type_traits> // std::remove_reference_t for the TB entry alias
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 
 #include "CpuModel.hpp"
 #include "System.hpp"
 #include "SystemComponent.hpp"
+#include "Tarantula.hpp"
 #include "WakeSemaphore.hpp"
 #include "cpu_defs.hpp"
 #ifdef ALPHABOX_HVF
@@ -1494,6 +1496,58 @@ private:
     u64 woke[WATCH_CAUSES] = {};
     u64 slept_ns = 0;
   } m_qs;
+
+  // --- Tarantula (CPU_EXT_TARANTULA: the `ev8` and `ev8n` rows) -------------
+  // The vector extension proposed for the EV8, as docs/platforms/ev8-isa.md,
+  // section 4, fixes it; S7 of docs/platforms/ev8.md: the state, VC, VV and
+  // VS, in the interpreter (opcodes 01-06 end every compiled block). The code
+  // is AlphaCPU_vector.cpp; the state and its file section Tarantula.hpp. At
+  // the end of the class, away from what compiled code addresses.
+public:
+  /// This processor has Tarantula's state and instructions.
+  bool has_tarantula() const { return m_vec != nullptr; }
+  /// VCTL in EV7-compatible mode (the `ev8` row): a CSR at offset 0x3F0000
+  /// of the processor's own register window, which the Marvel model's
+  /// CEv7Csr answers by these two (ev8-isa.md, section 2, D11). False on
+  /// the native EV8, whose VCTL is the IPR 0xAC (N8): the CSR offset is not
+  /// decoded there.
+  bool vctl_is_csr() const { return m_vec && !m_ev8n; }
+  u64 vctl_csr_read() const { return m_vctl.load(std::memory_order_relaxed); }
+  void vctl_csr_write(u64 v) {
+    m_vctl.store(v & tarantula::kVen, std::memory_order_relaxed); // <63:1> RAZ
+  }
+  /// The window of a board without EV7 register windows (the ES40, under
+  /// ALPHABOX_CPU_ANY_BOARD): index 0 is VCTL, index 1 the
+  /// ALPHABOX_TARANTULA_PEEK test window (tarantula_init).
+  virtual u64 ReadMem(int index, u64 address, int dsize);
+  virtual void WriteMem(int index, u64 address, int dsize, u64 data);
+
+private:
+  /// The vector state, on the rows with Tarantula only (nullptr elsewhere,
+  /// so every other row's processor keeps its size in memory).
+  std::unique_ptr<tarantula::State> m_vec;
+  /// VCTL<VEN> of the `ev8` row: written by any processor through the CSR,
+  /// read by this one's vector instructions.
+  std::atomic<u64> m_vctl{0};
+  /// A vector FP instruction in progress: ieee_trap collects what each
+  /// element would trap for in m_vec_trap instead of trapping, and the
+  /// instruction traps once, after every active element (ev8-isa.md 4.3).
+  bool m_vec_defer = false;
+  u64 m_vec_trap = 0;
+  void tarantula_init();  ///< at init(): the state, and the window's ranges
+  void tarantula_reset(); ///< power-up and reset: everything clear, VEN 0
+  bool ven() const {
+    return (m_ev8n ? m_ev8.vctl : m_vctl.load(std::memory_order_relaxed)) &
+           tarantula::kVen;
+  }
+  /// Opcodes 01-06 on a row with Tarantula (the interpreter's only).
+  void tarantula(u32 ins);
+  void tarantula_vc(u32 ins);
+  void tarantula_int(u32 ins);
+  void tarantula_fp(u32 ins);
+  /// The ARITH trap a vector FP instruction raises, reported as the scalar
+  /// instruction `ins` (registers 31) would report it.
+  void tarantula_trap(u64 flags, u32 ins);
 };
 
 /** Translate raw register (0..31) number to a number that takes PALshadow

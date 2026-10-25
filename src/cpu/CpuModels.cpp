@@ -90,11 +90,13 @@ static const cpu_model models[] = {
     // Four TPUs [IDS p. 46]. One processor per chip by default, as the EV7
     // console would see the chip; `tpus = 2..4` lists TPUs 1-3 to the
     // Marvel console as processors of their own, an Alphabox construction
-    // (S4; Configurator.cpp, processor_tpus).
+    // (S4; Configurator.cpp, processor_tpus). Tarantula's state and its
+    // operate and control instructions since S7 (CPU_EXT_TARANTULA), with
+    // VCTL a CSR of each processor's register window; AMASK bit 3 with S8.
     {"ev8", "21464 (EV8)", 4, 15, 5, 4,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV7, CPU_EXT_EV8, 64, 64, 3072, 4},
+     CPU_FAMILY_EV7, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
     // 21464 (EV8) on its own privileged interface, the IDS's
     // (docs/platforms/ev8-native.md, S11, decision N16): a family of its
     // own, CPU_FAMILY_EV8, with the IDS's IPRs, PALcode instructions,
@@ -107,11 +109,12 @@ static const cpu_model models[] = {
     // nothing reads it but our PALcode [decision N16]. The caches are the
     // `ev8` row's [IDS pp. 42-43]. The ES47, ES80 and GS1280 take it, in
     // 21464 mode (S11b, their rows' other_cpu_model); the CPU oracle runs it
-    // on the ES40 through ALPHABOX_CPU_ANY_BOARD.
+    // on the ES40 through ALPHABOX_CPU_ANY_BOARD. Tarantula as on the `ev8`
+    // row, its VCTL the IPR 0xAC (N8).
     {"ev8n", "21464 (EV8), native interface", 0, 18, 0, 4,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
          AMASK_PREFETCH,
-     CPU_FAMILY_EV8, CPU_EXT_EV8, 64, 64, 3072, 4},
+     CPU_FAMILY_EV8, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
 };
 
 const cpu_model *find_cpu_model(const char *name) {
