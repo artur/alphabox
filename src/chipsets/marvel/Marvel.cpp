@@ -97,13 +97,13 @@ void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
   m_gio = std::move(far);
 }
 
-u64 CMarvel::phys_mask() const { return ev7::kPhysMask; }
+u64 CMarvel::phys_mask() const { return ev7::kEv7Map.phys_mask(); }
 
 /**
  * memory.bits is each processor's memory; PID n's begins at
- * ev7::memory_base(n), 16 GB apart, so the array spans from 0 to the end of
- * the last processor's. The host allocates it lazily (calloc of untouched
- * pages costs no memory), so only what the guest touches is backed.
+ * ev7::kEv7Map.memory_base(n), 16 GB apart, so the array spans from 0 to the
+ * end of the last processor's. The host allocates it lazily (calloc of
+ * untouched pages costs no memory), so only what the guest touches is backed.
  *
  * The holes between processors' memory read as zero here rather than as
  * nonexistent memory: the console takes memory sizes from its management
@@ -121,7 +121,7 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
     const ev7_node &n = m_topology.node(i);
     if (n.tpu || (int)n.chip >= max_cpus)
       continue;
-    const u64 b = ev7::memory_base(n.pid);
+    const u64 b = ev7::kEv7Map.memory_base(n.pid);
     const u64 e = b + m_memory_per_pid;
     m_memory_regions.push_back({b, m_memory_per_pid});
     if (e > end)
@@ -168,7 +168,7 @@ CIo7 *CMarvel::io7(u32 pid) const {
 /// An IO7's space: PA<43> set, the PE inverted in PA<42:35>, the port
 /// inverted in PA<34:32> (Io7.hpp).
 static bool io7_decode(u64 a, u32 *pe, u32 *port, u32 *off) {
-  if (!ev7::is_io(a))
+  if (!ev7::kEv7Map.is_io(a))
     return false;
   *pe = (u32)(~(a >> 35) & 0xff);
   *port = (u32)(~(a >> 32) & 7);
@@ -187,7 +187,7 @@ CEv7Csr *CMarvel::csr(u32 pid) const {
 u64 CMarvel::read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) {
   (void)raw;
   u32 pe, off;
-  if (ev7::csr_decode(a, &pe, &off))
+  if (ev7::kEv7Map.csr_decode(a, &pe, &off))
     if (CEv7Csr *c = csr(pe))
       return c->read(off, dsize);
   u32 port;
@@ -195,8 +195,8 @@ u64 CMarvel::read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) {
     if (CIo7 *io = io7(pe))
       return io->read(port, off, dsize, source);
   // Another processor's space that is not there, or memory nobody owns.
-  m_sys->trace_unknown(ev7::is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize,
-                       false, 0, source);
+  m_sys->trace_unknown(ev7::kEv7Map.is_io(a) ? "EV7 I/O" : "EV7 memory", a,
+                       dsize, false, 0, source);
   return 0;
 }
 
@@ -204,7 +204,7 @@ void CMarvel::write_io(u64 a, u64 raw, int dsize, u64 data,
                        CSystemComponent *source) {
   (void)raw;
   u32 pe, off;
-  if (ev7::csr_decode(a, &pe, &off))
+  if (ev7::kEv7Map.csr_decode(a, &pe, &off))
     if (CEv7Csr *c = csr(pe)) {
       c->write(off, dsize, data);
       return;
@@ -215,8 +215,8 @@ void CMarvel::write_io(u64 a, u64 raw, int dsize, u64 data,
       io->write(port, off, dsize, data, source);
       return;
     }
-  m_sys->trace_unknown(ev7::is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize, true,
-                       data, source);
+  m_sys->trace_unknown(ev7::kEv7Map.is_io(a) ? "EV7 I/O" : "EV7 memory", a,
+                       dsize, true, data, source);
 }
 
 /**
@@ -247,7 +247,7 @@ u64 CMarvel::interval_period_ns() const {
 
 /// Hose h is PID h / 4, IO7 port h % 4 (Linux marvel_find_console_vga_hose).
 u64 CMarvel::pci_space_base(int hose, pci_space space) const {
-  const u64 base = ev7::io7_base((u32)hose / 4, (u32)hose % 4);
+  const u64 base = ev7::kEv7Map.io7_base((u32)hose / 4, (u32)hose % 4);
   switch (space) {
   case PCI_SPACE_MEM:
     return base;
@@ -305,14 +305,14 @@ void CMarvel::start_secondaries_as_console(CAlphaCPU **cpus, int ncpus) {
   const u64 pal = U64(0x30000), pal_bytes = U64(0x20000);
   for (int i = 1; i < ncpus; i++) {
     const u32 pid = cpus[i]->get_pid();
-    const u64 base = ev7::memory_base(pid);
+    const u64 base = ev7::kEv7Map.memory_base(pid);
     char *from = m_sys->PtrToMem(pal), *to = m_sys->PtrToMem(base + pal);
     if (!from || !to)
       continue;
     memcpy(to, from, pal_bytes);
     m_sys->code_pages()->note_write_all();
     const u64 entry = base + pal; // the PALcode's reset entry, in PALmode
-    const u64 scratch = ev7::csr_base(pid) | ev7csr::RBOX_SCRATCH1;
+    const u64 scratch = ev7::kEv7Map.csr_base(pid) | ev7csr::RBOX_SCRATCH1;
     m_sys->WriteMem(scratch, 64, (U64(0xf1) << 24) | ((entry >> 24) & 0xffffff),
                     nullptr);
     const u64 echo = m_sys->ReadMem(scratch, 64, nullptr);

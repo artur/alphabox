@@ -810,7 +810,7 @@ void CEs47Cmm::memory_assignment(u8 *a) {
   g[1] = (u8)owners.size();
   u8 *chunk = g + 4;
   for (u32 pid : owners) {
-    const u64 base = ev7::memory_base(pid);
+    const u64 base = ev7::kEv7Map.memory_base(pid);
     put32(chunk, (u32)base);
     put32(chunk + 4, (u32)(base >> 32));
     put32(chunk + 8, (u32)each);

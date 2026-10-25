@@ -578,6 +578,17 @@ target_include_directories(tpu_topology_test PRIVATE
 target_link_libraries(tpu_topology_test Threads::Threads)
 add_test(NAME tpu_topology COMMAND tpu_topology_test)
 
+# The Marvel model in 21464 mode where it has no image path: the 48-bit map
+# and the dense PIDs, routes and R_WHOAMI (docs/platforms/ev8-native.md,
+# section 2; test/cpu/marvel8_mp.py is the boot image).
+add_executable(marvel21464_test test/unit/marvel21464_test.cpp
+    src/chipsets/marvel/Topology.cpp src/platforms/es80/Es80.cpp
+    src/platforms/gs1280/Gs1280.cpp)
+target_include_directories(marvel21464_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(marvel21464_test Threads::Threads)
+add_test(NAME marvel21464 COMMAND marvel21464_test)
+
 # The processor rows (CpuModels.cpp) against their sources: IMPLVER is the
 # Alpha Architecture Reference Manual's Table D-4.
 add_executable(cpumodels_test test/unit/cpumodels_test.cpp

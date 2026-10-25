@@ -125,11 +125,13 @@ int CMarvelTopology::tpu_shift(const marvel_layout *layout, int nchips) {
   return -1;
 }
 
-bool CMarvelTopology::build(const marvel_layout *layout, int nchips, int tpus) {
+bool CMarvelTopology::build(const marvel_layout *layout, int nchips, int tpus,
+                            bool dense) {
   m_layout = layout;
   m_systype = layout ? layout->cmm_systype : 0x11;
   m_tpus = tpus < 1 ? 1 : tpus > kMaxTpus ? kMaxTpus : tpus;
-  m_shift = m_tpus > 1 ? tpu_shift(layout, nchips) : 0;
+  m_dense = dense;
+  m_shift = m_tpus > 1 && !dense ? tpu_shift(layout, nchips) : 0;
   m_nodes.clear();
   if (m_shift < 0)
     return false;
@@ -141,11 +143,14 @@ bool CMarvelTopology::build(const marvel_layout *layout, int nchips, int tpus) {
     else
       es47_default_coordinates(c, &n.ns, &n.ew);
     n.chip = (u32)c;
-    n.chip_pid = coord2id(gs, n.ns, n.ew);
+    n.site = coord2id(gs, n.ns, n.ew);
+    // Dense PIDs (21464 mode, N19): the chip's index, which all its TPUs
+    // share; the console's PIDs otherwise.
+    n.chip_pid = dense ? (u32)c : n.site;
     // The TPUs sit where their chip sits: one router, one Cbox [IDS p. 46].
     for (int t = 0; t < m_tpus; t++) {
       n.tpu = (u32)t;
-      n.pid = tpu_pid(n.chip_pid, n.tpu, m_shift);
+      n.pid = dense ? n.chip_pid : tpu_pid(n.chip_pid, n.tpu, m_shift);
       m_nodes.push_back(n);
     }
   }
@@ -172,8 +177,8 @@ bool CMarvelTopology::has_io7(u32 pid) const {
   if (!n || n->tpu)
     return false;
   if (m_layout)
-    return m_layout->has_io7(n->chip_pid);
-  return n->chip_pid == 0; // the ES47: its one IO7, on PID 0
+    return m_layout->has_io7(n->site);
+  return n->site == 0; // the ES47: its one IO7, on PID 0
 }
 
 bool CMarvelTopology::has_memory(u32 pid, int present) const {
@@ -209,6 +214,17 @@ u32 CMarvelTopology::route(u32 from, u32 to, int present) const {
   u32 r = R_VALID | R_ENABLED | (u32)b->ns << 20 | (u32)b->ew << 16;
   if (a == b || (a->ns == b->ns && a->ew == b->ew))
     return r | R_LOCAL; // itself, or another TPU of its chip
+  int dns, dew;
+  hops(*a, *b, present, &dns, &dew);
+  if (dns)
+    r |= R_NS | (dns < 0 ? R_NS_DOWN : 0);
+  if (dew)
+    r |= R_EW | (dew > 0 ? R_EW_UP : 0);
+  return r;
+}
+
+void CMarvelTopology::hops(const ev7_node &a, const ev7_node &b, int present,
+                           int *dns, int *dew) const {
   // The coordinates that have processors, per axis: the cables close each
   // row and column into a ring (a torus on a GS1280), and OpenVMS's walk
   // wraps the same way, between the lowest and highest coordinate present.
@@ -222,11 +238,43 @@ u32 CMarvelTopology::route(u32 from, u32 to, int present) const {
   std::sort(ews.begin(), ews.end());
   ews.erase(std::unique(ews.begin(), ews.end()), ews.end());
   // N/S first, then E/W in the destination's row.
-  const int dns = ring_step(nss, a->ns, b->ns);
-  const int dew = ring_step(ews, a->ew, b->ew);
-  if (dns)
-    r |= R_NS | (dns < 0 ? R_NS_DOWN : 0);
-  if (dew)
-    r |= R_EW | (dew > 0 ? R_EW_UP : 0);
-  return r;
+  *dns = ring_step(nss, a.ns, b.ns);
+  *dew = ring_step(ews, a.ew, b.ew);
+}
+
+/**
+ * The fields of an R_ROUT entry [21464 IDS Rev 1.1k, pp. 526-527, as its
+ * text layer reads; the packet checked DNS and DEW on the scan]: VAL <0>
+ * "destination is valid for all transfers"; IIP <1>, IIO <2>, IME <3> the
+ * local IO7's access to the destination's IPRs, IO7 and memory; PIP <4>,
+ * PIO <5>, PME <6> I/O and request packets' access to the same; CAD <7>
+ * may adapt ("typically, this bit is set"); BOU <8> bounce at a wall; STF
+ * <9> store and forward; RNS <10> the N/S hops go North (0) or South (1);
+ * REW <11> the E/W hops go East (0) or West (1); DEW <15:12>, DNS <19:16>;
+ * IND <21:20> the first hop's direction, North, South, East, West (0-3);
+ * PAR <23> parity. Here every access is allowed, the route adapts, never
+ * bounces and cuts through, parity is not modelled (0), and the hops are
+ * route()'s, N/S first; North is the higher N/S coordinate and East the
+ * higher E/W one [decision: the IDS does not say which way the coordinates
+ * count, and nothing but our own code reads the table]. Entries for the
+ * directory's sharing-mask bits (512-531) are not made (0).
+ */
+u32 CMarvelTopology::route21464(u32 from, u32 to, int present) const {
+  const ev7_node *a = by_pid(from, present);
+  const ev7_node *b = by_pid(to, present);
+  if (!a || !b)
+    return 0;
+  constexpr u32 kAccess = 0x7f; // VAL, IIP, IIO, IME, PIP, PIO, PME
+  constexpr u32 kCad = 1u << 7, kRns = 1u << 10, kRew = 1u << 11;
+  u32 r = kAccess | kCad | (u32)(b->ns & 0xf) << 16 | (u32)(b->ew & 0xf) << 12;
+  if (a->ns == b->ns && a->ew == b->ew)
+    return r; // itself (and its own TPUs): no hops
+  int dns, dew;
+  hops(*a, *b, present, &dns, &dew);
+  if (dns < 0)
+    r |= kRns; // South
+  if (dew < 0)
+    r |= kRew; // West
+  const u32 ind = dns > 0 ? 0 : dns < 0 ? 1 : dew > 0 ? 2 : 3;
+  return r | ind << 20;
 }

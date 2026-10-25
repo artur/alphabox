@@ -268,7 +268,7 @@ void CIo7::set_reg(u32 port, u32 off, int dsize, u64 data) {
 }
 
 u64 CIo7::read(u32 port, u32 off, int dsize, CSystemComponent *source) {
-  const u64 a = ev7::io7_base(m_pid, port) | off;
+  const u64 a = ev7::kEv7Map.io7_base(m_pid, port) | off;
   if (port < kPorts && off < kCsrOff) {
     // PCI space nothing answers: a configuration or I/O read master-aborts
     // and reads as all ones; memory reads as zero, as on the Tsunami.
@@ -300,7 +300,7 @@ u64 CIo7::read(u32 port, u32 off, int dsize, CSystemComponent *source) {
 
 void CIo7::write(u32 port, u32 off, int dsize, u64 data,
                  CSystemComponent *source) {
-  const u64 a = ev7::io7_base(m_pid, port) | off;
+  const u64 a = ev7::kEv7Map.io7_base(m_pid, port) | off;
   if (port < kPorts && off < kCsrOff) {
     m_sys->trace_unknown(off >= 0xFE000000 && off < 0xFF000000
                              ? "IO7 PCI configuration"
@@ -387,7 +387,7 @@ u64 CIo7::pci_phys(u32 port, u32 address) {
              (address & pci_window::PTE_ADD2_MASK);
     break; // an invalid entry: not translated
   }
-  return ev7::io7_base(m_pid, port) | address;
+  return ev7::kEv7Map.io7_base(m_pid, port) | address;
 }
 
 /**
@@ -465,7 +465,7 @@ bool CIo7::hp_write(u32 port, u32 r, u64 data) {
 
 /// A card in a slot is a device answering configuration space there.
 bool CIo7::slot_occupied(u32 port, u32 dev) const {
-  return m_sys->device_at(ev7::io7_base(m_pid, port) + 0xFE000000 +
+  return m_sys->device_at(ev7::kEv7Map.io7_base(m_pid, port) + 0xFE000000 +
                           (u64)dev * 0x800);
 }
 

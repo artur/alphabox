@@ -94,9 +94,10 @@ static void check_layout(const char *what, const marvel_layout *layout,
     // D5: a register block per TPU. Its RBOX_IREQ (another processor's
     // interprocessor request) decodes to this TPU's PID and no other's.
     u32 pe = 0, off = 0;
-    CHECK(ev7::csr_decode(ev7::csr_base(n.pid) | 0x70, &pe, &off));
+    CHECK(ev7::kEv7Map.csr_decode(ev7::kEv7Map.csr_base(n.pid) | 0x70, &pe,
+                                  &off));
     CHECK(pe == n.pid && off == 0x70);
-    CHECK(blocks.insert((u32)(ev7::csr_base(n.pid) >> 22)).second);
+    CHECK(blocks.insert((u32)(ev7::kEv7Map.csr_base(n.pid) >> 22)).second);
     // An IO7's LSI_CTL names its target in <22:14>: the TPU's PID.
     CHECK(io7::ctl_target((u64)n.pid << 14 | (U64(1) << 24)) == n.pid);
     // The route to another TPU of the same chip ends in the shared Cbox

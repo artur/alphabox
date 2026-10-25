@@ -438,8 +438,8 @@ u64 CEv7Csr::read(u32 off, int dsize) {
   default: {
     auto it = m_regs.find(off);
     if (it == m_regs.end()) {
-      m_sys->trace_unknown("EV7 CSR", ev7::csr_base(m_pid) | off, dsize, false,
-                           0, nullptr);
+      m_sys->trace_unknown("EV7 CSR", ev7::kEv7Map.csr_base(m_pid) | off, dsize,
+                           false, 0, nullptr);
       return 0;
     }
     v = it->second;
@@ -525,8 +525,8 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
   }
   auto it = m_regs.find(off);
   if (it == m_regs.end()) {
-    m_sys->trace_unknown("EV7 CSR", ev7::csr_base(m_pid) | off, dsize, true,
-                         data, nullptr);
+    m_sys->trace_unknown("EV7 CSR", ev7::kEv7Map.csr_base(m_pid) | off, dsize,
+                         true, data, nullptr);
     return;
   }
   it->second =

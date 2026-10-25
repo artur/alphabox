@@ -53,6 +53,14 @@
  * uses (tpu_shift): the module field on the ES47 and ES80, whose 2P drawers
  * leave it 0. That number is the PID the console's PALcode is handed and
  * forms every CSR address from. A chip of one TPU keeps its PID.
+ *
+ * In 21464 mode (processors of the `ev8n` row, docs/platforms/
+ * ev8-native.md, section 2.2, decision N19) the PIDs are dense instead:
+ * chip c is PID c, the topology's processor index, and its TPUs share the
+ * chip's PID, its register block and its place in the mesh; the coordinates
+ * go into R_WHOAMI and the route table takes the IDS's layout
+ * (route21464). The console's coord2id still names each chip's place
+ * (ev7_node::site), which is what the layout's IO7s are cabled by.
  **/
 #if !defined(INCLUDED_MARVEL_TOPOLOGY_H_)
 #define INCLUDED_MARVEL_TOPOLOGY_H_
@@ -89,8 +97,12 @@ struct ev7_node {
   u32 pid;
   u8 ns, ew;
   u32 chip = 0;     ///< the chip's index in the layout
-  u32 chip_pid = 0; ///< the chip's own PID, from its coordinates
+  u32 chip_pid = 0; ///< the chip's own PID: from its coordinates, or dense
   u32 tpu = 0;      ///< 0 on an EV7; 0-3 on an EV8
+  /// The console's number for the chip's place (coord2id), which the
+  /// layout's has_io7 and io_drawer take: the chip's PID but with dense
+  /// PIDs.
+  u32 site = 0;
 };
 
 /// The most TPUs an EV8 chip has [21464 IDS Rev 1.1k, PDF p. 46].
@@ -113,7 +125,14 @@ public:
   /// chip by chip, TPU 0 first. With more than one TPU the chips are the
   /// configured ones, whose PIDs decide where the TPU numbers go; returns
   /// false, with no processors, when they leave no bit pair free.
-  bool build(const marvel_layout *layout, int nchips, int tpus = 1);
+  ///
+  /// `dense`: the 21464 mode's numbering instead (docs/platforms/
+  /// ev8-native.md, 2.2, N19): chip c is PID c, the chips in the
+  /// configuration's order, and its TPUs are processors that share it.
+  bool build(const marvel_layout *layout, int nchips, int tpus = 1,
+             bool dense = false);
+  /// Whether the PIDs are dense (21464 mode).
+  bool dense() const { return m_dense; }
 
   /// The PID of chip `index` of `layout` (nullptr: the ES47's).
   static u32 chip_pid(const marvel_layout *layout, int index);
@@ -168,8 +187,27 @@ public:
    */
   u32 route(u32 from, u32 to, int present) const;
 
+  /**
+   * The same route as an entry of the 21464's R_ROUT, in the IDS's layout
+   * [21464 IDS Rev 1.1k, pp. 526-527], which the 21464 mode's route table
+   * holds (N19): VAL <0> and the access bits <6:1> for a processor that is
+   * there, CAD <7>, the hops' directions RNS <10> and REW <11>, the
+   * destination's coordinates DEW <15:12> and DNS <19:16>, and the first
+   * hop's direction IND <21:20>. 0 when either processor is not there.
+   */
+  u32 route21464(u32 from, u32 to, int present) const;
+  /// R_WHOAMI of a processor at `ns`, `ew`: EW <9:5>, NS <4:0> [IDS
+  /// p. 527].
+  static u32 whoami21464(u8 ns, u8 ew) {
+    return (u32)(ew & 0x1f) << 5 | (u32)(ns & 0x1f);
+  }
+
 private:
+  /// The shortest hops from `a` to `b` on each axis's ring: +1, -1 or 0.
+  void hops(const ev7_node &a, const ev7_node &b, int present, int *dns,
+            int *dew) const;
   std::vector<ev7_node> m_nodes;
+  bool m_dense = false;
   int m_tpus = 1;
   int m_shift = 0;
   u32 m_systype = 0x11;
