@@ -936,6 +936,12 @@ def check_layout(binary, layout, work, port, timeout, keep):
                  "LSI %d: sent again, taken by PID 0" % SYM_LSI):
         check("the IO7: %s" % what, "absent", "in the trace",
               ok=what in emu)
+    # A JIT_VERIFY lane: no compiled block may differ from the interpreter.
+    mism = [ln for ln in emu.splitlines() if "MISMATCH" in ln]
+    check("JIT_VERIFY MISMATCH lines", len(mism), 0)
+    vlines = [ln for ln in emu.splitlines() if "compiled-block execs" in ln]
+    if vlines:
+        print("  %s" % vlines[-1].strip())
     print("  %d results: PASS %d, FAIL %d" % (passes + fails, passes, fails))
     if not fails and not keep:
         shutil.rmtree(workdir, ignore_errors=True)
