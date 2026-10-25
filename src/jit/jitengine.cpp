@@ -82,6 +82,10 @@
 #error "ES40_JIT requires an x86-64 or AArch64 host"
 #endif
 
+// JIT-05's A/B switch (AlphaCPU.cpp): compiled MB tests the page-cache
+// flush request.
+extern const bool g_jit05_mb;
+
 namespace {
 
 // ALPHABOX_JIT_INLMEM=0: every load and store calls its helper, as on a
@@ -201,6 +205,8 @@ enum SafeOp {
   OP_ZAP, // INTS (0x12) byte-manip (Rb&7 keyed)
   OP_NOP,
   OP_MFENCE, // MISC (0x18): prefetch/cache hints (no-op), barriers (mfence)
+  OP_MB,     // MB and the reserved barriers that act as one: the fence, then
+             // a pending page-cache flush request (CAlphaCPU::memory_barrier)
   OP_RPCC,
   OP_RC,
   OP_RS, // MISC (0x18) state reads (Ra dest): cycle counter /
@@ -631,11 +637,12 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
     switch (ins & 0xFFFF) {
     case 0x0000:
     case 0x0400: // TRAPB, EXCB
-    case 0x4000:
     case 0x4400:
+      return OP_MFENCE; // WMB
+    case 0x4000:
     case 0x4800: // reserved barriers: they act as MB (ARM C.13)
     case 0x4C00:
-      return OP_MFENCE; // MB, WMB
+      return OP_MB;
     case 0x8000:
     case 0xA000:
     case 0xE800: // FETCH, FETCH_M, ECB
@@ -1852,6 +1859,20 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.mov(x86::rax, imm((uint64_t)fn));
       a.call(x86::rax);
     };
+
+    // MB: the fence, then the page-cache flush request another processor
+    // may have made, through the misc helper (CAlphaCPU::memory_barrier).
+    if (op == OP_MB) {
+      a.mfence();
+      if (g_jit05_mb) {
+        Label none = a.new_label();
+        a.cmp(x86::byte_ptr(x86::rbp, m_off.dpc_flush_req), imm(0));
+        a.je(none);
+        emit_call(misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)kMiscMbFlush}});
+        a.bind(none);
+      }
+      continue;
+    }
 
     // Memory-format loads: va = regs[Rb] + disp16.
     if (op == OP_LDQ || op == OP_LDL || op == OP_LDBU || op == OP_LDWU ||
@@ -3788,11 +3809,12 @@ void CJitEngine::compile_block(
   // compiled. A store by another processor is then either seen by the
   // re-check, or made after the bits were set, and reported by its own
   // note_write (or counted when that processor drops a cached inline-writable
-  // translation of a page that just became code: honour_new_code_pages and
-  // the check_timers path). Checked first and marked after, a store between
-  // the two was neither. The fence orders the bits before the re-check's
-  // loads; bits set for a block that is then not published cost only a
-  // slower write path for that memory.
+  // translation of a page that just became code: at its next MB, IMB or
+  // timer check, CAlphaCPU::memory_barrier and honour_dpc_flush_request).
+  // Checked first and marked after, a store between the two was neither.
+  // The fence orders the bits, and the requests note_code makes, before the
+  // re-check's loads; bits set for a block that is then not published cost
+  // only a slower write path for that memory.
   // The compiled prefix only: what follows it runs interpreted, or in a
   // block of its own that covers its own words.
   if (m_code_map) // this page now holds code: writes to it must be noticed

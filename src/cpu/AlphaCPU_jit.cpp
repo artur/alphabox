@@ -1580,6 +1580,13 @@ int CAlphaCPU::jit_fp_write(CAlphaCPU *cpu, u64 va, u32 fa, u32 descr) {
 // re-derive (cc advances only at the jit_run boundary; the flag is consumed by
 // the read), so in verify we replay the interp pass's value -- like a load.
 u64 CAlphaCPU::jit_misc(CAlphaCPU *cpu, u32 sel) {
+  // MB with a page-cache flush request pending (memory_barrier): compiled
+  // MB fenced and tested the flag inline. It reads nothing the verify pass
+  // logged, so it is not replayed.
+  if (sel == CJitEngine::kMiscMbFlush) {
+    cpu->honour_at_mb();
+    return 0;
+  }
   cpu->m_misc_calls[sel < 3 ? sel : 2]++;
   if (cpu->m_jit_vreplay)
     return cpu->m_jit_vlog[cpu->m_jit_vlog_i++]; // replay; no re-read, no

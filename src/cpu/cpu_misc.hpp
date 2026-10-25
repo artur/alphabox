@@ -99,7 +99,9 @@
 #define DO_TRAPB std::atomic_thread_fence(std::memory_order_seq_cst);
 // EXCB/MB: full fence (data+io ordering).
 #define DO_EXCB std::atomic_thread_fence(std::memory_order_seq_cst);
-#define DO_MB std::atomic_thread_fence(std::memory_order_seq_cst);
+// MB: the fence, and a page-cache flush another processor asked for
+// (CAlphaCPU::memory_barrier, JIT-05).
+#define DO_MB memory_barrier();
 // WMB: HRM 4.11.1 requires WMB to order all prior stores from this CPU
 // before all subsequent stores, as observed by every other CPU/DMA agent.
 // A standalone atomic_thread_fence(release) only synchronizes with a matching

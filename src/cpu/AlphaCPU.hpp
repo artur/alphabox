@@ -67,6 +67,11 @@ extern thread_local class CAlphaCPU *t_running_cpu;
 /// AlphaCPU_jit.cpp have to ask the same question before translating.
 bool alpha_valid_va_form(u64 virt, bool va48);
 
+/// JIT-05 A/B switch, read once at startup (AlphaCPU.cpp): an MB honours a
+/// pending page-cache flush request (CAlphaCPU::memory_barrier).
+/// ALPHABOX_JIT05_MB=0 turns it off.
+extern const bool g_jit05_mb;
+
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
 // cache when another CPU flushed: compiled blocks are per-CPU, but guest code
@@ -878,6 +883,27 @@ public:
   /// The flush request above, honoured on this processor's thread: drop the
   /// cached translations and note what the maps had marked by then.
   void honour_dpc_flush_request();
+  /// MB, and the reserved barriers that act as one (ARM C.13), in both
+  /// engines: a full fence, then the flush request above if one is
+  /// pending. A processor that cached a page as writable inline before it
+  /// became code stores into it unreported until it honours the request,
+  /// and the ARM's way to hand another processor new instructions is the
+  /// writer's MB, then a flag, then the executor's IMB (Alpha Architecture
+  /// Handbook, chapter 5, "Multiple-Processor Instruction Stream"; WMB is
+  /// not in that rule). Honoured here, the request's counted write comes
+  /// before the flag, so the executor's IMB sees it and does not skip the
+  /// flush. The fence first makes it a Dekker pair with the compiler, which
+  /// asks before its own fence and re-check (CJitEngine::compile_block):
+  /// either the re-check sees this processor's stores, or this load sees
+  /// the request. ALPHABOX_JIT05_MB=0 leaves the fence alone (A/B switch).
+  inline void memory_barrier() {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (g_jit05_mb && m_dpc_flush_req.load(std::memory_order_relaxed))
+      honour_at_mb();
+  }
+  /// The request honoured, then the fence again: the guest's next store,
+  /// its flag, must not become visible before the write counted here.
+  void honour_at_mb();
   u64 m_stat_dpc_flushes = 0; // flush_data_page_cache() calls (JIT_STATS)
   inline void flush_data_page_cache() {
     ++m_stat_dpc_flushes;
@@ -1601,6 +1627,13 @@ inline void CAlphaCPU::flush_icache() {
   // its source words whenever a flush has been seen. A remap therefore misses
   // on the physical, and a rewrite is what the map reports.
   if (m_nopflush && m_code_map) {
+    // IMB orders every access before it against every one after it (Alpha
+    // Architecture Handbook, Table 5-1), as MB does: the writer's stores
+    // against its look at the map below, and an executor's read of a flag
+    // against its read of the write count, whether or not the PALcode's IMB
+    // executes an MB of its own (JIT-05).
+    if (g_jit05_mb)
+      std::atomic_thread_fence(std::memory_order_seq_cst);
     if (m_code_map->code_pages() != m_code_pages_seen)
       honour_new_code_pages(); // a page became code: drop stale inline writes
     const u64 gen = m_code_map->write_gen();

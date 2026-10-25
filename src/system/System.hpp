@@ -199,6 +199,17 @@ private:
   u64 m_pages = 0, m_lines = 0;
   CSystem *m_sys = nullptr;
   bool m_trace = false;
+  // One note_code at a time (JIT-05). The processor that marks a page asks
+  // every processor to drop its inline-writable translations of it, after
+  // setting the bit; another processor compiling elsewhere in that page
+  // finds the bit set and asks nobody. Unserialised, the second one's
+  // re-check and publication could come between the first one's bit and
+  // its requests (a host thread preempted there), and a processor storing
+  // through a translation cached before the page became code would then
+  // find no request at its MB: its stores neither seen by that re-check nor
+  // counted. Serialised, every request of an earlier marking is made
+  // before a later one's fence and re-check. Taken once per compile.
+  std::mutex m_mark_mx;
 };
 
 class CSystem {

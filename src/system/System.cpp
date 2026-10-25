@@ -284,6 +284,9 @@ void CCodePageMap::trace_write(u64 phys) {
 void CCodePageMap::note_code(u64 phys, size_t bytes) {
   if (!m_page_bits)
     return;
+  std::unique_lock<std::mutex> serial(m_mark_mx, std::defer_lock);
+  if (g_jit05_mb) // the A/B switch: as before without it
+    serial.lock();
   const u64 last = phys + (bytes ? bytes - 1 : 0);
   for (u64 ln = phys >> kLineShift; ln <= (last >> kLineShift); ++ln) {
     if (ln >= m_lines)

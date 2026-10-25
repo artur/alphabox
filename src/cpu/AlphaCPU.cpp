@@ -488,6 +488,16 @@ void CAlphaCPU::honour_new_code_pages() {
     m_code_map->note_write_all();
 }
 
+const bool g_jit05_mb = [] {
+  const char *e = getenv("ALPHABOX_JIT05_MB");
+  return !(e && e[0] == '0');
+}();
+
+void CAlphaCPU::honour_at_mb() {
+  honour_dpc_flush_request();
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
 void CAlphaCPU::honour_dpc_flush_request() {
   if (!m_dpc_flush_req.exchange(false, std::memory_order_acq_rel))
     return;
@@ -855,6 +865,9 @@ void CAlphaCPU::init() {
     o.jit_budget = (uint32_t)((char *)&m_jit_budget - (char *)this);
     o.check_int = (uint32_t)((char *)&state.check_int - (char *)this);
     o.check_timers = (uint32_t)((char *)&state.check_timers - (char *)this);
+    // Compiled MB reads the request flag as a byte (memory_barrier).
+    static_assert(sizeof(m_dpc_flush_req) == 1, "a byte compiled code reads");
+    o.dpc_flush_req = (uint32_t)((char *)&m_dpc_flush_req - (char *)this);
     o.link_from = (uint32_t)((char *)&m_link_from - (char *)this);
     o.link_target = (uint32_t)((char *)&m_link_target - (char *)this);
     o.fpen = (uint32_t)((char *)&state.fpen - (char *)this);

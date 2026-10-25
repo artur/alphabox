@@ -320,6 +320,7 @@ public:
     // compiled epilogue checks before jumping on; link_from is where the
     // epilogue records a link-patch request.
     uint32_t jit_budget, check_int, check_timers, link_from;
+    uint32_t dpc_flush_req; // CAlphaCPU::m_dpc_flush_req: compiled MB's test
     uint32_t link_target; // static exit's target PC, recorded with link_from
     uint32_t exc_addr, pal_base,
         sde; // CALL_PAL: exc_addr save, PAL entry base, PALshadow enable
@@ -485,6 +486,10 @@ public:
   /// EV8 (CPU_FAMILY_EV8), whose CALL_PAL and native-mode MT_FPCR are left
   /// to the interpreter (its PALmode blocks are never compiled: jit_run).
   static constexpr uint32_t kExtNative8 = 0x80000000u;
+  /// The misc helper's selector for a compiled MB that found a page-cache
+  /// flush request pending (CAlphaCPU::memory_barrier); 0-2 are RPCC, RC
+  /// and RS.
+  static constexpr uint32_t kMiscMbFlush = 3;
   void set_cpu_identity(uint64_t amask, uint64_t implver, uint32_t ext) {
     m_amask = amask;
     m_implver = implver;

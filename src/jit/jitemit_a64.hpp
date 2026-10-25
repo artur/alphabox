@@ -822,6 +822,41 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.bind(ok);
     };
 
+    // MB: the fence, then the page-cache flush request another processor
+    // may have made (CAlphaCPU::memory_barrier). The test is inline; the
+    // helper, taken only with a request pending, is in the cold section.
+    if (op == OP_MB) {
+      auto mb_helper = [&]() {
+        emit_call(hs.misc_helper,
+                  {{JA_CPU, 0}, {JA_I32, (uint64_t)kMiscMbFlush}});
+      };
+#ifndef JIT_VERIFY
+      if (m_cold_pass) {
+        a.bind(Label(m_cold_slow[cold_idx]));
+        mb_helper();
+        a.b(Label(m_cold_back[cold_idx]));
+        continue;
+      }
+#endif
+      a.dmb(asmjit::a64::Predicate::DB::kISH);
+      if (g_jit05_mb) {
+        Label slow = a.new_label(), back = a.new_label();
+        a.ldrb(w1, fld(m_off.dpc_flush_req, 0));
+#ifndef JIT_VERIFY
+        if (cold_record(slow, back)) {
+          a.cbnz(w1, slow);
+          a.bind(back);
+          continue;
+        }
+#endif
+        a.cbz(w1, back);
+        mb_helper();
+        a.bind(back);
+        (void)slow;
+      }
+      continue;
+    }
+
 #ifndef JIT_VERIFY
     // Inline data-page-cache probe (mirrors jit_read/jit_write's cache path):
     // x2 = va. On a hit: x10 = the page's bias, so the access itself is
