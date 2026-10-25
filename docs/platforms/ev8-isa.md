@@ -908,9 +908,10 @@ to the calling standard.
 
 ## 6. Open points
 
-Settled by the owner and nada on 2026-10-24 (points 1 to 5, 9) and still
-open (6, 7, 8, 10 to 14; 7, 8 and 11 are the owner's alone, nada has no
-stake in them). Each point is given with the proposal it would replace:
+Settled by the owner and nada on 2026-10-24 (points 1 to 5, 9), by the
+owner alone on 2026-10-25 (7, 8 and 11, in which nada has no stake, each
+as proposed), and still open (6, 10, 12 to 14). Each point is given with
+the proposal it would replace:
 
 1. **RM syntax** (agreed): `vgathq $vrt, $vrx($rb)` puts a vector register
    where a displacement goes. The alternative, three operands `vgathq
@@ -928,11 +929,13 @@ stake in them). Each point is given with the proposal it would replace:
 6. **The 1C results** (D8) are all proposed; GPKBLB4 and PERMB8's
    selector values rest on the least evidence, VMINMAX's layout on a
    datapath description. The size order inside the zz blocks is agreed.
-7. **Masked-off elements**: UNPREDICTABLE plus an explicit merge, or
-   left unchanged as Alphabox implements anyway. The second is easier to
-   program and costs a third read port in hardware that will never exist.
-8. **Vector booleans** are the integer 1, not the scalar compares' 2.0
-   nor paired single's 1.0.
+7. **Masked-off elements** (decided by the owner, 2026-10-25):
+   UNPREDICTABLE, merged explicitly with VVMRG (section 4.3), against
+   leaving them unchanged as Alphabox implements anyway. The second is
+   easier to program and costs a third read port in hardware that will
+   never exist.
+8. **Vector booleans** (decided by the owner, 2026-10-25) are the integer
+   1, not the scalar compares' 2.0 nor paired single's 1.0.
 9. **VCTL's offset** (decided): 0x3F0000 in each processor's own EV7
    window (section 2; the owner, 2026-10-25, in place of 0x3F0000 + 0x40 ×
    tpu in the chip's, which stays for the native interface), chosen
@@ -942,9 +945,9 @@ stake in them). Each point is given with the proposal it would replace:
     timer fixed at 10240 cycles with both enables on (section 3.1). A test
     that wants another timeout would need a register of its own (a CSR
     beside VCTL's would do).
-11. **Vector arithmetic traps** report the next PC (trap style, as AMASK
-    bit 9 defines); the paper says only that the faulting instruction's PC
-    is provided. A fault-style report (own PC, nothing written) would let
+11. **Vector arithmetic traps** (decided by the owner, 2026-10-25) report
+    the next PC (trap style, as AMASK bit 9 defines; section 5); the paper
+    says only that the faulting instruction's PC is provided. A fault-style report (own PC, nothing written) would let
     an OS re-execute, but Linux under AMASK bit 9 decodes the instruction
     before the trap PC.
 12. **Instructions beyond the paper's evidence**: VVSQRTT, VVCVTTQC,
