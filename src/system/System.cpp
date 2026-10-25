@@ -394,6 +394,11 @@ void CSystem::free_guest_memory(void *p, size_t bytes) {
  * Register a device.
  **/
 void CSystem::RegisterComponent(CSystemComponent *component) {
+  if (iNumComponents == MAX_COMPONENTS)
+    FAILURE_1(Configuration,
+              "Out of components (%d): raise MAX_COMPONENTS (the processors "
+              "are components too)",
+              MAX_COMPONENTS);
   acComponents[iNumComponents] = component;
   iNumComponents++;
 }
