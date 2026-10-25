@@ -50,8 +50,11 @@ double us_since(clk::time_point t) {
 } // namespace
 
 void CAliM1543C_usb::selftest() {
-  auto nap_ms = [](int ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  auto nap_ms = [this](int ms) {
+    std::unique_lock<std::mutex> lk(m_selftest_mx);
+    if (m_selftest_cv.wait_for(lk, std::chrono::milliseconds(ms),
+                               [this]() { return m_selftest_stop; }))
+      throw SelftestStop();
   };
   bool pass = true;
   auto say = [&](const char *what, bool ok) {

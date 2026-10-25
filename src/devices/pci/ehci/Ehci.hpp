@@ -177,6 +177,8 @@ private:
   }
   std::atomic_bool m_selftest{false}; // read by the schedule and the CPUs
   std::unique_ptr<std::thread> m_selftest_thread;
+  struct SelftestStop {};
+  void selftest_nap(int ms);
   void selftest();
   void kick();
   void port_refresh(int p);

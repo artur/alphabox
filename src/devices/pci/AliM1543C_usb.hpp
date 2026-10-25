@@ -283,5 +283,11 @@ private:
   // ALPHABOX_OHCI_SELFTEST (AliM1543C_usb_selftest.cpp).
   void selftest();
   std::thread m_selftest_thread;
+  // stop_threads wakes the self-test's naps and ends it (the DMA window
+  // search alone can nap for five minutes).
+  struct SelftestStop {};
+  std::mutex m_selftest_mx;
+  std::condition_variable m_selftest_cv;
+  bool m_selftest_stop = false;
 };
 #endif // !defined(INCLUDED_ALIM1543C_USB_H)

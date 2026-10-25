@@ -233,8 +233,6 @@ CAliM1543C_usb::~CAliM1543C_usb() {
   stop_threads();
   if (theAli)
     theAli->remove_usbir_listener(this);
-  if (m_selftest_thread.joinable())
-    m_selftest_thread.join();
   CUsbFaultTarget *me = this;
   theUsbFaultTarget.compare_exchange_strong(me, nullptr);
   for (auto &port : m_port) {
@@ -295,11 +293,32 @@ void CAliM1543C_usb::start_threads() {
   // while the controller is idle (ALi M1543C datasheet 1.10, USBIR, p80).
   if (theAli)
     theAli->add_usbir_listener(this, [this]() { m_ohci.refresh_irq(); });
-  if (getenv("ALPHABOX_OHCI_SELFTEST") && !m_selftest_thread.joinable())
-    m_selftest_thread = std::thread([this]() { selftest(); });
+  if (getenv("ALPHABOX_OHCI_SELFTEST") && !m_selftest_thread.joinable()) {
+    {
+      std::lock_guard<std::mutex> lk(m_selftest_mx);
+      m_selftest_stop = false;
+    }
+    m_selftest_thread = std::thread([this]() {
+      try {
+        selftest();
+      } catch (const SelftestStop &) {
+        // stop_threads cut it short
+      }
+    });
+  }
 }
 
-void CAliM1543C_usb::stop_threads() { m_ohci.stop_threads(); }
+void CAliM1543C_usb::stop_threads() {
+  // The self-test first: it drives the controller, which must outlive it.
+  {
+    std::lock_guard<std::mutex> lk(m_selftest_mx);
+    m_selftest_stop = true;
+  }
+  m_selftest_cv.notify_all();
+  if (m_selftest_thread.joinable())
+    m_selftest_thread.join();
+  m_ohci.stop_threads();
+}
 
 void CAliM1543C_usb::check_state() {
   if (m_ohci.thread_dead())

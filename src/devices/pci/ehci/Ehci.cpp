@@ -359,6 +359,8 @@ void CEhci::start_threads() {
           selftest();
         } catch (CException &e) {
           printf("%%EHCI-E-SELFTEST: %s\n", e.displayText().c_str());
+        } catch (const SelftestStop &) {
+          // stop_threads cut it short: the schedule is going away
         }
         m_selftest = false;
       });
@@ -1181,6 +1183,17 @@ int CEhci::RestoreState(FILE *f) {
 // port 1 whose sector 0 ends in 55 AA. The structures live in the top 16 MB
 // of guest memory, addressed physically (dma_read/dma_write). Prints
 // %EHCI-I-SELFTEST lines, and PASS or FAIL.
+// Every wait of the self-test goes through here, so that stop_threads (which
+// joins the self-test before the schedule thread it needs) cuts it short at
+// the next nap instead of after a transfer's full timeout.
+void CEhci::selftest_nap(int ms) {
+  if (StopThread)
+    throw SelftestStop();
+  std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  if (StopThread)
+    throw SelftestStop();
+}
+
 void CEhci::selftest() {
   const u32 base =
       (u32)((1ull << cSystem->get_memory_bits()) - (16u << 20)) & ~0xfffu;
@@ -1204,9 +1217,7 @@ void CEhci::selftest() {
     printf("%%EHCI-I-SELFTEST: %-40s %s\n", what, ok ? "ok" : "FAILED");
     return ok;
   };
-  auto sleep_ms = [](int ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-  };
+  auto sleep_ms = [this](int ms) { selftest_nap(ms); };
   bool pass = true;
 
   // Controller and port.
@@ -1501,7 +1512,7 @@ bool CEhci::selftest_iso(u32 base) {
   reg(0x60, 1); // CONFIGFLAG: the ports are the EHCI's
   reg(psc, PS_PP);
   reg(psc, PS_PP | PS_PR | PS_CSC);
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  selftest_nap(10);
   reg(psc, PS_PP);
   char what[64];
   snprintf(what, sizeof(what), "port %d: iso loopback, high speed", q + 1);
@@ -1562,7 +1573,7 @@ bool CEhci::selftest_iso(u32 base) {
   reg(0x34, LIST);
   reg(0x20, CMD_RS | CMD_PSE | 0x00080000);
   for (int t = 0; t < 300 && (r32(ITD_NONE + 4) & (1u << 31)); ++t)
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    selftest_nap(1);
   const u32 sts = rreg(0x24);
   reg(0x20, 0x00080000);
 
@@ -1660,9 +1671,7 @@ bool CEhci::selftest_companions(u32 base) {
     printf("%%EHCI-I-SELFTEST: %-40s %s\n", what, ok ? "ok" : "FAILED");
     return ok;
   };
-  auto sleep_ms = [](int ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-  };
+  auto sleep_ms = [this](int ms) { selftest_nap(ms); };
   bool pass = true;
 
   // After the reset CONFIGFLAG is 0: every port is a companion's.
