@@ -54,6 +54,51 @@ bool vs_assigned(u32 f) {
 }
 bool vc_assigned(u32 f) { return f <= 0x02 || (f >= 0x04 && f <= 0x06); }
 
+/// The scalar IEEE instruction a vector FP element is computed as (4.3,
+/// D13): its 11-bit function with /SUI and dynamic rounding (/SUID); the
+/// T compares as CMPTxx/SU, the conversions as CVTQT/SUID and CVTTQ/SVID,
+/// VVCVTTQC as CVTTQ/SVIC (4.4). Fa, Fb and Fc are 31, so that the trap
+/// reports no scalar register (section 5). The IEEE routines read only the
+/// qualifier bits and Fc of the word.
+u32 scalar_word(u32 fnc) {
+  u32 f;
+  switch (fnc) {
+  case 0x20: // ADDT/SUID
+  case 0x21: // SUBT/SUID
+  case 0x22: // MULT/SUID
+  case 0x23: // DIVT/SUID
+    f = 0x7E0 | (fnc & 3);
+    break;
+  case 0x24: // SQRTT/SUID (14.7EB)
+    f = 0x7EB;
+    break;
+  case 0x28: // CMPTUN/SU
+    f = 0x5A4;
+    break;
+  case 0x26: // CMPTLT/SU, for LT and GT
+  case 0x2A:
+    f = 0x5A6;
+    break;
+  case 0x27: // CMPTLE/SU, for LE and GE
+  case 0x2B:
+    f = 0x5A7;
+    break;
+  case 0x2C: // CVTQT/SUID
+    f = 0x7EC;
+    break;
+  case 0x2D: // CVTTQ/SVID
+    f = 0x7EF;
+    break;
+  case 0x2E: // CVTTQ/SVIC
+    f = 0x72F;
+    break;
+  default: // CMPTEQ/SU, for EQ and NE; the CPYSx raise nothing
+    f = 0x5A5;
+    break;
+  }
+  return (0x16u << 26) | (31u << 21) | (31u << 16) | (f << 5) | 31u;
+}
+
 } // namespace
 
 /**
@@ -215,8 +260,12 @@ void CAlphaCPU::tarantula(u32 ins) {
     tarantula_vc(ins);
     return;
   }
-  if (fnc >= 0x20) { // the FP half follows in its own commit: OPCDEC
-    GO_PAL(OPCDEC);
+  if (fnc >= 0x20) {
+    if (!state.fpen) {
+      GO_PAL(FEN);
+      return;
+    }
+    tarantula_fp(ins);
     return;
   }
   tarantula_int(ins);
@@ -362,4 +411,116 @@ void CAlphaCPU::tarantula_int(u32 ins) {
     if (vc != 31)
       v.vr[vc][i] = r;
   }
+}
+
+/**
+ * VV and VS, the floating-point half, functions 20-3F (4.4): T format, each
+ * active element computed as the scalar instruction scalar_word() names
+ * (D13), with the FPCR: rounding from FPCR<DYN> (or chopped for VVCVTTQC),
+ * the trap disables and denormal controls as for a /S instruction, the
+ * status bits updated as that instruction updates them, once per active
+ * element and in element order. A compare writes the quadword 1 or 0, not
+ * 2.0 (point 8). The unary VV ones read Vb only (Va is not used, 4.3).
+ *
+ * The trap (section 5, point 11): every active element is computed and
+ * written, the correct value where no exception trapped and the IEEE
+ * routines' default result where one did; then, if any element would have
+ * trapped, the instruction takes one arithmetic trap, after it (trap
+ * style): EXC_SUM the OR of what every element would have reported, with
+ * SWC as for a /S instruction and REG 31. It is raised as the scalar
+ * instruction raises its own, so on the `ev8` row EXC_ADDR is what this
+ * core gives a scalar ARITH (the PALcode makes it the next PC) and on the
+ * native EV8 the next instruction's PC [IDS p. 485] [inference]. What
+ * "would trap" means is the scalar instruction's on this core, the
+ * 21264's: an enabled exception the FPCR does not disable, or an FPCR
+ * status bit the instruction sets that was clear (EXC_SUM<SET_*>, "PALcode
+ * should set FPCR[...]", 21264 HRM 5.2.13).
+ **/
+void CAlphaCPU::tarantula_fp(u32 ins) {
+  tarantula::State &v = *m_vec;
+  const u32 fnc = (ins >> 5) & 0x3f;
+  const bool vv = (ins >> 26) == 0x01;
+  const bool m = (ins >> 11) & 1;
+  const u32 va = I_GETRA(ins), vb = I_GETRB(ins), vc = I_GETRC(ins);
+  const u64 s = vv ? 0 : state.f[FREG_2];
+  const u32 sw = scalar_word(fnc);
+  state.exc_sum = 0; // as FPSTART
+  m_vec_defer = true;
+  m_vec_trap = 0;
+  for (u64 n = 0; n < v.vl; n++) {
+    const int i = (int)n;
+    if (m && !v.mask(i))
+      continue;
+    const u64 a = v.vr[va][i];
+    const u64 b = vv ? v.vr[vb][i] : s;
+    u64 r;
+    switch (fnc) {
+    case 0x20:
+      r = ieee_fadd(a, b, sw, DT_T, false);
+      break;
+    case 0x21:
+      r = ieee_fadd(a, b, sw, DT_T, true);
+      break;
+    case 0x22:
+      r = ieee_fmul(a, b, sw, DT_T);
+      break;
+    case 0x23:
+      r = ieee_fdiv(a, b, sw, DT_T);
+      break;
+    case 0x24: // SQRTT of Vb[i]
+      r = ieee_sqrt(b, sw, DT_T);
+      break;
+    case 0x25:
+      r = ieee_fcmp(a, b, sw, 0) == 0;
+      break;
+    case 0x26:
+      r = ieee_fcmp(a, b, sw, 1) == -1;
+      break;
+    case 0x27: {
+      const s32 c = ieee_fcmp(a, b, sw, 1);
+      r = c == -1 || c == 0;
+      break;
+    }
+    case 0x28:
+      r = ieee_fcmp(a, b, sw, 0) == 2;
+      break;
+    case 0x29: // true when unordered
+      r = ieee_fcmp(a, b, sw, 0) != 0;
+      break;
+    case 0x2A:
+      r = ieee_fcmp(a, b, sw, 1) == 1;
+      break;
+    case 0x2B: {
+      const s32 c = ieee_fcmp(a, b, sw, 1);
+      r = c == 1 || c == 0;
+      break;
+    }
+    case 0x2C: // CVTQT of Vb[i]
+      r = ieee_cvtif(b, sw, DT_T);
+      break;
+    case 0x2D: // CVTTQ of Vb[i], dynamic rounding
+    case 0x2E: // ... chopped
+      r = ieee_cvtfi(b, sw);
+      break;
+    case 0x30: // CPYS
+      r = (a & FPR_SIGN) | (b & ~FPR_SIGN);
+      break;
+    case 0x31: // CPYSN
+      r = ((a & FPR_SIGN) ^ FPR_SIGN) | (b & ~FPR_SIGN);
+      break;
+    default: // 0x32 CPYSE
+      r = (a & (FPR_SIGN | FPR_EXP)) | (b & ~(FPR_SIGN | FPR_EXP));
+      break;
+    }
+    if (vc != 31)
+      v.vr[vc][i] = r;
+  }
+  m_vec_defer = false;
+  if (m_vec_trap)
+    tarantula_trap(m_vec_trap | TRAP_SWC, sw);
+}
+
+void CAlphaCPU::tarantula_trap(u64 flags, u32 ins) {
+  state.exc_sum = 0;
+  ARITH_TRAP(flags, 31);
 }

@@ -25,6 +25,9 @@ public:
   static constexpr bool m_ev8n = false;
   void ev8_go_pal(u64) {}
   u64 ev8_regs_of(u32) const { return 0; }
+  /* A Tarantula FP instruction's collected trap (ieee_trap): never here. */
+  static constexpr bool m_vec_defer = false;
+  u64 m_vec_trap = 0;
   bool opcdec = false; /* the decode refused the instruction */
 
   void set_pc(u64 p_pc) {

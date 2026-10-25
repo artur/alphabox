@@ -1041,6 +1041,12 @@ void CAlphaCPU::ieee_trap(u64 trap, u32 instenb, u64 fpcrdsb, u32 ins) {
       && !((ins & I_FTRP_S) &&
            (state.fpcr & fpcrdsb))) /* /S and disabled? ignore */
     real_trap |= trap;              // trap bit in EXC_SUM
+  // A Tarantula FP instruction (AlphaCPU_vector.cpp): each element's trap
+  // is collected, and the instruction traps once, after its last element.
+  if (real_trap && m_vec_defer) {
+    m_vec_trap |= real_trap;
+    return;
+  }
   if (real_trap) {
     /* ALPHABOX_TRACE_ARITH=<n>: the first n IEEE arithmetic traps (default
        200) with what a handler would want to know: the trigger, its
