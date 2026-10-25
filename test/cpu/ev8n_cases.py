@@ -306,6 +306,27 @@ def g_iprs(b):
     stored(b, 4, "ISUM, SIEN<15> (level 2)", 1 << 15)
     stored(b, 5, "ISUM after HW_INT_CLR (software requests stay)", 1 << 15)
     stored(b, 6, "ISUM, all cleared", 0)
+    # The indexes the cases above leave: DTBMS_RET_ADDR's second (0xA7, the
+    # one that also blocks loads and stores), IC_FLUSH_ASM, M_MODE's 101 and
+    # 110 selects, and every performance register.
+    begin(b, "IPRs: DTBMS_RET_ADDR at 0xA7, IC_FLUSH_ASM, M_MODE 0x0D/0x0E")
+    sn = Sn().e(mf(1, 0xA6), mf(2, 0xA7), opr(0x11, 0x40, 1, 2, 3),
+                mt(R31, I["ic_flush_asm"]), A.ifetchb())
+    sn.li(17, M64).e(mt(17, 0x0D), mf(4, 0x0F), mt(R31, 0x0F))
+    sn.li(17, M64).e(mt(17, 0x0E), mf(5, 0x0F), mt(R31, 0x0F), A.ifetchb())
+    call(b, sn)
+    stored(b, 3, "DTBMS_RET_ADDR 0xA6 XOR 0xA7", 0)
+    stored(b, 4, "M_MODE <- ~0 at 0x0D: ALT and CURRENT", 0xD8)
+    stored(b, 5, "M_MODE <- ~0 at 0x0E: ALT and CONSOLE", 0xE0)
+    perf = ([0xE0, 0xE1, 0xE2, 0xE3] + list(range(0xE8, 0xEE)) +
+            list(range(0xF0, 0xF8)) + [0x60, 0x61, 0x62, 0x63, 0x68, 0x6A,
+                                       0x6B, 0x6C, 0x70, 0x71])
+    begin(b, "IPRs: every performance register reads zero, a write too")
+    sn = Sn().e(bis(R31, R31, 1))
+    for k in perf:
+        sn.li(17, M64).e(mt(17, k), mf(2, k), opr(0x11, 0x20, 1, 2, 1))
+    call(b, sn)
+    stored(b, 1, "the %d performance registers ORed" % len(perf), 0)
     # HW_MFPR's destination is Rc <4:0> (N3), whatever Rclass <24:21> holds;
     # HW_MTPR's source Rb <20:16>, whatever the classes [IDS pp. 571-573].
     begin(b, "HW_MFPR Rc and HW_MTPR Rb with reader and writer classes")

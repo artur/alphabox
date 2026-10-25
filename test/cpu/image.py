@@ -21,6 +21,10 @@ EXC_ADDR after clearing SIRR, IER and ASTRR (only the JIT cases raise
 any), an IACV on the kernel-only code page in kernel mode at R17, and
 anything it cannot resume from (ITB miss, any other IACV, machine check,
 double miss, reset) ends the run through the native `fatal` path.
+
+On the native EV8 (the `ev8n` row) the image has a PALcode of the 21464's
+own interface instead, with the same services and trap record
+(build_pal8, below).
 """
 import contextlib
 import struct
