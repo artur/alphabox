@@ -31,6 +31,13 @@
  * console's code shows it (docs/platforms/marvel.md, M2): the rest hold what
  * is written to them and read back the state a configured machine would
  * have, which for the error registers is clean.
+ *
+ * In 21464 mode (CMarvel::mode_21464) the block is a 21464 chip's, shared
+ * by its TPUs: the 21464's Rbox registers at the EV7's offsets (N20, the
+ * new ones at free offsets), R_WHOAMI the chip's coordinates and R_ROUT in
+ * the IDS's layout (N19), R_INT_STAT's bits and a R_INT_MASK per TPU (N22),
+ * a queue of four IIDs (N21), the interval timer's tick per TPU, and 32-bit
+ * GIO (N23); docs/platforms/ev8-native.md, sections 2.3 to 2.5.
  **/
 #if !defined(INCLUDED_EV7CSR_H_)
 #define INCLUDED_EV7CSR_H_
@@ -48,6 +55,7 @@
 #include <mutex>
 
 class CAlphaCPU;
+class CMarvel;
 class CMarvelTopology;
 class CSystem;
 
@@ -88,11 +96,36 @@ constexpr u64 INT_IOQ = U64(1) << 12; ///< an IID waits in RBOX_INTQ
 constexpr u64 INT_SYNC = U64(1) << 23;
 /// RBOX_INTQ <24>: the IID at the head of the queue is valid.
 constexpr u64 INTQ_VALID = U64(1) << 24;
+/// RBOX_INT<9>: the management side's (GIO) interrupt on the EV7, as the
+/// console's PALcode takes it (platforms/es47/Cmm.cpp).
+constexpr u64 INT_GIO = U64(1) << 9;
+
+// 21464 mode (docs/platforms/ev8-native.md, 2.3 and 2.4, decisions N20 to
+// N22): the 21464's Rbox registers at the EV7's offsets, these beside them.
+constexpr u32 R_CFG2 = 0x0e0; ///< [decision: a free offset, N20]
+/// TPU t's R_INT_MASK at + 0x40 x t; TPU 0's is RBOX_IMASK too (N22).
+constexpr u32 R_INT_MASK_TPU = 0x3f0000;
+/// R_ROUT: 512 nodes and 20 sharing-mask entries [IDS p. 526].
+constexpr u32 R_ROUT_ENTRIES = 532;
+/// The interrupt queue's depth (N21; four [IDS p. 464] against two [p. 528]).
+constexpr size_t kIntQueue21464 = 4;
+// R_INT_STAT, 32 bits (N22): what each field is, and which of them a write
+// to R_INT_REQ may set.
+constexpr u64 INT8_IPI = 0xf;            ///< <3:0> an IPI to TPU 0-3, level 3
+constexpr u64 INT8_TIMER = 0xf0;         ///< <7:4> a tick for TPU 0-3, level 2
+constexpr u64 INT8_HALT = 0xf00;         ///< <11:8> a halt to TPU 0-3, level 4
+constexpr u64 INT8_QUEUE = U64(1) << 12; ///< an IID is queued, level 1
+constexpr u64 INT8_GIO = U64(1) << 13;   ///< GIO_INT, level 4
+constexpr u64 INT8_GIO_HIGH = U64(1) << 14;    ///< GIO_HINT, level 4
+constexpr u64 INT8_SOFTWARE = U64(0xfffc0000); ///< <31:18>, level 3
+constexpr u64 INT8_REQUESTABLE = INT8_IPI | INT8_HALT | INT8_SOFTWARE;
 } // namespace ev7csr
 
 class CEv7Csr {
 public:
-  CEv7Csr(CSystem *sys, u32 pid, GioManagement *gio);
+  /// PID `pid`'s block on `marvel`, whose mode (EV7 or 21464) and topology
+  /// it takes.
+  CEv7Csr(CSystem *sys, CMarvel *marvel, u32 pid, GioManagement *gio);
 
   u64 read(u32 off, int dsize);
   void write(u32 off, int dsize, u64 data);
@@ -107,7 +140,12 @@ public:
   void request(u64 bits);
   /// An IO7 sends this processor an interrupt identifier (Io7.hpp): it
   /// waits in RBOX_INTQ and raises RBOX_INT<12> until the PALcode takes it.
-  void post_iid(u64 iid);
+  /// False when the queue refuses it, full (21464 mode: four entries, N21);
+  /// the EV7's queue takes every one.
+  bool post_iid(u64 iid);
+  /// The management side raises its interrupt (GIO_INT): RBOX_INT<9> on the
+  /// EV7, R_INT_STAT<13> in 21464 mode.
+  void gio_interrupt();
   /// Whether an IO7 hangs on this processor's I/O port (RBOX_IO_CFG).
   void set_io7_attached(bool on);
   /// The route table as the XSROM leaves it: a route to each of the first
@@ -132,10 +170,22 @@ public:
   void set_gio_management(GioManagement *far) { m_gio.set_far(far); }
 
 private:
-  /// This processor, once the CPUs exist (nullptr before).
+  /// This processor, once the CPUs exist (nullptr before); in 21464 mode
+  /// the chip's TPU 0.
   CAlphaCPU *cpu() const;
-  /// Deliver RBOX_INT & RBOX_IMASK to the core's external interrupt lines.
+  /// 21464 mode: TPU `t` of this chip, or nullptr.
+  CAlphaCPU *tpu_cpu(int t) const;
+  /// Deliver RBOX_INT & RBOX_IMASK to the core's external interrupt lines;
+  /// in 21464 mode R_INT_STAT & R_INT_MASK[t] to each TPU's (N22).
   void update_irq();
+  void update_irq_21464();
+  /// With m_lock held: the IID queued, or false when the queue is full.
+  bool queue_iid(u64 iid);
+  /// With m_lock held: a write to a 21464 interrupt register; false for
+  /// one the EV7's code serves alike.
+  bool write_21464(u32 off, int dsize, u64 data);
+  /// 21464 mode: the register at `off` is TPU `*t`'s R_INT_MASK.
+  static bool int_mask_tpu(u32 off, int *t);
   void note_pending(u64 pending);
   /// RBOX_SCRATCH1 written: the XSROM's wait for a start address, served
   /// for a processor that is still parked.
@@ -152,8 +202,15 @@ private:
   bool m_mp_seen_valid[32] = {};
 
   CSystem *m_sys;
+  CMarvel *m_marvel;
   u32 m_pid;
+  /// 21464 mode (CMarvel::mode_21464), and the TPUs sharing this block.
+  bool m_21464 = false;
+  int m_tpus = 1;
+  int m_lines8[4] = {};   ///< 21464 mode: the levels each TPU has asserted
+  u64 m_iids_refused = 0; ///< 21464 mode: IIDs a full queue refused
   mutable std::atomic<CAlphaCPU *> m_cpu{nullptr}; ///< cpu(), once found
+  mutable std::atomic<CAlphaCPU *> m_tpu_cpu[4] = {}; ///< tpu_cpu()
   std::mutex m_lock;
   /// RBOX_SCRATCH1's start hand-off between processors (StartHandoff.hpp).
   CStartHandoff m_handoff;

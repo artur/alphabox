@@ -406,10 +406,12 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
   m_ev8n = m_model->family == CPU_FAMILY_EV8;
   // A board takes processors of one core family: an EV7 has its memory
   // controller and router on chip and no Tsunami can drive one, and an EV68
-  // has neither of those for a Marvel console to find.
+  // has neither of those for a Marvel console to find. The Marvel boards
+  // also take the native 21464, in 21464 mode (Platform.hpp
+  // other_cpu_model).
   {
     const cpu_model *board = find_cpu_model(system->platform().cpu_model);
-    if (board && board->family != m_model->family) {
+    if (board && !platform_takes(system->platform(), *m_model)) {
       if (!cpu_any_board())
         FAILURE_2(Configuration, "the %s takes %s processors",
                   system->platform().description, board->part);

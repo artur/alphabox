@@ -84,6 +84,24 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   CMarvel *marvel = marvel_of(sys);
   if (!marvel)
     FAILURE(Configuration, "a Marvel board needs the Marvel chipset");
+  // 21464 mode (docs/platforms/ev8-native.md, section 2): the EV7 console
+  // cannot drive a 21464, and the 21464's own console is to come (S12), so
+  // the machine starts from a boot image, loaded as a decompressed console
+  // is (rom.decompressed: entry, PAL_BASE, the image, the tag), whose
+  // PALcode every TPU enters at PAL_BASE + 0xB00 (N17). Without one the
+  // console image would be decompressed and run on the 21464: refused.
+  if (marvel->mode_21464()) {
+    const char *image = cfg->get_text_value("rom.decompressed", (char *)0);
+    FILE *f = image ? fopen(image, "rb") : nullptr;
+    if (!f)
+      FAILURE_1(Configuration,
+                "the %s in 21464 mode (ev8n processors) starts from a boot "
+                "image, rom.decompressed, which it cannot read: the EV7 "
+                "console cannot drive a 21464, and the 21464's own console "
+                "does not exist yet",
+                sys->platform().description);
+    fclose(f);
+  }
   // The CMM's clock starts at the host's local time, as the ES40's RTC does:
   // the system block's `time` or `timezone` (ToySeed.hpp).
   const long toy_offset = toy_seed_offset(
@@ -155,14 +173,15 @@ int marvel_pci_interrupt(int hose, int slot, int intx, int func) {
 /// the same two fields, and a configuration check has no chipset.
 const char *marvel_slot_refusal(const platform_config &board, int hose,
                                 int slot) {
-  // With TPUs, the configured chips decide where their numbers go.
+  // With TPUs, the configured chips decide where their numbers go; in
+  // 21464 mode the PIDs are dense (N19), so are the hoses.
   CMarvelTopology topology;
   const int tpus = CConfigurator::machine_tpus();
   topology.build(board.marvel,
                  tpus > 1
                      ? std::min(CConfigurator::machine_chips(), board.max_cpus)
                      : board.max_cpus,
-                 tpus);
+                 tpus, CConfigurator::machine_21464_mode());
   const u32 pid = (u32)hose / 4;
   if (hose < 0 || !topology.by_pid(pid, topology.count()) ||
       !topology.has_io7(pid))

@@ -67,6 +67,7 @@
 #include "CpuModel.hpp"
 #include "Ev7.hpp"
 #include "Ev7Csr.hpp"
+#include "Marvel.hpp"
 #include "System.hpp"
 #include "Topology.hpp"
 
@@ -238,25 +239,89 @@ const named_reg kMoreRegs[] = {
     {0x28040, "(unnamed 28040)"},
 };
 
-bool is_route(u32 off) {
-  return off >= RBOX_ROUTE && off < RBOX_ROUTE + RBOX_ROUTE_ENTRIES * 0x10 &&
+/**
+ * 21464 mode (docs/platforms/ev8-native.md, 2.3, N20): the 21464's Rbox
+ * registers the EV7 has no place for, at free offsets of their blocks
+ * [decision]: R_CFG2 beside the Rbox's own, each port's CFG2 after its
+ * T2CFG, the I/O port's CFG2 and T2CFG after its BUFSIZ (the EV7's
+ * RBOX_IO_BUF). The ports' R_n_T2CFG is the EV7's RBOX_n_T2CFG, at + 0x40.
+ * Each TPU's R_INT_MASK at R_INT_MASK_TPU + 0x40 x TPU (N22) is not in the
+ * table: TPU 0's is RBOX_IMASK, the others' are made at reset.
+ */
+const named_reg kRegs21464[] = {
+    {R_CFG2, "R_CFG2"},       {0x004050, "R_N_CFG2"}, {0x006050, "R_S_CFG2"},
+    {0x008050, "R_E_CFG2"},   {0x00a050, "R_W_CFG2"}, {0x00c050, "R_IO_CFG2"},
+    {0x00c060, "R_IO_T2CFG"},
+};
+
+u32 route_entries(bool m21464) {
+  return m21464 ? R_ROUT_ENTRIES : RBOX_ROUTE_ENTRIES;
+}
+
+bool is_route(u32 off, bool m21464) {
+  return off >= RBOX_ROUTE && off < RBOX_ROUTE + route_entries(m21464) * 0x10 &&
          !(off & 0xf);
 }
 
-const char *reg_name(u32 off) {
-  if (is_route(off))
-    return "RBOX_ROUTE";
+/// The name of the register at `off`, in the EV7's block or (`m21464`) in
+/// the 21464 mode's.
+const char *reg_name(u32 off, bool m21464) {
+  if (is_route(off, m21464))
+    return m21464 ? "R_ROUT" : "RBOX_ROUTE";
   for (const named_reg &r : kRegs)
     if (r.off == off)
       return r.name;
   for (const named_reg &r : kMoreRegs)
     if (r.off == off)
       return r.name;
+  if (m21464) {
+    for (const named_reg &r : kRegs21464)
+      if (r.off == off)
+        return r.name;
+    static const char *const masks[] = {"R_INT_MASK0", "R_INT_MASK1",
+                                        "R_INT_MASK2", "R_INT_MASK3"};
+    if (off >= R_INT_MASK_TPU && off < R_INT_MASK_TPU + 4 * 0x40 &&
+        !(off & 0x3f))
+      return masks[(off - R_INT_MASK_TPU) / 0x40];
+    return nullptr;
+  }
   switch (off) {
   case GIO_LOCK:
     return "GIO lock";
   }
   return nullptr;
+}
+
+/**
+ * The level an R_INT_STAT bit drives in 21464 mode (N22, after the six
+ * levels of [IDS p. 465]: 0 correctable or performance, 1 the interrupt
+ * queue, 2 the interval timer, 3 interprocessor or software, 4 halt or
+ * other, 5 uncorrectable): -1 for a bit past the register's 32.
+ */
+int int_level_21464(int bit) {
+  if (bit < 4)
+    return 3; // IPI to TPU 0-3
+  if (bit < 8)
+    return 2; // interval timer tick for TPU 0-3
+  if (bit < 12)
+    return 4; // halt to TPU 0-3
+  if (bit == 12)
+    return 1; // the interrupt queue
+  if (bit == 13 || bit == 14)
+    return 4; // GIO_INT, GIO_HINT
+  if (bit == 15 || bit == 16)
+    return 0; // performance counter, correctable error
+  if (bit == 17)
+    return 5;               // uncorrectable error
+  return bit < 32 ? 3 : -1; // software use
+}
+
+u64 level_mask_21464(int level) {
+  u64 m = 0;
+  for (int b = 0; b < 32; b++)
+    if (int_level_21464(b) == level)
+      m |= U64(1) << b;
+  return m;
 }
 
 /// Which external interrupt line an RBOX_INT bit drives (-1: none).
@@ -291,7 +356,7 @@ bool trace_csr_on() {
   return on;
 }
 
-void trace_csr(u32 pid, u32 off, bool write, u64 v) {
+void trace_csr(u32 pid, u32 off, bool write, u64 v, bool m21464) {
   static std::mutex m;
   static std::map<u64, u64> seen;
   const u64 pc = t_running_cpu ? t_running_cpu->get_pc() : 0;
@@ -305,7 +370,7 @@ void trace_csr(u32 pid, u32 off, bool write, u64 v) {
   }
   if (n > 3 && (n & (n - 1)))
     return;
-  const char *name = reg_name(off);
+  const char *name = reg_name(off, m21464);
   char nm[32];
   if (!name) {
     snprintf(nm, sizeof(nm), "+%05x", off);
@@ -336,7 +401,7 @@ void CEv7Csr::trace_mp(const char *what, u32 off, u64 v) {
     snprintf(by, sizeof(by), "cpu%d pc %" PRIx64, t_running_cpu->get_cpuid(),
              t_running_cpu->get_pc());
   printf("%%MVL-T-MP: %10lld us %s PID %u %s %s %016" PRIx64, mp_us(), by,
-         m_pid, reg_name(off), what, v);
+         m_pid, reg_name(off, m_21464), what, v);
   if (self && self != t_running_cpu)
     printf(" (PID %u %s pc %" PRIx64 " icount %" PRIu64 ")", m_pid,
            self->get_waiting() ? "parked" : "running", self->get_pc(),
@@ -344,8 +409,11 @@ void CEv7Csr::trace_mp(const char *what, u32 off, u64 v) {
   printf("\n");
 }
 
-CEv7Csr::CEv7Csr(CSystem *sys, u32 pid, GioManagement *gio)
-    : m_sys(sys), m_pid(pid), m_gio(pid, gio) {
+CEv7Csr::CEv7Csr(CSystem *sys, CMarvel *marvel, u32 pid, GioManagement *gio)
+    : m_sys(sys), m_marvel(marvel), m_pid(pid), m_gio(pid, gio) {
+  m_21464 = marvel->mode_21464();
+  m_tpus = marvel->tpus_per_block();
+  m_gio.set_21464(m_21464);
   reset();
 }
 
@@ -358,6 +426,31 @@ CAlphaCPU *CEv7Csr::cpu() const {
       return m_sys->get_cpu(i);
     }
   return nullptr;
+}
+
+/// A chip's TPUs are the processors numbered PID x TPUs + t (dense PIDs,
+/// N19: the topology lays them out chip by chip).
+CAlphaCPU *CEv7Csr::tpu_cpu(int t) const {
+  if (t < 0 || t >= m_tpus)
+    return nullptr;
+  if (CAlphaCPU *c = m_tpu_cpu[t].load(std::memory_order_acquire))
+    return c;
+  const int i = (int)m_pid * m_tpus + t;
+  if (i >= m_sys->get_cpu_num() || m_sys->get_cpu(i)->get_pid() != m_pid)
+    return nullptr;
+  m_tpu_cpu[t].store(m_sys->get_cpu(i), std::memory_order_release);
+  return m_sys->get_cpu(i);
+}
+
+bool CEv7Csr::int_mask_tpu(u32 off, int *t) {
+  if (off == RBOX_IMASK) {
+    *t = 0;
+    return true;
+  }
+  if (off < R_INT_MASK_TPU || off >= R_INT_MASK_TPU + 4 * 0x40 || (off & 0x3f))
+    return false;
+  *t = (int)((off - R_INT_MASK_TPU) / 0x40);
+  return true;
 }
 
 /**
@@ -373,11 +466,25 @@ void CEv7Csr::reset() {
     m_regs[r.off] = 0;
   for (const named_reg &r : kMoreRegs)
     m_regs[r.off] = 0;
-  for (u32 n = 0; n < RBOX_ROUTE_ENTRIES; n++)
+  for (u32 n = 0; n < route_entries(m_21464); n++)
     m_regs[RBOX_ROUTE + n * 0x10] = 0; // load_routes fills them
   // RBOX_WHOAMI: the PID [guess: the field's position is not known; the
   // console takes its PID from r28 and has not been seen to read this].
   m_regs[RBOX_WHOAMI] = m_pid;
+  if (m_21464) {
+    // The 21464's own registers, and R_WHOAMI as the IDS gives it: the
+    // chip's coordinates, EW <9:5> and NS <4:0> [IDS p. 527; N19].
+    for (const named_reg &r : kRegs21464)
+      m_regs[r.off] = 0;
+    for (u32 t = 1; t < 4; t++)
+      m_regs[R_INT_MASK_TPU + t * 0x40] = 0;
+    const CMarvelTopology &topo = m_marvel->topology();
+    if (const ev7_node *n = topo.by_pid(m_pid, topo.count()))
+      m_regs[RBOX_WHOAMI] = CMarvelTopology::whoami21464(n->ns, n->ew);
+    for (int &l : m_lines8)
+      l = 0;
+    m_iids_refused = 0;
+  }
   // RBOX_IO_CFG: <0> and <2> say an IO7 is on the I/O port. The console's
   // PALcode tests exactly those two (its interval-timer path, 0x3941c,
   // before it touches the IO7's POx_RST registers), and with them clear the
@@ -409,6 +516,17 @@ u64 CEv7Csr::reg(u32 off) const {
 u64 CEv7Csr::read(u32 off, int dsize) {
   std::unique_lock<std::mutex> lk(m_lock);
   u64 v;
+  if (m_21464) {
+    // TPU 0's R_INT_MASK at both of its offsets (N22); the EV7 console's
+    // GIO lock is not there: our PALcode's is a word in memory (2.5).
+    if (off == R_INT_MASK_TPU)
+      off = RBOX_IMASK;
+    if (off == GIO_LOCK) {
+      m_sys->trace_unknown("EV7 CSR", m_marvel->map().csr_base(m_pid) | off,
+                           dsize, false, 0, nullptr);
+      return 0;
+    }
+  }
   switch (off) {
   case RBOX_SCRATCH1:
     v = read_scratch(lk);
@@ -438,8 +556,8 @@ u64 CEv7Csr::read(u32 off, int dsize) {
   default: {
     auto it = m_regs.find(off);
     if (it == m_regs.end()) {
-      m_sys->trace_unknown("EV7 CSR", ev7::kEv7Map.csr_base(m_pid) | off, dsize,
-                           false, 0, nullptr);
+      m_sys->trace_unknown("EV7 CSR", m_marvel->map().csr_base(m_pid) | off,
+                           dsize, false, 0, nullptr);
       return 0;
     }
     v = it->second;
@@ -448,14 +566,37 @@ u64 CEv7Csr::read(u32 off, int dsize) {
   if (dsize == 32)
     v &= 0xffffffff;
   if (trace_csr_on())
-    trace_csr(m_pid, off, false, v);
+    trace_csr(m_pid, off, false, v, m_21464);
   return v;
 }
 
 void CEv7Csr::write(u32 off, int dsize, u64 data) {
+  if (m_21464 && off == RBOX_INTQ) {
+    // R_INT_QUE: a write removes the head [IDS p. 528], and an IO7 whose
+    // IID the full queue refused sends it again (N21), outside this lock:
+    // the IO7 posts with its own held.
+    bool room;
+    {
+      std::lock_guard<std::mutex> g(m_lock);
+      if (trace_csr_on())
+        trace_csr(m_pid, off, true, data, m_21464);
+      m_regs[RBOX_INTQ] = data;
+      room = !m_intq.empty();
+      if (room)
+        m_intq.pop_front();
+      if (m_intq.empty())
+        m_regs[RBOX_INT] &= ~INT8_QUEUE;
+      update_irq();
+    }
+    if (room)
+      m_marvel->resend_iids();
+    return;
+  }
   std::lock_guard<std::mutex> g(m_lock);
-  if (trace_csr_on() && (reg_name(off) || off == 0x28020))
-    trace_csr(m_pid, off, true, data);
+  if (trace_csr_on() && (reg_name(off, m_21464) || off == 0x28020))
+    trace_csr(m_pid, off, true, data, m_21464);
+  if (m_21464 && write_21464(off, dsize, data))
+    return;
   switch (off) {
   case GIO_CFG:
     m_gio.write_cfg(data);
@@ -525,8 +666,8 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
   }
   auto it = m_regs.find(off);
   if (it == m_regs.end()) {
-    m_sys->trace_unknown("EV7 CSR", ev7::kEv7Map.csr_base(m_pid) | off, dsize,
-                         true, data, nullptr);
+    m_sys->trace_unknown("EV7 CSR", m_marvel->map().csr_base(m_pid) | off,
+                         dsize, true, data, nullptr);
     return;
   }
   it->second =
@@ -535,12 +676,86 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
           : data;
 }
 
-void CEv7Csr::post_iid(u64 iid) {
-  std::lock_guard<std::mutex> g(m_lock);
-  m_intq.push_back(iid & (INTQ_VALID - 1));
-  m_regs[RBOX_INT] |= INT_IOQ;
-  update_irq();
+/**
+ * 21464 mode (docs/platforms/ev8-native.md, 2.4, N21 and N22): the
+ * interrupt registers. With m_lock held; false for a register the EV7's
+ * code serves alike (GIO, R_WHOAMI, the scratch registers, the timer, the
+ * stored ones).
+ *
+ *   R_INT_STAT (0x050)  32 bits, written with ones to clear; <12> clears
+ *                       only as the queue empties.
+ *   R_INT_MASK[t]       TPU 0's at 0x060 and 0x3F0000, TPU t's at 0x3F0000
+ *                       + 0x40 x t: 32 bits.
+ *   R_INT_REQ (0x070)   sets its bits in R_INT_STAT: the IPIs <3:0>, the
+ *                       halts <11:8> and the software bits <31:18>, the
+ *                       fields N22 has R_INT_REQ set [inference: its table
+ *                       names no other source for them]; reads back what
+ *                       was last written, as the EV7's.
+ *   R_INT_QUEADD (0x090) an IID into the queue; a full queue refuses it
+ *                       (WrIONack [IDS p. 528]), which a processor's store
+ *                       cannot see: dropped and counted [decision].
+ */
+bool CEv7Csr::write_21464(u32 off, int dsize, u64 data) {
+  (void)dsize;
+  if (off == R_INT_MASK_TPU)
+    off = RBOX_IMASK;
+  int t;
+  if (int_mask_tpu(off, &t)) {
+    m_regs[off] = data & 0xffffffff;
+    update_irq();
+    return true;
+  }
+  switch (off) {
+  case GIO_LOCK:
+    m_sys->trace_unknown("EV7 CSR", m_marvel->map().csr_base(m_pid) | off,
+                         dsize, true, data, nullptr);
+    return true;
+  case RBOX_INT:
+    m_regs[RBOX_INT] &= ~(data & 0xffffffff & ~INT8_QUEUE);
+    update_irq();
+    return true;
+  case RBOX_IREQ:
+    if (CSystem::trace_mp_on())
+      trace_mp("write =", off, data);
+    m_regs[RBOX_IREQ] = data;
+    m_regs[RBOX_INT] |= data & INT8_REQUESTABLE;
+    update_irq();
+    return true;
+  case RBOX_INTA:
+    m_regs[RBOX_INTA] = data;
+    if (!queue_iid(data)) {
+      ++m_iids_refused;
+      if (trace_csr_on() || CSystem::trace_mp_on())
+        printf("%%MVL-T-CSR: pid %u R_INT_QUEADD %06" PRIx64
+               " refused: the queue is full (%" PRIu64 " refused)\n",
+               m_pid, data & (INTQ_VALID - 1), m_iids_refused);
+    }
+    update_irq();
+    return true;
+  }
+  return false;
 }
+
+/// With m_lock held.
+bool CEv7Csr::queue_iid(u64 iid) {
+  if (m_21464 && m_intq.size() >= kIntQueue21464)
+    return false;
+  m_intq.push_back(iid & (INTQ_VALID - 1));
+  m_regs[RBOX_INT] |= m_21464 ? INT8_QUEUE : INT_IOQ;
+  return true;
+}
+
+bool CEv7Csr::post_iid(u64 iid) {
+  std::lock_guard<std::mutex> g(m_lock);
+  if (!queue_iid(iid)) {
+    ++m_iids_refused;
+    return false;
+  }
+  update_irq();
+  return true;
+}
+
+void CEv7Csr::gio_interrupt() { request(m_21464 ? INT8_GIO : INT_GIO); }
 
 void CEv7Csr::set_io7_attached(bool on) {
   std::lock_guard<std::mutex> g(m_lock);
@@ -557,6 +772,14 @@ void CEv7Csr::set_io7_attached(bool on) {
  */
 void CEv7Csr::load_routes(const CMarvelTopology &topology, int present) {
   std::lock_guard<std::mutex> g(m_lock);
+  // 21464 mode: R_ROUT, entry n the route to PID n of the 512, in the IDS's
+  // layout (N19, Topology.cpp route21464); the 20 sharing-mask entries 0.
+  if (m_21464) {
+    for (u32 n = 0; n < R_ROUT_ENTRIES; n++)
+      m_regs[RBOX_ROUTE + n * 0x10] =
+          n < 512 ? topology.route21464(m_pid, n, present) : 0;
+    return;
+  }
   for (u32 n = 0; n < RBOX_ROUTE_ENTRIES; n++)
     m_regs[RBOX_ROUTE + n * 0x10] =
         n < 0x100 ? topology.route(m_pid, n, present) : 0;
@@ -624,7 +847,11 @@ void CEv7Csr::check_pending(int ms) {
  * RBOX_IT is zero takes no tick, with the missed-tick count left as written.
  */
 u64 CEv7Csr::interval_period_ns(u64 cpu_hz) const {
-  const u64 n = m_it.load(std::memory_order_relaxed) & 0x3fffff;
+  // 21464 mode: R_INTER_TIM's ITV <7:0> [IDS p. 528], the same period for
+  // its value (2.4, N22) [inference]; zero is off, as on the EV7
+  // [inference].
+  const u64 n = m_it.load(std::memory_order_relaxed) &
+                (m_21464 ? U64(0xff) : U64(0x3fffff));
   if (!n || !cpu_hz)
     return 0;
   return (n + 1) * (U64(1) << 17) * 1000000000 / cpu_hz;
@@ -632,6 +859,18 @@ u64 CEv7Csr::interval_period_ns(u64 cpu_hz) const {
 
 void CEv7Csr::interval_tick() {
   std::lock_guard<std::mutex> g(m_lock);
+  // 21464 mode: one timer per chip, a tick for each TPU in R_INT_STAT<7:4>
+  // (N22), which each TPU clears.
+  if (m_21464) {
+    if (!(reg(RBOX_IT) & 0xff))
+      return;
+    ++m_ticks;
+    if (m_regs[RBOX_INT] & INT8_TIMER)
+      ++m_ticks_merged;
+    m_regs[RBOX_INT] |= INT8_TIMER;
+    update_irq();
+    return;
+  }
   if (!reg(RBOX_IT))
     return;
   ++m_ticks;
@@ -649,6 +888,10 @@ void CEv7Csr::tick_stats() {
 }
 
 void CEv7Csr::update_irq() {
+  if (m_21464) {
+    update_irq_21464();
+    return;
+  }
   CAlphaCPU *c = cpu();
   if (!c)
     return;
@@ -663,6 +906,36 @@ void CEv7Csr::update_irq() {
   for (int l = 0; l < 6; l++)
     if (changed & (1 << l))
       c->irq_h(l, (lines >> l) & 1, 0);
+}
+
+/**
+ * 21464 mode (N22): TPU t's level L is asserted while a bit of level L is
+ * set in R_INT_STAT & R_INT_MASK[t]; its six lines go into its own
+ * ISUM<EI>, which its own IER_CM<EIEN> gates (the `ev8n` row's IPRs, N7).
+ * So an IPI to TPU t (R_INT_STAT<t>) reaches whichever TPUs' masks enable
+ * that bit, and only them.
+ */
+void CEv7Csr::update_irq_21464() {
+  const u64 stat = reg(RBOX_INT) & 0xffffffff;
+  u64 any = 0;
+  for (int t = 0; t < m_tpus && t < 4; t++) {
+    const u64 pending =
+        stat & reg(t ? R_INT_MASK_TPU + (u32)t * 0x40 : RBOX_IMASK);
+    any |= pending;
+    CAlphaCPU *c = tpu_cpu(t);
+    if (!c)
+      continue;
+    int lines = 0;
+    for (int l = 0; l < 6; l++)
+      if (pending & level_mask_21464(l))
+        lines |= 1 << l;
+    const int changed = lines ^ m_lines8[t];
+    m_lines8[t] = lines;
+    for (int l = 0; l < 6; l++)
+      if (changed & (1 << l))
+        c->irq_h(l, (lines >> l) & 1, 0);
+  }
+  note_pending(any);
 }
 
 /**
@@ -829,6 +1102,8 @@ bool CEv7Csr::restore_state(FILE *f) {
   m_sync_waiting = !(reg(RBOX_INT) & INT_SYNC);
   m_sync_held = false;
   m_lines = 0;
+  for (int &l : m_lines8)
+    l = 0;
   update_irq();
   return true;
 }

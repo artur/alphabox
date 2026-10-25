@@ -64,6 +64,14 @@
  * 0x4_0003_0001) through that processor's RBOX_SCRATCH, which the
  * emulator's Rbox serves (chipsets/marvel/Ev7Csr.cpp). They enter the
  * PALcode directly, with r19 still the XSROM's.
+ *
+ * A machine in 21464 mode (`ev8n` processors, docs/platforms/
+ * ev8-native.md, section 2) has no XSROM hand-off: the EV7's console cannot
+ * drive a 21464, so the machine starts from a boot image, and every TPU of
+ * every chip takes the 21464's own reset there (CAlphaCPU::ev8_reset, N17):
+ * PAL_BASE the image's, the PC at its PAL_BASE + 0xB00 in PALmode, its
+ * TPU_CNFG<TPU_ID>, CPU_BASE its chip's dense PID (N6, N19) and the IPRs'
+ * reset values; nothing waits on RBOX_SCRATCH1 (CMarvel::console_started).
  **/
 #include "StdAfx.hpp"
 

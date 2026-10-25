@@ -71,9 +71,6 @@ constexpr u64 ST_RXREADY = 0x100; ///< read: a character waits in R_RX
 // into SCB vectors 0x6c0, 0x6d0, 0x700 and 0x710.
 constexpr u64 rx_bit(u32 n) { return n ? 0x40 : 0x01; }
 constexpr u64 tx_bit(u32 n) { return n ? 0x80 : 0x02; }
-/// RBOX_INT<9>: the CMM's interrupt (EI0; the PALcode's handler tests it
-/// at 0x392b0 and clears it when done).
-constexpr u64 RBOX_INT_GIO = U64(1) << 9;
 
 // --- The CMM's memory, per processor (n = place on the module) -------------
 // Offsets from area(n) = 0x40000 + n * 0x6000, as the console computes them.
@@ -175,6 +172,9 @@ CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset,
   const CMarvelTopology &t = mv->topology();
   for (int i = 0; i < t.count(); i++) {
     const u32 pid = t.node(i).pid;
+    // One port per PID: a 21464 chip's TPUs share theirs (21464 mode).
+    if (t.by_pid(pid, t.count()) != &t.node(i))
+      continue;
     Module &m = m_modules[CMarvelTopology::module_key(pid)];
     if (m.mem.empty()) {
       m.mem.assign(kMemSize, 0);
@@ -452,7 +452,7 @@ void CEs47Cmm::tick() {
   CMarvel *mv = marvel();
   for (u32 pid : raise)
     if (CEv7Csr *c = mv ? mv->csr(pid) : nullptr)
-      c->request(RBOX_INT_GIO);
+      c->gio_interrupt(); // RBOX_INT<9> (EI0), R_INT_STAT<13> in 21464 mode
 }
 
 /// A byte-window access (read_dma/write_dma): R_ADDRESS names a CMM byte,
@@ -810,7 +810,7 @@ void CEs47Cmm::memory_assignment(u8 *a) {
   g[1] = (u8)owners.size();
   u8 *chunk = g + 4;
   for (u32 pid : owners) {
-    const u64 base = ev7::kEv7Map.memory_base(pid);
+    const u64 base = mv->map().memory_base(pid);
     put32(chunk, (u32)base);
     put32(chunk + 4, (u32)(base >> 32));
     put32(chunk + 8, (u32)each);

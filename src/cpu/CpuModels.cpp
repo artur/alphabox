@@ -105,9 +105,9 @@ static const cpu_model models[] = {
     // our console, and 18 is the next free value [decision D3; ARM pp.
     // 805-807]. Chip ID 0: CPU_CNFG<CHIP_ID> has no value [IDS p. 487], and
     // nothing reads it but our PALcode [decision N16]. The caches are the
-    // `ev8` row's [IDS pp. 42-43]. No board takes it yet (the Marvel model
-    // in 21464 mode is S11b); the CPU oracle runs it on the ES40 through
-    // ALPHABOX_CPU_ANY_BOARD.
+    // `ev8` row's [IDS pp. 42-43]. The ES47, ES80 and GS1280 take it, in
+    // 21464 mode (S11b, their rows' other_cpu_model); the CPU oracle runs it
+    // on the ES40 through ALPHABOX_CPU_ANY_BOARD.
     {"ev8n", "21464 (EV8), native interface", 0, 18, 0, 4,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
          AMASK_PREFETCH,

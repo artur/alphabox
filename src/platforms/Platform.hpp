@@ -219,10 +219,22 @@ struct platform_config {
   /// A Tsunami-family board's chip revisions; nullptr means the defaults
   /// the ES40 reported before the rows existed (Typhoon, PMONCTL 0).
   const tsunami_revisions *tsunami = nullptr;
+
+  /// A processor class of another core family the board also takes, which
+  /// puts the machine in that family's mode, or nullptr: the Marvel boards
+  /// take the 21464 on its own interface (`ev8n`) in 21464 mode
+  /// (docs/platforms/ev8-native.md, section 2). Every processor of a
+  /// machine is of one family.
+  const char *other_cpu_model = nullptr;
 };
 
 /// The board named `name`, or nullptr.
 const platform_config *find_platform(const char *name);
+
+struct cpu_model;
+/// Whether `board` takes processors of `cpu`'s core family: its own
+/// processor's (cpu_model), or its other_cpu_model's.
+bool platform_takes(const platform_config &board, const cpu_model &cpu);
 
 /// The boards, in the order of their table: the `i`th, or nullptr past the
 /// last.

@@ -85,9 +85,13 @@ static int s_check_cpus = 0;     ///< processor chips in the machine section
 static int s_check_tpus = 1;     ///< TPUs per chip (processor_tpus)
 static int s_check_chips = 0;    ///< processor chips (processor_tpus)
 static const platform_config *s_check_platform = nullptr;
+/// The core family of the machine's processors (processor_tpus), checked or
+/// built; -1 until its machine section has been read.
+static int s_machine_family = -1;
 
 void CConfigurator::set_check_mode(bool on) {
   s_check = on;
+  s_machine_family = -1;
   s_check_errors = 0;
   s_check_warnings = 0;
   s_check_gui = false;
@@ -109,6 +113,14 @@ int CConfigurator::machine_chips() {
   return theSystem ? theSystem->processor_chips() : 0;
 }
 
+int CConfigurator::machine_family() { return s_machine_family; }
+
+bool CConfigurator::machine_21464_mode() {
+  // Only the Marvel boards ask: a native EV8 elsewhere runs through the
+  // test hook, on the board's own chipset.
+  return s_machine_family == CPU_FAMILY_EV8;
+}
+
 /**
  * The 21464's TPUs (docs/platforms/ev8.md, S4). Each processor section is a
  * chip. An EV8 is one processor by default, as the EV7 console would see a
@@ -128,16 +140,34 @@ int CConfigurator::processor_tpus(int *chips_out) {
   const bool lists_tpus = board && board->chipset == CHIPSET_MARVEL;
   int chips = 0, tpus = 0;
   const char *first = nullptr;
+  int family = -1;
+  const char *first_family = nullptr;
   for (CConfigurator *c : pChildren) {
     const cpu_model *m = find_cpu_model(c->myValue);
     if (!m)
       continue;
     chips++;
+    // One family per machine: the Marvel boards take EV7 rows or the native
+    // EV8, and the family decides the machine's mode (21464 mode,
+    // docs/platforms/ev8-native.md, section 2). On a board of one family
+    // each processor is refused by its own check (the processor's class);
+    // the test hook that lets any row onto any board keeps what it allowed.
+    if (family >= 0 && m->family != family && board && board->other_cpu_model &&
+        !cpu_any_board())
+      FAILURE_2(Configuration,
+                "%s and %s are processors of different families: a "
+                "machine's processors are all of one (the family decides "
+                "the machine's mode)",
+                first_family, c->myName);
+    if (family < 0) {
+      family = m->family;
+      first_family = c->myName;
+    }
     int t = 1;
     // The native EV8 (ev8-native.md, N16) is the chip as designed: four
-    // TPUs, each a processor, on whatever board runs it (none yet but
-    // through the test hook); the EV7-compatible row lists its TPUs to the
-    // Marvel console only, and has one by default.
+    // TPUs, each a processor, on whatever board runs it (the Marvel boards
+    // in 21464 mode, others through the test hook); the EV7-compatible row
+    // lists its TPUs to the Marvel console only, and has one by default.
     const bool native = m->family == CPU_FAMILY_EV8;
     if (m->max_tpus > 1) {
       const u64 n = c->get_num_value("tpus", false, native ? m->max_tpus : 1);
@@ -163,6 +193,10 @@ int CConfigurator::processor_tpus(int *chips_out) {
   }
   if (!tpus)
     tpus = 1;
+  s_machine_family = family;
+  // A Marvel board of native EV8s is in 21464 mode: its PIDs are dense (the
+  // chips in order, N19), so a TPU's number is not in its PID.
+  const bool dense = lists_tpus && family == CPU_FAMILY_EV8;
   // Off the Marvel boards every TPU is one of the board's processors, and
   // the board's registers have one set each (the Tsunami's interrupt and
   // IPI masks, up to four): native EV8 chips there count TPUs against it.
@@ -175,7 +209,7 @@ int CConfigurator::processor_tpus(int *chips_out) {
   // chip's PID uses (CMarvelTopology::tpu_shift); a machine whose chips use
   // every pair has no numbers for them. Past the board's chip count the
   // processor count is refused below, or by the board's own limit.
-  if (tpus > 1 && board && lists_tpus && chips <= board->max_cpus &&
+  if (tpus > 1 && board && lists_tpus && !dense && chips <= board->max_cpus &&
       CMarvelTopology::tpu_shift(board->marvel, chips) < 0)
     FAILURE_2(Configuration,
               "%d chips of %d TPUs: their PIDs leave no pair of bits free, "
@@ -183,6 +217,9 @@ int CConfigurator::processor_tpus(int *chips_out) {
               "in such a pair (docs/platforms/ev8.md, S4). Configure fewer "
               "chips",
               chips, tpus);
+  // In 21464 mode the processor numbers are PID x 4 + TPU (N25), dense up
+  // to the same limit: an ES80's eight chips of four TPUs are 32, a GS1280
+  // of more than eight chips needs tpus below 4.
   if (chips * tpus > CSystem::kMaxCPUs)
     FAILURE_4(Configuration,
               "%d processor chips of %d TPUs each are %d processors, and "
@@ -1322,7 +1359,7 @@ void CConfigurator::check_device() {
     // As CAlphaCPU's constructor and CSystem::RegisterCPU.
     const cpu_model *cpu = find_cpu_model(myValue);
     const cpu_model *takes = find_cpu_model(board().cpu_model);
-    if (cpu && takes && takes->family != cpu->family) {
+    if (cpu && takes && !platform_takes(board(), *cpu)) {
       if (!cpu_any_board())
         FAILURE_2(Configuration, "the %s takes %s processors",
                   board().description, takes->part);

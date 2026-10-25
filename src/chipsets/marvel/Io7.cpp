@@ -244,6 +244,7 @@ void CIo7::reset() {
   for (u32 i = 0; i < kLsis; i++) {
     m_level[i] = false;
     m_in_service[i] = false;
+    m_refused[i] = false;
   }
   // Every slot powered and on its bus, as the XSROM leaves them: the
   // console powers the hot-plug slots of hoses 0 and 1 off and on again
@@ -268,7 +269,7 @@ void CIo7::set_reg(u32 port, u32 off, int dsize, u64 data) {
 }
 
 u64 CIo7::read(u32 port, u32 off, int dsize, CSystemComponent *source) {
-  const u64 a = ev7::kEv7Map.io7_base(m_pid, port) | off;
+  const u64 a = m_marvel->map().io7_base(m_pid, port) | off;
   if (port < kPorts && off < kCsrOff) {
     // PCI space nothing answers: a configuration or I/O read master-aborts
     // and reads as all ones; memory reads as zero, as on the Tsunami.
@@ -300,7 +301,7 @@ u64 CIo7::read(u32 port, u32 off, int dsize, CSystemComponent *source) {
 
 void CIo7::write(u32 port, u32 off, int dsize, u64 data,
                  CSystemComponent *source) {
-  const u64 a = ev7::kEv7Map.io7_base(m_pid, port) | off;
+  const u64 a = m_marvel->map().io7_base(m_pid, port) | off;
   if (port < kPorts && off < kCsrOff) {
     m_sys->trace_unknown(off >= 0xFE000000 && off < 0xFF000000
                              ? "IO7 PCI configuration"
@@ -387,7 +388,7 @@ u64 CIo7::pci_phys(u32 port, u32 address) {
              (address & pci_window::PTE_ADD2_MASK);
     break; // an invalid entry: not translated
   }
-  return ev7::kEv7Map.io7_base(m_pid, port) | address;
+  return m_marvel->map().io7_base(m_pid, port) | address;
 }
 
 /**
@@ -465,7 +466,7 @@ bool CIo7::hp_write(u32 port, u32 r, u64 data) {
 
 /// A card in a slot is a device answering configuration space there.
 bool CIo7::slot_occupied(u32 port, u32 dev) const {
-  return m_sys->device_at(ev7::kEv7Map.io7_base(m_pid, port) + 0xFE000000 +
+  return m_sys->device_at(m_marvel->map().io7_base(m_pid, port) + 0xFE000000 +
                           (u64)dev * 0x800);
 }
 
@@ -488,9 +489,28 @@ void CIo7::deliver(u32 n) {
   CEv7Csr *target = m_marvel->csr(ctl_target(ctl));
   if (!target)
     return;
+  // The IID: int_num <8:0>, msi <13> clear, this IO7's PE <23:14>. A full
+  // queue (21464 mode) refuses it: kept, and sent again when it has room.
+  if (!target->post_iid(((u64)m_pid << 14) | n)) {
+    if (trace_on() && !m_refused[n])
+      printf("%%MVL-T-IO7: pid %u LSI %u: refused by PID %u's full interrupt "
+             "queue, to be sent again\n",
+             m_pid, n, ctl_target(ctl));
+    m_refused[n] = true;
+    return;
+  }
+  if (trace_on() && m_refused[n])
+    printf("%%MVL-T-IO7: pid %u LSI %u: sent again, taken by PID %u\n", m_pid,
+           n, ctl_target(ctl));
+  m_refused[n] = false;
   m_in_service[n] = true;
-  // The IID: int_num <8:0>, msi <13> clear, this IO7's PE <23:14>.
-  target->post_iid(((u64)m_pid << 14) | n);
+}
+
+void CIo7::resend() {
+  std::lock_guard<std::mutex> g(m_lock);
+  for (u32 n = 0; n < kLsis; n++)
+    if (m_refused[n])
+      deliver(n);
 }
 
 /// With m_lock held.

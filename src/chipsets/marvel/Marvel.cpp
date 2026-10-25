@@ -26,6 +26,7 @@
 #include <algorithm>
 
 #include "AlphaCPU.hpp"
+#include "Configurator.hpp"
 #include "Ev7.hpp"
 #include "Marvel.hpp"
 #include "System.hpp"
@@ -42,18 +43,31 @@ CMarvel::CMarvel(CSystem *sys) : CChipset(sys), m_gio(new GioRecorder()) {
   // block, numbered in the PID bits the configured chips leave free
   // (Topology.hpp; docs/platforms/ev8.md, S4), so those chips are the ones
   // laid out.
+  //
+  // In 21464 mode (the `ev8n` row's processors, docs/platforms/
+  // ev8-native.md, section 2) the PIDs are dense and a chip's TPUs share
+  // its block, the 21464's map (N18) decodes the addresses, and the blocks
+  // take the 21464's interrupt layout (Ev7Csr.cpp).
+  m_21464 = CConfigurator::machine_21464_mode();
+  m_map = m_21464 ? &ev7::k21464Map : &ev7::kEv7Map;
   const int tpus = sys->tpus_per_chip();
   const int chips =
       tpus > 1 ? std::min(sys->processor_chips(), row.max_cpus) : row.max_cpus;
-  if (!m_topology.build(row.marvel, chips, tpus))
+  if (!m_topology.build(row.marvel, chips, tpus, m_21464))
     FAILURE(Configuration, "the processor chips' PIDs leave no pair of bits "
                            "free for their TPUs' numbers");
   for (int i = 0; i < m_topology.count(); i++) {
     const u32 pid = m_topology.node(i).pid;
     if (pid >= (u32)kMaxPids)
       FAILURE(Configuration, "a processor's PID beyond the console's range");
-    m_csr[pid].reset(new CEv7Csr(sys, pid, m_gio.get()));
+    if (!m_csr[pid]) // one per PID: a 21464 chip's TPUs share theirs
+      m_csr[pid].reset(new CEv7Csr(sys, this, pid, m_gio.get()));
   }
+  if (m_21464)
+    printf("%%MVL-I-21464: 21464 mode: %d chip%s of %d TPUs, dense PIDs, the "
+           "48-bit map (PID 0's registers at %012" PRIx64 ").\n",
+           sys->processor_chips(), sys->processor_chips() == 1 ? "" : "s", tpus,
+           m_map->csr_base(0));
   // ALPHABOX_TRACE_RBOX=<ms> (default 200): report any processor that
   // leaves an enabled interrupt pending that long, with its state -- for a
   // guest's CPUSPINWAIT, to tell an interrupt not raised from one not taken.
@@ -97,19 +111,25 @@ void CMarvel::set_management(std::unique_ptr<GioManagement> far) {
   m_gio = std::move(far);
 }
 
-u64 CMarvel::phys_mask() const { return ev7::kEv7Map.phys_mask(); }
+u64 CMarvel::phys_mask() const { return m_map->phys_mask(); }
+
+CAlphaCPU *CMarvel::processor(int index) const {
+  return index >= 0 && index < m_sys->get_cpu_num() ? m_sys->get_cpu(index)
+                                                    : nullptr;
+}
 
 /**
  * memory.bits is each processor's memory; PID n's begins at
- * ev7::kEv7Map.memory_base(n), 16 GB apart, so the array spans from 0 to the
- * end of the last processor's. The host allocates it lazily (calloc of
- * untouched pages costs no memory), so only what the guest touches is backed.
+ * map().memory_base(n), 16 GB apart, so the array spans from 0 to the end of
+ * the last processor's. The host allocates it lazily (calloc of untouched
+ * pages costs no memory), so only what the guest touches is backed.
  *
  * The holes between processors' memory read as zero here rather than as
  * nonexistent memory: the console takes memory sizes from its management
  * side, not by probing [inference], and nothing has been seen to touch them.
  */
 unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
+  // In 21464 mode too: N18's second 16 GB of a PID is not modelled.
   if (membits > 34)
     FAILURE(Configuration,
             "an EV7 holds at most 16 GB of its own memory (memory.bits 34)");
@@ -121,7 +141,7 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
     const ev7_node &n = m_topology.node(i);
     if (n.tpu || (int)n.chip >= max_cpus)
       continue;
-    const u64 b = ev7::kEv7Map.memory_base(n.pid);
+    const u64 b = m_map->memory_base(n.pid);
     const u64 e = b + m_memory_per_pid;
     m_memory_regions.push_back({b, m_memory_per_pid});
     if (e > end)
@@ -134,7 +154,12 @@ unsigned CMarvel::memory_span_bits(unsigned membits, int max_cpus) {
   unsigned bits = membits;
   while ((U64(1) << bits) < end)
     bits++;
-  if (m_topology.tpus() > 1)
+  if (m_21464)
+    printf("%%MVL-I-MEMORY: %u MB per chip, at its PID's base in the 21464's "
+           "map (%d chips of %d TPUs, the array spans %u bits).\n",
+           (unsigned)(m_memory_per_pid >> 20), max_cpus, m_topology.tpus(),
+           bits);
+  else if (m_topology.tpus() > 1)
     printf("%%MVL-I-MEMORY: %u MB per chip, at its TPU 0's PID's base (%d "
            "chips of %d TPUs, the array spans %u bits).\n",
            (unsigned)(m_memory_per_pid >> 20), max_cpus, m_topology.tpus(),
@@ -165,17 +190,6 @@ CIo7 *CMarvel::io7(u32 pid) const {
   return pid < (u32)kMaxPids ? m_io7[pid].get() : nullptr;
 }
 
-/// An IO7's space: PA<43> set, the PE inverted in PA<42:35>, the port
-/// inverted in PA<34:32> (Io7.hpp).
-static bool io7_decode(u64 a, u32 *pe, u32 *port, u32 *off) {
-  if (!ev7::kEv7Map.is_io(a))
-    return false;
-  *pe = (u32)(~(a >> 35) & 0xff);
-  *port = (u32)(~(a >> 32) & 7);
-  *off = (u32)a;
-  return true;
-}
-
 /// Only the processors the configuration has: another PID's block is
 /// space nobody answers.
 CEv7Csr *CMarvel::csr(u32 pid) const {
@@ -187,16 +201,16 @@ CEv7Csr *CMarvel::csr(u32 pid) const {
 u64 CMarvel::read_io(u64 a, u64 raw, int dsize, CSystemComponent *source) {
   (void)raw;
   u32 pe, off;
-  if (ev7::kEv7Map.csr_decode(a, &pe, &off))
+  if (m_map->csr_decode(a, &pe, &off))
     if (CEv7Csr *c = csr(pe))
       return c->read(off, dsize);
   u32 port;
-  if (io7_decode(a, &pe, &port, &off))
+  if (m_map->io7_decode(a, &pe, &port, &off))
     if (CIo7 *io = io7(pe))
       return io->read(port, off, dsize, source);
   // Another processor's space that is not there, or memory nobody owns.
-  m_sys->trace_unknown(ev7::kEv7Map.is_io(a) ? "EV7 I/O" : "EV7 memory", a,
-                       dsize, false, 0, source);
+  m_sys->trace_unknown(m_map->is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize,
+                       false, 0, source);
   return 0;
 }
 
@@ -204,19 +218,25 @@ void CMarvel::write_io(u64 a, u64 raw, int dsize, u64 data,
                        CSystemComponent *source) {
   (void)raw;
   u32 pe, off;
-  if (ev7::kEv7Map.csr_decode(a, &pe, &off))
+  if (m_map->csr_decode(a, &pe, &off))
     if (CEv7Csr *c = csr(pe)) {
       c->write(off, dsize, data);
       return;
     }
   u32 port;
-  if (io7_decode(a, &pe, &port, &off))
+  if (m_map->io7_decode(a, &pe, &port, &off))
     if (CIo7 *io = io7(pe)) {
       io->write(port, off, dsize, data, source);
       return;
     }
-  m_sys->trace_unknown(ev7::kEv7Map.is_io(a) ? "EV7 I/O" : "EV7 memory", a,
-                       dsize, true, data, source);
+  m_sys->trace_unknown(m_map->is_io(a) ? "EV7 I/O" : "EV7 memory", a, dsize,
+                       true, data, source);
+}
+
+void CMarvel::resend_iids() {
+  for (auto &io : m_io7)
+    if (io)
+      io->resend();
 }
 
 /**
@@ -231,9 +251,12 @@ void CMarvel::interrupt(int number, bool assert) {
 }
 
 void CMarvel::interval_tick() {
+  // Each register block once: a 21464 chip's TPUs share theirs, which
+  // ticks for all of them (R_INT_STAT<7:4>, N22).
   for (int i = 0; i < present() && i < m_topology.count(); i++)
-    if (CEv7Csr *c = csr(m_topology.node(i).pid))
-      c->interval_tick();
+    if (!m_21464 || !m_topology.node(i).tpu)
+      if (CEv7Csr *c = csr(m_topology.node(i).pid))
+        c->interval_tick();
   m_gio->tick();
   m_sys->note_interval_tick();
 }
@@ -247,7 +270,7 @@ u64 CMarvel::interval_period_ns() const {
 
 /// Hose h is PID h / 4, IO7 port h % 4 (Linux marvel_find_console_vga_hose).
 u64 CMarvel::pci_space_base(int hose, pci_space space) const {
-  const u64 base = ev7::kEv7Map.io7_base((u32)hose / 4, (u32)hose % 4);
+  const u64 base = m_map->io7_base((u32)hose / 4, (u32)hose % 4);
   switch (space) {
   case PCI_SPACE_MEM:
     return base;
@@ -279,6 +302,21 @@ void CMarvel::console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) {
       c->reset();
       c->load_routes(m_topology, present());
     }
+  // 21464 mode: no XSROM and no console. Every TPU of every chip has been
+  // reset into the boot image's PALcode at PAL_BASE + 0xB00 (N17; the
+  // loader's hand_to_console, CAlphaCPU::ev8_reset), with CPU_BASE its
+  // chip's dense PID (N6, N19) -- which is this machine's PID for it.
+  if (m_21464) {
+    for (int i = 0; i < ncpus; i++)
+      if (cpus[i]->get_pid() != (u32)(i / m_topology.tpus()))
+        FAILURE_2(Configuration,
+                  "processor %d has PID %u, not its chip's dense number", i,
+                  cpus[i]->get_pid());
+    printf("%%MVL-I-21464: %d TPU%s at PAL_BASE %" PRIx64 " + 0xB00, no "
+           "console (a boot image).\n",
+           ncpus, ncpus == 1 ? "" : "s", cpus[0]->get_pal_base());
+    return;
+  }
   for (int i = 0; i < ncpus; i++) {
     if (i == 0)
       ev7::xsrom_handoff(cpus[i], cpus[i]->get_pid(), image_base);
@@ -305,14 +343,14 @@ void CMarvel::start_secondaries_as_console(CAlphaCPU **cpus, int ncpus) {
   const u64 pal = U64(0x30000), pal_bytes = U64(0x20000);
   for (int i = 1; i < ncpus; i++) {
     const u32 pid = cpus[i]->get_pid();
-    const u64 base = ev7::kEv7Map.memory_base(pid);
+    const u64 base = m_map->memory_base(pid);
     char *from = m_sys->PtrToMem(pal), *to = m_sys->PtrToMem(base + pal);
     if (!from || !to)
       continue;
     memcpy(to, from, pal_bytes);
     m_sys->code_pages()->note_write_all();
     const u64 entry = base + pal; // the PALcode's reset entry, in PALmode
-    const u64 scratch = ev7::kEv7Map.csr_base(pid) | ev7csr::RBOX_SCRATCH1;
+    const u64 scratch = m_map->csr_base(pid) | ev7csr::RBOX_SCRATCH1;
     m_sys->WriteMem(scratch, 64, (U64(0xf1) << 24) | ((entry >> 24) & 0xffffff),
                     nullptr);
     const u64 echo = m_sys->ReadMem(scratch, 64, nullptr);

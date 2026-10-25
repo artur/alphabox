@@ -29,6 +29,7 @@
 #include "StdAfx.hpp"
 
 #include "Boards.hpp"
+#include "CpuModel.hpp"
 #include "Platform.hpp"
 
 // The boards' own PCI functions (Platform.hpp board_function): the ALi
@@ -125,11 +126,15 @@ static const platform_config platforms[] = {
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
     // the ES40's that decompresses to 0x440000. One IO7, on PID 0: hoses
-    // 0-3.
+    // 0-3. The ES47, ES80 and GS1280 also take the 21464 on its own
+    // interface (`ev8n`), which puts the machine in 21464 mode
+    // (docs/platforms/ev8-native.md, section 2): no console runs there yet,
+    // a boot image does (es47/Es47.cpp, marvel_board_devices).
     {"es47", "AlphaServer ES47", CHIPSET_MARVEL, "ev7", 2, 29, 33,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      es47_board_devices, es47_pci_interrupt, es47_slot_refusal, nullptr,
-     0x480000, &es47_layout, nullptr, nullptr, 0, 0, marvel_functions},
+     0x480000, &es47_layout, nullptr, nullptr, 0, 0, marvel_functions, nullptr,
+     "ev8n"},
     // docs/platforms/marvel.md, M6c: up to four ES47
     // drawers in one N/S ring, eight EV7s, an IO7 on each drawer's first
     // processor (PIDs 0, 8, 16, 24: hoses 0-3, 32-35, 64-67, 96-99). The
@@ -138,14 +143,15 @@ static const platform_config platforms[] = {
     {"es80", "AlphaServer ES80", CHIPSET_MARVEL, "ev7", 8, 29, 33,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 100, SECONDARIES_BY_CONSOLE,
      es80_board_devices, marvel_pci_interrupt, marvel_slot_refusal, nullptr,
-     0x480000, &es80_layout, nullptr, nullptr, 0, 0, marvel_functions},
+     0x480000, &es80_layout, nullptr, nullptr, 0, 0, marvel_functions, nullptr,
+     "ev8n"},
     // docs/platforms/marvel.md, M6c: 8P drawers in a
     // torus, here up to two (sixteen EV7s, PIDs 0-15), one I/O drawer on
     // PID 0: a standard I/O drawer ("3.3V PCI-X I/O"), no slot remap (M7c).
     {"gs1280", "AlphaServer GS1280", CHIPSET_MARVEL, "ev7", 16, 29, 34,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      gs1280_board_devices, marvel_pci_interrupt, marvel_slot_refusal, nullptr,
-     0x480000, &gs1280_layout},
+     0x480000, &gs1280_layout, nullptr, nullptr, 0, 0, nullptr, nullptr, "ev8n"},
     // docs/platforms/es45.md: the first Titan board.
     // Its console comes as an update utility, which installs it into the
     // flash, and the utility runs up to 0x648000 (console_bytes). No
@@ -188,4 +194,12 @@ const platform_config *find_platform(const char *name) {
     if (!strcmp(p.name, name))
       return &p;
   return nullptr;
+}
+
+bool platform_takes(const platform_config &board, const cpu_model &cpu) {
+  for (const char *row : {board.cpu_model, board.other_cpu_model})
+    if (const cpu_model *m = row ? find_cpu_model(row) : nullptr)
+      if (m->family == cpu.family)
+        return true;
+  return false;
 }

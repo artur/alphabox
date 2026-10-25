@@ -47,7 +47,9 @@
  * family of its own, CPU_FAMILY_EV8: the IDS's IPRs, PALcode instructions
  * and entries, its modes and shadow registers, its TB with TPU groups, and
  * four TPUs per chip (cpu_pal_ev8.hpp, AlphaCPU_ev8.cpp). Its user-visible
- * instructions are the `ev8` row's (CPU_EXT_EV8). No board takes it yet.
+ * instructions are the `ev8` row's (CPU_EXT_EV8). The Marvel boards take
+ * it, in 21464 mode (ev8-native.md, section 2, S11b; Platform.hpp
+ * other_cpu_model).
  *
  * Every value here is read by the firmware or the operating system, so a
  * wrong one is visible: the console prints the processor's name from the

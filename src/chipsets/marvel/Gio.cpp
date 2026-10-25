@@ -77,15 +77,45 @@ bool GioRecorder::gio_read(u32 pid, u32 reg, u64 *value) {
 
 // --- The transport -----------------------------------------------------------
 
+/// In 21464 mode the far side's words are 32 bits [IDS p. 476].
+static u64 narrow(bool m21464, u64 v) {
+  return m21464 ? (v & U64(0xffffffff)) : v;
+}
+
+void CGioPort::write_cfg(u64 v) {
+  // 21464 mode: DIVISOR <7:1>, the rest reads 0 [IDS p. 473]; a transaction
+  // waiting for the clock runs once it starts.
+  m_cfg = m_21464 ? (v & 0xfe) : v;
+  if (!clock_runs() || m_held == HELD_NONE)
+    return;
+  const auto held = m_held;
+  m_held = HELD_NONE;
+  if (held == HELD_READ)
+    start_read(m_held_reg);
+  else
+    start_write(m_held_reg, m_held_data);
+}
+
 void CGioPort::write_ctl(u64 v) {
-  m_ctl = v;
+  m_ctl = m_21464 ? (v & 0xff) : v; // 21464: ADDR <7:1>, START_READ <0>
   const u32 reg = (u32)(v >> 1) & 0x7f;
   if (!(v & 1))
     return; // the register for the next transaction, no go yet
-  // A read: the answer, or a pending read the processor polls for.
+  if (!clock_runs()) {
+    m_held = HELD_READ;
+    m_held_reg = reg;
+    m_pending = false;
+    m_dat &= ~kGioDone; // in progress, until the clock runs
+    return;
+  }
+  start_read(reg);
+}
+
+/// A read: the answer, or a pending read the processor polls for.
+void CGioPort::start_read(u32 reg) {
   u64 answer = 0;
   if (m_far && m_far->gio_read(m_pid, reg, &answer)) {
-    m_dat = answer | kGioDone;
+    m_dat = narrow(m_21464, answer) | kGioDone;
     m_pending = false;
   } else {
     m_dat = 0;
@@ -98,6 +128,18 @@ void CGioPort::write_dat(u64 v) {
   // A write to the register GIO_CTL named: done once the far side takes it.
   const u32 reg = (u32)(m_ctl >> 1) & 0x7f;
   m_pending = false;
+  if (!clock_runs()) {
+    m_held = HELD_WRITE;
+    m_held_reg = reg;
+    m_held_data = narrow(true, v);
+    m_dat = m_held_data; // in progress, DONE clear
+    return;
+  }
+  start_write(reg, v);
+}
+
+void CGioPort::start_write(u32 reg, u64 v) {
+  v = narrow(m_21464, v);
   const bool taken = m_far && m_far->gio_write(m_pid, reg, v);
   m_dat = taken ? (v | kGioDone) : (v & ~kGioDone);
 }
@@ -106,7 +148,7 @@ u64 CGioPort::read_dat() {
   if (m_pending) {
     u64 answer = 0;
     if (m_far && m_far->gio_poll(m_pid, m_pending_reg, &answer)) {
-      m_dat = answer | kGioDone;
+      m_dat = narrow(m_21464, answer) | kGioDone;
       m_pending = false;
     }
   }
@@ -123,6 +165,10 @@ void CGioPort::reset() {
   m_cfg = m_ctl = m_dat = m_lock_word = 0;
   m_pending = false;
   m_pending_reg = 0;
+  m_held = HELD_NONE;
+  // 21464 mode: DONE resets to 1, the port idle [IDS p. 474].
+  if (m_21464)
+    m_dat = kGioDone;
 }
 
 CGioPort::State CGioPort::save() const {

@@ -99,14 +99,26 @@ private:
   u64 m_seq = 0;
 };
 
-/// One processor's end of the link: the three registers and the lock.
+/**
+ * One processor's end of the link: the three registers and the lock.
+ *
+ * In 21464 mode (docs/platforms/ev8-native.md, 2.5, N23) the port is the
+ * 21464's [21464 IDS Rev 1.1k, pp. 472-476]: GIO_DATA carries 32 bits, a
+ * write passing DATA<31:0> on and a read returning DONE <63> with the far
+ * register's low 32 bits; DONE reads 1 at reset; GIO_CNFG's DIVISOR <7:1>
+ * runs the port's clock, which reset leaves stopped: a transaction begun
+ * while it is zero waits, DONE clear, until a divisor is written. The lock
+ * register is the EV7 console's, not the 21464's.
+ */
 class CGioPort {
 public:
   CGioPort(u32 pid, GioManagement *far) : m_pid(pid), m_far(far) {}
   /// The board's management side replaces the recorder (CMarvel).
   void set_far(GioManagement *far) { m_far = far; }
+  /// 21464 mode: the 21464's port (before reset).
+  void set_21464(bool on) { m_21464 = on; }
   u64 read_cfg() const { return m_cfg; }
-  void write_cfg(u64 v) { m_cfg = v; }
+  void write_cfg(u64 v);
   u64 read_ctl() const { return m_ctl; }
   void write_ctl(u64 v);
   u64 read_dat();
@@ -125,11 +137,20 @@ public:
   void restore(const State &s);
 
 private:
+  /// 21464 mode: whether GIO_CLK runs (DIVISOR not zero).
+  bool clock_runs() const { return !m_21464 || (m_cfg & 0xfe); }
+  void start_read(u32 reg);
+  void start_write(u32 reg, u64 v);
   u32 m_pid;
   GioManagement *m_far;
+  bool m_21464 = false;
   u64 m_cfg = 0, m_ctl = 0, m_dat = 0, m_lock_word = 0;
   bool m_pending = false; ///< a read with no answer yet
   u32 m_pending_reg = 0;
+  /// 21464 mode: a transaction begun with the clock stopped (not saved).
+  enum { HELD_NONE, HELD_READ, HELD_WRITE } m_held = HELD_NONE;
+  u32 m_held_reg = 0;
+  u64 m_held_data = 0;
 };
 
 #endif // !defined(INCLUDED_GIO_H_)

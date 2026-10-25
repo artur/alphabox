@@ -44,6 +44,12 @@
  * Pchip's); and level-sensitive interrupts (LSIs), which go to the EV7 that
  * LSI_CTL names as IIDs and are re-sent after the PALcode's end-of-interrupt
  * write while the line is still asserted. The error registers read clean.
+ *
+ * In 21464 mode (docs/platforms/ev8-native.md, 2.6) the space is the
+ * 21464's map (CMarvel::map, N18), LSI_CTL's target names a dense PID
+ * (N19, N22), and an IID the target's full queue refuses (WrIONack, N21)
+ * is sent again once the queue has room, as the IDS has the requester do
+ * [IDS pp. 75, 465].
  * docs/platforms/marvel.md, "M5", has where each piece was found.
  **/
 #if !defined(INCLUDED_IO7_H_)
@@ -133,6 +139,10 @@ public:
 
   /// A PCI interrupt line changes level: LSI `n` (io7::lsi).
   void lsi(u32 n, bool assert);
+  /// Send again what a full interrupt queue refused (21464 mode: four
+  /// entries, N21), now that one has room. Called with no register block
+  /// locked.
+  void resend();
 
   void reset();
   void save_state(FILE *f);
@@ -168,6 +178,8 @@ private:
     u64 misc = 0; ///< HP_MISC's event bits
   } m_hp[io7::kPorts];
   bool m_in_service[io7::kLsis] = {}; ///< sent, no end of interrupt yet
+  /// Refused by a full queue (WrIONack), to be sent again (resend).
+  bool m_refused[io7::kLsis] = {};
 };
 
 #endif // !defined(INCLUDED_IO7_H_)
