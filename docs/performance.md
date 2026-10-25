@@ -743,9 +743,13 @@ was timed four times for overlapping other work and its fp section
 alone moved 40%, and `fence-cab`'s base arm alone spans 4% (makecab's
 same-binary rows elsewhere in the ledger spread as wide). Both are over
 the 2% the switches were to be collapsed under, so they stay, as does
-`ALPHABOX_JIT08_XLATE` (inconclusive, +3.2% on cab), until the owner
-decides; a run on a quiet host, three rounds or more, is what would
-settle them:
+`ALPHABOX_JIT08_XLATE` (inconclusive, +3.2% on cab). **The owner decided
+on 2026-10-25** to merge the three fixes with their switches in place, on
+by default, and to measure them again on a quiet host, three rounds each,
+with the commands below. A switch whose cost is then under about 2% on
+both workloads is removed (the collapse: `lab/runs/jit0508-collapse.patch`
+and `.py`); one that is over goes back to the owner with its numbers. Until
+then the switches are not knobs to tune: leave them at their defaults.
 
 ```
 B=build-jit/alphabox

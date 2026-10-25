@@ -1209,7 +1209,9 @@ until they were fixed:
   on each superpage, a TB hit, a miss, an access violation and a
   fault-on-read, on every row; the other proofs are JIT-05's, above
   (the same branch). `ALPHABOX_JIT08_XLATE=0` selects the old copies
-  until the owner decides on what was measured.
+  until the quiet-host measurement the owner asked for on 2026-10-25
+  settles the switch ([performance.md](performance.md), "The code-page
+  map's fences, and one translation").
 - **A chained entry to the PAL reset vector** (JIT-13). The dispatcher
   flushes the instruction cache and the compiled blocks when it enters
   `PAL_BASE` (a firmware updater rewrote the image in place, or a
