@@ -2499,6 +2499,8 @@ int CAlphaCPU::SaveState(FILE *f) {
   fwrite(&cpu_magic2, sizeof(u32), 1, f);
   if (m_ev8n) // the native EV8's own IPRs, after the core's
     ev8_save(f);
+  if (m_vec) // Tarantula's state, last (Tarantula.hpp)
+    tarantula::save(f, *m_vec, m_vctl.load());
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
 }
@@ -2552,6 +2554,24 @@ int CAlphaCPU::RestoreState(FILE *f) {
   }
   if (m_ev8n && ev8_restore(f))
     return -1;
+  // Tarantula's section, which a state file written before S7 does not
+  // have: the vector state is then as at power-up (Tarantula.cpp).
+  if (m_vec) {
+    u64 vctl = 0;
+    const int r = tarantula::restore(f, *m_vec, &vctl);
+    if (r < 0) {
+      printf("%s: the vector state is damaged!\n", devid_string);
+      return -1;
+    }
+    if (r == 0) {
+      tarantula_reset();
+      printf("%s: no vector state in the file: the vector registers are "
+             "clear and VCTL<VEN> is 0.\n",
+             devid_string);
+    } else {
+      m_vctl.store(vctl);
+    }
+  }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   last_dtb_virt[0] = last_dtb_virt[1] = 0;

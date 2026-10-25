@@ -598,6 +598,15 @@ target_include_directories(cpumodels_test PRIVATE
 target_link_libraries(cpumodels_test Threads::Threads)
 add_test(NAME cpumodels COMMAND cpumodels_test)
 
+# Tarantula's section of the state file (src/cpu/Tarantula.cpp): read back
+# whole, absent from an older file, refused when damaged.
+add_executable(tarantula_state_test test/unit/tarantula_state_test.cpp
+    src/cpu/Tarantula.cpp)
+target_include_directories(tarantula_state_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+target_link_libraries(tarantula_state_test Threads::Threads)
+add_test(NAME tarantula_state COMMAND tarantula_state_test)
+
 # The PCI configuration space every device inherits (CPCIDevice).
 add_executable(pcicfg_test test/unit/pcicfg_test.cpp
     src/devices/pci/PCIDevice.cpp)
