@@ -672,7 +672,7 @@ where the EV7 has the register, the IDS's own prose giving the mapping:
 | R_SCRATCH1, R_SCRATCH2 | RBOX_SCRATCH1 0x0B0, SCRATCH2 0x0C0 | the same (both "TBD: Do we need this?" [p. 528]) |
 | R_LOC_ERR | RBOX_L_ERR 0x0D0 | the same |
 | R_ROUT | RBOX_ROUTE 0x2000, 0x114 entries | 532 entries at the same base, the IDS's layout (N19) |
-| R_n_CFG1, ERR, PERF, T1CFG (N, S, E, W) | the port blocks 0x4000, 0x6000, 0x8000, 0xA000 | the same; R_n_CFG2 and R_n_T2CFG at free offsets of each block **[decision]** |
+| R_n_CFG1, ERR, PERF, T1CFG, T2CFG (N, S, E, W) | the port blocks 0x4000, 0x6000, 0x8000, 0xA000, whose +0x40 is RBOX_n_T2CFG (`Ev7Csr.cpp`) | the same, R_n_T2CFG the EV7's at +0x40; R_n_CFG2 at a free offset of each block **[decision]** |
 | R_IO_CFG1, ERR, PERF, T1CFG; R_IO_CFG2, T2CFG, BUFSIZ | the RBOX_IO_CFG block 0xC000 ("RBOX_IO_CFG", "RBOX_IO_BUF" [IDS pp. 455, 464]) | the same block, the new ones at free offsets |
 | ZBOXn_* (two controllers) [IDS pp. 528-567] | Zbox0 0x10000-0x14110, Zbox1 0x16000-0x1A110 | the same blocks **[inference]**: the same controller family (Tarantula reuses the EV8's Zbox [TAR p. 284], and the EV8's register names are the 21364's) |
 | GIO_CNFG, GIO_ADDR, GIO_DATA [IDS pp. 472-474] | GIO_CFG 0x100, GIO_CTL 0x120, GIO_DAT 0x110 | the same (section 2.5) |
