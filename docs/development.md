@@ -90,7 +90,12 @@ The Windows guests (`w2k`, `w2k-beta`, `xp64`) must reach a desktop with a
 taskbar and no dialog; for `w2k` the taskbar clock is also read, by
 matching the font's glyphs against a table in the script, and must be
 within 5 minutes of the host's time (a clock it cannot read is reported,
-not failed). `vms-es40`, `vms-es47` and `linux` log in on the serial
+not failed). Windows keeps local time in the TOY and corrects it itself on
+the first boot after a daylight saving change, so when the host's UTC
+offset differs from the one it had when the image was last written, the
+run starts the TOY at the old offset (`timezone = "local+60m"` for an image
+from the summer booted in the winter), as a battery clock would have kept
+it. `vms-es40`, `vms-es47` and `linux` log in on the serial
 console and run commands (`SHOW TIME`, `uname -a`, a C program compiled
 and run), `arc` waits for the AlphaBIOS menu, which it reads with
 tesseract (without it `arc` fails), and `netbsd` for the installer's

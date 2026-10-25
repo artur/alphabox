@@ -583,6 +583,22 @@ win_guest() {
     fi
   done
   cp -c "$src/disk0.img" "$D/disk0.img" || return 2
+  # Windows keeps local time in the TOY, and the first boot after a daylight
+  # saving change moves it by the difference itself. A real machine's
+  # battery clock would still keep the offset of the guest's last shutdown,
+  # so the TOY starts at the host's offset when the image was last written
+  # (an image from the summer, booted in the winter: local+60m).
+  local tz=""
+  if [ "$clk" = 1 ] && ! grep -q timezone "$D/$cfg"; then
+    local a b m
+    a=$(date -r "$src/disk0.img" +%z) b=$(date +%z)
+    m=$(((${a:0:1}1 * (10#${a:1:2} * 60 + 10#${a:3:2})) - (${b:0:1}1 * (10#${b:1:2} * 60 + 10#${b:3:2}))))
+    if [ "$m" != 0 ]; then
+      [ "$m" -gt 0 ] && tz="local+${m}m" || tz="local${m}m"
+      awk -v tz="$tz" '/^sys0 =/ {s = 1} s && /^\{/ {print; print "  timezone = \"" tz "\";"; s = 0; next} {print}' \
+        "$D/$cfg" > "$D/$cfg.tz" && mv "$D/$cfg.tz" "$D/$cfg"
+    fi
+  fi
   start_emu "$D" "$cfg"
   if [ -n "$logon" ]; then
     r=$(H fbsplash "$D/fb" "$tmo" "$PID" 2>&1 | tail -1)
@@ -599,7 +615,7 @@ win_guest() {
   if [ "$clk" = 1 ]; then
     local c; c=$(H clock "$(ls "$D"/fb/*.ppm | tail -1)")
     case $? in
-      0) W_WHAT="$W_WHAT, clock $c" ;;
+      0) W_WHAT="$W_WHAT, clock $c${tz:+ (TOY $tz, the offset when the image was written)}" ;;
       2) W_WHAT="$W_WHAT, clock not read (${c#unread: })" ;;
       *) W_WHAT="$W_WHAT, clock WRONG ($c)"; return 1 ;;
     esac
