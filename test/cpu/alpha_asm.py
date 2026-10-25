@@ -255,6 +255,57 @@ MISC = {
 }
 
 
+# --- Tarantula (docs/platforms/ev8-isa.md, section 4) --------------------------
+#
+# The integer operate layout for VV (01), VS (02) and VC (05): Va or Ra
+# <25:21>, Vb, Rb or Fb <20:16>, <15:13> SBZ in the register form, L <12>
+# (an 8-bit literal in <20:13>), M <11> (under mask), the 6-bit function
+# <10:5>, Vc or Rc <4:0>. `sbz` and the literal flag can be forced, for the
+# cases of the field rules.
+
+VV_FNC = {
+    "vvaddq": 0x00, "vvsubq": 0x01, "vvmulq": 0x02, "vvumulh": 0x03,
+    "vvand": 0x04, "vvbic": 0x05, "vvbis": 0x06, "vvornot": 0x07,
+    "vvxor": 0x08, "vveqv": 0x09, "vvsll": 0x0A, "vvsrl": 0x0B, "vvsra": 0x0C,
+    "vvmrg": 0x0D, "vvcmpeq": 0x10, "vvcmpne": 0x11, "vvcmplt": 0x12,
+    "vvcmple": 0x13, "vvcmpgt": 0x14, "vvcmpge": 0x15, "vvcmpult": 0x16,
+    "vvcmpule": 0x17, "vvcmpugt": 0x18, "vvcmpuge": 0x19,
+    "vvaddt": 0x20, "vvsubt": 0x21, "vvmult": 0x22, "vvdivt": 0x23,
+    "vvsqrtt": 0x24, "vvcmpteq": 0x25, "vvcmptlt": 0x26, "vvcmptle": 0x27,
+    "vvcmptun": 0x28, "vvcmptne": 0x29, "vvcmptgt": 0x2A, "vvcmptge": 0x2B,
+    "vvcvtqt": 0x2C, "vvcvttq": 0x2D, "vvcvttqc": 0x2E, "vvcpys": 0x30,
+    "vvcpysn": 0x31, "vvcpyse": 0x32,
+}
+# VS has every VV code but the unary ones (24, 2C, 2D, 2E).
+VS_FNC = {"vs" + k[2:]: v for k, v in VV_FNC.items()
+          if v not in (0x24, 0x2C, 0x2D, 0x2E)}
+VC_FNC = {"setvl": 0x00, "setvs": 0x01, "setvm": 0x02, "getvl": 0x04,
+          "getvs": 0x05, "getvm": 0x06}
+
+
+def vop(op, fnc, a, b, c, m=False, lit=None, sbz=0):
+    """A Tarantula operate-format word: opcode `op`, fields a <25:21>,
+    b <20:16> (or the literal <20:13> with L set), c <4:0>."""
+    w = (op << 26) | ((a & 31) << 21) | ((1 if m else 0) << 11) | \
+        ((fnc & 0x3F) << 5) | (c & 31)
+    if lit is not None:
+        assert 0 <= lit < 256, lit
+        return w | (lit << 13) | (1 << 12)
+    return w | ((b & 31) << 16) | ((sbz & 7) << 13)
+
+
+def vv(name, va, vb, vc, m=False):
+    return vop(0x01, VV_FNC[name], va, vb, vc, m)
+
+
+def vs(name, va, rb, vc, m=False, lit=None):
+    return vop(0x02, VS_FNC[name], va, rb, vc, m, lit)
+
+
+def vc(name, rb=R31, rc=R31, lit=None, ra=R31):
+    return vop(0x05, VC_FNC[name], ra, rb, rc, False, lit)
+
+
 def ins_op(name, ra, b, rc, lit=False):
     op, fn = IOP[name]
     return opl(op, fn, ra, b, rc) if lit else opr(op, fn, ra, b, rc)

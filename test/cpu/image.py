@@ -43,7 +43,7 @@ PAL_PA = 0x100000                  # PAL_BASE (not 0x8000: that is the native VM
 CODE_PA = 0x108000                 # driver, printer and cases
 CODE_TOP = 0x1C0000
 POOL_PA = 0x1C0000                 # literal pool, R27 = its KSEG address + 32 KB
-POOL_ENTRIES = 8192
+POOL_ENTRIES = 7168                 # 56 KB: the last 8 KB are TAB_PA
 TR_PA = 0x1D0000                   # trap record
 SCR_PA = 0x1D2000                  # three 8 KB scratch pages for the memory cases
 USER_PA = 0x1D8000                 # one 8 KB page of user-mode code
@@ -54,6 +54,8 @@ USER_KONLY_VA = 0x20004000         # DTB: scratch page 2, kernel read/write only
 USER_FAULT_VA = 0x20006000         # DTB: scratch page 2, every mode, FOR and FOW set
 KCODE_PA = 0x1DA000                # one 8 KB page of code only kernel mode may run
 KCODE_VA = 0x20008000              # ITB: KCODE_PA, KRE only
+TAB_PA = POOL_PA + 8 * POOL_ENTRIES  # tables of quadwords (Builder.table), 8 KB
+TAB_TOP = TR_PA
 JPAL_SCR_PA = SCR_PA + 0x5F00      # scratch page 2: the PAL service's HW_ST/HW_LD
 IMAGE_TOP = 0x200000               # the decompressed image holds 2 MB
 BUF_A_PA = 0x400000                # first pass: always interpreted
@@ -776,6 +778,7 @@ class Builder:
         self.ev8n = self.row.family == "EV8"
         self.uart_va = UART_VA8 if self.ev8n else UART_VA
         self.pal8 = Asm(PAL8_SNIP_PA)   # PALmode snippets (pal8_call)
+        self.tables = []                # quadwords at TAB_PA (table)
 
     def va(self):
         """The virtual address of the next instruction."""
@@ -906,6 +909,17 @@ class Builder:
 
     def li(self, reg, value):
         self.asm.li(reg, value)
+
+    def table(self, values):
+        """Place quadwords in the image's table area, consecutive and in
+        order (the literal pool keeps one copy of each value); returns the
+        index of the first in the area, whose KSEG address is
+        kseg(TAB_PA) + 8 x index. Tables are not taken back with a skipped
+        case: a group makes them once."""
+        at = len(self.tables)
+        self.tables += [v & ((1 << 64) - 1) for v in values]
+        assert TAB_PA + 8 * len(self.tables) <= TAB_TOP, "table area full"
+        return at
 
     def load(self, reg, value):
         value &= (1 << 64) - 1
@@ -1043,6 +1057,8 @@ class Builder:
             struct.pack_into("<I", img, USER_PA + 4 * i, w)
         for i, w in enumerate(self.kcode.finish()):
             struct.pack_into("<I", img, KCODE_PA + 4 * i, w)
+        for i, v in enumerate(self.tables):
+            struct.pack_into("<Q", img, TAB_PA + 8 * i, v)
         assert PAL8_SNIP_PA + 4 * len(self.pal8.words) <= PAL8_SNIP_TOP
         for i, w in enumerate(self.pal8.finish()):
             struct.pack_into("<I", img, PAL8_SNIP_PA + 4 * i, w)

@@ -28,7 +28,12 @@ skipped:
     registers, I_CTL<SDE>, the AST registers), which the native EV8 does
     not: the image runs an EV8 PALcode of its own there (image.py,
     build_pal8) with the same services, but for those;
-  - NATIVE8: the row has the 21464's own (group ev8n, ev8n_cases.py).
+  - NATIVE8: the row has the 21464's own (group ev8n, ev8n_cases.py);
+  - TARANTULA: the row has Tarantula's state and instructions (opcodes
+    01-05, group tarantula, tarantula_cases.py). Not found from the words:
+    the other groups' OPCDEC cases emit opcodes 01-07 on every row, and on
+    a Tarantula row they still raise OPCDEC, its vector enable being 0
+    outside group tarantula.
 """
 import os
 import re
@@ -40,6 +45,7 @@ AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
 UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
 PAL21264 = "the 21264's PALcode interface"
 NATIVE8 = "the 21464's PALcode interface"
+TARANTULA = "Tarantula"
 
 
 class Unused:
@@ -133,6 +139,9 @@ class Row:
         if need == NATIVE8:
             return None if self.family == "EV8" else (
                 "the 21464's own PALcode interface is the native EV8's")
+        if need == TARANTULA:
+            return None if "TARANTULA" in self.ext else (
+                "no Tarantula (CPU_EXT_TARANTULA)")
         if need == UNUSED_MISC_NOP:
             return None if self.unused_misc_nop else (
                 "unused 18.xxxx codes are not no-ops on this row")
@@ -165,11 +174,11 @@ ROWS = {r.name: r for r in (
     # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 with
     # LDx_ARM and QUIESCE (S3), bit 11 with S5 and S6, bit 3 (Tarantula)
     # with S7 and S8. Its own instructions are those it executes so far
-    # (S2, S3).
+    # (S2, S3); Tarantula's (S7) are found by the need TARANTULA instead.
     Row("ev8", "21464 (EV8)", "EV7", 4, _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
-        ext={"EV8"},
+        ext={"EV8", "TARANTULA"},
         own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
              (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
              (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),
@@ -182,7 +191,7 @@ ROWS = {r.name: r for r in (
         _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: the ev8 row's "
         "(ev8-native.md, N16)",
-        ext={"EV8"},
+        ext={"EV8", "TARANTULA"},
         own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
              (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
              (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),

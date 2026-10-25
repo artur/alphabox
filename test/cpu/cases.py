@@ -6,7 +6,8 @@ References: ARM = Alpha Architecture Reference Manual, 4th edition; HRM =
 21264/EV68CB-DC Hardware Reference Manual. A `known` value is a documented
 divergence: docs/cpu-fidelity.md, or a finding of lab/legacy-audit/cpu/
 AUDIT.md (CPU-nn) or lab/legacy-audit/jit/AUDIT.md (JIT-nn) until it is
-fixed. The JIT groups are in jit_cases.py.
+fixed. The JIT groups are in jit_cases.py, the native EV8's in
+ev8n_cases.py, Tarantula's in tarantula_cases.py.
 
 What a case expects of the processor (IMPLVER, AMASK) is the row's
 (b.row, rows.py), and a case that needs what the row lacks is skipped
@@ -20,6 +21,7 @@ from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
 import jit_cases
 import rows
+import tarantula_cases
 from image import R_SCR, R_TR, TR_COUNT
 
 M64 = (1 << 64) - 1
@@ -44,7 +46,7 @@ GROUPS = [
             "row has them, MAP_ALIGN and WH64EN on every row"),
     ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
                 "them (one processor: the timeout), AMASK bit 10"),
-] + jit_cases.GROUPS + ev8n_cases.GROUPS
+] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
 
@@ -1378,6 +1380,7 @@ EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
         "quiesce": g_quiesce}
 EMIT.update(jit_cases.EMIT)
 EMIT.update(ev8n_cases.EMIT)
+EMIT.update(tarantula_cases.EMIT)
 
 
 def emit(b, groups):
