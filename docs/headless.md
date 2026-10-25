@@ -628,7 +628,7 @@ The Marvel chipset ([platforms/marvel.md](platforms/marvel.md)) has its own:
 | Variable | Reports |
 | --- | --- |
 | `ALPHABOX_TRACE_CSR=1` | every access to a modelled EV7 register, named, with the instruction that made it |
-| `ALPHABOX_TRACE_IO7=1` | every access to an IO7 register, named, with the instruction and its return address |
+| `ALPHABOX_TRACE_IO7=1` | every access to an IO7 register, named, with the instruction and its return address; in 21464 mode also an IID a full interrupt queue refused, and its taking when sent again |
 | `ALPHABOX_TRACE_RBOX=<ms>` | any processor that leaves an enabled interrupt pending that long (default 200) |
 | `ALPHABOX_TRACE_MP=1` | how the console starts the other processors: each write of a processor's RBOX_SCRATCH1 that changes it or comes from another processor, each reader's first read of a value (and how long it waited for the start hand-off), and each RBOX_IREQ request but the clock rendezvous; with the time in microseconds, who made the access, and where the processor is |
 | `ALPHABOX_GIO_LOG=<file>` | the console's transactions with its management side (the CMM on the ES47), written to `<file>` |
@@ -672,6 +672,19 @@ sets 2^24 for a row that has QUIESCE, and `test/cpu/quiesce_mp.py` 2^28
 
 On `ev8n` QUIESCE's timeout is the QUIESCE_TIMEOUT IPR's, which PALcode
 sets; `ALPHABOX_QUIESCE_TIMEOUT` does not apply.
+
+**Starting a Marvel board in 21464 mode.** An ES47, ES80 or GS1280 of
+`ev8n` processors needs no test hook, but it has no console yet
+([ev8-native.md](platforms/ev8-native.md), S11b): it starts from a boot
+image named by `rom.decompressed`, in the decompressed console's format
+(entry PC, PAL_BASE, the board's 0x480000 bytes of memory, the tag
+`ALPHDC01`; `test/cpu/image.py` `write_rom`), and refuses to start without
+one. Every TPU of every chip enters the image's PALcode at PAL_BASE +
+0xB00, and `%MVL-I-21464` lines say so. The image talks to the outside
+through GIO and the CMM: its terminal is `serial0`, as the console's is.
+`test/cpu/marvel8_mp.py` is the worked example. With
+`ALPHABOX_TRACE_IO7=1` an IO7 also says when a full interrupt queue
+refused one of its IIDs and when the IID it sent again was taken.
 
 ## Hypervisor runtime
 

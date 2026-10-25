@@ -10,7 +10,8 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 
 **Status**: plan, 2026-10-25; N1 to N31 accepted as proposed by the owner
 the same day. S11, the native interface on an `ev8n` row, done the same
-day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode, is
+day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode,
+done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, is
 next. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
@@ -1413,6 +1414,121 @@ run on the row. `guests_check.sh` passes `vms-es47`, `linux-es47`,
 `vms-es40` and `linux` (`lab/runs/ev8-s11-proof/`). No guest runs on
 `ev8n` (none exists until S13).
 
+## S11b (2026-10-25)
+
+The ES47, ES80 and GS1280 in **21464 mode**: section 2 as implemented.
+The board rows take `ev8n` processors beside their EV7 rows
+(`platform_config::other_cpu_model`, `platforms/Platforms.cpp`), and the
+processor family puts the machine in the mode: one family per machine,
+refused otherwise **[decision]**. The EV7 rows and the `ev8` row keep the
+EV7 mode exactly. The code is `cpu/ev7/Ev7.hpp` (the map),
+`chipsets/marvel/` (`Marvel`, `Ev7Csr`, `Topology`, `Io7`, `Gio`) and
+`platforms/es47/Es47.cpp`; every decision is in
+[cpu-fidelity.md](../cpu-fidelity.md), "The Marvel model in 21464 mode",
+and the board side in [marvel.md](marvel.md), "21464 mode".
+
+**What is implemented**, section by section:
+
+- **2.1 The map** (N18): `ev7::address_map`, a value per machine
+  (`CMarvel::map()`): `kEv7Map` (44 bits, the PE inverted in PA<43:35>)
+  and `k21464Map` (48 bits, ipe8, PA<47> the I/O bit, memory at ((n & 3) |
+  (n & 0x3fc) << 1) << 34). Every one of Ev7.hpp's 21 uses goes through
+  it; the decode refuses an inverted field that names no 10-bit PID
+  (PA<46:45> not 11) **[inference]**. memory.bits is still at most 34:
+  the second 16 GB of a PID, at + 2^36, is not modelled **[decision]**.
+- **2.2 PIDs** (N19): `CMarvelTopology::build(..., dense)`: chip c is PID
+  c in the configuration's order, its TPUs share its PID, register block
+  and coordinates; each chip keeps the console's number for its place
+  (`ev7_node::site`), by which the layouts cable their IO7s, so the ES80's
+  IO7s are on PIDs 0, 2, 4 and 6 and its hoses (PID x 4 + port) are 0-3,
+  8-11, 16-19 and 24-27 **[inference]**: N19 with the hose numbering kept.
+  R_WHOAMI holds EW <9:5>, NS <4:0>; CPU_BASE is the chip's dense number
+  (S11's, checked against the topology at start); R_ROUT has 532 entries,
+  the route to PID n in entry n in the IDS's layout (`route21464`). Its
+  flag bits are the IDS's text layer's order [IDS pp. 526-527]: every
+  access bit set, CAD set, BOU, STF and PAR 0, the hops N/S first as on
+  the EV7, North and East the higher coordinates, the sharing-mask entries
+  0 **[decision]**. WHAMI = PID x 4 + TPU limits a machine to 32
+  processors: an ES80 of eight chips of four TPUs fits, a GS1280 of more
+  than eight chips needs `tpus` below 4, and more is refused at
+  configuration with the reason.
+- **2.3 The registers** (N20): at the EV7's offsets; R_CFG2 at 0x0E0, each
+  port's R_n_CFG2 at +0x50, R_IO_CFG2 at 0xC050 and R_IO_T2CFG at 0xC060
+  **[decision]**; R_n_T2CFG is the EV7's RBOX_n_T2CFG at +0x40 (a
+  correction to the table, below). They hold what is written. The EV7
+  console's GIO lock at 0x80000 is not decoded in 21464 mode (2.5).
+- **2.4 Interrupts** (N21, N22): one R_INT_STAT per chip, 32 bits, the
+  table's fields and levels, written with ones to clear (<12> clears only
+  as the queue empties); R_INT_MASK per TPU, TPU 0's at 0x060 and 0x3F0000,
+  TPU t's at 0x3F0000 + 0x40 x t; TPU t's level L asserted while a bit of
+  level L is set in R_INT_STAT & R_INT_MASK[t], into its own ISUM<EI>,
+  gated by its own IER_CM<EIEN>. R_INT_REQ sets only the fields N22 has it
+  set, <3:0>, <11:8> and <31:18> **[inference]**, and reads back what was
+  written, as the EV7's **[decision]**. The interval timer: ITV <7:0>, the
+  EV7's period for its value **[inference]**, 0 off **[inference]**, the
+  machine's tick schedule PID 0's, each tick setting <7:4> on every chip
+  whose ITV is not 0. The queue: four IIDs; a processor's fifth write to
+  R_INT_QUEADD is dropped and counted, since a store cannot see a WrIONack
+  **[decision]**; R_INT_QUE reads the head with <24> valid and a write
+  removes it. The management side's interrupt (GIO_INT) is <13>
+  (`CEv7Csr::gio_interrupt`); halts (<11:8>) come from R_INT_REQ only, and
+  <14>-<17> are never raised.
+- **2.5 GIO** (N23): GIO_DATA carries 32 bits (a write passes <31:0> on, a
+  read returns DONE and the far register's low 32 bits); DONE reads 1 at
+  reset and GIO_CNFG's DIVISOR <7:1> runs the clock, which reset leaves
+  stopped: a transaction begun while it is zero waits, DONE clear, until a
+  divisor is written [IDS pp. 472-474]. The CMM is unchanged (one port per
+  PID: a chip's TPUs share theirs).
+- **2.6 The IO7**: its space through the map; LSI_CTL's target names a
+  dense PID; an IID the target's full queue refuses is kept and sent again
+  as soon as an entry of that queue is taken, the IDS's "retry the same
+  one" [IDS p. 465] **[decision]** (when: not on a timer); a refusal is not
+  in the state file **[decision]**. `ALPHABOX_TRACE_IO7` names both.
+- **Reset and start** (N17, 2.7): no XSROM and no console. A machine in
+  21464 mode starts from a boot image given as `rom.decompressed` (the
+  oracle's loader: entry, PAL_BASE, the board's 0x480000 bytes, the tag),
+  and refuses to start without one, since the EV7 console's decompressor
+  would otherwise run on the 21464 **[decision]**; every TPU of every chip
+  takes `ev8_reset` at the image's PAL_BASE + 0xB00 with its TPU_ID,
+  CPU_BASE its chip's PID. The XSROM hand-off and RBOX_SCRATCH1's start
+  protocol stay in the code, unused. `docs/headless.md` and `es40.cfg`
+  say how such a machine is started.
+
+**The tests**:
+
+- `test/cpu/marvel8_mp.py`: one image (the EV8 PALcode, `build_pal8` with
+  `by_chip`: each TPU numbered CPU_BASE x 4 + TPU_ID, its trap record and
+  start word by that number, only number 0 going on) on the ES47 (2 chips
+  of 4 TPUs), the ES80 (8 of 4) and the GS1280 (16 of 2), on the board
+  rows with no test hook, output through GIO to the CMM's terminal. TPU 0
+  of chip 0 checks GIO (DONE at reset, a write that does not complete with
+  the divisor zero and does after one, 32 bits, a read of the CMM's
+  register 0, a character typed at the terminal and echoed), the windows
+  of PIDs 0 and 1 through Linux's KSEG form (SPE43), R_ROUT's entries,
+  each chip's memory word at its PID's base, R_INT_REQ's fields, chip 0's
+  four tick bits and its own cleared, the queue's four entries, a fifth
+  refused, a sym53c810's SCRIPTS INT (LSI 4 of hose 0) refused by the full
+  queue and resent by the IO7 once an entry is taken (the IO7 trace names
+  both: an IO7 interrupt, not a register-level injection), the queue
+  emptied. Every other TPU reads TPU_CNFG, CPU_BASE, its own chip's and the
+  next chip's R_WHOAMI through ipe8, writes its R_INT_MASK (TPU 0 at
+  0x060, read back at 0x3F0000), and waits for an IPI, in QUIESCE or (one
+  in eight) a loop: TPU 0 sends one to each TPU in turn and counts the
+  woken after each, which must be one more each time; then every TPU takes
+  two timer interrupts with its own tick bit set. Then three
+  configurations refused, each for its reason: a GS1280 of nine chips of
+  four TPUs, `ev7` and `ev8n` mixed, no boot image. 129, 447 and 455
+  results (JIT_VERIFY's mismatch count among them) and 3 refusals, 1034
+  in all. A deliberately broken steering (every TPU's lines from all four
+  masks) failed 19 of the ES47's.
+- `test/unit/marvel21464_test.cpp`: the map for all 1024 PIDs (decode,
+  memory, the KSEG property for PIDs 0-31, the fields no PID has, the
+  EV7's map unchanged), the dense topology on the three layouts, the IO7
+  placement, R_ROUT's entries and R_WHOAMI (27115 checks).
+
+**The proofs**: see the status file `lab/runs/ev8-s11b-status.md` and the
+runs it names (filled in below when they end).
+
 ## Findings
 
 On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
@@ -1461,6 +1577,25 @@ S11 (2026-10-25):
 - **The I_CTL and M_CTL selects** write REDUCED_PT (and M_CTL's DBL_ALT)
   only with 11, as their lists give the fields [IDS pp. 489, 506]; a
   PALcode that sets DBL_ALT with the 10 select does not.
+- [ev8-isa.md](ev8-isa.md) needed no correction.
+
+S11b (2026-10-25):
+
+- **2.3's table gave R_n_T2CFG a free offset**: the EV7's port blocks
+  already have RBOX_n_T2CFG at +0x40 (the console's table), so by N20's
+  own rule it is that register; only R_n_CFG2 is new. Corrected in its own
+  commit.
+- **GIO_CNFG's divisor gates the port** [IDS pp. 472-473]: reset leaves
+  the clock stopped, so our PALcode (S12a) must write a divisor before its
+  first GIO transaction. 2.5 lists the field without saying so.
+- **The hoses follow the dense PIDs**: with hose = PID x 4 + port (Linux's
+  IO7_HOSE), an ES80 in 21464 mode has its drawers' hoses at 0-3, 8-11,
+  16-19, 24-27, not the EV7 console's 0-3, 32-35, 64-67, 96-99; a
+  configuration's `pciN.M` places follow.
+- **R_ROUT's flags** (BOU, CAD, PME, PIO, PIP, IME, IIO, IIP, VAL in
+  <8:0>, STF <9>, RNS <10>, REW <11>) were taken from the text layer, in
+  its order; the packet checked only DNS and DEW on the scan. Nothing but
+  our own code reads them.
 - [ev8-isa.md](ev8-isa.md) needed no correction.
 
 ## Rules

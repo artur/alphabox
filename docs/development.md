@@ -303,6 +303,22 @@ TPU_ID, TPUs 1-3 parked with LDQ_ARM and QUIESCE until TPU 0 stores a start
 address in their mailboxes, and each must read CPU_CNFG, a per-chip IPR,
 as TPU 0 wrote it and VCTL, a per-TPU one, as its own. Under a second.
 
+**The Marvel boards in 21464 mode.** `test/cpu/marvel8_mp.py
+<alphabox-binary> [label] [--layout L] [--port N]` boots one image on the
+ES47 (2 chips of 4 TPUs), the ES80 (8 of 4) and the GS1280 (16 of 2) with
+`ev8n` processors, on the board rows and with no hook (the image is the
+machine's `rom.decompressed`, [headless.md](headless.md)), its output on
+the CMM's terminal through GIO. It checks GIO at 32 bits and its clock,
+the terminal echoing a character the tool types, the register windows at
+ipe8 and through Linux's KSEG form, each chip's memory at its PID's base,
+CPU_BASE, R_WHOAMI and R_ROUT, an IPI to each TPU waking it alone (from
+QUIESCE or a loop), the timer's tick per TPU, the interrupt queue's four
+entries and an IO7 interrupt (a sym53c810's SCRIPTS INT) refused by the
+full queue and resent, and that three configurations are refused for
+their reasons ([ev8-native.md](platforms/ev8-native.md), S11b). About
+1030 results, a few seconds; `test/unit/marvel21464_test` is the map and
+topology without an image.
+
 ### Performance
 
 | Tool | Purpose |

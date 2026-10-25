@@ -594,14 +594,16 @@ The `ev8n` row is the 21464 on its own privileged interface, the IDS's
 (stage S11 of [ev8-native.md](platforms/ev8-native.md), whose decisions
 N1 to N31 the owner accepted on 2026-10-25). No firmware or operating
 system exists for it yet: the CPU oracle runs it on the ES40 through
-`ALPHABOX_CPU_ANY_BOARD`, with a PALcode of the image's own. Its user
+`ALPHABOX_CPU_ANY_BOARD`, with a PALcode of the image's own, and the
+Marvel boards take it in 21464 mode (S11b, [below](#the-marvel-model-in-21464-mode-ev8n-on-the-es47-es80-and-gs1280-2026-10-25)),
+started from a boot image. Its user
 instructions and AMASK are the `ev8` row's; what differs is everything
 PALcode sees. The code is `cpu/cpu_pal_ev8.hpp` and `cpu/AlphaCPU_ev8.cpp`.
 IDS is the *21464 Internal Design Specification*, Rev 1.1k, by PDF page.
 
 | What | The `ev8n` row | Basis |
 | --- | --- | --- |
-| Family, row | `CPU_FAMILY_EV8`, a family of its own; IMPLVER 4, AMASK 0x1707, type 18 minor 0, chip ID 0, `CPU_EXT_EV8`; no board takes it | **Alphabox decisions** N16 and D3 |
+| Family, row | `CPU_FAMILY_EV8`, a family of its own; IMPLVER 4, AMASK 0x1707, type 18 minor 0, chip ID 0, `CPU_EXT_EV8`; the ES47, ES80 and GS1280 take it in 21464 mode (below), other boards only through the test hook | **Alphabox decisions** N16 and D3 |
 | Modes | PC<1:0>: 00 normal, 01 PALmode, 11 SuperPALmode; EXC_ADDR and DTBMS_RET_ADDR carry them | [IDS pp. 484-485, 573-574] |
 | SuperPALmode | entered by a RET with Rb<1:0> = 11, behaves as PALmode; no PNMI is ever raised (no PALmode timeout, no TPU restart) | **decision N1** |
 | Jumps in PALmode | every jump-format instruction takes the new mode from Rb<1:0>; the link of every jump, BR and BSR included, keeps the mode bits; Rb<1:0> = 10 is normal mode | **decision N2**; BR and JMP/RET as BSR and JSR, one rule for one instruction with several hints **[inference]**; 10 **[decision]**: no mode has the encoding |
@@ -645,6 +647,47 @@ IDS is the *21464 Internal Design Specification*, Rev 1.1k, by PDF page.
 EV8 PALcode, `image.build_pal8`, runs PALmode snippets through a CALL_PAL
 of its own), and `test/cpu/tpu_mp.py` the four TPUs
 ([development.md](development.md)).
+
+### The Marvel model in 21464 mode (`ev8n` on the ES47, ES80 and GS1280, 2026-10-25)
+
+What the system logic does around an `ev8n` processor (stage S11b,
+[ev8-native.md](platforms/ev8-native.md) section 2, decisions N18 to N23).
+The chip's Rbox, Zbox and GIO registers are the processor's own on a real
+21464, so they are listed here; the board side is
+[marvel.md](platforms/marvel.md), "21464 mode". The code is
+`cpu/ev7/Ev7.hpp` and `chipsets/marvel/`. The EV7 rows and the `ev8` row
+are untouched by all of it.
+
+| What | 21464 mode | Basis |
+| --- | --- | --- |
+| The mode | chosen by the processors' family: a Marvel board of `ev8n` processors; a board refuses the two families mixed | the board rows' `other_cpu_model`; mixing **[decision]** |
+| The map | 48 bits; ipe8(n) = (~n & 0x1fff) << 35; the window at \| 0x7FFC << 20; IO7 port p at \| (~p & 7) << 32; memory of PID n at ((n & 3) \| (n & 0x3fc) << 1) << 34 | **decision N18** |
+| An I/O address whose inverted field names no 10-bit PID (PA<46:45> not 11) | nobody's: traced as unclaimed | **[inference]** |
+| Memory per PID | at most 16 GB (memory.bits 34), as on the EV7 | the IDS's 32 GB per processor [p. 43] is N18's two halves; the second, at + 2^36, is not modelled **[decision]** |
+| PIDs | dense: chip c is PID c, in the configuration's order; a chip's TPUs share its PID, register block and coordinates | **decision N19** |
+| The IO7s | where the board's layout cables them, by the console's number for the place; so the hoses (PID x 4 + port) follow the dense PIDs: an ES80's are 0-3, 8-11, 16-19, 24-27 | **[inference]**: N19 with the hose numbering kept |
+| R_WHOAMI | EW <9:5>, NS <4:0>: the chip's coordinates | [IDS p. 527], N19 |
+| CPU_BASE | the chip's dense PID, checked against the topology at start | N6, N19 |
+| R_ROUT | 532 entries at 0x2000, 0x10 apart, entry n the route to PID n: VAL and the access bits <6:1> set, CAD <7> set, BOU, STF and PAR 0, RNS <10> and REW <11> the hops' directions, DEW <15:12>, DNS <19:16>, IND <21:20> the first hop; N/S hops first; North and East the higher coordinates; the sharing-mask entries 512-531 zero | the fields [IDS pp. 526-527, the text layer's order]; the values **[decision]**: nothing but our own code reads the table |
+| R_CFG2 and the new port registers | R_CFG2 at 0x0E0, R_n_CFG2 at +0x50 of each port block, R_IO_CFG2 at 0xC050, R_IO_T2CFG at 0xC060; stored | **decision N20** and **[decision]** for the offsets; R_n_T2CFG is the EV7's RBOX_n_T2CFG at +0x40 |
+| R_INT_STAT | 0x050, one per chip, 32 bits: IPIs <3:0> (level 3), ticks <7:4> (2), halts <11:8> (4), the queue <12> (1), GIO_INT <13> and GIO_HINT <14> (4), performance <15> and correctable <16> (0), uncorrectable <17> (5), software <31:18> (3); written with ones to clear, <12> only by the queue emptying | **decision N22** |
+| R_INT_MASK | one per TPU, 32 bits: TPU 0's at 0x060 and 0x3F0000, TPU t's at 0x3F0000 + 0x40 x t; TPU t's level L is asserted while a bit of level L is set in R_INT_STAT & R_INT_MASK[t], into its own ISUM<EI>, gated by its own IER_CM<EIEN> | **decision N22** (N7 for the IPRs) |
+| R_INT_REQ | 0x070: sets its bits of <3:0>, <11:8> and <31:18> in R_INT_STAT; reads back what was last written | the fields N22's table gives it **[inference]**; the read-back as the EV7's **[decision]** |
+| The interval timer | R_INTER_TIM's ITV <7:0>; period (ITV + 1) x 2^17 cycles; 0 off; every tick sets <7:4> on each chip whose ITV is not 0; the machine's schedule follows PID 0's | the period **[inference]** (the EV7's, N22); 0 off **[inference]**, as the EV7 model |
+| The interrupt queue | four IIDs of 24 bits; R_INT_QUE reads the head with <24> valid, a write removes it; a fifth refused | **decision N21** [IDS pp. 464, 528] |
+| A processor's write to a full R_INT_QUEADD | dropped and counted | **[decision]**: a store cannot see the WrIONack [IDS p. 528] |
+| The IO7's refused IID | kept, and sent again as soon as an entry of that queue is taken; not in the state file | "retry the same one" [IDS p. 465]; when **[decision]**; the state file **[decision]** |
+| GIO_DATA | 32 bits: a write passes <31:0> on, a read returns DONE <63> and the far register's low 32 bits; DONE reads 1 at reset | **decision N23**; DONE's reset [IDS p. 474] |
+| GIO_CNFG | DIVISOR <7:1>, the rest reading 0; zero (the reset value) stops the clock: a transaction begun then waits, DONE clear, until a divisor is written; the waiting transaction is not in the state file | [IDS pp. 472-473]; the state file **[decision]** |
+| The EV7 console's GIO lock (0x80000) | not decoded | 2.5: our PALcode's lock is a word in memory |
+| The management side's interrupt | R_INT_STAT<13> | N22 |
+| Halts, GIO_HINT, errors, performance | <11:8> set by R_INT_REQ only; <14> to <17> never raised | nothing modelled raises them (N22's table: "not raised") |
+| Start | no console: a boot image given as `rom.decompressed`, refused without one; every TPU of every chip at its PAL_BASE + 0xB00 | N17; the refusal **[decision]**: the EV7 console's decompressor would run on the 21464 |
+| 32 processors | WHAMI = PID x 4 + TPU within Alphabox's 32: more is refused at configuration | N25 and `CSystem::kMaxCPUs` |
+
+`test/cpu/marvel8_mp.py` checks the table on the three layouts, from a boot
+image with the EV8 PALcode, and `test/unit/marvel21464_test.cpp` the map
+and the topology ([development.md](development.md)).
 
 ### Smaller ones
 

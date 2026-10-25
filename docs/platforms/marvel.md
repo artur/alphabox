@@ -19,7 +19,9 @@ machine.
 **Config**: `platform = "es47";` (two processors), `"es80"` (up to eight)
 or `"gs1280"` (up to sixteen) with `ev7` (or `ev7z`, or `ev8`, the 21464 in
 an EV7-compatible mode, [ev8.md](ev8.md), whose TPUs `tpus = 2..4` lists as
-processors of their own, [below](#ev8-s4-what-the-console-does-with-tpus-2026-10-25)) processors and a
+processors of their own, [below](#ev8-s4-what-the-console-does-with-tpus-2026-10-25))
+processors, or `ev8n`, the 21464 on its own interface, which puts the
+machine in [21464 mode](#21464-mode) (no console: a boot image), and a
 `serial0` for the console terminal, PCI devices as `pci<hose>.<slot>`,
 hose = PID * 4 + IO7 port · **Status**: L5 on all three rows (packets
 M0-M6 2026-10-02, M7 2026-10-03 and 10-04, the last checks 2026-10-05).
@@ -527,6 +529,34 @@ where Linux has RBX_IREQ_OFF/RBX_INTA_OFF.
   M1543C RTC use). M4 found it: an MC146818 image in the CMM's memory,
   which OpenVMS reads through GET_TOY (M5).
 
+### 21464 mode
+
+The same three boards with `ev8n` processors, the 21464 on its own
+interface, as it was designed for them ([ev8-native.md](ev8-native.md),
+section 2 and S11b; the chip-side decisions are
+[cpu-fidelity.md](../cpu-fidelity.md), "The Marvel model in 21464 mode").
+The processor family selects the mode: the rows take `ev8n` beside their
+EV7 rows (`other_cpu_model`), and a machine is all one or all the other.
+Beside the EV7 mode, which nothing here changes:
+
+| | EV7 mode (`ev7`, `ev7z`, `ev8`) | 21464 mode (`ev8n`) |
+| --- | --- | --- |
+| Address map | 44 bits; the PE inverted in PA<43:35> | 48 bits; ipe8, the PID inverted in PA<47:35> (N18); the same low 41 bits for PIDs 0-31 |
+| PIDs | the console's coord2id (an ES80: 0, 1, 8, 9, ...) | dense: chip c is PID c (N19) |
+| Register blocks | one per processor (an `ev8` TPU listed by `tpus` has its own) | one per chip, shared by its TPUs |
+| IO7s, hoses | on the layout's PIDs (an ES80's on 0, 8, 16, 24: hoses 0-3, 32-35, 64-67, 96-99) | the same places, dense PIDs (an ES80's on 0, 2, 4, 6: hoses 0-3, 8-11, 16-19, 24-27) |
+| Interrupts | RBOX_INT & RBOX_IMASK by the console PALcode's decode; an unbounded queue | R_INT_STAT's fields and a R_INT_MASK per TPU (N22); four IIDs, the IO7 resending what a full queue refuses (N21) |
+| Timer | RBOX_IT, bit 15 | R_INTER_TIM's ITV, a tick bit per TPU (<7:4>) |
+| GIO | 64-bit data; the console's lock at 0x80000 | 32-bit data, DONE at reset, the clock divisor (N23); no lock register |
+| Start | the XSROM hand-off to the console; secondaries parked on RBOX_SCRATCH1 | no console: a boot image (`rom.decompressed`, required), every TPU at its PAL_BASE + 0xB00 (N17) |
+| Processors | an ES80 of eight, a GS1280 of sixteen; TPUs as listed | at most 32: an ES80 of eight chips of four TPUs, a GS1280 of more than eight with `tpus` below 4 |
+
+The CMM is the same model (one port per PID: a chip's TPUs share theirs);
+its interrupt is R_INT_STAT<13> in 21464 mode. Nothing of the EV7 console
+runs, so everything it read from the CMM (the partition, the routes, the
+FRUs) is there but unread. `test/cpu/marvel8_mp.py` boots the three boards
+this way.
+
 ### The console
 
 **Packaging.** `SRM_V7_3.EXE` is the same "LFU APU" wrapper as the ES40's
@@ -819,6 +849,29 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### EV8 S11b: the boards in 21464 mode (2026-10-25)
+
+The ES47, ES80 and GS1280 take `ev8n` processors, in 21464 mode
+([21464 mode](#21464-mode); [ev8-native.md](ev8-native.md), S11b). What
+the board side needed:
+
+- **The rows**: `other_cpu_model = "ev8n"`; the processor check in
+  `CAlphaCPU` and in `--check` takes a board's either family
+  (`platform_takes`), and a machine mixing the two is refused.
+- **The boot image**: `marvel_board_devices` refuses a 21464-mode machine
+  whose `rom.decompressed` it cannot read, before the loader would run the
+  EV7 console's decompressor on a 21464.
+- **The slots**: `marvel_slot_refusal` builds the dense topology in 21464
+  mode, so the hoses it accepts follow the dense PIDs; the IO7s are
+  attached once per chip.
+- **The CMM**: one port per PID (a chip's TPUs share it); its terminal
+  interrupt goes to the chip's GIO_INT bit, R_INT_STAT<13>.
+
+Nothing in the EV7 mode changed: `boards_check.sh`, its `--diff` against
+main, the EV7 boards with `ev8` of one and of four TPUs, and
+`marvel_init_check.sh gs1280:16` give the earlier results (the proofs are
+in [ev8-native.md](ev8-native.md), S11b).
 
 ### EV8 S4: what the console does with TPUs (2026-10-25)
 
