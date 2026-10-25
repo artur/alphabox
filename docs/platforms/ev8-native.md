@@ -8,7 +8,8 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 [ev8.md](ev8.md); the instruction contract with the nada toolchain is
 [ev8-isa.md](ev8-isa.md); the Marvel machines are [marvel.md](marvel.md).
 
-**Status**: plan only, 2026-10-25. No code. The owner's decisions that
+**Status**: plan, 2026-10-25; N1 to N31 accepted as proposed by the owner
+the same day. No code yet. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S3
 done, S4 in progress), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -17,8 +18,9 @@ native track the place where TPUs are done the IDS's way (2026-10-25).
 
 **Markers**, as in [ev8.md](ev8.md): a bracketed source with a page is a
 fact; **[inference]** is derived from sources but not stated in them;
-**[decision]** is a choice proposed for the owner, numbered N1, N2, ... in
-[section 7](#7-decisions-for-the-owner); **[conflict]** marks sources, or
+**[decision]** is a choice of Alphabox's, numbered N1, N2, ... in
+[section 7](#7-decisions-for-the-owner) (all accepted by the owner on
+2026-10-25); **[conflict]** marks sources, or
 parts of one, that disagree. Where a decision of [ev8.md](ev8.md) carries
 over, it is cited as D1 to D16.
 
@@ -1131,7 +1133,10 @@ existing rows' guests unchanged.
 ## 7. Decisions for the owner
 
 Each is a gap, a conflict or a choice the native track needs. The
-proposal is what this packet assumes; a stage that changes one says so.
+owner accepted all of them as proposed on 2026-10-25, N22's revision of
+D5 for the native track included (D5 stands for EV7-compatible mode); a
+stage that changes one says so. N8's PALcode call (the OS's way to set
+VCTL) gets its function code when S12a starts.
 
 | # | Area | What is missing or in conflict | Proposal | Why |
 | --- | --- | --- | --- | --- |
