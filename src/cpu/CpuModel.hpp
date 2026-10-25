@@ -41,8 +41,13 @@
  * the EV7 console and its PALcodes run unchanged, with the 21464's
  * user-visible instructions on top. Those are the row's extensions
  * (cpu_model::ext, CPU_EXT_*), which the decoder tests; the family stays
- * what the board and the PALcode see. A native EV8 (the IDS's own IPRs and
- * PALcode interface, plan S11) would be a family of its own.
+ * what the board and the PALcode see.
+ *
+ * The native EV8 (the `ev8n` row, docs/platforms/ev8-native.md, S11) is a
+ * family of its own, CPU_FAMILY_EV8: the IDS's IPRs, PALcode instructions
+ * and entries, its modes and shadow registers, its TB with TPU groups, and
+ * four TPUs per chip (cpu_pal_ev8.hpp, AlphaCPU_ev8.cpp). Its user-visible
+ * instructions are the `ev8` row's (CPU_EXT_EV8). No board takes it yet.
  *
  * Every value here is read by the firmware or the operating system, so a
  * wrong one is visible: the console prints the processor's name from the
@@ -62,6 +67,7 @@ enum cpu_family {
   CPU_FAMILY_EV6, ///< 21264 and its shrinks (EV6, EV67, EV68)
   CPU_FAMILY_EV7, ///< 21364: an EV68 core with Rbox, Zbox and Cbox on chip;
                   ///< and the 21464 in EV7-compatible mode
+  CPU_FAMILY_EV8, ///< 21464 on its own privileged interface (ev8n, S11)
 };
 
 /// What an opcode 18 function code with no instruction does. The Alpha
@@ -69,10 +75,12 @@ enum cpu_family {
 /// so every EV6 and EV7 row) completes it as a no-op, the 21164 trapped
 /// (docs/cpu-fidelity.md). An instruction a row adds in that space (the
 /// EV8's, CPU_EXT_EV8) is decoded before this rule applies, so the rule
-/// covers only the codes that are no instruction of the row; a native EV8
-/// family would answer for itself.
+/// covers only the codes that are no instruction of the row. The native EV8
+/// keeps the `ev8` row's rule, whose user instructions it has: the IDS's
+/// decode tables have don't-care bits, and the row decodes the exact codes
+/// [decision, docs/platforms/ev8.md S1-S2 and ev8-native.md S11].
 inline bool cpu_family_unused_misc_is_nop(cpu_family f) {
-  return f == CPU_FAMILY_EV6 || f == CPU_FAMILY_EV7;
+  return f == CPU_FAMILY_EV6 || f == CPU_FAMILY_EV7 || f == CPU_FAMILY_EV8;
 }
 
 /// Instructions a row has beyond its family's core (cpu_model::ext).
@@ -102,8 +110,11 @@ struct cpu_model {
   u16 icache_kb, dcache_kb; ///< on-chip L1 caches
   u16 l2_kb;                ///< on-chip L2 (0: off chip, as on the EV6)
   /// Thread processing units per chip: 1, or the 21464's 4 [IDS p. 46]. A
-  /// row with more than one takes the `tpus` key, 1 by default; with more,
-  /// each TPU is a processor of its own (docs/platforms/ev8.md, S4).
+  /// row with more than one takes the `tpus` key; with more, each TPU is a
+  /// processor of its own (docs/platforms/ev8.md, S4). 1 by default on the
+  /// EV7 family, where TPUs listed as processors are an Alphabox
+  /// construction; all of them on the native EV8, the chip as designed
+  /// (ev8-native.md, N16).
   u8 max_tpus;
 };
 

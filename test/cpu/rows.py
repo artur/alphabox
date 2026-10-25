@@ -23,7 +23,12 @@ skipped:
     for a case that expects OPCDEC or a no-op from it;
   - Own(word): `word` is one of the row's own instructions, for a case of
     that instruction (the EV8's, cases.py group ev8);
-  - UNUSED_MISC_NOP: the row completes an unused 18.xxxx code as a no-op.
+  - UNUSED_MISC_NOP: the row completes an unused 18.xxxx code as a no-op;
+  - PAL21264: the row has the 21264's PALcode interface (its PALshadow
+    registers, I_CTL<SDE>, the AST registers), which the native EV8 does
+    not: the image runs an EV8 PALcode of its own there (image.py,
+    build_pal8) with the same services, but for those;
+  - NATIVE8: the row has the 21464's own (group ev8n, ev8n_cases.py).
 """
 import os
 import re
@@ -33,6 +38,8 @@ AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
               "TRAP": 0x0200, "SMT": 0x0400, "PREFETCH": 0x1000}
 
 UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
+PAL21264 = "the 21264's PALcode interface"
+NATIVE8 = "the 21464's PALcode interface"
 
 
 class Unused:
@@ -119,6 +126,13 @@ class Row:
             if self.own_instruction(need.word):
                 return None
             return "%08x is no instruction of this row" % need.word
+        if need == PAL21264:
+            return None if self.family != "EV8" else (
+                "the native EV8 has the 21464's PALcode interface, not the "
+                "21264's (PALshadow R4-R7/R20-R23, SDE, ASTs)")
+        if need == NATIVE8:
+            return None if self.family == "EV8" else (
+                "the 21464's own PALcode interface is the native EV8's")
         if need == UNUSED_MISC_NOP:
             return None if self.unused_misc_nop else (
                 "unused 18.xxxx codes are not no-ops on this row")
@@ -155,6 +169,19 @@ ROWS = {r.name: r for r in (
     Row("ev8", "21464 (EV8)", "EV7", 4, _EV68 | AMASK_BITS["SMT"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
+        ext={"EV8"},
+        own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
+             (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
+             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}),
+    # The 21464 on its own privileged interface (docs/platforms/ev8-native.md,
+    # S11, N16): a family of its own, the `ev8` row's user instructions and
+    # AMASK. The image runs an EV8 PALcode of its own on it (image.py,
+    # build_pal8), and the cases of the 21264's PALcode interface are
+    # skipped (PAL21264); group ev8n has the 21464's.
+    Row("ev8n", "21464 (EV8), native interface", "EV8", 4,
+        _EV68 | AMASK_BITS["SMT"],
+        "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: the ev8 row's "
+        "(ev8-native.md, N16)",
         ext={"EV8"},
         own={(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
              (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",

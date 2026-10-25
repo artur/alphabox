@@ -20,8 +20,8 @@
 
 /**
  * \file
- * The Alpha processors of the EV6 family this emulator implements, and the
- * EV7 and EV8 parts built on its core.
+ * The Alpha processors of the EV6 family this emulator implements, the
+ * EV7 and EV8 parts built on its core, and the EV8 on its own interface.
  *
  * The EV68CB is here because its values are established: the ES40 console
  * prints "Alpha EV68CB pass 4.0" from them, and the regression logs would
@@ -95,6 +95,23 @@ static const cpu_model models[] = {
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
          AMASK_PREFETCH,
      CPU_FAMILY_EV7, CPU_EXT_EV8, 64, 64, 3072, 4},
+    // 21464 (EV8) on its own privileged interface, the IDS's
+    // (docs/platforms/ev8-native.md, S11, decision N16): a family of its
+    // own, CPU_FAMILY_EV8, with the IDS's IPRs, PALcode instructions,
+    // entries, modes, shadow registers and TB, and four TPUs per chip by
+    // default. IMPLVER 4 [IDS p. 76]; the `ev8` row's AMASK and user
+    // instructions, stage by stage, by the same rule (report what
+    // executes). Type 18 minor 0: the HWRPB's processor type is written by
+    // our console, and 18 is the next free value [decision D3; ARM pp.
+    // 805-807]. Chip ID 0: CPU_CNFG<CHIP_ID> has no value [IDS p. 487], and
+    // nothing reads it but our PALcode [decision N16]. The caches are the
+    // `ev8` row's [IDS pp. 42-43]. No board takes it yet (the Marvel model
+    // in 21464 mode is S11b); the CPU oracle runs it on the ES40 through
+    // ALPHABOX_CPU_ANY_BOARD.
+    {"ev8n", "21464 (EV8), native interface", 0, 18, 0, 4,
+     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
+         AMASK_PREFETCH,
+     CPU_FAMILY_EV8, CPU_EXT_EV8, 64, 64, 3072, 4},
 };
 
 const cpu_model *find_cpu_model(const char *name) {

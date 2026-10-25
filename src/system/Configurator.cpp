@@ -134,12 +134,17 @@ int CConfigurator::processor_tpus(int *chips_out) {
       continue;
     chips++;
     int t = 1;
+    // The native EV8 (ev8-native.md, N16) is the chip as designed: four
+    // TPUs, each a processor, on whatever board runs it (none yet but
+    // through the test hook); the EV7-compatible row lists its TPUs to the
+    // Marvel console only, and has one by default.
+    const bool native = m->family == CPU_FAMILY_EV8;
     if (m->max_tpus > 1) {
-      const u64 n = c->get_num_value("tpus", false, 1);
+      const u64 n = c->get_num_value("tpus", false, native ? m->max_tpus : 1);
       if (n < 1 || n > m->max_tpus)
         FAILURE_4(Configuration, "%s: tpus = %d: a %s has 1 to %d TPUs",
                   c->myName, (int)n, m->part, (int)m->max_tpus);
-      if (n > 1 && !lists_tpus)
+      if (n > 1 && !lists_tpus && !native)
         FAILURE_2(Configuration,
                   "%s: tpus = %d: the TPUs are listed to the console as "
                   "processors of their own on the EV7 boards only (ES47, "
@@ -158,11 +163,19 @@ int CConfigurator::processor_tpus(int *chips_out) {
   }
   if (!tpus)
     tpus = 1;
+  // Off the Marvel boards every TPU is one of the board's processors, and
+  // the board's registers have one set each (the Tsunami's interrupt and
+  // IPI masks, up to four): native EV8 chips there count TPUs against it.
+  if (tpus > 1 && board && !lists_tpus && chips * tpus > board->max_cpus)
+    FAILURE_5(Configuration,
+              "%d processor chips of %d TPUs each are %d processors, and the "
+              "%s takes at most %d",
+              chips, tpus, chips * tpus, board->description, board->max_cpus);
   // TPU t of a chip is its PID with t in the lowest pair of PID bits no
   // chip's PID uses (CMarvelTopology::tpu_shift); a machine whose chips use
   // every pair has no numbers for them. Past the board's chip count the
   // processor count is refused below, or by the board's own limit.
-  if (tpus > 1 && board && chips <= board->max_cpus &&
+  if (tpus > 1 && board && lists_tpus && chips <= board->max_cpus &&
       CMarvelTopology::tpu_shift(board->marvel, chips) < 0)
     FAILURE_2(Configuration,
               "%d chips of %d TPUs: their PIDs leave no pair of bits free, "
@@ -820,6 +833,7 @@ classinfo classes[] = {
     {"ev7", c_ev68cb, ON_CS, kv_ev68cb},
     {"ev7z", c_ev68cb, ON_CS, kv_ev68cb},
     {"ev8", c_ev68cb, ON_CS, kv_ev8},
+    {"ev8n", c_ev68cb, ON_CS, kv_ev8},
     {"ali", c_ali, IS_PCI, kv_ali},
     {"ali_ide", c_ali_ide, IS_PCI | HAS_DISK, kv_ali_ide},
     {"cmd649", c_cmd649, IS_PCI | HAS_DISK, kv_cmd649},

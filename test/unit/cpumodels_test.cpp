@@ -67,6 +67,17 @@ int main() {
   check_row("ev7", CPU_FAMILY_EV7, 3);    // 21364/EV7
   check_row("ev7z", CPU_FAMILY_EV7, 3);   // 21364/EV79
   check_row("ev8", CPU_FAMILY_EV7, 4, CPU_EXT_EV8); // 21464/EV8
+  // The native EV8 (ev8-native.md, N16): a family of its own, the `ev8`
+  // row's user instructions and AMASK, type 18, chip ID 0, four TPUs.
+  check_row("ev8n", CPU_FAMILY_EV8, 4, CPU_EXT_EV8);
+  if (const cpu_model *m = find_cpu_model("ev8n")) {
+    const cpu_model *e = find_cpu_model("ev8");
+    CHECK_EQ(m->amask, e ? e->amask : 0);
+    CHECK_EQ(m->type_major, 18);
+    CHECK_EQ(m->type_minor, 0);
+    CHECK_EQ(m->chip_id, 0);
+    CHECK_EQ(m->max_tpus, 4);
+  }
   // The EV8 reports only what it implements of the IDS's 0x1F07: never
   // more, and the bits of every stage not yet done are clear (S5-S6: bit
   // 11, Tarantula: bit 3). Bit 10 (SMT) is set since S3, with LDx_ARM and
