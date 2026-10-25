@@ -493,9 +493,12 @@ stays as it is; the `ev8n` family gets its own lookup **[decision]**
   WAKEUP and TPU_RESTART are not raised in S11 (N1).
 - **[conflict]** with ev8-isa.md 3.1's note: QUIESCE_TIMEOUT's enables
   reset to 0 [IDS p. 511], which in the native interface means a QUIESCE
-  after reset sleeps until a store or an interrupt. The native row follows
+  after reset sleeps until an interrupt: with WATCH_EN clear "a TPU will
+  not awaken when an access to the WATCH_PHYS_ADDR is detected", and with
+  TIMEOUT_EN clear it does not time out [p. 511]. The native row follows
   the register (enables 0, TIMEOUT 0x280) **[decision]** (part of N17):
-  PALcode sets what it wants; the EV7-compatible row keeps D16.
+  PALcode sets what it wants, WATCH_EN for the parking above; the
+  EV7-compatible row keeps D16.
 - **Interrupts**: six levels into each TPU [IDS p. 465], ISUM and IER_CM
   per TPU [IDS p. 479]; how a chip-level source reaches one TPU is
   [section 2.4](#24-interrupts-steering-to-tpus-ipis-the-timer).
