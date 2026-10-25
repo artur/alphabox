@@ -716,24 +716,46 @@ that restores the old path in the same binary (`ALPHABOX_JIT05_MB=0`,
 `ALPHABOX_JIT05_FENCE=2` fences on every reported store, the simple
 construction the default avoids).
 
-Not measured yet: the host was never quiet while the branch was open
-(other sessions' gates and guests; a load average near 400), and
-`perf_ab.py` refuses to time a round beside them. The runs owed, on the
-branch's JIT build, each switch against itself:
+Measured inside one binary (the branch's JIT build, 9ee50f7), from the
+snapshot, two interleaved rounds each, the switch off in the base arm
+(`perf_ab.py <label> B B --env-base ALPHABOX_<switch>=0 --workload <w>
+--rounds 2 --snapshot`). Other sessions' builds and guests came and went
+throughout, and `perf_ab.py` timed several rounds again because one
+overlapped them:
+
+| ledger row | total, switch off -> on | verdict |
+| --- | --- | --- |
+| `jit0508-jit05-mb-axp` | [8007, 8054] -> [8062, 8742] ms, +4.6% | resolved |
+| `jit0508-jit05-mb-cab` | [7500, 7430] -> [7450, 7620] ms, +0.9% | inconclusive (ranges overlap) |
+| `jit0508-jit05-fence-axp` | [8312, 8484] -> [8375, 8171] ms, -1.5% | inconclusive (ranges overlap) |
+| `jit0508-jit05-fence-cab` | [7430, 7130] -> [7500, 7830] ms, +5.3% | resolved |
+| `jit0508-jit08-xlate-axp` | [8546, 8351] -> [8429, 8343] ms, -0.7% | inconclusive (ranges overlap) |
+| `jit0508-jit08-xlate-cab` | [7780, 7300] -> [7970, 7600] ms, +3.2% | inconclusive (ranges overlap) |
+
+A second sitting of `mb-axp` was stopped unfinished, its last head round
+waiting for a quiet host, so that another session's gate could start: no
+ledger row. Its timed rounds were base 8140 and 8210 ms and head 8078 ms,
+the head faster than either base round.
+
+Every section computed the same results in both arms. The two
+"resolved" rows rest on two rounds each: `mb-axp`'s second head round
+was timed four times for overlapping other work and its fp section
+alone moved 40%, and `fence-cab`'s base arm alone spans 4% (makecab's
+same-binary rows elsewhere in the ledger spread as wide). Both are over
+the 2% the switches were to be collapsed under, so they stay, as does
+`ALPHABOX_JIT08_XLATE` (inconclusive, +3.2% on cab), until the owner
+decides; a run on a quiet host, three rounds or more, is what would
+settle them:
 
 ```
 B=build-jit/alphabox
 for sw in JIT05_MB JIT05_FENCE JIT08_XLATE; do
   for wl in axp cab; do
-    test/tools/perf_ab.py jit0508-$sw-$wl $B $B --env-base ALPHABOX_$sw=0 \
-      --workload $wl --rounds 2 --snapshot
+    test/tools/perf_ab.py jit0508-$sw-$wl-q $B $B --env-base ALPHABOX_$sw=0 \
+      --workload $wl --rounds 3 --snapshot
   done
 done
 ```
-
-Once a switch costs no more than about 2% on either workload it goes, and
-the path it measured stays; over that, the owner decides. Until then no
-number here is a measurement.
 
 ## One binary at a time
 

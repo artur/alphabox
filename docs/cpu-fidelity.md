@@ -1163,9 +1163,10 @@ until they were fixed:
   and on the ES47, Gentoo Linux and Windows XP 64-bit passed
   `guests_check.sh`. The fixes are behind switches still
   (`ALPHABOX_JIT05_MB=0` and `ALPHABOX_JIT05_FENCE=0` restore the old
-  paths, [headless.md](headless.md)) until `perf_ab.py` has measured them
-  on a quiet host ([performance.md](performance.md), "The code-page map's
-  fences, and one translation").
+  paths, [headless.md](headless.md)): `perf_ab.py` measured more than 2%
+  on one workload each, on a busy host and two rounds, and the owner
+  decides ([performance.md](performance.md), "The code-page map's fences,
+  and one translation").
 - **What a block marks as code** (JIT-04). A compiled block copied,
   checked again, hashed and marked in the code-page map its whole
   interpreted span, up to a dispatch batch of 2000 instructions, though
@@ -1208,7 +1209,7 @@ until they were fixed:
   on each superpage, a TB hit, a miss, an access violation and a
   fault-on-read, on every row; the other proofs are JIT-05's, above
   (the same branch). `ALPHABOX_JIT08_XLATE=0` selects the old copies
-  until the measurement.
+  until the owner decides on what was measured.
 - **A chained entry to the PAL reset vector** (JIT-13). The dispatcher
   flushes the instruction cache and the compiled blocks when it enters
   `PAL_BASE` (a firmware updater rewrote the image in place, or a
