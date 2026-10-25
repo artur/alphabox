@@ -115,7 +115,7 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   const CMarvelTopology &t = marvel->topology();
   const marvel_layout *layout = sys->platform().marvel;
   for (int i = 0; i < t.count(); i++)
-    if (t.has_io7(t.node(i).pid))
+    if (!t.node(i).tpu && t.has_io7(t.node(i).pid)) // a chip's, once
       marvel->attach_io7(t.node(i).pid, layout ? layout->io_backplane_rev : 0,
                          layout ? layout->io_type : io7::kIoTypeEmbedded);
 }
