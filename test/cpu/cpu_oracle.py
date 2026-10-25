@@ -61,7 +61,7 @@ CFG = """sys0 = tsunami
 
   cpu0 = %(cpu)s
   {
-    speed = 800M;
+    speed = 800M;%(tpus)s
   }
 
   serial0 = serial
@@ -87,8 +87,13 @@ def free_port():
 
 def run(binary, workdir, cpu, port, env_extra, timeout):
     """Boot the image; return (serial text, emulator output, seconds)."""
+    # The native EV8 has four TPUs by default, all started at reset; the
+    # cases are one processor's (a TPU's first QUIESCE on a page may fail
+    # while the others drop their cached translations, which the timing
+    # cases would see). Its TPUs are test/cpu/tpu_mp.py's.
+    tpus = "\n    tpus = 1;" if rows.ROWS[cpu].family == "EV8" else ""
     with open(os.path.join(workdir, "es40.cfg"), "w") as f:
-        f.write(CFG % {"cpu": cpu, "port": port})
+        f.write(CFG % {"cpu": cpu, "port": port, "tpus": tpus})
     env = dict(os.environ)
     env.update(env_extra)
     out = open(os.path.join(workdir, "alphabox.out"), "wb")

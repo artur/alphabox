@@ -312,6 +312,377 @@ def build_pal(tr_pa, main_va, fatal_va):
     return words
 
 
+# --- The EV8 PALcode: the same services on the 21464's own interface ------------
+#
+# For the `ev8n` row (docs/platforms/ev8-native.md, S11): the 21464's IPRs
+# (alpha_asm.IPR8), HW_MFPR's Rc, RET for every return, IFETCHB after the
+# IPR writes of a flow (Restriction 1), and two shadow registers, S0 and S1,
+# in place of the 21264's eight, so the handlers spill R1-R5 into the trap
+# record's save area. Every TPU enters the reset entry (0xB00, N17); TPU 0
+# goes to the driver, TPUs 1-3 park on a mailbox of their own with LDQ_ARM
+# and QUIESCE (WATCH_EN set, no timeout) and, given an address there, start
+# at it in kernel mode with their own trap record (TR_PA + TR8_BLOCK x TPU).
+# The machine state is the 21264 image's: kernel mode, interrupts off, FP
+# on, ASN 0, TPU group 0, 43-bit VA and 8 KB pages, the code in SPE43 (the
+# KSEG), data through SPE52 (the UART: SEG52), SPE43 and SPE32, the cycle
+# counter's offset 0x12345678, both TBs empty; and QUIESCE_TIMEOUT 0xFFFF0
+# cycles with both enables (the quiesce group's timeout, QUIESCE8_TIMEOUT).
+#
+# The trap record keeps the 21264 image's fields, so that the cases compare
+# what they compare on every row: TR_EXC_ADDR is the restart PC the PALcode
+# returns through (DTBMS_RET_ADDR for the DTB single miss), TR_EXC_SUM the
+# 21264's form (REG<12:8>: the instruction's Rc for ARITH, Ra otherwise;
+# INT<7>). The 21464's own values follow it (TR8_*). An ARITH or MT_FPCR
+# trap resumes at EXC_ADDR, which is the next instruction [IDS p. 485];
+# BAD_JUMP_IVA and DTBM_SINGLE(_CONS) after the instruction, as every fault;
+# an ITB miss in the probe region (PROBE_VA, 64 KB) returns to R17 in
+# kernel mode, as an IACV on the kernel-only code page does.
+
+SEG52 = 0xFFF8000000000000          # SPE52: VA<63:50> = 0x3FFE -> PA<47:0>
+SEG32 = 0xFFFFFFFF80000000          # SPE32: VA<63:30> = 0x3FFFFFFFE -> PA<29:0>
+UART_VA8 = SEG52 | UART_PA
+TR8_EXC_ADDR, TR8_EXC_SUM, TR8_DTBMS, TR8_VA_FORM, TR8_IVA_FORM = (
+    56, 64, 72, 80, 88)
+TR8_SAVE = 0x80                     # R1-R5 while a handler runs
+TR8_BLOCK = 0x400                   # TPU t's trap record: TR_PA + t x 0x400
+TR8_MAILBOX = 0x1000                # TPU t's start word: + 0x40 x t
+PAL8_SNIP_PA = 0x1E0000             # PALmode snippets (CALL_PAL 91)
+PAL8_SNIP_TOP = 0x200000
+PROBE_VA = 0x20010000               # ITB probes: a miss here returns to R17
+QUIESCE8_TIMEOUT = 0xFFFF0          # QUIESCE_TIMEOUT<19:4>, its largest
+I_CTL8 = 2 << 24                    # SPE43
+M_CTL8 = 7 << 24                    # SPE52, SPE43, SPE32
+# The entries the PALcode does not return from (chapter 22's).
+FATAL8 = (0x000, 0x080, 0x500, 0x780, 0x980, 0xA00, 0xA80, 0xB00, 0xB80)
+# The reset record (in each TPU's trap record): these IPRs as the reset
+# left them, then the entry the TPU came through.
+RESET_IPRS = ("i_ctl", "m_ctl", "i_mode", "m_mode", "i_pctx", "m_pctx",
+              "ier_cm", "sirr", "isum", "cc", "quiesce_timeout", "pal_base",
+              "pal_temp1", "pal_temp2", "vctl", "tpu_cnfg", "cpu_cnfg",
+              "cpu_base", "dc_ctl", "dc_stat", "ic_stat", "exc_addr",
+              "exc_sum", "m_stat", "va", "dtbms_ret_addr")
+TR8_RESET = 0x200
+TR8_RESET_ENTRY = TR8_RESET + 8 * len(RESET_IPRS)
+VECTORS8 = dict(VECTORS)
+VECTORS8.update({0x100: "DTBM_DOUBLE", 0x180: "DTBM_DOUBLE_ALT",
+                 0x780: "IMCHK", 0x800: "DTBM_SINGLE_CONS",
+                 0x880: "ITB_MISS_CONS", 0x900: "BAD_JUMP_IVA",
+                 0x980: "FAST_RESET", 0xA00: "WAKEUP", 0xA80: "TPU_RESTART",
+                 0xB80: "DST_NXM"})
+
+
+def li8(asm, ra, rb, value):
+    """asm.li for a register named `ra` as destination and `rb` as operand
+    B: a shadow register's two numbers (S0: 24 and 22), or the same number
+    twice for any other register."""
+    value &= (1 << 64) - 1
+    sval = value - (1 << 64) if value >> 63 else value
+
+    def add32(base_b, v):
+        lo = v & 0xFFFF
+        lo = lo - 0x10000 if lo >= 0x8000 else lo
+        hi = (v - lo) >> 16
+        assert -0x8000 <= hi < 0x8000
+        if hi:
+            asm.emit(mem(OP["LDAH"], ra, base_b, hi))
+            base_b = rb
+        if lo or base_b != rb:
+            asm.emit(mem(OP["LDA"], ra, base_b, lo))
+
+    if -0x80000000 <= sval < 0x7FFF8000:
+        add32(R31, sval)
+        return
+    lo = value & 0xFFFFFFFF
+    lo_s = lo - (1 << 32) if lo >> 31 else lo
+    hi = (sval - lo_s) >> 32
+    add32(R31, hi)
+    asm.emit(opl(0x12, 0x39, ra, 32, ra))   # SLL: Ra reads as operand A
+    if lo_s:
+        add32(rb, lo_s)
+
+
+def build_pal8(tr_pa, main_va, fatal_va):
+    """The EV8 PALcode, PAL_BASE-relative, as {address: word}."""
+    I = A.IPR8
+    mf, mt = A.hw_mfpr8, A.hw_mtpr8
+    S0A, S1A, S0B, S1B = A.S0A, A.S1A, A.S0B, A.S1B
+    words = {}
+
+    def ld(ra, disp):           # HW_LDQ/P ra <- [S0 + disp]
+        return A.hw_ld8(ra, S0B, disp)
+
+    def st(ra, disp):
+        return A.hw_st8(ra, S0B, disp)
+
+    def save(a, regs):
+        for k, r in enumerate(regs):
+            a.emit(st(r, TR8_SAVE + 8 * k))
+
+    def restore(a, regs):
+        for k, r in enumerate(regs):
+            a.emit(ld(r, TR8_SAVE + 8 * k))
+
+    def bump(a, disp):          # [S0 + disp] += 1, through R1
+        a.emit(ld(1, disp))
+        a.emit(opl(0x10, 0x20, 1, 1, 1))
+        a.emit(st(1, disp))
+
+    # Reset (every TPU): the machine state, then TPU 0 to the driver.
+    init = Asm(PAL_PA + 0x4000)
+    # This TPU's trap record (R1), and in it the IPRs as reset left them
+    # and the entry taken (S1, set by the entry's first instruction).
+    init.emit(mf(2, I["tpu_cnfg"]))
+    init.emit(opl(0x12, 0x34, 2, 56, 2))    # SRL: TPU_ID
+    init.emit(opl(0x12, 0x39, 2, 10, 3))    # SLL: x TR8_BLOCK (0x400)
+    li8(init, 1, 1, tr_pa)
+    init.emit(opr(0x10, 0x20, 1, 3, 1))
+    for k, name in enumerate(RESET_IPRS):
+        init.emit(mf(4, I[name]))
+        init.emit(A.hw_st8(4, 1, TR8_RESET + 8 * k))
+    init.emit(A.hw_st8(S1A, 1, TR8_RESET_ENTRY))
+    init.emit(mt(1, I["pal_temp1"]))
+    li8(init, 4, 4, I_CTL8)
+    init.emit(mt(4, I["i_ctl"]))
+    li8(init, 4, 4, M_CTL8)
+    init.emit(mt(4, I["m_ctl"]))
+    init.emit(mt(R31, I["ier_cm"]))         # kernel mode, interrupts off
+    init.emit(mt(R31, I["sirr"]))
+    init.emit(mt(R31, I["m_mode"]))
+    init.emit(mt(R31, I["i_mode"]))
+    li8(init, 1, 1, 1 << 19)                # FP_ENABLE, ASN 0, group 0
+    init.emit(mt(1, I["i_pctx"]))
+    init.emit(mt(R31, I["m_pctx"]))
+    init.emit(mem(OP["LDA"], 1, R31, 0x10))  # all groups, the write pointer
+    init.emit(mt(1, I["itb_im"]))
+    init.emit(mt(1, I["dtb_im"]))
+    li8(init, 1, 1, 0x1234567800000001)     # CC: offset, enabled, count 0
+    init.emit(mt(1, I["cc"]))
+    li8(init, 1, 1, QUIESCE8_TIMEOUT | 3)
+    init.emit(mt(1, I["quiesce_timeout"]))
+    init.emit(A.ifetchb())
+    init.branch(OP["BNE"], 2, "park")
+    li8(init, 1, 1, main_va)
+    init.emit(A.ret(1))                     # normal mode: Rb<1:0> = 00
+    # TPUs 1-3: LDQ_ARM on the mailbox, QUIESCE until it holds an address
+    # (WATCH_EN only: no timeout, N17), then start there.
+    init.label("park")
+    init.emit(opl(0x12, 0x39, 2, 6, 3))     # x 0x40
+    li8(init, 4, 4, kseg(tr_pa + TR8_MAILBOX))
+    init.emit(opr(0x10, 0x20, 4, 3, 4))
+    init.emit(mem(OP["LDA"], 1, R31, 2))
+    init.emit(mt(1, I["quiesce_timeout"]))
+    init.emit(A.ifetchb())
+    init.label("park_loop")
+    init.emit(A.mfc(A.MISC["LDQ_ARM"], 5, 4))
+    init.branch(OP["BNE"], 5, "go")
+    init.emit(A.mfc(A.MISC["QUIESCE"]))
+    init.branch(OP["BR"], R31, "park_loop")
+    init.label("go")
+    li8(init, 1, 1, QUIESCE8_TIMEOUT | 3)
+    init.emit(mt(1, I["quiesce_timeout"]))
+    init.emit(A.ifetchb())
+    init.emit(A.ret(5))
+
+    # The common exception handler: S1 = the vector offset.
+    com = Asm(PAL_PA + 0x4800)
+    com.emit(mf(S0A, I["pal_temp1"]))
+    save(com, [1, 2, 3, 4, 5])
+    bump(com, TR_COUNT)
+    bump(com, TR_TOTAL)
+    com.emit(opr(0x11, 0x20, R31, S1B, 1))  # BIS: r1 = vector
+    com.emit(st(1, TR_VEC))
+    for reg, ipr, disp in ((1, "exc_addr", TR8_EXC_ADDR),
+                           (2, "dtbms_ret_addr", TR8_DTBMS),
+                           (3, "exc_sum", TR8_EXC_SUM),
+                           (4, "va_form", TR8_VA_FORM),
+                           (4, "iva_form", TR8_IVA_FORM),
+                           (4, "m_stat", TR_MM_STAT),
+                           (4, "va", TR_VA)):
+        com.emit(mf(reg, I[ipr]))
+        com.emit(st(reg, disp))
+    # The restart PC: DTBMS_RET_ADDR for the DTB single miss, else EXC_ADDR.
+    for v in (0x300, 0x800):
+        com.emit(mem(OP["LDA"], 5, S1B, -v))
+        com.branch(OP["BEQ"], 5, "dtbm")
+    com.branch(OP["BR"], R31, "restart")
+    com.label("dtbm")
+    com.emit(opr(0x11, 0x20, R31, 2, 1))
+    com.label("restart")
+    com.emit(st(1, TR_EXC_ADDR))
+    # EXC_SUM in the 21264's form: <6:0>, INT<13> -> <7>, REG<12:8>.
+    com.emit(opl(0x11, 0x00, 3, 0x7F, 2))
+    com.emit(opl(0x12, 0x34, 3, 13, 4))
+    com.emit(opl(0x11, 0x00, 4, 1, 4))
+    com.emit(opl(0x12, 0x39, 4, 7, 4))
+    com.emit(opr(0x11, 0x20, 2, 4, 2))
+    com.emit(opl(0x12, 0x34, 3, 24, 4))     # Ra
+    com.emit(mem(OP["LDA"], 5, S1B, -0x600))
+    com.branch(OP["BNE"], 5, "not_arith")
+    com.emit(opl(0x12, 0x34, 3, 14, 4))     # Rc
+    com.label("not_arith")
+    com.emit(opl(0x11, 0x00, 4, 31, 4))
+    com.emit(opl(0x12, 0x39, 4, 8, 4))
+    com.emit(opr(0x11, 0x20, 2, 4, 2))
+    com.emit(st(2, TR_EXC_SUM))
+    com.emit(mem(OP["LDA"], 5, S1B, -0x680))
+    com.branch(OP["BEQ"], 5, "intr")
+    com.emit(mem(OP["LDA"], 5, S1B, -0x480))
+    com.branch(OP["BEQ"], 5, "iacv")
+    for v in (0x580, 0x880):
+        com.emit(mem(OP["LDA"], 5, S1B, -v))
+        com.branch(OP["BEQ"], 5, "itbmiss")
+    for v in FATAL8:
+        com.emit(mem(OP["LDA"], 5, S1B, -v))
+        com.branch(OP["BEQ"], 5, "fatal")
+    for v in (0x600, 0x700):                # restart at the next instruction
+        com.emit(mem(OP["LDA"], 5, S1B, -v))
+        com.branch(OP["BEQ"], 5, "resume")
+    com.emit(opl(0x10, 0x20, 1, 4, 1))      # a fault: skip the instruction
+    com.label("resume")
+    com.emit(opr(0x11, 0x20, R31, 1, S1A))  # S1 = the restart PC
+    restore(com, [1, 2, 3, 4, 5])
+    com.emit(A.ret(S1B))
+    com.label("intr")                       # nothing stays pending or enabled
+    com.emit(mt(R31, I["sirr"]))
+    com.emit(mt(R31, I["ier_cm"]))
+    com.emit(A.ifetchb())
+    com.branch(OP["BR"], R31, "resume")
+    com.label("iacv")                       # the kernel-only code page
+    com.emit(opl(0x12, 0x34, 1, 13, 2))
+    li8(com, 3, 3, KCODE_VA >> 13)
+    com.emit(opr(0x10, 0x2D, 2, 3, 2))      # CMPEQ
+    com.branch(OP["BEQ"], 2, "fatal")
+    com.emit(mt(R31, I["i_mode_cur"]))      # kernel mode
+    com.emit(A.ifetchb())
+    com.branch(OP["BR"], R31, "to_r17")
+    com.label("itbmiss")                    # the probe region
+    com.emit(opl(0x12, 0x34, 1, 16, 2))
+    li8(com, 3, 3, PROBE_VA >> 16)
+    com.emit(opr(0x10, 0x2D, 2, 3, 2))
+    com.branch(OP["BEQ"], 2, "fatal")
+    com.label("to_r17")
+    com.emit(opr(0x11, 0x20, R31, 17, S1A))
+    restore(com, [1, 2, 3, 4, 5])
+    com.emit(A.ret(S1B))
+    com.label("fatal")
+    li8(com, 1, 1, fatal_va)
+    com.emit(A.ret(1))
+
+    # CALL_PAL entries [IDS p. 499]: privileged at 0x2000 + func x 0x40,
+    # unprivileged at 0x3000 + (func & 0x3f) x 0x40; S1 holds the return PC.
+    # One not given a service counts itself (vector 0x2000 + offset,
+    # EXC_ADDR the return PC) and returns.
+    cp = Asm(PAL_PA + 0x4C00)               # R1 (saved) = the offset
+    cp.emit(st(1, TR_VEC))
+    bump(cp, TR_COUNT)
+    bump(cp, TR_TOTAL)
+    cp.emit(opr(0x11, 0x20, R31, S1B, 1))
+    cp.emit(st(1, TR_EXC_ADDR))
+    restore(cp, [1])
+    cp.emit(A.ret(S1B))
+
+    # CALL_PAL 02: the user-mode translations (the 21264 image's, in the
+    # 21464's PTE forms: the PFN in <63:32>, VALID <0> in the DTB's), then
+    # CM = user, at R16.
+    umode = Asm(PAL_PA + 0x5000)
+    for va, pte, itb in (
+            (USER_CODE_VA, (USER_PA >> 13) << 32 | 0xF00 | 0x10, True),
+            (KCODE_VA, (KCODE_PA >> 13) << 32 | 0x100 | 0x10, True),
+            (USER_DATA_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0xFF11, False),
+            (USER_KONLY_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0x1111, False),
+            (USER_FAULT_VA, ((SCR_PA + 0x4000) >> 13) << 32 | 0xFF17, False)):
+        li8(umode, S0A, S0B, va)
+        if itb:
+            umode.emit(mt(S0B, I["itb_tag"]))
+        else:
+            umode.emit(mt(S0B, I["dtb_tag0"]))
+            umode.emit(mt(S0B, I["dtb_tag1"]))
+        li8(umode, S0A, S0B, pte)
+        if itb:
+            umode.emit(mt(S0B, I["itb_pte"]))
+        else:
+            umode.emit(mt(S0B, I["dtb_pte0"]))
+            umode.emit(mt(S0B, I["dtb_pte1"]))
+        umode.emit(A.ifetchb())
+    umode.emit(mem(OP["LDA"], S0A, R31, 3 << 3))  # CM = user
+    umode.emit(mt(S0B, I["i_mode_cur"]))
+    umode.emit(A.ifetchb())
+    umode.emit(A.ret(16))
+    blocks = [init, com, cp, umode]
+
+    for off in VECTORS8:
+        if off == 0xB00:
+            continue
+        v = Asm(PAL_PA + off)
+        v.emit(mem(OP["LDA"], S1A, R31, off))
+        v.emit(bra(OP["BR"], R31, (com.base - (v.here + 4)) // 4))
+        blocks.append(v)
+    reset = Asm(PAL_PA + 0xB00)             # MILD_RESET, power-up (N11)
+    reset.emit(mem(OP["LDA"], S1A, R31, 0xB00))
+    reset.emit(bra(OP["BR"], R31, (init.base - (reset.here + 4)) // 4))
+    entry0 = Asm(PAL_PA)                    # the SWPPAL/SROM entry
+    entry0.emit(mem(OP["LDA"], S1A, R31, 0))
+    entry0.emit(bra(OP["BR"], R31, (init.base - (entry0.here + 4)) // 4))
+    blocks += [reset, entry0]
+    for func in list(range(0x00, 0x40)) + list(range(0x80, 0xC0)):
+        off = 0x2000 + ((func & 0x80) << 5) + ((func & 0x3F) << 6)
+        e = Asm(PAL_PA + off)
+        if func == 0x00:                   # HALT: exit_on_pal_halt ends the run
+            e.emit(bra(OP["BR"], R31, -1))
+        elif func == 0x01:                 # FP_ENABLE <- R16<0>
+            e.emit(opl(0x12, 0x39, 16, 19, S0A))
+            e.emit(mt(S0B, I["i_pctx_fpe"]))
+            e.emit(A.ifetchb())
+            e.emit(A.ret(S1B))
+        elif func == 0x02:                 # user mode at R16
+            e.emit(bra(OP["BR"], R31, (umode.base - (e.here + 4)) // 4))
+        elif func == 0x84:                 # kernel mode at R17
+            e.emit(mt(R31, I["i_mode_cur"]))
+            e.emit(A.ifetchb())
+            e.emit(A.ret(17))
+        elif func == 0x83:                 # R0 <- S1 (the return), R1 <- EXC_ADDR
+            e.emit(opr(0x11, 0x20, R31, S1B, 0))
+            e.emit(mf(1, I["exc_addr"]))
+            e.emit(A.ret(S1B))
+        elif func == 0x85:                 # SIRR <- R16, IER_CM <- R17
+            e.emit(mt(16, I["sirr"]))
+            e.emit(mt(17, I["ier_cm"]))
+            e.emit(A.ifetchb())
+            e.emit(A.ret(S1B))
+        elif func == 0x8C:                 # IER_CM <- R17
+            e.emit(mt(17, I["ier_cm"]))
+            e.emit(A.ifetchb())
+            e.emit(A.ret(S1B))
+        elif func in (0x8D, 0x8E):         # 8D: HW_STL R17 -> phys R16; IC_FLUSH
+            if func == 0x8D:
+                e.emit(A.hw_st8(17, 16, 0, length=2))
+            e.emit(mt(R31, I["ic_flush"]))
+            e.emit(A.ifetchb())
+            e.emit(A.ret(S1B))
+        elif func == 0x91:                 # a PALmode snippet at physical R16
+            e.emit(mt(S1B, I["pal_temp2"]))
+            e.emit(opl(0x11, 0x20, 16, 1, S0A))   # BIS: R16 | PALmode
+            e.emit(A.ret(S0B))
+        else:
+            e.emit(mf(S0A, I["pal_temp1"]))
+            e.emit(st(1, TR8_SAVE))
+            e.emit(mem(OP["LDA"], 1, R31, off))
+            e.emit(bra(OP["BR"], R31, (cp.base - (e.here + 4)) // 4))
+        assert len(e.words) <= 0x40 // 4, hex(func)
+        blocks.append(e)
+
+    for b in blocks:
+        for i, w in enumerate(b.finish()):
+            a = b.base + 4 * i
+            assert a not in words, hex(a)
+            words[a] = w
+    return words
+
+
+# How a PALmode snippet (CALL_PAL 91) returns: S1 from PAL_TEMP2, RET.
+PAL8_RETURN = [A.hw_mfpr8(A.S1A, A.IPR8["pal_temp2"]), A.ret(A.S1B)]
+
+
 def emit_print_hex(asm):
     """print_hex: R16 = address, R17 = quadword count, R18 = return.
     Each quadword as 16 hex digits and a newline, through COM1 THR."""
@@ -383,6 +754,11 @@ class Builder:
         self.expected_traps = 0
         self.scratch = kseg(SCR_PA)
         self.trap_record = kseg(TR_PA)
+        # The native EV8 runs the EV8 PALcode (build_pal8), and reaches the
+        # UART through its 52-bit superpage.
+        self.ev8n = self.row.family == "EV8"
+        self.uart_va = UART_VA8 if self.ev8n else UART_VA
+        self.pal8 = Asm(PAL8_SNIP_PA)   # PALmode snippets (pal8_call)
 
     def va(self):
         """The virtual address of the next instruction."""
@@ -445,6 +821,7 @@ class Builder:
             "fixups": len(self.asm.fixups), "user": len(self.user.words),
             "kcode": len(self.kcode.words), "results": len(self.results),
             "pool": len(self.pool), "traps": self.expected_traps,
+            "pal8": len(self.pal8.words),
             "res_base": self.res_base})
 
     def _close(self):
@@ -468,6 +845,7 @@ class Builder:
                              len(self.results) - s["results"]))
         del self.results[s["results"]:]
         self.pool = {v: i for v, i in self.pool.items() if i < s["pool"]}
+        del self.pal8.words[s["pal8"]:]
         self.expected_traps = s["traps"]
         self.res_base = s["res_base"]
 
@@ -488,6 +866,26 @@ class Builder:
 
     def emit(self, word):
         return self.asm.emit(word)
+
+    def pal8_snippet(self, words):
+        """PALmode code for the EV8 PALcode's CALL_PAL 91, which runs it at
+        its physical address in PALmode; it returns to the instruction after
+        the CALL_PAL (PAL8_RETURN). Returns the address."""
+        pa = self.pal8.here
+        for w in list(words) + PAL8_RETURN:
+            self.pal8.emit(w)
+        return pa
+
+    def pal8_call(self, words):
+        """Run `words` in PALmode now (the native EV8's image only): R16
+        is the snippet's address, the others are the case's. Elsewhere
+        the case is skipped (rows.NATIVE8), and this is taken back with it.
+        Returns the snippet's address and the CALL_PAL's VA."""
+        pa = self.pal8_snippet(words)
+        self.li(16, pa)
+        at = self.va()
+        self.emit(call_pal(0x91))
+        return pa, at
 
     def li(self, reg, value):
         self.asm.li(reg, value)
@@ -531,6 +929,10 @@ class Builder:
         masked EXC_SUM and VA asked for. `known` = (count, reference[,
         scope]) for a documented divergence in whether the trap is taken."""
         count = 0 if vector is None else 1
+        # The 21464's restart PC for ARITH and MT_FPCR is the next
+        # instruction's, which EXC_ADDR holds [IDS pp. 485, 630].
+        if self.ev8n and vector in (0x600, 0x700) and exc_addr is not None:
+            exc_addr += 4
         self.expected_traps += count
 
         self.asm.emit(ldq(0, R_TR, TR_COUNT))
@@ -557,7 +959,7 @@ class Builder:
         emit_print_hex(a)
 
         a.label("fatal")                   # an exception nothing can resume
-        a.li(R_UART, UART_VA)
+        a.li(R_UART, self.uart_va)
         emit_print_text(a, "\n@@FATAL\n")
         a.li(16, kseg(TR_PA))
         a.li(17, 7)
@@ -566,7 +968,7 @@ class Builder:
 
         a.label("main")
         a.li(R_TR, kseg(TR_PA))
-        a.li(R_UART, UART_VA)
+        a.li(R_UART, self.uart_va)
         a.emit(bis(R31, R31, R_PASS))
         a.label("pass")
         a.li(R_POOL, kseg(POOL_PA) + 32768)
@@ -604,7 +1006,8 @@ class Builder:
         assert 8 * nres <= BUF_B_PA - BUF_A_PA
 
         img = bytearray(IMAGE_TOP)
-        pal = build_pal(TR_PA, kseg(a.labels["main"]), kseg(a.labels["fatal"]))
+        pal = (build_pal8 if self.ev8n else build_pal)(
+            TR_PA, kseg(a.labels["main"]), kseg(a.labels["fatal"]))
         # What the cases kept, the row has; anything else is the image's own
         # (print_hex's STB is BWX), and a row without it cannot be tested.
         lacks = sorted({self.row.lacks(n) for n in filter(None, map(
@@ -623,6 +1026,9 @@ class Builder:
             struct.pack_into("<I", img, USER_PA + 4 * i, w)
         for i, w in enumerate(self.kcode.finish()):
             struct.pack_into("<I", img, KCODE_PA + 4 * i, w)
+        assert PAL8_SNIP_PA + 4 * len(self.pal8.words) <= PAL8_SNIP_TOP
+        for i, w in enumerate(self.pal8.finish()):
+            struct.pack_into("<I", img, PAL8_SNIP_PA + 4 * i, w)
         for p in CONSOLE_PATCHES:
             assert img[p:p + 4] == bytes(4), "a console patch lands on the image"
         self.code_words = len(code)

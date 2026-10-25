@@ -9,7 +9,9 @@ Manual's (chapter 6.4 and Table 5-1).
 
 The 21464's (EV8's) additions are its Internal Design Specification's (Rev
 1.1k), as docs/platforms/ev8-isa.md fixes them for Alphabox and the nada
-toolchain: CMOV2, FCMOV2, MAP_ALIGN, CCB, LDL_ARM, LDQ_ARM and QUIESCE.
+toolchain: CMOV2, FCMOV2, MAP_ALIGN, CCB, LDL_ARM, LDQ_ARM and QUIESCE; and
+its own PALcode forms and IPR names, as docs/platforms/ev8-native.md 3.5
+gives them (hw_mfpr8, hw_mtpr8, hw_ld8, hw_st8, ifetchb, ret, IPR8).
 
 Nothing here knows what an instruction does: that is aarm.py's job.
 """
@@ -106,6 +108,78 @@ IPR = {
 }
 # PCTX field selects (index bits <4:0>): ASN, ASTER, ASTRR, PPCE, FPE.
 PCTX_FPE = 0x10
+
+# --- the 21464's PALcode forms (IDS pp. 569-574, 650; ev8-native.md 3.5) ----
+
+
+def hw_mfpr8(rc, ipr, rclass=0):
+    """HW_MFPR: Rclass <24:21>, index <12:5>, the destination Rc <4:0>."""
+    return ((0x19 << 26) | ((rclass & 0xF) << 21) | ((ipr & 0xFF) << 5) |
+            (rc & 0x1F))
+
+
+def hw_mtpr8(rb, ipr, rclass=0, wclass=0):
+    """HW_MTPR: Rclass <24:21>, the source Rb <20:16>, index <12:5>, Wclass
+    <4:0> (bubble, valid, class)."""
+    return ((0x1D << 26) | ((rclass & 0xF) << 21) | ((rb & 0x1F) << 16) |
+            ((ipr & 0xFF) << 5) | (wclass & 0x1F))
+
+
+# HW_LD/HW_ST types <15:13> and lengths <12:11> [IDS p. 570].
+HW8_TYPE = {"p": 0, "pte": 2, "v": 4, "wchk": 5, "a": 6, "wchk_a": 7}
+HW8_LEN = {"b": 0, "w": 1, "l": 2, "q": 3}
+
+
+def hw_ld8(ra, rb, disp, typ=0, length=3):
+    """HW_LD: type <15:13>, length <12:11>, an 11-bit signed displacement."""
+    assert -0x400 <= disp < 0x400, disp
+    return ((0x1B << 26) | (ra << 21) | (rb << 16) | ((typ & 7) << 13) |
+            ((length & 3) << 11) | (disp & 0x7FF))
+
+
+def hw_st8(ra, rb, disp, typ=0, length=3):
+    assert -0x400 <= disp < 0x400, disp
+    return ((0x1F << 26) | (ra << 21) | (rb << 16) | ((typ & 7) << 13) |
+            ((length & 3) << 11) | (disp & 0x7FF))
+
+
+def ifetchb():
+    """IFETCHB: opcode 1E, the other bits zero [IDS p. 650]."""
+    return 0x1E << 26
+
+
+def ret(rb, ra=R31, hint=0):
+    """RET: in PALmode the new mode is Rb<1:0> (00 normal, 01 PALmode, 11
+    SuperPALmode) [IDS p. 573]."""
+    return jmp(2, ra, rb, hint)
+
+
+# The shadow registers by position [IDS p. 580]: S0 and S1 are named R24
+# and R25 as operand A or the destination, R22 and R23 as operand B.
+S0A, S1A, S0B, S1B = 24, 25, 22, 23
+
+# The 21464's IPR names (ev8-native.md 3.5): a field-select variant is a
+# name of its own; cpu_base, vctl, ier_cm, sirr, isum and hw_int_clr are
+# Alphabox's indexes (N6-N8).
+IPR8 = {
+    "i_ctl": 0x83, "i_ctl_vpte": 0x81, "i_ctl_spe": 0x82,
+    "i_mode": 0x8B, "i_mode_cur": 0x89, "i_mode_con": 0x8A,
+    "i_pctx": 0x97, "i_pctx_asn": 0x91, "i_pctx_grp": 0x92,
+    "i_pctx_fpe": 0x94, "exc_sum": 0xA0, "exc_addr": 0xA1, "iva_form": 0xA3,
+    "dtbms_ret_addr": 0xA6, "dtbms_ret_addr_blk": 0xA7, "pal_base": 0xA8,
+    "pal_temp1": 0xA9, "pal_temp2": 0xAA, "cpu_base": 0xAB, "vctl": 0xAC,
+    "ier_cm": 0xB0, "sirr": 0xB1, "isum": 0xB2, "hw_int_clr": 0xB3,
+    "cc": 0xBB, "cc_offset": 0xB9, "cc_count": 0xBA, "itb_im": 0xC0,
+    "itb_is": 0xC2, "itb_pte": 0xC4, "itb_tag": 0xC6, "cpu_cnfg": 0xC8,
+    "ic_stat": 0xC9, "ic_flush": 0xCC, "ic_flush_asm": 0xCD,
+    "tpu_cnfg": 0xD8,
+    "m_ctl": 0x03, "m_ctl_vpte": 0x01, "m_ctl_spe": 0x02, "m_mode": 0x0F,
+    "m_mode_cur": 0x09, "m_mode_con": 0x0A, "m_mode_alt": 0x0C,
+    "m_pctx": 0x13, "m_pctx_asn": 0x11, "m_pctx_grp": 0x12, "m_stat": 0x20,
+    "va": 0x21, "va_form": 0x23, "quiesce_timeout": 0x38, "dtb_im": 0x40,
+    "dtb_is": 0x42, "dtb_pte0": 0x44, "dtb_pte1": 0x45, "dtb_tag0": 0x46,
+    "dtb_tag1": 0x47, "dc_ctl": 0x48, "dc_stat": 0x49,
+}
 
 # --- opcodes and function codes (ARM appendix C) ----------------------------
 

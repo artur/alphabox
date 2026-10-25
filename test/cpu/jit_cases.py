@@ -743,6 +743,8 @@ def g_jitint(b):
             ("software interrupt (SIRR, IER)", 0x85, SIRR_SI1, IER_SIEN1),
             ("kernel AST (ASTER, ASTRR, ASTEN)", 0x86, AST_K, IER_ASTEN)):
         b.begin("jitint: %s raised in PALcode" % name)
+        if svc == 0x86:     # the AST registers are the 21264's
+            b.need(rows.PAL21264)
         for r, v in vals.items():
             b.load(r, v)
         b.load(16, r16)
@@ -866,6 +868,7 @@ def g_jitpal(b):
     for a16, a17 in ((5, 9), (0xFFFFFFFFFFFFFFF0, 3), (0x123456789, 0x123456789),
                      (0x7FFFFFFFFFFFFFFF, 0x8000000000000000)):
         b.begin("jitpal: CALL_PAL 8A (R16=%s R17=%s)" % (_h(a16), _h(a17)))
+        b.need(rows.PAL21264)
         for r in shadowed:
             b.load(r, 0xA0A0A0A000000000 | r)
         b.load(16, a16)
@@ -886,6 +889,7 @@ def g_jitpal(b):
     # R4; the block of CALL_PAL 88 compiled with it set must not run then.
     E, T = 13, 14
     b.begin("jitpal: PALmode R4 with SDE<1> clear on the edge passes")
+    b.need(rows.PAL21264)
     edge(b, E, T)
     b.load(4, 0x4444444444444444)
     b.load(23, 0x2323232323232323)

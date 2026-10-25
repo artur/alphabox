@@ -15,6 +15,7 @@ rest it asks for with b.need().
 """
 import aarm
 import alpha_asm as A
+import ev8n_cases
 from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
 import jit_cases
@@ -43,7 +44,7 @@ GROUPS = [
             "row has them, MAP_ALIGN and WH64EN on every row"),
     ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
                 "them (one processor: the timeout), AMASK bit 10"),
-] + jit_cases.GROUPS
+] + jit_cases.GROUPS + ev8n_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
 
@@ -1202,7 +1203,9 @@ def _quiesce_timed(b, field, slept):
     b.emit(mfc(A.MISC["RPCC"], 11))
     b.emit(opr(0x10, 0x29, 11, 10, 12))            # SUBQ r11,r10,r12
     b.emit(opl(0x12, 0x31, 12, 0x0F, 12))           # ZAPNOT: the 32-bit count
-    b.emit(mem(OP["LDAH"], 13, R31, QUIESCE_TIMEOUT >> 16))
+    # The native EV8's timeout is its IPR's, which the EV8 PALcode sets.
+    timeout = image.QUIESCE8_TIMEOUT if b.ev8n else QUIESCE_TIMEOUT
+    b.emit(mem(OP["LDAH"], 13, R31, timeout >> 16))
     b.emit(opr(0x10, 0x3D, 13, 12, 14))            # CMPULE r13,r12,r14
     b.store(14, field, 1 if slept else 0)
 
@@ -1374,6 +1377,7 @@ EMIT = {"intop": g_intop, "cmov": g_cmov, "trapv": g_trapv, "mem": g_mem,
         "fix": g_fix, "misc": g_misc, "mode": g_mode, "ev8": g_ev8,
         "quiesce": g_quiesce}
 EMIT.update(jit_cases.EMIT)
+EMIT.update(ev8n_cases.EMIT)
 
 
 def emit(b, groups):
@@ -1385,7 +1389,7 @@ def emit(b, groups):
         for reg, value in ((image.R_TR, b.trap_record),
                            (image.R_SCR, b.scratch),
                            (image.R_POOL, image.kseg(image.POOL_PA) + 32768),
-                           (image.R_UART, image.UART_VA)):
+                           (image.R_UART, b.uart_va)):
             b.li(0, value)
             b.emit(opr(0x11, 0x40, reg, 0, 0))     # XOR
             b.store(0, "r%d XOR its value" % reg, 0)
