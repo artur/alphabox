@@ -174,7 +174,14 @@ position-dependent replacement policy" [IDS p. 580]:
   21464 special-cases to disable replacement of Rc [IDS pp. 574-575, 580].
   A native CMOV must not name R24 or R25 as destination (Restriction 13),
   and no CMOV may name a shadow register (Restriction 12) [IDS pp.
-  579-580]. **[conflict]** of wording only: p. 574 says "R24/F24 and
+  579-580]. **[inference]**: by the same table a native CMOV must not
+  name R22 or R23 as destination either. The 21464 replaces it with
+  `CMOVx1 Ra, Rc -> Rc; CMOV2 Rc, Rb -> Rc` [IDS p. 580], whose first
+  part reads the old Rc as operand B, so with Rc = 22 or 23 it reads S0
+  or S1 where the destination is the architectural register: the failure
+  Restriction 13 describes for R24 and R25, which the IDS does not list
+  for R22 and R23. A legacy CMOV is safe for all four, since its Rc is not
+  replaced at all. **[conflict]** of wording only: p. 574 says "R24/F24 and
   R25/F25", p. 580 R24 and R25 alone; no FP shadow register appears
   anywhere else. **[decision, N5]**: integer registers only.
 - A CALL_PAL writes "ShadowReg1" implicitly [IDS p. 149, Table 4-3]: the
@@ -965,6 +972,65 @@ Two ways:
   fetch block, the ALIGN_NOP in slot 7), which an emulator does not
   enforce but a hardware-faithful PALcode would keep.
 
+**Agreed with nada, 2026-10-25** (nada accepted the forms for its first
+batch after its item 3; Artur on both sides):
+
+- **`-mpal` means the file is PALmode code**: it admits the forms and
+  `$s0`/`$s1`, and it applies section 1.3's replacement table. A plain
+  `$24` or `$25` as Ra or destination, or `$22` or `$23` as Rb, is
+  refused with a message naming the shadow register it would be; the
+  source writes `$s0`/`$s1` there. Plain `$24`/`$25` as Rb and `$22`/`$23`
+  as Ra or destination are the architectural registers and are accepted.
+  The one exception is a legacy CMOV, whose destination `$24`/`$25` is
+  the architectural register. Outside `-mpal`, `$s0`/`$s1` are errors.
+- **CMOV**: no CMOV may name `$s0`/`$s1` as destination (Restriction 12).
+  A native CMOV (one followed by its `cmov2`) may not have Rc 24 or 25
+  (Restriction 13), nor 22 or 23 (section 1.3, **[inference]**). A legacy
+  CMOV may write any of the four architectural registers.
+- **IPR names** live in a namespace of their own, valid only in the IPR
+  operand of `hw_mfpr`/`hw_mtpr`, so a label of the same name does not
+  clash; a bare number 0-255 is accepted there too. The list is below.
+- **The macro** `__nada_alpha_pal__` is defined under `-mpal`.
+- **Restrictions 3 to 8**: no warnings in the first version; S12a does not
+  need them.
+
+**The IPR names** (for assemblers). The names are Alphabox's: the IDS has
+none for assemblers. A field-select variant is a name of its own. Combined
+selects such as I_PCTX's 0x93 (ASN and TPU_GRP) and the performance
+registers (0x60-0x71, 0xE0-0xF7) are written as numbers in the first
+version. Indexes marked N6 to N8 are Alphabox decisions, not IDS facts.
+
+| Name | Index | Name | Index | Name | Index |
+| --- | --- | --- | --- | --- | --- |
+| `i_ctl` | 0x83 | `pal_temp1` | 0xA9 | `m_ctl` | 0x03 |
+| `i_ctl_vpte` | 0x81 | `pal_temp2` | 0xAA | `m_ctl_vpte` | 0x01 |
+| `i_ctl_spe` | 0x82 | `cpu_base` (N6) | 0xAB | `m_ctl_spe` | 0x02 |
+| `i_mode` | 0x8B | `vctl` (N8) | 0xAC | `m_mode` | 0x0F |
+| `i_mode_cur` | 0x89 | `ier_cm` (N7) | 0xB0 | `m_mode_cur` | 0x09 |
+| `i_mode_con` | 0x8A | `sirr` (N7) | 0xB1 | `m_mode_con` | 0x0A |
+| `i_pctx` | 0x97 | `isum` (N7) | 0xB2 | `m_mode_alt` | 0x0C |
+| `i_pctx_asn` | 0x91 | `hw_int_clr` (N7) | 0xB3 | `m_pctx` | 0x13 |
+| `i_pctx_grp` | 0x92 | `cc` | 0xBB | `m_pctx_asn` | 0x11 |
+| `i_pctx_fpe` | 0x94 | `cc_offset` | 0xB9 | `m_pctx_grp` | 0x12 |
+| `exc_sum` | 0xA0 | `cc_count` | 0xBA | `m_stat` | 0x20 |
+| `exc_addr` | 0xA1 | `itb_im` | 0xC0 | `va` | 0x21 |
+| `iva_form` | 0xA3 | `itb_is` | 0xC2 | `va_form` | 0x23 |
+| `dtbms_ret_addr` | 0xA6 | `itb_pte` | 0xC4 | `quiesce_timeout` | 0x38 |
+| `dtbms_ret_addr_blk` | 0xA7 | `itb_tag` | 0xC6 | `dtb_im` | 0x40 |
+| `pal_base` | 0xA8 | `cpu_cnfg` | 0xC8 | `dtb_is` | 0x42 |
+| | | `ic_stat` | 0xC9 | `dtb_pte0` | 0x44 |
+| | | `ic_flush` | 0xCC | `dtb_pte1` | 0x45 |
+| | | `ic_flush_asm` | 0xCD | `dtb_tag0` | 0x46 |
+| | | `tpu_cnfg` | 0xD8 | `dtb_tag1` | 0x47 |
+| | | | | `dc_ctl` | 0x48 |
+| | | | | `dc_stat` | 0x49 |
+
+`_vpte`, `_spe`, `_cur`, `_con`, `_alt`, `_asn`, `_grp`, `_fpe`,
+`_offset` and `_count` are the selects of section 1.4's tables (VPTE_BASE;
+SUPERPAGE with VA_SIZE and PAGE_SIZE; CURRENT; CONSOLE; ALT; ASN; TPU_GRP;
+FP_ENABLE; OFFSET and ENABLE; COUNT). `dtbms_ret_addr_blk` is 0xA7, the
+form that also blocks loads and stores.
+
 **[decision, N27]**: the PALcode is written in nada assembler source once
 nada has the forms; until then S11's tests and S12's first boot images
 use `alpha_asm.py`. The console is C (section 4), compiled by nada for
@@ -1230,6 +1296,10 @@ On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
   VCTL's native index open, which N8 proposes to fill (0xAC); its note on
   QUIESCE_TIMEOUT's reset conflict [IDS pp. 511, 678] is what N17 follows
   for the native row.
+- **Restriction 13 leaves out R22 and R23** (found with nada,
+  2026-10-25): by p. 580's own table, a native CMOV with Rc 22 or 23
+  reads S0 or S1 as its old value (section 1.3, **[inference]**). The
+  assembler refuses it (section 3.5), so no Alphabox PALcode contains it.
 - **D5's IO7 part does not carry over** to the native track (N22): the
   IO7's target field names a PID only. D5 as written stays right for the
   EV7-compatible row's S4, where it is Alphabox's construction anyway.
