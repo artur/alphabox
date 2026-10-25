@@ -97,8 +97,11 @@ that depend on them.
   ES47. So far it is the EV7-compatible mode and the EV8's first new
   instructions, among them the ones it was to synchronise its threads
   with: a processor can sleep on a lock until another one writes it, and a
-  Linux program on two emulated EV8s does. Its four threads per core and
-  the Tarantula vector unit are planned ([the EV8](docs/platforms/ev8.md)).
+  Linux program on two emulated EV8s does. Its four threads per core can be
+  shown to the console as processors of their own (`tpus = 4`, an
+  Alphabox construction, not the chip's own behaviour), and
+  OpenVMS and Linux then run on all eight threads of an ES47. The
+  Tarantula vector unit is planned ([the EV8](docs/platforms/ev8.md)).
 
 ## What runs
 
@@ -123,7 +126,7 @@ Every guest below with media in the lab is booted and checked by
 | Area | Devices |
 |---|---|
 | Machines | AlphaServer ES40, DS20E, DS20, DS20L, DS10 (Tsunami); ES45, DS25, DS15 (Titan); ES47, ES80, GS1280 (EV7, "Marvel") |
-| CPU | EV68CB (21264), 1–4; EV7 and EV7z (21364), 2–16; the cancelled EV8 (21464), in an EV7-compatible mode, 2–16 |
+| CPU | EV68CB (21264), 1–4; EV7 and EV7z (21364), 2–16; the cancelled EV8 (21464), in an EV7-compatible mode, 2–16, with its threads as processors up to 32 |
 | Storage | Symbios 53C8xx and QLogic ISP SCSI; ALi and CMD 649 IDE; floppy; virtio-blk |
 | Graphics | S3 Trio64; Cirrus GD5430/5434; ATI Mach64 through the 3D Rage Pro; 3Dlabs Permedia 2; S3 ViRGE family; DEC TGA and TGA2; ATI Radeon 7500 |
 | Network | DEC Tulip 2104x/2114x; Intel 8255x (DE600, DE602); virtio-net |
