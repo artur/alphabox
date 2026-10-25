@@ -910,8 +910,10 @@ to the calling standard.
 
 Settled by the owner and nada on 2026-10-24 (points 1 to 5, 9), by the
 owner alone on 2026-10-25 (7, 8 and 11, in which nada has no stake, each
-as proposed), and still open (6, 10, 12 to 14). Each point is given with
-the proposal it would replace:
+as proposed), and accepted by the owner as proposed on 2026-10-25 and
+waiting for nada's agreement (6, 10, 12, 13); 14 is a record, with
+nothing to decide. Each point is given with the proposal it would
+replace:
 
 1. **RM syntax** (agreed): `vgathq $vrt, $vrx($rb)` puts a vector register
    where a displacement goes. The alternative, three operands `vgathq
@@ -926,9 +928,10 @@ the proposal it would replace:
    letter.
 5. **AMASK bit 11** for both new EV8 sets, and bit 3 for Tarantula: decided
    by the owner, 2026-10-24.
-6. **The 1C results** (D8) are all proposed; GPKBLB4 and PERMB8's
-   selector values rest on the least evidence, VMINMAX's layout on a
-   datapath description. The size order inside the zz blocks is agreed.
+6. **The 1C results** (D8; the owner accepted them as proposed, 2026-10-25)
+   are all proposed; GPKBLB4 and PERMB8's selector values rest on the least
+   evidence, VMINMAX's layout on a datapath description. The size order
+   inside the zz blocks is agreed.
 7. **Masked-off elements** (decided by the owner, 2026-10-25):
    UNPREDICTABLE, merged explicitly with VVMRG (section 4.3), against
    leaving them unchanged as Alphabox implements anyway. The second is
@@ -936,28 +939,29 @@ the proposal it would replace:
    never exist.
 8. **Vector booleans** (decided by the owner, 2026-10-25) are the integer
    1, not the scalar compares' 2.0 nor paired single's 1.0.
-9. **VCTL's offset** (decided): 0x3F0000 in each processor's own EV7
-   window (section 2; the owner, 2026-10-25, in place of 0x3F0000 + 0x40 ×
-   tpu in the chip's, which stays for the native interface), chosen
-   because no console table or Linux name uses it. It is listed so that a
-   later look at a console's CSR table can reopen it.
-10. **The quiesce registers** in EV7-compatible mode: not reachable, the
-    timer fixed at 10240 cycles with both enables on (section 3.1). A test
-    that wants another timeout would need a register of its own (a CSR
-    beside VCTL's would do).
+9. **VCTL's offset** (decided): 0x3F0000 in each processor's own EV7 window
+   (section 2; the owner, 2026-10-25, in place of 0x3F0000 + 0x40 × tpu in
+   the chip's, which stays for the native interface), chosen because no
+   console table or Linux name uses it. It is listed so that a later look
+   at a console's CSR table can reopen it.
+10. **The quiesce registers** in EV7-compatible mode (the owner accepted,
+    2026-10-25): not reachable, the timer fixed at 10240 cycles with both
+    enables on (section 3.1). A test that wants another timeout would need
+    a register of its own (a CSR beside VCTL's would do).
 11. **Vector arithmetic traps** (decided by the owner, 2026-10-25) report
     the next PC (trap style, as AMASK bit 9 defines; section 5); the paper
-    says only that the faulting instruction's PC is provided. A fault-style report (own PC, nothing written) would let
-    an OS re-execute, but Linux under AMASK bit 9 decodes the instruction
-    before the trap PC.
-12. **Instructions beyond the paper's evidence**: VVSQRTT, VVCVTTQC,
-    VVUMULH and the unsigned compares are Alphabox's additions. The
-    operations the paper names are add, multiply, the NE and GT compares,
-    AND, SETVM, the strided load, the scatter and DrainM, and its
-    divide-by-zero example implies a divide.
-13. **No element moves** between vector and scalar registers; reductions
-    and extraction go through memory. VC function space is free if a stage
-    shows the cost matters.
+    says only that the faulting instruction's PC is provided. A fault-style
+    report (own PC, nothing written) would let an OS re-execute, but Linux
+    under AMASK bit 9 decodes the instruction before the trap PC.
+12. **Instructions beyond the paper's evidence** (kept as Alphabox's
+    additions, the owner, 2026-10-25): VVSQRTT, VVCVTTQC, VVUMULH and the
+    unsigned compares are Alphabox's additions. The operations the paper
+    names are add, multiply, the NE and GT compares, AND, SETVM, the
+    strided load, the scatter and DrainM, and its divide-by-zero example
+    implies a divide.
+13. **No element moves** between vector and scalar registers (the owner
+    accepted, 2026-10-25); reductions and extraction go through memory. VC
+    function space is free if a stage shows the cost matters.
 14. **The IDS's own errors** this sheet works around, for the record:
     the AMASK test branching the wrong way [IDS p. 674], the paired single
     high half's field boundaries [IDS p. 280], the decode appendix calling
