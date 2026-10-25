@@ -72,6 +72,11 @@ bool alpha_valid_va_form(u64 virt, bool va48);
 /// ALPHABOX_JIT05_MB=0 turns it off.
 extern const bool g_jit05_mb;
 
+/// JIT-08 A/B switch, read once at startup (AlphaCPU.cpp): virt2phys and the
+/// JIT's memory helpers translate through CAlphaCPU::virt2phys_fast.
+/// ALPHABOX_JIT08_XLATE=0 selects the copies they had before.
+extern const bool g_jit08_xlate;
+
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
 // cache when another CPU flushed: compiled blocks are per-CPU, but guest code
@@ -218,6 +223,18 @@ public:
   u64 va_form(u64 address, bool bIBOX);
 
   int virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit, u32 instruction);
+  /// What virt2phys_fast() found (JIT-08).
+  enum VirtXlate {
+    XL_OK = 0,    // translated: *phys (and *asm_bit) set
+    XL_ACV = 1,   // a malformed address, a superpage outside kernel mode,
+                  // or the entry's access bit clear
+    XL_MISS = 2,  // not in the TB
+    XL_FAULT = 3, // the entry's fault-on-read, -write or -execute bit set
+  };
+  int virt2phys_old(u64 virt, u64 *phys, int flags, bool *asm_bit, u32 ins);
+  /// virt2phys without its side effects (defined below the class).
+  inline int virt2phys_fast(u64 virt, int flags, int cm, u64 *phys,
+                            bool *asm_bit, int *entry);
 
   virtual void init();
   virtual void start_threads();
@@ -999,6 +1016,10 @@ public:
   // interpreter).
   static int jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out);
   int jit_spe_data(u64 va, int cm, u64 *phys) const; // data superpage probe
+  /// The memory helpers' translation (JIT-08): virt2phys_fast, or with
+  /// ALPHABOX_JIT08_XLATE=0 the copies the helpers had (jit_xlate_old).
+  int jit_xlate(u64 va, int flags, int cm, u64 *phys);
+  int jit_xlate_old(u64 va, int flags, int cm, u64 *phys);
   static int jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                            u64 *out); // HW_LD physical: no translation
   static int jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
@@ -1875,6 +1896,83 @@ inline u64 CAlphaCPU::va_form(u64 address, bool bIBOX) {
  * Return processor number.
  **/
 inline int CAlphaCPU::get_cpuid() { return state.iProcNum; }
+
+/**
+ * The side-effect-free part of virt2phys, on every row: the VA's form, the
+ * superpages, the TB and the entry's access and fault bits (the native
+ * EV8's by its own rules, ev8_superpage and its TB groups). No page-table
+ * walk, no fault vectored, no TB filled: FindTBEntry's lookup hints are
+ * all it writes. `cm` is the mode the access is checked in (virt2phys
+ * picks it from VPTE and ALT); `flags` is virt2phys's, of which this
+ * reads ACCESS_EXEC, ACCESS_WRITE, NO_CHECK and WRCHK. *entry is the TB
+ * entry on XL_OK, XL_ACV and XL_FAULT from the TB, else -1. virt2phys
+ * vectors what this does not translate; the JIT's memory helpers bail to
+ * the interpreter, which then does.
+ **/
+inline int CAlphaCPU::virt2phys_fast(u64 virt, int flags, int cm, u64 *phys,
+                                     bool *asm_bit, int *entry) {
+  const bool exec = (flags & ACCESS_EXEC) != 0;
+  *entry = -1;
+  if (m_ev8n) {
+    const int sp = ev8_superpage(virt, exec, cm, phys);
+    if (sp < 0)
+      return XL_ACV;
+    if (sp == 1) {
+      if (asm_bit)
+        *asm_bit = true; // a superpage matches every address space
+      return XL_OK;
+    }
+  } else {
+    if (!alpha_valid_va_form(virt, exec ? (state.i_ctl_va_mode & 1)
+                                        : (state.va_ctl_va_mode & 1)))
+      return XL_ACV;
+    // The superpages before the TB (HRM 5.3.9): SPE[2] maps VA<43:13> to
+    // PA<43:13> where VA<47:46> = 2; SPE[1] VA<40:13> to PA<40:13>, PA<43:41>
+    // copies of PA<40>, where VA<47:41> = 7E; SPE[0] VA<29:13> where
+    // VA<47:30> = 3FFFE. Kernel mode only.
+    const int spe = exec ? state.i_ctl_spe : state.m_ctl_spe;
+    if (spe) {
+      bool hit = true;
+      if (((virt & SPE_2_MASK) == SPE_2_MATCH) && (spe & 4))
+        *phys = virt & SPE_2_MAP;
+      else if (((virt & SPE_1_MASK) == SPE_1_MATCH) && (spe & 2))
+        *phys = (virt & SPE_1_MAP) | ((virt & SPE_1_TEST) ? SPE_1_ADD : 0);
+      else if (((virt & SPE_0_MASK) == SPE_0_MATCH) && (spe & 1))
+        *phys = virt & SPE_0_MAP;
+      else
+        hit = false;
+      if (hit) {
+        if (cm)
+          return XL_ACV;
+        // A superpage mapping involves neither the TB nor the ASN, so it
+        // matches every address space: reported as ASM, instruction-cache
+        // lines survive a process switch and the JIT keeps one compiled copy
+        // of kernel code for all processes.
+        if (asm_bit)
+          *asm_bit = true;
+        return XL_OK;
+      }
+    }
+  }
+  const int i = FindTBEntry(virt, flags);
+  if (i < 0)
+    return XL_MISS;
+  *entry = i;
+  const STBEntry &e = state.tb[exec ? TB_INDEX_ITB : TB_INDEX_DATA][i];
+  if (!(flags & NO_CHECK)) {
+    // WRCHK (HW_LD WrChk, HRM 6.4.1): read AND write access, and neither
+    // fault bit.
+    if (!e.access[flags & ACCESS_WRITE][cm] ||
+        ((flags & WRCHK) && !e.access[1][cm]))
+      return XL_ACV;
+    if (e.fault[flags & ACCESS_MODE] || ((flags & WRCHK) && e.fault[1]))
+      return XL_FAULT;
+  }
+  *phys = e.phys | (virt & e.keep_mask);
+  if (asm_bit)
+    *asm_bit = e.asm_bit != 0;
+  return XL_OK;
+}
 
 /**
  * True when execute()'s interrupt poll would deliver something: an enabled

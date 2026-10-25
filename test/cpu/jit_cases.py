@@ -1007,6 +1007,109 @@ def g_jitmisc(b):
     b.store(7, "third read >= second", 1)
 
 
+# --- jitxlate: the memory helpers' translation -----------------------------------------
+
+SEG32_21264 = 0xFFFFFFFF80000000  # SPE<0>: VA<47:30> = 3FFFE -> PA<29:0>
+
+
+def g_jitxlate(b):
+    """The translation a compiled load's helper makes when the data page
+    cache misses, which is virt2phys's without its side effects
+    (CAlphaCPU::virt2phys_fast, JIT-08), on every row: each superpage, a TB
+    hit, a TB miss, an access violation and a fault-on-read. Each block
+    runs right after the page cache was emptied, so its load reaches the
+    helper on every pass, the last one compiled: an M_CTL write empties the
+    cache (the 21264's CALL_PAL 8F of the image, the 21464's M_CTL<SPE>
+    through a PALmode snippet), and CALL_PAL 02's DTB fills drop the user
+    pages. A miss and a fault bail to the interpreter, which takes them
+    (HRM 5.3.9, 6.8.2 Table 6-8; MM_STAT 5.3.8)."""
+    import ev8n_cases                      # its PALmode snippet helpers
+    exit_ = A.call_pal(0x84)
+    page2 = b.scratch + 0x4000
+    ud, uk, uf = image.USER_DATA_VA, image.USER_KONLY_VA, image.USER_FAULT_VA
+    pa = image.SCR_PA + JSCR + 0x900
+    value = 0x0F1E2D3C4B5A6978
+    sentinel = 0x5E5E5E5E5E5E5E5E
+
+    def flush_dpc(spe_all):
+        if b.ev8n:
+            ev8n_cases.call(b, ev8n_cases.Sn().li(17, image.M_CTL8).e(
+                A.hw_mtpr8(17, A.IPR8["m_ctl_spe"]), A.ifetchb()))
+        else:                              # M_CTL SPE<2:0>, or SPE<2,1>
+            b.li(16, 0xE if spe_all else 0xC)
+            b.emit(call_pal(0x8F))
+
+    def enter(snippet_va):
+        b.li(16, snippet_va)
+        b.emit(bra(OP["BR"], 17, 0))            # r17 = here
+        b.emit(mem(OP["LDA"], 17, 17, 8))       # r17 = after the CALL_PAL
+        b.emit(call_pal(0x02))
+
+    b.begin("jitxlate: a load through each superpage, the page cache empty")
+    if b.ev8n:
+        sps = [("SPE52", image.SEG52 | pa), ("SPE43", image.kseg(pa)),
+               ("SPE32", image.SEG32 | pa)]
+    else:
+        sps = [("SPE<2>", image.SEG48 | pa), ("SPE<1>", image.kseg(pa)),
+               ("SPE<0>", SEG32_21264 | pa)]
+    b.load(1, value)
+    b.emit(mem(OP["STQ"], 1, R_SCR, JSCR + 0x900))
+    for k, (_, va) in enumerate(sps):
+        b.li(10 + k, va)
+        b.load(2 + k, sentinel)
+    b.trap_clear()
+    flush_dpc(True)
+    b.block()
+    for k in range(len(sps)):
+        b.emit(mem(OP["LDQ"], 2 + k, 10 + k, 0))
+    b.block()
+    if not b.ev8n:
+        flush_dpc(False)
+    b.trap_check()
+    for k, (nm, _) in enumerate(sps):
+        b.store(2 + k, "LDQ through %s" % nm, value)
+
+    b.begin("jitxlate: a TB hit, user mode")
+    snip = b.user_snippet([mem(OP["LDQ"], 2, 9, 0x20), exit_])
+    b.load(1, value ^ 0xFF)
+    b.emit(mem(OP["STQ"], 1, R_SCR, 0x4020))
+    b.li(9, ud)
+    b.load(2, sentinel)
+    b.trap_clear()
+    enter(snip)
+    b.trap_check()
+    b.store(2, "LDQ through the DTB", value ^ 0xFF)
+
+    b.begin("jitxlate: a TB miss, kernel mode")
+    b.li(15, UNMAPPED)
+    b.load(10, sentinel)
+    b.trap_clear()
+    flush_dpc(False)
+    b.block()
+    at = b.va()
+    b.emit(mem(OP["LDQ"], 10, 15, 0))
+    b.block()
+    b.trap_check(vector=0x300, exc_addr=at, va=UNMAPPED, exc_sum=10 << 8,
+                 exc_sum_mask=0x1F00)
+    b.store(10, "r10 (not written)", sentinel)
+
+    for nm, reg, va, mmstat in (
+            ("an access violation: a kernel-only page", 3, uk, 2),
+            ("an access violation: a superpage", 3, page2, 2),
+            ("a fault-on-read", 4, uf, 4)):
+        b.begin("jitxlate: %s, user mode" % nm)
+        snip = b.user_snippet([mem(OP["LDQ"], reg, 11, 0), exit_])
+        b.li(11, va)
+        b.load(reg, sentinel)
+        b.trap_clear()
+        enter(snip)
+        b.trap_check(vector=0x380, exc_addr=snip, exc_sum=reg << 8,
+                     exc_sum_mask=0x1F00, va=va)
+        b.emit(mem(OP["LDQ"], 0, R_TR, image.TR_MM_STAT))
+        b.store(0, "MM_STAT", (0x29 << 4) | mmstat, mask=0x7FF)
+        b.store(reg, "r%d (not written)" % reg, sentinel)
+
+
 GROUPS = [
     ("jitregs", "JIT: all registers live across chained exits, helper calls "
                 "among them, probe-reuse runs"),
@@ -1022,8 +1125,10 @@ GROUPS = [
     ("jitsmc", "JIT: an instruction rewritten by a store and by HW_ST, then "
                "IC_FLUSH"),
     ("jitmisc", "JIT: RPCC in compiled code"),
+    ("jitxlate", "JIT: the memory helpers' translation on each superpage, a "
+                 "TB hit and miss, an ACV and a fault-on-read"),
 ]
 EMIT = {"jitregs": g_jitregs, "jitbranch": g_jitbranch,
         "jitfault": g_jitfault, "jitint": g_jitint, "jitllsc": g_jitllsc,
         "jitpal": g_jitpal, "jitmode": g_jitmode, "jitsmc": g_jitsmc,
-        "jitmisc": g_jitmisc}
+        "jitmisc": g_jitmisc, "jitxlate": g_jitxlate}

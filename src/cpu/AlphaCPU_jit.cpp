@@ -1310,6 +1310,37 @@ int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
   return cm ? -1 : 1;
 }
 
+// The copies of virt2phys's fast path the helpers had before JIT-08, as
+// each checked it: jit_spe_data, then FindTBEntry and the entry's access and
+// fault bits (both for WRCHK); a VPTE fetch went straight to the TB.
+int CAlphaCPU::jit_xlate_old(u64 va, int flags, int cm, u64 *phys) {
+  if (!(flags & VPTE)) {
+    const int spe = jit_spe_data(va, cm, phys);
+    if (spe < 0)
+      return XL_ACV;
+    if (spe)
+      return XL_OK;
+  }
+  const int rw = (flags & ACCESS_WRITE) ? 1 : 0;
+  const int i = FindTBEntry(va, rw ? ACCESS_WRITE : ACCESS_READ);
+  if (i < 0)
+    return XL_MISS;
+  const auto &e = state.tb[TB_INDEX_DATA][i];
+  if (!e.access[rw][cm] || ((flags & WRCHK) && !e.access[1][cm]))
+    return XL_ACV;
+  if (e.fault[rw] || ((flags & WRCHK) && e.fault[1]))
+    return XL_FAULT;
+  *phys = e.phys | (va & e.keep_mask);
+  return XL_OK;
+}
+
+int CAlphaCPU::jit_xlate(u64 va, int flags, int cm, u64 *phys) {
+  if (!g_jit08_xlate)
+    return jit_xlate_old(va, flags, cm, phys);
+  int entry;
+  return virt2phys_fast(va, flags, cm, phys, nullptr, &entry);
+}
+
 // JIT load helper (static). Reads size_bits from virtual address va into *out,
 // mirroring DATA_PHYS_NT's normal-read fast path. Returns 0 on success, or 1 on
 // a translation fault / unaligned access - the caller bails to the interpreter
@@ -1416,32 +1447,17 @@ int CAlphaCPU::jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    // Side-effect-free TB fast path. NOT virt2phys - that walks the page table
-    // and vectors faults as a side effect, which (re-done by the interpreter
-    // after we bail) corrupts state. Bail on a TB miss or any access fault and
-    // let the interpreter do the side-effect translation ~  it fills this cache
-    // so the next compiled run hits. Mirrors virt2phys's read path.
-    const int spe = cpu->jit_spe_data(va, cm, &phys);
-    if (spe < 0) { // bad VA form / superpage outside kernel mode (ACV)
-      cpu->m_jit->note_bail(false, CJitEngine::BK_ACV);
+    // virt2phys's translation without its side effects (virt2phys_fast):
+    // virt2phys itself walks the page table and vectors faults, which,
+    // done again by the interpreter after we bail, corrupts state. Bail on
+    // a TB miss or any fault and let the interpreter do it; it fills this
+    // cache, so the next compiled run hits.
+    const int x = cpu->jit_xlate(va, ACCESS_READ, cm, &phys);
+    if (x != XL_OK) {
+      cpu->m_jit->note_bail(false, x == XL_MISS    ? CJitEngine::BK_TB_MISS
+                                   : x == XL_FAULT ? CJitEngine::BK_FAULT
+                                                   : CJitEngine::BK_ACV);
       return 1;
-    }
-    if (!spe) {
-      const int i = cpu->FindTBEntry(va, ACCESS_READ);
-      if (i < 0) { // TB miss
-        cpu->m_jit->note_bail(false, CJitEngine::BK_TB_MISS);
-        return 1;
-      }
-      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-      if (!e.access[0][cm]) { // protection (ACV)
-        cpu->m_jit->note_bail(false, CJitEngine::BK_ACV);
-        return 1;
-      }
-      if (e.fault[0]) { // fault-on-read (FOR)
-        cpu->m_jit->note_bail(false, CJitEngine::BK_FAULT);
-        return 1;
-      }
-      phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
@@ -1688,20 +1704,8 @@ int CAlphaCPU::jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
-    if (spe < 0)
-      return 1; // bad VA form / superpage outside kernel mode (ACV)
-    if (!spe) {
-      const int i = cpu->FindTBEntry(va, ACCESS_READ);
-      if (i < 0)
-        return 1; // TB miss
-      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-      if (!e.access[0][cpu->state.cm])
-        return 1; // protection (ACV)
-      if (e.fault[0])
-        return 1; // fault-on-read (FOR)
-      phys = e.phys | (va & e.keep_mask);
-    }
+    if (cpu->jit_xlate(va, ACCESS_READ, cpu->state.cm, &phys) != XL_OK)
+      return 1; // a TB miss or a fault: the interpreter takes it
     dpc.fill(vp, phys & ~U64(0x1FFF),
              cpu->dpc_host_base(phys),
              cpu->state.cm, cpu->state.asn0);
@@ -1748,15 +1752,10 @@ int CAlphaCPU::jit_read_vpte(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
   if (va & amask)
     return 1; // unaligned: let the interpreter handle it
 
-  const int i = cpu->FindTBEntry(va, ACCESS_READ);
-  if (i < 0)
-    return 1; // TB miss (double miss)
-  const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-  if (!e.access[0][0])
-    return 1; // protection: kernel read access
-  if (e.fault[0])
-    return 1; // fault-on-read (FOR)
-  const u64 phys = e.phys | (va & e.keep_mask);
+  // A VPTE fetch is checked in kernel mode (virt2phys).
+  u64 phys;
+  if (cpu->jit_xlate(va, ACCESS_READ | VPTE, 0, &phys) != XL_OK)
+    return 1; // a miss (the double miss) or a fault: the interpreter's
 
   if (phys >= cpu->dram_size) // MMIO: bail before the replay (mirrors jit_read)
     return 1;
@@ -1792,22 +1791,9 @@ int CAlphaCPU::jit_read_wchk(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out) {
 
   u64 phys;
   const int cm = cpu->state.cm;
-  const int spe = cpu->jit_spe_data(va, cm, &phys);
-  if (spe < 0)
-    return 1; // bad VA form / superpage outside kernel mode (ACV)
-  if (!spe) {
-    const int i = cpu->FindTBEntry(va, ACCESS_READ);
-    if (i < 0)
-      return 1; // TB miss
-    const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-    if (!e.access[0][cm])
-      return 1; // no read access (ACV)
-    if (!e.access[1][cm])
-      return 1; // no write access -- WrChk fails (ACV)
-    if (e.fault[0] || e.fault[1])
-      return 1; // FOR/FOW: bail so the interpreter vectors the fault
-    phys = e.phys | (va & e.keep_mask);
-  }
+  // WrChk: read and write access, neither fault bit (virt2phys_fast).
+  if (cpu->jit_xlate(va, ACCESS_READ | WRCHK, cm, &phys) != XL_OK)
+    return 1; // a miss, an ACV, FOR/FOW: the interpreter vectors it
 
   if (phys >=
       cpu->dram_size) // MMIO: bail before the replay (mirrors jit_read_vpte)
@@ -1925,31 +1911,15 @@ int CAlphaCPU::jit_write(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    // Side-effect-free TB fast path on the write cache [1]; bail on a TB miss
-    // or access fault so the interpreter does the side-effecting translation
-    // (filling this cache, so the next compiled run hits). NOT virt2phys -- it
-    // vectors faults as a side effect.
-    const int spe = cpu->jit_spe_data(va, cm, &phys);
-    if (spe < 0) { // bad VA form / superpage outside kernel mode (ACV)
-      cpu->m_jit->note_bail(true, CJitEngine::BK_ACV);
+    // virt2phys's translation without its side effects, for the write
+    // cache [1]; bail on a TB miss or any fault so the interpreter does the
+    // translation that vectors them (and fills this cache).
+    const int x = cpu->jit_xlate(va, ACCESS_WRITE, cm, &phys);
+    if (x != XL_OK) {
+      cpu->m_jit->note_bail(true, x == XL_MISS    ? CJitEngine::BK_TB_MISS
+                                  : x == XL_FAULT ? CJitEngine::BK_FAULT
+                                                  : CJitEngine::BK_ACV);
       return 1;
-    }
-    if (!spe) {
-      const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
-      if (i < 0) { // TB miss
-        cpu->m_jit->note_bail(true, CJitEngine::BK_TB_MISS);
-        return 1;
-      }
-      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-      if (!e.access[1][cm]) { // protection (ACV)
-        cpu->m_jit->note_bail(true, CJitEngine::BK_ACV);
-        return 1;
-      }
-      if (e.fault[1]) { // fault-on-write (FOW)
-        cpu->m_jit->note_bail(true, CJitEngine::BK_FAULT);
-        return 1;
-      }
-      phys = e.phys | (va & e.keep_mask);
     }
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cm,
              cpu->state.asn0);
@@ -2054,20 +2024,8 @@ u64 CAlphaCPU::jit_stc(CAlphaCPU *cpu, u64 va, int size_bits, u64 value) {
     cpu->m_jit->note_dpc_l2_helper();
     phys = dpc.phys_base | (va & U64(0x1FFF));
   } else {
-    const int spe = cpu->jit_spe_data(va, cpu->state.cm, &phys);
-    if (spe < 0)
-      return U64(0x100); // bad VA form / superpage outside kernel mode (ACV)
-    if (!spe) {
-      const int i = cpu->FindTBEntry(va, ACCESS_WRITE);
-      if (i < 0)
-        return U64(0x100); // TB miss
-      const auto &e = cpu->state.tb[TB_INDEX_DATA][i];
-      if (!e.access[1][cpu->state.cm])
-        return U64(0x100); // protection (ACV)
-      if (e.fault[1])
-        return U64(0x100); // fault-on-write (FOW)
-      phys = e.phys | (va & e.keep_mask);
-    }
+    if (cpu->jit_xlate(va, ACCESS_WRITE, cpu->state.cm, &phys) != XL_OK)
+      return U64(0x100); // a miss or a fault: the interpreter takes it
     dpc.fill(vp, phys & ~U64(0x1FFF), cpu->dpc_host_base_w(phys), cpu->state.cm,
              cpu->state.asn0);
     cpu->dpc_l2_put(1, dpc);
@@ -2186,11 +2144,23 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   // hot-path). Virtual+ASN keying can't see a page remap, so a stale block
   // (same tag+ASN, but the vpage now maps different physical bytes) would
   // tail-execute as wrong code -> OPCDEC / garbage.
-  const int i = cpu->FindTBEntry(target, ACCESS_EXEC);
-  if (i < 0)
-    return nullptr; // ITB miss: let the dispatcher fault it in
-  const auto &e = cpu->state.tb[TB_INDEX_ITB][i];
-  if ((e.phys | (target & e.keep_mask)) != b->phys) {
+  // The live translation, by virt2phys's rules (a superpage too, and the
+  // entry's execute right and fault bit in this mode); anything it does not
+  // translate is the dispatcher's, which faults it in.
+  u64 live;
+  if (g_jit08_xlate) {
+    int entry;
+    if (cpu->virt2phys_fast(target, ACCESS_EXEC, cpu->state.cm, &live, nullptr,
+                            &entry) != XL_OK)
+      return nullptr;
+  } else {
+    const int i = cpu->FindTBEntry(target, ACCESS_EXEC);
+    if (i < 0)
+      return nullptr; // ITB miss: let the dispatcher fault it in
+    const auto &e = cpu->state.tb[TB_INDEX_ITB][i];
+    live = e.phys | (target & e.keep_mask);
+  }
+  if (live != b->phys) {
     // Caught a stale block: the page was remapped without flushing the JIT
     // cache. Bail so the dispatcher re-records/recompiles. Rate-limited log --
     // this firing confirms the stale chain.

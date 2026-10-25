@@ -269,6 +269,9 @@ def build_pal(tr_pa, main_va, fatal_va):
         elif func == 0x8C:                 # IER <- R17
             e.emit(hw_mtpr(17, IPR["IER"]))
             e.emit(hw_ret(P23, stall=True))
+        elif func == 0x8F:                 # M_CTL <- R16 (group jitxlate)
+            e.emit(hw_mtpr(16, IPR["M_CTL"]))
+            e.emit(hw_ret(P23, stall=True))
         elif func in (0x8D, 0x8E):         # 8D: HW_STL R17 -> phys R16; both IC_FLUSH
             if func == 0x8D:
                 e.emit(hw_st(17, 16, 0, quad=False))

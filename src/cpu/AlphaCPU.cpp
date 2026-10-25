@@ -2857,8 +2857,113 @@ int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
  *                help (in this case state.pc contains the address of the
  *                next instruction to execute (PALcode or OS entry point).
  **/
+const bool g_jit08_xlate = [] {
+  const char *e = getenv("ALPHABOX_JIT08_XLATE");
+  return !(e && e[0] == '0');
+}();
+
 int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
                          u32 ins) {
+  if (!g_jit08_xlate)
+    return virt2phys_old(virt, phys, flags, asm_bit, ins);
+  /*
+   * Access-check current mode selection.
+   *  - VPTE (HRM 6.4.1 Table 6-3): Virtual/VPTE accesses are LD_VPTE
+   *    page-table fetches and use *kernel mode* for permission checks
+   *    regardless of executing CM.
+   *  - ALT (HRM 6.4.1 Table 6-3 row 1102, Table 6-4 row 1102): the
+   *    /alt variants use DTB_ALT_MODE for permission checks.
+   *  - Otherwise: current mode.
+   * Order matters: VPTE wins over ALT (VPTE is never combined with ALT in
+   * any valid HW_LD encoding, but the precedence is clear).
+   */
+  const int cm = (flags & VPTE) ? 0 : (flags & ALT) ? state.alt_cm : state.cm;
+  int i;
+  const int r = virt2phys_fast(virt, flags, cm, phys, asm_bit, &i);
+#if defined(DEBUG_TB)
+  if (!(flags & FAKE))
+    printf("TB %" PRIx64 ",%x: %s\n", virt, flags,
+           r == XL_OK     ? "ok"
+           : r == XL_ACV  ? "acv"
+           : r == XL_MISS ? "miss"
+                          : "fault");
+#endif
+  if (r == XL_OK)
+    return 0;
+  if (flags & FAKE) // a probe (the debugger's, the dispatcher's): vector
+    return -1;      // nothing; the caller has the interpreter run it
+  if (m_ev8n) // the 21464's entries (AlphaCPU_ev8.cpp): it translates again
+    return ev8_virt2phys(virt, phys, flags, asm_bit, ins);
+  const int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
+  // A malformed address, a superpage outside kernel mode, or an access the
+  // entry does not allow (WRCHK: read and write): the same IACV or DFAULT
+  // with MM_STAT<ACV>.
+  if (r == XL_ACV)
+    return initiate_acv_fault(virt, flags, ins);
+  if (r == XL_MISS) { // not in the TB: trap to PALcode
+    state.exc_addr = state.current_pc;
+    if (flags & VPTE) {
+      // HRM 5.1.3: VA is NOT written for LD_VPTE misses
+      state.va_form_va = virt;
+      state.exc_sum = ((u64)REG_1 & 0x1f)
+                      << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
+      // I_CTL[VA_48] selects the DTB double-miss PAL entry (bit 0 of
+      // state.i_ctl_va_mode, which packs I_CTL<16:15>).
+      set_pc(state.pal_base +
+             ((state.i_ctl_va_mode & 1) ? DTBM_DOUBLE_4 : DTBM_DOUBLE_3) + 1);
+    } else if (flags & ACCESS_EXEC) {
+      set_pc(state.pal_base + ITB_MISS + 1);
+    } else {
+      state.fault_va = virt;
+      state.va_form_va = virt;
+      state.exc_sum = ((u64)REG_1 & 0x1f)
+                      << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
+      u32 opcode = I_GETOP(ins);
+      state.mm_stat =
+          ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
+          (flags & ACCESS_WRITE);
+      set_pc(state.pal_base + DTBM_SINGLE + 1);
+    }
+    return -1;
+  }
+  // XL_FAULT: the entry's fault-on bit for this access (WRCHK: FOR or FOW).
+  state.exc_addr = state.current_pc;
+  cSystem->cpu_clear_lock(state.iProcNum); // as GO_PAL does
+  if (flags & ACCESS_EXEC) {
+    state.exc_sum = 0;
+    set_pc(state.pal_base + IACV + 1);
+    return -1;
+  }
+  state.fault_va = virt;
+  /* HRM 5.1.5/D.24: VA_FORM is derived from VA, which is written on every
+     D-stream fault (including FOR/FOW DFAULT), not just TB miss. Keep the
+     VA_FORM snapshot current so the OS fault handler computes the right PTE
+     address. */
+  state.va_form_va = virt;
+  state.exc_sum = ((u64)REG_1 & 0x1f)
+                  << 8; /* HRM 5.2.13: EXC_SUM REG[12:8] is 5 bits */
+  /* HRM 5.3.8 MM_STAT: FOR [bit 2] is set when a fault-on-read error occurs
+   * during a read transaction with PTE[FOR] set. FOW [bit 3] is set when a
+   * fault-on-write error occurs. For HW_LD WrChk variants the chip is
+   * performing both a read AND a write-protection check, so PTE[FOW] (if
+   * set) is reportable too. */
+  u32 opcode = I_GETOP(ins);
+  int for_bit =
+      ((flags & ACCESS_WRITE) == 0) && state.tb[t][i].fault[0] ? 4 : 0;
+  int fow_bit =
+      (((flags & ACCESS_WRITE) || (flags & WRCHK)) && state.tb[t][i].fault[1])
+          ? 8
+          : 0;
+  state.mm_stat =
+      ((opcode == 0x1b || opcode == 0x1f) ? opcode - 0x18 : opcode) << 4 |
+      (flags & ACCESS_WRITE) | for_bit | fow_bit;
+  set_pc(state.pal_base + DFAULT + 1);
+  return -1;
+}
+
+/// virt2phys as it was before virt2phys_fast (ALPHABOX_JIT08_XLATE=0).
+int CAlphaCPU::virt2phys_old(u64 virt, u64 *phys, int flags, bool *asm_bit,
+                             u32 ins) {
   if (m_ev8n) // the 21464's translation and entries (AlphaCPU_ev8.cpp)
     return ev8_virt2phys(virt, phys, flags, asm_bit, ins);
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
