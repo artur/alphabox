@@ -787,7 +787,9 @@ void CAlphaCPU::init() {
   if (!m_jit) {
     m_jit = new CJitEngine((int)state.iProcNum, &m_jit_epoch);
     m_jit_ind_base = m_jit->ind_cache_base();
-    m_jit->set_cpu_identity(m_model->amask, m_model->implver, m_model->ext);
+    m_jit->set_cpu_identity(m_model->amask, m_model->implver,
+                            m_model->ext |
+                                (m_ev8n ? CJitEngine::kExtNative8 : 0));
     m_jit->set_watch((m_model->ext & CPU_EXT_EV8) ? cSystem->watch_flags()
                                                   : nullptr,
                      1u << state.iProcNum, cSystem->watch_machine_ptr());

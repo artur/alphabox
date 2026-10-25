@@ -464,7 +464,13 @@ void CAlphaCPU::jit_run(int budget) {
     u64 start_phys = 0;
     bool start_asm = false;
     bool have_phys = true;
-    if (start_virt & 1) // PALmode: physically addressed, always ASM
+    // The native EV8's PALmode code is interpreted, never recorded or
+    // compiled (ev8-native.md, S11): its shadow registers, PALcode forms,
+    // CALL_PAL and mode bits are the interpreter's. A block that is not
+    // translated is what the cold path below runs that way.
+    if ((start_virt & 1) && m_ev8n)
+      have_phys = false;
+    else if (start_virt & 1) // PALmode: physically addressed, always ASM
     {
       start_phys = start_virt & ~U64(1);
       start_asm = true;
@@ -1280,6 +1286,14 @@ void CAlphaCPU::jit_run(int budget) {
 // -1 when the interpreter must take it (bad VA form, or a hit outside kernel
 // mode -> ACV).
 int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
+  // The native EV8: Appendix C's superpages and sign check, the 21464's
+  // (ev8_superpage). The TB behind it is the 21464's too: the entries
+  // ev8_add_tb makes, valid only in their TPU group, with their own masks;
+  // the page cache holds 8 KB pieces of any page, as for a granularity hint.
+  if (m_ev8n) {
+    const int r = ev8_superpage(va, false, cm, phys);
+    return r < 0 ? -1 : r;
+  }
   if (!alpha_valid_va_form(va, state.va_ctl_va_mode & 1))
     return -1;
   const int spe = state.m_ctl_spe;

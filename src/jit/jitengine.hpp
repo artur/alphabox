@@ -481,6 +481,10 @@ public:
   /// processors differ still gets the right values. ext is the row's
   /// cpu_model::ext: the instructions classify() compiles only on rows that
   /// have them (the EV8's).
+  /// In `ext` beside the row's CPU_EXT_* flags: the processor is a native
+  /// EV8 (CPU_FAMILY_EV8), whose CALL_PAL and native-mode MT_FPCR are left
+  /// to the interpreter (its PALmode blocks are never compiled: jit_run).
+  static constexpr uint32_t kExtNative8 = 0x80000000u;
   void set_cpu_identity(uint64_t amask, uint64_t implver, uint32_t ext) {
     m_amask = amask;
     m_implver = implver;

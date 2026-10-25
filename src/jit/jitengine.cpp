@@ -497,9 +497,12 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
     if (ins == 0x5fff041f)
       return OP_NOP; // FNOP: no effect and no FEN fault (DO_CPYS)
     const uint32_t f17 = (ins >> 5) & 0x7ff;
+    // MT_FPCR traps to PALcode on the native EV8 (CAlphaCPU::fltl_operate):
+    // the interpreter's.
     const bool ok = f17 == 0x010 || (f17 >= 0x020 && f17 <= 0x022) ||
-                    f17 == 0x024 || f17 == 0x025 ||
-                    (f17 >= 0x02a && f17 <= 0x02f) || f17 == 0x030 ||
+                    (f17 == 0x024 && !(ext & CJitEngine::kExtNative8)) ||
+                    f17 == 0x025 || (f17 >= 0x02a && f17 <= 0x02f) ||
+                    f17 == 0x030 ||
                     (f17 == 0x068 && (ext & CPU_EXT_EV8)); // FCMOV2 (21464)
     if (!ok)
       return OP_NONE;
@@ -661,6 +664,10 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
     break;
   case 0x00: { // CALL_PAL: compile valid standard funcs (priv 0x01-0x3f, unpriv
                // 0x80-0xbf)
+    // The native EV8's (S1 and its entry, CAlphaCPU::ev8_call_pal) stays
+    // the interpreter's, a block ending before it (ev8-native.md, S11).
+    if (ext & CJitEngine::kExtNative8)
+      return OP_NONE;
     const uint32_t fn = ins & 0x1FFFFFFF;
     // HALT (0x00) stays interpreted so DO_CALL_PAL can honour
     // exit_on_pal_halt; it runs about once a session, so nothing is lost.
@@ -792,6 +799,11 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
     return OP_NONE;
   }
   case 0x1a:
+    // The native EV8's jumps check their target (BAD_JUMP_IVA at the jump,
+    // CAlphaCPU::ev8_jump), which a compiled JMP does not: the
+    // interpreter's on that row (ev8-native.md, S11).
+    if (ext & CJitEngine::kExtNative8)
+      return OP_NONE;
     return OP_JMP; // JMP/JSR/RET: computed jump (target = Rb & ~3). Now
                    // compiled -- chained in-frame via a block-cache lookup
                    // (jit_indirect), which handles varying targets without the
