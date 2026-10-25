@@ -613,6 +613,11 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
                          : _ua_opcode)                                         \
                         << 4 |                                                 \
                     ((flags & ACCESS_WRITE) ? 1 : 0);                          \
+    if (m_ev8n) { /* the 21464's EXC_SUM and M_STAT [IDS pp. 486, 510] */      \
+      state.exc_sum = ev8_regs_of(ins);                                        \
+      state.mm_stat =                                                          \
+          ((u64)_ua_opcode << 4) | ((flags & ACCESS_WRITE) ? 1 : 0);           \
+    }                                                                          \
     TRACE_UNALIGN(flags, 0);                                                   \
     GO_PAL(UNALIGN);                                                           \
     ES40_EXECUTE_END();                                                        \
@@ -826,9 +831,9 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
       sys_write(_pa, size, data);                                              \
   }
 
-#define REG_1 RREG(I_GETRA(ins))
-#define REG_2 RREG(I_GETRB(ins))
-#define REG_3 RREG(I_GETRC(ins))
+#define REG_1 RREG_A(I_GETRA(ins))
+#define REG_2 RREG_B(I_GETRB(ins))
+#define REG_3 RREG_A(I_GETRC(ins))
 #define FREG_1 (I_GETRA(ins))
 #define FREG_2 (I_GETRB(ins))
 #define FREG_3 (I_GETRC(ins))
@@ -885,10 +890,17 @@ inline u64 fsqrt64(u64 asig, s32 exp) {
    describes is the PC the operating system's handler is entitled to; the
    processor hands PALcode the trigger, and PALcode builds the frame. See
    docs/cpu-fidelity.md. */
+/* On the native EV8 EXC_SUM is the 21464's: the same cause bits <6:0>,
+   INT at <13>, and the instruction's register fields [IDS pp. 485-486];
+   EXC_ADDR is the next instruction (ev8_go_pal). */
 #define ARITH_TRAP(flags, reg)                                                 \
   {                                                                            \
     state.exc_sum |= flags;             /* cause of trap */                    \
     state.exc_sum |= (reg & 0x1f) << 8; /* destination register */             \
+    if (m_ev8n)                                                                \
+      state.exc_sum = (state.exc_sum & 0x7f) |                                 \
+                      ((state.exc_sum & TRAP_INT) ? U64(1) << 13 : 0) |        \
+                      ev8_regs_of(ins);                                        \
     GO_PAL(ARITH);                      /* trap */                             \
   }
 

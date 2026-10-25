@@ -462,7 +462,9 @@ public:
   /// Arm: called by processor `cpuid` on its own thread, inside the LL/SC
   /// reader guard (CLLSCDRAMGuard) and before it reads the line, so that a
   /// DMA write is wholly before the arm and the read, or clears the flag.
-  void cpu_arm_watch(int cpuid, u64 address);
+  /// `compare` false: the flag is set, and no store clears it (the native
+  /// EV8's QUIESCE_TIMEOUT<WATCH_EN> clear).
+  void cpu_arm_watch(int cpuid, u64 address, bool compare = true);
   bool cpu_watch_armed(int cpuid) const {
     return m_cpu_watch_flags.load(std::memory_order_seq_cst) & (1u << cpuid);
   }

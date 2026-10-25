@@ -44,6 +44,8 @@ struct FpShimSystem {
 /* Integer register numbers without PALshadow (the test never runs in
    PALmode with shadow registers enabled). */
 #define RREG(a) ((a) & 0x1f)
+#define RREG_A(a) ((a) & 0x1f)
+#define RREG_B(a) ((a) & 0x1f)
 
 #include "fp_shim_class.inc"
 

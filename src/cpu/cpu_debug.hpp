@@ -47,11 +47,17 @@
 #define DEBUG_INSTALL_PAL_TRAP(offset) ((void)0)
 #endif
 
+/* The native EV8 has entries and an EXC_ADDR rule of its own
+   (CAlphaCPU::ev8_go_pal). */
 #define GO_PAL(offset)                                                         \
   {                                                                            \
     DEBUG_INSTALL_PAL_TRAP(offset);                                            \
-    state.exc_addr = state.current_pc;                                         \
-    set_pc(state.pal_base | offset | 1);                                       \
+    if (m_ev8n) {                                                              \
+      ev8_go_pal(offset);                                                      \
+    } else {                                                                   \
+      state.exc_addr = state.current_pc;                                       \
+      set_pc(state.pal_base | offset | 1);                                     \
+    }                                                                          \
     /* HRM 4.2.4: clear lock_flag on taken exception/interrupt (fail a         \
        pending STx_C). Exclude transparent TB-miss fills; offset is a          \
        compile-time constant so this condition folds to nothing per site. */   \

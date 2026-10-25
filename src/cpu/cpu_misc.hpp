@@ -61,6 +61,10 @@
    the same. */
 #define ENTER_NATIVE_CALL_PAL()                                                \
   do {                                                                         \
+    if (m_ev8n) { /* S1 and the 21464's target (ev8_call_pal) */               \
+      ev8_call_pal((u32)function);                                             \
+      break;                                                                   \
+    }                                                                          \
     SAVE_CALL_PAL_R23();                                                       \
     set_pc(state.pal_base | (1 << 13) | ((function & 0x80) << 5) |             \
            ((function & 0x3f) << 6) | 1);                                      \

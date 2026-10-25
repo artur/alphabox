@@ -51,6 +51,7 @@
 #include "cpu_misc.hpp"
 #include "cpu_mvi.hpp"
 #include "cpu_pal.hpp"
+#include "cpu_pal_ev8.hpp"
 #include "cpu_vax.hpp"
 #include "diag_rpcc.hpp"
 #include <algorithm>
@@ -401,6 +402,8 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
   m_model = find_cpu_model(cfg->get_myValue());
   if (!m_model)
     FAILURE_1(Configuration, "Unknown Alpha processor %s", cfg->get_myValue());
+  // The native EV8's privileged interface (AlphaCPU_ev8.cpp).
+  m_ev8n = m_model->family == CPU_FAMILY_EV8;
   // A board takes processors of one core family: an EV7 has its memory
   // controller and router on chip and no Tsunami can drive one, and an EV68
   // has neither of those for a Marvel console to find.
@@ -565,6 +568,13 @@ void CAlphaCPU::watch_arm(u64 phys) {
     return;
   }
   m_quiesce_why.store(WATCH_NONE, std::memory_order_relaxed);
+  // The native EV8's QUIESCE_TIMEOUT<WATCH_EN> "enables comparison against
+  // the physical address": clear, the flag is set and no store clears it
+  // [IDS p. 511].
+  if (m_ev8n && !(m_ev8.quiesce_timeout & 2)) {
+    cSystem->cpu_arm_watch(id, phys, false);
+    return;
+  }
   cSystem->cpu_arm_watch(id, phys);
 }
 
@@ -618,7 +628,11 @@ void CAlphaCPU::quiesce() {
 #endif
   using namespace std::chrono;
   const auto t0 = steady_clock::now();
-  const auto timeout_at = t0 + nanoseconds(m_quiesce_ns);
+  // The native EV8's timeout is its IPR's, and none with TIMEOUT_EN clear
+  // (ev8_quiesce_ns): a day stands for never, the wait still sliced below.
+  const u64 qns = m_ev8n ? ev8_quiesce_ns() : m_quiesce_ns;
+  const auto timeout_at =
+      t0 + nanoseconds(qns == ~U64(0) ? U64(86400) * 1000000000u : qns);
   int why = WATCH_NONE;
   {
     std::unique_lock<std::mutex> lk(m_quiesce_mx);
@@ -943,6 +957,11 @@ void CAlphaCPU::init() {
   seq_offset = 0;
   seq_remaining = 0;
   seq_next_pc = 0;
+
+  // The native EV8: its chip's shared IPRs, and the 21464's reset in place
+  // of the state above, which is the 21264's.
+  if (m_ev8n)
+    ev8_init();
 
   printf("%s(%d): $Id$\n", devid_string, state.iProcNum);
   if (state.iProcNum == 0 && m_max_instr_per_tick)
@@ -1690,6 +1709,11 @@ _next_instruction:
 
   case 0x11: // INTL* instructions
     function = (ins >> 5) & 0x7f;
+    // A CMOV in PALmode on the native EV8: the shadow registers' rule for
+    // native and legacy CMOVs (ev8_pal_cmov).
+    if ((state.pc & 1) && m_ev8n && ev8_pal_cmov(ins)) {
+      ES40_EXECUTE_END();
+    }
     switch (function) {
     case 0x00:
       OP(AND, R12_R3);
@@ -2030,6 +2054,17 @@ _next_instruction:
     break;
 
   case 0x19: // HW_MFPR (PALRES)
+    // The native EV8's: Rc <4:0> the destination (N3), the index <12:5>;
+    // OPCDEC outside PALmode, as for 0x1B, 0x1D, 0x1E, 0x1F: its I_CTL has
+    // no HWE [IDS pp. 489-490, 571; inference].
+    if (m_ev8n) {
+      if (!(state.pc & 1)) {
+        GO_PAL(OPCDEC);
+        ES40_EXECUTE_END();
+      }
+      state.r[REG_3] = ev8_mfpr((ins >> 5) & 0xff);
+      ES40_EXECUTE_END();
+    }
     /* HRM 6.4 / 6.8.2: PALRES opcodes (0x19/0x1B/0x1D/0x1E/0x1F) raise
      * OPCDEC unless executing in PALmode or in kernel mode with I_CTL[HWE]
      * set. Matches brokenpipe palres_access_check(). */
@@ -2041,9 +2076,21 @@ _next_instruction:
     OP(HW_MFPR, MFPR);
 
   case 0x1a: // JSR* instructions
+    if (m_ev8n) { // PC<1:0> is the mode (N2)
+      ev8_jump(ins);
+      ES40_EXECUTE_END();
+    }
     OP(JMP, JMP);
 
   case 0x1b: // PAL reserved - HW_LD (PALRES)
+    if (m_ev8n) {
+      if (!(state.pc & 1)) {
+        GO_PAL(OPCDEC);
+        ES40_EXECUTE_END();
+      }
+      ev8_hw_ld(ins);
+      ES40_EXECUTE_END();
+    }
     if (!(state.pc & 1) && !(state.cm == 0 && state.hwe)) {
       GO_PAL(OPCDEC);
       ES40_EXECUTE_END();
@@ -2104,6 +2151,14 @@ _next_instruction:
     break;
 
   case 0x1d: // HW_MTPR (PALRES)
+    if (m_ev8n) { // Rb <20:16> the source, the index <12:5>
+      if (!(state.pc & 1)) {
+        GO_PAL(OPCDEC);
+        ES40_EXECUTE_END();
+      }
+      ev8_mtpr((ins >> 5) & 0xff, state.r[REG_2]);
+      ES40_EXECUTE_END();
+    }
     if (!(state.pc & 1) && !(state.cm == 0 && state.hwe)) {
       GO_PAL(OPCDEC);
       ES40_EXECUTE_END();
@@ -2112,6 +2167,16 @@ _next_instruction:
     OP(HW_MTPR, MTPR);
 
   case 0x1e: // HW_RET (PALRES)
+    // The native EV8 has no HW_RET (RET leaves PALmode): 0x1E is IFETCHB,
+    // which stops fetching until it retires and restarts at PC + 4 [IDS pp.
+    // 107-108, 650]. An emulator that executes in order and commits every
+    // write at once has nothing to wait for: a no-op [inference].
+    if (m_ev8n) {
+      if (!(state.pc & 1)) {
+        GO_PAL(OPCDEC);
+      }
+      ES40_EXECUTE_END();
+    }
     if (!(state.pc & 1) && !(state.cm == 0 && state.hwe)) {
       GO_PAL(OPCDEC);
       ES40_EXECUTE_END();
@@ -2119,6 +2184,14 @@ _next_instruction:
     OP(HW_RET, RET);
 
   case 0x1f: // HW_ST (PALRES)
+    if (m_ev8n) {
+      if (!(state.pc & 1)) {
+        GO_PAL(OPCDEC);
+        ES40_EXECUTE_END();
+      }
+      ev8_hw_st(ins);
+      ES40_EXECUTE_END();
+    }
     if (!(state.pc & 1) && !(state.cm == 0 && state.hwe)) {
       GO_PAL(OPCDEC);
       ES40_EXECUTE_END();
@@ -2179,6 +2252,12 @@ _next_instruction:
     OP(STQ_C, MEM);
 
   case 0x30:
+    // In PALmode on the native EV8 the link keeps the mode bits (N2).
+    if ((state.pc & 1) && m_ev8n) {
+      state.r[REG_1] = state.pc;
+      add_pc(DISP_21 * 4);
+      ES40_EXECUTE_END();
+    }
     OP(BR, BR);
 
   case 0x31:
@@ -2191,6 +2270,11 @@ _next_instruction:
     OP(FBLE, FCOND);
 
   case 0x34:
+    if ((state.pc & 1) && m_ev8n) { // as BR (N2)
+      state.r[REG_1] = state.pc;
+      add_pc(DISP_21 * 4);
+      ES40_EXECUTE_END();
+    }
     OP(BSR, BSR);
 
   case 0x35:
@@ -2332,6 +2416,13 @@ bool CAlphaCPU::fltl_operate(u32 ins, u32 function) {
     break;
   case 0x024:
     DO_MT_FPCR;
+    // On the native EV8 an MT_FPCR outside PALmode traps to the MT_FPCR
+    // entry once it has written the FPCR, with EXC_ADDR the next
+    // instruction [IDS pp. 581, 630]; the PALcode's flow is HW_MFPR
+    // EXC_ADDR -> S1, IFETCHB, RET (S1).
+    if (m_ev8n && !(state.current_pc & 1)) {
+      GO_PAL(MT_FPCR);
+    }
     break;
   case 0x025:
     DO_MF_FPCR;
@@ -2383,6 +2474,8 @@ int CAlphaCPU::SaveState(FILE *f) {
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
   fwrite(&cpu_magic2, sizeof(u32), 1, f);
+  if (m_ev8n) // the native EV8's own IPRs, after the core's
+    ev8_save(f);
   printf("%s: %d bytes saved.\n", devid_string, (int)ss);
   return 0;
 }
@@ -2434,6 +2527,8 @@ int CAlphaCPU::RestoreState(FILE *f) {
     printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
+  if (m_ev8n && ev8_restore(f))
+    return -1;
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   last_dtb_virt[0] = last_dtb_virt[1] = 0;
@@ -2708,6 +2803,8 @@ int CAlphaCPU::initiate_acv_fault(u64 virt, int flags, u32 ins) {
  **/
 int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
                          u32 ins) {
+  if (m_ev8n) // the 21464's translation and entries (AlphaCPU_ev8.cpp)
+    return ev8_virt2phys(virt, phys, flags, asm_bit, ins);
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
   int i;
 
@@ -2998,15 +3095,21 @@ int CAlphaCPU::virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit,
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  * \param asn     Address space number latched by the PAL fill port.
  **/
+// An 8 KB entry, which the index holds: its tag covers VA<47:13> (the
+// 21264's GH 0, or the native EV8's VA<51:13>).
+static inline bool tb_idx_8k(u64 match_mask) {
+  return (match_mask & GH_0_MATCH) == GH_0_MATCH;
+}
+
 void CAlphaCPU::tb_idx_drop(int t, int slot) {
-  if (state.tb[t][slot].match_mask == GH_0_MATCH)
+  if (tb_idx_8k(state.tb[t][slot].match_mask))
     tb_idx_remove(t, state.tb[t][slot].virt, slot);
   else
     m_tb_gh_live[t]--;
 }
 
 void CAlphaCPU::tb_idx_add(int t, int slot) {
-  if (state.tb[t][slot].match_mask == GH_0_MATCH)
+  if (tb_idx_8k(state.tb[t][slot].match_mask))
     tb_idx_insert(t, state.tb[t][slot].virt, slot);
   else
     m_tb_gh_live[t]++;

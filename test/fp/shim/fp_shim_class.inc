@@ -21,6 +21,10 @@ public:
   FpShimSystem sys;
   FpShimSystem *cSystem = &sys;
   int pal_entries = 0; /* GO_PAL calls in this instruction */
+  /* The native EV8's trap path (GO_PAL, ARITH_TRAP): never taken here. */
+  static constexpr bool m_ev8n = false;
+  void ev8_go_pal(u64) {}
+  u64 ev8_regs_of(u32) const { return 0; }
   bool opcdec = false; /* the decode refused the instruction */
 
   void set_pc(u64 p_pc) {

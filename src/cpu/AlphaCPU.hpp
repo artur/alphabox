@@ -1175,6 +1175,12 @@ public:
       int access[2][4]; /**< Access permitted [read/write][current mode]*/
       int fault[3];     /**< Fault on access [read/write/execute]*/
       bool valid;       /**< Valid entry*/
+      /** The native EV8 only (CPU_FAMILY_EV8): the TPU group the entry was
+          filled in, and whether it holds a translation at all; `valid` is
+          then "present and of the current group" (ev8_set_group). In the
+          padding after `valid`, so the state file keeps its size. */
+      u8 ev8_grp;
+      u8 ev8_present;
     } tb[2]
         [TB_ENTRIES]; /**< Unified Dstream TB model plus Istream TB entries */
 
@@ -1223,6 +1229,8 @@ public:
   static constexpr int kTbShadowBits = 12;
   static constexpr int kTbShadowEntries = 1 << kTbShadowBits;
   using STBEntry = std::remove_reference_t<decltype(state.tb[0][0])>;
+  static_assert(sizeof(STBEntry) == 88,
+                "a TB entry's size is part of the state file's format");
   STBEntry m_tb_shadow[kTbShadowEntries] = {};
   u64 m_tb_shadow_refills = 0; // FindTBEntry refills from the shadow
   static inline u64 tb_shadow_index(u64 va) {
@@ -1361,9 +1369,96 @@ public:
   std::atomic<bool> m_debug_on{false};
   CDebugTarget *m_debug = nullptr;
 
+  // --- The native EV8 (CPU_FAMILY_EV8, the `ev8n` row) ---------------------
+  // docs/platforms/ev8-native.md (S11) and docs/cpu-fidelity.md. The code is
+  // in cpu_pal_ev8.hpp (the PALcode instructions and the IPRs) and
+  // AlphaCPU_ev8.cpp (modes, entries, translation, the TB with TPU groups,
+  // the reset). IDS is the 21464 Internal Design Specification, Rev 1.1k.
+  /// This processor is a TPU of a native EV8 (m_model->family ==
+  /// CPU_FAMILY_EV8): the IDS's privileged interface in place of the 21264's.
+  bool is_ev8n() const { return m_ev8n; }
+  /// Reset (N17): every TPU at PAL_BASE + 0xB00 in PALmode, with its TPU_ID,
+  /// its chip's CPU_BASE and the IPRs at their reset values. `pal_base` is
+  /// the loader's, in the 32 KB page an image's entry names.
+  void ev8_reset(u64 pal_base);
+  /// Superpages and the sign check, in Appendix C's order [IDS p. 695]:
+  /// 1 with *phys set for an enabled superpage taken in kernel mode, 0 for
+  /// a well-formed address the TB translates, -1 for a malformed one (bad
+  /// VA sign), -2 for a superpage outside kernel mode (an access
+  /// violation). Side-effect free; the JIT's helpers ask it too.
+  int ev8_superpage(u64 va, bool istream, int cm, u64 *phys) const;
+  /// virt2phys on this row: the 21464's superpages, sign check, TB and
+  /// entries (CAlphaCPU::virt2phys hands every translation here).
+  int ev8_virt2phys(u64 virt, u64 *phys, int flags, bool *asm_bit, u32 ins);
+
 private:
   u32 m_pid = 0;
   int m_tpu = 0;
+
+  bool m_ev8n = false;
+  /// What a chip's TPUs share: the per-chip IPRs of Table 16-1 [IDS pp.
+  /// 477-481]. TPU 0 owns it; the others point at TPU 0's.
+  struct SEv8Chip {
+    std::atomic<u64> cpu_cnfg{0}; ///< CPU_CNFG<24:0> (CHIP_ID read-only)
+    std::atomic<u64> dc_ctl{0};   ///< DC_CTL<55:48>
+    u32 pid = 0;                  ///< CPU_BASE<9:0> (N6): the chip's number
+  };
+  std::shared_ptr<SEv8Chip> m_ev8_chip;
+  /// The per-TPU IPRs the 21264's state has no place for (the rest share
+  /// `state`'s fields: cm, asn, asn0, fpen, alt_cm, exc_addr, exc_sum,
+  /// fault_va, mm_stat, pal_base, the interrupt enables and requests, the
+  /// cycle counter, the superpage enables, the TBs). Not in `state`, whose
+  /// size is the state file's format for every row: saved after it, for
+  /// this family only.
+  struct SEv8 {
+    u64 i_ctl = 0, m_ctl = 0; ///< as written: VPTE_BASE, REDUCED_PT, sizes
+    bool i_console = false, m_console = false; ///< I_MODE, M_MODE<CONSOLE>
+    int i_grp = 0, m_grp = 0;                  ///< I_PCTX, M_PCTX<TPU_GRP>
+    u64 dtbms_ret_addr = 0;                    ///< DTBMS_RET_ADDR
+    u64 pal_temp[2] = {0, 0};                  ///< PAL_TEMP1, PAL_TEMP2
+    u64 vctl = 0;                              ///< VCTL (N8): VEN <0>
+    u64 tpu_cnfg = 0;             ///< TPU_CNFG<7:4> (TPU_ID is m_tpu)
+    u64 quiesce_timeout = 0x2800; ///< QUIESCE_TIMEOUT [IDS p. 511]
+    u64 invalid_ptes = 0;         ///< DTB_PTEs dropped (N10)
+  } m_ev8;
+  /// The PALmode register an operand names (docs/platforms/ev8-native.md,
+  /// 1.3): the 21264's PALshadow bank (R4-R7, R20-R23 with I_CTL<SDE>), or
+  /// on the native EV8 the position-dependent S0/S1 of p. 580: operand A
+  /// and the destination R24, R25; operand B R22, R23. S0 and S1 are
+  /// state.r[56] and state.r[57]. Called in PALmode only (RREG_A, RREG_B).
+  int pal_off_a(u32 a) const {
+    if (((a & 0xc) == 0x4) && state.sde)
+      return 32;
+    return (m_ev8n && (a & 0x1e) == 24) ? 32 : 0;
+  }
+  int pal_off_b(u32 a) const {
+    if (((a & 0xc) == 0x4) && state.sde)
+      return 32;
+    return (m_ev8n && (a & 0x1e) == 22) ? 34 : 0;
+  }
+  // The pieces (AlphaCPU_ev8.cpp and cpu_pal_ev8.hpp).
+  void ev8_init();                   ///< at construction/init: chip state
+  void ev8_go_pal(u64 offset);       ///< GO_PAL on this row
+  void ev8_trap(u64 entry, u32 ins); ///< enter `entry` writing nothing
+  u64 ev8_regs_of(u32 ins) const;    ///< EXC_SUM<28:14> of a word
+  inline u64 ev8_mfpr(u32 index);    ///< HW_MFPR (cpu_pal_ev8.hpp)
+  inline void ev8_mtpr(u32 index, u64 value);  ///< HW_MTPR
+  void ev8_hw_ld(u32 ins);                     ///< HW_LD [IDS pp. 569-570]
+  void ev8_hw_st(u32 ins);                     ///< HW_ST
+  void ev8_jump(u32 ins);                      ///< JMP/JSR/RET/JSR_CO (N2)
+  bool ev8_pal_cmov(u32 ins);                  ///< a CMOV in PALmode (1.3)
+  void ev8_call_pal(u32 function);             ///< CALL_PAL's entry and S1
+  u64 ev8_va_form(u64 va, bool istream) const; ///< IVA_FORM, VA_FORM
+  bool ev8_va52(bool istream) const;           ///< 52-bit VA and 64 KB pages
+  void ev8_add_tb(int t, u64 virt, u64 pte);   ///< ITB_PTE, DTB_PTE fills
+  void ev8_tb_im(int t, u64 mode);             ///< ITB_IM, DTB_IM
+  void ev8_tb_is(int t, u64 va);               ///< ITB_IS, DTB_IS
+  void ev8_set_group(int t, int grp);          ///< TPU_GRP: which entries show
+  void ev8_tb_clear(int t);                    ///< every entry gone (reset)
+  void ev8_tb_changed(int t);                  ///< what caches a TB's entries
+  u64 ev8_quiesce_ns() const;                  ///< QUIESCE's timeout, or ~0
+  int ev8_save(FILE *f);
+  int ev8_restore(FILE *f);
 
   // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ----------------------
   // docs/platforms/ev8.md (S3, D16) and docs/cpu-fidelity.md. At the end of
@@ -1406,6 +1501,12 @@ private:
     (to determine if we're in PALmode), and the SDE (Shadow Enable) bit. */
 #define RREG(a)                                                                \
   (((a)&0x1f) + (((state.pc & 1) && (((a)&0xc) == 0x4) && state.sde) ? 32 : 0))
+/** The same by the operand's position, which the native EV8's shadow
+    registers depend on (pal_off_a, pal_off_b): operand A and the
+    destination (Ra, Rc), and operand B (Rb). On the other rows both are
+    RREG. */
+#define RREG_A(a) (((a)&0x1f) + ((state.pc & 1) ? pal_off_a((a)&0x1f) : 0))
+#define RREG_B(a) (((a)&0x1f) + ((state.pc & 1) ? pal_off_b((a)&0x1f) : 0))
 
 // Tell the JIT which caller's icache flush this is, for the epoch census.
 // A flush rejects every cached block link, so knowing which event does it is

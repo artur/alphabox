@@ -246,6 +246,16 @@ bool CDebugTarget::translate(int cpu, u64 va, u64 *pa, std::string *how) {
   // The superpages, either stream's enable (HRM 5.3.9). On the chip they
   // map kernel-mode accesses only; a debugger reads as the kernel.
   for (int stream = 0; stream < 2; stream++) {
+    // The native EV8's superpages are Appendix C's (CAlphaCPU::ev8_superpage);
+    // its TB entries are valid in their TPU group only, as read below.
+    if (c->is_ev8n()) {
+      if (c->ev8_superpage(va, stream != 0, 0, pa) == 1) {
+        if (how)
+          *how = stream ? "I-stream superpage" : "D-stream superpage";
+        return true;
+      }
+      continue;
+    }
     const int spe = stream ? s.i_ctl_spe : s.m_ctl_spe;
     const bool va48 = stream ? (s.i_ctl_va_mode & 1) : (s.va_ctl_va_mode & 1);
     if (!spe || !alpha_valid_va_form(va, va48))

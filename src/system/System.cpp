@@ -1046,9 +1046,12 @@ void CSystem::cpu_clear_lock(int cpuid) {
 // --- LDx_ARM / QUIESCE (the 21464's; docs/platforms/ev8.md, S3) ----------
 static_assert(CSystem::kMaxCPUs <= 32, "one watch flag bit per processor");
 
-void CSystem::cpu_arm_watch(int cpuid, u64 address) {
-  cpu_watch_mark_page(address);
-  m_cpu_watch_address[cpuid] = address;
+void CSystem::cpu_arm_watch(int cpuid, u64 address, bool compare) {
+  if (compare)
+    cpu_watch_mark_page(address);
+  // No comparison: an address past every memory and I/O space, which no
+  // store's line matches (cpu_watch_hit).
+  m_cpu_watch_address[cpuid] = compare ? address : ~U64(0);
   // Sequentially consistent, and before the caller reads the line: a store
   // the read does not see sees the flag (cpu_note_store_watch's fence).
   m_cpu_watch_flags.fetch_or(1u << cpuid, std::memory_order_seq_cst);
@@ -1304,6 +1307,12 @@ static bool srm_decomp_chunk(CAlphaCPU *cpu) {
  **/
 static void hand_to_console(CAlphaCPU **cpus, int n, u64 entry) {
   for (int i = 0; i < n; i++) {
+    // The native EV8 (ev8-native.md, N17): the 21464's reset on every TPU,
+    // at its PAL_BASE + 0xB00, PAL_BASE the 32 KB page the entry names.
+    if (cpus[i]->is_ev8n()) {
+      cpus[i]->ev8_reset(entry & ~U64(1));
+      continue;
+    }
     cpus[i]->set_pc(entry);
     cpus[i]->set_PAL_BASE(entry & ~U64(1));
   }
