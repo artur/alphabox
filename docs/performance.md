@@ -699,6 +699,42 @@ No effect came out above the noise of a busy host (the switched-off arm
 alone spans 10% on `cab`); a run on a quiet host is still owed before a
 number is quoted. Every section computed the same results in both arms.
 
+### The code-page map's fences, and one translation
+
+*2026-10-25.* JIT-05's fixes ([cpu-fidelity.md](cpu-fidelity.md), "The
+code-page map between processors") put work on three paths: every `MB`
+tests the processor's page-cache flush request after its fence (compiled:
+a byte load and a branch, the helper only with a request pending), every
+`IC_FLUSH` fences before it reads the map, and `note_code` takes a mutex
+once per compile; and a store reported to the code-page map (the
+interpreter's, a store helper's) fences before it reads the line's bit,
+where its page holds code. JIT-08 replaced the memory helpers' copy of
+`virt2phys`'s fast path with `virt2phys_fast`, inline, which `virt2phys`
+calls too, so a page-cache miss gains no call. Each is behind a switch
+that restores the old path in the same binary (`ALPHABOX_JIT05_MB=0`,
+`ALPHABOX_JIT05_FENCE=0`, `ALPHABOX_JIT08_XLATE=0`;
+`ALPHABOX_JIT05_FENCE=2` fences on every reported store, the simple
+construction the default avoids).
+
+Not measured yet: the host was never quiet while the branch was open
+(other sessions' gates and guests; a load average near 400), and
+`perf_ab.py` refuses to time a round beside them. The runs owed, on the
+branch's JIT build, each switch against itself:
+
+```
+B=build-jit/alphabox
+for sw in JIT05_MB JIT05_FENCE JIT08_XLATE; do
+  for wl in axp cab; do
+    test/tools/perf_ab.py jit0508-$sw-$wl $B $B --env-base ALPHABOX_$sw=0 \
+      --workload $wl --rounds 2 --snapshot
+  done
+done
+```
+
+Once a switch costs no more than about 2% on either workload it goes, and
+the path it measured stays; over that, the owner decides. Until then no
+number here is a measurement.
+
 ## One binary at a time
 
 *2026-09-19.* The per-block items, extended blocks and the exact TB index,

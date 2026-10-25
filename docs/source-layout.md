@@ -395,7 +395,9 @@ that once sat beside them was deleted in October 2026 (git keeps it; see
 
 `jit_run()` in `cpu/AlphaCPU_jit.cpp` is the dispatch loop. Memory accesses
 go through the `jit_read` and `jit_write` helpers, which mirror the
-semantics of `cpu/cpu_memory.hpp`.
+semantics of `cpu/cpu_memory.hpp` and translate with
+`CAlphaCPU::virt2phys_fast` (`cpu/AlphaCPU.hpp`), the part of `virt2phys`
+that has no side effects, shared with it.
 
 ## Configuration
 

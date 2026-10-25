@@ -660,7 +660,7 @@ IDS is the *21464 Internal Design Specification*, Rev 1.1k, by PDF page.
 | **Divergence: Mode 3** | TPUs in one group do not see each other's fills, and an invalidation reaches only the writer's TB | on the chip a group's entries serve all its TPUs, and an invalidation by mode "all groups" reaches every group [IDS pp. 306, 494]. Software that invalidates on every TPU it changes a translation for sees no difference but in the misses it takes |
 | QUIESCE | QUIESCE_TIMEOUT decides: TIMEOUT cycles at the clock with TIMEOUT_EN, no timeout without; WATCH_EN clear, no store clears watch_flag | [IDS pp. 510-511]; **decision N17** follows the register (enables 0 at reset); `ALPHABOX_QUIESCE_TIMEOUT` is the `ev8` row's and does not apply |
 | TPUs | four per chip by default, each a processor with its own registers and per-TPU IPRs; the per-chip CPU_CNFG, DC_CTL and CPU_BASE shared; every TPU of every chip resets at PAL_BASE + 0xB00 with its TPU_ID; off the Marvel boards each TPU is one of the board's processors | [IDS pp. 46, 477-481, 488]; all at 0xB00 **decision N17** |
-| The JIT | PALmode code interpreted, never compiled; CALL_PAL, JMP/JSR/RET/JSR_CO and MT_FPCR the interpreter's; normal-mode loads and stores compiled, their helpers translating by the 21464's rules (`ev8_superpage`, the group's TB entries) | **[decision]** (part of N16): the 21464's forms through helpers once the interpreter's are proven; the jumps for BAD_JUMP_IVA |
+| The JIT | PALmode code interpreted, never compiled; CALL_PAL, JMP/JSR/RET/JSR_CO and MT_FPCR the interpreter's; normal-mode loads and stores compiled, their helpers translating by the 21464's rules through `virt2phys_fast`, the interpreter's own fast path (`ev8_superpage`, the group's TB entries) | **[decision]** (part of N16): the 21464's forms through helpers once the interpreter's are proven; the jumps for BAD_JUMP_IVA |
 | The state file | the native IPRs after the core's block, for this family only | **[decision]**: no other row's format changes |
 
 `test/cpu` group `ev8n` checks the table's rows with one TPU (the image's
@@ -1103,16 +1103,69 @@ until they were fixed:
   skipped with the old code published. The bits are set first now, then
   a fence, then the check. A processor that had the page cached as
   writable inline when it became code counts one write when an `IMB`
-  makes it drop that translation, as a timer check already did. What
-  remains: a store and its own report are not fenced from each other,
-  so a store still in its processor's store buffer while the compiler
-  checks can be missed; and a processor that still holds the page as
-  writable inline stores into it unreported until its next timer check
-  or `IMB`, so another processor's `IMB` in that window can still be
-  skipped. Closing the first needs a fence on the store path, and the
-  second a request every other processor answers before the block is
-  published; neither was added. Windows 2000 RC2 and OpenVMS 8.4 on
-  two processors, `smc_test.sh` on two and SRM on four ran as before.
+  makes it drop that translation, as a timer check already did. Two
+  windows were left, both closed on 2026-10-25:
+  1. *A store and its own report were not fenced from each other.* Still
+     in its processor's store buffer while a compiler checked, a store
+     was missed by the check, and its report read the line's old bit. A
+     fence between the store and its read of the bit now makes the two a
+     Dekker pair: either the check sees the store, or the store sees the
+     bit. It is in `CCodePageMap::note_write`, which every reporting store
+     passes (the interpreter's, the JIT's store helpers, `STx_C`,
+     `CSystem::WriteMem`), and it is paid only where the page's bit is
+     already set. A store that finds the page bit clear while the page is
+     being marked is the next window's case: the marker asks every
+     processor to drop its cached translations after setting the bit, and
+     the writer's `MB` honours that request and counts a write, which pairs
+     with the marker's fence and check. For every program that follows the
+     ARM's rule below, this gives the guarantee a fence on every store
+     would, on hosts that are multi-copy atomic (x86-64 and AArch64, every
+     host the JIT runs on). AArch64's inline physical `HW_ST`, which reads
+     the page bit before it stores, is the next window's case too.
+  2. *A processor that still held the page as writable inline* (cached
+     before it became code) stored into it unreported until its next
+     timer check or `IMB`, so another processor's `IMB` in that window was
+     skipped. The ARM's way to hand another processor new instructions is
+     the writer's `MB` (`IMB` if it runs them too), then a flag, then the
+     executor's `IMB` (Alpha Architecture Handbook, chapter 5,
+     "Multiple-Processor Instruction Stream"; `WMB` is not in that rule).
+     So `MB`, and the reserved 18.4800 and 18.4C00 that act as one, now
+     fence, then test the processor's page-cache flush request, and with
+     one pending drop the cached translations, count a write and fence
+     again, so the guest's flag cannot become visible before the count
+     (`CAlphaCPU::memory_barrier`). Compiled `MB` tests the request inline
+     and calls the helper only when one is pending. The fence before the
+     test pairs with the compiler, which asks before its own fence and
+     check: either the check sees the writer's stores, or the `MB` sees
+     the request. `IC_FLUSH` fences the same way before it reads the map
+     (the handbook's Table 5-1 orders `IMB` as `MB`). And `note_code` is
+     serialised: a processor that set a page's bit and was preempted
+     before it asked the others could otherwise have a second processor
+     compile elsewhere in that page, find the bit set, ask nobody and
+     publish in between.
+
+  `test/cpu/codepage_mp.py` shows the second window: a writer that stores
+  the new code through a translation it cached before the page became
+  code, then `MB` and a flag, and an executor that `IMB`s and calls it.
+  On 35b8e15 the executor ran the old code in 2681 of 3000 iterations on
+  AArch64 and in 2949 on x86-64; now in none, on every lane. The first
+  window is a race of nanoseconds, which no test here shows. A device's
+  DMA reports before and after its transfer (`CPCIDMAWriteGuard`), not
+  between a store and a fence; a guest runs code a device writes only
+  after the transfer completes, which orders it. The CPU oracle's
+  verdicts are main's on the interpreter, AArch64, `JIT_VERIFY` and x86-64
+  lanes for `ev68cb`, `ev7`, `ev8` and `ev8n` (`JIT_VERIFY`: 0
+  mismatches); `quiesce_mp.py` and `tpu_mp.py` pass on the four lanes;
+  SRM's console log is unchanged on the interpreter, AArch64 and
+  `JIT_VERIFY` lanes (116 million compiled blocks, 0 mismatches);
+  `smc_test.sh` passes on one processor and on two. Windows 2000 RC2 on two
+  processors, OpenVMS 8.4 on the ES40, on the DS20E with two processors
+  and on the ES47, Gentoo Linux and Windows XP 64-bit passed
+  `guests_check.sh`. The fixes are behind switches still
+  (`ALPHABOX_JIT05_MB=0` and `ALPHABOX_JIT05_FENCE=0` restore the old
+  paths, [headless.md](headless.md)) until `perf_ab.py` has measured them
+  on a quiet host ([performance.md](performance.md), "The code-page map's
+  fences, and one translation").
 - **What a block marks as code** (JIT-04). A compiled block copied,
   checked again, hashed and marked in the code-page map its whole
   interpreted span, up to a dispatch batch of 2000 instructions, though
@@ -1131,13 +1184,31 @@ until they were fixed:
   implementation: `CAlphaCPU::hw_mfpr` and `hw_mtpr` (`cpu_pal.hpp`),
   `fltv_operate` and `fltl_operate` (`AlphaCPU.cpp`). A compiled
   `IC_FLUSH` now records its epoch cause as an interpreted one does
-  (statistics only). The data helpers' side-effect-free translation is
-  still a copy of `virt2phys`'s: calling it with `FAKE` instead would
-  put a call on every page-cache miss and fold the `JIT_STATS` bail
-  causes (TB miss, access violation, fault) into one, which was not done
-  without a measurement. SRM's console log is unchanged on the
-  interpreter, AArch64 and `JIT_VERIFY` lanes, `ALPHABOX_JIT_FPTEST`
-  passes, Windows 2000 RC2 reached its desktop and OpenVMS 8.4 logged in.
+  (statistics only). SRM's console log is unchanged on the interpreter,
+  AArch64 and `JIT_VERIFY` lanes, `ALPHABOX_JIT_FPTEST` passes, Windows
+  2000 RC2 reached its desktop and OpenVMS 8.4 logged in. The data
+  helpers' translation, still a copy of `virt2phys`'s fast path then, is
+  one routine since 2026-10-25: `CAlphaCPU::virt2phys_fast`
+  (`AlphaCPU.hpp`, inline, so no call is added): the address's form, the
+  superpages, the TB and the entry's access and fault bits, by each
+  row's rules (the native EV8's through `ev8_superpage` and its TB
+  groups), with no page-table walk, no fault vectored and no TB fill.
+  It returns what it found, and `virt2phys` vectors the rest (on the
+  `ev8n` row through `ev8_virt2phys`, which translates again), while
+  the helpers (`jit_read`, `jit_read_locked`, `jit_read_vpte`,
+  `jit_read_wchk`, `jit_write`, `jit_stc`, and `jit_indirect`'s check of
+  a chained jump after an ITB invalidate) bail to the interpreter and
+  keep the `JIT_STATS` causes (TB miss, access violation, fault). Two
+  now ask what the interpreter asks: `jit_read_vpte` checks the
+  address's form and the superpages first (a malformed address could
+  have matched the TB entry of its canonical twin), and `jit_indirect`
+  checks the execute right and the fault bit in the live mode and
+  translates a superpage target rather than leaving it to the
+  dispatcher. Group `jitxlate` runs a compiled load through the helper
+  on each superpage, a TB hit, a miss, an access violation and a
+  fault-on-read, on every row; the other proofs are JIT-05's, above
+  (the same branch). `ALPHABOX_JIT08_XLATE=0` selects the old copies
+  until the measurement.
 - **A chained entry to the PAL reset vector** (JIT-13). The dispatcher
   flushes the instruction cache and the compiled blocks when it enters
   `PAL_BASE` (a firmware updater rewrote the image in place, or a

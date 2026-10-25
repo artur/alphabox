@@ -505,6 +505,9 @@ The switches, each for a same-binary A/B or for isolating a fault:
 | `ALPHABOX_JIT_NOPFLUSH_BREAK=1` | Do not report the processor's own stores to the code-page map, as though a write path had been forgotten. |
 | `ALPHABOX_DPC_KEEP=0` | A data-TB fill empties the page-cache slots of the page it evicts and of the page it inserts, as before. |
 | `ALPHABOX_LLSC_MEMOP=0` | A load or store between `LDx_L` and `STx_C` does not make the `STx_C` fail, in either engine, as before 2026-10-22 (an A/B switch; [cpu-fidelity.md](cpu-fidelity.md)). |
+| `ALPHABOX_JIT05_MB=0` | `MB` (compiled and interpreted) does not honour a pending page-cache flush request, `IC_FLUSH` does not fence before it reads the code-page map, and `note_code` is not serialised, as before 2026-10-25 (JIT-05; an A/B switch, removed once measured: [performance.md](performance.md)). |
+| `ALPHABOX_JIT05_FENCE=0\|2` | `0`: a store reported to the code-page map does not fence before it reads the line's bit, as before 2026-10-25. `2`: every such store fences, where the default fences only on a page that holds code (JIT-05; an A/B switch, removed once measured). |
+| `ALPHABOX_JIT08_XLATE=0` | `virt2phys` and the JIT's memory helpers translate with the copies they had before 2026-10-25 instead of `virt2phys_fast` (JIT-08; an A/B switch, removed once measured). |
 | `ALPHABOX_JIT_PINLOG=1` | Print each change of pin set, with the share of register accesses the old and the new set cover. |
 | `ALPHABOX_JIT_CHAIN=0` | Compiled blocks never run on into one another, as on a JIT_VERIFY build. |
 | `ALPHABOX_JIT_INLMEM=0` | Every load and store from compiled code calls its helper, as on a JIT_VERIFY build. |

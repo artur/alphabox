@@ -201,14 +201,18 @@ and so never traps).
   the skipped words and what follows an instruction the JIT does not
   compile). `--no-blocks` gives the old layout.
 - **The JIT groups** (`jitregs`, `jitbranch`, `jitfault`, `jitint`,
-  `jitllsc`, `jitpal`, `jitmode`, `jitsmc`, `jitmisc`; `test/cpu/jit_cases.py`)
+  `jitllsc`, `jitpal`, `jitmode`, `jitsmc`, `jitmisc`, `jitxlate`;
+  `test/cpu/jit_cases.py`)
   are shaped for the translator: all case registers live across chained
   exits and helper calls, branches that go one way while a block is
   recorded and the other way when it runs compiled, faults in the middle
   of a compiled block, an interrupt at the return from PALcode,
   LDx_L/STx_C split across blocks, PALmode blocks with and without the
-  shadow registers, one block entered in two modes, and code rewritten
-  before an `IC_FLUSH`. A case that must behave differently while its
+  shadow registers, one block entered in two modes, code rewritten
+  before an `IC_FLUSH`, and loads that reach the memory helpers'
+  translation (an `M_CTL` write or a DTB fill empties the page cache
+  first) on each superpage, a TB hit and miss, an access violation and a
+  fault-on-read. A case that must behave differently while its
   blocks compile does so through an `edge` register, 1 in the first and
   the last pass only, which are the two checked.
 - **Verdicts.** PASS is the manual's value. KNOWN is a documented
@@ -357,6 +361,23 @@ and come out through the window. The image counts the elements that
 differ; the script checks the counts, the scalar results against its own
 computation, three passes of the loop and no exception taken. About a
 second.
+
+**A code change across processors.** `test/cpu/codepage_mp.py
+<alphabox-binary> [label] [--cpu ROW] [--port N] [--iterations N]
+[--polls K]` boots two processors of the row (default `ev68cb`) on the
+ES40, the image's PALcode, and goes through N iterations (3000), each on
+a page that no block was compiled from: the writer stores the old code
+there from compiled code, so the page is cached as writable inline; the
+executor calls it until it compiles, which makes it a code page and asks
+every processor to drop that translation; the writer, in a run of K polls
+(1024) with no backward branch, so no gated exit, stores the new code,
+executes `MB` and sets a flag; the executor `IMB`s and calls the page,
+which must return the new code. A second run under
+`ALPHABOX_JIT_NOPFLUSH=2` must report no block whose source changed while
+the code-page map said nothing was written. On 35b8e15 the old code ran
+in most iterations on both back ends (JIT-05,
+[cpu-fidelity.md](cpu-fidelity.md)). A `JIT_VERIFY` build and the
+interpreter have nothing to show and must pass. A second or two.
 
 ### Performance
 
