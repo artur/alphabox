@@ -868,10 +868,11 @@ the board side needed:
 - **The CMM**: one port per PID (a chip's TPUs share it); its terminal
   interrupt goes to the chip's GIO_INT bit, R_INT_STAT<13>.
 
-Nothing in the EV7 mode changed: `boards_check.sh`, its `--diff` against
-main, the EV7 boards with `ev8` of one and of four TPUs, and
-`marvel_init_check.sh gs1280:16` give the earlier results (the proofs are
-in [ev8-native.md](ev8-native.md), S11b).
+Nothing in the EV7 mode changed: `boards_check.sh` and its `--diff`
+against main, and the EV7 boards with `ev8` of one TPU, give the earlier
+results; with four TPUs the boards list their 8 processors (the proofs,
+and the broad checks left to the gate on main, are in
+[ev8-native.md](ev8-native.md), S11b).
 
 ### EV8 S4: what the console does with TPUs (2026-10-25)
 

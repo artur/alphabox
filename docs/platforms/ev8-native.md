@@ -1526,8 +1526,32 @@ and the board side in [marvel.md](marvel.md), "21464 mode".
   EV7's map unchanged), the dense topology on the three layouts, the IO7
   placement, R_ROUT's entries and R_WHOAMI (27115 checks).
 
-**The proofs**: see the status file `lab/runs/ev8-s11b-status.md` and the
-runs it names (filled in below when they end).
+**The proofs**. Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT), and
+every commit of the series built with its unit tests on an interpreter
+lane. `marvel8_mp.py` passed on the interpreter, JIT, JIT_VERIFY and
+x86-64 lanes, all three layouts, 1034 results each, JIT_VERIFY 0
+mismatches. The CPU oracle on the same four lanes gave main's verdicts:
+`ev68cb` and `ev7` PASS 20180, KNOWN 61; `ev8` PASS 20432, KNOWN 73;
+`ev8n` PASS 20906, KNOWN 70, SKIP 74; FAIL 0 everywhere and JIT_VERIFY 0
+mismatches. `quiesce_mp.py` and `tpu_mp.py` passed on the four lanes. The
+SRM console-log check was clean on the interpreter, JIT and JIT_VERIFY
+lanes (0 mismatches). `boards_check.sh` passed its 12 boards and three
+`init` checks, `--diff` against main and against the gate's ev8s11 run
+the same on every board; with `BOARDS_EV7_CPU=ev8` the ES47, ES80 and
+GS1280 and their `init` checks passed, the same as the gate's ev8s4 run;
+with `ev8` of four TPUs the three boards listed 8 processors each
+(`lab/runs/ev8-s11b-proof/`, `boards-ev8-s11b-*`). On a host at load 300
+the owner stopped the rest of the broad sweep, which the gate on main runs
+after the merge: the four-TPU `init` checks and their `--diff`,
+`marvel_init_check.sh gs1280:16`, and `guests_check.sh` (`vms-es47`,
+`linux-es47`, with `ev7` and with `ev8`) were not run on this branch. At
+the last commit, which only drops two functions nothing called, every
+lane was built again with `ctest`, `marvel8_mp.py`, the oracle with
+`--cpu ev8n` and `tpu_mp.py` passed again on the four lanes (the same
+counts, JIT_VERIFY 0 mismatches), and the ES47 alone passed
+`boards_check.sh` and its `init` check, its `--diff` against main the
+same (`lab/runs/ev8-s11b-proof-final/`, `boards-ev8-s11b-es47`).
 
 ## Findings
 
