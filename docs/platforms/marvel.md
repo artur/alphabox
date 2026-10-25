@@ -2209,7 +2209,8 @@ minute on either lane (an estimate from the run times, not a measurement).
 - `show config`, `show memory`, `show cpu`, `show fru`, `show version`,
   `show pal` answer;
 - `set`/`show` of environment variables work, and the variables survive a
-  restart (`rom.nvram`).
+  restart (`rom.nvram`; `os_type` too since 2026-10-25, see the SMLAN
+  table: it lives in the TOY's battery RAM, not in the console's NVRAM).
 
 The transcripts are in `lab/platforms/marvel/m4/` (`es47-console-*.log`,
 `es47-cmds-*.log`, the SMLAN log `es47-gio-int.log`). The model is
@@ -2394,6 +2395,18 @@ responded to command %04x with status %04x".
 | 0x0333 | `get_own_partition_number` | none | hard, soft partition (2 bytes) | 0, 0 |
 | 0x041c | `fetch_sm_nvram` | hard, soft partition | the console's NVRAM image, 0x800 | from `rom.nvram` |
 | 0x041b | `save_sm_nvram` | hard, soft partition, 0x800 image | none | to `rom.nvram` |
+
+The console sends 0x041b when `set` changes a variable kept in that image
+(`set boot_osflags x`: one 0x041c, then one 0x041b), from the close routine
+of its NVRAM file, which saves only when the file was written. Not every
+variable is in the image: `set os_type` writes the operating system type
+into the TOY's battery RAM instead (the CMM memory at area + 0x4b98 + 63,
+and a second byte at + 38 that changes with it), sends no 0x041b, and the
+CMM did not keep that RAM, so the type was gone at the next start (found
+2026-10-25). The CMM now writes `rom.nvram` whenever the console changes a
+TOY NVRAM byte: after the console's 2 KB come the records of the modules, a
+module key (u32) and 0x100 bytes for each of its two places. A file of 2 KB
+only (an older one) still loads; so does no file.
 | 0x0323 | `get_partition_database` | 1 | the partition database, 0x800 (below) | one hard and one sub partition, both EV7s, the IO7 on PID 0 |
 | 0x0321 | `get_mbm_configuration` | none (to the MBM) | MBM configuration, 0xd8 (below) | one module, two EV7s, five RIMMs each |
 | 0x0418 | `get_hard_partition_mem_assignm` | hard partition | memory groups and chunks, 0x800 (below) | each EV7's memory one chunk |

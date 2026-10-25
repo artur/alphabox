@@ -131,6 +131,8 @@ private:
 
   void nvram_load();
   void nvram_save();
+  /// Is `a` a byte of a place's TOY NVRAM (the part the battery keeps)?
+  static bool in_toy_nv(u32 a);
   void refresh_toy(u32 pid);
   void toy_written(u32 pid, u32 idx);
   CSerial *terminal();
@@ -152,6 +154,9 @@ private:
   s64 m_toy_offset = 0; ///< seconds the TOY is set away from the host clock
   std::string m_nvram_file;
   std::vector<u8> m_nvram; ///< the console's NVRAM image, 2 KB
+  /// The TOY NVRAM of both places of each module (module key -> 2 x
+  /// kToyNvSize bytes) as the file held it, until the module exists.
+  std::map<u32, std::vector<u8>> m_toy_saved;
   std::string m_serial;    ///< the configured system serial number, or empty
 };
 

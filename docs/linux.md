@@ -327,9 +327,11 @@ P00>>> boot dqa1 -flags 0
 aboot switches to the console's UNIX PALcode itself ("switching to OSF/1
 PALcode version 2.8"), and the boot works the same without `set os_type
 unix` and `init` (the four-processor runs, the `linux-es47` check). The
-environment is not kept here: no run wrote `cmm_nvram.bin`, so a `set` is
-gone at the next start (open, below). The live CD logs in as root on
-`srm0` by itself.
+environment is kept in `cmm_nvram.bin` (`rom.nvram`): `set os_type unix`
+survives a restart (the console keeps the operating system type in the
+TOY's battery RAM, which the file holds after the console's 2 KB; before
+that was kept, `set os_type` was the one `set` that never reached the file).
+The live CD logs in as root on `srm0` by itself.
 
 **The installed disk.** `test/tools/es47_linux.sh retarget <iso> <clone>`
 changes a clone of the ES40's install (`lab/linux/disk`) for Marvel: the
@@ -532,9 +534,6 @@ pending registers stay unmodelled until a guest reads them.
 - A graphics card's framebuffer driver (the kernel has `tgafb`,
   `radeonfb`, `pm2fb`); the text console works (above).
 - SCSI: the kernel has the Symbios driver as a module.
-- On the ES47: the console's environment is not kept (no `cmm_nvram.bin`
-  is ever written, `set os_type unix` is gone at the next start). Not
-  looked into.
 - On the ES47: a graphical console on the Radeon 7500 with the Mesa r100
   driver (phase 2); it would also keep `vgacon` from faulting without the
   patched byte.

@@ -135,6 +135,9 @@ constexpr u32 M_DATA = 0x10;
 
 /// The console's NVRAM image (fetch_sm_nvram, save_sm_nvram).
 constexpr u32 kNvramSize = 0x800;
+/// The TOY NVRAM bytes kept for each place (index 12 up to 0x10b; the
+/// console writes the operating system type there, `set os_type`).
+constexpr u32 kToyNvSize = 0x100;
 constexpr u32 kMbmConfigSize = 0xd8;
 
 u16 get16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
@@ -176,6 +179,11 @@ CEs47Cmm::CEs47Cmm(CSystem *sys, const char *nvram, s64 toy_offset,
     if (m.mem.empty()) {
       m.mem.assign(kMemSize, 0);
       m.read_seen.assign(kMemSize, false);
+      const auto saved = m_toy_saved.find(CMarvelTopology::module_key(pid));
+      if (saved != m_toy_saved.end())
+        for (u32 p = 0; p < 2; p++)
+          memcpy(&m.mem[area(p) + A_TOY_NV - kMemBase],
+                 &saved->second[p * kToyNvSize], kToyNvSize);
       const u32 sys_type = t.cmm_systype();
       for (u32 b = 0; b < 4; b++)
         mem_write(pid, A_SYSTYPE + b, (u8)(sys_type >> (8 * b)));
@@ -273,7 +281,18 @@ void CEs47Cmm::mem_write(u32 pid, u32 a, u8 v) {
     note("write of CMM address %05x = %02x outside the modelled memory", a, v);
     return;
   }
-  module_of(pid).mem[a - kMemBase] = v;
+  u8 &cell = module_of(pid).mem[a - kMemBase];
+  const bool nv_changed = in_toy_nv(a) && cell != v && m_ready;
+  cell = v;
+  if (nv_changed)
+    nvram_save(); // the battery: the console's `set os_type` outlives the run
+}
+
+bool CEs47Cmm::in_toy_nv(u32 a) {
+  for (u32 p = 0; p < 2; p++)
+    if (a >= area(p) + A_TOY_NV && a < area(p) + A_TOY_NV + kToyNvSize)
+      return true;
+  return false;
 }
 
 u8 *CEs47Cmm::mem_at(u32 pid, u32 a) {
@@ -602,6 +621,16 @@ void CEs47Cmm::nvram_load() {
   if (!f)
     return; // a new machine: the console finds its NVRAM blank
   const size_t got = fread(m_nvram.data(), 1, kNvramSize, f);
+  // After the console's 2 KB: a record for each module, its key and the TOY
+  // NVRAM of its two places. A file from before has none.
+  for (;;) {
+    u8 key[4];
+    std::vector<u8> toy(2 * kToyNvSize);
+    if (fread(key, 1, 4, f) != 4 ||
+        fread(toy.data(), 1, toy.size(), f) != toy.size())
+      break;
+    m_toy_saved[get32(key)] = toy;
+  }
   fclose(f);
   printf("%%MVL-I-CMM: console NVRAM read from %s (%zu bytes).\n",
          m_nvram_file.c_str(), got);
@@ -615,6 +644,15 @@ void CEs47Cmm::nvram_save() {
     return;
   }
   fwrite(m_nvram.data(), 1, kNvramSize, f);
+  for (auto &mod : m_modules) {
+    if (mod.second.mem.empty())
+      continue;
+    u8 key[4];
+    put32(key, mod.first);
+    fwrite(key, 1, 4, f);
+    for (u32 p = 0; p < 2; p++)
+      fwrite(&mod.second.mem[area(p) + A_TOY_NV - kMemBase], 1, kToyNvSize, f);
+  }
   fclose(f);
 }
 
