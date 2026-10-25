@@ -215,9 +215,11 @@ void CAlphaCPU::tarantula(u32 ins) {
     tarantula_vc(ins);
     return;
   }
-  // VV and VS follow in their own commits: until then OPCDEC.
-  (void)fnc;
-  GO_PAL(OPCDEC);
+  if (fnc >= 0x20) { // the FP half follows in its own commit: OPCDEC
+    GO_PAL(OPCDEC);
+    return;
+  }
+  tarantula_int(ins);
 }
 
 /**
@@ -257,5 +259,107 @@ void CAlphaCPU::tarantula_vc(u32 ins) {
       for (u64 i = 0; i < v.vl; i++)
         v.vr[rc][i] = v.mask((int)i) ? 1 : 0;
     break;
+  }
+}
+
+/**
+ * VV and VS, the integer half, functions 00-1F (4.4): Vc[i] <- Va[i] op B
+ * for every active element, B = Vb[i] (VV) or the scalar (VS: Rbv or the
+ * zero-extended literal). Active: i < vl, and vm[i] = 1 under the mask
+ * (4.3). Inactive elements of Vc are left unchanged (the Alphabox choice of
+ * 4.3: the sheet makes them UNPREDICTABLE). Arithmetic wraps and raises no
+ * overflow; a compare writes the quadword 1 or 0 (4.3, points 7 and 8).
+ * VVMRG and VSMRG read vm as a selector for every i < vl, and take no mask.
+ **/
+void CAlphaCPU::tarantula_int(u32 ins) {
+  tarantula::State &v = *m_vec;
+  const u32 fnc = (ins >> 5) & 0x3f;
+  const bool vv = (ins >> 26) == 0x01;
+  const bool m = (ins >> 11) & 1;
+  const u32 va = I_GETRA(ins), vb = I_GETRB(ins), vc = I_GETRC(ins);
+  const u64 s = vv ? 0 : RBV;
+  for (u64 n = 0; n < v.vl; n++) {
+    const int i = (int)n;
+    if (m && !v.mask(i))
+      continue;
+    const u64 a = v.vr[va][i];
+    const u64 b = vv ? v.vr[vb][i] : s;
+    u64 r;
+    switch (fnc) {
+    case 0x00:
+      r = a + b;
+      break;
+    case 0x01:
+      r = a - b;
+      break;
+    case 0x02:
+      r = a * b;
+      break;
+    case 0x03: // UMULH
+      r = (u64)(((unsigned __int128)a * b) >> 64);
+      break;
+    case 0x04:
+      r = a & b;
+      break;
+    case 0x05:
+      r = a & ~b;
+      break;
+    case 0x06:
+      r = a | b;
+      break;
+    case 0x07:
+      r = a | ~b;
+      break;
+    case 0x08:
+      r = a ^ b;
+      break;
+    case 0x09:
+      r = a ^ ~b;
+      break;
+    case 0x0A:
+      r = a << (b & 63);
+      break;
+    case 0x0B:
+      r = a >> (b & 63);
+      break;
+    case 0x0C:
+      r = (u64)((s64)a >> (b & 63));
+      break;
+    case 0x0D: // MRG
+      r = v.mask(i) ? b : a;
+      break;
+    case 0x10:
+      r = a == b;
+      break;
+    case 0x11:
+      r = a != b;
+      break;
+    case 0x12:
+      r = (s64)a < (s64)b;
+      break;
+    case 0x13:
+      r = (s64)a <= (s64)b;
+      break;
+    case 0x14:
+      r = (s64)a > (s64)b;
+      break;
+    case 0x15:
+      r = (s64)a >= (s64)b;
+      break;
+    case 0x16:
+      r = a < b;
+      break;
+    case 0x17:
+      r = a <= b;
+      break;
+    case 0x18:
+      r = a > b;
+      break;
+    default: // 0x19
+      r = a >= b;
+      break;
+    }
+    if (vc != 31)
+      v.vr[vc][i] = r;
   }
 }
