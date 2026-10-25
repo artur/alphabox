@@ -33,9 +33,13 @@ changes. A new directory must be added to the CMake glob list and to
   interpreter and compiled blocks.
 - `AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`: IEEE and VAX floating
   point.
+- `AlphaCPU_vector.cpp`, `Tarantula.hpp`, `Tarantula.cpp`: Tarantula, the
+  EV8's proposed vector extension (`CPU_EXT_TARANTULA`, the `ev8` and
+  `ev8n` rows; [ev8-isa.md](platforms/ev8-isa.md), section 4): its
+  instructions in the interpreter, its state and the state file's section.
 - `CpuModel.hpp`, `CpuModels.cpp`: the processor's identity and core
   family, one row per part (EV68CB, EV7, EV7z, EV8), and what a row adds
-  to its family's core (`CPU_EXT_EV8`).
+  to its family's core (`CPU_EXT_EV8`, `CPU_EXT_TARANTULA`).
 - `diag_rpcc.hpp`: cycle counter diagnostics.
 - `ev7/`: what the EV7 family changes. `Ev7.hpp` is its 44-bit address map
   with the PID encoding; `Ev7Reset.cpp` sets the registers the XSROM hands

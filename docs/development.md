@@ -221,7 +221,8 @@ and so never traps).
 - **Cost.** Under a second per lane (about 1.2 s under Rosetta), in
   `$ALPHABOX_WORK/runs/cpu-oracle-<label>`, removed when the run passes.
   `--port` (or `$PORT`) picks COM1's telnet port; without one a free port
-  is used. The results, about 550 KB, come back over COM1, which keeps
+  is used. The results, about 550 KB (1.4 MB on the EV8 rows, with group
+  `tarantula`), come back over COM1, which keeps
   only its newest 256 KB when its reader falls behind: a run that lost
   some (`%SRL-W-DROPPED`, a host too busy to read) is run once more, and
   fails if it loses some again.
@@ -249,7 +250,8 @@ and so never traps).
   (`cpu_family_unused_misc_is_nop`), its extensions (`cpu_model::ext`),
   and the instructions a row has beyond the 21264's (the EV8 row's CCB,
   CMOV2 and FCMOV2, which group `ev8` checks, and LDL_ARM, LDQ_ARM and
-  QUIESCE, group `quiesce`). The values are the
+  QUIESCE, group `quiesce`; Tarantula, `rows.TARANTULA`, group
+  `tarantula`). The values are the
   manuals', as `src/cpu/CpuModels.cpp` gives them, and every run first
   reads that file and `CpuModel.hpp` and fails if the two tables differ,
   so a row added to the emulator is added to `rows.py` with it.
@@ -318,6 +320,43 @@ full queue and resent, and that three configurations are refused for
 their reasons ([ev8-native.md](platforms/ev8-native.md), S11b). About
 1030 results, a few seconds; `test/unit/marvel21464_test` is the map and
 topology without an image.
+
+**Tarantula.** Group `tarantula` (`test/cpu/tarantula_cases.py`) checks
+the vector extension of [ev8-isa.md](platforms/ev8-isa.md), section 4, on
+the rows that have it (`ev8`, `ev8n`; `rows.TARANTULA`): VCTL and what
+VEN = 0 does to every group, every VC instruction, every VV and VS
+function in its register and literal forms at vector lengths 0, 1, 64 and
+128 with and without the mask, a SETVL above 128, $vr31, the field rules,
+and the FP functions' rounding modes, FPCR updates and trap. Its first
+cases, the sheet's example words for opcodes 01 to 06, run on every row
+and must raise OPCDEC (VEN is 0 outside the group's window, so the other
+groups' OPCDEC cases of those opcodes hold on these rows too). The
+expected values are the sheet's rules, and an FP element's the scalar
+/SUI instruction's (`test/cpu/tfloat.py`, exact arithmetic with
+fractions). S7 has no vector loads or stores, so operands go in and
+results come out through a test hook, the `ALPHABOX_TARANTULA_PEEK`
+window ([headless.md](headless.md)), which the oracle sets for these rows:
+`t_fill` fills a register from a table of 64 quadwords, `t_read` copies
+elements to the results. On `ev8` VEN is set by a store to the VCTL CSR,
+which the ES40 answers under the test hook; on `ev8n` through the IPR, in
+PALmode.
+
+```
+test/cpu/tarantula_vv.py <alphabox-binary> [label] [--cpu ev8|ev8n] [--port N]
+```
+
+boots one processor of the row on the ES40 (the same hooks, the image's
+PALcode) and runs four kernels, each against scalar code on the same
+inputs in the same image: daxpy (VSMULT, VVADDT), a dot product in T and
+quadword (VVMULT, VVMULQ, the sum by scalar code over the products), a
+masked update (VSCMPGT, SETVM, VSADDQ under the mask, VVMRG) and a
+strip-mined loop over 300 quadwords, SETVL giving each pass its length.
+Values go in by the route the sheet gives (an index vector built from VC
+and VS, then one element at a time with a one-element mask and VSMRG)
+and come out through the window. The image counts the elements that
+differ; the script checks the counts, the scalar results against its own
+computation, three passes of the loop and no exception taken. About a
+second.
 
 ### Performance
 
@@ -508,6 +547,7 @@ driver does. Each is an executable in every build directory, and `ctest
 | `irqlines_test` | The wire-OR of the chipset's interrupt inputs (`InterruptLines.hpp`): devices and functions sharing an input, from several threads at once. |
 | `pcicfg_test` | The configuration space every PCI device inherits (`PCIDevice.cpp`): write masks, BAR and ROM sizing, access sizes, accesses past a function's 256 bytes, the state file. |
 | `pcibridge_test` | The PCI-PCI bridge (`bridge/`), configured as the ES40 console configures one: the type 1 header, configuration cycles once the bus is numbered, the windows and what a master abort reads, the interrupt swizzle, the secondary bus reset. |
+| `tarantula_state_test` | Tarantula's section of the state file (`cpu/Tarantula.cpp`): every register, vl, vs, the mask and VCTL read back; a file with no section (written before S7) restores nothing and leaves the file where it was; a truncated or damaged section is refused. |
 
 ### The original regression test
 

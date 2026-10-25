@@ -16,14 +16,16 @@ showing "what Alpha could have been": where the hardware never existed,
 fidelity means following the published design as far as it goes, and
 every gap we fill is an **Alphabox decision**, not history.
 
-**Branch**: `ev8/s1s2` to `ev8/s4` · **Config**: `cpu0 = ev8` (and so every
+**Branch**: `ev8/s1s2` to `ev8/s4`, `ev8/s7` · **Config**: `cpu0 = ev8` (and so every
 processor) on `platform = "es47"`, `"es80"` or `"gs1280"`; `tpus = 2..4`
 in each to list the TPUs as processors ([S4](#s4-2026-10-25)) ·
 **Status**: research done (2026-10-23); the owner chose the path on
 2026-10-24 (option A first, then the native interface,
 [below](#the-owners-decision-2026-10-24)); S1 and S2 done the same day
 ([the plan](#6-the-plan), [what they did](#s1-and-s2-2026-10-24)), S3 too
-([S3](#s3-2026-10-24)), S4 on 2026-10-25 ([S4](#s4-2026-10-25)).
+([S3](#s3-2026-10-24)), S4 on 2026-10-25 ([S4](#s4-2026-10-25)), and
+S7, Tarantula's state, control and operate instructions, the same day
+([S7](#s7-2026-10-25)).
 
 Markers used below:
 
@@ -697,7 +699,7 @@ toolchain.
 | S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7; **done 2026-10-25** ([below](#s4-2026-10-25)), with the owner's numbering in place of D6 and `tpus` 1 by default: the TPUs as EV7 nodes are an Alphabox construction, the native interface (S11-S13) does them the IDS's way |
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
 | S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9 |
-| S7 | Tarantula state, VC and VV/VS groups, SaveState/RestoreState of vector state | interpreter | boot-image kernels (daxpy and the like) checked against scalar results | D10, D11, D13, D14 |
+| S7 | Tarantula state, VC and VV/VS groups, SaveState/RestoreState of vector state | interpreter | boot-image kernels (daxpy and the like) checked against scalar results | D10, D11, D13, D14; **done 2026-10-25** ([below](#s7-2026-10-25)): the values go in by VS and come out through a test hook until S8 |
 | S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15 |
 | S9 | Tarantula under an OS: Linux enables vectors and saves them on switch | interpreter | two processes using vectors at once | D11 |
 | S10 | Tarantula in the JIT (helpers first, host SIMD later) | JIT | JIT_VERIFY extended to compare vector state; any speed claim through `perf_ab.py` | S7-S9 |
@@ -800,7 +802,8 @@ such instruction (its PC, mode and result; not committed), on both rows.
   AMASK is `ELF_HWCAP`, 0x1307 on both. The FPU and xor paths that test
   for IMPLVER 2 did not run.
 
-**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+**The proofs**, on S11b (the Marvel model in 21464 mode), which S7 was
+rebased onto. Every lane built and passed `ctest` (the interpreter, the
 AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT). The CPU
 oracle, on every one of them: `ev68cb` and
 `ev7` PASS 20171, KNOWN 61, FAIL 0, with 211 results skipped (the EV8's
@@ -963,7 +966,8 @@ in and powers off as before. Every AMASK OpenVMS 8.4 executes tests BWX
 (S1), so bit 10 changes nothing it does; it boots to DCL on the row as
 before, and `SHOW CPU/FULL` still reads "EV7 (21364), Minor = 5".
 
-**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+**The proofs**, on S11b (the Marvel model in 21464 mode), which S7 was
+rebased onto. Every lane built and passed `ctest` (the interpreter, the
 AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT). The CPU
 oracle on the interpreter, JIT, JIT_VERIFY and x86-64 lanes, alike on
 all four: `ev68cb` and `ev7` PASS 20176, KNOWN 61, FAIL 0, SKIP 286 (S2's
@@ -1140,7 +1144,8 @@ that replaced it), and the probe build as `ev8-s4-probe/probe-build.patch`.
   runs `test/cpu/quiesce_lock.c`'s threads on every processor. Unset, they
   write no `tpus` and expect one processor per chip.
 
-**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+**The proofs**, on S11b (the Marvel model in 21464 mode), which S7 was
+rebased onto. Every lane built and passed `ctest` (the interpreter, the
 AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT), and so
 did every commit of the series. `test/unit/tpu_topology_test.cpp` checks
 the numbering on the ES47, ES80 and GS1280 layouts (every number distinct,
@@ -1210,6 +1215,219 @@ written).
   processors (a PID and a window each) no longer have in EV7-compatible
   mode. The owner's layout (2026-10-25) puts it in each processor's own
   window; the chip-window layout stays for the native interface.
+
+## S7 (2026-10-25)
+
+Tarantula's state and its operate and control instructions, in the
+interpreter, on the `ev8` and `ev8n` rows: the vector state of
+[ev8-isa.md](ev8-isa.md) 4.1, VCTL<VEN>, the VC group (4.7) and every VV
+and VS function (4.4) with the rules of 4.3, and the vector state in the
+state file. The memory groups SM and RM, DrainM and AMASK bit 3 are S8's.
+The code is `cpu/AlphaCPU_vector.cpp` (the instructions, the window of a
+board without EV7 windows), `cpu/Tarantula.*` (the state and its file
+section), the decode in `cpu/AlphaCPU.cpp`, VCTL in
+`chipsets/marvel/Ev7Csr.cpp`, and one test in `ieee_trap`
+(`cpu/AlphaCPU_ieeefloat.cpp`); every decision and inference below is in
+[cpu-fidelity.md](../cpu-fidelity.md) too.
+
+**What is implemented, as the sheet gives it.**
+
+- **The state** (4.1), per processor and so per TPU: $vr0-$vr31 of 128
+  quadwords ($vr31 reads zero and discards writes), vl (0 to 128), vs (64
+  bits, a signed byte stride), vm (128 bits), VCTL<VEN>. All are cleared
+  at power-up and by a reset; the sheet leaves them UNPREDICTABLE but VEN,
+  and clearing them is its Alphabox choice. A row has it when its
+  `cpu_model::ext` has the new `CPU_EXT_TARANTULA`, which both EV8 rows
+  have **[decision]**: a flag of its own beside `CPU_EXT_EV8`, since
+  Tarantula was a follow-on candidate to the EV8 with an AMASK bit of its
+  own. The state is allocated for those rows only and kept outside
+  `state`, so no other row's processor, `state` or state file changes.
+- **VEN** (section 2, D11). On `ev8` VCTL is the quadword CSR at offset
+  0x3F0000 of the processor's own register window, VEN <0>, <63:1>
+  RAZ/IGN, reset 0: `CEv7Csr` answers it from the processor's value, so
+  any processor can write any processor's VCTL as the sheet places it,
+  and TPUs listed as processors (S4) each have their own. On `ev8n` it is
+  the IPR 0xAC that S11 stores (N8), and the CSR offset is not decoded.
+  With VEN = 0 every word of opcodes 01-06 raises OPCDEC, EXC_ADDR its
+  own PC, and changes nothing; it is not reported as an unknown opcode,
+  since that is how an OS's lazy switching works (section 5).
+- **VC**: SETVL (vl <- MIN(Rbv unsigned, 128), Rc <- vl), SETVS, SETVM
+  (vm[i] <- Vb[i]<0> below vl, 0 above), GETVL, GETVS, GETVM (below vl;
+  the rest unchanged), the literal forms of SETVL and SETVS.
+- **VV and VS**, every function code of 4.4's table, in the register and
+  literal forms the table gives: an element is active when i < vl and,
+  with M, vm[i] = 1; an inactive destination element is left unchanged
+  (the sheet's Alphabox choice, point 7); $vr31 as a destination
+  discards the result; integer arithmetic wraps and raises nothing; every
+  compare writes the quadword 1 or 0 (point 8); VVMRG and VSMRG select by
+  vm for every i < vl.
+- **FP** (4.3, D13, section 5, point 11): each active element is the
+  scalar instruction with /SUI and dynamic rounding, computed by the
+  core's own IEEE routines with that instruction's word: ADDT, SUBT,
+  MULT, DIVT and SQRTT /SUID; the compares as CMPTxx/SU (NE as EQ, GT and
+  GE as LT and LE); CVTQT/SUID, CVTTQ/SVID, VVCVTTQC as CVTTQ/SVIC; CPYSx
+  raise nothing. The FPCR is updated element by element in element order,
+  as that instruction would update it once per element. Every active
+  element is computed and written, the IEEE default result where one
+  trapped; then, if any element would have trapped, the instruction takes
+  one arithmetic trap: EXC_SUM the OR of what every element would have
+  reported, with SWC (a /S instruction's) and REG 31.
+- **The field rules** (4.3): an SBZ field that is not zero, an unassigned
+  function code, a literal on a VS code that reads Fb, M on VVMRG or
+  VSMRG, M on VC: OPCDEC whatever VEN is. A register field an instruction
+  does not use is ignored. Opcode 06 is all OPCDEC.
+- **On every other row** opcodes 01-06 raise OPCDEC as before (the
+  decode tests the row's state; the words reach `UNKNOWN1` as they did).
+
+**What Alphabox decided or inferred** (the gaps the sheet leaves).
+
+- **The trap's report** **[inference]**: the vector instruction traps as
+  the scalar instruction it is computed as would, so EXC_ADDR is what
+  this core gives a scalar ARITH: on `ev8` the trigger's own PC, which the
+  EV7 PALcodes turn into the next PC (cpu_defs.hpp, ARITH_TRAP), and on
+  `ev8n` the next instruction's [IDS p. 485]. The OS therefore sees the
+  next PC (point 11) on both rows. The scalar words have Fa, Fb and Fc
+  31, which gives REG 31 on `ev8` and the 21464's register fields 31 on
+  `ev8n` **[decision]**.
+- **"Would trap"** **[inference]**: the scalar instruction's rule on this
+  core, the 21264's: an exception the instruction enables and the FPCR
+  does not disable, or an FPCR status bit that is clear and has to be set
+  (EXC_SUM<SET_x>, "PALcode should set FPCR[x]", 21264 HRM Table 5-9).
+  `ieee_trap` collects each element's report instead of trapping while a
+  vector instruction runs, and the instruction traps once at its end.
+- **FEN** **[inference]**: with the FPU disabled the FP half of VV and VS
+  (functions 20-3F, where VS reads Fb and the arithmetic uses the FPCR)
+  takes FEN, as each element's scalar instruction would; the integer
+  functions and VC do not. The order: OPCDEC for an unassigned encoding,
+  then OPCDEC for VEN = 0, then FEN.
+- **VV's <12>** **[inference]**: it "must be 0" (4.4) and is no register
+  field, the only kind 4.3 lets Alphabox ignore, so it is SBZ: OPCDEC.
+- **A literal on VC** **[decision]**: L on SETVM, GETVL, GETVS or GETVM
+  raises OPCDEC, as a literal on VS's FP codes does; 4.7 gives L to SETVL
+  and SETVS only.
+- **SM and RM until S8** **[decision]**: opcodes 03 and 04 raise OPCDEC on
+  every row until their stage, which AMASK bit 3, still clear, tells
+  software to expect.
+- **PALmode** **[decision]**: the instructions execute as in any mode;
+  they are UNPREDICTABLE there (section 5).
+- **VEN for the CPU oracle** **[decision]**: the oracle runs `--cpu ev8`
+  on the ES40, which has no EV7 register windows. Under
+  `ALPHABOX_CPU_ANY_BOARD` the processor answers its own VCTL address
+  there (a memory range of its own), so the cases set and clear VEN with
+  the quadword store an OS would use on a Marvel board, and the window
+  layout is the sheet's. The Tsunami ignores PA<42:35> in its I/O space,
+  so every PID's window is one address there; each processor reaches its
+  own. Of the brief's choices this one needs no hook of its own and
+  tests the address software uses; a reset hook would have left VEN = 0
+  untestable within one run.
+- **How the tests get values in and out** **[decision]**: S7 has no
+  vector loads or stores, and the sheet moves no element between vector
+  and scalar registers (point 13): a scalar enters through VS, an element
+  leaves through memory only. Out therefore needs a test hook,
+  `ALPHABOX_TARANTULA_PEEK=1` ([headless.md](../headless.md)): on a board
+  without EV7 windows only, the vector registers at offset 0x3F8000 of
+  the processor's window (element i of $vrN at 0x3F8000 + 0x400 x N + 8
+  x i), the last 32 KB of the 64 KB that section 2 finds unclaimed. The
+  boot-image test puts values in by the sheet's route (below); the
+  oracle's cases fill registers through the window, so that each case
+  tests one instruction.
+- **Whose map the window follows** **[decision]**: the processor's own,
+  S11b's `ev7::address_map`: the EV7's for `ev8` (PID 0's block at
+  0xFFF_FFC0_0000), where the sheet puts VCTL, and the 21464 mode's (N18,
+  PID 0's at 0xFFFF_FFC0_0000) for the hook's register window on
+  `ev8n`, the map its Marvel boards use. The ES40 folds both into one
+  address. On a Marvel board in 21464 mode offset 0x3F0000 of a chip's
+  block is TPU 0's R_INT_MASK (N22), and VCTL is never decoded there;
+  0x3F8000 is free in that block as in the EV7's.
+- **The state file** **[decision]**: Tarantula's state is a section of
+  its own after the processor's block (after the native EV8's IPRs on
+  `ev8n`): a magic word, the payload's size, VCTL, vl, vs, the mask and
+  the 32 registers, a second magic word (32,820 bytes). RestoreState
+  reads it when its magic word is there; a file written before S7 has
+  none, and restores with the vector state clear and VEN 0 (saying so).
+  No version step: rows without Tarantula write and read what they did,
+  and an `ev8` file of main's restores.
+
+**The JIT.** Nothing changed: `classify()` compiles nothing of opcodes
+01-06, on any row, so a block ends before every Tarantula word and the
+interpreter runs it; JIT_VERIFY never meets one, and compares no vector
+state. The FP elements call the same IEEE routines the JIT's helpers do;
+`m_vec_defer` is set only while a vector instruction runs.
+
+**The tests.**
+
+- `test/cpu` group `tarantula` (`tarantula_cases.py`, the expected values
+  from the sheet and, for FP, `tfloat.py`'s exact arithmetic): the sheet's
+  example words of opcodes 01-06 raising OPCDEC on every row (VEN 0 on the
+  EV8 rows outside the group); VCTL (its RAZ bits on `ev8`, the CSR not
+  decoded on `ev8n`), OPCDEC with VEN = 0 for each group and nothing
+  changed; every VC instruction in both forms, SETVL from 0 to 2^64 - 1,
+  SETVM and GETVM at vl 0, 1, 64, 100, 128; every VV and VS integer
+  function in register and literal forms over a rotation of vl 0, 1, 64,
+  128 with and without the mask, and three functions at all eight
+  combinations reading all 128 elements; SETVL 129, 255, 300; $vr31 as
+  sources and destination; the field rules, 45 encodings; every FP
+  function with the FPCR's disables set, the four rounding modes on the
+  arithmetic and conversions, the FPCR across elements (SET traps once,
+  then not), a trapping element with DZE enabled and disabled, past vl,
+  under the mask and with its status already set; FEN. 20,674 results
+  in 390 cases on `ev8`, 20,999 on `ev8n` (its MT_FPCR traps are checked
+  too); 56 on every other row, the OPCDEC words.
+- `test/cpu/tarantula_vv.py`, the boot image: an index vector built from
+  SETVL, a broadcast, SETVM and VVMRG, values put in one element at a time
+  with a one-element mask (VSCMPEQ, SETVM, VSMRG), results out through the
+  hook; daxpy, a dot product in T and quadword (the reduction by scalar
+  code over the products: the sheet has neither element moves nor a way to
+  halve), a masked update merged with VVMRG, and a strip-mined loop over
+  300 quadwords in three SETVL passes, each against scalar code on the
+  same inputs. Passed on `ev8` and `ev8n`.
+- `test/unit/tarantula_state_test.cpp`: the state file's section read
+  back whole, absent from an older file (nothing read, the file where it
+  was), refused when truncated or damaged, $vr31 zero after a restore.
+
+**The proofs**, on S11b (the Marvel model in 21464 mode), which S7 was
+rebased onto. Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, a headless JIT), and so
+did every commit of the series. The CPU oracle on the interpreter, JIT,
+JIT_VERIFY and x86-64 lanes, alike on all four: `ev68cb` and `ev7` PASS
+20236, KNOWN 61, FAIL 0 (S11's 20180 and the 56 OPCDEC results of group
+`tarantula`); `ev8` PASS 41106, KNOWN 73, FAIL 0; `ev8n` PASS 41905,
+KNOWN 70, FAIL 0; JIT_VERIFY 0 mismatches. main's own oracle (35b8e15's
+`test/cpu`) gives main's verdicts on this branch's binary on all four
+rows (20180, 20180, 20432 and 20906 PASS). A model made wrong on
+purpose (VVSRL, VVMULT under round-minus, a forgotten DZE) failed 333
+results of each pass. `tarantula_vv.py` on `ev8` and `ev8n`,
+`quiesce_mp.py`, `tpu_mp.py` and `marvel8_mp.py` (its three layouts, S11b)
+passed on the same four lanes. The SRM
+console-log check is clean on the interpreter, JIT and JIT_VERIFY lanes
+(JIT_VERIFY: 0 mismatches). `boards_check.sh` on the ES47 with the `ev8`
+row passes, its console and `init` the same as S11's gate run
+(`--diff`). From the ES47's own console on the `ev8` row, `examine` and
+`deposit` of PID 0's VCTL (0xFFF_FFFF_0000) read 0, then 1 after a
+deposit of all ones, 0 after 2, and PID 1's (0xFF7_FFFF_0000) is its
+own; on the `ev7` row both read 0, as before (`boards-ev8-s7-vctl-ev8`,
+`-ev7`). `snap_roundtrip.sh` on the ES40 and the ES47, and on the ES47
+with the `ev8` row: the state files identical, the console answering
+after the restore; every part of the ES40's and the ES47's (`ev7`) files
+has the size main's has, and on the `ev8` row each processor's part is
+32,820 bytes longer, the section. State files written by main's
+`build-jit/alphabox` at the console prompt (the ES40, the ES47, and the
+ES47 on the `ev8` row) restore on this branch's binary and the console
+answers; the `ev8` processors say they found no vector state. The
+desktop snapshots `perf_ab.py` and `sect_mips.sh` resume
+(`lab/ntsnap`, `lab/mips1/ntsnap`) resume on clones and run a section
+to DONE. The runs are in `lab/runs/ev8-s7-proofs/`,
+`boards-ev8-s7-*` and `snap-ev8-s7*`.
+
+**Findings.**
+
+- The sheet gives no way out of a vector register but memory (point 13),
+  so until S8 any test of the operate instructions needs a hook or the
+  FPCR as a side channel; the hook is test-only and dies with S8's
+  VSTOREQ as the tests' route.
+- The sheet's example words are what `alpha_asm.py` assembles; group
+  `tarantula` checks them first. [ev8-isa.md](ev8-isa.md) needed no
+  correction for S7.
 
 ## Findings
 

@@ -686,6 +686,29 @@ through GIO and the CMM: its terminal is `serial0`, as the console's is.
 `ALPHABOX_TRACE_IO7=1` an IO7 also says when a full interrupt queue
 refused one of its IIDs and when the IID it sent again was taken.
 
+### Tarantula (the `ev8` and `ev8n` rows)
+
+| Variable | Effect |
+| --- | --- |
+| `ALPHABOX_TARANTULA_PEEK=1` | a test hook, on a board without EV7 register windows (the ES40 under `ALPHABOX_CPU_ANY_BOARD`) only: the processor's vector registers appear at offset 0x3F8000 of its EV7 register window, element i of $vrN at 0x3F8000 + 0x400 x N + 8 x i, for quadword loads and stores ($vr31 reads zero and ignores a store); `%CPU-W-TARPEEK` says so at startup |
+
+Stage S7 has no vector loads or stores (they are S8's), and the contract
+moves no element between vector and scalar registers
+([ev8-isa.md](platforms/ev8-isa.md), point 13), so this window is how the
+CPU oracle's group `tarantula` and `test/cpu/tarantula_vv.py` read results
+and the oracle puts operands in ([development.md](development.md)). PID
+0's window is at physical 0xFFF_FFC0_0000, so its registers start at
+0xFFF_FFFF_8000; on `ev8n` the window is the 21464 mode's (N18), PID 0's
+at 0xFFFF_FFC0_0000, and the ES40 folds both into one address.
+
+Under `ALPHABOX_CPU_ANY_BOARD` an `ev8` processor on such a board also
+answers VCTL, the vector enable, at offset 0x3F0000 of its window
+(0xFFF_FFFF_0000 for PID 0), as the Marvel boards do, so a test sets and
+clears VEN with the quadword store an operating system would use. The
+Tsunami and the Titan ignore PA<42:35> in their I/O space, so every PID's
+window lands on one address there, and each processor reaches its own.
+On `ev8n` VCTL is the IPR 0xAC and the offset is not decoded (N8).
+
 ## Hypervisor runtime
 
 Builds with `-DALPHABOX_HVF=ON` only ([hypervisor.md](hypervisor.md)):
