@@ -405,8 +405,17 @@ def li8(asm, ra, rb, value):
         add32(rb, lo_s)
 
 
-def build_pal8(tr_pa, main_va, fatal_va):
-    """The EV8 PALcode, PAL_BASE-relative, as {address: word}."""
+def build_pal8(tr_pa, main_va, fatal_va, by_chip=False, mailbox_pa=None):
+    """The EV8 PALcode, PAL_BASE-relative, as {address: word}.
+
+    With `by_chip` (a machine of several chips, test/cpu/marvel8_mp.py),
+    each TPU's number is CPU_BASE x 4 + TPU_ID, the WHAMI of
+    docs/platforms/ev8-native.md N25: its trap record is tr_pa + that x
+    TR8_BLOCK, its start word mailbox_pa + that x 0x40, and only number 0
+    goes on to `main_va`; the others park. Without it the number is TPU_ID,
+    as on the one chip of tpu_mp.py and the oracle."""
+    if mailbox_pa is None:
+        mailbox_pa = tr_pa + TR8_MAILBOX
     I = A.IPR8
     mf, mt = A.hw_mfpr8, A.hw_mtpr8
     S0A, S1A, S0B, S1B = A.S0A, A.S1A, A.S0B, A.S1B
@@ -437,6 +446,10 @@ def build_pal8(tr_pa, main_va, fatal_va):
     # and the entry taken (S1, set by the entry's first instruction).
     init.emit(mf(2, I["tpu_cnfg"]))
     init.emit(opl(0x12, 0x34, 2, 56, 2))    # SRL: TPU_ID
+    if by_chip:                             # + CPU_BASE x 4 (N25)
+        init.emit(mf(3, I["cpu_base"]))
+        init.emit(opl(0x12, 0x39, 3, 2, 3))
+        init.emit(opr(0x10, 0x20, 2, 3, 2))
     init.emit(opl(0x12, 0x39, 2, 10, 3))    # SLL: x TR8_BLOCK (0x400)
     li8(init, 1, 1, tr_pa)
     init.emit(opr(0x10, 0x20, 1, 3, 1))
@@ -471,7 +484,7 @@ def build_pal8(tr_pa, main_va, fatal_va):
     # (WATCH_EN only: no timeout, N17), then start there.
     init.label("park")
     init.emit(opl(0x12, 0x39, 2, 6, 3))     # x 0x40
-    li8(init, 4, 4, kseg(tr_pa + TR8_MAILBOX))
+    li8(init, 4, 4, kseg(mailbox_pa))
     init.emit(opr(0x10, 0x20, 4, 3, 4))
     init.emit(mem(OP["LDA"], 1, R31, 2))
     init.emit(mt(1, I["quiesce_timeout"]))
