@@ -84,6 +84,10 @@ constexpr u32 area(u32 n) { return 0x40000 + n * 0x6000; }
 constexpr u32 A_STATE = 0x12a0;
 constexpr u32 A_SPEED =
     0x12a6; ///< PALcode: u16 MHz (block + 0x129e), cserve 0x4a
+/// u8 the I/O port's clock ratio, the CMM's code (ev7csr::io_clock_code),
+/// which the XSROM puts in RBOX_IO_CFG<8:5> and the console's power_on_ior
+/// (0x2e1b30) reads; the CMM writes it with the speed (CMM3 V2.7-5).
+constexpr u32 A_IO_RATIO = 0x12a9;
 /**
  * The route table the XSROM leaves for the console (start_secondaries,
  * 0x2dd0f0, for the primary; the PALcode's own copy loop at 0x3f108 for a
@@ -260,6 +264,7 @@ void CEs47Cmm::late_init() {
     const u32 mhz = (u32)(c->get_speed() / 1000000);
     mem_write(pid, area(n) + A_SPEED, (u8)mhz);
     mem_write(pid, area(n) + A_SPEED + 1, (u8)(mhz >> 8));
+    mem_write(pid, area(n) + A_IO_RATIO, (u8)ev7csr::io_clock_code(mhz));
     // The routes from this processor to every PID, in the copy's form: the
     // fields Topology.cpp names, less their low four bits.
     mem_write(pid, area(n) + A_ROUTES, (u8)kRoutes);

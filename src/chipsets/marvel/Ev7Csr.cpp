@@ -409,6 +409,32 @@ void CEv7Csr::trace_mp(const char *what, u32 off, u64 v) {
   printf("\n");
 }
 
+/**
+ * The I/O port's clock ratio. The CMM keeps a code for it at its memory's
+ * area + 0x12a9 (CMM3 V2.7-5: smlan_set_freq's ratios looked up in its
+ * table at 0x3fb0270, ratios 1.5 to 8.0 in halves, code = 2 x ratio - 2,
+ * 1 to 14); the XSROM writes RBOX_IO_CFG = (code << 5) | 0xa001, then <2>,
+ * <4> and <14> on and <13> off (0x4494-0x45ec), as the console's own
+ * power_on_ior (0x2e1b30) does from that byte; and io7_init_all_sp
+ * (0x2ee280) prints "IO7 North port speed is %d MHz" as the clock in MHz
+ * over RBOX_IO_CFG<8:5> + 2, that is over twice the ratio. So the code
+ * settles the field and its encoding.
+ *
+ * Which ratio a clock gets is the MBM's (SetFreq; its table was not found).
+ * Three real start logs give one each: 216 MHz at 1300 MHz (a real ES47
+ * 7/1300, test/platforms/es47/power-up.log: code 4, ratio 3.0), 210 MHz at
+ * 1050 (the User Information's log: code 3) and 133 MHz at 533 (the SRM
+ * reference's; 533 MHz and 2.0 are the CMM's own defaults: code 2). The
+ * smallest code from 2 that keeps the North port at or under 216 MHz gives
+ * all three [inference]: code 3 at 1000 MHz (200 MHz), 4 at 1150 (191).
+ */
+u32 ev7csr::io_clock_code(u32 mhz) {
+  u32 code = 2;
+  while (code < 14 && mhz / (code + 2) > 216)
+    code++;
+  return code;
+}
+
 CEv7Csr::CEv7Csr(CSystem *sys, CMarvel *marvel, u32 pid, GioManagement *gio)
     : m_sys(sys), m_marvel(marvel), m_pid(pid), m_gio(pid, gio) {
   m_21464 = marvel->mode_21464();
@@ -488,8 +514,9 @@ void CEv7Csr::reset() {
   // RBOX_IO_CFG: <0> and <2> say an IO7 is on the I/O port. The console's
   // PALcode tests exactly those two (its interval-timer path, 0x3941c,
   // before it touches the IO7's POx_RST registers), and with them clear the
-  // console reports "No Local I/O" [inference: the other bits configure the
-  // port and are not modelled].
+  // console reports "No Local I/O"; <8:5>, the clock ratio, is read()'s
+  // (io_clock_code) [inference: the XSROM's <4>, <14> and <15> configure
+  // the port and are not modelled].
   m_regs[RBOX_IO_CFG] = m_io7 ? 5 : 0;
   m_intq.clear();
   m_it.store(0, std::memory_order_relaxed);
@@ -561,6 +588,16 @@ u64 CEv7Csr::read(u32 off, int dsize) {
   case RBOX_INTQ:
     // The oldest IID an IO7 sent, valid in <24>; 0 when none waits.
     v = m_intq.empty() ? 0 : (m_intq.front() | INTQ_VALID);
+    break;
+  case RBOX_IO_CFG:
+    // With an IO7 on the port, <8:5> the I/O clock ratio's code for this
+    // processor's clock (io_clock_code), as the XSROM sets it; not in 21464
+    // mode, whose register is not known to have the field.
+    v = reg(off);
+    if (m_io7 && !m_21464)
+      if (CAlphaCPU *c = cpu())
+        v |= (u64)io_clock_code((u32)(c->get_speed() / 1000000))
+             << IO_CFG_RATIO_SHIFT;
     break;
   case 0x28020:
     // The revision probe (see kMoreRegs): with chip ID 2, bit 19 tells

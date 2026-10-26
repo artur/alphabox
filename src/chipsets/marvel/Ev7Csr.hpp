@@ -76,6 +76,13 @@ constexpr u32 RBOX_SCRATCH1 = 0x0b0;
 constexpr u32 RBOX_SCRATCH2 = 0x0c0; // Linux core_marvel.h; not in the table
 constexpr u32 RBOX_L_ERR = 0x0d0;
 constexpr u32 RBOX_IO_CFG = 0xc000;
+/// RBOX_IO_CFG<8:5>: the I/O port's clock ratio, in the CMM's code (Ev7Csr.cpp,
+/// io_clock_code).
+constexpr u32 IO_CFG_RATIO_SHIFT = 5;
+/// The code of the I/O clock ratio the CMM sets for a processor clocked at
+/// `mhz` (code = 2 x ratio - 2), which the XSROM copies into RBOX_IO_CFG<8:5>
+/// and the console prints the IO7's North port speed from.
+u32 io_clock_code(u32 mhz);
 /// The route table: 0x114 registers 0x10 apart (the console's table of
 /// arrays, "RBOX_ROUTE" at 0x3ac688: offset 0x2000, 0x114 entries, stride
 /// 0x10). Entry n < 0x100 is the route to PID n; what the last 0x14 route
