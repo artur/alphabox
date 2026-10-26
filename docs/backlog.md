@@ -38,7 +38,7 @@ EV7 an EV7 is around the core, and that is where the model is thin:
 | --- | --- |
 | IO7: MSIs (`MSI_CTL`), `INT_PND`/`INT_CLR`/`MISC_PND` | **M8**, done by Linux (2026-10-24): it writes MSI_CTL with the target PID and reads it back, and enables an MSI only for a device whose MSI the console turned on, which none is (`arch/alpha` has no MSI support, and the CD's kernel has `CONFIG_PCI_MSI` off); the pending registers, MSI_PND/MSI_CLR and POx_MSI_WBASE it never touches, nor does the UNIX PALcode ([linux.md](linux.md)). Nothing to model until a guest reads them |
 | IO7: data mover, error reporting | left (no guest uses them; errors are never raised) |
-| CMM: FRU EEPROMs, fans, power, VRMs, the console data log | done by **M10** (2026-10-20): answers built from the console's own decoders; `show fru`, `show power` and `boot` are clean on the ES47. The EEPROMs' contents are invented ([marvel.md](platforms/marvel.md), M10) |
+| CMM: FRU EEPROMs, fans, power, VRMs, the console data log | done by **M10** (2026-10-20): answers built from the console's own decoders; `show fru`, `show power` and `boot` are clean on the ES47. The EEPROMs' contents are invented ([marvel.md](platforms/marvel.md), M10); since 2026-10-26 the part numbers are in a real ES47's format and a module reports a real one's nine VRMs ("Captures from a real ES47 7/1300") |
 | CMM: a GS1280's power supply tray (0x090e), cabinet control panel and PBM EEPROMs | left: only the GS1280 asks; its FRUs print "-" |
 | One partition only | M9 |
 | One I/O layout per machine: no expansion or high-performance drawers, one IO7 on the GS1280 | M9 |

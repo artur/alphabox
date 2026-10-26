@@ -133,9 +133,13 @@ Left, by choice or because only a real machine could settle them:
   for recordable media, which a real RRD42 rejects too (M5);
 - the GS1280's power supply tray (SMLAN 0x090e), its cabinet control
   panel and its I/O drawers' PBM EEPROMs, which only a GS1280 asks for, and
-  the FRU EEPROMs' real contents (M10 invents them; a real ES47's part
-  numbers and its nine VRMs are known since 2026-10-26, "Captures from a
-  real ES47 7/1300").
+  the FRU EEPROMs' real contents (M10 invents them; since 2026-10-26 the
+  model has a real ES47's nine VRMs and part numbers made up in its
+  format, "Captures from a real ES47 7/1300");
+- the clock ratio the MBM gives each processor speed (three real logs fit
+  the model's rule), Free_Pool's layout in the partition database, and
+  why a real ES47's HWRPB slot 1 holds a halt and an unread line from CPU 1
+  (Captures: what to ask the machine's owner).
 
 **[guess]** marks reasoning without a source, and **[inference]** marks
 something derived from sources but not stated in them. The working files
@@ -921,34 +925,183 @@ memory, 0x40 pages against 0x39: the 4 GB bitmap needs 7 pages more), the
 cards, the console build (the CRB's 0x7A4 pages against 0x7AB) and the
 system serial number (ours `ES47EM000000`; the real HWRPB holds "SET").
 
-**Different, to fix or to find out:**
+**Different, to fix or to find out**, and what became of each (branch
+`es47/captures-fixes`, 2026-10-26; the details below the table):
 
-| Point | Real ES47 | Emulated | Next |
+| Point | Real ES47 | Emulated before | Now |
 | --- | --- | --- | --- |
-| VRMs in `show fru` | nine: VRM0-4.CPU, VRM2-4.RIMM, VRM0.TERM | twelve: VRM0-5.CPU, VRM0-4.RIMM, VRM0.TERM; `get_vrm_status` (0x090f) reports all twelve | report the nine; which bit is which place stays an inference until the CMM's real 0x090f reply is known |
-| FRU part numbers | 54-30398-02.D3 (DOCP), 54-30252-LG.C1 (DUO), 54-30672-02.A1 (CMM), 54-30444-01.D3 (MBM), 54-30392-02.A3 (I/O expander), 20-50928-04.C1, -05.B3 and -06.B5 (CPU, RIMM and TERM VRMs), 140641-001.01 (power supplies) | `EM-` and the kind | the owner's decision: real part numbers with the `EM` serial numbers kept |
-| RIMM serial | sixteen `?`: the EEPROM's bytes are not printable | an `EM` serial | keep, or bytes as a real RIMM's |
-| `spcount` at the start | 2: `Default_SP` and `Free_Pool`, in `Default_HP` | 1: `sub_partition0`, in `hard_partition0` | the partition database (0x0323): a second, empty sub partition and the real names |
-| IO7 North port speed | 216 MHz | 650 MHz | find what the console reads to print it (its string is at 0x4015f0; `POx_RST3`, read right after the IO7's revision, is the AGP PLL range); then ask for that register |
-| Hose 0 speed | 66 MHz, a DEGX2-TA in slot 1 | 33 MHz, empty | a run with a 66 MHz card there, and what the console reads (`POx_CTRL`; `HP_DEV_CAP` already says 66 MHz) |
-| Card FRUs | hose 0 slot 1 `CAB0.DRW0.PCI0.SLOT1`, hose 1 slot 3 `CAB0.DRW0.PCI2.SLOT1`, the Radeon `CAB0.DRW0.AGP` | M10 checked hose 0 slot 1 only | a run with cards in hose 1 slot 3 and the AGP slot |
-| HWRPB slot 1 | HALT_PCBB 0x10400, HALT_PS 0x1F00; TXLEN 0x12 with TX ready bit 1, a message from CPU 1 not yet read | zero | not known: how the secondary started |
-| CTB TERM_IN_PROTOCOL | 0 | 1 | not known (the emulated machine has a USB keyboard) |
+| VRMs in `show fru` | nine: VRM0-4.CPU, VRM2-4.RIMM, VRM0.TERM | twelve: VRM0-5.CPU, VRM0-4.RIMM, VRM0.TERM; `get_vrm_status` (0x090f) reports all twelve | **done**: the nine, on every Marvel board; the code settles which bit is which place |
+| FRU part numbers | 54-30398-02.D3 (DOCP), 54-30252-LG.C1 (DUO), 54-30672-02.A1 (CMM), 54-30444-01.D3 (MBM), 54-30392-02.A3 (I/O expander), 20-50928-04.C1, -05.B3 and -06.B5 (CPU, RIMM and TERM VRMs), 140641-001.01 (power supplies) | `EM-` and the kind | **done**: made up in the real format (54-99001-01.A1 ...), the `EM` serial numbers kept |
+| RIMM serial | sixteen `?`: the EEPROM's bytes are not printable | an `EM` serial | kept (the owner's decision) |
+| `spcount` at the start | 2: `Default_SP` and `Free_Pool`, in `Default_HP` | 1: `sub_partition0`, in `hard_partition0` | **done**: 2, the real names; the GCT and every `show` unchanged |
+| IO7 North port speed | 216 MHz | 650 MHz | **done**: RBOX_IO_CFG<8:5>, the I/O clock ratio's code; 216 MHz at 1300 MHz |
+| Hose 0 speed | 66 MHz, a DEGX2-TA in slot 1 | 33 MHz, empty | **done**: POx_HP_DEV_CAP<s> is the card's 66 MHz capability; a Radeon 7500 PCI there prints 66 MHz, an empty hose 0 33 MHz on both |
+| Card FRUs | hose 0 slot 1 `CAB0.DRW0.PCI0.SLOT1`, hose 1 slot 3 `CAB0.DRW0.PCI2.SLOT1`, the Radeon `CAB0.DRW0.AGP` | M10 checked hose 0 slot 1 only | **the same** with cards in the three places: the console's own names, nothing to fix |
+| HWRPB slot 1 | HALT_PCBB 0x10400, HALT_PS 0x1F00; TXLEN 0x12 with TX ready bit 1, a message from CPU 1 not yet read | zero | open: CPU 1 halted into the console and printed a line the primary did not read; not ours to fix as far as the code shows |
+| CTB TERM_IN_PROTOCOL | 0 | 1 | **configuration**: 1 with a USB keyboard (the board check's uss344 has one), 0 without, as the real machine's USB has none (`hub`, not `hub/kbd`) |
 
-The comment in `Ev7Csr.cpp` (`interval_period_ns`) still says the console
-writes 7; it changes with the next code change there. The power-up log's
-first part, the MBM's failsafe loader and firmware (VxWorks 5.4.2, ES47
-Server Management V2.7-7), its topology map and its diagnostics (tests 10
-to 50, on both EV7s or the one with the IO7), runs before the console and
-is not emulated.
+The comment in `Ev7Csr.cpp` (`interval_period_ns`) now says the console
+writes n following the clock (7 at 1000 MHz, 9 at 1300). The power-up
+log's first part, the MBM's failsafe loader and firmware (VxWorks 5.4.2,
+ES47 Server Management V2.7-7), its topology map and its diagnostics (tests
+10 to 50, on both EV7s or the one with the IO7), runs before the console
+and is not emulated.
 
-**What they offered to read**: console register values (RBOX_ROUTE,
-RBOX_WHOAMI, RBOX_IT, BBOX_CTL), the CMM's replies to the console's SMLAN
-requests (sensors, fans, power supplies, VRM status, the partition
-database), the CMM's per-processor memory areas, and their tooling for the
-System Management protocol. The replies to 0x090f (VRM status) and 0x0323
-(the partition database) would replace two inferences in the table;
-RBOX_IT should read 9 and BBOX_CTL seven ways.
+`boards_check.sh` takes `BOARDS_SPEED` (default 1000M), so the comparison
+is `BOARDS_SPEED=1300M BOARDS_EV7_CPU=ev7z boards_check.sh <bin> <label>
+es47` with the issue's commands in `BOARDS_EXTRA_CMDS`.
+
+**The VRMs.** `build_vrm_hw` (0x2f8990) takes the 0x090f reply's <0> bit
+n as "VRM n is there" and its <6> bit n as "good" (VRM 11 also needs bit
+12), and for each VRM there calls `build_vrm_fru` (0x2fa850) with n, which
+names it from its table at 0x403500 (n to the node's place: 0 to 10 give
+1 to 11, 11 gives 0) and reads EEPROM 0x16 + n. The emulated `show fru`,
+whose serial numbers end in the EEPROM index, pairs them: VRM0-5.CPU are n
+0-5, VRM0-4.RIMM n 6-10, VRM0.TERM n 11. So the code settles the mapping,
+and the real module's nine are bits 0-4, 8-10 and 11: the CMM answers
+0x0f1f there and 0x1f1f good, and only those nine have an EEPROM
+(`Cmm.cpp`, `kVrmPresent`). Every module of every Marvel board reports
+them **[decision: the one module whose VRMs are known; another
+configuration may hold others]**. Bit 12's own meaning is still not known.
+
+**The part numbers** (the owner's decision: made up, in the real format):
+DOCP `54-99001-01.A1`, DUO `54-99002-01.A1`, CMM `54-99003-01.A1`, MBM
+`54-99004-01.A1`, I/O expander `54-99005-01.A1`; the VRMs one family as the
+real 20-50928-04/05/06 are, `20-99006-04.A1` (CPU), `-05.A1` (RIMM),
+`-06.A1` (TERM); the power supplies `999007-001.01`, in the supplies'
+layout (10 bytes at <0x3e>, '.', 2 at <0x49>). The serial numbers stay the
+`EM` ones, the RIMMs' part numbers the console's own table. The GS1280's
+FRUs with an EEPROM here are the same kinds (its DOCP, MBM, CMMs, DUOs,
+VRMs), so no other number was needed; a kind added later takes the next
+`54-990nn-01.A1`.
+
+**The partition database.** A real ES47's MBM names `Default_HP`,
+`Default_SP` and `Free_Pool` (its log: "HP:Default_HP SP:Default_SP Primary
+is ...", "Running test 50 ... on 0 EV7s (SP:Free_Pool)"), and the MBM
+firmware refuses to delete, halt or give memory to `Free_Pool` and
+complains when the free pool entries and the hard partitions differ in
+number ("Data Base Erroneous - FREE POOL entries:%d - Hard
+Partitions:%d"). What the console makes of a sub partition entry: its <1>
+is the sub partition's number, which a processor's <6> names; `gct_init$platform_tree` (0x2f53e0) makes a GCT
+partition node for each entry of its hard partition but one whose <1> is
+0xff, and memconfig's count of sub partitions (0x2f101c, run only when the
+hard partition's <5> is 1) skips the same. Every other consumer
+(`start_secondaries`, `find_ev7_data`, `find_io7_data`, `sort_io7s`,
+`power_on_ior`, the GCT's hardware builders) only steps over the list by
+its count. So `Free_Pool` is the second entry, <0> 0, <1> 0xff, no
+processor and no memory **[inference: 0xff is the mark for the free pool;
+what else would carry it]**, its <2> Default_SP's 4 (nothing reads it for
+such an entry) **[guess]**. Proof: the console prints "hpcount = 1, spcount
+= 2" as the real one does; the GCT at 0x556000, dumped at the prompt
+(`ALPHABOX_DUMP_MEMORY`), is the same byte for byte as without the entry
+(80 nodes), and every `show` command's output is unchanged
+(`lab/runs/boards-es47fix-real-fix12` against `-fix3`).
+
+**The IO7 North port speed.** `io7_init_all_sp` (0x2ee280) reads the
+RBOX_IO_CFG of the processor the IO7 hangs on (`read_ev7_csr(pid, 0xc000)`), takes <8:5>, and prints the
+processor's clock in MHz (`get_cpu_speed`) over that field + 2. The
+field's writer is the XSROM (0x4494-0x45ec: RBOX_IO_CFG = (code << 5) |
+0xa001, then 0xa005, 0xa015, 0x8015 and 0xc015 with the code), from the
+byte at the CMM's area + 0x12a9, which the console's own `power_on_ior`
+(0x2e1b30) reads and writes into the register the same way. The CMM
+firmware (CMM3 V2.7-5) fills that byte, and 0x12a8 and 0x12a1 beside it,
+with the codes of the IO, IP and ZBOX clock ratios the MBM sets
+(`smlan_set_freq`), from its table at 0x3fb0270: ratios 1.5 to 8.0 in
+halves, code = 2 x ratio - 2. So the North port runs at the clock over
+twice the I/O ratio: 216 MHz is code 4, ratio 3.0. Which ratio a clock
+gets is the MBM's (its frequency table was not found); three real logs
+give one each: 1300 MHz 216 MHz (code 4, this machine), 1050 MHz 210 MHz
+(code 3, the User Information's log) and 533 MHz 133 MHz (code 2, the SRM
+reference's; 533 MHz and 2.0 are the CMM's own defaults). The model takes
+the smallest code from 2 that keeps the North port at or under 216 MHz,
+which fits all three **[inference]**: at 1000 MHz code 3 (200 MHz, 500
+before), at 1150 MHz code 4 (191). RBOX_IO_CFG reads <8:5> so with an IO7
+on the port (not in 21464 mode), and the CMM writes the code at area +
+0x12a9 with the speed (`ev7csr::io_clock_code`). The XSROM's other bits
+(<4>, <14>, <15>) are still not modelled.
+
+**Hose 0's speed.** "Hose %d - %s" (0x3d7be8) and `show config`'s "64 Bit,
+%s MHz" come from one decision, `php_get_port_speed` (0x2e65a0), which
+`io7_init_pci_pll` then programs into POx_RST<38:36>, where
+`show_core_system` (0x2dce2c) reads it back. Its inputs, per slot, are what
+the routine at 0x2e59f0 copies out of POx_HP_DEV_CAP: <s> 66 MHz, <8+s>
+PCI-X, <16+s> PCI-X 133, <31> invalid. Over the slots that hold a card it
+keeps 66 MHz only if every card has its bit (the PCI rule: a bus runs at 66
+MHz when the bus and every card on it can, M66EN), clears it with no card
+at all, and drops 66 MHz for a Broadcom 5703/5704 (the DEGXA family)
+unless its revision ID is 0x10. Then the backplane type (0x3b0030: 0 MARVEL
+STD, 1 MARVEL 2P, 2 X-SHELF, 3 YOSEMITE, 4 TELCO, 5 RAPTOR) has its say; on
+MARVEL 2P, the ES47's drawer **[inference: by its name; the console's
+source of the type was not traced]**, hose 0 keeps the result, hose 1
+follows its own rule of which slots hold cards, hose 2 is always 33 MHz. So an empty hose 0
+prints 33 MHz on a real ES47 too, and the real 66 MHz comes from its
+DEGX2-TA (a dual BCM5704, so of revision 0x10 by the console's check
+**[inference]**). The model had HP_DEV_CAP = 0x3f on hose 0 whatever it
+held, so a DE500 (a 33 MHz part) there printed 66 MHz; now <s> is the
+card's PCI status <5>, 66 MHz capable **[inference: the hot-plug
+controller senses the slot's M66EN]**, on every port. Checked: a Radeon 7500 PCI (status 0x02b0, the only one of
+our cards with the bit; none needed it set) in hose 0 slot 1 prints "Hose
+0 - 66 MHz PCI" and "64 Bit, 66 MHz", a DE500 there 33 MHz
+(`lab/runs/es47fix-cards-a`, `-cards-b`). No card of ours is PCI-X.
+
+**The card FRUs.** With a Radeon 7500 PCI or a DE500 in hose 0 slot 1, a
+DE500 or an 82559 in hose 1 slot 3 and the Radeon 7500 AGP in hose 3 slot
+5, `show fru` names them `CAB0.DRW0.PCI0.SLOT1`, `CAB0.DRW0.PCI2.SLOT1` and
+`CAB0.DRW0.AGP`, as the real machine does: the names are the console's
+(its 2P drawer's table at 0x3ae9c8: .PCI0.SLOT0-1, .PCI_5V.SLOT1-2, .AGP,
+.PCI1.SLOT1-2, .PCI2.SLOT1-6), and nothing of ours was wrong.
+
+**HWRPB slot 1 and the CTB.** TERM_IN_PROTOCOL is the configuration's: the
+board check's USS-344 has a USB keyboard and the CTB says 1; without one
+it says 0 as the real machine's, whose USB has only hubs (`show config`:
+`hub`, ours `hub/kbd`). Slot 1's TXLEN and TX ready bit are a secondary's
+console terminal: `hwrpbtt_txsend` (0x2b0c50) puts each line CPU n prints
+into its slot's TX buffer (slot + 0x180), followed by the prompt
+"P%02d>>>", stores the length at slot + 0x12c and sets bit n of the
+HWRPB's TX ready mask for the primary. 0x12 is 18 bytes: a 12-byte line
+and "P01>>>". HALT_PCBB 0x10400 (slot 1's own HWPCB) and HALT_PS 0x1F00
+(IPL 31) are what the PALcode's halt entry records, so the real CPU 1
+halted into the console and said so, and the primary had not taken the
+line when `show hwrpb` ran **[inference]**. The emulated CPU 1, started
+through the console's start hand-off, records no halt and prints nothing
+to the primary, so both stay zero. Not ours to fix on this evidence; the
+line itself would tell (below).
+
+**What they offered to read**, and what would settle the inferences above:
+
+- the CMM's replies to 0x090f (VRM status: expect 0x0f1f there, 0x1f1f
+  good) and 0x0323 (the partition database: is Free_Pool's <1> 0xff, and
+  its <2>?);
+- PID 0's RBOX_IO_CFG (physical 0xFFFFFC0C000; <8:5> should read 4) and
+  the CMM's byte at area + 0x12a9 (4), or the MBM's frequency display
+  ("Board EV7 Freq IP Ratio (MHz) IO Ratio (MHz) ZBOX Ratio (MHz)": IO
+  ratio 3.0, 433 MHz);
+- the 18 bytes of slot 1's TX buffer at physical 0x10580, the line CPU 1
+  printed;
+- RBOX_IT (9) and BBOX_CTL (seven ways), as before.
+
+The comparison (whitespace collapsed, the issue's ten commands and the
+console's start, `-` real and `+` emulated lines): 174 lines before
+(`lab/runs/boards-es47fix-real-before`), 167 after with the board check's
+devices (`-real-after`), 168 with cards where the real machine has them
+(`es47fix-realcfg`: a Radeon 7500 PCI in hose 0 slot 1, a DE500 in hose 1
+slot 3, a 53C895, the CMD 649 and a USS-344 without a keyboard). What
+remains is the configuration (4 GB against 512 MB per processor and what
+follows from it, the cards, V7.3-11 against V7.3-1, the serial numbers and
+part numbers), and the open slot 1 fields above.
+
+**The other checks.** The ES47, ES80 and GS1280 at 1000 MHz against the
+gate's run before (`boards-gate-ev8s5s6` and `boards-es47fix-boards`):
+only the FRU lines change (the part numbers, and VRM5.CPU, VRM0.RIMM and
+VRM1.RIMM gone from each module), and in the console's start spcount (2)
+and the North port (200 MHz at 1000 MHz, 500 before); `show config` is the
+same, and every `init` brings back every processor (spcount 2 after each).
+OpenVMS 8.4 on the ES47 logs in, and SHOW CPU lists 0 and 1 active as
+before; its start differs only in spcount, the North port and hose 0,
+whose DE500 now makes it a 33 MHz bus. Linux on the ES47 finds its IO7
+through the GCT ("Found an IO7 at PID 0") and prints nothing about the
+GCT, as before. The JIT, interpreter, JIT_VERIFY and headless lanes build,
+and their 21 unit tests pass.
 
 ### EV8 S11b: the boards in 21464 mode (2026-10-25)
 
@@ -1137,7 +1290,9 @@ real machine's console would, as far as the console's own code tells:
 - `show fru` lists 41 FRUs: the drawer, its control panel, backplane, MBM,
   I/O expander, two power supplies and seven fans; the dual processor
   module, its CMM, twelve VRMs, two CPUs and ten RIMMs; and the PCI card
-  in hose 0 slot 1. Every FRU with an EEPROM shows a part and a serial
+  in hose 0 slot 1. (Since 2026-10-26 the module has a real one's nine
+  VRMs, 38 FRUs in all, and the part numbers are made up in the real
+  format: "Captures from a real ES47 7/1300".) Every FRU with an EEPROM shows a part and a serial
   number; the ones the console builds without an EEPROM (drawer, SBB,
   CPUs, fans) show "-", as in the listing in the SRM reference (p. 58).
   `show fru -e`, which lists only FRUs with an error byte set, lists none.
@@ -1229,12 +1384,15 @@ status ... ip: ... loc: ...".
 
 The console names the twelve VRMs by place: VRM0-5.CPU, VRM0-4.RIMM and
 VRM0.TERM, which matches the CMM firmware's own names (CPU VRM 0-5, RIMM
-VRM 0-4, TERM VRM).
+VRM 0-4, TERM VRM). They are the console's VRM n 0-5, 6-10 and 11, bit n of
+the 0x090f reply and EEPROM 0x16 + n (settled 2026-10-26 from
+`build_vrm_fru`'s table; a real module holds nine of them, Captures).
 
 **The EEPROMs' contents are invented [guess]**: no real ES47 EEPROM image
-or `show fru` listing was at hand. Part numbers are "EM-" and the FRU's
-kind; serial numbers "EM" and the micro's address bytes and the index in
-hexadecimal, so each is unique and stays the same from start to start.
+or `show fru` listing was at hand. Part numbers were "EM-" and the FRU's
+kind (since 2026-10-26: made up in a real listing's format,
+54-99001-01.A1 and so on, Captures); serial numbers "EM" and the micro's
+address bytes and the index in hexadecimal, so each is unique and stays the same from start to start.
 The RIMMs' presence detect describes 256 Mbit (32 MB) RDRAM devices, 9 row
 bits, 7 column bits and 32 banks, as many as the RIMM size takes (the
 memory per processor over four RIMMs, as the MBM configuration has it)
@@ -1264,8 +1422,9 @@ boards. The character set is the emulator's rule, not the console's.
 u16 the VRMs that are good, a bit per VRM. VRM 11 is good only with bit 12
 set as well. Status 3 and status 5 are taken quietly. The module has 12
 VRM slots (User Information: "12 slots for voltage regulator modules");
-the model reports all twelve there and good, 0x0fff and 0x1fff
-**[inference: a full module; what bit 12 stands for is not known]**.
+the model reported all twelve there and good, 0x0fff and 0x1fff
+**[inference: a full module; what bit 12 stands for is not known]**. Since
+2026-10-26 it reports a real module's nine, 0x0f1f and 0x1f1f (Captures).
 
 **Power supplies, SMLAN 0x0908** (`get_power_supply_state` 0x30ac40), of
 the drawer's MBM: 0x124 bytes, u32 the count and records of 0x10 bytes:
@@ -1316,7 +1475,8 @@ answers]**.
   there, so those FRUs print "-".
 - The 'J' layout, the 8 bytes at <0x40>, bit 12 of the VRM word, the
   meaning of a supply's state and of a fan's 12 bytes, and real part
-  numbers: unknown, and only a real machine would settle them.
+  numbers: unknown, and only a real machine would settle them (a real
+  machine's part numbers and VRMs came on 2026-10-26: Captures).
 
 Evidence in `lab/m10/` (git-ignored): `es47-console-int.log` (the console:
 `show fru`, `show fru -e`, `show power`, `boot dka400` to the date prompt,
@@ -2204,7 +2364,7 @@ M4 table holds):
 | --- | --- | --- | --- |
 | IO7 line | IO7 0, Embedded I/O, IO7 pass 3 | the same | IO_SYS_REV type 1, IO_ASIC_REV 0x12 |
 | drawer line | I/O Drawer 0, Cabinet 0, Riser 0, Backplane rev 2 | Backplane rev 0 | IO_SYS_REV<3:0>: matches since M7a |
-| hoses | Bus 0 66 MHz, 1-2 33 MHz, PCI 2.2 mode; AGP Bus 3, AGP rev 2.0, 1x/4x | the same | HP_DEV_CAP gives hose 0's slots 66 MHz (with no card there it reads 33 MHz) |
+| hoses | Bus 0 66 MHz, 1-2 33 MHz, PCI 2.2 mode; AGP Bus 3, AGP rev 2.0, 1x/4x | the same | HP_DEV_CAP gives hose 0's slots 66 MHz (with no card there it reads 33 MHz); since 2026-10-26 HP_DEV_CAP<s> is the card's own 66 MHz capability, so the DE500 there prints 33 MHz and a Radeon 7500 PCI 66 (Captures) |
 | devices | DEGX2-TA (0/1), a SIIG serial card (1/3), AIC-7892 (2/1), CMD 649 (2/2), USB (2/3), Radeon (3/5) | DE500-BA (0/1), 53C895 (2/1) | below |
 
 The devices: at M5 Alphabox had no AIC-7892, CMD 649 or BCM5703. The
@@ -2240,7 +2400,9 @@ console and its PALcode:
     ones to clear);
   - HP_INTR_IN gives the slot inputs (<s> interlock open, <8+s> power
     fault, <16+s> and <24+s> both set for an empty slot);
-  - HP_DEV_CAP the slots' speeds (<s> 66 MHz, <8+s> PCI-X, <16+s> 133).
+  - HP_DEV_CAP what each slot's card supports (<s> 66 MHz, <8+s> PCI-X,
+    <16+s> 133; since 2026-10-26 <s> is the card's PCI status <5>, before
+    it was 0x3f on hose 0 whatever the slot held).
 
   Hose 2's embedded slots are read but never powered by the console, so
   the model starts with every slot powered **[inference]**.
@@ -2561,7 +2723,7 @@ CMM did not keep that RAM, so the type was gone at the next start (found
 TOY NVRAM byte: after the console's 2 KB come the records of the modules, a
 module key (u32) and 0x100 bytes for each of its two places. A file of 2 KB
 only (an older one) still loads; so does no file.
-| 0x0323 | `get_partition_database` | 1 | the partition database, 0x800 (below) | one hard and one sub partition, both EV7s, the IO7 on PID 0 |
+| 0x0323 | `get_partition_database` | 1 | the partition database, 0x800 (below) | one hard and one sub partition, both EV7s, the IO7 on PID 0; since 2026-10-26 a real ES47's: Default_HP holding Default_SP (both EV7s, the IO7) and an empty Free_Pool |
 | 0x0321 | `get_mbm_configuration` | none (to the MBM) | MBM configuration, 0xd8 (below) | one module, two EV7s, five RIMMs each |
 | 0x0418 | `get_hard_partition_mem_assignm` | hard partition | memory groups and chunks, 0x800 (below) | each EV7's memory one chunk |
 | 0x0100 | `get_hard_partition_mem_assignm` (another path) | | | not seen |
@@ -2585,7 +2747,7 @@ longword followed by its entries.
 | List | Entry | Fields |
 | --- | --- | --- |
 | hard partitions | 0x1c | <0> number, <4> u32 (0xff in the simulator's), <8> name |
-| sub partitions | 0x20 | <0> hard partition, <2> 4 **[unknown, copied]**, <6> name |
+| sub partitions | 0x20 | <0> hard partition, <1> number, which a processor's <6> names (0xff: not a sub partition, the free pool, which the GCT builder skips; 2026-10-26), <2> 4 **[unknown, copied]**, <6> name |
 | processors | 12 | <0> 0x80 = the sub partition's primary, 0 = another member (others refused); <1> N/S, <2> E/W; <3> PID; <4> hard partition; <6> sub partition |
 | I/O | 8 | <3> N/S, <4> E/W of the EV7 the IO7 hangs on (corrected by M6c), <5> present |
 
