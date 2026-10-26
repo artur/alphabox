@@ -72,6 +72,12 @@
 #   GUESTS_EXTRA_CMDS    more commands for vms-es47 and linux-es47, after
 #                        their own and before the shutdown, separated by ';'
 #                        (e.g. 'SHOW CPU/FULL' or 'cat /proc/cpuinfo')
+#   GUESTS_OUT           the output directory (default
+#                        $ALPHABOX_WORK/runs/guests-<label>)
+#
+# Sourced from another script (test/tools/clock_drift.sh) with the binary
+# and a label as its positional parameters, this file defines the helper and
+# the functions below and runs no guest.
 set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
@@ -90,7 +96,7 @@ BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2; shift 2
 GUESTS=${*:-$ALL}
 [ -x "$BIN" ] || { echo "guests_check: $BIN is not executable"; exit 2; }
-OUT=$WORK/runs/guests-$LABEL
+OUT=${GUESTS_OUT:-$WORK/runs/guests-$LABEL}
 mkdir -p "$OUT" || exit 2
 : > "$OUT/summary.txt"
 PID=
@@ -387,6 +393,7 @@ class Chat:
             raise SystemExit("noconnect")
         s.settimeout(0.5)
         self.s = s
+        self.t_rx = (time.time(), time.monotonic())
 
     def rd(self):
         try:
@@ -395,6 +402,9 @@ class Chat:
             return
         if not d:
             raise EOFError
+        # when the newest data arrived: the host's wall clock and its
+        # monotonic clock (a step whose two clocks disagree slept)
+        self.t_rx = (time.time(), time.monotonic())
         d = re.sub(rb"\xff[\xfb-\xfe].", b"", d).replace(b"\x00", b"")
         self.log.write(d)
         self.buf += d.decode("latin1").replace("\r", "")
@@ -470,11 +480,54 @@ def chat(port, logf, outf, steps):
             elif k == "last":
                 # last=name: the text the last expect consumed up to
                 out.write("last %s %s\n" % (v, last.group(0).strip() if last else ""))
+            elif k == "stamp":
+                # stamp=name:regex@secs: expect the regex, and write its
+                # first group with the host's wall and monotonic clocks
+                # when the data that completed it arrived
+                spec, _, secs = v.rpartition("@")
+                name, _, rx = spec.partition(":")
+                m = c.expect(rx, float(secs))
+                if not m:
+                    out.write("TIMEOUT %.0fs stamp %s\n" % (time.time() - t0, name))
+                    print("FAIL no match for %r within %ss" % (rx, secs))
+                    return 1
+                out.write("stamp %s %.6f %.6f %s\n" % (name, c.t_rx[0], c.t_rx[1], m.group(1).strip()))
+                out.flush()
+                last = m
+            elif k == "load":
+                # load=name: the host's load averages, and its clocks
+                out.write("load %s %.6f %.6f %.2f %.2f %.2f\n" % (
+                    (v, time.time(), time.monotonic()) + os.getloadavg()))
+                out.flush()
     except EOFError:
         print("FAIL console closed")
         return 1
     print("ok %.0f" % (time.time() - t0))
     return rc
+
+
+def tap(port, logf, outf, connect_s):
+    """Listen on a serial console until it closes: every line that is a
+    time of day with hundredths (Windows' %TIME%) is written to outf with
+    the host's wall and monotonic clocks when it arrived."""
+    try:
+        c = Chat(port, logf, deadline_s=connect_s)
+    except SystemExit as e:
+        print("FAIL", e)
+        return 1
+    out = open(outf, "w", buffering=1)
+    rx = re.compile(r"(\d{1,2}:\d\d:\d\d[.,]\d\d)[ \t]*\n")
+    try:
+        while True:
+            c.rd()
+            m = rx.search(c.buf)
+            while m:
+                out.write("stamp com1 %.6f %.6f %s\n" % (c.t_rx[0], c.t_rx[1], m.group(1)))
+                c.buf = c.buf[m.end():]
+                m = rx.search(c.buf)
+    except (EOFError, OSError):
+        pass
+    return 0
 
 
 if __name__ == "__main__":
@@ -502,6 +555,8 @@ if __name__ == "__main__":
         sys.exit(0)
     if a[0] == "chat":
         sys.exit(chat(int(a[1]), a[2], a[3], a[4:]))
+    if a[0] == "tap":
+        sys.exit(tap(int(a[1]), a[2], a[3], float(a[4])))
 PY
 
 # ---------------------------------------------------------------------------
@@ -599,6 +654,9 @@ win_guest() {
         "$D/$cfg" > "$D/$cfg.tz" && mv "$D/$cfg.tz" "$D/$cfg"
     fi
   fi
+  # WIN_GUEST_PREP: a command run on the copied configuration before the
+  # start (clock_drift.sh puts serial0 on a telnet port with it)
+  if [ -n "${WIN_GUEST_PREP:-}" ]; then "$WIN_GUEST_PREP" "$D/$cfg" || return 2; fi
   start_emu "$D" "$cfg"
   if [ -n "$logon" ]; then
     r=$(H fbsplash "$D/fb" "$tmo" "$PID" 2>&1 | tail -1)
@@ -659,6 +717,9 @@ SG_RESULT=
 serial_guest() {
   local g=$1 port=$2; shift 2
   start_emu "$D" es40.cfg
+  # SERIAL_GUEST_STARTED: a command run once the emulator ($PID) is
+  # started, before the dialogue (clock_drift.sh's DRIFT_DUTY)
+  if [ -n "${SERIAL_GUEST_STARTED:-}" ]; then "$SERIAL_GUEST_STARTED"; fi
   SG_RESULT=$(H chat "$port" "$D/console.log" "$D/chat.txt" "$@")
   cp "$D/chat.txt" "$OUT/$g.chat" 2>/dev/null
   tr -d '\r\000' < "$D/console.log" | tail -c 400000 > "$OUT/$g.log"
@@ -789,6 +850,42 @@ vms_board() {
   report "$g" PASS "$(secs)" "DCL login, HW_NAME $hw, $ncpu CPUs, BACKUP + DIFFERENCES 0, SHOW ERROR clean, SHUTDOWN"
 }
 
+# vms_es40_setup: the vms-es40 guest's run directory $D: the console, a
+# clone of the installed disk, an ES40 with its console on port $PORT.
+# `vms_steps dqa0` then boots it and logs in. On failure, $SETUP_WHY.
+SETUP_WHY=
+vms_es40_setup() {
+  local src=$WORK/vms84/disk-installed.img
+  rm -rf "$D"; mkdir -p "$D"
+  cp "$R/test/rom/cl67srmrom.exe" "$D/" && chmod u+w "$D/cl67srmrom.exe"
+  cp -c "$src" "$D/disk.img" || { SETUP_WHY="no image $src"; return 1; }
+  serial_cfg "$D" "$PORT" 1 30 disk.img
+}
+
+# linux_setup: the linux guest's run directory $D: the console, a flash
+# with os_type UNIX from the run that installed the system, a clone of the
+# installed disk, an ES40 with its console on port $PORT.
+linux_setup() {
+  local src=$WORK/linux f
+  rm -rf "$D"; mkdir -p "$D"
+  cp "$R/test/rom/cl67srmrom.exe" "$D/" && chmod u+w "$D/cl67srmrom.exe"
+  for f in flash.rom dpr.rom; do
+    cp "$src/run-disk/$f" "$D/" || { SETUP_WHY="no $src/run-disk/$f"; return 1; }
+  done
+  cp -c "$src/disk/gentoo-installed.img" "$D/disk.img" || { SETUP_WHY="no image"; return 1; }
+  serial_cfg "$D" "$PORT" 1 30 disk.img
+}
+
+# linux_login_steps: the dialogue that boots the linux guest and logs in as
+# root, one step a line
+linux_login_steps() {
+  printf '%s\n' "expect=P00>>>@240" "send=boot dqa0 -flags 0" "expect=login: @$BTMO" \
+    "send=root" "expect=Password: @60" "send=alphabox" "expect=# \$@120"
+}
+
+# Sourced (clock_drift.sh): the helper and the functions only.
+if (return 0 2>/dev/null); then return 0; fi
+
 rc_all=0
 for g in $GUESTS; do
   idx=0; for x in $ALL $EXTRA; do [ "$x" = "$g" ] && break; idx=$((idx + 1)); done
@@ -833,11 +930,7 @@ for g in $GUESTS; do
       report "$g" PASS "$(secs)" "$what"
     else fail "$W_WHAT"; continue; fi ;;
   vms-es40)
-    src=$WORK/vms84/disk-installed.img
-    rm -rf "$D"; mkdir -p "$D"
-    cp "$R/test/rom/cl67srmrom.exe" "$D/" && chmod u+w "$D/cl67srmrom.exe"
-    cp -c "$src" "$D/disk.img" || { fail "no image $src"; continue; }
-    serial_cfg "$D" "$PORT" 1 30 disk.img
+    vms_es40_setup || { fail "$SETUP_WHY"; continue; }
     steps=(); while IFS= read -r l; do steps+=("$l"); done < <(vms_steps dqa0 "$BTMO")
     steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW SYSTEM" "expect=\\$ \$@60"
             "send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
@@ -880,16 +973,9 @@ for g in $GUESTS; do
   vms-ds10) vms_board "$g" ds10 1 DS10/DS10SRM.ROM pci0.7 pci0.13 pci0.1 || continue ;;
   vms-ds20l) vms_board "$g" ds20l 2 - pci0.7 pci0.15 pci0.19 || continue ;;
   linux)
-    src=$WORK/linux
-    rm -rf "$D"; mkdir -p "$D"
-    cp "$R/test/rom/cl67srmrom.exe" "$D/" && chmod u+w "$D/cl67srmrom.exe"
-    # a flash with os_type UNIX: from the run that installed the system
-    for f in flash.rom dpr.rom; do cp "$src/run-disk/$f" "$D/" || { fail "no $src/run-disk/$f"; continue 2; }; done
-    cp -c "$src/disk/gentoo-installed.img" "$D/disk.img" || { fail "no image"; continue; }
-    serial_cfg "$D" "$PORT" 1 30 disk.img
-    steps=("expect=P00>>>@240" "send=boot dqa0 -flags 0" "expect=login: @$BTMO" "send=root"
-           "expect=Password: @60" "send=alphabox" "expect=# \$@120"
-           "send=uname -a; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
+    linux_setup || { fail "$SETUP_WHY"; continue; }
+    steps=(); while IFS= read -r l; do steps+=("$l"); done < <(linux_login_steps)
+    steps+=("send=uname -a; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
            "send=date; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
            "send=echo '#include <stdio.h>' > /tmp/t.c; echo 'int main(){printf(\"gc-sum=%d\\n\",6*7);return 0;}' >> /tmp/t.c; gcc -O1 -o /tmp/t /tmp/t.c && /tmp/t; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@300"
            "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
