@@ -39,6 +39,7 @@
 #endif
 #include "AliM1543C.hpp"
 #include "DebugTarget.hpp"
+#include "Ev8Simd.hpp"
 #include "cpu_arith.hpp"
 #include "cpu_bwx.hpp"
 #include "cpu_control.hpp"
@@ -2167,6 +2168,13 @@ _next_instruction:
     case 0x78:
       OP(FTOIS, F1_R3);
     default:
+      // The 21464's short-vector SIMD set (docs/platforms/ev8-isa.md 3.3,
+      // Ev8Simd.cpp) on the rows with CPU_EXT_EV8; on every other row, and
+      // for the codes the sheet leaves free, OPCDEC as before.
+      if ((m_model->ext & CPU_EXT_EV8) && ev8simd::assigned(function)) {
+        state.r[REG_3] = ev8simd::exec(function, state.r[REG_1], V_2);
+        ES40_EXECUTE_END();
+      }
       UNKNOWN2;
     }
     break;
