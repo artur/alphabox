@@ -69,8 +69,10 @@
 #                        each TPU is a processor (docs/platforms/ev8.md, S4),
 #                        and SHOW CPU's active set and Linux's "cpus active"
 #                        must count 2 * TPUs
-#   GUESTS_EXTRA_CMDS    more commands for vms-es47 and linux-es47, after
-#                        their own and before the shutdown, separated by ';'
+#   GUESTS_EXTRA_CMDS    more commands for vms-es47, linux and linux-es47,
+#                        after their own and before the shutdown (the Linux
+#                        guests: before their date, which is compared with
+#                        the host's clock), separated by ';'
 #                        (e.g. 'SHOW CPU/FULL' or 'cat /proc/cpuinfo')
 #   GUESTS_OUT           the output directory (default
 #                        $ALPHABOX_WORK/runs/guests-<label>)
@@ -976,9 +978,11 @@ for g in $GUESTS; do
     linux_setup || { fail "$SETUP_WHY"; continue; }
     steps=(); while IFS= read -r l; do steps+=("$l"); done < <(linux_login_steps)
     steps+=("send=uname -a; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
-           "send=date; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
-           "send=echo '#include <stdio.h>' > /tmp/t.c; echo 'int main(){printf(\"gc-sum=%d\\n\",6*7);return 0;}' >> /tmp/t.c; gcc -O1 -o /tmp/t /tmp/t.c && /tmp/t; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@300"
-           "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
+           "send=echo '#include <stdio.h>' > /tmp/t.c; echo 'int main(){printf(\"gc-sum=%d\\n\",6*7);return 0;}' >> /tmp/t.c; gcc -O1 -o /tmp/t /tmp/t.c && /tmp/t; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@300")
+    extra_steps linux
+    # the date last, as on the ES47
+    steps+=("send=date; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
+            "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       # the guest's `date` against the host's clock. The emulated RTC keeps
       # the host's local time, which a guest with its zone at UTC prints as
@@ -1013,10 +1017,12 @@ for g in $GUESTS; do
     steps=("expect=P00>>>@600" "send=boot dqa0 -flags 0" "expect=login: @$BTMO" "send=root"
            "expect=Password: @60" "send=alphabox" "expect=# \$@120"
            "send=uname -a; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
-           "send=grep -E 'cpus active|platform string' /proc/cpuinfo; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
-           "send=date; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60")
+           "send=grep -E 'cpus active|platform string' /proc/cpuinfo; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60")
     extra_steps linux
-    steps+=("send=sync; poweroff" "expect=halted CPU|P00>>>@180")
+    # the date last: it is compared with the host's clock after the
+    # shutdown, and the extra commands may take minutes
+    steps+=("send=date; echo GC-DONE-\$?" "expect=GC-DONE-[0-9]@60"
+            "send=sync; poweroff" "expect=halted CPU|P00>>>@180")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       # the date against the host's local time, as for linux above
       gt=$(grep -a -o "$(date '+%a %b %e') [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^ ]* $(date +%Y)" "$D/console.log" | head -1)

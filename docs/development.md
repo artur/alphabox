@@ -141,8 +141,9 @@ guest passed. A whole run takes about 15 minutes. `GUESTS_EV7_CPU` boots
 `vms-es47` and `linux-es47` on another processor class than `ev7` (`ev7z`,
 `ev8`; with `ev8`, `GUESTS_EV8_TPUS` sets each chip's `tpus`, and SHOW
 CPU and Linux's "cpus active" must count every TPU), and
-`GUESTS_EXTRA_CMDS` gives those two more commands (separated by `;`)
-before they shut down.
+`GUESTS_EXTRA_CMDS` gives those two and `linux` more commands (separated
+by `;`) before they shut down; the Linux guests read their date after
+them, since it is compared with the host's clock.
 
 Four more guests run only when named, so the default run stays short:
 `vms-ds20e`, `vms-ds20`, `vms-ds10` and `vms-ds20l` boot the same
