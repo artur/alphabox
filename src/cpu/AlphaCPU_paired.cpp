@@ -39,6 +39,7 @@
  * alphabox_fptest too (test/fp), against its shim.
  **/
 #include "AlphaCPU.hpp"
+#include "Ev8Simd.hpp"
 #include "cpu_debug.hpp"
 
 #include <cmath>
@@ -128,6 +129,10 @@ const u32 S_CQNAN = 0xffc00000; // the canonical quiet NaN, stored as STS
 const u64 ONE_T = U64(0x3ff0000000000000);
 
 } // namespace
+
+namespace ev8paired {
+bool assigned(u32 fn) { return paired_valid(fn); }
+} // namespace ev8paired
 
 /// One half as the scalar ADDS or SUBS.
 u32 CAlphaCPU::paired_add(u32 a, u32 b, u32 ins, bool sub) {

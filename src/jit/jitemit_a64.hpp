@@ -1574,6 +1574,21 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
+    // The 21464's 1C SIMD set: Rc = jit_simd(ins, Rav, Rbv).
+    if (op == OP_SIMD) {
+      if (islit)
+        emit_call(m_simd_helper, {{JA_I32, (uint64_t)ins},
+                                  {JA_GPZ, (uint64_t)ra},
+                                  {JA_I64, (uint64_t)lit}});
+      else
+        emit_call(m_simd_helper, {{JA_I32, (uint64_t)ins},
+                                  {JA_GPZ, (uint64_t)ra},
+                                  {JA_GPZ, (uint64_t)rb}});
+      if (rc != 31)
+        mov_to_reg(rc, x0);
+      continue;
+    }
+
     // MISC state reads RPCC/RC/RS: Ra = jit_misc(cpu, sel).
     if (op == OP_RPCC || op == OP_RC || op == OP_RS) {
       const int sel = (op == OP_RPCC) ? 0 : (op == OP_RC) ? 1 : 2;
@@ -1640,6 +1655,24 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.mov(x9, imm(b->tag + 4 * (uint64_t)i));
       a.str(x9, fld(m_off.state_current_pc, 3));
       emit_call(hs.fltv_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
+      Label ok = a.new_label(), trapped = a.new_label();
+      a.cbz(w0, ok);
+      a.cmp(w0, imm(2));
+      a.b_eq(trapped);
+      bail(i);
+      a.bind(trapped);
+      a64_add_imm(a, x0, a64::x27, i + 1);
+      a.b(done);
+      a.bind(ok);
+      continue;
+    }
+
+    // Paired single (the 21464's 07): 0 ok / 1 FEN bail (not run) / 2 arith
+    // trap (ran, GO_PAL set state.pc -> count it and return as-is), as FLTV.
+    if (op == OP_PAIRED) {
+      a.mov(x9, imm(b->tag + 4 * (uint64_t)i));
+      a.str(x9, fld(m_off.state_current_pc, 3));
+      emit_call(m_paired_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
       Label ok = a.new_label(), trapped = a.new_label();
       a.cbz(w0, ok);
       a.cmp(w0, imm(2));

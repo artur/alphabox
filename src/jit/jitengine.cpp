@@ -53,6 +53,7 @@
 #include "jitengine.hpp"
 
 #include "CpuModel.hpp"
+#include "Ev8Simd.hpp" // the 21464's 1C SIMD and 07 paired-single codes
 #include "System.hpp" // CCodePageMap: which pages code was compiled from
 #ifdef ALPHABOX_HVF
 #include "HvRuntime.hpp"
@@ -181,6 +182,9 @@ enum SafeOp {
   OP_EQV,
   OP_CMOV,  // INTL (0x11) conditional moves CMOVxx: Rc = cond(Ra) ? op2 : Rc
   OP_CMOV2, // INTL (0x11) CMOV2 (21464, CPU_EXT_EV8): Rc = Ra
+  OP_SIMD,  // 1C SIMD set (21464, CPU_EXT_EV8): Rc = jit_simd(ins, Ra, op2)
+  // 07 paired single (21464, CPU_EXT_EV8): f[Fc] via jit_paired
+  OP_PAIRED,
   OP_AMASK,
   OP_IMPLVER, // INTL (0x11) CPU feature probes: Rc = op2 & ~CPU_AMASK / Rc =
               // CPU_IMPLVER
@@ -631,6 +635,16 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
         return OP_NONE;
       return (func == 0x70) ? OP_FTOIT : OP_FTOIS;
     }
+    // The 21464's short-vector SIMD set (ev8-isa.md 3.3) on the rows that
+    // have it: the interpreter's routine, called from the block. Elsewhere,
+    // and for the codes the sheet leaves free, the interpreter's OPCDEC.
+    if ((ext & CPU_EXT_EV8) && ev8simd::assigned(func))
+      return OP_SIMD;
+    break;
+  case 0x07: // the 21464's paired single (ev8-isa.md 3.4), as OP_SIMD; an
+             // unassigned code, and opcode 07 on the other rows, OPCDEC
+    if ((ext & CPU_EXT_EV8) && ev8paired::assigned((ins >> 5) & 0x7ff))
+      return OP_PAIRED;
     break;
   case 0x18: // MISC: memory barriers -> mfence (keep MP ordering);
              // prefetch/cache hints -> no-op
@@ -3067,6 +3081,30 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       continue;
     }
 
+    // Paired single (07, the 21464's): jit_paired runs it on state.f and
+    // the FPCR. 0 ok / 1 FEN bail (not run: the interpreter takes the
+    // fault) / 2 arith trap (ran, GO_PAL set state.pc), as FLTV.
+    if (op == OP_PAIRED) {
+      a.mov(x86::r10, imm(b->tag + 4 * (uint64_t)i));
+      a.mov(x86::qword_ptr(x86::rbp, m_off.state_current_pc), x86::r10);
+      emit_call(m_paired_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)ins}});
+      Label ok = a.new_label(), trapped = a.new_label();
+      a.test(x86::eax, x86::eax);
+      a.jz(ok);
+      a.cmp(x86::eax, imm(2));
+      a.je(trapped);
+      set_pc(b->tag + 4 * (uint64_t)i); // 1: FEN -> resume this instruction
+      a.mov(x86::eax, imm(i));
+      a.add(x86::eax, x86::dword_ptr(x86::rsp, 40));
+      a.jmp(done);
+      a.bind(trapped); // ran then diverted: count it, keep state.pc
+      a.mov(x86::eax, imm(i + 1));
+      a.add(x86::eax, x86::dword_ptr(x86::rsp, 40));
+      a.jmp(done);
+      a.bind(ok);
+      continue;
+    }
+
     // Computed jump JMP/JSR/RET (0x1a): Ra = PC+4 (return address); PC = Rb &
     // ~3. A terminator like a branch, but the target is a register -- left in
     // R10 so the epilogue's cached link validates it (succ->tag == target),
@@ -3569,6 +3607,16 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       break;
     case OP_CMOV2: // Rc = Ra: CMOV2's predicate is clear outside the pair
       op1_rax();
+      break;
+    case OP_SIMD: // the 21464's 1C SIMD set: rax = jit_simd(ins, Rav, Rbv)
+      if (islit)
+        emit_call(m_simd_helper, {{JA_I32, (uint64_t)ins},
+                                  {JA_GPZ, (uint64_t)ra},
+                                  {JA_I64, (uint64_t)lit}});
+      else
+        emit_call(m_simd_helper, {{JA_I32, (uint64_t)ins},
+                                  {JA_GPZ, (uint64_t)ra},
+                                  {JA_GPZ, (uint64_t)rb}});
       break;
 
     case OP_CMPEQ:

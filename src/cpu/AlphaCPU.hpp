@@ -1083,6 +1083,12 @@ public:
   // FLTV (0x15) VAX arith/convert/compare. Return 0 ok / 1 FEN-trap bail / 2
   // arith trap (exc_sum set).
   static int jit_fltv(CAlphaCPU *cpu, u32 ins);
+  // The 21464's opcode 1C SIMD set (Ev8Simd.cpp): Rc from Rav and Rbv (the
+  // literal in the literal form); nothing else is read or written.
+  static u64 jit_simd(u32 ins, u64 a, u64 b);
+  // The 21464's opcode 07 paired single (paired_operate). Return 0 ok / 1
+  // FEN-trap bail (not run) / 2 arith trap (run, GO_PAL set state.pc).
+  static int jit_paired(CAlphaCPU *cpu, u32 ins);
   // Verify support: the interpreter pass records each value it loads, and the
   // compiled pass replays them instead of re-reading memory - false mismatch
   // fix

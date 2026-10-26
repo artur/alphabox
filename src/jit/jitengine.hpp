@@ -495,6 +495,14 @@ public:
     m_implver = implver;
     m_ext = ext;
   }
+  /// The 21464's opcode 1C SIMD set and opcode 07 paired single (S5, S6 of
+  /// docs/platforms/ev8.md), which compiled code runs through the
+  /// interpreter's routines without ending the block (CAlphaCPU::jit_simd,
+  /// jit_paired), on the rows with CPU_EXT_EV8 (classify()).
+  void set_ev8_helpers(void *simd, void *paired) {
+    m_simd_helper = simd;
+    m_paired_helper = paired;
+  }
   /// LDx_ARM's watch (the 21464's; CSystem::cpu_arm_watch). `flags` is the
   /// machine's watch_flag word and `bit` this processor's, or null on a
   /// row without LDx_ARM: a compiled CALL_PAL clears the bit, as the
@@ -854,6 +862,8 @@ private:
   uint64_t m_amask = 0; ///< set by set_cpu_identity() before any compile
   uint64_t m_implver = 0;
   uint32_t m_ext = 0;
+  void *m_simd_helper = nullptr;       ///< set_ev8_helpers()
+  void *m_paired_helper = nullptr;     ///< set_ev8_helpers()
   const void *m_watch_flags = nullptr; ///< set_watch()
   uint32_t m_watch_bit = 0;
   const bool *m_watch_machine = nullptr;

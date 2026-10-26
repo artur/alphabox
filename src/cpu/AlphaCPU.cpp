@@ -803,6 +803,8 @@ void CAlphaCPU::init() {
     m_jit->set_cpu_identity(m_model->amask, m_model->implver,
                             m_model->ext |
                                 (m_ev8n ? CJitEngine::kExtNative8 : 0));
+    m_jit->set_ev8_helpers((void *)&CAlphaCPU::jit_simd,
+                           (void *)&CAlphaCPU::jit_paired);
     m_jit->set_watch((m_model->ext & CPU_EXT_EV8) ? cSystem->watch_flags()
                                                   : nullptr,
                      1u << state.iProcNum, cSystem->watch_machine_ptr());

@@ -26,7 +26,8 @@
  * literal; no instruction of the set traps or reads the FPCR. The rows with
  * CPU_EXT_EV8 (`ev8`, `ev8n`) decode it in execute() and compiled code calls
  * the same routine (CAlphaCPU::jit_simd); on every other row the words raise
- * OPCDEC as before.
+ * OPCDEC as before. And which opcode 07 codes are paired single (S6), for
+ * the JIT's classify().
  **/
 #if !defined(INCLUDED_EV8SIMD_HPP)
 #define INCLUDED_EV8SIMD_HPP
@@ -45,5 +46,14 @@ bool assigned(u32 function);
 u64 exec(u32 function, u64 a, u64 b);
 
 } // namespace ev8simd
+
+namespace ev8paired {
+
+/// True for an opcode 07 11-bit function <15:5> the sheet assigns (3.4: a
+/// Fnc of its table under a qualifier its class accepts); the paired
+/// single routines are AlphaCPU_paired.cpp's (CAlphaCPU::paired_operate).
+bool assigned(u32 function);
+
+} // namespace ev8paired
 
 #endif // !defined(INCLUDED_EV8SIMD_HPP)

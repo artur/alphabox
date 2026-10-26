@@ -47,6 +47,7 @@
 #endif
 #include "AliM1543C.hpp"
 #include "DebugTarget.hpp"
+#include "Ev8Simd.hpp"
 #include "cpu_debug.hpp"
 #include "cpu_memory.hpp"
 #include "cpu_misc.hpp"
@@ -1681,6 +1682,34 @@ int CAlphaCPU::jit_fltv(CAlphaCPU *cpu, u32 ins) {
   return cpu->state.exc_sum
              ? 2
              : 0; // exc_sum != 0 => vax_trap GO_PAL'd -> caller honors state.pc
+}
+
+// The 21464's opcode 1C short-vector SIMD set from compiled code (static):
+// the interpreter's own routine (Ev8Simd.cpp), on Rav and Rbv as compiled
+// code holds them; classify() routes only the codes the sheet assigns, on a
+// row with CPU_EXT_EV8. Nothing traps.
+u64 CAlphaCPU::jit_simd(u32 ins, u64 a, u64 b) {
+  return ev8simd::exec((ins >> 5) & 0x7f, a, b);
+}
+
+// The 21464's opcode 07 paired single from compiled code (static), through
+// the interpreter's own paired_operate. classify() routes only the codes the
+// sheet assigns. Compiled code has stored this instruction's PC in
+// current_pc (EXC_ADDR, as for jit_fltv). Returns 1 with the FPU disabled
+// (FEN: not run, the interpreter takes it), 2 when a half trapped (the
+// instruction ran, and GO_PAL set state.pc to the ARITH entry: the caller
+// honours it), 0 otherwise. A trap is told by state.pc: set here to the next
+// instruction, it changes only through GO_PAL; and EXC_SUM, nonzero after a
+// trap on the EV7-compatible row (whose PALmode blocks compile; the native
+// EV8's are never compiled, jit_run).
+int CAlphaCPU::jit_paired(CAlphaCPU *cpu, u32 ins) {
+  if (cpu->state.fpen == 0)
+    return 1;
+  const u64 next = cpu->state.current_pc + 4;
+  cpu->state.pc = next;
+  if (!cpu->paired_operate(ins))
+    return 1; // no code of the sheet's (classify() compiles none): OPCDEC
+  return (cpu->state.pc != next || cpu->state.exc_sum) ? 2 : 0;
 }
 
 // JIT load-locked helper (static). LDx_L: the verify-checked load PLUS cpu_lock
