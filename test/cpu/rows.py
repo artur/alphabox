@@ -48,7 +48,8 @@ import alpha_asm
 
 # AMASK bits [ARM 4th ed. p. 808]: the names are CpuModel.hpp's.
 AMASK_BITS = {"BWX": 0x0001, "FIX": 0x0002, "CIX": 0x0004, "MVI": 0x0100,
-              "TRAP": 0x0200, "SMT": 0x0400, "PREFETCH": 0x1000}
+              "TRAP": 0x0200, "SMT": 0x0400, "EV8SIMD": 0x0800,
+              "PREFETCH": 0x1000}
 
 UNUSED_MISC_NOP = "unused 18.xxxx codes are no-ops"
 PAL21264 = "the 21264's PALcode interface"
@@ -202,11 +203,12 @@ ROWS = {r.name: r for r in (
     # The 21464 in EV7-compatible mode (docs/platforms/ev8.md, D1): the
     # EV7's core and PALcode interface, the EV8's identity and extensions.
     # Of the IDS's AMASK 0x1F07 only what the row implements: bit 10 with
-    # LDx_ARM and QUIESCE (S3), bit 11 with S5 and S6, bit 3 (Tarantula)
-    # with S7 and S8. Its own instructions are those it executes so far
+    # LDx_ARM and QUIESCE (S3), bit 11 with the 1C SIMD set and paired
+    # single (S5 and S6), so 0x1F07; bit 3 (Tarantula) with S7 and S8. Its own instructions are those it executes so far
     # (S2, S3, S5: _EV8_OWN); Tarantula's (S7) are found by the need
     # TARANTULA instead.
-    Row("ev8", "21464 (EV8)", "EV7", 4, _EV68 | AMASK_BITS["SMT"],
+    Row("ev8", "21464 (EV8)", "EV7", 4,
+        _EV68 | AMASK_BITS["SMT"] | AMASK_BITS["EV8SIMD"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: of the IDS's "
         "0x1F07 (p. 76), the bits whose instructions the row has",
         ext={"EV8", "TARANTULA"}, own=_EV8_OWN),
@@ -216,7 +218,7 @@ ROWS = {r.name: r for r in (
     # build_pal8), and the cases of the 21264's PALcode interface are
     # skipped (PAL21264); group ev8n has the 21464's.
     Row("ev8n", "21464 (EV8), native interface", "EV8", 4,
-        _EV68 | AMASK_BITS["SMT"],
+        _EV68 | AMASK_BITS["SMT"] | AMASK_BITS["EV8SIMD"],
         "IMPLVER 4: 21464 IDS Rev 1.1k, PDF p. 76; AMASK: the ev8 row's "
         "(ev8-native.md, N16)",
         ext={"EV8", "TARANTULA"}, own=_EV8_OWN),

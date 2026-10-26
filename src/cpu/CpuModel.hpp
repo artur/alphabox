@@ -95,7 +95,9 @@ enum : u32 {
   /// once every instruction it names executes. S2: CCB (18.EC00), CMOV2
   /// (11.68) and FCMOV2 (17.068); WH64EN and MAP_ALIGN are the core's
   /// already. S3: LDL_ARM (18.B000), LDQ_ARM (18.B400) and QUIESCE
-  /// (18.B800), with one TPU per chip, and AMASK bit 10.
+  /// (18.B800), with one TPU per chip, and AMASK bit 10. S5 and S6: the
+  /// short-vector SIMD set under opcode 1C (Ev8Simd.cpp) and paired single
+  /// under 07 (AlphaCPU_paired.cpp), and AMASK bit 11.
   CPU_EXT_EV8 = 0x0001,
   /// Tarantula, the vector extension proposed for the EV8 [Espasa et al.,
   /// ISCA 2002; the encodings and rules are docs/platforms/ev8-isa.md,
@@ -130,9 +132,9 @@ struct cpu_model {
 };
 
 /// Architecture extension bits, as AMASK reports them [ARM D-4]. The EV8's
-/// bits 3 (Tarantula) and 11 (its SIMD and paired-single sets) get their
-/// names with the stage that implements them (docs/platforms/ev8-isa.md,
-/// section 2); bit 10 has its with S3.
+/// bit 3 (Tarantula) gets its name with the stage that implements it
+/// (docs/platforms/ev8-isa.md, section 2); bit 10 has its with S3, bit 11
+/// with S5 and S6.
 #define AMASK_BWX U64(0x0001)      ///< byte and word access
 #define AMASK_FIX U64(0x0002)      ///< square root and FP conversions
 #define AMASK_CIX U64(0x0004)      ///< count extension
@@ -141,6 +143,11 @@ struct cpu_model {
 #define AMASK_PREFETCH U64(0x1000) ///< prefetch with modify intent
 /// SMT: LDL_ARM, LDQ_ARM and QUIESCE [21464 IDS Rev 1.1k, PDF p. 668]
 #define AMASK_SMT U64(0x0400)
+/// The 21464's opcode 1C short-vector SIMD set and opcode 07 paired single:
+/// set in the IDS's 0x1F07, meaning not stated [IDS p. 76], "not available"
+/// in the ARM [p. 808]; both sets, by the owner's decision of 2026-10-24
+/// (ev8-isa.md, section 2)
+#define AMASK_EV8SIMD U64(0x0800)
 
 /// The part named `name`, or nullptr.
 const cpu_model *find_cpu_model(const char *name);

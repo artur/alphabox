@@ -80,8 +80,10 @@ static const cpu_model models[] = {
     // the row reports only what it implements, so that software testing
     // AMASK never uses a missing feature: the EV68 core's 0x1307 and bit 10
     // (SMT), whose LDx_ARM and QUIESCE it has since S3 [IDS pp. 668, 674],
-    // 0x1707; bit 11 with the SIMD and paired-single sets (S5 and S6), bit 3
-    // with Tarantula (S7, S8) [decision; docs/cpu-fidelity.md]. Chip ID 4,
+    // and bit 11, its 1C SIMD and opcode 07 paired-single sets, since S5 and
+    // S6 [the bit's meaning the owner's decision, ev8-isa.md section 2]:
+    // 0x1F07; bit 3 with Tarantula (S7, S8) [decision;
+    // docs/cpu-fidelity.md]. Chip ID 4,
     // the EV7z's, which the console names "EV7 rev 3.0", type 15 minor 5
     // [decision D2: the IDS gives CPU_CNFG<CHIP_ID> no value, p. 487, and
     // the console turns I_CTL<29:24> into a name through its EV7 table]. L1
@@ -95,7 +97,7 @@ static const cpu_model models[] = {
     // VCTL a CSR of each processor's register window; AMASK bit 3 with S8.
     {"ev8", "21464 (EV8)", 4, 15, 5, 4,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
-         AMASK_PREFETCH,
+         AMASK_EV8SIMD | AMASK_PREFETCH,
      CPU_FAMILY_EV7, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
     // 21464 (EV8) on its own privileged interface, the IDS's
     // (docs/platforms/ev8-native.md, S11, decision N16): a family of its
@@ -113,7 +115,7 @@ static const cpu_model models[] = {
     // row, its VCTL the IPR 0xAC (N8).
     {"ev8n", "21464 (EV8), native interface", 0, 18, 0, 4,
      AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
-         AMASK_PREFETCH,
+         AMASK_EV8SIMD | AMASK_PREFETCH,
      CPU_FAMILY_EV8, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
 };
 

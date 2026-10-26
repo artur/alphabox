@@ -85,13 +85,13 @@ int main() {
     CHECK_EQ(m->max_tpus, 4);
   }
   // The EV8 reports only what it implements of the IDS's 0x1F07: never
-  // more, and the bits of every stage not yet done are clear (S5-S6: bit
-  // 11, Tarantula: bit 3). Bit 10 (SMT) is set since S3, with LDx_ARM and
-  // QUIESCE: 0x1707.
+  // more, and the bits of every stage not yet done are clear (Tarantula:
+  // bit 3). Bit 10 (SMT) is set since S3, with LDx_ARM and QUIESCE, and
+  // bit 11 since S5 and S6, with the 1C SIMD set and paired single: 0x1F07.
   if (const cpu_model *m = find_cpu_model("ev8")) {
     CHECK_EQ(m->amask & ~U64(0x1F07), 0);
-    CHECK_EQ(m->amask & U64(0x0808), 0);
-    CHECK_EQ(m->amask, 0x1707);
+    CHECK_EQ(m->amask & U64(0x0008), 0);
+    CHECK_EQ(m->amask, 0x1F07);
   }
   CHECK_EQ(find_cpu_model("ev5") == nullptr, 1);
   printf("cpumodels: %d checks, %d failures\n", checks, failures);
