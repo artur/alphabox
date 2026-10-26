@@ -18,6 +18,14 @@
 # arch/alpha/kernel/smp.c) and `show cpu` lists that many. The emulator must
 # then exit with status 0 on SIGTERM.
 #
+# A console that stops answering (`no prompt`) is looked at before the
+# emulator is stopped: SIGUSR2 has every processor print its state at its
+# next dispatch batch (PC, registers, the code at the PC and the stack:
+# `%DBG-I-DUMP` lines in alphabox.out, docs/headless.md's dbg-dump; JIT
+# builds), and SIGUSR1 then saves the whole machine to stall.axp in the
+# run's directory and exits (ALPHABOX_SNAPSHOT_EXIT), a state that
+# ALPHABOX_RESTORE resumes at the stall.
+#
 # Output: one line per board and run, `PASS|FAIL <board>-init <seconds>
 # <reason>`, also in $ALPHABOX_WORK/runs/boards-<label>/init-summary.txt
 # (ALPHABOX_WORK defaults to <repo>/lab), with each run's console session as
@@ -35,6 +43,7 @@
 #   BOARDS_EV7_CPU         the processor class (default ev7; ev7z, or ev8,
 #                          the 21464 in EV7-compatible mode)
 #   BOARDS_SPEED           every processor's `speed` (default 1000M)
+#   MARVEL_INIT_SNAPSHOT   0: no stall.axp on a stall, the dump only (default 1)
 #   BOARDS_EV8_TPUS        with ev8: each chip's TPUs, 1 to 4, written as its
 #                          `tpus` (unset: no key, the row's one processor
 #                          per chip). Each TPU is a processor
@@ -197,10 +206,28 @@ for spec in $BOARDS; do
       echo '  pci2.3 = uss344 { port1 = "tablet"; port2 = "keyboard"; }'
       echo '}'
     } > "$D/es40.cfg"
-    ( cd "$D" && exec "$BIN" run es40.cfg ) \
+    # The snapshot variables act only on a SIGUSR1, sent on a stall.
+    ( cd "$D" && ALPHABOX_SNAPSHOT="$D/stall.axp" ALPHABOX_SNAPSHOT_EXIT=1 \
+      exec "$BIN" run es40.cfg ) \
       > >(head -c 30000000 > "$D/alphabox.out") 2>&1 &
     PID=$!
     st=$(drive "$PORT" "$D/console.log" $((n * TPUS)) "$INITS" 2>&1 | tail -1)
+    case $st in
+    "bad no prompt"*)
+      if kill -0 "$PID" 2>/dev/null; then
+        kill -USR2 "$PID" 2>/dev/null
+        k=0
+        while [ "$(grep -ac '%DBG-I-DUMP' "$D/alphabox.out")" -lt $((n * TPUS)) ] && [ $k -lt 50 ]; do
+          sleep 0.2; k=$((k + 1))
+        done
+        if [ "${MARVEL_INIT_SNAPSHOT:-1}" = 1 ]; then
+          kill -USR1 "$PID" 2>/dev/null
+          k=0
+          while kill -0 "$PID" 2>/dev/null && [ $k -lt 600 ]; do sleep 0.2; k=$((k + 1)); done
+        fi
+        st="$st; $(grep -ac '%DBG-I-DUMP' "$D/alphabox.out") processors dumped$([ -s "$D/stall.axp" ] && echo ", stall.axp saved")"
+      fi ;;
+    esac
     if kill -0 "$PID" 2>/dev/null; then
       kill "$PID" 2>/dev/null
       k=0
