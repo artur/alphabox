@@ -6,6 +6,8 @@
 # tab of its window.
 #
 # usage: alphaz_guest.sh <alphabox-binary> <label> <guest>...
+#        alphaz_guest.sh <alphabox-binary> <label> --recheck <guest>...
+#          (a finished run's Linux console logs read and checked again)
 #   w2k-ev68cb  Windows 2000 on the ES40 (lab/win2k-installed,
 #               es40-window-smp.cfg): its two ev68cb processors
 #   w2k-ev8     the same with two `ev8` processors, w2k-ev7 and w2k-ev7z
@@ -293,23 +295,31 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   wait $gpid
   rc=$?
   tail -1 "$D/guests_check.out" | sed 's/^/   guests_check: /'
+  echo "boot $load0" > "$D/host-load.txt"
   cp "$D/gc/$gc/es40.cfg" "$D/es40.cfg" 2>/dev/null
   rm -f "$D/gc/$gc/disk.img" "$D/gc/$gc"/*.rom "$D/gc/$gc"/*.exe
-  tr -d '\r' < "$D/gc/$gc.log" | sed -n '/^ALPHAZ-REPORT-BEGIN/,/^ALPHAZ-REPORT-END/p' |
-    sed '1d;$d' > "$D/report.txt"
-  grep -a -m1 -E '^[0-9a-f]{64}  /tmp/alphaz' "$D/gc/$gc.log" | tr -d '\r' > "$D/sha256-guest.txt"
+  linux_check "$g" "$gc" "$rc"
+}
+
+# linux_check <guest> <guests_check guest> <its rc>: the report out of the
+# console log, checked; also run alone by --recheck on a finished run
+linux_check() {
+  local g=$1 gc=$2 rc=$3 D=$OUT/$1 ok_sha=no exp model=EV7 crc load0
+  load0=$(sed -n 's/^boot //p' "$D/host-load.txt" 2>/dev/null)
+  # the shell's terminal escapes (bracketed paste) out, then the report
+  tr -d '\r' < "$D/gc/$gc.log" | sed -e $'s/\033\\[[?0-9;]*[a-zA-Z]//g' > "$D/console.txt"
+  sed -n '/^ALPHAZ-REPORT-BEGIN/,/^ALPHAZ-REPORT-END/p' "$D/console.txt" | sed '1d;$d' > "$D/report.txt"
+  grep -a -m1 -E '^[0-9a-f]{64}  /tmp/alphaz' "$D/console.txt" > "$D/sha256-guest.txt"
   if ! grep -q "^== CPU" "$D/report.txt"; then
     report "$g" FAIL "no report in the console log (guests_check rc $rc)"
     return 1
   fi
-  local ok_sha=no
   [ "$(cut -d' ' -f1 "$D/sha256-guest.txt")" = "$(shasum -a 256 "$B/alphaz-linux" | cut -d' ' -f1)" ] && ok_sha=yes
-  local exp model=EV7
   exp=$(expect "$D/es40.cfg" linux)
   case "$exp" in *implver=2*) model=EV68CB ;; esac
   $FB check "$D/report.txt" $exp model=$model ${ev8_cases:+ev8=$ev8_cases} > "$D/check.txt"
-  local crc=$?
-  echo "info host load averages   at the boot $load0, at the end $(host_load)" >> "$D/check.txt"
+  crc=$?
+  echo "info host load averages   at the boot ${load0:-not recorded}, at the check $(host_load)" >> "$D/check.txt"
   sed 's/^/   /' "$D/check.txt"
   if [ $crc = 0 ] && [ $ok_sha = yes ]; then
     report "$g" PASS "every value as configured, binary sha256 matches (guests_check rc $rc)"
@@ -323,9 +333,23 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
 # guests run cannot change what they do.
 main() {
   local g rc_all=0 ev8_n
-  build || return 2
   # the EV8 page's cases, from az_ev8.c
   ev8_n=$(grep -cE '^ +add_case\(' "$R/guest/alphaz/az_ev8.c")
+  if [ "${1:-}" = --recheck ]; then
+    # a finished run's Linux logs read and checked again, nothing booted
+    shift
+    for g in "$@"; do
+      ev8_cases=
+      case $g in es47-ev8*) ev8_cases=$ev8_n ;; esac
+      case $g in
+      linux) linux_check "$g" linux "-" ;;
+      es47-*) linux_check "$g" linux-es47 "-" ;;
+      *) report "$g" FAIL "--recheck reads Linux guests only"; false ;;
+      esac || rc_all=1
+    done
+    return $rc_all
+  fi
+  build || return 2
   for g in "$@"; do
     ev8_cases=
     case $g in
