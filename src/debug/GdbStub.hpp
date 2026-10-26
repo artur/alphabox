@@ -29,13 +29,18 @@
 #include <vector>
 
 class CSystem;
+namespace hostsock {
+class TcpListener;
+}
 
 /**
  * \brief A gdb remote serial protocol server for the guest
  * (docs/debugging.md).
  *
- * Listens on 127.0.0.1:<port> and serves one gdb at a time, the way QEMU's
- * `-gdb tcp::<port>` does: all-stop, one thread per processor, software
+ * Listens on the loopback interface, 127.0.0.1:<port> and [::1]:<port>
+ * (either where the host has only one), and serves one gdb at a time, the
+ * way QEMU's `-gdb tcp::<port>` does: all-stop, one thread per processor,
+ * software
  * breakpoints by address (Z0, and Z1 taken as the same), single step,
  * registers in gdb's Alpha numbering, memory through the selected
  * processor's mapping, and `monitor` commands for the Alpha state gdb has
@@ -54,7 +59,8 @@ public:
 
 private:
   void thread_main();
-  void session();
+  /// One gdb's connection, from `peer`.
+  void session(const std::string &peer);
   bool get_packet(std::string *out);
   void put_packet(const std::string &data);
   void send_raw(const std::string &s);
@@ -69,7 +75,8 @@ private:
   int cpu_of(const std::string &tid, bool *all);
 
   std::unique_ptr<CDebugTarget> m_target;
-  int m_listen = -1;
+  /// 127.0.0.1:<port> and [::1]:<port>.
+  std::unique_ptr<hostsock::TcpListener> m_listen;
   int m_fd = -1;
   std::thread m_thread;
   std::atomic<bool> m_quit{false};

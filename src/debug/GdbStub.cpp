@@ -27,6 +27,7 @@
 
 #include "GdbStub.hpp"
 #include "AlphaCPU.hpp"
+#include "HostSocket.hpp"
 #include "StdAfx.hpp"
 #include "System.hpp"
 #include <csignal>
@@ -161,25 +162,26 @@ CGdbStub::~CGdbStub() {}
 #else
 
 CGdbStub::CGdbStub(CSystem *sys, int port, bool wait)
-    : m_target(std::make_unique<CDebugTarget>(sys)) {
-  m_listen = socket(AF_INET, SOCK_STREAM, 0);
-  int one = 1;
-  setsockopt(m_listen, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-  sockaddr_in a = {};
-  a.sin_family = AF_INET;
-  a.sin_port = htons((u16)port);
-  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (m_listen < 0 || bind(m_listen, (sockaddr *)&a, sizeof a) != 0 ||
-      listen(m_listen, 1) != 0) {
-    const int err = errno;
-    if (m_listen >= 0)
-      close(m_listen);
-    FAILURE_2(Runtime, "gdb: can't listen on 127.0.0.1:%d: %s", port,
-              strerror(err));
+    : m_target(std::make_unique<CDebugTarget>(sys)),
+      m_listen(std::make_unique<hostsock::TcpListener>()) {
+  // The loopback interface only, in both families: gdb's `target remote
+  // localhost:<port>` connects to whichever address its resolver gives
+  // first, ::1 on macOS. A host without the one has the other.
+  std::vector<hostsock::Endpoint> loopback;
+  std::string why;
+  for (const char *lo : {"127.0.0.1", "::1"}) {
+    std::vector<hostsock::Endpoint> found;
+    if (hostsock::resolve(lo, std::to_string(port), SOCK_STREAM, true, &found,
+                          &why))
+      loopback.insert(loopback.end(), found.begin(), found.end());
   }
+  if (!m_listen->open(loopback, 1, &why))
+    FAILURE_1(Runtime, "gdb: %s", why.c_str());
+  for (const std::string &note : m_listen->notes())
+    printf("%%GDB-I-SKIP: %s\n", note.c_str());
   if (wait)
     m_target->attach(true); // stopped before the first instruction
-  printf("%%GDB-I-LISTEN: gdb stub on 127.0.0.1:%d%s\n", port,
+  printf("%%GDB-I-LISTEN: gdb stub on %s%s\n", m_listen->where().c_str(),
          wait ? "; the processors wait for it" : "");
   fflush(stdout);
   m_thread = std::thread([this] { thread_main(); });
@@ -189,28 +191,26 @@ CGdbStub::~CGdbStub() {
   m_quit = true;
   if (m_thread.joinable())
     m_thread.join();
-  if (m_listen >= 0)
-    close(m_listen);
 }
 
 void CGdbStub::thread_main() {
   while (!m_quit) {
-    pollfd p = {m_listen, POLLIN, 0};
-    if (poll(&p, 1, 200) <= 0)
+    std::string peer;
+    const int64_t fd = m_listen->accept(200, &peer);
+    if (fd < 0)
       continue;
-    m_fd = accept(m_listen, nullptr, nullptr);
-    if (m_fd < 0)
-      continue;
+    m_fd = (int)fd;
     int one = 1;
     setsockopt(m_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    session();
+    session(peer);
     close(m_fd);
     m_fd = -1;
   }
 }
 
-void CGdbStub::session() {
-  printf("%%GDB-I-ATTACH: gdb attached; the machine stops\n");
+void CGdbStub::session(const std::string &peer) {
+  printf("%%GDB-I-ATTACH: gdb attached from %s; the machine stops\n",
+         peer.c_str());
   fflush(stdout);
   m_noack = false;
   m_in.clear();
