@@ -33,71 +33,149 @@ void CNetworkUdp::close() {}
 
 #else
 
-#include <arpa/inet.h>
+#include "HostSocket.hpp"
+
 #include <fcntl.h>
-#include <netdb.h>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 
-/// Resolve "host:port" (IPv4) into `out`.
-static bool parse_endpoint(const char *text, sockaddr_in *out) {
-  const char *colon = text ? strrchr(text, ':') : nullptr;
-  if (!colon)
-    return false;
-  std::string host(text, colon - text);
-  memset(out, 0, sizeof(*out));
-  out->sin_family = AF_INET;
-  out->sin_port = htons((u16)atoi(colon + 1));
-  if (host.empty() || host == "*") {
-    out->sin_addr.s_addr = htonl(INADDR_ANY);
-    return true;
+namespace {
+
+/// "*" or nothing before the port: the wildcard address.
+bool wildcard(const std::string &host) { return host.empty() || host == "*"; }
+
+/// The wildcard address, with `port`, of each family in `like`.
+std::vector<hostsock::Endpoint>
+wildcards(const std::vector<hostsock::Endpoint> &like,
+          const std::string &port) {
+  std::vector<hostsock::Endpoint> out;
+  for (const hostsock::Endpoint &e : like) {
+    bool seen = false;
+    for (const hostsock::Endpoint &o : out)
+      seen = seen || o.family() == e.family();
+    if (!seen)
+      out.push_back(hostsock::any_address(e.family(), (u16)atoi(port.c_str())));
   }
-  addrinfo hints = {};
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_DGRAM;
-  addrinfo *res = nullptr;
-  if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res)
-    return false;
-  out->sin_addr = ((sockaddr_in *)res->ai_addr)->sin_addr;
-  freeaddrinfo(res);
-  return true;
+  return out;
 }
+
+/// The first address of `family` in `v`, or null.
+const hostsock::Endpoint *first_of(const std::vector<hostsock::Endpoint> &v,
+                                   int family) {
+  for (const hostsock::Endpoint &e : v)
+    if (e.family() == family)
+      return &e;
+  return nullptr;
+}
+
+} // namespace
 
 bool CNetworkUdp::init(const char *devid_string, CConfigurator *cfg) {
   const char *local = cfg->get_text_value("udp_local");
   const char *remote = cfg->get_text_value("udp_remote");
-  sockaddr_in local_addr;
-  sockaddr_in remote_addr;
-
-  if (!parse_endpoint(local, &local_addr) ||
-      !parse_endpoint(remote, &remote_addr)) {
+  if (!local || !remote) {
     printf("%s: type = udp needs udp_local and udp_remote as host:port.\n",
            devid_string);
     return false;
   }
 
-  sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sock < 0) {
-    perror("udp socket");
+  // host:port, with an IPv6 address in brackets ([::1]:5555); a name is
+  // resolved for either family.
+  std::string lhost, lport, rhost, rport, why;
+  if (!hostsock::split_host_port(local, &lhost, &lport, &why)) {
+    printf("%s: udp_local = \"%s\": %s.\n", devid_string, local, why.c_str());
     return false;
   }
-  if (bind(sock, (sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
-    printf("%s: cannot bind UDP %s: %s\n", devid_string, local,
+  if (!hostsock::split_host_port(remote, &rhost, &rport, &why)) {
+    printf("%s: udp_remote = \"%s\": %s.\n", devid_string, remote, why.c_str());
+    return false;
+  }
+  std::vector<hostsock::Endpoint> ls, rs;
+  if (!wildcard(rhost) &&
+      !hostsock::resolve(rhost, rport, SOCK_DGRAM, false, &rs, &why)) {
+    printf("%s: udp_remote = \"%s\": %s.\n", devid_string, remote, why.c_str());
+    return false;
+  }
+  if (!wildcard(lhost) &&
+      !hostsock::resolve(lhost, lport, SOCK_DGRAM, true, &ls, &why)) {
+    printf("%s: udp_local = \"%s\": %s.\n", devid_string, local, why.c_str());
+    return false;
+  }
+  // A wildcard end ("*:5555", ":5555") takes the other end's family, IPv4
+  // when both are wildcards.
+  const std::vector<hostsock::Endpoint> v4 = {
+      hostsock::any_address(AF_INET, 0)};
+  if (wildcard(lhost))
+    ls = wildcards(wildcard(rhost) ? v4 : rs, lport);
+  if (wildcard(rhost))
+    rs = wildcards(ls, rport);
+
+  // One socket, so both ends in one family: IPv4 where both have it (a name
+  // with addresses in both families keeps the IPv4 link it always had;
+  // write [::1] for IPv6), else IPv6. A local "::" reaches an IPv4-only
+  // remote as ::ffff:a.b.c.d, dual stack.
+  const hostsock::Endpoint *l = nullptr;
+  hostsock::Endpoint r;
+  bool mapped = false;
+  for (int family : {AF_INET, AF_INET6}) {
+    if (!l && first_of(ls, family) && first_of(rs, family)) {
+      l = first_of(ls, family);
+      r = *first_of(rs, family);
+    }
+  }
+  const hostsock::Endpoint *l6 = first_of(ls, AF_INET6);
+  if (!l && l6 && hostsock::is_any(*l6) && first_of(rs, AF_INET)) {
+    l = l6;
+    r = hostsock::v4_mapped(*first_of(rs, AF_INET));
+    mapped = true;
+  }
+  if (!l) {
+    printf("%s: udp_local = \"%s\" and udp_remote = \"%s\" have no address "
+           "family in common.\n",
+           devid_string, local, remote);
+    return false;
+  }
+
+  sock = socket(l->family(), SOCK_DGRAM, 0);
+  if (sock < 0) {
+    printf("%s: cannot open a UDP socket for %s: %s\n", devid_string,
+           l->text().c_str(), strerror(errno));
+    return false;
+  }
+  if (mapped) {
+    const int v6only = 0;
+    if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof v6only)) {
+      printf("%s: %s cannot reach the IPv4 %s: the host keeps IPv4 off IPv6 "
+             "sockets (%s)\n",
+             devid_string, l->text().c_str(), r.text().c_str(),
+             strerror(errno));
+      close();
+      return false;
+    }
+  }
+  if (bind(sock, l->sa(), l->len) < 0) {
+    printf("%s: cannot bind UDP %s: %s\n", devid_string, l->text().c_str(),
            strerror(errno));
     close();
     return false;
   }
   // A connected datagram socket sends to the peer and only hears from it.
-  if (connect(sock, (sockaddr *)&remote_addr, sizeof(remote_addr)) < 0) {
-    printf("%s: cannot address UDP %s: %s\n", devid_string, remote,
+  if (connect(sock, r.sa(), r.len) < 0) {
+    printf("%s: cannot address UDP %s: %s\n", devid_string, r.text().c_str(),
            strerror(errno));
     close();
     return false;
   }
   fcntl(sock, F_SETFL, fcntl(sock, F_GETFL) | O_NONBLOCK);
-  printf("%s: frames over UDP, %s <-> %s\n", devid_string, local, remote);
+  // The addresses in use, the port bound for a local port 0.
+  hostsock::Endpoint here;
+  here.len = sizeof here.addr;
+  if (getsockname(sock, (sockaddr *)&here.addr, &here.len) != 0)
+    here = *l;
+  printf("%s: frames over UDP, %s <-> %s\n", devid_string, here.text().c_str(),
+         r.text().c_str());
   return true;
 }
 

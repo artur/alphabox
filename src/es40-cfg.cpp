@@ -1072,7 +1072,8 @@ static int configure_session(const string &out) {
           q.setQuestion(e[1]);
           q.setExplanation("The other end is another program: a second "
                            "Alphabox, QEMU's -netdev dgram, or "
-                           "test/tools/net_peer.py.");
+                           "test/tools/net_peer.py. An IPv6 address goes "
+                           "in brackets: [::1]:5555.");
           q.setDefault(e[2]);
           os << "    " << (e[0] + 4) << " = " << quote(q.ask()) << ";\n";
         }

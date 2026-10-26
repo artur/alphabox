@@ -28,9 +28,11 @@
  * datagram: a point-to-point cable to another program.
  *
  * Configure with type = "udp", udp_local = "host:port" (where to listen)
- * and udp_remote = "host:port" (where frames go). The framing is the same
- * as QEMU's "-netdev dgram", so the peer can be a second Alphabox, a QEMU
- * guest, or a test script (test/tools/net_peer.py answers BOOTP and TFTP).
+ * and udp_remote = "host:port" (where frames go), each host an IPv4
+ * address, an IPv6 one in brackets ("[::1]:5555") or a name. The framing is
+ * the same as QEMU's "-netdev dgram", so the peer can be a second Alphabox,
+ * a QEMU guest, or a test script (test/tools/net_peer.py answers BOOTP and
+ * TFTP).
  * Needs no host privileges.
  */
 class CNetworkUdp : public CNetworkBackend {
