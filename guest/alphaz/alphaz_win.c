@@ -178,10 +178,18 @@ static void clock_rows(void)
     az_add(AZ_CPU, "  the median's", "measured: RPCC against QueryPerformanceCounter",
            "%llu cycles in %llu counter ticks; low 32 bits wrapped %llu times; %llu reads", c.cycles, c.ticks,
            c.wraps, c.samples);
-    az_measure_clock(&c, tick_now, 1000, 400);
+    /* A HAL whose performance counter is the cycle counter itself gives
+     * as many ticks as cycles: then the clock above is only the frequency
+     * Windows was told (by the console, which timed the processor at
+     * boot), and the second opinion is the one independent of it. */
+    if (c.ticks && (c.cycles > c.ticks ? c.cycles - c.ticks : c.ticks - c.cycles) * 1000 < c.ticks)
+        az_add(AZ_CPU, "  which is", "measured: ticks = cycles",
+               "the cycle counter itself: the clock above is QueryPerformanceFrequency's");
+    /* GetTickCount moves in clock interrupts, 10 ms or so: longer windows */
+    az_measure_clock(&c, tick_now, 1000, 1000);
     az_fmt_hz(hz, sizeof hz, c.hz);
     az_fmt_windows(each, sizeof each, &c);
-    az_add(AZ_CPU, "Clock, second opinion", "measured: RPCC against GetTickCount", "%s (windows: %s)", hz, each);
+    az_add(AZ_CPU, "Clock, second opinion", "measured: RPCC against GetTickCount, 3 of 1 s", "%s (windows: %s)", hz, each);
 #else
     az_add(AZ_CPU, "Clock", "", "not measured: no cycle counter in this build");
 #endif

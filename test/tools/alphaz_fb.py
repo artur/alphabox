@@ -210,6 +210,11 @@ def cmd_check(path, items):
     want = int(exp["speed"]) / 1e6
     ok = bool(m) and abs(float(m.group(1)) - want) <= want * 0.02
     line(ok, "Clock (RPCC)", clk, "speed = %gM (within 2%%)" % want)
+    # what the clock was measured against, for reading a DIFF: not checked
+    for lab in ("Performance counter", "Clock, second opinion", "Clock, the console's", "  windows"):
+        v = value(rep, lab)
+        if v is not None:
+            out.append("info %-24s guest: %s" % (lab.strip(), v))
     if exp["os"] == "windows":
         v = value(rep, "Processors")
         n = int(v.split()[0]) if v else -1

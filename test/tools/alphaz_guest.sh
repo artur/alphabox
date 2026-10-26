@@ -73,6 +73,10 @@ stop_emu() {
 trap stop_emu EXIT
 trap 'exit 130' INT TERM
 
+# the host's load averages, for reading a clock that disagrees: a guest's
+# own timers fall behind the host's time when the host is starved
+host_load() { uptime | sed 's/.*load averages*: //'; }
+
 report() { # report <guest> <PASS|FAIL> <what>
   echo "$2 $1 $3" | tee -a "$OUT/summary.txt"
 }
@@ -146,7 +150,7 @@ focus_click() {
 win_guest() {
   local g=$1 cpu=$2 inst=${3:-win2k-installed} cfg=${4:-es40-window-smp.cfg} off=${5:-16384}
   local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
-  local IMG any= f ref i n name names done_at start rows
+  local IMG any= f ref i n name names done_at start rows load0
   rm -rf "$D" "$run"; mkdir -p "$D"
   cp "$B/NADA-COMMIT.txt" "$D/" # the build this guest ran
   cp -c -R "$WORK/$inst" "$run" || { report "$g" FAIL "no $WORK/$inst"; return 1; }
@@ -187,6 +191,7 @@ win_guest() {
     exec env ${any:+ALPHABOX_CPU_ANY_BOARD=1} SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb \
       ALPHABOX_KEYPIPE=keys.txt "$BIN" run "$cfg" ) > "$run/run.log" 2>&1 &
   PID=$!
+  load0=$(host_load)
   start=$(date +%s)
   ref=$($FB window "$run/fb" "$BOOT_TMO" "$PID")
   if [ "$ref" = none ]; then
@@ -211,7 +216,7 @@ win_guest() {
       if [ "$f" != same ]; then python3 -I "$T/ppm2png.py" "$f" "$D/tab-$i-$name-2.png"; ref=$f; fi
     fi
     i=$((i + 1))
-    [ "$i" -lt "$(echo $names | wc -w)" ] || break
+    [ "$i" -lt "$(echo $names | wc -w | tr -d " ")" ] || break
     echo ctrl-tab >> "$run/keys.txt"
     f=$($FB change "$run/fb" "$ref" 20 "$PID")
     if [ "$f" = same ] && [ "$i" = 1 ]; then
@@ -255,11 +260,12 @@ win_guest() {
   fi
   $FB check "$D/report.txt" $(expect "$D/$cfg" windows) ${ev8_cases:+ev8=$ev8_cases} > "$D/check.txt"
   local rc=$?
+  echo "info host load averages   at the boot $load0, at the end $(host_load)" >> "$D/check.txt"
   cat "$D/check.txt" | sed 's/^/   /'
-  if [ $rc = 0 ] && [ "$n" -ge "$(echo $names | wc -w)" ]; then
+  if [ $rc = 0 ] && [ "$n" -ge "$(echo $names | wc -w | tr -d " ")" ]; then
     report "$g" PASS "$n tabs shot, every value as configured (finished after ${done_at}s)"
   else
-    report "$g" FAIL "$n of $(echo $names | wc -w) tabs shot, $(grep -c '^DIFF' "$D/check.txt") values differ"
+    report "$g" FAIL "$n of $(echo $names | wc -w | tr -d " ") tabs shot, $(grep -c '^DIFF' "$D/check.txt") values differ"
   fi
 }
 
@@ -281,7 +287,10 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   [ -d "$roms" ] || roms=$(cd "$(git -C "$R" rev-parse --git-common-dir)/.." && pwd)/roms
   ALPHABOX_ROMS=$roms GUESTS_EXTRA_CMDS="$cmds" GUESTS_PORT_BASE=${AZ_PORT_BASE:-24600} GUESTS_OUT="$D/gc" GUESTS_KEEP=1 \
     ${cpu:+GUESTS_EV7_CPU=$cpu} ${tpus:+GUESTS_EV8_TPUS=$tpus} \
-    "$T/guests_check.sh" "$BIN" "alphaz-$LABEL-$g" "$gc" > "$D/guests_check.out" 2>&1
+    "$T/guests_check.sh" "$BIN" "alphaz-$LABEL-$g" "$gc" > "$D/guests_check.out" 2>&1 &
+  local gpid=$! load0
+  load0=$(host_load)
+  wait $gpid
   rc=$?
   tail -1 "$D/guests_check.out" | sed 's/^/   guests_check: /'
   cp "$D/gc/$gc/es40.cfg" "$D/es40.cfg" 2>/dev/null
@@ -300,6 +309,7 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   case "$exp" in *implver=2*) model=EV68CB ;; esac
   $FB check "$D/report.txt" $exp model=$model ${ev8_cases:+ev8=$ev8_cases} > "$D/check.txt"
   local crc=$?
+  echo "info host load averages   at the boot $load0, at the end $(host_load)" >> "$D/check.txt"
   sed 's/^/   /' "$D/check.txt"
   if [ $crc = 0 ] && [ $ok_sha = yes ]; then
     report "$g" PASS "every value as configured, binary sha256 matches (guests_check rc $rc)"
