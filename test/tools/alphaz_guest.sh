@@ -265,7 +265,7 @@ win_guest() {
   if [ $rc = 0 ] && [ "$n" -ge "$(echo $names | wc -w | tr -d " ")" ]; then
     report "$g" PASS "$n tabs shot, every value as configured (finished after ${done_at}s)"
   else
-    report "$g" FAIL "$n of $(echo $names | wc -w | tr -d " ") tabs shot, $(grep -c '^DIFF' "$D/check.txt") values differ"
+    report "$g" FAIL "$n of $(echo $names | wc -w | tr -d " ") tabs shot, $(grep -c '^DIFF' "$D/check.txt") values differ"; return 1
   fi
 }
 
@@ -314,7 +314,7 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   if [ $crc = 0 ] && [ $ok_sha = yes ]; then
     report "$g" PASS "every value as configured, binary sha256 matches (guests_check rc $rc)"
   else
-    report "$g" FAIL "$(grep -c '^DIFF' "$D/check.txt") values differ, sha256 match $ok_sha (guests_check rc $rc)"
+    report "$g" FAIL "$(grep -c '^DIFF' "$D/check.txt") values differ, sha256 match $ok_sha (guests_check rc $rc)"; return 1
   fi
 }
 
