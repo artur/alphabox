@@ -119,10 +119,14 @@ expect() {
   speed=$(grep -o 'speed *= *[0-9]*M' "$cfg" | head -1 | grep -o '[0-9]*')
   bits=$(sed -n 's/^ *memory\.bits *= *\([0-9]*\).*/\1/p' "$cfg" | head -1)
   tpus=$(grep -o 'tpus *= *[0-9]*' "$cfg" | head -1 | grep -o '[0-9]*$')
+  # on the EV7 boards memory.bits is each processor chip's memory
+  # (docs/configuration.md, "Memory"); elsewhere the machine's
+  local mem=$(( (1 << bits) / 1024 ))
+  grep -qE 'platform *= *"(es47|es80|gs1280)"' "$cfg" && mem=$((mem * n))
   [ -n "$tpus" ] && n=$((n * tpus))
   row=$($FB row "$R/src" "$cpu") # implver amask type minor
   set -- $row
-  echo "os=$os implver=$1 amask=$2 cpus=$n speed=$((speed * 1000000)) mem_kb=$(( (1 << bits) / 1024 ))"
+  echo "os=$os implver=$1 amask=$2 cpus=$n speed=$((speed * 1000000)) mem_kb=$mem"
 }
 
 # --- Windows -------------------------------------------------------------------
