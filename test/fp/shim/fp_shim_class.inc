@@ -28,6 +28,8 @@ public:
   /* A Tarantula FP instruction's collected trap (ieee_trap): never here. */
   static constexpr bool m_vec_defer = false;
   u64 m_vec_trap = 0;
+  /* A paired-single estimate's dropped INE (ieee_trap). */
+  bool m_fp_no_ine = false;
   bool opcdec = false; /* the decode refused the instruction */
 
   void set_pc(u64 p_pc) {
@@ -39,6 +41,16 @@ public:
      the DO_ macros, decoded as AlphaCPU.cpp's execute() decodes it. */
   void fp_exec(u32 ins);
 
+  /* The 21464's paired single (AlphaCPU_paired.cpp, opcode 07): the
+     current code only. */
+  bool paired_operate(u32 ins);
+  u32 paired_add(u32 a, u32 b, u32 ins, bool sub);
+  u32 paired_mul(u32 a, u32 b, u32 ins);
+  u32 paired_cmp(u32 a, u32 b, u32 ins, int op);
+  u32 paired_maxmin(u32 a, u32 b, u32 ins, bool max);
+  u32 paired_cvt(u32 b, u32 ins);
+  u32 paired_est(u32 b, u32 ins, bool root);
+
   void write_fpcr_arch(u64 arch_val);
   u64 read_fpcr_arch() const;
 
@@ -49,6 +61,7 @@ public:
   s32 ieee_fcmp(u64 s1, u64 s2, u32 ins, u32 trap_nan);
   u64 ieee_cvtif(u64 val, u32 ins, u32 dp);
   u64 ieee_cvtfi(u64 op, u32 ins);
+  u64 ieee_cvtfi_n(u64 op, u32 ins, bool l32);
   u64 ieee_fadd(u64 s1, u64 s2, u32 ins, u32 dp, bool sub);
   u64 ieee_fmul(u64 s1, u64 s2, u32 ins, u32 dp);
   u64 ieee_fdiv(u64 s1, u64 s2, u32 ins, u32 dp);

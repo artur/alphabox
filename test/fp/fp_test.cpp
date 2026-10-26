@@ -35,6 +35,11 @@
  *  - VAX F, G and D: an exact integer model rounds each true result
  *    (vax_model).
  *  - Hand tables of cases taken from the manuals, each with its citation.
+ *  - The 21464's paired single (opcode 07, AlphaCPU_paired.cpp): each half
+ *    against the IEEE model of its scalar S instruction, the host FPU in
+ *    every rounding mode, the exceptions of both halves ORed (stage S6 of
+ *    docs/platforms/ev8.md); the bit manipulations; the decode of every
+ *    function code, OPCDEC and FEN.
  *
  * The same inputs also run through the routines as they were at the
  * baseline commit (fp_frozen.cpp), and every difference between the two must
@@ -50,6 +55,7 @@
 #include "fp_host.hpp"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1901,6 +1907,405 @@ static int run_misc() {
   return bad;
 }
 
+/* ------------------------------------------------------------------------ */
+/* The 21464's paired single (opcode 07, docs/platforms/ev8-isa.md 3.4)     */
+/* ------------------------------------------------------------------------ */
+
+/* Each half of a paired register is a single in memory format, high in
+   <63:32>; each is computed as the scalar S instruction with the same
+   qualifiers and FPCR (D9), so the model is the scalar one above (the host
+   FPU for the arithmetic, in every rounding mode) applied to each half,
+   the exceptions ORed. The code under test is AlphaCPU_paired.cpp's
+   paired_operate, compiled against the shim like the IEEE routines. */
+
+enum PKind {
+  PK_ADD,
+  PK_SUB,
+  PK_MUL,
+  PK_EQ,
+  PK_NE,
+  PK_UN,
+  PK_LT,
+  PK_LE,
+  PK_MAX,
+  PK_MIN,
+  PK_CVT,
+  PK_RCP,
+  PK_RSQRT,
+  PK_BIT
+};
+
+/* Where each half's operands come from: 0 faH, 1 faL, 2 fbH, 3 fbL; a
+   negative half is negated after rounding; -1: the half is 0, unchecked. */
+struct POp {
+  const char *name;
+  u32 fnc;
+  PKind k;
+  int hx, hy, lx, ly;
+  bool hneg, lneg;
+  int cls; /* 0 ARITH, 1 CMP, 2 EST, 3 CVT, 4 BIT */
+};
+
+static const POp pops[] = {
+    {"PMUL", 0x00, PK_MUL, 0, 2, 1, 3, false, false, 0},
+    {"PMULL", 0x01, PK_MUL, 0, 3, 1, 3, false, false, 0},
+    {"PMULH", 0x02, PK_MUL, 0, 2, 1, 2, false, false, 0},
+    {"PMULLN", 0x05, PK_MUL, 0, 3, 1, 3, false, true, 0},
+    {"PMULHN", 0x06, PK_MUL, 0, 2, 1, 2, true, false, 0},
+    {"PARCPL", 0x08, PK_RCP, 2, 2, 3, 3, false, false, 2},
+    {"PARCPLH", 0x09, PK_RCP, 2, 2, -1, -1, false, false, 2},
+    {"PARCPLL", 0x0a, PK_RCP, -1, -1, 3, 3, false, false, 2},
+    {"PARSQRT", 0x0c, PK_RSQRT, 2, 2, 3, 3, false, false, 2},
+    {"PARSQRTH", 0x0d, PK_RSQRT, 2, 2, -1, -1, false, false, 2},
+    {"PARSQRTL", 0x0e, PK_RSQRT, -1, -1, 3, 3, false, false, 2},
+    {"PADD", 0x10, PK_ADD, 0, 2, 1, 3, false, false, 0},
+    {"PCADD", 0x11, PK_ADD, 0, 3, 1, 2, false, false, 0},
+    {"PHADD", 0x12, PK_ADD, 0, 1, 2, 3, false, false, 0},
+    {"PSUB", 0x14, PK_SUB, 0, 2, 1, 3, false, false, 0},
+    {"PSUBC", 0x15, PK_SUB, 0, 3, 1, 2, false, false, 0},
+    {"PHSUB", 0x16, PK_SUB, 0, 1, 2, 3, false, false, 0},
+    {"PHSUBR", 0x1f, PK_SUB, 1, 0, 3, 2, false, false, 0},
+    {"PCMPEQ", 0x28, PK_EQ, 0, 2, 1, 3, false, false, 1},
+    {"PCMPNEQ", 0x29, PK_NE, 0, 2, 1, 3, false, false, 1},
+    {"PCMPUN", 0x2a, PK_UN, 0, 2, 1, 3, false, false, 1},
+    {"PCMPLT", 0x2c, PK_LT, 0, 2, 1, 3, false, false, 1},
+    {"PCMPLE", 0x2d, PK_LE, 0, 2, 1, 3, false, false, 1},
+    {"PFMAX", 0x2e, PK_MAX, 0, 2, 1, 3, false, false, 1},
+    {"PFMIN", 0x2f, PK_MIN, 0, 2, 1, 3, false, false, 1},
+    {"PCVTFI", 0x39, PK_CVT, 2, 2, 3, 3, false, false, 3},
+};
+
+/* The qualifiers each class accepts (ev8-isa.md 3.4): Trp<<8 | Rnd<<6. */
+static std::vector<u32> pquals(int cls) {
+  std::vector<u32> q;
+  static const u32 trps[5][4] = {
+      {0, 1, 5, 7}, {0, 5, 9, 9}, {0, 1, 5, 9}, {0, 1, 5, 7}, {0, 9, 9, 9}};
+  for (u32 t : trps[cls])
+    for (u32 r = 0; r < 4; r++) {
+      if (t == 9)
+        continue;
+      if ((cls == 1 || cls == 4) && r != 2)
+        continue;
+      q.push_back((t << 8) | (r << 6));
+    }
+  return q;
+}
+
+static bool pvalid(u32 fn) {
+  const u32 fnc = fn & 0x3f;
+  for (const POp &p : pops)
+    if (p.fnc == fnc) {
+      for (u32 q : pquals(p.cls))
+        if ((fn & ~0x3fu) == q)
+          return true;
+      return false;
+    }
+  static const u32 bit[] = {0x18, 0x19, 0x1a, 0x1b, 0x20,
+                            0x21, 0x22, 0x30, 0x3a, 0x3c};
+  for (u32 b : bit)
+    if (fnc == b)
+      return (fn & ~0x3fu) == 0x080;
+  return false;
+}
+
+static Outcome run_paired(u32 ins, u64 a, u64 b, u64 fpcr, bool fpen = true) {
+  static CAlphaCPU cpu;
+  memset(&cpu.state, 0, sizeof cpu.state);
+  cpu.state.fpen = fpen;
+  cpu.state.pal_base = U64(0x8000);
+  cpu.state.pc = cpu.state.current_pc = U64(0x20000);
+  cpu.state.f[1] = a;
+  cpu.state.f[2] = b;
+  cpu.state.f[3] = SENTINEL;
+  cpu.state.fpcr = fpcr;
+  cpu.state.exc_sum = U64(0x5A5A);
+  cpu.pal_entries = 0;
+  const bool ok = cpu.paired_operate(ins);
+  return {cpu.state.f[3], cpu.state.fpcr, cpu.state.exc_sum,
+          cpu.pal_entries > 0, !ok};
+}
+
+static const Op op_adds = {"ADDS", K_ADD, 0x16, 0x00, F_S, F_S, false, R4, T4};
+static const Op op_subs = {"SUBS", K_SUB, 0x16, 0x01, F_S, F_S, false, R4, T4};
+static const Op op_muls = {"MULS", K_MUL, 0x16, 0x02, F_S, F_S, false, R4, T4};
+static const Op op_divs = {"DIVS", K_DIV, 0x16, 0x03, F_S, F_S, false, R4, T4};
+static const Op op_cmpeq = {"CMPTEQ", K_CMPTEQ, 0x16, 0x0a5,     F_T,
+                            F_T,      false,    {0},  {0, 0x500}};
+static const Op op_cmplt = {"CMPTLT", K_CMPTLT, 0x16, 0x0a6,     F_T,
+                            F_T,      false,    {0},  {0, 0x500}};
+static const Op op_cmple = {"CMPTLE", K_CMPTLE, 0x16, 0x0a7,     F_T,
+                            F_T,      false,    {0},  {0, 0x500}};
+static const Op op_cmpun = {"CMPTUN", K_CMPTUN, 0x16, 0x0a4,     F_T,
+                            F_T,      false,    {0},  {0, 0x500}};
+
+/* The operand as an instruction with /S and DNZ sees it. */
+static u64 p_dnz(const Ctx &c, u64 x) {
+  return (c.dnz && cls_t(x) == C_DEN) ? (x & SIGN) : x;
+}
+
+/* One half: its Expect, res the 32-bit word. */
+static Expect p_half(PKind k, const Ctx &c, u32 x, u32 y) {
+  const u64 a = s_to_reg(x), b = s_to_reg(y);
+  Expect e;
+  switch (k) {
+  case PK_ADD:
+  case PK_SUB:
+  case PK_MUL:
+    e = ieee_model(k == PK_ADD   ? op_adds
+                   : k == PK_SUB ? op_subs
+                                 : op_muls,
+                   c, a, b);
+    e.res = reg_to_s(e.res);
+    return e;
+  case PK_EQ:
+  case PK_NE:
+  case PK_UN:
+  case PK_LT:
+  case PK_LE:
+    /* the compares as CMPTxx, NE and UN raising as EQ (ev8-isa.md 3.4) */
+    e = ieee_model(k == PK_LT   ? op_cmplt
+                   : k == PK_LE ? op_cmple
+                   : k == PK_UN ? op_cmpun
+                                : op_cmpeq,
+                   c, a, b);
+    if (k == PK_NE)
+      e.res = e.res ? 0 : FTRUE;
+    e.res = e.res == FTRUE ? 0x3F800000 : 0;
+    return e;
+  case PK_MAX:
+  case PK_MIN: {
+    /* PFMAX, PFMIN: (a < b) ? b : a and the reverse, compared as PCMPLT;
+       unordered, the NaN quieted, Fb's first */
+    e = ieee_model(op_cmplt, c, a, b);
+    const int r = host_cmp_t(p_dnz(c, a), p_dnz(c, b));
+    if (r == 2)
+      e.res = (is_nan(cls_t(b)) ? y : x) | 0x00400000;
+    else if (k == PK_MAX)
+      e.res = r == -1 ? y : x;
+    else
+      e.res = r == -1 ? x : y;
+    return e;
+  }
+  case PK_CVT: {
+    /* CVTTQ's rules at 32 bits: out of range the low 32 bits, IOV, and INV
+       with /S */
+    e = ieee_cvttq(c, b);
+    if (e.res_known) {
+      const int64_t v = (int64_t)e.res;
+      if (!(e.det & X_IOV) && (v < INT32_MIN || v > INT32_MAX)) {
+        e.det |= X_IOV;
+        if (c.U)
+          e.trap |= X_IOV;
+        if (c.S)
+          ieee_inv(e, c);
+      }
+      e.res &= 0xffffffff;
+    }
+    return e;
+  }
+  case PK_RCP: {
+    /* DIVS/C of 1.0, the fraction then chopped to 14 bits, never INE */
+    Ctx cc = c;
+    cc.rnd = 0;
+    e = ieee_model(op_divs, cc, s_to_reg(0x3F800000), b);
+    e.det &= ~X_INE;
+    e.trap &= ~X_INE;
+    const u32 ex = (e.res >> 52) & 0x7ff;
+    if (ex != 0 && ex != 0x7ff)
+      e.res &= ~(U64(0x1ff) << 29);
+    e.res = reg_to_s(e.res);
+    return e;
+  }
+  case PK_RSQRT: {
+    /* the exact 1/sqrt chopped to 15 significant bits; SQRTS's exceptions
+       but INE; +-0 gives the infinity of its sign, raising nothing */
+    u64 v = b;
+    ieee_operand(e, c, v);
+    if (!e.res_known)
+      return e;
+    const Cls kk = cls_t(v);
+    if (is_nan(kk)) {
+      e.res = reg_to_s(quiet(v, true));
+      return e;
+    }
+    if (kk == C_ZERO) {
+      e.res = (u32)((v >> 32) & 0x80000000) | 0x7F800000;
+      return e;
+    }
+    if (v & SIGN) {
+      ieee_inv(e, c);
+      e.res = 0xFFC00000;
+      return e;
+    }
+    if (kk == C_INF) {
+      e.res = 0;
+      return e;
+    }
+    const u32 s = reg_to_s(v);
+    const u64 m = (s & 0x7fffff) | 0x800000;
+    const int E = (int)((s >> 23) & 0xff) - 150;
+    const long double r = 1.0L / sqrtl(ldexpl((long double)m, E));
+    int e2 = ilogbl(r);
+    u64 q = (u64)floorl(ldexpl(r, 14 - e2));
+    /* the exact test: q^2 m 2^(2F+E) <= 1 < (q+1)^2 m 2^(2F+E), F = e2-14 */
+    for (int it = 0; it < 8; it++) {
+      const int G = -(2 * (e2 - 14) + E);
+      const u128 p2 = (u128)1 << G;
+      if ((u128)q * q * m > p2)
+        q--;
+      else if ((u128)(q + 1) * (q + 1) * m <= p2)
+        q++;
+      else
+        break;
+      if (q >= (U64(1) << 15)) {
+        q >>= 1;
+        e2++;
+      } else if (q < (U64(1) << 14)) {
+        q = (q << 1) | 1;
+        e2--;
+      }
+    }
+    e.res = ((u32)(e2 + 127) << 23) | (u32)((q - (U64(1) << 14)) << 9);
+    return e;
+  }
+  default:
+    return e;
+  }
+}
+
+static long n_paired = 0, n_paired_failed = 0;
+
+static void check_paired(const POp &p, u32 ins, u64 fa, u64 fb, u64 fpcr) {
+  const Ctx c = ctx_of(ins, fpcr, false);
+  const u32 src[4] = {(u32)(fa >> 32), (u32)fa, (u32)(fb >> 32), (u32)fb};
+  Expect h, l;
+  if (p.hx >= 0)
+    h = p_half(p.k, c, src[p.hx], src[p.hy]);
+  if (p.lx >= 0)
+    l = p_half(p.k, c, src[p.lx], src[p.ly]);
+  if (p.hneg)
+    h.res ^= 0x80000000;
+  if (p.lneg)
+    l.res ^= 0x80000000;
+  Expect e;
+  e.det = h.det | l.det;
+  e.trap = h.trap | l.trap;
+  e.dc = h.dc | l.dc;
+  e.res_known = false;
+  const u64 mask = (h.res_known ? U64(0xffffffff00000000) : 0) |
+                   (l.res_known ? U64(0xffffffff) : 0);
+  const u64 res = ((u64)(u32)h.res << 32) | (u32)l.res;
+  const Outcome got = run_paired(ins, fa, fb, fpcr);
+  const Outcome want = derive(c, e, res);
+  n_paired++;
+  bool ok = !got.opcdec && (got.res & mask) == (res & mask);
+  const u64 fmask = ~(e.dc << 51);
+  const u64 xmask = ~(e.dc | (e.dc << 41));
+  ok = ok && (got.fpcr & fmask) == (want.fpcr & fmask) &&
+       (got.exc & xmask) == (want.exc & xmask) && got.trapped == want.trapped;
+  if (!ok) {
+    n_paired_failed++;
+    if (printed++ < 60)
+      printf("  PAIRED %s ins=%08x fa=%016" PRIx64 " fb=%016" PRIx64
+             " fpcr=%016" PRIx64 "\n    got  res=%016" PRIx64
+             " fpcr=%016" PRIx64 " exc=%04" PRIx64 " trap=%d%s\n"
+             "    want res=%016" PRIx64 " (mask %016" PRIx64
+             ") fpcr=%016" PRIx64 " exc=%04" PRIx64 " trap=%d\n",
+             p.name, ins, fa, fb, fpcr, got.res, got.fpcr, got.exc, got.trapped,
+             got.opcdec ? " OPCDEC" : "", res, mask, want.fpcr, want.exc,
+             want.trapped);
+  }
+}
+
+static int run_paired_all() {
+  n_paired = n_paired_failed = 0;
+  std::vector<u32> sw = s_fixed_words;
+  const size_t n = sw.size();
+  auto rnd_word = [&]() -> u32 { return reg_to_s(rnd_s()); };
+  for (const POp &p : pops) {
+    const long before = n_paired_failed;
+    const bool cvt = p.k == PK_CVT;
+    for (u32 q : pquals(p.cls)) {
+      const u32 ins =
+          (0x07u << 26) | (1u << 21) | (2u << 16) | ((q | p.fnc) << 5) | 3;
+      for (u64 fpcr : ieee_fpcrs) {
+        for (size_t i = 0; i < n; i++)
+          for (size_t j = 0; j < n; j += (p.cls == 0 ? 1 : 3)) {
+            u64 fa = ((u64)sw[i] << 32) | sw[(i + j) % n];
+            u64 fb = ((u64)sw[j] << 32) | sw[(j * 7 + i) % n];
+            if (cvt) /* integers in and out of a longword's range */
+              fb = ((u64)(sw[j] ^ (u32)(i << 24)) << 32) | sw[i];
+            check_paired(p, ins, fa, fb, fpcr);
+          }
+        for (long k = 0; k < n_random / 3; k++) {
+          const u64 fa = ((u64)rnd_word() << 32) | rnd_word();
+          const u64 fb = ((u64)rnd_word() << 32) | rnd_word();
+          check_paired(p, ins, fa, fb, fpcr);
+        }
+      }
+    }
+    if (verbose || n_paired_failed != before)
+      printf("%-8s %ld failed\n", p.name, n_paired_failed - before);
+  }
+  /* The bit manipulations: no checking, no exception, whatever the
+     halves hold. */
+  int bad = 0;
+  for (long k = 0; k < 20000; k++) {
+    const u64 fa = rnd64(), fb = rnd64();
+    const u32 aH = (u32)(fa >> 32), aL = (u32)fa, bH = (u32)(fb >> 32),
+              bL = (u32)fb;
+    const struct {
+      u32 fnc;
+      u64 want;
+    } bits[] = {
+        {0x18, ((u64)aL << 32) | bL},
+        {0x19, ((u64)aL << 32) | bH},
+        {0x1a, ((u64)aH << 32) | bL},
+        {0x1b, ((u64)aH << 32) | bH},
+        {0x20, (fa & U64(0x8000000080000000)) | (fb & U64(0x7fffffff7fffffff))},
+        {0x21,
+         (~fa & U64(0x8000000080000000)) | (fb & U64(0x7fffffff7fffffff))},
+        {0x22, (fa & U64(0xff800000ff800000)) | (fb & U64(0x007fffff007fffff))},
+        {0x30, ((u64)reg_to_s(fa) << 32) | reg_to_s(fb)},
+        {0x3a, s_to_reg(bL)},
+        {0x3c, s_to_reg(bH)},
+    };
+    for (const auto &t : bits) {
+      const u32 ins =
+          (0x07u << 26) | (1u << 21) | (2u << 16) | ((0x080 | t.fnc) << 5) | 3;
+      const Outcome o = run_paired(ins, fa, fb, 0);
+      n_paired++;
+      if (o.res != t.want || o.trapped || o.opcdec || o.fpcr != 0) {
+        n_paired_failed++;
+        if (printed++ < 60)
+          printf("  PAIRED bit %02x fa=%016" PRIx64 " fb=%016" PRIx64
+                 " got %016" PRIx64 " want %016" PRIx64 "\n",
+                 t.fnc, fa, fb, o.res, t.want);
+      }
+    }
+  }
+  /* Every 11-bit function: OPCDEC exactly where the sheet assigns none;
+     FEN, Fc unchanged, where it does and the FPU is disabled. */
+  for (u32 fn = 0; fn < 0x800; fn++) {
+    const u32 ins = (0x07u << 26) | (1u << 21) | (2u << 16) | (fn << 5) | 3;
+    const Outcome o = run_paired(ins, U64(0x3F8000003F800000),
+                                 U64(0x3F8000003F800000), FPCR_N);
+    const Outcome d = run_paired(ins, 0, 0, FPCR_N, false);
+    n_paired += 2;
+    const bool v = pvalid(fn);
+    if (o.opcdec == v || (v && o.trapped) || d.opcdec == v ||
+        (v && (!d.trapped || d.res != SENTINEL))) {
+      n_paired_failed++;
+      bad++;
+      if (printed++ < 60)
+        printf("  PAIRED decode fn=%03x: valid %d, opcdec %d, FEN %d\n", fn, v,
+               o.opcdec, d.trapped);
+    }
+  }
+  printf("paired single: %ld cases, %ld failed\n", n_paired, n_paired_failed);
+  return n_paired_failed ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-v"))
@@ -1936,6 +2341,7 @@ int main(int argc, char **argv) {
       printf("item %s is not marked fixed but nothing mismatches the model\n",
              it.id);
     }
+  bad += run_paired_all();
   printf("%s\n", bad ? "FAIL" : "PASS");
   return bad ? 1 : 0;
 }

@@ -415,7 +415,7 @@ check_cxx_source_compiles(
 if (ALPHABOX_FPTEST AND ALPHABOX_HAVE_INT128)
   set(fp_cur ${CMAKE_BINARY_DIR}/fp_current_src)
   set(fp_cur_srcs)
-  foreach(f AlphaCPU_ieeefloat.cpp AlphaCPU_vaxfloat.cpp)
+  foreach(f AlphaCPU_ieeefloat.cpp AlphaCPU_vaxfloat.cpp AlphaCPU_paired.cpp)
     add_custom_command(OUTPUT ${fp_cur}/${f}
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/cpu/${f}
                 ${fp_cur}/${f}

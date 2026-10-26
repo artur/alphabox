@@ -418,6 +418,17 @@ u64 CAlphaCPU::ieee_cvtif(u64 val, u32 ins, u32 dp) {
  * \return    64-bit signed integer.
  **/
 u64 CAlphaCPU::ieee_cvtfi(u64 op, u32 ins) {
+  return ieee_cvtfi_n(op, ins, false);
+}
+
+/**
+ * ieee_cvtfi, or with `l32` the same conversion to a longword: the range
+ * checked is a 32-bit two's complement integer's and the low 32 bits of the
+ * result are the value, an overflow reported as CVTTQ reports one at 64
+ * bits. The 21464's PCVTFI converts each half of a paired single so
+ * (AlphaCPU_paired.cpp; docs/platforms/ev8-isa.md 3.4).
+ **/
+u64 CAlphaCPU::ieee_cvtfi_n(u64 op, u32 ins, bool l32) {
   UFP a;
   u64 sticky;
   u32 rndm;
@@ -476,7 +487,8 @@ u64 CAlphaCPU::ieee_cvtfi(u64 op, u32 ins) {
       a.frac = a.frac & ~1;
   }
 
-  if (a.frac > (a.sign ? IMMAX : IPMAX))
+  if (a.frac > (a.sign ? (l32 ? U64(0x80000000) : IMMAX)
+                       : (l32 ? U64(0x7FFFFFFF) : IPMAX)))
     ovf = 1; /* overflow? */
 
   if (ovf) {
@@ -1029,6 +1041,11 @@ u64 CAlphaCPU::ieee_rpack(UFP *r, u32 ins, u32 dp) {
  **/
 void CAlphaCPU::ieee_trap(u64 trap, u32 instenb, u64 fpcrdsb, u32 ins) {
   u64 real_trap = U64(0x0);
+
+  /* An estimate of the 21464's paired single never sets INE (ev8-isa.md
+     3.4; AlphaCPU_paired.cpp): its DIVS raises everything else. */
+  if (trap == TRAP_INE && m_fp_no_ine)
+    return;
 
   /* HRM 4.7.6: the FPCR sticky bit is set whenever the corresponding
      exception is detected, regardless of whether a trap is delivered. */

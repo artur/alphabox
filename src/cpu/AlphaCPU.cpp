@@ -2354,6 +2354,18 @@ _next_instruction:
     }
     UNKNOWN1;
 
+  // Paired single (docs/platforms/ev8-isa.md 3.4, AlphaCPU_paired.cpp) on
+  // the rows with CPU_EXT_EV8, where a code the sheet does not assign raises
+  // OPCDEC; on every other row opcode 07 raises OPCDEC as before.
+  case 0x07:
+    if (m_model->ext & CPU_EXT_EV8) {
+      if (paired_operate(ins))
+        ES40_EXECUTE_END();
+      function = (ins >> 5) & 0x7ff;
+      UNKNOWN2;
+    }
+    UNKNOWN1;
+
   default:
     UNKNOWN1;
   }

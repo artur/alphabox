@@ -152,6 +152,16 @@ public:
   /// none of them.
   bool fltv_operate(u32 ins, u32 function);
   bool fltl_operate(u32 ins, u32 function);
+  /// The 21464's paired single (opcode 07, AlphaCPU_paired.cpp) on a row
+  /// with CPU_EXT_EV8, for both engines (execute() and jit_paired). False
+  /// for a code the sheet does not assign (OPCDEC).
+  bool paired_operate(u32 ins);
+  u32 paired_add(u32 a, u32 b, u32 ins, bool sub);
+  u32 paired_mul(u32 a, u32 b, u32 ins);
+  u32 paired_cmp(u32 a, u32 b, u32 ins, int op);
+  u32 paired_maxmin(u32 a, u32 b, u32 ins, bool max);
+  u32 paired_cvt(u32 b, u32 ins);
+  u32 paired_est(u32 b, u32 ins, bool root);
   int get_cpuid();
   void flush_icache();
   void note_ic_flush_pc();  // ALPHABOX_TRACE_ICFLUSH: histogram of the PC that
@@ -299,6 +309,7 @@ private:
   s32 ieee_fcmp(u64 s1, u64 s2, u32 ins, u32 trap_nan);
   u64 ieee_cvtif(u64 val, u32 ins, u32 dp);
   u64 ieee_cvtfi(u64 op, u32 ins);
+  u64 ieee_cvtfi_n(u64 op, u32 ins, bool l32);
   u64 ieee_fadd(u64 s1, u64 s2, u32 ins, u32 dp, bool sub);
   u64 ieee_fmul(u64 s1, u64 s2, u32 ins, u32 dp);
   u64 ieee_fdiv(u64 s1, u64 s2, u32 ins, u32 dp);
@@ -1581,6 +1592,9 @@ private:
   /// instruction traps once, after every active element (ev8-isa.md 4.3).
   bool m_vec_defer = false;
   u64 m_vec_trap = 0;
+  /// A paired-single estimate in progress (paired_est): ieee_trap drops its
+  /// INE, which an estimate never sets (ev8-isa.md 3.4).
+  bool m_fp_no_ine = false;
   void tarantula_init();  ///< at init(): the state, and the window's ranges
   void tarantula_reset(); ///< power-up and reset: everything clear, VEN 0
   bool ven() const {
