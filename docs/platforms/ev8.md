@@ -1279,10 +1279,10 @@ inference below is in [cpu-fidelity.md](../cpu-fidelity.md) too.
 - **The unary paired forms** (PARCPLx, PARSQRTx, PCVTFI, PEXTL, PEXTH)
   ignore Fa **[decision]**, as this core's CVTxx do; its SQRTx alone raise
   OPCDEC for Fa != 31.
-- **PARSQRTx of +-0**: the infinity of the zero's sign, as 1.0 /
-  SQRTS(+-0) gives it, and nothing raised, as SQRTS raises nothing for a
-  zero **[inference]**: the sheet gives the case no value. IEEE 754's
-  rSqrt signals division by zero there: a point for the owner and nada.
+- **PARSQRTx of +-0**: the infinity of the zero's sign, raising division
+  by zero as IEEE 754's rSqrt and PARCPL of a zero do **[decision]**, the
+  owner's on 2026-10-26, now in ev8-isa.md 3.4. S6 first raised nothing,
+  reading "SQRTS's exceptions" literally.
 - **An estimate of a NaN** is the NaN quieted, its fraction not chopped
   **[inference]**: the chop is of "the exact reciprocal". After a
   denormal operand's trap the result is UNPREDICTABLE: the reciprocal

@@ -11,6 +11,8 @@ parts of D9, D11, D12 and D15.
 nada's review are applied: the vector enable is a CSR, not an instruction,
 AMASK bits 3 and 11 are decided, the 1C size order is agreed. No code yet
 ([ev8.md](ev8.md), plan S2 to S10).
+Revision 1.1, 2026-10-26: one result rule in 3.4, no encoding: the
+estimate of the root of +-0 raises division by zero (the owner).
 
 ## 1. How to read it
 
@@ -451,7 +453,9 @@ leaves open, all **[decision]**:
   to 14 fraction bits (fraction <8:0> of the single zero), so the
   emulator gives the guaranteed precision and no more. Exceptions as the
   scalar DIVS of 1.0 by the operand (SQRTS for the root) would raise them,
-  except INE, which an estimate never sets.
+  except INE, which an estimate never sets. The root of +-0 is the
+  infinity of the zero's sign and raises division by zero, as IEEE 754's
+  rSqrt and PARCPL of a zero do (the owner, 2026-10-26).
 - **PFMAX and PFMIN**: per half `(faX < fbX) ? fbX : faX` and the
   reverse, comparing as PCMPLT does; an unordered pair is an invalid
   operation, and the half gets the result the scalar rules give one.
