@@ -862,8 +862,11 @@ void CEv7Csr::check_pending(int ms) {
  * The interval timer. The console's PALcode clears RBOX_IT early, takes
  * RBOX_INT<15> as the clock interrupt, and on each one reads RBOX_IT<31:22>
  * as a count of further ticks it missed (0x39344-0x393cc: none when 0 or
- * 0x3ff). The console's C code writes 7, and tells the operating system
- * (HWRPB intr_freq, get_iclk_freq at 0x2e2270) that the timer runs at
+ * 0x3ff). The console's C code writes n, which follows the clock: 7 at
+ * 1000 MHz and 9 at 1300 MHz (n + 1 = ceil(cpu_hz / 2^27), the fastest rate
+ * not above 1024 Hz, fits both [inference]; docs/platforms/marvel.md,
+ * "Captures from a real ES47"), and tells the operating system (HWRPB
+ * intr_freq, get_iclk_freq at 0x2e2270) that the timer runs at
  * cpu_hz / ((n + 1) * 2^17), times another 1/4 on a revision 1.0 part: so
  * RBOX_IT<21:0> is taken as n, a period of n + 1 times 2^17 processor
  * cycles [inference]. The machine's schedule (CPU 0's, cpu/AlphaCPU.hpp)
