@@ -77,14 +77,37 @@ keeps its own notice in the header of the file that holds it:
 | --- | --- | --- | --- |
 | es40 | most of `src/` | Camiel Vanderhoeven and the ES40 Emulator Project | GPL-2.0-or-later |
 | AXPbox | most of `src/` | Tomáš Glozar, Remy van Elst and contributors | GPL-2.0-or-later |
-| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT, the SPD EEPROM and the MAME shims BSD-1-Clause |
-| MAME | `devices/video/`: `VGA.*`, `VGACard.cpp`, `s3/S3Trio64.*`, `ibm8514a.*`, `attotime`, `coretmpl`, `logmacro`, `xtal`, `address_map` | Nathan Woods, Peter Trauner, Angelo Salese, Barry Rodewald, Aaron Giles, Vas Crabb, Olivier Galibert | BSD-3-Clause |
+| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT core, the ALi M7101 PMU, the SPD EEPROM and the MAME shims BSD-1-Clause |
+| MAME | `devices/video/`: `VGA.*`, `VGACard.*`, `s3/S3Trio64.*`, `ibm8514a.*`, `attotime`, `coretmpl`, `logmacro`, `xtal`, `address_map` | Nathan Woods, Peter Trauner, Angelo Salese, Barry Rodewald, Aaron Giles, Vas Crabb, Olivier Galibert | BSD-3-Clause |
 | Bochs | `gui/`, the CD-ROM commands in `storage/Disk.cpp`, `isa/Keyboard.*` | MandrakeSoft S.A. (and the plex86 developers in `gui/plugin.hpp`) | LGPL, version 2 or later |
 | GXemul | `common/es40_debug.*`, `net/Ethernet.*`, `pci/tulip/` | Anders Gavare | BSD-3-Clause style |
 | NetBSD | `pci/tulip/TulipMii.hpp`, `TulipRegs.hpp` | Manuel Bouyer; The NetBSD Foundation | BSD |
 | SIMH and SoftFloat | `cpu/AlphaCPU_ieeefloat.cpp`, `AlphaCPU_vaxfloat.cpp`, `cpu_defs.hpp` | Robert M Supnik; John R. Hauser | MIT-style; the SoftFloat terms |
 | QEMU | `pci/es137x/ES137x.cpp`, `ES137x.hpp`, `ES137xRegs.hpp` | Vassili Karpov | MIT |
 | 86Box | `video/mach64/Mach64Engine.cpp` (ported) | Sarah Walker, Miran Grca, Connor Hyde | GPL-2.0-or-later |
+
+**Changes given back.** Where code came to Alphabox under a permissive
+licence, this repository's changes to it are distributed under that
+licence too, so that they can go back to where the code came from
+(since 2026-10-26; ES40-Emu keeps borrowed code under its upstream licence
+for the same reason):
+
+- the JIT core (`jit/jitengine.*`) and the ALi M7101 PMU
+  (`pci/AliM1543C_pmu.*`) are BSD-1-Clause as a whole: they hold only
+  ES40-Emu's code, which ES40-Emu distributes under BSD-1-Clause, and this
+  repository's;
+- `VGA.*`, `VGACard.*` and `s3/S3Trio64.*` also hold GPL-2.0-or-later code
+  from es40 and AXPbox besides MAME's and ES40-Emu's BSD-3-Clause code, so
+  they stay `GPL-2.0-or-later AND BSD-3-Clause`, and this repository's
+  changes to them are also distributed under BSD-3-Clause;
+- the files under a permissive licence alone (`i2c_spd.*`,
+  `mame_shims.hpp`, MAME's `ibm8514a.*`, `attotime`, `coretmpl`,
+  `logmacro`, `xtal` and `address_map`) keep it, this repository's
+  changes included.
+
+A contribution to one of these files is accepted under the same terms.
+Everything else this repository wrote, the AArch64 back end
+(`jit/jitemit_a64.hpp`) included, is GPL-2.0-or-later.
 
 Everything in the source is GPL-2.0-or-later or under a licence compatible
 with it. (A Windows-only MPU-401 MIDI output that ES40-Emu marks

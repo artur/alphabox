@@ -175,4 +175,6 @@ others: [docs/acknowledgements.md](docs/acknowledgements.md).
 
 GNU General Public License, version 2 or later: see [LICENSE](LICENSE).
 Third-party code keeps its original license, as noted in the source file
-headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md).
+headers and listed in [docs/acknowledgements.md](docs/acknowledgements.md);
+this repository's changes to code that came under a permissive license are
+distributed under that license too.
