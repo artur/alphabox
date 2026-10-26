@@ -11,6 +11,9 @@ change it for the SRM probes:
                         "none" leaves the key out (the emulator's default,
                         127.0.0.1 and ::1)
   --cpus N              1-4 CPUs (copies of cpu0)
+  --cpu-class CLASS     the processors' class (default: the board's own,
+                        CPU_CLASS), e.g. ev8 on the ES40, which takes the EV7
+                        family's rows as an Alphabox construction
   --membits N           memory.bits
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
                         e.g. palcode.vms.nohle=true
@@ -114,6 +117,7 @@ def main():
     ap.add_argument("--port", type=int, default=21000)
     ap.add_argument("--serial-address")
     ap.add_argument("--cpus", type=int, default=1, choices=[1, 2, 3, 4])
+    ap.add_argument("--cpu-class")
     ap.add_argument("--membits", type=int)
     ap.add_argument("--cpu-opt", action="append", default=[])
     ap.add_argument("--cpu1-opt", action="append", default=[])
@@ -170,7 +174,8 @@ def main():
     platform = args.platform or "es40"
     if platform not in SLOTS:
         sys.exit("srm_cfg: no places for platform %s (add it to SLOTS)" % platform)
-    cpu0 = cpu0.replace("= ev68cb", "= " + CPU_CLASS.get(platform, "ev68cb"), 1)
+    cpu0 = cpu0.replace("= ev68cb", "= " + (args.cpu_class or
+                                            CPU_CLASS.get(platform, "ev68cb")), 1)
 
     blocks = [with_opts(cpu0, args.cpu_opt)]
     for i in range(1, args.cpus):

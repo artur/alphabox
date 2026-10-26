@@ -283,7 +283,9 @@ with SDL and pcap; on another build only the trees are compared.
 
 `srm_probe.sh` takes its variants from the environment:
 
-- `CPUS=`, `MEMBITS=`, `PLATFORM=` and `ROM=` pick the machine and firmware.
+- `CPUS=`, `MEMBITS=`, `PLATFORM=` and `ROM=` pick the machine and firmware;
+  `CPU=<class>` the processors' row, for one the board takes besides its
+  own (`CPU=ev8` on the ES40, an Alphabox construction).
 - `SCSI=<class>`, `IDE_CFG=<file>` and `FLOPPY=<image>|halt` add drives.
 - `NIC=<class>` adds a NIC; `NET_PEER=<nic port>:<peer port>` puts it on a
   UDP link to `net_peer.py`, so `boot eia0`/`boot ewa0` runs a full network
@@ -379,10 +381,13 @@ and so never traps).
 - **Any processor row.** `--cpu` names the row (`ev68cb`, the default,
   `ev7`, `ev7z`, `ev8`, `ev8n`; `--list` shows them). The board is always the ES40:
   plain instructions do not depend on it, and the image replaces the
-  console, so a row of another family (the EV7's, whose own boards need
-  the Marvel console) runs there through the `ALPHABOX_CPU_ANY_BOARD`
-  test hook ([headless.md](headless.md)), which the tool sets; the
-  emulator's `%CPU-W-ANYBOARD` line is checked to name the row's part.
+  console, so a row of another family runs there with the
+  `ALPHABOX_CPU_ANY_BOARD` test hook ([headless.md](headless.md)), which
+  the tool sets for every such row. The ES40 needs it for `ev8n` alone:
+  it takes the EV7 family's rows as an Alphabox construction
+  ([cpu-fidelity.md](cpu-fidelity.md)). The emulator's line for the row,
+  `%CPU-I-CONSTRUCT` or (for `ev8n`) `%CPU-W-ANYBOARD`, is checked to name
+  its part.
   Every row the oracle can run has the 21264's core, which its PALcode
   is written for, but `ev8n`, the 21464 on its own privileged interface:
   for it the image has an EV8 PALcode (`image.build_pal8`) with the same

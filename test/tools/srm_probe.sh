@@ -4,6 +4,8 @@
 # usage: [VAR=value ...] srm_probe.sh <alphabox-binary> <label> [timeout_s]
 #   PORT=<n>             telnet port (default 21100; one per parallel probe)
 #   CPUS=1..4            number of CPUs (default 1)
+#   CPU=<class>          the processors' class (default: the board's own),
+#                        e.g. ev8 on the ES40 (an Alphabox construction)
 #   MEMBITS=<n>          memory.bits (default: the test machine's 26)
 #   SCSI=<class>         add that SCSI controller with a 1 GB disk + RAM disk:
 #                        sym53c810|825|875|895|896, isp1020|1040|1080|1240
@@ -45,7 +47,7 @@ set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { sed -n '2,40p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,42p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
@@ -62,6 +64,7 @@ rm -rf "$D" && mkdir -p "$D" || exit 2
 cp "$R/test/rom/cl67srmrom.exe" "$D/"
 
 cfg=(--out "$D/es40.cfg" --port "$PORT" --cpus "${CPUS:-1}")
+[ -n "${CPU:-}" ] && cfg+=(--cpu-class "$CPU")
 [ -n "${MEMBITS:-}" ] && cfg+=(--membits "$MEMBITS")
 [ -n "${SCSI:-}" ] && cfg+=(--scsi "$SCSI")
 [ -n "${PLATFORM:-}" ] && cfg+=(--platform "$PLATFORM")
@@ -129,6 +132,6 @@ fi
 echo "== $LABEL: CPUs seen by SRM"
 tr -d '\000\r' < console.log | grep -aE 'CPU [0-9] speed|starting console on CPU' | sort | uniq -c | sed 's/^/  /'
 echo "== $LABEL: emulator messages"
-grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating' alphabox.out |
+grep -aE 'Exiting gracefully|Emulator Failure|Exception in|STARTING \*\*\*|DPR \*\*\*|MEMTEST|UNKNOWNCFG|BADREST|Unknown TIG|MISMATCH|terminating|CPU-I-CONSTRUCT|CPU-W-ANYBOARD' alphabox.out |
   sort | uniq -c | head -20 | sed 's/^/  /'
 exit 0
