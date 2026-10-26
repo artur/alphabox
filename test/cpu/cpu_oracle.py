@@ -13,8 +13,10 @@ is about a second.
 
 The processor is a row of the emulator's (--cpu, default ev68cb, the ES40's
 own), always on the ES40 board: plain instructions do not depend on the
-board, and a row of another family (the EV7's) is let onto it by the
-ALPHABOX_CPU_ANY_BOARD test hook. What the cases expect of the row (IMPLVER,
+board, and a row of another family is let onto it by the
+ALPHABOX_CPU_ANY_BOARD test hook (set for every such row, although the
+ES40 takes the EV7 family's as an Alphabox construction and needs it for
+`ev8n` alone). What the cases expect of the row (IMPLVER,
 AMASK, the extensions, the unused opcode 18 rule) is rows.py's, which is
 checked against src/cpu/CpuModels.cpp first; a case that needs what the
 row lacks is skipped and counted (SKIP).
@@ -283,9 +285,14 @@ def main():
                                  b.code_words, args.passes, secs))
     print("  row %s%s" % (row.describe(), "" if diffs is not None else
                           " (src/cpu/CpuModels.cpp not found: not checked)"))
-    if hook and ("%%CPU-W-ANYBOARD: a %s on" % row.part) not in emu:
-        print("  the emulator did not say it runs a %s (%%CPU-W-ANYBOARD)"
-              % row.part)
+    # The ES40 takes the EV7 family's rows as an Alphabox construction and
+    # says so (%CPU-I-CONSTRUCT); a row it does not take (ev8n) runs there
+    # through the hook alone, which says so too (%CPU-W-ANYBOARD).
+    said = ("%%CPU-W-ANYBOARD: a %s on" % row.part,
+            "%%CPU-I-CONSTRUCT: %s processors on" % row.part)
+    if hook and not any(s in emu for s in said):
+        print("  the emulator did not say it runs a %s (%%CPU-W-ANYBOARD or "
+              "%%CPU-I-CONSTRUCT)" % row.part)
         for ln in emu.splitlines()[-8:]:
             print("   |", ln)
         print("  CPU ORACLE: FAIL")

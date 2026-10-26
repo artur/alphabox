@@ -1,0 +1,20 @@
+# exit 0
+sys0 = tsunami
+{
+  rom.srm = "cl67srmrom.exe";
+  cpu0 = ev7z
+  {
+    speed = "1300M";
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial0 = serial // added
+  {
+    null_attach = "true";
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}

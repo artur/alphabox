@@ -46,3 +46,5 @@ ali-pmu-not-on-board.cfg 11:3 has no ali_pmu of its own
 serial-long.cfg 5:3 1 to 12 characters
 serial-space.cfg 5:3 no spaces
 serial-empty.cfg 5:3 1 to 12 characters
+es40-ev8n.cfg 4:3 the AlphaServer ES40 takes 21264CB (EV68CB) processors
+es40-mixed-families.cfg 1:1 processors of different families

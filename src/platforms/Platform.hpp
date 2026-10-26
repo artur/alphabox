@@ -226,6 +226,17 @@ struct platform_config {
   /// (docs/platforms/ev8-native.md, section 2). Every processor of a
   /// machine is of one family.
   const char *other_cpu_model = nullptr;
+
+  /// A processor class of another core family the board also takes as an
+  /// Alphabox construction, a machine that was never built, or nullptr. It
+  /// puts the machine in no other mode: the board, its chipset and its
+  /// console stay what they are with the board's own processors, and the
+  /// processors run the console's PALcode as those would. A configuration
+  /// that uses it says so at startup (%CPU-I-CONSTRUCT). The ES40 takes the
+  /// EV7 family's rows (ev7, ev7z, ev8) this way (docs/cpu-fidelity.md, "The
+  /// ES40 with EV7-family processors"). Every processor of such a machine is
+  /// of one family, as with other_cpu_model.
+  const char *construction_cpu_model = nullptr;
 };
 
 /// The board named `name`, or nullptr.
@@ -233,8 +244,13 @@ const platform_config *find_platform(const char *name);
 
 struct cpu_model;
 /// Whether `board` takes processors of `cpu`'s core family: its own
-/// processor's (cpu_model), or its other_cpu_model's.
+/// processor's (cpu_model), its other_cpu_model's, or its
+/// construction_cpu_model's.
 bool platform_takes(const platform_config &board, const cpu_model &cpu);
+
+/// Whether `board` takes `cpu` as an Alphabox construction only: a row of
+/// its construction_cpu_model's family, which is neither of the others.
+bool platform_construction(const platform_config &board, const cpu_model &cpu);
 
 /// The boards, in the order of their table: the `i`th, or nullptr past the
 /// last.

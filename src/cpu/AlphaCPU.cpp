@@ -409,7 +409,8 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
   // controller and router on chip and no Tsunami can drive one, and an EV68
   // has neither of those for a Marvel console to find. The Marvel boards
   // also take the native 21464, in 21464 mode (Platform.hpp
-  // other_cpu_model).
+  // other_cpu_model), and the ES40 the EV7 family's rows as an Alphabox
+  // construction (construction_cpu_model), which processor_tpus reports.
   {
     const cpu_model *board = find_cpu_model(system->platform().cpu_model);
     if (board && !platform_takes(system->platform(), *m_model)) {

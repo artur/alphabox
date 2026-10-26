@@ -89,6 +89,8 @@ static const platform_config *s_check_platform = nullptr;
 /// built; -1 until its machine section has been read.
 static int s_machine_family = -1;
 
+static void cfg_msg(bool warning, const char *fmt, ...);
+
 void CConfigurator::set_check_mode(bool on) {
   s_check = on;
   s_machine_family = -1;
@@ -129,8 +131,9 @@ bool CConfigurator::machine_21464_mode() {
  * an Alphabox construction [decision, the owner's, 2026-10-25], so that
  * OpenVMS and Linux see the threads. Only the Marvel boards list them: their
  * console learns its processors from the management side (the CMM), which
- * can name every TPU. On another board an EV8 runs only through the
- * ALPHABOX_CPU_ANY_BOARD test hook, and is one processor there.
+ * can name every TPU. On the ES40, which takes the EV8 as an Alphabox
+ * construction (Platform.hpp construction_cpu_model), and on a board that
+ * runs it through the ALPHABOX_CPU_ANY_BOARD test hook, it is one processor.
  **/
 int CConfigurator::processor_tpus(int *chips_out) {
   const platform_config *board =
@@ -140,6 +143,7 @@ int CConfigurator::processor_tpus(int *chips_out) {
   const char *first = nullptr;
   int family = -1;
   const char *first_family = nullptr;
+  const cpu_model *construction = nullptr;
   for (CConfigurator *c : pChildren) {
     const cpu_model *m = find_cpu_model(c->myValue);
     if (!m)
@@ -147,20 +151,23 @@ int CConfigurator::processor_tpus(int *chips_out) {
     chips++;
     // One family per machine: the Marvel boards take EV7 rows or the native
     // EV8, and the family decides the machine's mode (21464 mode,
-    // docs/platforms/ev8-native.md, section 2). On a board of one family
-    // each processor is refused by its own check (the processor's class);
-    // the test hook that lets any row onto any board keeps what it allowed.
-    if (family >= 0 && m->family != family && board && board->other_cpu_model &&
+    // docs/platforms/ev8-native.md, section 2); the ES40 takes the EV68 or,
+    // as a construction, the EV7 family. On a board of one family each
+    // processor is refused by its own check (the processor's class); the
+    // test hook that lets any row onto any board keeps what it allowed.
+    if (family >= 0 && m->family != family && board &&
+        (board->other_cpu_model || board->construction_cpu_model) &&
         !cpu_any_board())
       FAILURE_2(Configuration,
                 "%s and %s are processors of different families: a "
-                "machine's processors are all of one (the family decides "
-                "the machine's mode)",
+                "machine's processors are all of one",
                 first_family, c->myName);
     if (family < 0) {
       family = m->family;
       first_family = c->myName;
     }
+    if (board && !construction && platform_construction(*board, *m))
+      construction = m;
     int t = 1;
     // The native EV8 (ev8-native.md, N16) is the chip as designed: four
     // TPUs, each a processor, on whatever board runs it (the Marvel boards
@@ -225,6 +232,16 @@ int CConfigurator::processor_tpus(int *chips_out) {
               "LDx_L/STx_C lock flags, the LDx_ARM watch flags) are 32 bits "
               "wide. Configure fewer chips, or fewer TPUs (tpus)",
               chips, tpus, chips * tpus, CSystem::kMaxCPUs);
+  // Processors the board takes as an Alphabox construction (Platform.hpp
+  // construction_cpu_model): supported, so said once, and not a warning.
+  if (construction) {
+    const cpu_model *own = find_cpu_model(board->cpu_model);
+    cfg_msg(false,
+            "%%CPU-I-CONSTRUCT: %s processors on the %s, whose own are %s: "
+            "an Alphabox construction (docs/cpu-fidelity.md)\n",
+            construction->part, board->description,
+            own ? own->part : board->cpu_model);
+  }
   if (chips_out)
     *chips_out = chips;
   return tpus;

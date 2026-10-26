@@ -103,15 +103,16 @@ u32 scalar_word(u32 fnc) {
 
 /**
  * At init(): the state of a processor with Tarantula, cleared, and on a
- * board without EV7 register windows -- the ES40 under the
+ * board without EV7 register windows -- the ES40, which takes the `ev8` row
+ * as an Alphabox construction, or any board under the
  * ALPHABOX_CPU_ANY_BOARD test hook, where the CPU oracle runs every row --
  * the part of the processor's window Tarantula owns: VCTL (the `ev8` row
  * only) and, with ALPHABOX_TARANTULA_PEEK=1, the register window
  * (docs/headless.md). On the Marvel boards CEv7Csr answers VCTL.
  *
- * [decision] The window is answered on any board under the hook so that
- * the oracle's cases set and clear VEN as an operating system would, with a
- * quadword store to the address ev8-isa.md gives. The Tsunami and the Titan
+ * [decision] The window is answered on such a board so that software (the
+ * oracle's cases, an operating system) sets and clears VEN with a quadword
+ * store to the address ev8-isa.md gives. The Tsunami and the Titan
  * decode 44 physical address bits and ignore PA<42:35> in their I/O space
  * (their "Bits <42:35> are don't cares if bit <43> is asserted"), so every
  * PID's window lands on one address there, in either map; each processor
@@ -123,8 +124,11 @@ void CAlphaCPU::tarantula_init() {
   if (!m_vec)
     m_vec.reset(new tarantula::State);
   tarantula_reset();
+  // A Tarantula row is on a board of another family only as the ES40's
+  // construction or through the test hook; either way the board has no
+  // EV7 register windows.
   const cpu_model *board = find_cpu_model(cSystem->platform().cpu_model);
-  if (!cpu_any_board() || !board || board->family == CPU_FAMILY_EV7)
+  if (!board || board->family == CPU_FAMILY_EV7)
     return;
   // The window by the processor's own map: the EV7's for the `ev8` row,
   // whose VCTL the sheet places there; on the native EV8 the 21464 mode's

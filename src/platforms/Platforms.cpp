@@ -87,11 +87,15 @@ static const tsunami_revisions ds10_revisions = {1, 0, 0, 0x41, 0xfe, 0xfe};
 static const tsunami_revisions ds20l_revisions = {1, 1, 0, 0x8f, 0x48, 0x01};
 
 static const platform_config platforms[] = {
+    // It also takes the EV7 family's rows (ev7, ev7z, ev8), as an Alphabox
+    // construction (construction_cpu_model; docs/cpu-fidelity.md): the
+    // console names them from its own table of EV6 chip IDs. The other
+    // Tsunami boards could take them the same way.
     {"es40", "AlphaServer ES40", CHIPSET_TSUNAMI, "ev68cb", 4, 26, 35,
      "cl67srmrom.exe", FW_LFU_BUNDLE, 2, SECONDARIES_BY_CONSOLE,
      es40_board_devices, es40_pci_interrupt, es40_slot_refusal,
      es40_console_patches, 0, nullptr, nullptr, nullptr, 0, 0, es40_functions,
-     &es40_revisions},
+     &es40_revisions, nullptr, "ev7"},
     // docs/platforms/ds20e.md. The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
@@ -196,10 +200,20 @@ const platform_config *find_platform(const char *name) {
   return nullptr;
 }
 
+/// Whether the row named `row` (nullptr: none) is of `cpu`'s family.
+static bool same_family(const char *row, const cpu_model &cpu) {
+  const cpu_model *m = row ? find_cpu_model(row) : nullptr;
+  return m && m->family == cpu.family;
+}
+
 bool platform_takes(const platform_config &board, const cpu_model &cpu) {
-  for (const char *row : {board.cpu_model, board.other_cpu_model})
-    if (const cpu_model *m = row ? find_cpu_model(row) : nullptr)
-      if (m->family == cpu.family)
-        return true;
-  return false;
+  return same_family(board.cpu_model, cpu) ||
+         same_family(board.other_cpu_model, cpu) ||
+         same_family(board.construction_cpu_model, cpu);
+}
+
+bool platform_construction(const platform_config &board, const cpu_model &cpu) {
+  return same_family(board.construction_cpu_model, cpu) &&
+         !same_family(board.cpu_model, cpu) &&
+         !same_family(board.other_cpu_model, cpu);
 }

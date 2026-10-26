@@ -1,0 +1,30 @@
+# exit 0
+sys0 = tsunami
+{
+  platform = "es40";
+  memory.bits = "28";
+  rom.srm = "cl67srmrom.exe";
+  cpu0 = ev7
+  {
+  }
+  cpu1 = ev7
+  {
+  }
+  cpu2 = ev7
+  {
+  }
+  cpu3 = ev7
+  {
+  }
+  fdc0 = floppy // added
+  {
+  }
+  serial0 = serial // added
+  {
+    null_attach = "true";
+  }
+  serial1 = serial // added
+  {
+    null_attach = "true";
+  }
+}
