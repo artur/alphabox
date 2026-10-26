@@ -299,8 +299,9 @@ scripted use.
 ## Debugging the guest
 
 `gdb = <port>;` in the `sys0` section (or `ALPHABOX_GDB=<port>`) starts a
-gdb stub on 127.0.0.1, and `gdb.wait = true;` holds the processors until
-gdb attaches. [debugging.md](debugging.md) describes it.
+gdb stub on the loopback interface, `127.0.0.1` and `::1` (IPv6), and
+`gdb.wait = true;` holds the processors until gdb attaches.
+[debugging.md](debugging.md) describes it.
 
 ## Serial consoles
 
@@ -308,14 +309,29 @@ The sample configuration attaches both UARTs as `null_attach`: present but
 unconnected. The emulator then starts without waiting for anything, and the
 console lives on the VGA window (`vga_console = true`).
 
-To use a telnet console instead, set `port = 21264;` in a serial section
-(`address = "127.0.0.1";`, or a host name such as `"localhost"`, limits it
-to one interface; by default it listens on all of them). The emulator then
-**waits at startup** until a client connects (`nc localhost 21264`), unless
-the section also has `wait = false;`: then the machine starts at once, and
-the client that comes later first gets what the guest printed meanwhile.
-Ports left out of the configuration are added as `null_attach`
-automatically.
+To use a telnet console instead, set `port = 21264;` in a serial section.
+The emulator then **waits at startup** until a client connects
+(`nc localhost 21264`), unless the section also has `wait = false;`: then
+the machine starts at once, and the client that comes later first gets
+what the guest printed meanwhile. Ports left out of the configuration are
+added as `null_attach` automatically.
+
+By default the port listens on every IPv4 interface (`0.0.0.0`).
+`address` limits it, to an IPv4 address, an IPv6 one or a host name:
+
+- `address = "127.0.0.1";`: IPv4 clients on this host only;
+- `address = "::1";`: IPv6 clients on this host only (`nc ::1 21264`);
+- `address = "localhost";`: every address the name has, both of those on
+  most hosts, so a client gets in whichever its resolver tries first;
+- `address = "::";`: every interface in both families. The port is dual
+  stack (`IPV6_V6ONLY` off): IPv4 clients connect too, where the host
+  allows it (a host that keeps IPv6 sockets IPv6 only, as OpenBSD does,
+  takes IPv6 clients only, and the emulator says so at startup).
+
+The startup line says where the port listens (`serial0: Waiting for
+connection on [::1]:21264.`), and each client is reported by its address,
+IPv6 in brackets (`client [::1]:53937 connected.`), an IPv4 client of a
+dual-stack port as IPv4.
 
 A client can leave and come back: the port takes the next connection, and
 what the guest printed in between (the newest 256 KB) is sent to it first.
@@ -377,9 +393,17 @@ that is no type, is refused at startup and by `--check`.
 - `type = "udp"`: a point-to-point link to another program, one Ethernet
   frame per UDP datagram (the framing of QEMU's `-netdev dgram`). Set
   `udp_local = "127.0.0.1:5555";` (where the NIC listens) and
-  `udp_remote = "127.0.0.1:5556";` (where its frames go). The peer can be a
+  `udp_remote = "127.0.0.1:5556";` (where its frames go). Each is
+  `host:port`, the host an IPv4 address, an IPv6 one in brackets
+  (`udp_local = "[::1]:5555"; udp_remote = "[::1]:5556";`) or a name, and
+  `*` (or nothing) before the colon for every interface. Both ends share
+  one socket, so they are in one family: IPv4 where both have an IPv4
+  address (a name such as `localhost` that has both stays on IPv4, as it
+  always has), else IPv6; a local `[::]` also reaches an IPv4 remote. The
+  startup line prints the addresses in use. The peer can be a
   second Alphabox, a QEMU guest, or `test/tools/net_peer.py`, which answers
-  ARP, BOOTP and TFTP so the console can network-boot. Needs no privileges.
+  ARP, BOOTP and TFTP so the console can network-boot (`--host ::1` for
+  IPv6). Needs no privileges.
 - `type = "loopback"`: a loopback plug on the port. Every frame the
   controller transmits comes back on its own receiver; the link is up and
   nothing reaches the host. Needs no privileges. With it the SRM console's

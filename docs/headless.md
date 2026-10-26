@@ -428,7 +428,7 @@ DRIR rises.
 
 | Variable | Effect |
 | --- | --- |
-| `ALPHABOX_GDB=<port>` | Listen for gdb on 127.0.0.1:`<port>`, as the `gdb` key of `sys0` does; overrides it. |
+| `ALPHABOX_GDB=<port>` | Listen for gdb on 127.0.0.1:`<port>` and [::1]:`<port>`, as the `gdb` key of `sys0` does; overrides it. |
 | `ALPHABOX_GDB_WAIT=1` | Hold every processor before its first instruction until a gdb attaches and continues (`gdb.wait`); `0` overrides the key. |
 
 A stopped guest, its breakpoints, single steps, registers and memory, and

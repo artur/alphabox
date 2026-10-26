@@ -28,15 +28,22 @@ In the `sys0` section of `es40.cfg`:
 ```
 sys0 = tsunami
 {
-  gdb = 1234;        // listen on 127.0.0.1:1234
+  gdb = 1234;        // listen on 127.0.0.1:1234 and [::1]:1234
   gdb.wait = true;   // hold every processor before its first instruction
   ...
 ```
 
 or, without touching the configuration, `ALPHABOX_GDB=1234` and
 `ALPHABOX_GDB_WAIT=1` in the environment (they override the keys). The
-stub listens on the loopback interface only; use an SSH tunnel to debug
-from another host. It prints `%GDB-I-LISTEN` when it is ready.
+stub listens on the loopback interface only, in both families:
+`127.0.0.1` and `::1`, so `target remote localhost:1234` works whichever
+address the host's resolver gives gdb first, and `target remote
+[::1]:1234` and `target remote 127.0.0.1:1234` name one. A host with only
+one of them has that one (`%GDB-I-SKIP` names the other). Use an SSH
+tunnel to debug from another host. It prints `%GDB-I-LISTEN` when it is
+ready (`gdb stub on 127.0.0.1:1234 and [::1]:1234`), and each attach
+says where gdb came from (`%GDB-I-ATTACH: gdb attached from
+[::1]:54459`).
 
 The stub starts just before the processors' threads. By then the
 configuration has been read, a telnet serial port has had its client
@@ -226,3 +233,7 @@ console reach `P00>>>`, then attaches again and:
 
 It finally diffs the console log against `test/rom/axp_correct.log` (one
 processor) and counts JIT_VERIFY mismatches.
+
+gdb connects to `localhost`; `GDB_HOST='[::1]'` (or `127.0.0.1`) makes
+it one family. Without gdb, `test/tools/ipv6_check.sh`'s `gdb6` section
+speaks the protocol itself over `::1` (the stop reply, `g`, a detach).

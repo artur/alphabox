@@ -37,14 +37,40 @@ gives its usage and variables.
 | `ev8_simd_guest.sh` | The 21464's 1C SIMD set and 07 paired single under Linux: `ev8_simd.c` sent to `guests_check.sh`'s `linux-es47` guest on the `ev8` row through its serial console (base64 in short lines), compiled by the guest's gcc with the new words as `.long`, its SIMD and paired-single kernels checked against scalar C; PASS when the program prints `EV8SIMD: PASS` ([ev8.md](platforms/ev8.md), S5 and S6). |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
-| `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
-| `srm_console.py` | Drives the console over its telnet port: waits for the prompt (`--wake` asks a restored console for it), runs commands, stops the emulator or saves it (`--after sigusr1`). |
-| `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. |
+| `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). `GDB_HOST='[::1]'` connects over IPv6. |
+| `ipv6_check.sh` | The emulator's own endpoints over IPv6, against the console (below): the serial port on `::1` and on `::` (an IPv4 client, then an IPv6 one), the gdb stub over `::1` without gdb, a NIC's UDP link on `::1` to `net_peer.py`. |
+| `srm_console.py` | Drives the console over its telnet port: waits for the prompt (`--wake` asks a restored console for it), runs commands, stops the emulator or saves it (`--after sigusr1`). `--host` is the port's address (IPv4, IPv6 or a name). |
+| `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. `--host ::1` for a link over IPv6. |
 | `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |
 | `ev7_pal_iprs.py` | Every internal-register access in a console's PALcodes: `HW_MFPR`/`HW_MTPR` with their entry point and the bits tested or set, `HW_LD`/`HW_ST` and the EV7 registers they reach, `IMPLVER`/`AMASK`; checked against the core and the Marvel register table. `--dis` disassembles. Written for the EV7 ([platforms/marvel.md](platforms/marvel.md)); works on the ES40's console too. |
 | `unix_pal_probe.py` | A boot image that switches to the console's UNIX PALcode with SWPPAL, calls a dozen of its routines (optionally clock interrupts and a cache flush) and halts: the UNIX PALcode without a UNIX guest. |
 
 Give each `srm_run.sh` its own `PORT` to run several builds at once.
+
+`ipv6_check.sh <alphabox> <label> [section ...]` is the check for a
+change to the serial port's sockets, the gdb stub's or the UDP back
+end's ([configuration.md](configuration.md#serial-consoles)). It runs
+four machines, one after another, on ports `PORT` to `PORT + 6` (default
+21860), in `$ALPHABOX_WORK/runs/ipv6-<label>/<section>`:
+
+- `serial6`: `serial0` on `address = "::1"`; a client over IPv6 reaches
+  `P00>>>` and runs `show version`;
+- `dual`: `serial0` on `"::"`, dual stack; a client over `127.0.0.1` runs
+  `show version` and leaves, then one over `::1` gets the prompt back and
+  runs `show cpu`, and the emulator reports each by its address;
+- `gdb6`: the stub, which listens on `127.0.0.1` and `::1`; a remote
+  protocol exchange over `::1` written in the script (no gdb needed): the
+  stop reply, `g` (67 registers, the PC at reset 0x8000) and a detach,
+  after which the console reaches its prompt;
+- `udp6`: a DE500 on the UDP back end with both ends on `::1` and
+  `net_peer.py --host ::1` at the other: `boot ewa0 -protocols bootp`
+  gets the BOOTP reply and the TFTP image and runs it to its HALT.
+
+Each prints PASS or FAIL lines, with the JIT_VERIFY mismatch count, and
+the script exits 0 only if all passed. On a host without an IPv6 loopback
+it says so, with the commands that add one, and exits 2.
+`srm_cfg.py --serial-address ADDR` and `--nic-udp-host ADDR` make the
+same machines by hand.
 
 `boards_check.sh <alphabox> <label> [board ...]` is the gate for a change to
 a shared board or chipset file, which `srm_run.sh` (the ES40 only) cannot

@@ -321,7 +321,10 @@ card. The user guide is [usb.md](usb.md).
   and `gui = X11` in a configuration name the SDL window.
 - `common/`: `StdAfx`, `datatypes`, `es40_debug` (with `Exception`, what
   its `FAILURE()` throws), `es40_endian`, `config_debug`, `banner`,
-  `telnet`, and `WakeSemaphore` (a device thread's wake-up).
+  `telnet`, `WakeSemaphore` (a device thread's wake-up), and `HostSocket`
+  (the host addresses of the serial ports, the gdb stub and the UDP back
+  end, IPv4 and IPv6: `host:port` with brackets, resolving, printing, and
+  listening on every address a name has).
 - `emu/`: `emu.hpp`, the shim that stands in for MAME's header.
 - `src/` itself: the entry points `Main.cpp`, `AlphaSim.cpp`,
   `es40-cfg.cpp` (with its `*Question.hpp`), and `config.hpp.in`.
