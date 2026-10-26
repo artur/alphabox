@@ -6,6 +6,8 @@ The base is the regression test's no-VGA machine: one EV68CB, 64 MB
 change it for the SRM probes:
 
   --port N              serial0 telnet port
+  --serial-address A    serial0's address (default the base's 127.0.0.1):
+                        IPv4, IPv6 (::1, :: for both families) or a name
   --cpus N              1-4 CPUs (copies of cpu0)
   --membits N           memory.bits
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
@@ -28,6 +30,9 @@ change it for the SRM probes:
                         cache is named after it
   --nic-udp N:P         put that NIC on the UDP backend instead: listening
                         on 127.0.0.1:N, sending to 127.0.0.1:P (net_peer.py)
+  --nic-udp-host A      the address of both ends of --nic-udp instead of
+                        127.0.0.1: IPv4, IPv6 (::1, written [::1]:N) or a
+                        name (net_peer.py --host A)
   --nic-nat TFTPDIR     put that NIC on the NAT backend instead (libslirp):
                         BOOTP offers 10.0.2.15 and TFTP serves TFTPDIR,
                         bootfile boot.img
@@ -105,6 +110,7 @@ def main():
     ap.add_argument("--dir", help="directory for generated disk images (default: --out's)")
     ap.add_argument("--base", default=BASE)
     ap.add_argument("--port", type=int, default=21000)
+    ap.add_argument("--serial-address")
     ap.add_argument("--cpus", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--membits", type=int)
     ap.add_argument("--cpu-opt", action="append", default=[])
@@ -118,6 +124,7 @@ def main():
     ap.add_argument("--platform")
     ap.add_argument("--rom")
     ap.add_argument("--nic-udp")
+    ap.add_argument("--nic-udp-host", default="127.0.0.1")
     ap.add_argument("--nic-nat")
     ap.add_argument("--extra-cfg")
     ap.add_argument("--ide-cfg")
@@ -133,6 +140,12 @@ def main():
     t, n = re.subn(r"port = \d+;", "port = %d;" % args.port, t, count=1)
     if n != 1:
         sys.exit("srm_cfg: serial port setting not found in base config")
+
+    if args.serial_address is not None:
+        t, n = re.subn(r'address = "[^"]*";', 'address = "%s";' % args.serial_address,
+                       t, count=1)
+        if n != 1:
+            sys.exit("srm_cfg: serial address setting not found in base config")
 
     if args.membits is not None:
         t, n = re.subn(r"memory\.bits\s*=\s*\d+;", "memory.bits = %d;" % args.membits, t)
@@ -213,9 +226,13 @@ def main():
     if args.nic:
         if args.nic_udp:
             nic_port, peer_port = args.nic_udp.split(":")
+            host = args.nic_udp_host.strip("[]")
+            # An IPv6 address carries brackets when a port follows.
+            if ":" in host:
+                host = "[%s]" % host
             backend = ("    type = \"udp\";\n"
-                       "    udp_local = \"127.0.0.1:%s\";\n"
-                       "    udp_remote = \"127.0.0.1:%s\";\n") % (nic_port, peer_port)
+                       "    udp_local = \"%s:%s\";\n"
+                       "    udp_remote = \"%s:%s\";\n") % (host, nic_port, host, peer_port)
         elif args.nic_nat:
             backend = ("    type = \"nat\";\n"
                        "    tftp_root = \"%s\";\n"

@@ -5,7 +5,12 @@ Connects, waits for the P00>>> prompt, runs console commands one by one, then
 optionally stops the emulator. Everything received (NULs removed) goes to the
 log; the output of the commands alone goes to --cmd-log when given.
 
+--host is the port's address (127.0.0.1 by default; ::1 or a name for
+IPv6).
+
 Status lines on stdout:
+  connected=<address>:<port>         with --host: the address connected to
+                                     ([::1]:21000 for IPv6)
   status=prompt                      prompt reached
   status=noconnect / status=noprompt
   status=no-prompt-after: <cmd>      a command didn't return to the prompt
@@ -54,6 +59,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, required=True)
+    ap.add_argument("--host",
+                    help="address of the telnet port: IPv4, IPv6 (::1) or a "
+                         "name (default 127.0.0.1); prints connected=<the "
+                         "address the connection took>")
     ap.add_argument("--log", required=True, help="full console log")
     ap.add_argument("--cmd-log", help="output of the commands only")
     ap.add_argument("--timeout", type=int, default=300, help="wait for the first prompt")
@@ -76,10 +85,11 @@ def main():
     # Retry quickly: the emulator opens its telnet port a moment after it
     # starts, and a one-second retry quantised every timed run to whole
     # seconds -- which is a quarter of what cpu_bench.sh used to measure.
+    host = (args.host or "127.0.0.1").strip("[]")
     s = None
     for _ in range(800):
         try:
-            s = socket.create_connection(("127.0.0.1", args.port), timeout=2)
+            s = socket.create_connection((host, args.port), timeout=2)
             break
         except OSError:
             time.sleep(0.05)
@@ -87,6 +97,12 @@ def main():
         print("status=noconnect")
         return 1
     s.settimeout(1)
+    if args.host:
+        # Which address and family the connection took: a name such as
+        # localhost may resolve to either.
+        peer = s.getpeername()
+        print("connected=" + ("[%s]:%d" % peer[:2] if s.family == socket.AF_INET6
+                              else "%s:%d" % peer[:2]), flush=True)
 
     # The port escapes a data byte 0xff as IAC IAC (RFC 854), as a telnet
     # client expects; undo that, so a log shows what the guest sent. Other

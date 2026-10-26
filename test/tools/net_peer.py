@@ -5,8 +5,10 @@ The NIC's config block:
     type = "udp";
     udp_local = "127.0.0.1:<nic port>";
     udp_remote = "127.0.0.1:<peer port>";
+(over IPv6 "[::1]:<nic port>" and "[::1]:<peer port>", with --host ::1)
 
-  net_peer.py --listen <peer port> --nic <nic port> [--file IMAGE | --halt-kb N]
+  net_peer.py --listen <peer port> --nic <nic port> [--host 127.0.0.1]
+              [--file IMAGE | --halt-kb N]
               [--server-ip 10.0.2.2] [--client-ip 10.0.2.15]
               [--boot-name boot.img] [--log FILE] [--timeout S]
               [--flood PPS]
@@ -59,9 +61,14 @@ class Peer:
         self.image = image
         self.sip = ip_bytes(args.server_ip)
         self.cip = ip_bytes(args.client_ip)
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("127.0.0.1", args.listen))
-        self.nic = ("127.0.0.1", args.nic)
+        # Both ends on --host, in its family: IPv4, or IPv6 (the NIC's
+        # udp_local and udp_remote then read "[::1]:<port>").
+        host = args.host.strip("[]")
+        family, _, _, _, here = socket.getaddrinfo(host, args.listen, 0,
+                                                   socket.SOCK_DGRAM)[0]
+        self.sock = socket.socket(family, socket.SOCK_DGRAM)
+        self.sock.bind(here)
+        self.nic = socket.getaddrinfo(host, args.nic, family, socket.SOCK_DGRAM)[0][4]
         self.log = open(args.log, "a") if args.log else None
         self.stats = {"frames_in": 0, "frames_out": 0, "arp": 0, "bootp": 0,
                       "tftp_rrq": 0, "tftp_blocks": 0, "tftp_done": 0,
@@ -233,6 +240,11 @@ class Peer:
 
     def run(self):
         self.t0 = time.time()
+        def fmt(a):
+            v6 = self.sock.family == socket.AF_INET6
+            return ("[%s]:%d" if v6 else "%s:%d") % a[:2]
+        self.say("listening on %s, the NIC at %s" %
+                 (fmt(self.sock.getsockname()), fmt(self.nic)))
         self.sock.settimeout(0.5)
         end = self.t0 + self.args.timeout
         if self.args.flood:
@@ -270,6 +282,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--listen", type=int, required=True)
     ap.add_argument("--nic", type=int, required=True)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="the address of both ends: IPv4, IPv6 (::1) or a name")
     ap.add_argument("--file")
     ap.add_argument("--halt-kb", type=int, default=64)
     ap.add_argument("--server-ip", default="10.0.2.2")

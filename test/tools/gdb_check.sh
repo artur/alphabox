@@ -9,6 +9,8 @@
 # usage: PORT=<serial port> GDB_PORT=<gdb port> gdb_check.sh <alphabox> <label> [cpus]
 #   Runs in $ALPHABOX_WORK/runs/gdb-<label> (ALPHABOX_WORK defaults to
 #   <repo>/lab). GDB defaults to /opt/homebrew/bin/gdb, or the gdb on PATH.
+#   GDB_HOST is where gdb connects (default localhost; 127.0.0.1, or
+#   [::1] for IPv6: the stub listens on both).
 #   Exit status 0 when every check passed.
 set -u
 export LC_ALL=C
@@ -24,6 +26,7 @@ CPUS=${3:-1}
 PORT=${PORT:-21000}
 GDB_PORT=${GDB_PORT:-$((PORT + 1))}
 GDB=${GDB:-/opt/homebrew/bin/gdb}
+GDB_HOST=${GDB_HOST:-localhost}
 [ -x "$GDB" ] || GDB=$(command -v gdb)
 WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/runs/gdb-$LABEL
@@ -77,7 +80,7 @@ cat > s1.gdb <<EOF
 set pagination off
 set confirm off
 set heuristic-fence-post 64
-target remote localhost:$GDB_PORT
+target remote $GDB_HOST:$GDB_PORT
 echo @@ threads\n
 info threads
 echo @@ pc-at-reset\n
@@ -142,7 +145,7 @@ set pagination off
 set confirm off
 set heuristic-fence-post 64
 set breakpoint always-inserted on
-target remote localhost:$GDB_PORT
+target remote $GDB_HOST:$GDB_PORT
 echo @@ attached\n
 printf "PC=%#lx\n", \$pc
 info threads
