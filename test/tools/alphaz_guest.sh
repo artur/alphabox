@@ -90,15 +90,17 @@ host_ready() {
 
 # --- build -------------------------------------------------------------------
 B=$OUT/build
-OUT=$B NADA=$NADA "$R/guest/alphaz/build.sh" > "$OUT/build.log" 2>&1 ||
-  { cat "$OUT/build.log"; echo "alphaz_guest: build failed"; exit 2; }
-tail -2 "$OUT/build.log"
-L=$NADA/lib
-"$NADA/nada" -t alpha-windows -o "$B/SHUTDOWN.EXE" -I "$NADA/include" \
-  "$T/ntbench/shutdown.c" "$T/ntbench/user32.def" "$T/ntbench/advapi32.def" \
-  "$L/windows.c" "$L/printf.c" "$L/stdio.c" "$L/scanf.c" "$L/string.c" "$L/stdlib.c" \
-  "$L/ctype.c" "$L/math.c" "$L/fltconv.c" "$L/time.c" "$L/setjmp.c" "$L/windows/kernel32.def" ||
-  { echo "alphaz_guest: SHUTDOWN.EXE failed"; exit 2; }
+build() {
+  OUT=$B NADA=$NADA "$R/guest/alphaz/build.sh" > "$OUT/build.log" 2>&1 ||
+    { cat "$OUT/build.log"; echo "alphaz_guest: build failed"; return 1; }
+  tail -2 "$OUT/build.log"
+  local L=$NADA/lib
+  "$NADA/nada" -t alpha-windows -o "$B/SHUTDOWN.EXE" -I "$NADA/include" \
+    "$T/ntbench/shutdown.c" "$T/ntbench/user32.def" "$T/ntbench/advapi32.def" \
+    "$L/windows.c" "$L/printf.c" "$L/stdio.c" "$L/scanf.c" "$L/string.c" "$L/stdlib.c" \
+    "$L/ctype.c" "$L/math.c" "$L/fltconv.c" "$L/time.c" "$L/setjmp.c" "$L/windows/kernel32.def" ||
+    { echo "alphaz_guest: SHUTDOWN.EXE failed"; return 1; }
+}
 
 # the configuration's values for check: expect <cfg> <os> [ev8 cases]
 expect() {
@@ -115,6 +117,26 @@ expect() {
 }
 
 # --- Windows -------------------------------------------------------------------
+# focus_click <frame> <keypipe>: the PS/2 mouse to the middle of the band
+# AlphaZ's frame shows, and a left click there
+focus_click() {
+  local frame=$1 keys=$2 box x y h dx dy
+  box=$($FB band "$frame" | sed -n 's/^band \([0-9]*\),\([0-9]*\)-\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
+  [ -n "$box" ] || return 1
+  set -- $box
+  x=$(( ($1 + $3) / 2 )); y=$(( ($2 + $4) / 2 ))
+  h=$(sed -n 's/.*-[0-9]*x\([0-9]*\)\.ppm$/\1/p' <<< "$frame")
+  echo "mouse:-3000:3000" >> "$keys"
+  sleep 8
+  dx=$x; dy=$(( ${h:-480} - 1 - y ))
+  while [ $dx -gt 0 ] || [ $dy -gt 0 ]; do
+    echo "mouse:$(( dx > 4 ? 4 : dx )):-$(( dy > 4 ? 4 : dy ))" >> "$keys"
+    dx=$(( dx > 4 ? dx - 4 : 0 )); dy=$(( dy > 4 ? dy - 4 : 0 ))
+  done
+  echo "mouse:0:0:1 mouse:0:0:0" >> "$keys"
+  sleep 25
+}
+
 win_guest() { # win_guest <guest> <cpu row>
   local g=$1 cpu=$2 D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run cfg=es40-window-smp.cfg
   local IMG any= f ref i n name names done_at start
@@ -183,6 +205,15 @@ win_guest() { # win_guest <guest> <cpu row>
     [ "$i" -lt "$(echo $names | wc -w)" ] || break
     echo ctrl-tab >> "$run/keys.txt"
     f=$($FB change "$run/fb" "$ref" 20 "$PID")
+    if [ "$f" = same ] && [ "$i" = 1 ]; then
+      # the keys went elsewhere: click the window's band to give it the
+      # focus, from the bottom left corner in steps small enough that
+      # Windows' pointer acceleration leaves them 1:1, and try again
+      echo "   Ctrl+Tab changed nothing: clicking the window"
+      focus_click "$ref" "$run/keys.txt"
+      echo ctrl-tab >> "$run/keys.txt"
+      f=$($FB change "$run/fb" "$ref" 20 "$PID")
+    fi
     [ "$f" = same ] && { echo "   Ctrl+Tab changed nothing"; break; }
     ref=$f
   done
@@ -263,23 +294,30 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   fi
 }
 
-# the EV8 page's cases, from az_ev8.c
-ev8_n=$(grep -cE '^ +add_case\(' "$R/guest/alphaz/az_ev8.c")
+# Everything runs from main, called on the file's last line, so bash has
+# read the whole script before the first guest boots: an edit to it while
+# guests run cannot change what they do.
+main() {
+  local g rc_all=0 ev8_n
+  build || return 2
+  # the EV8 page's cases, from az_ev8.c
+  ev8_n=$(grep -cE '^ +add_case\(' "$R/guest/alphaz/az_ev8.c")
+  for g in "$@"; do
+    ev8_cases=
+    case $g in
+    w2k-ev68cb) win_guest "$g" ev68cb ;;
+    w2k-ev7) win_guest "$g" ev7 ;;
+    w2k-ev7z) win_guest "$g" ev7z ;;
+    w2k-ev8) ev8_cases=$ev8_n; win_guest "$g" ev8 ;;
+    linux) linux_guest "$g" linux ;;
+    es47-ev7) linux_guest "$g" linux-es47 ev7 ;;
+    es47-ev7z) linux_guest "$g" linux-es47 ev7z ;;
+    es47-ev8) ev8_cases=$ev8_n; linux_guest "$g" linux-es47 ev8 ;;
+    es47-ev8t4) ev8_cases=$ev8_n; linux_guest "$g" linux-es47 ev8 4 ;;
+    *) report "$g" FAIL "unknown guest"; false ;;
+    esac || rc_all=1
+  done
+  return $rc_all
+}
 
-rc_all=0
-for g in "$@"; do
-  ev8_cases=
-  case $g in
-  w2k-ev68cb) win_guest "$g" ev68cb ;;
-  w2k-ev7) win_guest "$g" ev7 ;;
-  w2k-ev7z) win_guest "$g" ev7z ;;
-  w2k-ev8) ev8_cases=$ev8_n; win_guest "$g" ev8 ;;
-  linux) linux_guest "$g" linux ;;
-  es47-ev7) linux_guest "$g" linux-es47 ev7 ;;
-  es47-ev7z) linux_guest "$g" linux-es47 ev7z ;;
-  es47-ev8) ev8_cases=$ev8_n; linux_guest "$g" linux-es47 ev8 ;;
-  es47-ev8t4) ev8_cases=$ev8_n; linux_guest "$g" linux-es47 ev8 4 ;;
-  *) report "$g" FAIL "unknown guest"; false ;;
-  esac || rc_all=1
-done
-exit $rc_all
+main "$@"; exit $?
