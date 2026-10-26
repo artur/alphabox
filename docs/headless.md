@@ -84,8 +84,10 @@ a line of text into tokens for a US keyboard layout.
 
 Besides keys, the two variables take these tokens:
 
-- **`dbg-dump`** (`KEYPIPE` only, JIT builds): every processor prints its
-  state at its next dispatch batch, as `%DBG-I-DUMP`/`CODE`/`STACK` lines.
+- **`dbg-dump`** (`KEYPIPE` only, JIT builds): every running processor
+  prints its state at its next dispatch batch, as `%DBG-I-DUMP`/`CODE`/
+  `STACK` lines; a processor still parked, waiting for its start address,
+  has no batch and prints nothing.
   That is the PC, SDE, mode, ASN, PAL base, `EXC_ADDR`, `EXC_SUM`, `VA`,
   `MM_STAT`, both register banks, the code around the PC (read physically
   when the PC is in PALcode) and 512 bytes of stack. It is for looking at

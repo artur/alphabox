@@ -19,12 +19,13 @@
 # then exit with status 0 on SIGTERM.
 #
 # A console that stops answering (`no prompt`) is looked at before the
-# emulator is stopped: SIGUSR2 has every processor print its state at its
-# next dispatch batch (PC, registers, the code at the PC and the stack:
-# `%DBG-I-DUMP` lines in alphabox.out, docs/headless.md's dbg-dump; JIT
-# builds), and SIGUSR1 then saves the whole machine to stall.axp in the
-# run's directory and exits (ALPHABOX_SNAPSHOT_EXIT), a state that
-# ALPHABOX_RESTORE resumes at the stall.
+# emulator is stopped: SIGUSR2 has every running processor print its state
+# at its next dispatch batch (PC, registers, the code at the PC and the
+# stack: `%DBG-I-DUMP` lines in alphabox.out, docs/headless.md's dbg-dump;
+# JIT builds; a processor still parked, waiting for its start address, has
+# no batch and prints nothing), and SIGUSR1 then saves the whole machine to
+# stall.axp in the run's directory and exits (ALPHABOX_SNAPSHOT_EXIT), a
+# state that ALPHABOX_RESTORE resumes at the stall.
 #
 # Output: one line per board and run, `PASS|FAIL <board>-init <seconds>
 # <reason>`, also in $ALPHABOX_WORK/runs/boards-<label>/init-summary.txt
@@ -216,8 +217,11 @@ for spec in $BOARDS; do
     "bad no prompt"*)
       if kill -0 "$PID" 2>/dev/null; then
         kill -USR2 "$PID" 2>/dev/null
+        # One header line per processor; a parked one never prints, so the
+        # wait is bounded.
+        dumped() { grep -acE '%DBG-I-DUMP: CPU[0-9]+ pc=' "$D/alphabox.out"; }
         k=0
-        while [ "$(grep -ac '%DBG-I-DUMP' "$D/alphabox.out")" -lt $((n * TPUS)) ] && [ $k -lt 50 ]; do
+        while [ "$(dumped)" -lt $((n * TPUS)) ] && [ $k -lt 50 ]; do
           sleep 0.2; k=$((k + 1))
         done
         if [ "${MARVEL_INIT_SNAPSHOT:-1}" = 1 ]; then
@@ -225,7 +229,7 @@ for spec in $BOARDS; do
           k=0
           while kill -0 "$PID" 2>/dev/null && [ $k -lt 600 ]; do sleep 0.2; k=$((k + 1)); done
         fi
-        st="$st; $(grep -ac '%DBG-I-DUMP' "$D/alphabox.out") processors dumped$([ -s "$D/stall.axp" ] && echo ", stall.axp saved")"
+        st="$st; $(dumped) of $((n * TPUS)) processors dumped$([ -s "$D/stall.axp" ] && echo ", stall.axp saved")"
       fi ;;
     esac
     if kill -0 "$PID" 2>/dev/null; then
