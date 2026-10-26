@@ -21,6 +21,7 @@ first audit was made on 2026-09-18; later entries carry their dates.
 | [How to check the processor yourself](#how-to-check-the-processor-yourself) | the verify lane, its blind spots, guest programs, trap tracing |
 | [Known divergences](#known-divergences) | where the processor differs, ranked by what a guest would notice |
 | [What was checked and found correct](#what-was-checked-and-found-correct) | so that it does not get re-litigated |
+| [Guest time](#guest-time-checked-2026-10-26) | what keeps a guest's clock, our changes since September and ES40-Emu's, checked |
 | [A guest's floating-point exception that is the guest's own](#a-guests-floating-point-exception-that-is-the-guests-own) | Direct3D 7 on Windows 2000 RC2 |
 | [The rule this audit produced](#the-rule-this-audit-produced) | two references, not one |
 
@@ -1236,6 +1237,109 @@ until they were fixed:
   but a static exit, a PC-relative branch in PALcode to `PAL_BASE`,
   could be, and then skipped the flush. The dispatcher no longer fills a
   link into it.
+
+## Guest time (checked 2026-10-26)
+
+ES40-Emu's maintainer warned that keeping OpenVMS, Windows and Linux
+clocks right, wall-clock pinned, through the firmware's calibration
+loops too, took a long time to get right, and that the three want
+different things. Alphabox took that work in September (the review that
+ended at ES40-Emu's `2aa5e11`, 2026-09-15: the port-from-es40 skill's
+port history) and reworked the ALi's timer, interrupt controllers and
+TOY clock on 2026-10-20. This section is the check that what the
+September code did for guest time is still done, and what ES40-Emu has
+changed since. The measured drift and calibration are in
+[development.md](development.md), "Guest clocks".
+
+### What keeps a guest's time
+
+| Clock | Who keeps time by it | How it follows the host |
+| --- | --- | --- |
+| The cycle counter (`RPCC`) | Linux on one processor (clocksource `rpcc`); the console's and Linux's processor-speed calibrations; Windows' `KeStallExecutionProcessor` | `state.cc` advances by host time times the configured speed at every dispatch batch and every read (`sync_cc_wallclock`); two reads never return the same value (`rpcc_read`'s floor, repaid out of later progress); a gap over a second (a debugger stop, a host sleep) counts as one second. The JIT's inline stub does the same arithmetic (`ALPHABOX_JIT_RPCCTEST=1` compares them). |
+| The interval timer | OpenVMS and Windows count it for the time of day; the console calibrates the processor's speed in cycles per tick | Processor 0 fires it from its dispatch loop (`interval_timer_poll`), at the rate register A of the TOY clock selects (0x26, 1024 Hz, from power on, as a battery-backed part keeps it), the first tick at once. The schedule advances one period a tick, so ticks a busy or descheduled thread missed are repaid: at least half a period apart (at most twice the rate, the gaps modulated so the console's calibration windows never agree), and a backlog over a second is dropped. |
+| The TOY clock (MC146818) | every guest at boot, for the time of day | the host's wall clock plus the offset the guest last set; UIP in the last 244 us of each of the clock's own seconds; PF at the programmed rate, counted from a fixed epoch |
+| The 8254 | Linux's speed calibration (counter 2 in mode 0, OUT polled on port 61h bit 5); stall loops counting port 61h's refresh toggle | each counter's count and OUT derived from host time since its load; the ALi thread steps the counters every millisecond for IRQ0, with a 30 ms catch-up cap |
+
+### Our changes since 2026-09-15
+
+Each read before and after (`git show`); the guests' register traffic
+for the TOY changes was traced with `ALPHABOX_TRACE_TOY` when they were
+made.
+
+| Commit | What changed | What guest time needed from the earlier code | Still done |
+| --- | --- | --- | --- |
+| `700b174` | the 8254 as `CI8254`, under its own lock | counts and OUT from host time since the load; IRQ0 once per rising edge of OUT0; the 30 ms catch-up cap | yes: the same words and arithmetic, elapsed time turned into input clocks exactly (whole seconds split off) instead of through microseconds |
+| `2fdeb60` | mode 0: OUT stays high after terminal count, the count wraps | Linux's `calibrate_cc_with_pit` polls OUT2 in mode 0 | yes, and fixed: the timer thread set NULL COUNT at terminal count, which `out()` read as "no count loaded", low in mode 0, so OUT2 fell again within a millisecond (the defect ES40-Emu fixed in `f77dbb8`, which the September code had) |
+| `49b3047`, `e04571c`, `62a79ad` | a restore resumes each counter's phase; a new count waits for the end of the cycle in modes 2 and 3; BCD | nothing a guest's clock uses: Linux and the consoles load stopped counters | yes |
+| `3afc922`, `20797eb`, `8b2f42f` | the 8259 pair as `CI8259`; special mask mode updates INT at once; `irq_requested` asks the model | the cascade rule of `0a57dbd` (master IRQ2 follows the slave's output in either trigger mode), the master's INT to Cchip DRIR bit 55 with the lock held | yes: the rule moved verbatim (`CI8259::update_output`). The ES40's interval timer does not pass through the 8259s: the Cchip raises it on every processor's IRQ2 |
+| `56347ad` | the TOY clock as `CMc146818`, on references to the ALi's state | register A 0x26 at power on (the console calibrates before it programs the clock); the interval timer's period from register A, read without a lock; PF from host time against a fixed epoch; time from the host's wall clock plus the offset | yes: the ALi still writes 0x26 in `init()`, `interval_period_ns` is the same formula, and the PF count and the time are the old code's |
+| `15e2ed9` | UIP high in the last 244 us of the clock's own second, not of a second counted from the first access | a once-a-second UIP edge (Linux's `rpcc_after_update_in_progress` times two of them) | yes: same width and rate, now at the rollover the time registers follow |
+| `3c8858c`, `605d65a`, `23b380e` | C, D and UIP read only, a time byte written with SET clear sets the clock; port 71h reads live and reading C clears it; 12 at noon and midnight in 12-hour mode | the console, Windows 2000, OpenVMS and Linux write A and B (OpenVMS the time bytes with SET set), read C only once (Linux, after setting PIE), select before every read and run in 24-hour mode | yes: each select-then-read pair returns what it did before |
+| `fbb8af4` | the host clock read from the generic timer (`cntvct_el0`), guest cycles per host tick as 32.32 fixed point | `RPCC` from host time | yes: the same counter `steady_clock` reads; truncation makes the counter slow by under one part in 2^32 |
+| `f1fc924`, `c62e69a` | `RPCC` through a generated stub, rebuilt after a code reclaim | the per-read sync and floor of `2766e04` | yes: the stub does `rpcc_read`'s arithmetic, the one-second cap included |
+| `77a7a87` | `KeStallExecutionProcessor`'s loop is handed the cycles it waits for | time of day from the interval timer | yes for the time of day; `RPCC` runs ahead, a divergence of its own ([above](#a-busy-wait-is-handed-the-time-it-is-waiting-for)) |
+| `db8a902` | a guest spinning on port 61h sleeps to the next refresh toggle | the toggle every 15 us of host time | yes: the toggle comes at the same host instants, the reads in between are not answered early |
+| `39f040a`, `04b0d86` | the idle pacer does not sleep on a masked interrupt; a learned idle loop does not survive a restore | processor 0 never sleeps past its next tick | yes: `jit_idle_pause` sleeps until the earlier of 1 ms and `next_timer_fire`, and the batch ends after it, so the next fires the tick with a fresh time |
+| `15b74a4`, `e1cd0d3` | the delayed interrupt countdown is one read-modify-write; the Cchip's DRIR, DIM, DIR and MISC read under their writers' lock | the tick sets MISC<7:4> and raises IRQ2 at once | yes |
+| `649b418` | the dead "speed factor" loop goes | `RPCC` from host time, not from instructions | yes: the loop fed only itself |
+| `7631d98` | `interval_timer_poll` out of the two dispatch loops, for QUIESCE | the count-preserving schedule | yes: the same code, called from the same places, and from QUIESCE's wait |
+| `2905f45` | the native OpenVMS PALcode routines go | OpenVMS's clock interrupt | yes: it enters the console's PALcode, as on the hardware |
+| `13b7385`, `3b4cb06` | the TOY's starting offset from one `timezone`/`time` seed for the ALi and the Marvel CMM | the TOY starts at the host's local time | yes |
+| `6789dc2`, `8852249`, `8d695ee`, `03314d3`, `80fc4b1`, `34825a2` | the Marvel boards' own clocks: RBOX_IT and the CMM's TOY | (not the ES40's path) | the console reports the RBOX_IT rate it programs in the HWRPB ([marvel.md](platforms/marvel.md)), and the emulator ticks at it |
+
+### ES40-Emu since `2aa5e11`
+
+Read in a clone with git only. `fe048da` (2026-09-07, the modulated
+catch-up gaps) is before `2aa5e11` and was taken in September
+(`2e8e8ae`).
+
+| Commit | What it fixes, and for which guest | Here |
+| --- | --- | --- |
+| `95b5235`, `3ab1f2f`, `45e8d27`, `fab7ebc` | an idle guest that never issues `WTINT` (HP OpenVMS 8.4, Tru64, NetBSD) holds a host core at 100%: a configured `idle_detect` naps when the dispatcher sees full batches from a small set of PCs (at IPL 3 for OpenVMS), one processor only; its history is cleared on reset and restore | not the same problem for guest time: an idle OpenVMS or Linux guest here spins a host core too (host cost only, the clocks follow the host either way). Windows' idle loop is recognised by its instruction words (`nt_idle_head`); there is no such pacing for OpenVMS or Linux. The learned loops are cleared on a restore (`04b0d86`) but not on a TIG reset, which only the update utility's exit causes (below) |
+| `9203738` | after a detected-idle nap, processor 0 resumed the batch before firing a due tick: late ticks | already solved: `jit_idle_pause` ends the batch, and the next one fires the tick with a fresh time |
+| `f4cbe03` | the nap polled every 100 us (later 1000 us) instead of being woken: interrupts, stop and reset now notify the wait, and a due tick is fired after it | already solved: the idle pause waits on a condition variable that `irq_h` notifies (`idle_wake`), bounded by 1 ms and the next tick; a stop or reset waits at most that millisecond |
+| `accc531` | one time sample per PCI transaction, so every device answering it sees the same instant; the S3's retrace status from its CRTC and clock settings (firmware and drivers that wait for vertical retrace) | already solved for the retrace: input status 1 follows the programmed refresh from host time (`VGACard`, port 3DAh). No device here answers a transaction as a group that would need one shared instant |
+| `0a09e28`, `790ccd1` | positive decoders before subtractive ones: the ALi's PIT, PIC, port 61h and ELCR answer only when no other device claims the address (and decode positively in docking mode) | not here: nothing else registers those ports, and there is no docking mode |
+| `f77dbb8` | mode 0 terminal count set NULL COUNT, so `pit_out()` read OUT low and Linux's port 61h poll missed the edge ("fixes other linuxes") | had it, fixed here independently (`2fdeb60`, above) |
+| `5a66ba3`, `12cbdfa`, `9fc2774` | fewer interrupt polls; JIT speed; the console's decompression budget | not timing |
+
+### Found by this check: a starved thread lost ticks
+
+`interval_timer_poll` repays missed ticks at least half a period apart
+(0.7 of one on average, `tick_next_gap_ns`), so a processor 0 thread
+repays at most about 1.4 times the rate while it runs. A thread the host
+gives less than about 70% of a core falls behind for good: the backlog
+grows past a second, is dropped, and a guest that counts ticks loses the
+time. Measured at the console's prompt with `ALPHABOX_IRQSTATS=1`, the
+emulator stopped for 20 ms in every 50 (SIGSTOP and SIGCONT, a 60%
+share): the timer ran at 786 to 858 Hz instead of 1024, and OpenVMS 8.4
+lost 108 s in ten minutes; unthrottled on the shared host, at a load of 9
+to 30, it lost 22.5 s in twenty. Since `3a0b44f` a backlog of more than
+32 periods (a thread starved, not one stalled for a moment) is repaid
+with a quarter of the gap, still modulated: at the same share the timer
+runs at 1018 to 1030 Hz and OpenVMS keeps time to 0.1 s an hour. A
+thread that keeps up never reaches it, so unthrottled the console still
+measures 800 MHz and the timer runs at 1024 Hz. A console calibrating
+on a starved thread measures a wrong speed with or without the fix (its
+cycle counter follows the host, the ticks wait for the thread). The
+measurements are in [development.md](development.md), "Guest clocks".
+
+### What is left
+
+- **The learned loops survive a TIG reset.** `ResetForSystemReset`
+  keeps `m_idle_pc`, `m_park_pc` and `m_stall_pc`; a guest booted after
+  the reset with other code at the stall loop's address would have its
+  `RPCC` advanced there. Only the update utility's exit resets the
+  machine, so no guest flow reaches it today.
+- **1024 Hz is 976562 ns.** The period is truncated to whole
+  nanoseconds, so the ES40's interval timer runs 0.5 parts per million
+  fast: 1.8 ms an hour.
+- **The HWRPB's cycle frequency is a whole number of picoseconds.** The
+  console measures the cycle time in picoseconds, so `speed = 667M`
+  (1499.25 ps) is reported as 666666666 Hz, 500 ppm from the counter the
+  emulator runs, and 833M as 833333333 (400 ppm). The real parts ran at
+  those reported rates; a `speed` that is a whole number of picoseconds
+  agrees with its HWRPB.
 
 ## A guest's floating-point exception that is the guest's own
 

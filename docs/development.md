@@ -34,6 +34,7 @@ gives its usage and variables.
 | `marvel_init_check.sh` | The EV7 boards with more processors (es47 2, es80 and gs1280 4): `init` twice, and every secondary started again each time, counted in the console's messages, the HWRPB's processor slots and `show cpu`. A console that stops answering gets every processor's state dumped (SIGUSR2) and the machine saved to `stall.axp` (SIGUSR1) before the emulator stops. `boards_check.sh` runs it after its boards. |
 | `snap_roundtrip.sh` | Every board saved at its console prompt, restored and saved again: the two state files compared byte for byte, part by part, and the restored console asked the same commands again. |
 | `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console; OpenVMS on the DS20E, DS20, DS10 and DS20L when named) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
+| `clock_drift.sh` | A guest's clock against the host's: `vms-es40`, `linux` or `w2k` of `guests_check.sh` (whose boot and login it sources) cold booted on a clone, its clock read just after login, a minute later and N minutes later (20 by default), the drift in seconds per hour, PASS/FAIL against a bound (2 s per hour). Also the Linux guest's interval timer rate against the HWRPB's. |
 | `ev8_simd_guest.sh` | The 21464's 1C SIMD set and 07 paired single under Linux: `ev8_simd.c` sent to `guests_check.sh`'s `linux-es47` guest on the `ev8` row through its serial console (base64 in short lines), compiled by the guest's gcc with the new words as `.long`, its SIMD and paired-single kernels checked against scalar C; PASS when the program prints `EV8SIMD: PASS` ([ev8.md](platforms/ev8.md), S5 and S6). |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
@@ -155,6 +156,116 @@ chipset code, the board rows or the chip revisions, which an operating
 system may read and act on: `guests_check.sh <alphabox> <label> vms-ds20e
 vms-ds20 vms-ds10 vms-ds20l`. The DS20L's console is the one its update
 utility wrote into `lab/ds20l-lfu/flash.rom`.
+
+#### Guest clocks
+
+`clock_drift.sh <alphabox> <label> <guest> [minutes]` measures how a
+guest keeps time: `vms-es40`, `linux` or `w2k`, configured, booted and
+logged in by `guests_check.sh`'s own code (it sources that script). After
+the login it reads the guest's clock five times in a row (`DRIFT_READS`),
+again a minute later and again after `minutes` (`DRIFT_MINUTES`, 20 by
+default):
+
+- OpenVMS: `WRITE SYS$OUTPUT F$TIME()`, the time `SHOW TIME` prints, to
+  the hundredth; `SHOW TIME` itself is logged beside it.
+- Linux: `date +%s.%N`. The Linux reading also takes the timer's count in
+  `/proc/interrupts`, so the rate of the interval timer the guest takes is
+  measured over the first minute and over the run, against the HWRPB's
+  `timer frequency` in `/proc/cpuinfo`; and it logs the cycle frequency,
+  the clocksource and what the kernel said of its cycle counter.
+- Windows 2000: `echo %TIME% > COM1` typed into a command window through
+  the key pipe, with `serial0` moved to a telnet port, to the hundredth.
+  When nothing arrives on the port the command window is read from the
+  screen instead, with tesseract. Neither works yet: the RC2 image's COM1
+  gave nothing, and tesseract misreads the console's raster font, which
+  shows the time plainly (18:13:44.21 read as "18 213=44_.21"). Matching
+  its glyphs exactly, as `guests_check.sh` reads the taskbar clock, is the
+  next step.
+
+The offset of a read is the guest's clock minus the host's when its line
+arrived on the serial port; a reading is the mean of its reads, and their
+spread is the resolution the run actually had. The drift is the change of
+the offset between the first and the last reading, per hour of host time,
+and the run passes when it is within `DRIFT_BOUND` (2 s per hour). The
+host's load average is noted at each reading. The host's monotonic clock
+is kept beside its wall clock: a run in which they part by more than a
+second (the host slept, or its clock was set) or whose last reading came
+more than a minute late ends `RERUN`, not PASS or FAIL. Before it starts,
+the host needs memory pressure level 1, under 17.5 GB of swap in use and
+over 4 GB free (`DRIFT_SKIP_HOSTCHECK=1` skips the check). Output:
+`$ALPHABOX_WORK/runs/clock-<label>/<guest>.txt` (the result),
+`<guest>.chat` (the readings), `<guest>.log` (the console). Run one guest
+at a time, with `GUESTS_PORT_BASE` set when other runs use the default
+ports. `DRIFT_DUTY=<run_ms>:<stop_ms>` stops and continues the emulator
+(SIGSTOP, SIGCONT) from the first reading on, so it runs `run_ms` of every
+`run_ms + stop_ms`: a host that gives it that share, the same every run,
+without loading anyone else's work.
+
+The measurements of 2026-10-26, on the AArch64 JIT lane, the ES40 with one
+EV68 at 833 MHz (two at 800 MHz for Windows); "main" is `2c4f8df`, "fix"
+the same with `3a0b44f` ([cpu-fidelity.md](cpu-fidelity.md), "Guest
+time"). Load is the host's one-minute load average at the first, the
+one-minute and the last reading; the spread is the largest difference
+between the five reads of one reading, the resolution the run had.
+
+| Guest | Binary | Share of the host | Minutes | Load | Spread | Drift | |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenVMS 8.4 | main | the shared host's | 20 | 28.9, 12.0, 9.1 | 0.008 s | -67.2 s/h | FAIL |
+| OpenVMS 8.4 | main | the shared host's | 10 | 3.3, 26.2, 5.6 | 0.148 s | -0.05 s/h | PASS |
+| OpenVMS 8.4 | main | 58% (`DRIFT_DUTY=30:20`) | 10 | 6.7, 4.6, 7.3 | 0.266 s | -644.6 s/h | FAIL |
+| OpenVMS 8.4 | fix | 58% (`DRIFT_DUTY=30:20`) | 10 | 5.5, 4.5, 6.4 | 0.034 s | -0.10 s/h | PASS |
+| Linux 7.0.1 | fix | the shared host's | 20 | 7.0, 10.8, 24.6 | 0.028 s | +1.54 s/h | PASS |
+| Windows 2000 RC2 | fix | the shared host's | 20, 6 | 48.4, 16.5, 46.6 | | not read | RERUN |
+
+- Windows 2000 reached its desktop with the taskbar clock on the host's
+  minute both times, and the command window showed `%TIME%`, but neither
+  reading path took it (above): no drift figure yet.
+
+- The first OpenVMS run lost 22.5 s in twenty minutes on an unthrottled
+  emulator while the host's load ran from 9 to 30: processor 0's thread
+  starved, the interval timer's backlog passed a second and was dropped.
+  The second, mostly at a load of 3 to 6, dipped by 0.3 s while the load
+  was 26 and repaid it (`ALPHABOX_IRQSTATS`: 4819 ticks in one five
+  seconds, 5490 in the next). The 58% runs are that, made the same every
+  time.
+- Linux keeps time by jiffies (`jiffies` is the clocksource: the kernel is
+  an SMP build, which registers `rpcc` only on a uniprocessor). Its
+  interval timer ran at 1023.987 Hz over the first minute and 1023.980 Hz
+  over the run, against the HWRPB's 1024.00: 19 parts per million slow,
+  0.07 s an hour. The +1.54 s/h is the kernel's own: on Alpha `USER_HZ` is
+  1024, so `TICK_USEC` rounds 976.5625 us up to 977 and NTP's base second
+  is 1.000448 s, +1.61 s/h, which a real ES40 shows too. The emulator's
+  part is the -0.07.
+- Linux also printed "HWRPB cycle frequency bogus, and unable to estimate
+  a proper value!": `validate_cc_value`'s table of speeds per processor
+  starts the EV68CB at 1 GHz, so at 833 MHz it throws its own estimate
+  away and keeps the HWRPB's 833333333 (with the jiffies clocksource it
+  does not time anything by it).
+
+The firmware's calibration, with `srm_probe.sh` (HWRPB at physical 2000h:
+`e -q pmem:2068` is the interval clock frequency times 4096, `pmem:2070`
+the cycle counter frequency):
+
+| Board | `speed` | Start line | `show config` | HWRPB cycle frequency | HWRPB interval clock |
+| --- | --- | --- | --- | --- | --- |
+| ES40 | 667M | 667 MHz | 666 MHz | 666666666 Hz | 1024 Hz |
+| ES40 | 800M | 800 MHz | | | 1024.0 to 1024.6 Hz at the prompt (`ALPHABOX_IRQSTATS`) |
+| ES40 | 833M | 833 MHz | | 833333333 Hz (Linux's `/proc/cpuinfo`) | 1024.00 Hz, 1023.98 measured |
+| DS20E | 500M | 500 MHz (banner) | 500 MHz | 500000000 Hz | 1024 Hz |
+
+The console measures a cycle time in whole picoseconds: 667 MHz is 1499.25
+ps, taken as 1500, so the HWRPB says 666666666 Hz for a counter that runs
+at 667000000, 500 ppm apart (833 MHz: 1200 ps, 400 ppm). A guest that
+times by the HWRPB's frequency and the cycle counter sees that much
+error; Linux would estimate its own, if it accepted the part's speed. A
+`speed` that is a whole number of picoseconds (500M, 1000M, or 666666667
+and 833333333 written out) has none.
+
+Under a starved thread the console's own speed calibration is wrong,
+before the fix and after, since its cycle counter follows the host while
+the ticks wait for the thread: at 800 MHz with a 60% share from power on
+it printed 962 MHz before and 654 after, at a 25% share 1923 and 1042.
+Unthrottled it prints 800 with both.
 
 ### Configuration
 
