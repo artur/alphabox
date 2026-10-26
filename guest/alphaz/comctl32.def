@@ -1,0 +1,5 @@
+; comctl32.def: the one comctl32 call ALPHAZ.EXE makes, which registers
+; the tab control's window class (alphaz_win.c).
+LIBRARY comctl32.dll
+EXPORTS
+    InitCommonControls

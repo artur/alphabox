@@ -1,0 +1,8 @@
+; advapi32.def: the registry calls ALPHAZ.EXE makes (alphaz_win.c).
+LIBRARY advapi32.dll
+EXPORTS
+    RegCloseKey
+    RegEnumKeyExA
+    RegEnumValueA
+    RegOpenKeyExA
+    RegQueryValueExA

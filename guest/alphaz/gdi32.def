@@ -1,0 +1,9 @@
+; gdi32.def: the gdi32 calls ALPHAZ.EXE makes (alphaz_win.c).
+LIBRARY gdi32.dll
+EXPORTS
+    CreateFontA
+    CreateSolidBrush
+    GetStockObject
+    SelectObject
+    SetBkMode
+    SetTextColor

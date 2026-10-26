@@ -1,0 +1,18 @@
+; kernel32x.def: the kernel32 calls ALPHAZ.EXE makes beyond those of
+; nada's lib/windows/kernel32.def, which lib/windows.c needs. build.sh links
+; a copy without the names nada's file already lists, since a name in two
+; .def files is an error (doc/targets.md, "Imports").
+LIBRARY kernel32.dll
+EXPORTS
+    GetCurrentProcess
+    GetCurrentThread
+    GetModuleHandleA
+    GetProcessAffinityMask
+    GetSystemInfo
+    GetTickCount
+    GetVersionExA
+    GlobalMemoryStatus
+    QueryPerformanceCounter
+    QueryPerformanceFrequency
+    SetThreadAffinityMask
+    Sleep

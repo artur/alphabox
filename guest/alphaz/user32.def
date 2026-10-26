@@ -1,0 +1,32 @@
+; user32.def: the user32 calls ALPHAZ.EXE makes (alphaz_win.c).
+LIBRARY user32.dll
+EXPORTS
+    BeginPaint
+    BringWindowToTop
+    CreateWindowExA
+    DefWindowProcA
+    DestroyWindow
+    DispatchMessageA
+    DrawTextA
+    EndPaint
+    FillRect
+    GetClientRect
+    GetKeyState
+    GetMessageA
+    GetSysColor
+    GetSystemMetrics
+    InvalidateRect
+    LoadCursorA
+    LoadIconA
+    MoveWindow
+    PostQuitMessage
+    RegisterClassA
+    SendMessageA
+    SetFocus
+    SetForegroundWindow
+    SetScrollPos
+    SetScrollRange
+    SetTimer
+    ShowWindow
+    TranslateMessage
+    UpdateWindow
