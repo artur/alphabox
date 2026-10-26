@@ -11,6 +11,8 @@
 #   w2k-ev8     the same with two `ev8` processors, w2k-ev7 and w2k-ev7z
 #               with `ev7` and `ev7z`: ALPHABOX_CPU_ANY_BOARD=1, a test
 #               hook that lets the ES40 take another family's row
+#   xp64        Windows XP 64-bit (lab/xp64-installed, es40-window.cfg, C:
+#               the logical drive at byte 209731584): whether a PE32 runs
 #   linux       guests_check.sh's `linux` (Gentoo on the ES40, one ev68cb)
 #   es47-ev7, es47-ev7z, es47-ev8, es47-ev8t4
 #               guests_check.sh's `linux-es47` with GUESTS_EV7_CPU ev7,
@@ -137,19 +139,24 @@ focus_click() {
   sleep 25
 }
 
-win_guest() { # win_guest <guest> <cpu row>
-  local g=$1 cpu=$2 D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run cfg=es40-window-smp.cfg
-  local IMG any= f ref i n name names done_at start
+# win_guest <guest> <cpu row> [install dir] [cfg] [C:'s byte offset]: the
+# installed Windows in $WORK/<install dir> (default win2k-installed,
+# es40-window-smp.cfg, C: at 16384), its ev68cb rows made <cpu row>
+win_guest() {
+  local g=$1 cpu=$2 inst=${3:-win2k-installed} cfg=${4:-es40-window-smp.cfg} off=${5:-16384}
+  local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
+  local IMG any= f ref i n name names done_at start rows
   rm -rf "$D" "$run"; mkdir -p "$D"
-  cp -c -R "$WORK/win2k-installed" "$run" || { report "$g" FAIL "no $WORK/win2k-installed"; return 1; }
+  cp -c -R "$WORK/$inst" "$run" || { report "$g" FAIL "no $WORK/$inst"; return 1; }
   rm -rf "$run/fb" "$run"/fb-*.ppm "$run"/peek.img
+  rows=$(grep -c "= ev68cb\$" "$run/$cfg")
   if [ "$cpu" != ev68cb ]; then
-    sed -i '' "s/= ev68cb/= $cpu/" "$run/$cfg"
-    [ "$(grep -c "= $cpu\$" "$run/$cfg")" = 2 ] || { report "$g" FAIL "cpu rows not swapped"; return 1; }
+    sed -i '' "s/= ev68cb\$/= $cpu/" "$run/$cfg"
+    [ "$(grep -c "= $cpu\$" "$run/$cfg")" = "$rows" ] || { report "$g" FAIL "cpu rows not swapped"; return 1; }
     any=1
   fi
   cp "$run/$cfg" "$D/$cfg"
-  IMG="$run/disk0.img@@16384"
+  IMG="$run/disk0.img@@$off"
   local S=$run/stage
   mkdir -p "$S"
   cp "$B/ALPHAZ.EXE" "$B/SHUTDOWN.EXE" "$S/"
@@ -173,7 +180,7 @@ win_guest() { # win_guest <guest> <cpu row>
   [ "$hooked" -gt 0 ] || { report "$g" FAIL "no Startup folder on C:"; return 1; }
   host_ready || { report "$g" FAIL "the host stayed busy (memory pressure or disk)"; return 1; }
 
-  echo "== $g: Windows 2000, two $cpu, startup hooks $hooked"
+  echo "== $g: $inst, $rows $cpu, startup hooks $hooked"
   ( cd "$run" && mkdir -p fb && : > keys.txt &&
     exec env ${any:+ALPHABOX_CPU_ANY_BOARD=1} SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb \
       ALPHABOX_KEYPIPE=keys.txt "$BIN" run "$cfg" ) > "$run/run.log" 2>&1 &
@@ -226,7 +233,7 @@ win_guest() { # win_guest <guest> <cpu row>
   while kill -0 "$PID" 2>/dev/null && [ $(( $(date +%s) - start )) -lt $((BOOT_TMO + 600)) ]; do
     rm -f "$run/peek.img"
     if cp -c "$run/disk0.img" "$run/peek.img" 2>/dev/null &&
-       mtype -i "$run/peek.img@@16384" ::/NADA/OUT.TXT 2>/dev/null | grep -q DONE; then
+       mtype -i "$run/peek.img@@$off" ::/NADA/OUT.TXT 2>/dev/null | grep -q DONE; then
       done_at=$(( $(date +%s) - start )); break
     fi
     case "$(ls -t "$run/fb" | grep -m1 ppm)" in *720x400*) done_at=$(( $(date +%s) - start )); break ;; esac
@@ -265,7 +272,10 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   cmds="$cmds;base64 -d /tmp/az.b64 | gunzip > /tmp/alphaz;sha256sum /tmp/alphaz;chmod +x /tmp/alphaz;/tmp/alphaz"
   host_ready || { report "$g" FAIL "the host stayed busy (memory pressure or disk)"; return 1; }
   echo "== $g: guests_check.sh $gc${cpu:+, $cpu}${tpus:+, tpus $tpus}, $(( n / 2000 + 1 )) lines of base64"
-  GUESTS_EXTRA_CMDS="$cmds" GUESTS_PORT_BASE=${AZ_PORT_BASE:-24600} GUESTS_OUT="$D/gc" GUESTS_KEEP=1 \
+  # the firmware is git-ignored: a worktree has none of its own
+  local roms=${ALPHABOX_ROMS:-$R/roms}
+  [ -d "$roms" ] || roms=$(cd "$(git -C "$R" rev-parse --git-common-dir)/.." && pwd)/roms
+  ALPHABOX_ROMS=$roms GUESTS_EXTRA_CMDS="$cmds" GUESTS_PORT_BASE=${AZ_PORT_BASE:-24600} GUESTS_OUT="$D/gc" GUESTS_KEEP=1 \
     ${cpu:+GUESTS_EV7_CPU=$cpu} ${tpus:+GUESTS_EV8_TPUS=$tpus} \
     "$T/guests_check.sh" "$BIN" "alphaz-$LABEL-$g" "$gc" > "$D/guests_check.out" 2>&1
   rc=$?
@@ -309,6 +319,7 @@ main() {
     w2k-ev7) win_guest "$g" ev7 ;;
     w2k-ev7z) win_guest "$g" ev7z ;;
     w2k-ev8) ev8_cases=$ev8_n; win_guest "$g" ev8 ;;
+    xp64) win_guest "$g" ev68cb xp64-installed es40-window.cfg 209731584 ;;
     linux) linux_guest "$g" linux ;;
     es47-ev7) linux_guest "$g" linux-es47 ev7 ;;
     es47-ev7z) linux_guest "$g" linux-es47 ev7z ;;
