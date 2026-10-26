@@ -1,0 +1,7 @@
+P00>>>show memory
+System Memory 8 GB
+
+                       RIMMs
+  PID   Cab Drw CPU  0123456789     Size     Address
+   0     0   0   0   PPPPP.....     4 GB            0   Non-Striped
+   1     0   0   1   PPPPP.....     4 GB    400000000   Non-Striped

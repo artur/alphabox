@@ -1,0 +1,224 @@
+00 01 02 03 04 05 06 07 08 09 Attaching interface lo0...done
+
+
+                 VxWorks
+
+Copyright 1984-1998  Wind River Systems, Inc.
+
+            CPU: AMD SC520 CDP
+        VxWorks: 5.4.2
+    BSP version: 1.2/0
+  Creation date: May  7 2003
+            WDB: Ready.
+
+
+ES47 Server Management Failsafe Loader V2.1-1 Starting up
+
+Image built on May  7 2003 at 10:37:56
+~FLD-W-(tRootTask) Flash Directory changed - using old
+Cabinet number: 00
+Drawer number: 0
+Micro type: MBM
+Node IP address: 10.0.0.1
+Press enter to remain in FSL.
+
+boot device          : flash
+unit number          : 0 
+processor number     : 0 
+host name            : host
+file name            : vxWorks
+inet on ethernet (e) : 10.250.250.250
+host inet (h)        : 10.253.0.254
+user (u)             : target
+flags (f)            : 0xa0 
+other (o)            : fei
+
+06 07 08 09 Attaching interface lo0...done
+
+Adding 5894 symbols for standalone.
+
+
+                 VxWorks
+
+Copyright 1984-1998  Wind River Systems, Inc.
+
+            CPU: AMD SC520 CDP
+        VxWorks: 5.4.2
+    BSP version: 1.2/0
+  Creation date: Jun  4 2007
+            WDB: Ready.
+
+
+ES47 Server Management  V2.7-7 Starting up
+
+Image built on Jun  4 2007 at 11:05:08
+Running POST ...
+0A 0B 0C 0D 0E 
+CPLD Rev 5 OK
+Cabinet number: 00
+Drawer number: 0
+Micro type: MBM
+Node IP address: 10.0.0.1
+~GRP-W-(tRootTask) Joined Group ID: 100000a.1
+Forming group.....interrupt: ~GRP-I-(interrupt), GROUP HAS FORMED ID:100000a.1
+......interrupt: ~GRP-I-(interrupt), GROUP IS STABLE ID:100000a.1
+
+DHCP server started.
+pco_task started as pco_00
+pco_task started as pco_01
+pco_task started as pco_02
+pco_task started as pco_03
+pco_task started as pco_04
+Welcome - ES47 Server Manager - V2.7-7
+[2026/08/01 20:39:30]
+~REC-W-(trecTask) Server management group is transitioning.
+[2026/08/01 20:39:30]
+~REC-W-(trecTask) Server management group is stable.
+Starting telnet port on port:323
+Starting telnet daemon on port:323
+[2026/08/01 20:39:41]
+~ENV-W-(envmon) MBM(cab:00, drw:0) PCI Hot Plug Cover was opened
+[2026/08/01 20:39:41]
+~ENV-W-(envmon) MBM(cab:00, drw:0) PCI Expander Cover was opened
+MBM Init finished at: SAT AUG 01 20:39:44 2026
+
+0x179ebf0 (mbm_dhcp): dhcps: read 0 entries from binding and addr-pool database.
+[2026/08/01 20:39:48]
+~PCO-I-(pco_02) Preparing to power on partition. HP: Default_HP
+FPGA version: V3.1-02
+Read 97726 bytes
+Selecting FPGA 0
+................................................................................................
+[2026/08/01 20:40:04]
+~PCO-I-(pco_02) 
+
+Configuring for 2 CPUs for HP:0 Default_HP
+
+       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F 
+      ................................................
+  0   .P..............................................
+      .|..............................................   P  Processor
+      .|..............................................   F  Filler
+  1   .P..............................................   |  connection
+      ................................................   -  connection
+      ................................................
+  2   ................................................    W <----------> E
+      ................................................  N ^ (0,0)
+      ................................................    |  .  
+  3   ................................................    |    .
+      ................................................    |       .
+      ................................................  S v      (ns,ew)
+  4   ................................................
+      ................................................
+      ................................................
+  5   ................................................
+      ................................................
+      ................................................
+  6   ................................................
+      ................................................
+      ................................................
+  7   ................................................
+      ................................................
+       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F 
+[2026/08/01 20:40:07]
+~PCO-I-(pco_02) Running diagnostics on HP: Default_HP
+Running test 10, Initialize RAMBUS ... on 2 EV7s
+Running test 11, Initialize Memory ... on 2 EV7s
+Running test 12, Data Pattern March read/write ... on 2 EV7s
+Running test 13, RAID channel Test ... on 2 EV7s
+Running test 14, Single Bit Error ... on 2 EV7s
+Running test 15, Double Bit Error ... on 2 EV7s
+Running test 20, Init IO7 and Start Clocks ... on 1 EV7s
+Running test 21, IO7 Data Path (Scratch CSR) ... on 1 EV7s
+Running test 22, IO Single Bit Error checkers ... on 1 EV7s
+Running test 23, IO Double Bit Error checkers ... on 1 EV7s
+Running test 24, IO Timer Expirations ... on 1 EV7s
+Running test 25, IO up-hose SBE checkers ... on 1 EV7s
+Running test 26, IO up-hose DBE checkers ... on 1 EV7s
+Running test 27, IO7 pass2 data mover test ... on 1 EV7s
+Running test 30, Configure RBOX Routes ... on 2 EV7s
+Running test 31, Clear Errors / Enable Routes ... on 2 EV7s
+Running test 32, Route Test: N S E W ... on 2 EV7s (North)
+Running test 32, Route Test: N S E W ... on 2 EV7s (South)
+Running test 32, Route Test: N S E W ... on 2 EV7s (East )
+Running test 32, Route Test: N S E W ... on 2 EV7s (West )
+Running test 33, Inverse Route Setup ... on 2 EV7s
+Running test 32, Route Test: N S E W ... on 2 EV7s (North)
+Running test 32, Route Test: N S E W ... on 2 EV7s (South)
+Running test 32, Route Test: N S E W ... on 2 EV7s (East )
+Running test 32, Route Test: N S E W ... on 2 EV7s (West )
+Running test 33, Inverse Route Setup ... on 2 EV7s
+Running test 34, Single Bit Error checker ... on 2 EV7s
+Running test 35, Double Bit Error checker ... on 2 EV7s
+Running test 31, Clear Errors / Enable Routes ... on 2 EV7s
+Running test 16, Interprocessor Memory Access ... on 2 EV7s
+Running test 40, Local I/O Device Interrupts ... on 2 EV7s
+Running test 41, Local Interval Timer Interrupts ... on 2 EV7s
+Running test 42, Local Interprocess Interrupts ... on 2 EV7s
+Running test 43, Software Alerts ... on 1 EV7s
+Running test 46, Other Local Interrupt Bits ... on 2 EV7s
+[2026/08/01 20:41:19]
+~PCO-I-(pco_02) Diagnostics completed on HP: Default_HP
+[2026/08/01 20:41:19]
+~PCO-I-(pco_02) HP:Default_HP SP:Default_SP Primary is NS:0 EW:0 which is cab:00 drw:0 cpu:0
+Running test 50, Loop on Secondary Routine ... on 1 EV7s (SP:Default_SP)
+[2026/08/01 20:41:19]
+~PCO-I-(pco_02) Loading SRM on Primary for HP: Default_HP, SP: Default_SP.
+Running test 50, Loop on Secondary Routine ... on 0 EV7s (SP:Free_Pool)
+[2026/08/01 20:41:23]
+~PCO-I-(pco_02) Powered On HP:Default_HP
+
+Connecting to partition. Use the sequence ^[^[MBM to return.
+~PCO-I-(pco_02) Powering on partition. HP: Default_HP
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 700c0
+memory low limit = 556000 heap = 700c0, 1fffc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 1300 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+entering idle loop
+access NVRAM
+Get Partition DB
+hpcount = 1, spcount = 2, ev7_count = 2, io7_count = 1
+hard_partition = 0
+IO7-100 (Pass 3) at PID 0
+IO7 North port speed is 216 MHz
+Hose 0 - 66 MHz PCI
+Hose 1 - 33 MHz PCI
+Hose 2 - 33 MHz PCI
+Hose 3 - 4X AGP
+0 sub-partition 0:   start:00000000 00000000   size:00000001 00000000
+PID 0 console memory base: 0, 4 GB
+1 sub-partition 0:   start:00000004 00000000   size:00000001 00000000
+PID 1 memory: 400000000, 4 GB
+total memory, 8 GB
+probe I/O subsystem
+probing hose 0, PCI
+bus 0, slot 1, function 0 -- ega -- DEGX2-TA Gigabit Ethernet
+bus 0, slot 1, function 1 -- egb -- DEGX2-TA Gigabit Ethernet
+probing hose 1, PCI
+probing hose 2, PCI
+do not use secondary IDE channel on CMD controller
+bus 0, slot 1 -- pka -- Adaptec AIC-7892
+bus 0, slot 2 -- dqa -- CMD 649 PCI-IDE
+bus 0, slot 3, function 0 -- usba -- USB
+bus 0, slot 3, function 1 -- usbb -- USB
+bus 0, slot 3, function 2 -- usbc -- USB
+bus 0, slot 3, function 3 -- usbd -- USB
+probing hose 3, PCI
+bus 0, slot 5 -- vga -- Radeon 7500 AGP
+starting drivers
+Starting secondary CPU 1 at address 400030000
+initializing GCT/FRU.... at 556000
+Initializing dqa pka ega egb 
+AlphaServer Console V7.3-11, built on Jun  4 2007 at 13:31:34

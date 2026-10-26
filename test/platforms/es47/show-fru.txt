@@ -1,0 +1,42 @@
+P00>>>show fru
+Fru Name                  E Part #             Serial #         Model/Other
+CAB0.DRW0                00 -                  -                -           
+CAB0.DRW0.DOCP           00 54-30398-02.D3     KI40900362       -           
+CAB0.DRW0.SBB            00 -                  -                -           
+CAB0.DRW0.DUO0.DUO       00 54-30252-LG.C1     JA45000719       -           
+CAB0.DRW0.DUO0.CMM       00 54-30672-02.A1     JA73500288       -           
+CAB0.DRW0.DUO0.VRM0.CPU  00 20-50928-04.C1     C244900505       -           
+CAB0.DRW0.DUO0.VRM1.CPU  00 20-50928-04.C1     C244900509       -           
+CAB0.DRW0.DUO0.VRM2.CPU  00 20-50928-04.C1     C244900507       -           
+CAB0.DRW0.DUO0.VRM3.CPU  00 20-50928-04.C1     C244900512       -           
+CAB0.DRW0.DUO0.VRM4.CPU  00 20-50928-04.C1     C244900504       -           
+CAB0.DRW0.DUO0.VRM2.RIMM 00 20-50928-05.B3     C244700068       -           
+CAB0.DRW0.DUO0.VRM3.RIMM 00 20-50928-05.B3     C244700064       -           
+CAB0.DRW0.DUO0.VRM4.RIMM 00 20-50928-05.B3     C244700188       -           
+CAB0.DRW0.DUO0.VRM0.TERM 00 20-50928-06.B5     9Q44533454       -           
+CAB0.DRW0.DUO0.CPU0      00 -                  -                -           
+CAB0.DRW0.DUO0.RIMM00    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM10    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM20    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM30    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM40    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.CPU1      00 -                  -                -           
+CAB0.DRW0.DUO0.RIMM01    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM11    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM21    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM31    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.DUO0.RIMM41    00 20-1F18B-01        ???????????????? -           
+CAB0.DRW0.MBM            00 54-30444-01.D3     JA42200370       -           
+CAB0.DRW0.PCI0.SLOT1     00 DEGX2-TA Gigabit Et-                -           
+CAB0.DRW0.PCI2.SLOT1     00 95101415/0000131F  -                -           
+CAB0.DRW0.AGP            00 Radeon 7500 AGP    -                -           
+CAB0.DRW0.PS0            00 140641-001.01      534B70A4DQ008U   -           
+CAB0.DRW0.PS1            00 140641-001.01      534B70A4DPN08I   -           
+CAB0.DRW0.FAN0           00 -                  -                -           
+CAB0.DRW0.FAN1           00 -                  -                -           
+CAB0.DRW0.FAN2           00 -                  -                -           
+CAB0.DRW0.FAN3           00 -                  -                -           
+CAB0.DRW0.FAN.PCI        00 -                  -                -           
+CAB0.DRW0.FAN.PS0        00 -                  -                -           
+CAB0.DRW0.FAN.PS1        00 -                  -                -           
+CAB0.DRW0.PCI            00 54-30392-02.A3     JA41801312       -

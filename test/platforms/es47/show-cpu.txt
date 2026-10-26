@@ -1,0 +1,3 @@
+P00>>>show cpu
+CPU 0   CurOwner 0  Owner 0   Type Major 15, Minor  5  
+CPU 1   CurOwner 0  Owner 0   Type Major 15, Minor  5

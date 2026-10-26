@@ -1,0 +1,19 @@
+megalith, Linux 7.3.0-rc1-comp-zstd+, 2026-10-25, run on each CPU (taskset -c 0 / -c 1)
+using __builtin_alpha_implver() and __builtin_alpha_amask(~0UL):
+
+IMPLVER = 3
+AMASK(~0) = 0xffffffffffffecf8, implemented bits = 0x1307
+  BWX(0)=1 FIX(1)=1 CIX(2)=1 MVI(8)=1 PAT(9)=1 PMI(12)=1
+
+Both CPUs gave identical results.
+
+/proc/cpuinfo excerpt:
+cpu model		: EV7
+cpu variation		: 7
+cycle frequency [Hz]	: 1300000000
+timer frequency [Hz]	: 991.82
+platform string		: hp AlphaServer ES47 7/1300
+cpus active		: 2
+L1 Icache		: 64K, 2-way, 64b line
+L1 Dcache		: 64K, 2-way, 64b line
+L2 cache		: 1792K, 7-way, 64b line

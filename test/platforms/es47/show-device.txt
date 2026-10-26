@@ -1,0 +1,7 @@
+P00>>>show device
+dka0.0.0.1.2               DKA0              COMPAQ BF3008B26C  HPB9
+dka100.1.0.1.2             DKA100            COMPAQ BD07285A25  HPB7
+dqa0.0.0.2.2               DQA0                       CD-W216E  E.0E    
+ega0.0.0.1.0               EGA0              00-10-18-0D-87-1A
+egb0.0.0.101.0             EGB0              00-10-18-0D-87-1B
+pka0.7.0.1.2               PKA0                  SCSI Bus ID 7

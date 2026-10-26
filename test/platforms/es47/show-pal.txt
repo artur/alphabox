@@ -1,0 +1,2 @@
+P00>>>show pal
+pal                 	OpenVMS PALcode V2.11-25, Tru64 UNIX PALcode V2.08-19

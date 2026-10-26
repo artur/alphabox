@@ -1,3 +1,4 @@
+P00>>>show config
                            hp AlphaServer ES47 7/1300
 
 SRM Console	V7.3-11, built on Jun  4 2007 at 13:31:34
@@ -28,8 +29,8 @@ System Memory 8 GB
  Cab Dwr IOR Port Slot Option                  Hose  Bus  Slot  Function  Name
   0   0   0    0    1  DEGX2-TA Gigabit Eth      0    0     1       0     ega
                        + DEGX2-TA Gigabit Eth    0    0     1       1     egb
-  0   0   0    1    3  950A1415/2031131F         1    0     3       0
-                       + 95101415/0000131F       1    0     3       1
+  0   0   0    1    3  950A1415/2031131F         1    0     3       0     
+                       + 95101415/0000131F       1    0     3       1     
   0   0   0    2    1  Adaptec AIC-7892          2    0     1             pka
   0   0   0    2    2  CMD 649 PCI-IDE           2    0     2             dqa
   0   0   0    2    3  USB                       2    0     3       0     usba
@@ -45,19 +46,19 @@ System Memory 8 GB
    1/1	DEGX2-TA Gigabit Eth	egb0.0.0.101.0      	00-10-18-0D-87-1B
 
  Slot	Option			Hose 1, Bus 0, PCI
-   3/0	950A1415/2031131F
-   3/1	95101415/0000131F
+   3/0	950A1415/2031131F   	                    	
+   3/1	95101415/0000131F   	                    	
 
  Slot	Option			Hose 2, Bus 0, PCI
    1	Adaptec AIC-7892    	pka0.7.0.1.2        	SCSI Bus ID 7
 				dka0.0.0.1.2        	COMPAQ BF3008B26C
 				dka100.1.0.1.2      	COMPAQ BD07285A25
-   2	CMD 649 PCI-IDE     	dqa.0.0.2.2
+   2	CMD 649 PCI-IDE     	dqa.0.0.2.2         	
 				dqa0.0.0.2.2        	CD-W216E
    3/0	USB                 	usba0.0.0.3.2       	hub
    3/1	USB                 	usbb0.0.0.103.2     	hub
    3/2	USB                 	usbc0.0.0.203.2     	hub
-   3/3	USB                 	usbd0.0.0.303.2
+   3/3	USB                 	usbd0.0.0.303.2     	
 
  Slot	Option			Hose 3, Bus 0, PCI
    5	Radeon 7500 AGP     	vga0.0.0.5.3

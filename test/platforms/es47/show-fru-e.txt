@@ -1,0 +1,2 @@
+P00>>>show fru -e
+Fru Name                  E Part #             Serial #         Model/Other
