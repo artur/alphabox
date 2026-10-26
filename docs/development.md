@@ -34,6 +34,7 @@ gives its usage and variables.
 | `marvel_init_check.sh` | The EV7 boards with more processors (es47 2, es80 and gs1280 4): `init` twice, and every secondary started again each time, counted in the console's messages, the HWRPB's processor slots and `show cpu`. `boards_check.sh` runs it after its boards. |
 | `snap_roundtrip.sh` | Every board saved at its console prompt, restored and saved again: the two state files compared byte for byte, part by part, and the restored console asked the same commands again. |
 | `guests_check.sh` | Every guest operating system with media (Windows 2000, the 2000 beta, XP 64-bit, OpenVMS on the ES40 and ES47, Linux, NetBSD, and the ARC console; OpenVMS on the DS20E, DS20, DS10 and DS20L when named) booted on a clone of its disk and checked: a desktop, a DCL or shell login with a few commands, an installer menu. A PASS/FAIL line per guest, the last frame and the console log. |
+| `ev8_simd_guest.sh` | The 21464's 1C SIMD set and 07 paired single under Linux: `ev8_simd.c` sent to `guests_check.sh`'s `linux-es47` guest on the `ev8` row through its serial console (base64 in short lines), compiled by the guest's gcc with the new words as `.long`, its SIMD and paired-single kernels checked against scalar C; PASS when the program prints `EV8SIMD: PASS` ([ev8.md](platforms/ev8.md), S5 and S6). |
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). |
@@ -153,7 +154,7 @@ with SDL and pcap; on another build only the trees are compared.
 | --- | --- |
 | `JIT_VERIFY` build | Every compiled block re-run by the interpreter and compared. A clean SRM boot is ~130 million blocks. |
 | `ALPHABOX_JIT_FPTEST=1` on that build | The JIT's inline IEEE operations checked over 8.5 million cases. |
-| `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. |
+| `alphabox_fptest` (built with every lane; `ctest` runs it) | The interpreter's IEEE and VAX operate instructions without a guest, about 20 million cases: IEEE results and flags against the host FPU in every rounding mode, VAX results against an exact model, hand tables from the manuals, and the same routines as they were at the commit `ALPHABOX_FP_BASELINE` names. Each difference from that baseline must be one of the intended changes listed in `test/fp/fp_test.cpp`. The 21464's paired single (`cpu/AlphaCPU_paired.cpp`), 7 million cases more: each half against the model of its scalar S instruction, the host FPU in every rounding mode, the halves' exceptions ORed; the bit manipulations; every function code's decode, OPCDEC and FEN. |
 | `test/cpu/cpu_oracle.py` | Instruction conformance against the Architecture Reference Manual and the 21264 HRM, no firmware: about 20,000 results from 16,500 cases (integer operate, CMOV, the /V traps, loads and stores, BWX, CIX, MVI, LDx_L/STx_C, branches and jumps, the FIX moves, OPCDEC, CALL_PAL, user mode, the EV8's additions, and the JIT groups), each from the interpreter and from compiled code, on any processor row (`--cpu`). A second per lane (below). |
 | `smc_test.sh`, `smc_image.py` | A guest that rewrites its own compiled code: the emulator halts if the change was seen, hangs if the stale block ran. |
 | `bench_image.py` | A bootable image from a list of instruction words. |
@@ -254,7 +255,8 @@ and so never traps).
   (`cpu_family_unused_misc_is_nop`), its extensions (`cpu_model::ext`),
   and the instructions a row has beyond the 21264's (the EV8 row's CCB,
   CMOV2 and FCMOV2, which group `ev8` checks, and LDL_ARM, LDQ_ARM and
-  QUIESCE, group `quiesce`; Tarantula, `rows.TARANTULA`, group
+  QUIESCE, group `quiesce`; the 1C SIMD set and 07 paired single, groups
+  `simd` and `paired`; Tarantula, `rows.TARANTULA`, group
   `tarantula`). The values are the
   manuals', as `src/cpu/CpuModels.cpp` gives them, and every run first
   reads that file and `CpuModel.hpp` and fails if the two tables differ,
@@ -324,6 +326,25 @@ full queue and resent, and that three configurations are refused for
 their reasons ([ev8-native.md](platforms/ev8-native.md), S11b). About
 1030 results, a few seconds; `test/unit/marvel21464_test` is the map and
 topology without an image.
+
+**The EV8's 1C SIMD set and paired single.** Group `simd`
+(`test/cpu/simd_cases.py`) checks every row of
+[ev8-isa.md](platforms/ev8-isa.md) 3.3 on the rows with `CPU_EXT_EV8`, in
+the register and literal forms, a dozen instructions to a case, with the
+expected values computed from the sheet: saturation in every lane at both
+ends, PERMB8's selectors, the tree sums, VMINMAX's running pair, the shift
+counts. Group `paired` (`test/cpu/paired_cases.py`) checks every row of 3.4
+under every qualifier its class accepts: a sweep of results on pairs that
+do not trap (the FPCR's status and disables set first), then cases with
+the trap record, Fc and the FPCR for each exception per half, NaNs,
+infinities, denormals, underflow and the disables, the estimates, PCVTFI,
+the compares, FEN. Each half's expected outcome is the scalar S
+instruction's, `test/cpu/sfloat.py` (exact arithmetic, the ARM and 21264
+HRM rules, denormals and underflow included). Both groups check that the
+other rows raise OPCDEC for the same words (`rows.NOT_EV8`, one SKIP
+reason for all of them, as `rows.EV8` for the cases themselves), and that
+the codes the sheet leaves free trap everywhere; the paired OPCDEC cases
+run in batches of 32 words, the trap count theirs.
 
 **Tarantula.** Group `tarantula` (`test/cpu/tarantula_cases.py`) checks
 the vector extension of [ev8-isa.md](platforms/ev8-isa.md), section 4, on

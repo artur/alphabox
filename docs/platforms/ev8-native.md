@@ -519,7 +519,7 @@ from the EV7's. In `cpu_model` terms **[decision, N16]**:
 | implver | 4 | [IDS p. 76] |
 | type, minor | 18, 0 | D3: the HWRPB's processor type is written by our console, and 18 is the next free value [ARM pp. 805-807] |
 | chip_id | 0 | CPU_CNFG<CHIP_ID> has no value [IDS p. 487]; nothing reads it but our PALcode |
-| amask | the `ev8` row's, stage by stage (0x1707 today) | the same rule: report what executes |
+| amask | the `ev8` row's, stage by stage (0x1F07 since S5 and S6) | the same rule: report what executes |
 | family | a new `CPU_FAMILY_EV8` | the PALcode instructions, IPRs, entries, TB model and per-TPU state are the family's; boards take it as they take EV7 rows (the ES47, ES80 and GS1280 in 21464 mode, [section 2](#2-the-marvel-model-in-21464-mode)) |
 | ext | `CPU_EXT_EV8` | the user-visible instructions are those of the `ev8` row, shared code |
 | caches | 64, 64, 3072 | as `ev8` |

@@ -697,8 +697,8 @@ toolchain.
 | S2 | The harmless additions: CCB, WH64EN, CMOV2/FCMOV2, MAP_ALIGN as NOPs; unused 18.xxxx codes stay NOPs as on the EV6/EV7 rows (2026-10-24), but for the EV8's own | both | cpu_oracle cases; JIT_VERIFY | **done 2026-10-24**; LDx_ARM and QUIESCE are unused codes, NOPs, until S3 |
 | S3 | LDx_ARM and QUIESCE with one TPU per chip, across processors and DMA | interpreter first; the JIT ends a block at QUIESCE and calls the interpreter's routine | a two-processor boot image: one sleeps on a lock, the other releases it; timeout path; interrupt path (D16). Linux: a spinlock patched as in [IDS p. 674] | D16; **done 2026-10-24** ([below](#s3-2026-10-24)) |
 | S4 | TPUs as processors: per-TPU state, D5-D7, TPU groups in the TB model (Mode 2 first) | interpreter, then JIT (per-TPU state is per-CPU state) | the console lists 4 x the chips' processors; OpenVMS boots on all of them; Linux SMP | D4-D7; **done 2026-10-25** ([below](#s4-2026-10-25)), with the owner's numbering in place of D6 and `tpus` 1 by default: the TPUs as EV7 nodes are an Alphabox construction, the native interface (S11-S13) does them the IDS's way |
-| S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8 |
-| S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9 |
+| S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8; **done 2026-10-26** ([below](#s5-and-s6-2026-10-26)): the JIT calls the interpreter's routine |
+| S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9; **done 2026-10-26** ([below](#s5-and-s6-2026-10-26)), and AMASK bit 11 with it |
 | S7 | Tarantula state, VC and VV/VS groups, SaveState/RestoreState of vector state | interpreter | boot-image kernels (daxpy and the like) checked against scalar results | D10, D11, D13, D14; **done 2026-10-25** ([below](#s7-2026-10-25)): the values go in by VS and come out through a test hook until S8 |
 | S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15 |
 | S9 | Tarantula under an OS: Linux enables vectors and saves them on switch | interpreter | two processes using vectors at once | D11 |
@@ -744,11 +744,11 @@ executes, so that software testing AMASK never uses a missing feature:
 | --- | --- | --- |
 | 0-2, 8, 9, 12 | BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent | now: the core's, 0x1307 |
 | 10 | SMT: LDL_ARM, LDQ_ARM, QUIESCE | since S3 (0x1707), the instructions software tests it for [IDS pp. 668, 674]; S4 brings the TPUs its name describes |
-| 11 | the 1C SIMD set and paired single (owner, 2026-10-24) | once both execute, after S5 and S6 |
+| 11 | the 1C SIMD set and paired single (owner, 2026-10-24) | since S5 and S6 (0x1F07), once both executed |
 | 3 | Tarantula (D14) | once its instructions execute, after S7 and S8 |
 
-The IDS's full 0x1F07 (0x1F0F with Tarantula) is reached when all of them
-are on.
+The IDS's full 0x1F07 is reached with bit 11 (S6); 0x1F0F, with
+Tarantula, once bit 3 is on.
 
 **The harmless additions** (S2), on the `ev8` row only, as
 [ev8-isa.md](ev8-isa.md) 3.1 and 3.2 give them: CCB (18.EC00) is a no-op,
@@ -1215,6 +1215,179 @@ written).
   processors (a PID and a window each) no longer have in EV7-compatible
   mode. The owner's layout (2026-10-25) puts it in each processor's own
   window; the chip-window layout stays for the native interface.
+
+## S5 and S6 (2026-10-26)
+
+The 21464's short-vector SIMD set under opcode 1C (S5, D8) and paired
+single precision under opcode 07 (S6, D9), in the interpreter and then in
+the JIT, on the `ev8` and `ev8n` rows (both carry `CPU_EXT_EV8`), and AMASK
+bit 11, which reports both. The code is `cpu/Ev8Simd.cpp` (the 1C set, one
+routine both engines call), `cpu/AlphaCPU_paired.cpp` (opcode 07,
+`paired_operate`), the decode in `cpu/AlphaCPU.cpp`, two additions to
+`cpu/AlphaCPU_ieeefloat.cpp` (`ieee_cvtfi_n`, CVTTQ's conversion with a
+longword's range, for PCVTFI; `m_fp_no_ine`, which drops an estimate's
+INE) and the helpers in `cpu/AlphaCPU_jit.cpp`; every decision and
+inference below is in [cpu-fidelity.md](../cpu-fidelity.md) too.
+
+**What is implemented, as the sheet gives it.**
+
+- **S5**: every row of [ev8-isa.md](ev8-isa.md) 3.3, in the register and
+  literal forms, with the sheet's results: CMPWGE and CMPLGE, PERMB8 with
+  its sixteen selectors (13, reserved, reads 0), GPKBLB4, VADD and VSUB
+  with SAT in the four zz sizes (the order agreed with nada) and the two
+  L2 forms, VMINMAX's running pair, the packs and unpacks, the tree ops
+  (TADD, TSUB, TABSERR, TSQERR, TMUL in four sizes, TMULUS in two) as
+  exact 64-bit sums, VMULLUW4 and VMULHUW4, and the shifts, one count
+  modulo the element width. Nothing traps or reads the FPCR. The other 1C
+  codes are what they were on every row: 00, 01, 30-3F, 70 and 78 the
+  core's, every other OPCDEC; the new words raise OPCDEC on every row
+  without `CPU_EXT_EV8`.
+- **S6**: every row of 3.4's table at the 0x080 | Fnc base, under the
+  qualifiers its class accepts and OPCDEC for every other Trp and Rnd
+  (the estimates take every Rnd alike). Each half is the scalar S
+  instruction with the word's own Trp and Rnd and the FPCR, through the
+  core's IEEE routines: ADDS, SUBS and MULS for P-ARITH, the operands by
+  the table (the cross and horizontal forms), PMULLN and PMULHN negated
+  after rounding; the compares as CMPTxx, NEQ and UN as EQ, writing IEEE
+  1.0 or a true zero; PCVTFI as CVTTQ at 32 bits; the estimates as DIVS of
+  1.0 by the operand (SQRTS for the root) but INE, exact and chopped to 14
+  fraction bits whatever Rnd is, the H and L forms' other half 0 and
+  unread; the bit manipulations with no checking. A half is read as LDS
+  maps it and written as STS packs it. Each half's exceptions set their
+  FPCR status bits; both halves are always computed and written; a trap is
+  the scalar instruction's on this core, EXC_SUM the OR of both halves'
+  reports with SWC for /S and REG = Fc (on `ev8n` the 21464's register
+  fields), EXC_ADDR what a scalar ARITH gives (on `ev8` the trigger's PC,
+  which the PALcode turns into the next; on `ev8n` the next, section 5).
+  FEN with the FPU disabled, after OPCDEC for a code the sheet does not
+  assign. Opcode 07 stays OPCDEC on every other row.
+- **AMASK bit 11** on both rows, in the commit after S6's: 0x1F07, the
+  IDS's value. Bit 3, Tarantula's, waits for S8.
+
+**What Alphabox decided or inferred** (the gaps the sheet leaves).
+
+- **CMPLGE** compares unsigned, as CMPWGE **[inference]**: the sheet
+  gives it "by analogy".
+- **The unpacks** read Rb only and ignore Ra, as this core's UNPKBW
+  **[decision]**: "the operand as MVI's".
+- **VMINMAX** reads only the element-size low bits of each of Rb's
+  longwords **[inference]**: "each as an element-size value in the low
+  bits of its longword".
+- **The unary paired forms** (PARCPLx, PARSQRTx, PCVTFI, PEXTL, PEXTH)
+  ignore Fa **[decision]**, as this core's CVTxx do; its SQRTx alone raise
+  OPCDEC for Fa != 31.
+- **PARSQRTx of +-0**: the infinity of the zero's sign, as 1.0 /
+  SQRTS(+-0) gives it, and nothing raised, as SQRTS raises nothing for a
+  zero **[inference]**: the sheet gives the case no value. IEEE 754's
+  rSqrt signals division by zero there: a point for the owner and nada.
+- **An estimate of a NaN** is the NaN quieted, its fraction not chopped
+  **[inference]**: the chop is of "the exact reciprocal". After a
+  denormal operand's trap the result is UNPREDICTABLE: the reciprocal
+  what DIVS computes, the root +inf **[decision]**.
+- **PFMAX and PFMIN**: "the reverse" is the same compare with the
+  results swapped, (faX < fbX) ? faX : fbX, so for equal operands (+0 and
+  -0) PFMAX gives faX and PFMIN fbX **[inference]**; an unordered pair
+  gets the NaN quieted, Fb's first, ADDS's result for NaN operands
+  **[inference]** ("the result the scalar rules give one"); an ordered
+  one the operand's bits as they are.
+- **PMULLN and PMULHN** flip the sign of whatever the rounded product is,
+  a NaN's too, so an underflow's true zero becomes -0 **[inference]**
+  ("negated after rounding").
+- **Fc = F31** writes nothing and still raises the exceptions, as a
+  scalar instruction does.
+
+**The JIT.** First the check the brief asked for: on the AMASK commit
+`classify()` compiled no new word on either back end (it returned OP_NONE
+for every 1C code but the core's and for all of opcode 07), so a block
+ended before each and the interpreter ran it; groups `simd` and `paired`
+passed on the JIT_VERIFY lane so. Then both compiled, on the rows with
+`CPU_EXT_EV8` and for the codes the sheet assigns only (`ev8simd::assigned`,
+`ev8paired::assigned`): OP_SIMD calls `ev8simd::exec` through
+`CAlphaCPU::jit_simd` with Rav and Rbv as compiled code holds them and
+writes Rc; OP_PAIRED calls `paired_operate` through `jit_paired`, which
+bails to the interpreter with the FPU disabled (FEN) and, after a trap,
+leaves through the ARITH entry as a compiled FLTV does (the trap told by
+`state.pc`, which only GO_PAL changes). Neither ends the block. A
+deliberately wrong helper (the SIMD result's bit 0 flipped, Fc's bit 0
+flipped after a paired instruction) failed 6744 and 6789 results of the
+compiled pass on the AArch64 JIT (`ev8`, `ev8n`), 6739 and 6780 on the
+x86-64 one, and none of the interpreted pass. Inline host SIMD is a later
+stage; no performance claim and no switch.
+
+**The tests.**
+
+- `test/cpu` group `simd` (`simd_cases.py`, the expected values from the
+  sheet's definitions): every 1C row in register and literal forms over a
+  cross of edge values, saturation at both ends in every lane, signed and
+  unsigned, every PERMB8 selector in every byte and the sign fill, the
+  tree sums with carries out of every element width, VMINMAX's running
+  pair from its start values and its unread bits, the shift counts, the
+  value an operate leaves for the next instruction; the new words OPCDEC
+  on the rows without `CPU_EXT_EV8` and the free codes OPCDEC on every
+  row. 5,798 results on `ev8` and `ev8n`, 518 elsewhere.
+- `test/cpu` group `paired` (`paired_cases.py`, the scalar rules per half
+  in `sfloat.py`, exact arithmetic from the ARM and the 21264 HRM): a
+  sweep of every instruction under every qualifier its class accepts, /D
+  under each FPCR rounding mode, on pairs that do not trap; one-instruction
+  cases with the trap record, Fc and the FPCR: each exception in one half,
+  the other and both, NaNs and infinities per half, denormals (the
+  unmaskable trap, DNZ with /S), underflow with /U and the disables (UNFD
+  without UNDZ still traps), the estimates' DZE, underflow and unused
+  halves, PCVTFI's overflow under the four rounding modes, the compares'
+  NaN rules, the bit manipulations with every exception enabled, register
+  aliasing and Fc = F31; FEN; OPCDEC for the free Fnc codes and for every
+  qualifier a class does not accept, counted in batches, on every row, and
+  for every code of the sheet on the rows without `CPU_EXT_EV8`. 3,702
+  results on `ev8`, 6,162 on `ev8n` (its MT_FPCR traps are checked too),
+  83 elsewhere.
+- `alphabox_fptest` (`ctest`): paired single per half against the host
+  FPU in every rounding mode, under every FPCR of the scalar sweep, the
+  bit manipulations, and every one of the 2048 function codes' decode
+  (OPCDEC or not, FEN): 7.2 million cases. A model made wrong on purpose
+  (PMULLN not negated, the estimates rounded instead of chopped) failed
+  412,158 of them.
+- `test/tools/ev8_simd_guest.sh` and `ev8_simd.c`: a Linux program for the
+  `linux-es47` guest on the `ev8` row, compiled by the guest's gcc with
+  the new words as `.long`, running SIMD kernels (a saturating add, a sum
+  of absolute differences, a dot product, a running min and max, packing,
+  a byte reverse) and paired-single ones (y = a x + y, a horizontal sum,
+  compares, a max, a conversion, a reciprocal) against scalar C.
+
+**The proofs.** Every lane built and passed `ctest` (the interpreter, the
+AArch64 JIT with SDL, JIT_VERIFY, the x86-64 JIT, JIT_STATS, a headless
+JIT), and every commit of the series built (the interpreter, headless JIT
+and JIT_VERIFY lanes, configured again at each commit for the source
+list). The CPU oracle on the interpreter, JIT, JIT_VERIFY and x86-64
+lanes, alike on all four: `ev68cb` and `ev7` PASS 20872, KNOWN 61, FAIL 0
+(main's 20273 and the new groups' OPCDEC results, 518 of `simd` and 83 of
+`paired`, less two harness results counted once); `ev8` PASS 50638, KNOWN
+73, FAIL 0; `ev8n` PASS 53897, KNOWN 70, FAIL 0; the KNOWN counts are
+main's; JIT_VERIFY 0 mismatches (4.5 million compiled-block executions on
+each EV8 row). Of main's results only the three of group `misc`'s
+"opcode 07 raises OPCDEC" no longer run on the EV8 rows, whose word,
+0x1C000000, is PMUL/C there. `quiesce_mp.py`, `tpu_mp.py`,
+`tarantula_vv.py` on `ev8` and `ev8n`, `codepage_mp.py` and
+`marvel8_mp.py` passed on the same four lanes, with no MISMATCH line. The
+SRM console-log check is clean on the interpreter, JIT and JIT_VERIFY
+lanes (JIT_VERIFY: 113 million compiled-block executions, 0 mismatches).
+`boards_check.sh` on the ES47 with the `ev8` row passes its board and its
+`init` check, and `--diff` against `boards-gate-jit0508-ev8` gives the same
+console: the console never executes AMASK (S1), so bit 11 shows nowhere in
+it. `ev8_simd_guest.sh` on the AArch64 JIT: the guest logs in on both
+processors, its gcc compiles the program, which reads IMPLVER 4 and AMASK
+bit 11 present and makes 2101 checks against scalar C with 0 mismatches.
+The runs are in `lab/runs/ev8-s5s6-proofs/`, `boards-ev8-s5s6-es47` and
+`guests-ev8-s5s6-linux`.
+
+**Findings.**
+
+- [ev8-isa.md](ev8-isa.md) needed no correction for S5 and S6: its example
+  words are what `alpha_asm.py` assembles, and groups `simd` and `paired`
+  check them first. Its gaps are the inferences above; the zero's
+  reciprocal square root is the one with no basis at all.
+- The oracle image's code area is nearly full: on `ev8n` the cases take
+  721 KB of the 736 KB `image.py` gives them. The next stage's cases need
+  more room (a second image, or the code area moved).
 
 ## S7 (2026-10-25)
 
