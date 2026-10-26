@@ -219,11 +219,13 @@ u32 CAlphaCPU::paired_est(u32 b, u32 ins, bool root) {
   const int t = ieee_unpack(op, &x, ins_c);
   if (t == UFT_NAN)
     return b | 0x00400000; // quieted, as SQRTS returns it
-  if (t == UFT_ZERO)
-    // 1/sqrt(+-0): the infinity of the zero's sign, as 1.0 / SQRTS(+-0);
-    // SQRTS raises nothing for a zero, so neither does the estimate
-    // [inference: the sheet gives this case no value].
+  if (t == UFT_ZERO) {
+    // 1/sqrt(+-0): the infinity of the zero's sign, raising division by
+    // zero as IEEE 754's rSqrt does and as PARCPL of a zero does
+    // [decision, the owner's, 2026-10-26].
+    ieee_trap(TRAP_DZE, 1, FPCR_DZED, ins_c);
     return (x.sign ? 0x80000000 : 0) | S_INF;
+  }
   if (x.sign) {
     ieee_trap(TRAP_INV, 1, FPCR_INVD, ins_c);
     return S_CQNAN;

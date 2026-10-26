@@ -268,9 +268,10 @@ def rcp(q, b):
 
 def rsqrt(q, b):
     """PARSQRTx's half: the exact reciprocal square root chopped to 15
-    significant bits; the exceptions SQRTS raises, but INE: none for a zero,
-    whose estimate is the infinity of its sign, as 1.0 / SQRTS(+-0)
-    [inference]; a negative operand is an invalid operation."""
+    significant bits; the exceptions SQRTS raises, but INE; a zero's
+    estimate is the infinity of its sign and raises division by zero, as
+    IEEE 754's rSqrt and PARCPL of a zero do [decision]; a negative operand
+    is an invalid operation."""
     (b,), det, forced = _operands(q, b)
     if forced:
         return Half(None, det, True)
@@ -278,7 +279,7 @@ def rsqrt(q, b):
     if k in ("qnan", "snan"):
         return Half(quiet(b), det)
     if k == "zero":
-        return Half((b & SIGN) | INF, det)
+        return Half((b & SIGN) | INF, det | DZE)
     if b & SIGN:
         return Half(CQNAN, det | INV)
     if k == "inf":

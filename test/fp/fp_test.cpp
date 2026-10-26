@@ -2118,7 +2118,8 @@ static Expect p_half(PKind k, const Ctx &c, u32 x, u32 y) {
   }
   case PK_RSQRT: {
     /* the exact 1/sqrt chopped to 15 significant bits; SQRTS's exceptions
-       but INE; +-0 gives the infinity of its sign, raising nothing */
+       but INE; +-0 gives the infinity of its sign and raises division by
+       zero, as rSqrt and PARCPL of a zero do */
     u64 v = b;
     ieee_operand(e, c, v);
     if (!e.res_known)
@@ -2130,6 +2131,9 @@ static Expect p_half(PKind k, const Ctx &c, u32 x, u32 y) {
     }
     if (kk == C_ZERO) {
       e.res = (u32)((v >> 32) & 0x80000000) | 0x7F800000;
+      e.det |= X_DZE;
+      if (!(c.S && (c.fpcr & FPCR_DZED)))
+        e.trap |= X_DZE;
       return e;
     }
     if (v & SIGN) {
