@@ -15,6 +15,12 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
+ * History: before ES40-Emu built this card on MAME's S3 code, es40 had
+ * one (the ES40 Emulator Project: Camiel Vanderhoeven, 2007-2008), which
+ * AXPbox carried on (Tomáš Glozar, Remy van Elst). This file keeps none
+ * of their text, only the interface it implements: the class and function
+ * names, their signatures and the values of the PCI header.
+ *
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * ES40-Emu distributes this file under the BSD 3-Clause licence, as MAME
@@ -51,7 +57,7 @@
 
 /**
  * \file
- * Contains the code for emulated S3 Trio 64 Video Card device.
+ * The S3 Trio64 (86C764) PCI display adapter.
  **/
 #include "S3Trio64.hpp"
 #include "AliM1543C.hpp"
@@ -1366,28 +1372,28 @@ uint32_t CS3Trio64::screen_update(bitmap_rgb32 &bitmap,
 
 // ES40 specific functions
 
-/** PCI Configuration Space data block */
+/** The PCI configuration header the card resets to. */
 static u32 s3_cfg_data[64] = {
-    /*00*/ 0x88115333, // CFID: vendor + device
-    /*04*/ 0x02000000, // CFCS: command + status: medium DEVSEL, nothing else
+    /*00*/ 0x88115333, // device 8811 (Trio64), vendor 5333 (S3)
+    /*04*/ 0x02000000, // status, command: medium DEVSEL, nothing else
                        // -- a real 86C764 reports 0x0200. The old 0x011F
                        // advertised a capability list (pointer 0), a
                        // master-data-parity error latched at reset on a card
                        // that never bus-masters, and reserved bits.
-    /*08*/ 0x03000002, // CFRV: class + revision
-    /*0c*/ 0x00000000, // CFLT: latency timer + cache line size
-    /*10*/ 0x00000000, // BAR0: FB
-    /*14*/ 0x00000000, // BAR1:
-    /*18*/ 0x00000000, // BAR2:
-    /*1c*/ 0x00000000, // BAR3:
-    /*20*/ 0x00000000, // BAR4:
-    /*24*/ 0x00000000, // BAR5:
-    /*28*/ 0x00000000, // CCIC: CardBus
-    /*2c*/ 0x00000000, // CSID: subsystem + vendor
-    /*30*/ 0x00000000, // BAR6: expansion rom base
-    /*34*/ 0x00000000, // CCAP: capabilities pointer
+    /*08*/ 0x03000002, // class 030000 (VGA display), revision 02
+    /*0c*/ 0x00000000, // BIST, header type, latency timer, cache line size
+    /*10*/ 0x00000000, // BAR0, the linear framebuffer
+    /*14*/ 0x00000000, // BAR1 to BAR5: none
+    /*18*/ 0x00000000,
+    /*1c*/ 0x00000000,
+    /*20*/ 0x00000000,
+    /*24*/ 0x00000000,
+    /*28*/ 0x00000000, // CardBus CIS pointer
+    /*2c*/ 0x00000000, // subsystem, subsystem vendor
+    /*30*/ 0x00000000, // expansion ROM base address
+    /*34*/ 0x00000000, // capabilities pointer
     /*38*/ 0x00000000,
-    /*3c*/ 0x281401ff, // CFIT: interrupt configuration
+    /*3c*/ 0x281401ff, // max latency, min grant, interrupt pin A, line
     0,
     0,
     0,
@@ -1437,24 +1443,24 @@ static u32 s3_cfg_data[64] = {
     0,
     0};
 
-/** PCI Configuration Space mask block */
+/** The bits of each configuration dword the guest can write. */
 static u32 s3_cfg_mask[64] = {
-    /*00*/ 0x00000000, // CFID: vendor + device
-    /*04*/ 0x0000ffff, // CFCS: command + status
-    /*08*/ 0x00000000, // CFRV: class + revision
-    /*0c*/ 0x0000ffff, // CFLT: latency timer + cache line size
-    /*10*/ 0xfc000000, // BAR0: FB
-    /*14*/ 0x00000000, // BAR1:
-    /*18*/ 0x00000000, // BAR2:
-    /*1c*/ 0x00000000, // BAR3:
-    /*20*/ 0x00000000, // BAR4:
-    /*24*/ 0x00000000, // BAR5:
-    /*28*/ 0x00000000, // CCIC: CardBus
-    /*2c*/ 0x00000000, // CSID: subsystem + vendor
-    /*30*/ 0x00000000, // BAR6: expansion rom base
-    /*34*/ 0x00000000, // CCAP: capabilities pointer
+    /*00*/ 0x00000000,
+    /*04*/ 0x0000ffff, // the command register
+    /*08*/ 0x00000000,
+    /*0c*/ 0x0000ffff, // latency timer, cache line size
+    /*10*/ 0xfc000000, // BAR0: 64 MB
+    /*14*/ 0x00000000,
+    /*18*/ 0x00000000,
+    /*1c*/ 0x00000000,
+    /*20*/ 0x00000000,
+    /*24*/ 0x00000000,
+    /*28*/ 0x00000000,
+    /*2c*/ 0x00000000,
+    /*30*/ 0x00000000,
+    /*34*/ 0x00000000,
     /*38*/ 0x00000000,
-    /*3c*/ 0x000000ff, // CFIT: interrupt configuration
+    /*3c*/ 0x000000ff, // the interrupt line
     0,
     0,
     0,
@@ -1505,9 +1511,7 @@ static u32 s3_cfg_mask[64] = {
     0};
 
 /**
- * Constructor.
- *
- * Don't do anything, the real initialization is done by init()
+ * Nothing is set up here; init() does it.
  **/
 CS3Trio64::CS3Trio64(CConfigurator *cfg, CSystem *c, int pcibus, int pcidev)
     : CVGACard(cfg, c, pcibus, pcidev) {}
@@ -1752,10 +1756,11 @@ static u32 s3_legacy_port(int index) {
 }
 
 /**
- * Initialize the S3 device.
+ * Sets the card up: its PCI function, the VGA and S3 state, the legacy
+ * ranges and ports, and the VGA BIOS.
  **/
 void CS3Trio64::init() {
-  // Register PCI device
+  // Function 0, with its configuration header and write mask
   add_function(0, s3_cfg_data, s3_cfg_mask);
 
   // Make the 21272/21274 PCI config window visible for this device now.
@@ -1763,7 +1768,7 @@ void CS3Trio64::init() {
   // mapping it sees ~0/0 and panics with "no device at 255/255/0".
   ResetPCI();
 
-  // Initialize all state variables to 0
+  // The card's own state starts at zero
   memset((void *)&state, 0, sizeof(state));
 
   // initialize MAME S3 and VGA fields and values to 0
@@ -1802,11 +1807,10 @@ void CS3Trio64::init() {
   lfb_base = s3_cfg_data[0x10 >> 2] & 0xFC000000; // BAR0 default (aligned)
   lfb_size = vga.svga_intf.vram_size;             // clamp to VRAM for now
 
-  // Reset the base PCI device
+  // The configuration header back to its reset values, the BARs mapped
   ResetPCI();
 
-  /* The configuration file variable "rom" should point to a VGA BIOS
-     image. If not, try "vgabios.bin". */
+  // The VGA BIOS: the image the `rom` key names, by default vgabios.bin
   load_option_rom("vgabios.bin");
 
   vga.attribute.state = 1;
@@ -2511,7 +2515,8 @@ bool CS3Trio64::IsAccelPort(u32 p) const {
 }
 
 /**
- * Read from one of the PCI BAR (configurable address) memory ranges.
+ * A read in one of the card's BARs: BAR0, the linear framebuffer, is the
+ * only one.
  **/
 u32 CS3Trio64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 #ifdef S3_LFB_TRACE
@@ -2523,7 +2528,7 @@ u32 CS3Trio64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 #endif
 
   switch (bar) {
-    // PCI memory range
+    // BAR0
   case 0:
     if (!lfb_active) {
       // No decode when LFB disabled  mimic bus-float/read-as-FFs
@@ -2537,7 +2542,8 @@ u32 CS3Trio64::ReadMem_Bar(int func, int bar, u32 address, int dsize) {
 }
 
 /**
- * Write to one of the PCI BAR (configurable address) memory ranges.
+ * A write in one of the card's BARs: BAR0, the linear framebuffer, is the
+ * only one.
  **/
 void CS3Trio64::WriteMem_Bar(int func, int bar, u32 address, int dsize,
                              u32 data) {
@@ -2554,7 +2560,7 @@ void CS3Trio64::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 #endif
 
   switch (bar) {
-    // PCI Memory range
+    // BAR0
   case 0:
     if (!lfb_active) {
       // Ignore writes when LFB disabled
@@ -2835,9 +2841,7 @@ void CS3Trio64::lfb_recalc_and_cache() {
 }
 
 /**
- * Read from Framebuffer.
- *
- * Not functional.
+ * A read of display memory through BAR0 (dsize in bits).
  **/
 u32 CS3Trio64::mem_read(u32 address, int dsize) {
   const u32 mv = s3_vram_mask(); // (memsize - 1)
@@ -2860,9 +2864,7 @@ u32 CS3Trio64::mem_read(u32 address, int dsize) {
 }
 
 /**
- * Write to Framebuffer.
- *
- * Not functional.
+ * A write to display memory through BAR0 (dsize in bits).
  **/
 void CS3Trio64::mem_write(u32 address, int dsize, u32 data) {
   const u32 mv = s3_vram_mask(); // (memsize - 1)
@@ -2902,9 +2904,8 @@ void CS3Trio64::mem_write(u32 address, int dsize, u32 data) {
 }
 
 /**
- * Read from Legacy VGA Memory
- *
- * Calls vga_mem_read to read the data 1 byte at a time.
+ * A read in the legacy window at 0xA0000: the S3's MMIO alias when CR53
+ * enables it, else VGA memory.
  **/
 u32 CS3Trio64::legacy_read(u32 address, int dsize) {
   // MMIO alias active ?
@@ -2949,8 +2950,9 @@ u32 CS3Trio64::legacy_read(u32 address, int dsize) {
 }
 
 /**
- * Read from I/O Port
- */
+ * A read of an I/O port: the 8514/A-style accelerator ports here, the
+ * others by the VGA core.
+ **/
 u32 CS3Trio64::io_read(u32 address, int dsize) {
   // Always intercept S3 8514/A-style ports. If the port block is not enabled
   // yet (CR40 == 0), hardware behaves benignly: reads return bus pull-ups,
@@ -3015,10 +3017,9 @@ u8 CS3Trio64::io_read_b(u32 address) {
 }
 
 /**
- * Write to I/O Port
- *
- * Calls io_write_b to write the data 1 byte at a time.
- */
+ * A write to an I/O port: the 8514/A-style accelerator ports here, the
+ * others by the VGA core, a byte at a time through io_write_b.
+ **/
 void CS3Trio64::io_write(u32 address, int dsize, u32 data) {
   // 8514/A-style accel window (S3 engine). Intercept first, and swallow writes
   // until CR40 enables the port block (to avoid falling through to VGA path).
@@ -3114,9 +3115,7 @@ void CS3Trio64::write_b_3c2(u8 value) {
 }
 
 /**
- * Read from the VGA Enable register (0x3c3)
- *
- * (Not sure where this comes from; doesn't seem to be in the VGA specs.)
+ * 0x3c3, video subsystem enable: whether the VGA answers.
  **/
 u8 CS3Trio64::read_b_3c3() {
 #if DEBUG_VGA_NOISY

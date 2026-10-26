@@ -11,6 +11,12 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
+ * History: before ES40-Emu built this card on MAME's S3 code, es40 had
+ * one (the ES40 Emulator Project: Camiel Vanderhoeven, 2007-2008), which
+ * AXPbox carried on (Tomáš Glozar, Remy van Elst). This file keeps none
+ * of their text, only the interface it declares: the class and function
+ * names, their signatures and the 4 MB of display memory.
+ *
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * ES40-Emu distributes this file under the BSD 3-Clause licence, as MAME
@@ -47,7 +53,7 @@
 
 /**
  * \file
- * Contains the definitions for emulated S3 Trio 64 Video Card device.
+ * The S3 Trio64 (86C764) PCI display adapter.
  **/
 #if !defined(INCLUDED_S3Trio64_H_)
 #define INCLUDED_S3Trio64_H_
@@ -60,17 +66,14 @@
 #include "ibm8514a.hpp"
 #include "mame_shims.hpp"
 
-/* video card has 4M of ram */
+// log2 of the display memory: 4 MB
 #define VIDEO_RAM_SIZE 22
 #define CRTC_MAX 0x70
 
 /**
- * \brief S3 Trio 64 Video Card
- *
- * Documentation consulted:
- *  - VGADOC4b
- *   (http://home.worldonline.dk/~finth/)
- *  .
+ * \brief The S3 Trio64: S3's extended registers, the linear framebuffer
+ * and the 8514/A-style accelerator on the VGA core. Finn Thøgersen's
+ * VGADOC 4b describes the registers.
  **/
 class CS3Trio64 : public CVGACard {
 public:

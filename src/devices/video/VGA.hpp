@@ -13,6 +13,13 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
+ * History: before ES40-Emu built this core on MAME's VGA, es40 had a VGA
+ * base class (the ES40 Emulator Project: Camiel Vanderhoeven, 2007-2008),
+ * which AXPbox carried on (Tomáš Glozar, Remy van Elst). This file keeps
+ * none of their text, only the interface it declares: the class, its
+ * constructor and destructor, get_actl_palette_idx, redraw_area and
+ * theVGA.
+ *
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * ES40-Emu distributes this file under the BSD 3-Clause licence, as MAME
@@ -49,7 +56,7 @@
 
 /**
  * \file
- * Contains the definitions for the VGA base class.
+ * The VGA core the PCI VGA cards are built on.
  **/
 #if !defined(__VGA_H__)
 #define __VGA_H__
@@ -63,7 +70,8 @@
 using offs_t = uint32_t;
 
 /**
- * \brief Abstract base class for PCI VGA cards.
+ * \brief The VGA core of a PCI VGA card: MAME's VGA registers and memory,
+ * and what each card provides to draw them.
  **/
 class CVGA : public CPCIDevice {
   friend class ibm8514a_device;

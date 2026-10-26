@@ -13,6 +13,12 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
+ * History: before ES40-Emu built this core on MAME's VGA, es40 had a VGA
+ * base class (the ES40 Emulator Project: Camiel Vanderhoeven, 2007-2008),
+ * which AXPbox carried on (Tomáš Glozar, Remy van Elst). This file keeps
+ * none of their text, only the interface it implements: the class, its
+ * constructor's signature, the one-card check and theVGA.
+ *
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * ES40-Emu distributes this file under the BSD 3-Clause licence, as MAME
@@ -49,7 +55,7 @@
 
 /**
  * \file
- * Contains the code for the VGA base class.
+ * The VGA core the PCI VGA cards are built on.
  **/
 #include "VGA.hpp"
 #include "StdAfx.hpp"
@@ -59,9 +65,8 @@
 #include "logmacro.hpp"
 
 /**
- * Constructor.
- *
- * Checks if more than one VGA card is present. If so, throws a failure.
+ * The card becomes the machine's VGA (theVGA); a second VGA card is a
+ * configuration error.
  **/
 CVGA::CVGA(class CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev)
     : CPCIDevice(cfg, c, pcibus, pcidev) {
@@ -70,9 +75,6 @@ CVGA::CVGA(class CConfigurator *cfg, class CSystem *c, int pcibus, int pcidev)
   theVGA = this;
 }
 
-/**
- * Destructor.
- **/
 CVGA::~CVGA(void) {}
 
 /**************************************
@@ -1078,6 +1080,6 @@ void CVGA::mem_linear_w(offs_t offset, uint8_t data) {
 }
 
 /**
- * Variable pointer to the one and only VGA card.
+ * The machine's VGA card, null without one.
  **/
 CVGA *theVGA = 0;

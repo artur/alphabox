@@ -100,10 +100,12 @@ for the same reason):
   distributes them. They came to AXPbox from ES40-Emu in July 2026, under
   the GPL header ES40-Emu then used; ES40-Emu moved them to BSD-3-Clause
   in September 2026, and its maintainer confirmed on issue #2 that the
-  versions they wrote are BSD-3-Clause throughout. What is left in them
-  from es40 and AXPbox is interface scaffolding (the constructor and
-  destructor declarations, the one-VGA check, `break` and `default`
-  lines), not authorship;
+  versions they wrote are BSD-3-Clause throughout. The es40 and AXPbox
+  text still in them (doc comments and the PCI header's field labels) was
+  rewritten here on 2026-10-26. What is left of es40 and AXPbox is the
+  interface: class and function names, signatures, the PCI header's
+  values and the one-VGA check. Each header names es40 and AXPbox in a
+  history line;
 - `VGACard.*`, this repository's base class for the cards, also holds
   GPL-2.0-or-later code moved there from es40's card files (the display
   thread, saving and restoring state, the I/O dispatch), so it stays
