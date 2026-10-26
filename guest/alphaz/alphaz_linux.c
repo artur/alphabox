@@ -136,6 +136,24 @@ static void clock_rows(void)
     az_add(AZ_CPU, "  windows", "measured: 3 of 400 ms on processor 0", "%s: the median above", each);
     az_add(AZ_CPU, "  the median's", "measured: RPCC against CLOCK_MONOTONIC",
            "%llu cycles in %llu ns; low 32 bits wrapped %llu times; %llu reads", c.cycles, c.ticks, c.wraps, c.samples);
+    /* the kernel's clock source: on one processor Linux on the Alpha
+     * counts time with RPCC itself, and then the clock above is only the
+     * frequency the kernel was given */
+    {
+        char src[64];
+        FILE *f = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
+        if (f && fgets(src, sizeof src, f)) {
+            trim(src);
+            if (!strcmp(src, "rpcc"))
+                az_add(AZ_CPU, "  against", "/sys/.../current_clocksource",
+                       "rpcc, the cycle counter itself: the clock above is the kernel's frequency");
+            else
+                az_add(AZ_CPU, "  against", "/sys/.../current_clocksource", "%s", src);
+        } else {
+            az_add(AZ_CPU, "  against", "/sys/.../current_clocksource", "not reported");
+        }
+        if (f) fclose(f);
+    }
     cf = cpuinfo_value("cycle frequency [Hz]");
     if (cf) {
         u64 v = 0;
