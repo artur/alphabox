@@ -230,12 +230,11 @@ void az_cpu_rows(void)
 
 /* ---- the clock ---- */
 
-void az_measure_clock(struct az_clock *c, u64 (*now)(void), u64 freq, u64 window_ms)
+static void one_window(struct az_clock *c, u64 (*now)(void), u64 freq, u64 window_ms)
 {
     u64 t0, t, want, prev, cur;
     memset(c, 0, sizeof *c);
     c->freq = freq;
-    if (freq == 0) return;
     want = freq / 1000 * window_ms;
     t0 = now();
     prev = az_rpcc() & 0xffffffffULL;
@@ -252,10 +251,48 @@ void az_measure_clock(struct az_clock *c, u64 (*now)(void), u64 freq, u64 window
     c->hz = c->cycles / c->ticks * freq + c->cycles % c->ticks * freq / c->ticks;
 }
 
+/* Three windows, and the median's: an operating system's timer can jump
+ * for a moment (in a guest whose host is busy, the clock interrupts that
+ * were late are made up in a burst), and one window in three that does
+ * should not be the answer. The others' rates are kept, so the spread is
+ * shown with it. */
+void az_measure_clock(struct az_clock *c, u64 (*now)(void), u64 freq, u64 window_ms)
+{
+    struct az_clock w[AZ_WINDOWS];
+    int i, k, order[AZ_WINDOWS];
+    memset(c, 0, sizeof *c);
+    c->freq = freq;
+    if (freq == 0) return;
+    for (i = 0; i < AZ_WINDOWS; i++) {
+        one_window(&w[i], now, freq, window_ms);
+        order[i] = i;
+    }
+    for (i = 1; i < AZ_WINDOWS; i++)
+        for (k = i; k > 0 && w[order[k]].hz < w[order[k - 1]].hz; k--) {
+            int s = order[k];
+            order[k] = order[k - 1];
+            order[k - 1] = s;
+        }
+    *c = w[order[AZ_WINDOWS / 2]];
+    for (i = 0; i < AZ_WINDOWS; i++) c->each[i] = w[i].hz;
+    c->windows = AZ_WINDOWS;
+}
+
 void az_fmt_hz(char *buf, int size, u64 hz)
 {
     u64 tenth = (hz + 50000) / 100000;
     az_snprintf(buf, size, "%llu.%llu MHz", tenth / 10, tenth % 10);
+}
+
+void az_fmt_windows(char *buf, int size, const struct az_clock *c)
+{
+    int i, n = 0;
+    buf[0] = 0;
+    for (i = 0; i < c->windows && n < size - 16; i++) {
+        u64 tenth = (c->each[i] + 50000) / 100000;
+        n += az_snprintf(buf + n, size - n, "%s%llu.%llu", i ? ", " : "", tenth / 10, tenth % 10);
+    }
+    if (n < size - 5) az_snprintf(buf + n, size - n, " MHz");
 }
 
 /* ---- the caches ----

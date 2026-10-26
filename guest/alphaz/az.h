@@ -113,15 +113,21 @@ void az_part(char *buf, int size, u64 implver, int type, int minor);
  * now() returns the timer in ticks of freq per second. The low 32 bits of
  * RPCC wrap (every 4.3 s at 1 GHz), so the loop samples the counter
  * continuously and adds up the 32-bit differences: any number of wraps is
- * counted as long as two samples are less than one wrap apart. */
+ * counted as long as two samples are less than one wrap apart. Three
+ * windows are timed and the median's are the results. */
+#define AZ_WINDOWS 3
 struct az_clock {
-    u64 cycles;  /* counted by RPCC over the window */
+    u64 cycles;  /* counted by RPCC over the median window */
     u64 ticks;   /* of the OS timer over the same window */
     u64 freq;    /* the OS timer's ticks per second */
     u64 wraps;   /* times the low 32 bits wrapped */
     u64 samples; /* RPCC reads */
     u64 hz;      /* cycles * freq / ticks */
+    int windows;
+    u64 each[AZ_WINDOWS]; /* every window's hz, in the order timed */
 };
+/* "799.9, 758.1, 800.0 MHz": every window's rate */
+void az_fmt_windows(char *buf, int size, const struct az_clock *c);
 void az_measure_clock(struct az_clock *c, u64 (*now)(void), u64 freq, u64 window_ms);
 /* "833.3 MHz" */
 void az_fmt_hz(char *buf, int size, u64 hz);

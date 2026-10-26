@@ -163,23 +163,25 @@ static void clock_rows(void)
 {
     struct az_clock c;
     LARGE_INTEGER f;
-    char hz[32];
+    char hz[32], each[64];
     HANDLE th = GetCurrentThread();
     DWORD_PTR old = SetThreadAffinityMask(th, 1);
     Sleep(0);
     if (!QueryPerformanceFrequency(&f)) f.QuadPart = 0;
     az_add(AZ_CPU, "Performance counter", "kernel32 QueryPerformanceFrequency", "%llu Hz", (u64)f.QuadPart);
 #ifdef __nada_alpha__
-    az_measure_clock(&c, qpc_now, (u64)f.QuadPart, 500);
+    az_measure_clock(&c, qpc_now, (u64)f.QuadPart, 400);
     az_fmt_hz(hz, sizeof hz, c.hz);
     az_add(AZ_CPU, "Clock", "measured: RPCC against QueryPerformanceCounter", "%s", hz);
-    az_add(AZ_CPU, "  how", "measured: 500 ms on processor 0",
+    az_fmt_windows(each, sizeof each, &c);
+    az_add(AZ_CPU, "  windows", "measured: 3 of 400 ms on processor 0", "%s: the median above", each);
+    az_add(AZ_CPU, "  the median's", "measured: RPCC against QueryPerformanceCounter",
            "%llu cycles in %llu counter ticks; low 32 bits wrapped %llu times; %llu reads", c.cycles, c.ticks,
            c.wraps, c.samples);
-    az_measure_clock(&c, tick_now, 1000, 500);
+    az_measure_clock(&c, tick_now, 1000, 400);
     az_fmt_hz(hz, sizeof hz, c.hz);
-    az_add(AZ_CPU, "Clock, second opinion", "measured: RPCC against GetTickCount", "%s (%llu cycles in %llu ms)", hz,
-           c.cycles, c.ticks);
+    az_fmt_windows(each, sizeof each, &c);
+    az_add(AZ_CPU, "Clock, second opinion", "measured: RPCC against GetTickCount", "%s (windows: %s)", hz, each);
 #else
     az_add(AZ_CPU, "Clock", "", "not measured: no cycle counter in this build");
 #endif

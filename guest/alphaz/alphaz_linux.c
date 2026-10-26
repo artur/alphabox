@@ -124,15 +124,17 @@ static void meminfo_row(const char *key)
 static void clock_rows(void)
 {
     struct az_clock c;
-    char hz[32];
+    char hz[32], each[64];
     const char *cf;
     u64 old = get_cpus();
     set_cpus(1);
-    az_measure_clock(&c, mono_now, 1000000000ULL, 500);
+    az_measure_clock(&c, mono_now, 1000000000ULL, 400);
     if (old) set_cpus(old);
     az_fmt_hz(hz, sizeof hz, c.hz);
     az_add(AZ_CPU, "Clock", "measured: RPCC against CLOCK_MONOTONIC", "%s", hz);
-    az_add(AZ_CPU, "  how", "measured: 500 ms on processor 0",
+    az_fmt_windows(each, sizeof each, &c);
+    az_add(AZ_CPU, "  windows", "measured: 3 of 400 ms on processor 0", "%s: the median above", each);
+    az_add(AZ_CPU, "  the median's", "measured: RPCC against CLOCK_MONOTONIC",
            "%llu cycles in %llu ns; low 32 bits wrapped %llu times; %llu reads", c.cycles, c.ticks, c.wraps, c.samples);
     cf = cpuinfo_value("cycle frequency [Hz]");
     if (cf) {
