@@ -10,7 +10,7 @@ Manual's (chapter 6.4 and Table 5-1).
 The 21464's (EV8's) additions are its Internal Design Specification's (Rev
 1.1k), as docs/platforms/ev8-isa.md fixes them for Alphabox and the nada
 toolchain: CMOV2, FCMOV2, MAP_ALIGN, CCB, LDL_ARM, LDQ_ARM and QUIESCE, the
-1C short-vector SIMD set (SIMD1C); and
+1C short-vector SIMD set (SIMD1C), paired single under 07 (PAIRED); and
 its own PALcode forms and IPR names, as docs/platforms/ev8-native.md 3.5
 gives them (hw_mfpr8, hw_mtpr8, hw_ld8, hw_st8, ifetchb, ret, IPR8).
 
@@ -258,6 +258,65 @@ for _base, _stem in ((0x14, "VADD"), (0x1C, "VSUB"), (0x24, "VMINMAX")):
     SIMD1C[_stem + "UL2"] = _base
     SIMD1C[_stem + "SL2"] = _base + 2
 IOP.update({_n: (0x1C, _f) for _n, _f in SIMD1C.items()})
+
+# The 21464's paired single precision under opcode 07 (ev8-isa.md 3.4): the
+# FP operate format with Trp <15:13>, Rnd <12:11> and a 6-bit Fnc <10:5>;
+# the 11-bit function is Trp << 8 | Rnd << 6 | Fnc, the plain form Rnd = 10
+# (0x080 | Fnc) [inference]. Mnemonic -> (Fnc, qualifier class).
+PAIRED = {
+    "PMUL": (0x00, "ARITH"), "PMULL": (0x01, "ARITH"),
+    "PMULH": (0x02, "ARITH"), "PMULLN": (0x05, "ARITH"),
+    "PMULHN": (0x06, "ARITH"), "PARCPL": (0x08, "EST"),
+    "PARCPLH": (0x09, "EST"), "PARCPLL": (0x0A, "EST"),
+    "PARSQRT": (0x0C, "EST"), "PARSQRTH": (0x0D, "EST"),
+    "PARSQRTL": (0x0E, "EST"), "PADD": (0x10, "ARITH"),
+    "PCADD": (0x11, "ARITH"), "PHADD": (0x12, "ARITH"),
+    "PSUB": (0x14, "ARITH"), "PSUBC": (0x15, "ARITH"),
+    "PHSUB": (0x16, "ARITH"), "PMOVLL": (0x18, "BIT"),
+    "PMOVLH": (0x19, "BIT"), "PMOVHL": (0x1A, "BIT"),
+    "PMOVHH": (0x1B, "BIT"), "PHSUBR": (0x1F, "ARITH"),
+    "PCPYS": (0x20, "BIT"), "PCPYSN": (0x21, "BIT"), "PCPYSE": (0x22, "BIT"),
+    "PCMPEQ": (0x28, "CMP"), "PCMPNEQ": (0x29, "CMP"),
+    "PCMPUN": (0x2A, "CMP"), "PCMPLT": (0x2C, "CMP"),
+    "PCMPLE": (0x2D, "CMP"), "PFMAX": (0x2E, "CMP"), "PFMIN": (0x2F, "CMP"),
+    "PCVTSP": (0x30, "BIT"), "PCVTFI": (0x39, "CVT"),
+    "PEXTL": (0x3A, "BIT"), "PEXTH": (0x3C, "BIT"),
+}
+# The qualifier classes [decision; P-EST agreed]: the Trp values and the
+# Rnd values each accepts. Trp 000 none, 001 /U (/V), 101 /SU (/SV), 111
+# /SUI (/SVI); Rnd 00 /C, 01 /M, 10 none, 11 /D. Every other combination
+# is an unused code (OPCDEC); the estimates take every Rnd alike.
+PAIRED_QUALS = {"ARITH": ((0, 1, 5, 7), (0, 1, 2, 3)),
+                "CMP": ((0, 5), (2,)),
+                "EST": ((0, 1, 5), (0, 1, 2, 3)),
+                "CVT": ((0, 1, 5, 7), (0, 1, 2, 3)),
+                "BIT": ((0,), (2,))}
+# Fa = $f31 by the syntax (the unary forms).
+PAIRED_UNARY = {"PARCPL", "PARCPLH", "PARCPLL", "PARSQRT", "PARSQRTH",
+                "PARSQRTL", "PCVTFI", "PEXTL", "PEXTH"}
+
+
+def paired_fn(name, trp=0, rnd=2):
+    fnc, _ = PAIRED[name]
+    return (trp << 8) | (rnd << 6) | fnc
+
+
+def paired(name, fa, fb, fc, trp=0, rnd=2):
+    """A paired-single word; the qualifiers by their fields."""
+    return fop(0x07, paired_fn(name, trp, rnd), fa, fb, fc)
+
+
+def paired_codes():
+    """{11-bit function: mnemonic} of every opcode 07 code the sheet
+    assigns."""
+    out = {}
+    for name, (fnc, cls) in PAIRED.items():
+        trps, rnds = PAIRED_QUALS[cls]
+        for t in trps:
+            for r in rnds:
+                out[(t << 8) | (r << 6) | fnc] = name
+    return out
+
 
 # Integer <-> floating register moves (FIX): (opcode, function).
 FTOI = {"FTOIT": (0x1C, 0x70), "FTOIS": (0x1C, 0x78)}

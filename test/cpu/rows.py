@@ -87,8 +87,9 @@ class Own:
 def function_of(word):
     """The function field of an instruction word, as the ARM's Table C-1
     writes codes: the 16 bits of opcode 18 (oo.ffff), the 11 of the
-    floating-point operate opcodes 14-17 (oo.fff), the 7 of the integer
-    operate opcodes 10-13 and 1C (oo.ff); None for the other formats."""
+    floating-point operate opcodes 14-17 and the EV8's 07 (oo.fff), the 7
+    of the integer operate opcodes 10-13 and 1C (oo.ff); None for the other
+    formats."""
     op = word >> 26
     if op == 0x18:
         return word & 0xFFFF
@@ -96,6 +97,8 @@ def function_of(word):
         return (word >> 5) & 0x7FF
     if 0x10 <= op <= 0x13 or op == 0x1C:
         return (word >> 5) & 0x7F
+    if op == 0x07:                # the EV8's paired single, FP operate
+        return (word >> 5) & 0x7FF
     return None
 
 
@@ -168,7 +171,7 @@ class Row:
         return None
 
     def describe(self):
-        own = sorted(self.own.values())
+        own = sorted(set(self.own.values()))
         return "%s: %s, IMPLVER %d, AMASK %#x, unused 18.xxxx %s%s" % (
             self.name, self.part, self.implver, self.amask,
             "no-ops" if self.unused_misc_nop else "trap",
@@ -176,12 +179,14 @@ class Row:
 
 
 # The EV8's own instructions, those the `ev8` and `ev8n` rows execute: S2's
-# and S3's (ev8-isa.md 3.1, 3.2) and S5's short-vector SIMD set under 1C
-# (3.3, alpha_asm.SIMD1C; simd_cases.py).
+# and S3's (ev8-isa.md 3.1, 3.2), S5's short-vector SIMD set under 1C
+# (3.3, alpha_asm.SIMD1C; simd_cases.py) and S6's paired single under 07
+# (3.4, alpha_asm.PAIRED; paired_cases.py).
 _EV8_OWN = {(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
             (0x17, 0x068): "FCMOV2", (0x18, 0xB000): "LDL_ARM",
             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}
 _EV8_OWN.update({(0x1C, f): n for n, f in alpha_asm.SIMD1C.items()})
+_EV8_OWN.update({(0x07, f): n for f, n in alpha_asm.paired_codes().items()})
 
 _EV68 = AMASK_BITS["BWX"] | AMASK_BITS["FIX"] | AMASK_BITS["CIX"] | \
     AMASK_BITS["MVI"] | AMASK_BITS["TRAP"] | AMASK_BITS["PREFETCH"]

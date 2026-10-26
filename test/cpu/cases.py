@@ -8,7 +8,7 @@ divergence: docs/cpu-fidelity.md, or a finding of lab/legacy-audit/cpu/
 AUDIT.md (CPU-nn) or lab/legacy-audit/jit/AUDIT.md (JIT-nn) until it is
 fixed. The JIT groups are in jit_cases.py, the native EV8's in
 ev8n_cases.py, Tarantula's in tarantula_cases.py, the EV8's 1C SIMD set in
-simd_cases.py.
+simd_cases.py and its paired single in paired_cases.py.
 
 What a case expects of the processor (IMPLVER, AMASK) is the row's
 (b.row, rows.py), and a case that needs what the row lacks is skipped
@@ -21,6 +21,7 @@ import ev8n_cases
 from alpha_asm import OP, R31, bra, jmp, mem, mfc, opl, opr, fop, call_pal
 import image
 import jit_cases
+import paired_cases
 import rows
 import simd_cases
 import tarantula_cases
@@ -49,7 +50,7 @@ GROUPS = [
     ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
                 "them (one processor: the timeout), AMASK bit 10"),
 ] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS + \
-    simd_cases.GROUPS
+    simd_cases.GROUPS + paired_cases.GROUPS
 
 # --- operand sets ------------------------------------------------------------
 
@@ -1385,6 +1386,7 @@ EMIT.update(jit_cases.EMIT)
 EMIT.update(ev8n_cases.EMIT)
 EMIT.update(tarantula_cases.EMIT)
 EMIT.update(simd_cases.EMIT)
+EMIT.update(paired_cases.EMIT)
 
 
 def emit(b, groups):
