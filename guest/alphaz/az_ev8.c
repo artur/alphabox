@@ -225,6 +225,12 @@ void az_ev8_rows(void)
     int i, simd = (az_cpu.present & AZ_AMASK_SIMD) != 0;
     az_add(AZ_EV8, "IMPLVER", "instruction IMPLVER", "%llu: %s", az_cpu.implver, az_implver_name(az_cpu.implver));
     az_add(AZ_EV8, "SMT", "AMASK bit 10", "%s", az_cpu.present & AZ_AMASK_SMT ? "present: LDL_ARM, LDQ_ARM, QUIESCE" : "absent");
+    if (az_cpu.ncpus > 0)
+        az_add(AZ_EV8, "Threads the system runs", az_cpu.who, "%d processors: each TPU a chip lists is one of them",
+               az_cpu.ncpus);
+    else
+        az_add(AZ_EV8, "Threads the system runs", "", "not reported");
+    az_add(AZ_EV8, "TPUs a chip", "", "not reported: no instruction tells a program its TPU");
     az_add(AZ_EV8, "SIMD and paired single", "AMASK bit 11", "%s", simd ? "present: opcode 1C SIMD, opcode 07 paired single" : "absent");
     az_add(AZ_EV8, "Tarantula", "AMASK bit 3", "%s",
            az_cpu.present & AZ_AMASK_TARANTULA ? "present: the vector extension" : "absent: no vector instruction is run");

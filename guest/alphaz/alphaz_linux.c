@@ -10,6 +10,7 @@
  * that one counter is read throughout. nada's libc has no clock_gettime or
  * sched_setaffinity, so both are system calls made here. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "az.h"
@@ -258,6 +259,10 @@ int main(void)
     if (ncpuinfo < 0) {
         ncpuinfo = 0;
         az_add(AZ_CPU, "/proc/cpuinfo", "", "not readable");
+    }
+    if (cpuinfo_value("cpus active")) {
+        az_cpu.ncpus = atoi(cpuinfo_value("cpus active"));
+        az_cpu.who = "/proc/cpuinfo cpus active";
     }
     cpu_rows();
     cache_rows();

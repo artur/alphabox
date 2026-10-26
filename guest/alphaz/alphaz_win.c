@@ -319,6 +319,8 @@ static void gather(void)
     az_pages_init();
     az_probe();
     GetSystemInfo(&si);
+    az_cpu.ncpus = (int)si.dwNumberOfProcessors;
+    az_cpu.who = "kernel32 GetSystemInfo";
     cpu_rows();
     cache_rows();
     system_rows();

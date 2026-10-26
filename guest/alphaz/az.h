@@ -85,7 +85,9 @@ extern const int az_nfeatures;
 /* the probe's results, read once at start */
 struct az_cpu {
     u64 implver;
-    u64 present; /* the features AMASK reported present, of AZ_AMASK_ASK */
+    u64 present;     /* the features AMASK reported present, of AZ_AMASK_ASK */
+    int ncpus;       /* the processors the OS reports, 0 when it does not */
+    const char *who; /* the OS call that gave ncpus */
 };
 extern struct az_cpu az_cpu;
 void az_probe(void);
