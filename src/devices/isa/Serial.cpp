@@ -160,7 +160,6 @@ void CSerial::init() {
     // SERIAL.SYS conclude "no UART here" and skip further probing/polling.
     state.rcvW = 0;
     state.rcvR = 0;
-    listenSocket = INVALID_SOCKET;
     connectSocket = INVALID_SOCKET;
     printf("%s: disabled - guest will see no UART at this address.\n",
            devid_string);
@@ -194,7 +193,6 @@ void CSerial::init() {
     in_subneg = false;
     stageLen = 0;
     myThread = nullptr;
-    listenSocket = INVALID_SOCKET;
     connectSocket = INVALID_SOCKET;
     printf("%s: null_attach - TX discarded, RX always empty.\n", devid_string);
     return;
@@ -203,11 +201,11 @@ void CSerial::init() {
   // Start Telnet server
 #if defined(_WIN32)
 
-  // Windows Sockets only work after calling WSAStartup.
+  // Windows Sockets only work after calling WSAStartup; 2.2 is the version
+  // with getaddrinfo and IPv6.
   WSADATA wsa;
-  WSAStartup(0x0101, &wsa);
+  WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif // defined (_WIN32)
-  struct sockaddr_in Address;
 
   const u64 port = myCfg->get_num_value("port", false, 8000 + state.iNumber);
   if (port < 1 || port > 65535)
@@ -218,38 +216,23 @@ void CSerial::init() {
   // Resolved rather than parsed, so a host name such as "localhost" works,
   // and an address that does not resolve stops here: it used to fall back
   // to every interface, which opened the console (and its BREAK menu) to
-  // the network when the user had asked for one address.
-  addrinfo hints = {};
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;
-  addrinfo *res = nullptr;
-  const int gai = getaddrinfo(listenAddress, nullptr, &hints, &res);
-  if (gai || !res)
+  // the network when the user had asked for one address. Either family:
+  // "::1", and "::" for every interface, IPv4 clients too. A name is
+  // listened on at every address it has, "localhost" at 127.0.0.1 and ::1
+  // (HostSocket.hpp).
+  std::vector<hostsock::Endpoint> addrs;
+  std::string why;
+  if (!hostsock::resolve(listenAddress, std::to_string(listenPort), SOCK_STREAM,
+                         true, &addrs, &why))
     FAILURE_3(Configuration, "%s: cannot listen on address \"%s\": %s",
-              devid_string, listenAddress,
-              gai ? gai_strerror(gai) : "no IPv4 address");
-  memcpy(&Address, res->ai_addr, sizeof(Address));
-  freeaddrinfo(res);
-  Address.sin_port = htons((u16)listenPort);
-
-  listenSocket = (int)socket(AF_INET, SOCK_STREAM, 0);
-  if (listenSocket == INVALID_SOCKET)
-    FAILURE_1(Runtime, "Serial: can't create a socket: %s\n", strerror(errno));
-  set_cloexec(listenSocket);
-
-  int optval = 1;
-  setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, (char *)&optval,
-             sizeof(optval));
-  // Without these checks a busy port went unnoticed: listen() on an unbound
-  // socket binds an ephemeral one, so the emulator announced the configured
-  // port and then waited for a connection that could never arrive.
-  if (bind(listenSocket, (struct sockaddr *)&Address, sizeof(Address)))
-    FAILURE_2(Runtime, "Serial: can't bind port %d: %s\n", listenPort,
-              strerror(errno));
-  if (listen(listenSocket, 8))
-    FAILURE_2(Runtime, "Serial: can't listen on port %d: %s\n", listenPort,
-              strerror(errno));
+              devid_string, listenAddress, why.c_str());
+  // A busy port stops here too: listen() on an unbound socket binds an
+  // ephemeral one, so the emulator used to announce the configured port
+  // and then wait for a connection that could never arrive.
+  if (!listener.open(addrs, 8, &why))
+    FAILURE_2(Runtime, "%s: %s", devid_string, why.c_str());
+  for (const std::string &note : listener.notes())
+    printf("%s: %s.\n", devid_string, note.c_str());
 
   uart.reset();
   myThread = nullptr;
@@ -257,7 +240,6 @@ void CSerial::init() {
   // The client program, if one is configured. Here a failure is a
   // configuration error; when it is started again for a reconnect, a
   // warning (execute).
-  std::string why;
   if (!launch_action(why))
     FAILURE_2(Configuration, "%s: cannot start the action program: %s",
               devid_string, why.c_str());
@@ -266,13 +248,13 @@ void CSerial::init() {
   // first client when it comes, and what the guest printed until then
   // follows the greeting (the newest 256 KB of it).
   if (!myCfg->get_bool_value("wait", true)) {
-    printf("%s: listening on %s port %d; the machine starts without "
-           "waiting for a client.\n",
-           devid_string, listenAddress, listenPort);
+    printf("%s: listening on %s; the machine starts without waiting for a "
+           "client.\n",
+           devid_string, listener.where().c_str());
     return;
   }
-  printf("%s: Waiting for connection on %s port %d.\n", devid_string,
-         listenAddress, listenPort);
+  printf("%s: Waiting for connection on %s.\n", devid_string,
+         listener.where().c_str());
   WaitForConnection();
 }
 
@@ -714,8 +696,8 @@ void CSerial::execute() {
         printf("%%SRL-W-DISCONNECT: Write socket closed on other end for "
                "serial port %d.\n",
                state.iNumber);
-        printf("-SRL-I-WAITFOR: Waiting for a new connection on port %d.\n",
-               listenPort);
+        printf("-SRL-I-WAITFOR: Waiting for a new connection on %s.\n",
+               listener.where().c_str());
         drop_client();
         std::string why;
         if (!launch_action(why))
@@ -1085,30 +1067,23 @@ bool CSerial::launch_action(std::string &why) {
 }
 
 void CSerial::WaitForConnection() {
-  struct sockaddr_in Address;
-  socklen_t nAddressSize = sizeof(struct sockaddr_in);
   char s[100];
 
   //  Wait until we have a connection. Poll rather than block in accept(), so
   //  that stop_threads() can join the serial thread while it waits for a
-  //  reconnect; without a connection the thread just returns.
+  //  reconnect; without a connection the thread just returns. (accept
+  //  waits out its 200 ms on EINTR or a broken listener: no spinning.)
   connectSocket = INVALID_SOCKET;
+  std::string peer;
   while (connectSocket == INVALID_SOCKET) {
     if (StopThread)
       return;
-    const int ready = wait_readable(listenSocket, 200);
-    if (ready < 0) // EINTR or a broken listener: don't spin
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    if (ready <= 0)
-      continue;
-    connectSocket =
-        (int)accept(listenSocket, (struct sockaddr *)&Address, &nAddressSize);
+    const int64_t c = listener.accept(200, &peer);
+    if (c >= 0)
+      connectSocket = c;
   }
   configure_client_socket();
-  char peer[INET_ADDRSTRLEN] = "?";
-  inet_ntop(AF_INET, &Address.sin_addr, peer, sizeof(peer));
-  printf("%s: client %s:%u connected.\n", devid_string, peer,
-         (unsigned)ntohs(Address.sin_port));
+  printf("%s: client %s connected.\n", devid_string, peer.c_str());
 
   iac_carry_len = 0;
   in_subneg = false;

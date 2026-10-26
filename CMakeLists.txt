@@ -624,6 +624,14 @@ target_include_directories(pcibridge_test PRIVATE
 target_link_libraries(pcibridge_test Threads::Threads)
 add_test(NAME pcibridge COMMAND pcibridge_test)
 
+# The host endpoints' addresses in either IP family (HostSocket.cpp: the
+# serial ports, the gdb stub, the UDP back end): host:port with IPv6
+# brackets, the printed form, and listening on loopback, dual stack on ::.
+add_executable(hostsock_test test/unit/hostsock_test.cpp
+    src/common/HostSocket.cpp)
+target_include_directories(hostsock_test PRIVATE src/common)
+add_test(NAME hostsock COMMAND hostsock_test)
+
 # The NAT network back end (libslirp) driven with hand-built guest frames:
 # DHCP, BOOTP, TFTP, TCP to the host, hostfwd, loss and retransmission.
 if(HAVE_SLIRP)

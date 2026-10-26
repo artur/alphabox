@@ -35,6 +35,7 @@
 #if !defined(INCLUDED_SERIAL_H)
 #define INCLUDED_SERIAL_H
 
+#include "HostSocket.hpp"
 #include "SystemComponent.hpp"
 #include "Uart16550.hpp"
 #include "telnet.hpp"
@@ -117,7 +118,8 @@ private:
   /// The 16550 model working on `state` (declared after it).
   CUart16550 uart;
   int listenPort = 0;
-  int64_t listenSocket = INVALID_SOCKET;
+  /// Where clients connect: every address `address` resolves to.
+  hostsock::TcpListener listener;
   int64_t connectSocket = INVALID_SOCKET;
   bool disabled =
       false; ///< If true, port is not exposed to guest; reads return 0xff,
