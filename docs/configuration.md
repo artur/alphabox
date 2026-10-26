@@ -197,9 +197,16 @@ each one goes.
   machines, and `ev7`, `ev7z` or `ev8` on the EV7 machines (`ev8` is the
   cancelled 21464 in an EV7-compatible mode,
   [ev8.md](platforms/ev8.md)). A board refuses processors of the other
-  family. An `ev8` section takes `tpus`, 1 to 4: the 21464's thread
-  processing units to list as processors. The default, 1, is one
-  processor per chip, what the EV7 console would see of a real 21464.
+  family, but for one construction: the ES40 also takes `ev7`, `ev7z` and
+  `ev8`, 1 to 4, a machine that was never built, and says so at startup
+  (`%CPU-I-CONSTRUCT`); its own console runs on them
+  ([cpu-fidelity.md](cpu-fidelity.md), "The ES40 with EV7-family
+  processors"). The other Tsunami boards could take them the same way.
+  A machine's processors are all of one family. An `ev8` section takes
+  `tpus`, 1 to 4, on the EV7 machines: the 21464's thread processing
+  units to list as processors (elsewhere an `ev8` is one processor). The
+  default, 1, is one processor per chip, what the EV7 console would see
+  of a real 21464.
   `tpus = 2` to `4` is an Alphabox construction, not the chip's
   behaviour: TPUs 1-3 become processors with a PID and a register block
   of their own, invented, and no memory or I/O, so that OpenVMS and Linux

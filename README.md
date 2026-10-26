@@ -126,7 +126,7 @@ Every guest below with media in the lab is booted and checked by
 | Area | Devices |
 |---|---|
 | Machines | AlphaServer ES40, DS20E, DS20, DS20L, DS10 (Tsunami); ES45, DS25, DS15 (Titan); ES47, ES80, GS1280 (EV7, "Marvel") |
-| CPU | EV68CB (21264), 1–4; EV7 and EV7z (21364), 2–16; the cancelled EV8 (21464), in an EV7-compatible mode, 2–16, with its threads as processors up to 32 |
+| CPU | EV68CB (21264), 1–4; EV7 and EV7z (21364), 2–16; the cancelled EV8 (21464), in an EV7-compatible mode, 2–16, with its threads as processors up to 32; on the ES40 the EV7, EV7z or EV8 too, 1–4, a machine that was never built |
 | Storage | Symbios 53C8xx and QLogic ISP SCSI; ALi and CMD 649 IDE; floppy; virtio-blk |
 | Graphics | S3 Trio64; Cirrus GD5430/5434; ATI Mach64 through the 3D Rage Pro; 3Dlabs Permedia 2; S3 ViRGE family; DEC TGA and TGA2; ATI Radeon 7500 |
 | Network | DEC Tulip 2104x/2114x; Intel 8255x (DE600, DE602); virtio-net |

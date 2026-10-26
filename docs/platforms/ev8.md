@@ -644,7 +644,10 @@ conformance suite of A, and Linux booting to a shell.
 **C. An EV8 row on a Tsunami or Titan board.** The ES40 takes four
 processors: one EV8 with four TPUs would fill it, under its own console and
 OpenVMS. Cheap, but further from history than A: the EV8 was a Marvel part
-with no 21264 system bus.
+with no 21264 system bus. (Since 2026-10-26 the ES40 takes the `ev8` row,
+the EV7-compatible one, as an Alphabox construction, one processor per
+chip under its own console:
+[cpu-fidelity.md](../cpu-fidelity.md#the-es40-with-ev7-family-processors-an-alphabox-construction-2026-10-26).)
 
 **D. A bare-metal harness only.** Boot images (`test/tools/bench_image.py`
 and `srm_probe.sh`) that run the new instructions on any board and store

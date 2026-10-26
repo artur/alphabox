@@ -648,12 +648,14 @@ caused by an interrupt not raised from one not taken.
 
 | Variable | Effect |
 | --- | --- |
-| `ALPHABOX_CPU_ANY_BOARD=1` | a test hook: a board takes a processor row of another core family than its own (an `ev7` on the ES40), where it would refuse the configuration; `%CPU-W-ANYBOARD` says so at startup, and `alphabox run --check` reports it as a warning |
+| `ALPHABOX_CPU_ANY_BOARD=1` | a test hook: a board takes a processor row of a core family it does not take (an `ev8n` on the ES40), and processors of different families in one machine, where it would refuse the configuration; `%CPU-W-ANYBOARD` says so at startup, and `alphabox run --check` reports it as a warning. The ES40 takes the EV7 family's rows (`ev7`, `ev7z`, `ev8`) without it, as an Alphabox construction (`%CPU-I-CONSTRUCT`, [cpu-fidelity.md](cpu-fidelity.md)) |
 
 The CPU oracle sets it to run a row's instructions without its console
 (`test/cpu/cpu_oracle.py --cpu`, [development.md](development.md)). The
-processor keeps its row's identity and the board everything else, so no
-console or operating system runs this way.
+processor keeps its row's identity and the board everything else. What
+only the hook lets onto a board, such as an `ev8n` on the ES40 or an
+`ev68cb` on an ES47, runs no console or operating system: the board's
+console is written for another processor.
 
 ### LDx_ARM and QUIESCE (the `ev8` row)
 
@@ -695,7 +697,7 @@ refused one of its IIDs and when the IID it sent again was taken.
 
 | Variable | Effect |
 | --- | --- |
-| `ALPHABOX_TARANTULA_PEEK=1` | a test hook, on a board without EV7 register windows (the ES40 under `ALPHABOX_CPU_ANY_BOARD`) only: the processor's vector registers appear at offset 0x3F8000 of its EV7 register window, element i of $vrN at 0x3F8000 + 0x400 x N + 8 x i, for quadword loads and stores ($vr31 reads zero and ignores a store); `%CPU-W-TARPEEK` says so at startup |
+| `ALPHABOX_TARANTULA_PEEK=1` | a test hook, on a board without EV7 register windows (the ES40, with an `ev8` or, under `ALPHABOX_CPU_ANY_BOARD`, an `ev8n`) only: the processor's vector registers appear at offset 0x3F8000 of its EV7 register window, element i of $vrN at 0x3F8000 + 0x400 x N + 8 x i, for quadword loads and stores ($vr31 reads zero and ignores a store); `%CPU-W-TARPEEK` says so at startup |
 
 Stage S7 has no vector loads or stores (they are S8's), and the contract
 moves no element between vector and scalar registers
@@ -706,12 +708,13 @@ and the oracle puts operands in ([development.md](development.md)). PID
 0xFFF_FFFF_8000; on `ev8n` the window is the 21464 mode's (N18), PID 0's
 at 0xFFFF_FFC0_0000, and the ES40 folds both into one address.
 
-Under `ALPHABOX_CPU_ANY_BOARD` an `ev8` processor on such a board also
-answers VCTL, the vector enable, at offset 0x3F0000 of its window
-(0xFFF_FFFF_0000 for PID 0), as the Marvel boards do, so a test sets and
-clears VEN with the quadword store an operating system would use. The
-Tsunami and the Titan ignore PA<42:35> in their I/O space, so every PID's
-window lands on one address there, and each processor reaches its own.
+An `ev8` processor on such a board (the ES40's construction, or another
+board under `ALPHABOX_CPU_ANY_BOARD`) also answers VCTL, the vector
+enable, at offset 0x3F0000 of its window (0xFFF_FFFF_0000 for PID 0), as
+the Marvel boards do, so software sets and clears VEN with the quadword
+store an operating system would use. The Tsunami and the Titan ignore
+PA<42:35> in their I/O space, so every PID's window lands on one address
+there, and each processor reaches its own.
 On `ev8n` VCTL is the IPR 0xAC and the offset is not decoded (N8).
 
 ## Hypervisor runtime

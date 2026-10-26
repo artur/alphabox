@@ -33,8 +33,13 @@ Three layers, each added in a different way:
   with instructions of its own ([ev8.md](platforms/ev8.md)). `cpu/ev7/` holds what that family
   changes: the physical address map and the state the XSROM hands the
   console. The JIT emits code per processor. A board takes processors of
-  one family and refuses the other, except under the CPU oracle's test
-  hook (`ALPHABOX_CPU_ANY_BOARD`), which runs any row on the ES40. Each
+  one family and refuses the other, but for what its row adds: the Marvel
+  boards also take the native EV8 (`ev8n`, in 21464 mode,
+  `other_cpu_model`), and the ES40 the EV7 family's rows as an Alphabox
+  construction (`construction_cpu_model`: its own console runs on them,
+  [cpu-fidelity.md](cpu-fidelity.md)), which the other Tsunami boards
+  could take the same way. The CPU oracle's test hook
+  (`ALPHABOX_CPU_ANY_BOARD`) runs any row on the ES40. Each
   row has a model in `test/cpu/rows.py`, which the oracle checks against
   `CpuModels.cpp`.
 - **Board**: a row per machine in `platforms/Platform.hpp` and
@@ -70,7 +75,7 @@ Three layers, each added in a different way:
 
 | Machine | Row | Chipset | Reached | Packet |
 | --- | --- | --- | --- | --- |
-| AlphaServer ES40 | `es40` | Tsunami | the machine this project is about | |
+| AlphaServer ES40 | `es40` | Tsunami | the machine this project is about; with EV7-family processors, an Alphabox construction | |
 | AlphaServer DS20E | `ds20e` | Tsunami | L5 | [ds20e.md](platforms/ds20e.md) |
 | AlphaServer DS20 | `ds20` | Tsunami | L5 | [ds20.md](platforms/ds20.md) |
 | AlphaServer DS10 | `ds10` | Tsunami | L5 | [ds10.md](platforms/ds10.md) |

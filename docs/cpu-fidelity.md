@@ -544,7 +544,7 @@ encodings and results are [ev8-isa.md](platforms/ev8-isa.md)'s. IDS is the
 
 | What | The `ev8` row | Basis |
 | --- | --- | --- |
-| Family | `CPU_FAMILY_EV7`, so the ES47, ES80 and GS1280 take it and the Tsunami and Titan boards refuse it; `cpu_model::ext` = `CPU_EXT_EV8` says what the EV8 adds | **Alphabox decision** (D1): the family is what decides the address map, the start-up and the interrupts, all the EV7's in this mode |
+| Family | `CPU_FAMILY_EV7`, so the ES47, ES80 and GS1280 take it, the ES40 as an Alphabox construction ([below](#the-es40-with-ev7-family-processors-an-alphabox-construction-2026-10-26)), and the other Tsunami and the Titan boards refuse it; `cpu_model::ext` = `CPU_EXT_EV8` says what the EV8 adds | **Alphabox decision** (D1): the family is what decides the address map, the start-up and the interrupts, all the EV7's in this mode |
 | `IMPLVER` | 4 | [IDS p. 76] |
 | `AMASK` | 0x1F07: BWX, FIX, CIX, MVI, precise traps, prefetch with modify intent (bits 0-2, 8, 9, 12), the core's; SMT (bit 10) since S3; the 1C SIMD set and paired single (bit 11) since S5 and S6 | of the IDS's 0x1F07 [IDS p. 76] the row reports only what it executes, so software that tests `AMASK` never uses a missing feature: **Alphabox decision**. Bit 10 (SMT) came with LDx_ARM and QUIESCE (S3), the instructions software tests it for [IDS pp. 668, 674], although the row has one TPU per chip until S4; bit 11 covers the 1C SIMD set and paired single by the owner's decision (2026-10-24) and came with S6, once both execute; bit 3, Tarantula's, when all its instructions execute: S7 gave the state, VC, VV and VS, and the bit waits for the memory instructions (S8) |
 | Chip ID, processor type | chip ID 4, the EV7z's: the console calls it "EV7 rev 3.0", type 15 minor 5 | **Alphabox decision** (D2): the IDS gives CPU_CNFG<CHIP_ID> no value [IDS p. 487], and the console names the processor from its EV7 table |
@@ -569,7 +569,7 @@ encodings and results are [ev8-isa.md](platforms/ev8-isa.md)'s. IDS is the
 | Rows without `CPU_EXT_EV8` | unchanged: 11.68 and 17.068 raise OPCDEC, 18.EC00 is an unused code (a no-op), the new 1C codes and opcode 07 raise OPCDEC | |
 | Tarantula's state (S7) | per processor, so per TPU: $vr0-$vr31 of 128 quadwords ($vr31 reads zero and discards writes), vl (0-128), vs, vm (128 bits), VCTL<VEN>; all clear at power-up and at a reset. On the rows with `CPU_EXT_TARANTULA` (`ev8`, `ev8n`) only, kept outside `state`: no other row's processor, state or state file changes | [TAR pp. 282-284]; [ev8-isa.md](platforms/ev8-isa.md) 4.1. The values are UNPREDICTABLE but VEN's: clearing them all is the sheet's **Alphabox decision**. Tarantula a flag of its own beside `CPU_EXT_EV8` **[decision]**: the paper's "follow-on candidate to the EV8", with an AMASK bit of its own |
 | VCTL, the vector enable | the quadword CSR at offset 0x3F0000 of the processor's own register window (`CEv7Csr` answers it from the processor), VEN <0>, <63:1> RAZ/IGN, reset 0; with VEN = 0 every word of opcodes 01-06 raises OPCDEC with EXC_ADDR its own PC, and changes nothing | **decision D11** and the owner's offset (2026-10-25), [ev8-isa.md](platforms/ev8-isa.md) sections 2 and 5. Not reported as an unknown opcode (`%CPU-W-OPCDEC`): it is how an OS's lazy switching works |
-| VCTL on the ES40 | under `ALPHABOX_CPU_ANY_BOARD` the processor answers its VCTL address itself, so the CPU oracle sets VEN with the store an OS would use; the Tsunami ignores PA<42:35> in its I/O space, so every PID's window is one address there and each processor reaches its own | **[decision]** (S7), [headless.md](headless.md) |
+| VCTL on the ES40 | the processor answers its VCTL address itself (the ES40's construction, or another board under `ALPHABOX_CPU_ANY_BOARD`), so software and the CPU oracle set VEN with the store an OS would use; the Tsunami ignores PA<42:35> in its I/O space, so every PID's window is one address there and each processor reaches its own | **[decision]** (S7), [headless.md](headless.md) |
 | VC (opcode 05) | SETVL (vl <- MIN(Rbv unsigned, 128), Rc <- vl), SETVS, SETVM (below vl; zero above), GETVL, GETVS, GETVM (below vl; the rest unchanged), register and literal forms | [ev8-isa.md](platforms/ev8-isa.md) 4.7 |
 | VV, VS (01, 02): integer | every function of 4.4's table on each active element (i < vl, and vm[i] under the mask); inactive destination elements unchanged; the arithmetic wraps, nothing raises integer overflow; a compare writes the quadword 1 or 0; VVMRG and VSMRG select by vm for every i < vl | [ev8-isa.md](platforms/ev8-isa.md) 4.3, 4.4; leaving inactive elements unchanged is the sheet's Alphabox choice (where it makes them UNPREDICTABLE, point 7) |
 | VV, VS: floating point | each active element as the scalar instruction with /SUI and dynamic rounding: ADDT, SUBT, MULT, DIVT, SQRTT /SUID; the compares as CMPTxx/SU (NE as EQ, GT and GE as LT and LE), writing 1 or 0; CVTQT/SUID, CVTTQ/SVID, and VVCVTTQC as CVTTQ/SVIC; CPYSx raise nothing. The FPCR is updated element by element, in element order. Every active element is computed and written (the IEEE default where one trapped); then one arithmetic trap if any element would have trapped: EXC_SUM the OR of the elements' with SWC and REG 31, raised as the scalar instruction raises its own, so EXC_ADDR is what a scalar ARITH gives here (the trigger's PC, which the PALcode turns into the next) | D13 and point 11, [ev8-isa.md](platforms/ev8-isa.md) 4.3 and section 5. "Would have trapped" is the scalar instruction's on this core, the 21264's: an exception enabled and not disabled by the FPCR, or an FPCR status bit to set (EXC_SUM<SET_x>, 21264 HRM Table 5-9) **[inference]**. The scalar words' Fa, Fb and Fc are 31, so the trap names no scalar register **[decision]** |
@@ -722,6 +722,46 @@ are untouched by all of it.
 `test/cpu/marvel8_mp.py` checks the table on the three layouts, from a boot
 image with the EV8 PALcode, and `test/unit/marvel21464_test.cpp` the map
 and the topology ([development.md](development.md)).
+
+### The ES40 with EV7-family processors: an Alphabox construction (2026-10-26)
+
+The ES40 takes the `ev7`, `ev7z` and `ev8` rows besides its own `ev68cb`:
+a machine that was never built. **Alphabox decision** (the owner's,
+2026-10-26), one of the anachronisms the project means to have. A real
+21364 carries its memory controllers, router and I/O port on the chip and
+has no bus a Tsunami could drive; here the processor is its row (the
+EV68's core with the row's identity and instructions) and the board is
+the ES40 as it is: the Tsunami's memory and I/O map, the ES40's own
+console (V7.3-1) and PALcode. None of the EV7's on-chip system logic
+exists on this board, and the EV7 machines' console is not involved. The
+board row's `construction_cpu_model` says so (`platforms/Platform.hpp`);
+unlike the Marvel boards' `other_cpu_model` it puts the machine in no
+other mode. A configuration that uses it says so once, at startup and in
+`alphabox run --check`: `%CPU-I-CONSTRUCT`, a message, not a warning. The
+default processor is the 21264CB, unchanged. The other Tsunami boards
+could take the rows the same way; only the ES40 does for now.
+
+| What | On the ES40 | Basis |
+| --- | --- | --- |
+| The rows | `ev7`, `ev7z`, `ev8`, 1 to 4 (the board's limit), all of the one family: `ev68cb` among them is refused, and so are `ev8n` and `tpus` above 1 on an `ev8` (off the Marvel boards an `ev8` is one processor) | `construction_cpu_model`; mixing **[decision]**, as on the Marvel boards. `ev8n` has the 21464's own privileged interface, not the 21264's that the console's PALcode is written for: only `ALPHABOX_CPU_ANY_BOARD` lets it on ([headless.md](headless.md)) |
+| What the console shows | `show config` names `ev7` (chip ID 2) "Alpha EV6 pass 2.2" and `ev7z` and `ev8` (chip ID 4) "Alpha EV6 pass 3", from the ES40 console's own table of 21264 chip IDs; `show cpu` lists every processor. At power-up it prints `*** Warning - PALcode/CPU Mismatch - Reload SRM Firmware ***` once, and goes on | the console's. Why it warns **[inference]**: `cl67srmrom.exe` is the firmware for the ES40's EV67 and EV68 processors, and reads chip IDs 2 and 4 as the original 21264 (EV6), which took the other ES40 firmware |
+| What software sees | the row's IMPLVER (3, or 4 for `ev8`), AMASK and instructions: on `ev8` the 21464's (the 1C SIMD set, paired single, CCB, CMOV2, FCMOV2, LDx_ARM, QUIESCE) and Tarantula's, its VCTL at offset 0x3F0000 of the processor's register window, which the Tsunami folds onto one address for every PID | the rows ([above](#the-ev8-row-what-it-implements-and-what-alphabox-decided-2026-10-24)); the VCTL window **[decision]** (S7), the same as under the hook before |
+
+What was checked, without the hook (2026-10-26, the JIT lane unless
+said): the console reaches `P00>>>` with one and two processors of each
+row, and `show cpu` and `show config` list them as above; the CPU oracle
+passes on `ev7`, `ev7z` and `ev8` with `ALPHABOX_CPU_ANY_BOARD=0`, with
+the same counts as under the hook and as before the change (group
+`tarantula` sets VEN through the window); Windows 2000 RC2 reaches its
+desktop with the host's time and shuts down on two `ev8`s (158 s;
+TODO two `ev7`s, not yet run). Before the
+construction, under the hook, SRM came up on two `ev8`s, Windows 2000
+reached its desktop and shut down, and nada's EV8 SIMD self-check passed
+39 of 39 there. OpenVMS and Linux on these processors were not tried.
+On a host loaded far past its cores (load average 200), the console
+sometimes leaves processor 1 out of `Configured CPUs`, with no `CPU 1
+speed is` line: on `ev8` in two runs of four, and on the default `ev68cb`
+in one of three, so the host's load and not the row **[inference]**.
 
 ### Smaller ones
 
