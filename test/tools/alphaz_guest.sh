@@ -34,8 +34,9 @@
 # Output in $ALPHABOX_WORK/runs/alphaz-<label>/ (ALPHABOX_WORK defaults to
 # <repo>/lab): build/ (build.sh's, NADA-COMMIT.txt), and for each guest
 # <guest>/report.txt, check.txt (each value against the configuration),
-# tab-N-<name>.png and the guest's log; summary.txt, a PASS or FAIL line a
-# guest. Exit 0 only if every guest passed.
+# tab-N-<name>.png, the guest's log and the build's NADA-COMMIT.txt;
+# summary.txt, a PASS or FAIL line a guest, each run's lines added. Exit 0
+# only if every guest passed.
 #
 # Environment: NADA (default ~/Documents/proj/nada), KEEP=1 to keep the
 # clones, BOOT_TMO (seconds to the window, default 1200), AZ_PORT_BASE
@@ -56,7 +57,7 @@ shift 2
 [ -x "$BIN" ] || { echo "alphaz_guest: $BIN is not executable"; exit 2; }
 OUT=$WORK/runs/alphaz-$LABEL
 mkdir -p "$OUT" || exit 2
-: > "$OUT/summary.txt"
+echo "# $(date "+%Y-%m-%d %H:%M") $*" >> "$OUT/summary.txt" # a run adds its lines
 FB="python3 -I $T/alphaz_fb.py"
 PID=
 
@@ -147,6 +148,7 @@ win_guest() {
   local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
   local IMG any= f ref i n name names done_at start rows
   rm -rf "$D" "$run"; mkdir -p "$D"
+  cp "$B/NADA-COMMIT.txt" "$D/" # the build this guest ran
   cp -c -R "$WORK/$inst" "$run" || { report "$g" FAIL "no $WORK/$inst"; return 1; }
   rm -rf "$run/fb" "$run"/fb-*.ppm "$run"/peek.img
   rows=$(grep -c "= ev68cb\$" "$run/$cfg")
@@ -242,7 +244,8 @@ win_guest() {
   rm -f "$run/peek.img"
   stop_emu
   cp "$run/run.log" "$D/run.log"
-  mtype -i "$IMG" ::/NADA/OUT.TXT 2>/dev/null | tr -d '\r' > "$D/report.txt"
+  # the guest writes its ANSI code page, Windows-1252
+  mtype -i "$IMG" ::/NADA/OUT.TXT 2>/dev/null | tr -d '\r' | iconv -f CP1252 -t UTF-8 > "$D/report.txt"
   mtype -i "$IMG" ::/NADA/KEYS.TXT 2>/dev/null | tr -d '\r' > "$D/keys-seen.txt"
   grep -a "ANYBOARD\|ANY_BOARD" "$run/run.log" | head -2
   [ "${KEEP:-0}" = 1 ] || rm -rf "$run"
@@ -264,6 +267,7 @@ win_guest() {
 linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   local g=$1 gc=$2 cpu=${3:-} tpus=${4:-} D=$OUT/$1 b64 cmds n i rc
   rm -rf "$D"; mkdir -p "$D"
+  cp "$B/NADA-COMMIT.txt" "$D/" # the build this guest ran
   gzip -9n < "$B/alphaz-linux" > "$D/alphaz.gz"
   b64=$(base64 < "$D/alphaz.gz" | tr -d '\n')
   cmds="rm -f /tmp/az.b64 /tmp/alphaz"
