@@ -156,6 +156,21 @@ constexpr u16 kVrmPresent = 0x0f1f;
 /// with every VRM good; what bit 12 stands for is not known].
 constexpr u16 kVrmGood = kVrmPresent | 0x1000;
 
+/// The FRUs' part numbers (eerom): made up, in a real ES47's format. A
+/// FRU kind added later takes the next 54-990nn-01.A1.
+constexpr const char *kPartDocp = "54-99001-01.A1";  ///< drawer control panel
+constexpr const char *kPartDuo = "54-99002-01.A1";   ///< dual processor module
+constexpr const char *kPartCmm = "54-99003-01.A1";   ///< the module's CMM
+constexpr const char *kPartMbm = "54-99004-01.A1";   ///< the drawer's MBM
+constexpr const char *kPartIoExp = "54-99005-01.A1"; ///< 2P I/O expander
+/// The VRMs by kind: VRM n is a CPU VRM for n 0-5, a RIMM VRM for 6-10 and
+/// the TERM VRM for 11 (kVrmPresent).
+constexpr const char *kPartVrm[3] = {"20-99006-04.A1", "20-99006-05.A1",
+                                     "20-99006-06.A1"};
+/// A power supply's: 10 bytes, '.', 2 bytes, as 140641-001.01.
+constexpr const char *kPartPs = "999007-001";
+constexpr const char *kPartPsRev = "01";
+
 u16 get16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
 u32 get32(const u8 *p) { return get16(p) | (u32)get16(p + 2) << 16; }
 void put16(u8 *p, u16 v) {
@@ -953,8 +968,12 @@ std::string CEs47Cmm::system_serial() const {
  *     the 2P drawer's I/O expander (build_io_exp_fru); 3 + n power supply n
  *     (build_ps_fru).
  *
- * The contents are invented [guess: no real EEPROM image was at hand]:
- * part numbers "EM-" and the FRU's kind, serial numbers "EM" and the
+ * The contents are invented, in the form of a real ES47's (its `show fru`,
+ * test/platforms/es47/show-fru.txt: 54-30398-02.D3 for the control panel,
+ * 20-50928-04.C1 for a CPU VRM, 140641-001.01 for a power supply)
+ * [decision: the owner's, made-up part numbers in the real format]: the
+ * module and drawer boards 54-990nn-01.A1, the VRMs one family as the real
+ * 20-50928-04, -05 and -06 are (kPart*); serial numbers "EM" and the
  * micro's address and the index in hexadecimal (unique, stable). The
  * RIMMs' presence detect describes 256 Mbit RDRAM devices (9 row bits, 7
  * column bits, 32 banks) [inference: the console's size arithmetic, and
@@ -977,14 +996,14 @@ bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
   if (is_mbm(ip)) {
     const bool two_p = systype() == 0x11;
     if (index == (two_p ? 0u : 1u))
-      return fru("EM-DOCP");
+      return fru(kPartDocp);
     if (index == (two_p ? 1u : 2u))
-      return fru("EM-MBM");
+      return fru(kPartMbm);
     if (two_p && index == 2)
-      return fru("EM-IOEXP");
+      return fru(kPartIoExp);
     if (two_p && (index == 3 || index == 4)) {
-      memcpy(image + 0x3e, "EM-PS-2P00", 10);
-      memcpy(image + 0x49, "01", 2);
+      memcpy(image + 0x3e, kPartPs, 10);
+      memcpy(image + 0x49, kPartPsRev, 2);
       memcpy(image + 0x4c, "EM", 2);
       memcpy(image + 0x4e, serial + 2, 8);
       return true;
@@ -997,9 +1016,9 @@ bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
   CMarvel *mv = marvel();
   switch (index) {
   case 0:
-    return fru("EM-CMM");
+    return fru(kPartCmm);
   case 1: {
-    fru("EM-DUO");
+    fru(kPartDuo);
     const std::string s = system_serial();
     memcpy(image + 0x80, s.data(), std::min<size_t>(s.size(), 12));
     return true;
@@ -1022,8 +1041,9 @@ bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
     memcpy(image + 0x80, serial, 10);
     return true;
   }
-  if (index >= 0x16 && index < 0x16 + 12 && (kVrmPresent >> (index - 0x16)) & 1)
-    return fru("EM-VRM");
+  const u32 vrm = index - 0x16;
+  if (index >= 0x16 && vrm < 12 && (kVrmPresent >> vrm) & 1)
+    return fru(kPartVrm[vrm < 6 ? 0 : vrm < 11 ? 1 : 2]);
   return false;
 }
 
