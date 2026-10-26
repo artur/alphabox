@@ -431,7 +431,9 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
  * modulated so consecutive SRM cycles-per-tick windows (~100 ticks) never agree
  * during a repay stretch: per-fire noise alone averages out over a window, the
  * triangle wave's ~2.8-window wavelength survives the averaging, and the noise
- * breaks symmetric-alignment ties. Always between half and ~1.2 periods.
+ * breaks symmetric-alignment ties. Always between 0.5 and 0.91 of a period,
+ * 0.7 on average: a thread that runs at all repays at most 1.4 times the
+ * rate on average (interval_timer_poll's starved case goes faster).
  **/
 u64 CAlphaCPU::tick_next_gap_ns(u64 period_ns) {
   tick_fire_idx++;
@@ -532,14 +534,23 @@ void CAlphaCPU::interval_timer_poll(std::chrono::steady_clock::time_point now) {
     // the guests' tick-counted clocks (VMS never resyncs) stay true to wall
     // time. Repayment is paced to >= half a period between fires (max 2x
     // nominal, never a burst - burst/compressed ticks skew RPCC-vs-tick
-    // calibrations). Backlog beyond 1s (debugger pause, host sleep) is
-    // dropped.
+    // calibrations), an eighth when starved (below). Backlog beyond 1s
+    // (debugger pause, host sleep) is dropped.
     // Repay gaps are modulated (tick_next_gap_ns).
     if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
       cSystem->interval_tick();
       tick_last_fire = now;
       tick_gap_ns = tick_next_gap_ns(period_ns);
       next_timer_fire += std::chrono::nanoseconds(period_ns);
+      // A thread the host gives less than about 70% of a core cannot repay
+      // at those gaps: the backlog grows until it passes a second and is
+      // dropped, and a guest counting ticks loses the time (at a 60% share
+      // the console's timer ran at 810-860 Hz instead of 1024). More than 32
+      // periods behind, the thread is starved, not stalled for a moment:
+      // repay four times as fast, still modulated, which keeps up down to
+      // about a fifth of a core. A thread that keeps up never gets here.
+      if (now - next_timer_fire > std::chrono::nanoseconds(32 * period_ns))
+        tick_gap_ns /= 4;
       if (now - next_timer_fire > std::chrono::seconds(1))
         next_timer_fire = now;
     }
