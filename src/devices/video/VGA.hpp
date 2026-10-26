@@ -1,6 +1,8 @@
 /* Alphabox Alpha Emulator
  * Copyright (C) 2020 Tomáš Glozar
+ * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/lenticularis39/axpbox
+ *          https://github.com/artur/alphabox
  *
  * Forked from: ES40 emulator
  * Copyright (C) 2007-2008 by the ES40 Emulator Project
@@ -60,6 +62,9 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Artur Goulão's changes to this file are also distributed under the BSD
+ * 3-Clause licence above, so that they can go back to ES40-Emu and MAME.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-3-Clause
  */

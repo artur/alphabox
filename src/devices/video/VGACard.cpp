@@ -60,6 +60,9 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
+ * Artur Goulão's changes to this file are also distributed under the BSD
+ * 3-Clause licence above, so that they can go back to ES40-Emu and MAME.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-3-Clause
  */
 

@@ -7,10 +7,11 @@
  * Copyright (C) 2026 Artur Goulão
  * Website: https://github.com/artur/alphabox
  *
- * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-1-Clause
+ * SPDX-License-Identifier: BSD-1-Clause
  *
- * ES40-Emu distributes its JIT under the BSD 1-Clause licence; this notice
- * applies to the code that comes from it:
+ * ES40-Emu distributes its JIT under the BSD 1-Clause licence, and this
+ * fork's changes to this file are distributed under the same licence, so
+ * that they can go back to ES40-Emu:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -29,24 +30,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * This fork's changes, and the file as part of Alphabox, are distributed
- * under the GNU General Public License:
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
- * USA.
  */
 #ifdef ES40_JIT
 
