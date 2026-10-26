@@ -63,6 +63,9 @@ console's secondaries, which the boot alone never exercises.
 class than `ev7` (`ev7z`, `ev8`), and with `ev8` `BOARDS_EV8_TPUS` each
 chip's `tpus`: the scripts then want chips x TPUs processors in `show
 config`, `show cpu` and the HWRPB ([ev8.md](platforms/ev8.md), S4).
+`BOARDS_SPEED` sets every processor's `speed` in both scripts (default
+`1000M`): `BOARDS_SPEED=1300M BOARDS_EV7_CPU=ev7z` is the real ES47 7/1300
+whose captures are in `test/platforms/es47/`.
 
 `snap_roundtrip.sh <alphabox> <label> [board ...]` checks that a machine's
 state survives a snapshot. For each board, `boards_check.sh` boots it, runs

@@ -63,6 +63,10 @@
 #   BOARDS_EV7_CPU       the EV7 boards' processor class (default ev7; ev7z,
 #                        or ev8, the 21464 in EV7-compatible mode), for the
 #                        boards and their `init` check
+#   BOARDS_SPEED         every processor's `speed` (default 1000M), for the
+#                        boards and the EV7 boards' `init` check: 1300M with
+#                        BOARDS_EV7_CPU=ev7z is a real ES47 7/1300
+#                        (test/platforms/es47/)
 #   BOARDS_EV8_TPUS      with ev8: each chip's TPUs, 1 to 4, written as its
 #                        `tpus` (unset: no key, one processor per chip, the
 #                        row's default); each TPU is a processor
@@ -83,6 +87,7 @@ BASE=${BOARDS_PORT_BASE:-21600}
 PTMO=${BOARDS_PROMPT_TMO:-600}
 CTMO=${BOARDS_CMD_TMO:-180}
 MINFREE=${BOARDS_MIN_FREE_GB:-3}
+SPEED=${BOARDS_SPEED:-1000M}
 ALL="es40 ds20e ds20 ds10 ds20l es45 es45m1 ds25 ds15 es47 es80 gs1280"
 
 # Remove the run-specific parts of a log so two runs can be diffed.
@@ -185,7 +190,7 @@ write_cfg() {
     local tpus=
     [ "$B_CPU" = ev8 ] && [ -n "${BOARDS_EV8_TPUS:-}" ] && tpus=" tpus = $BOARDS_EV8_TPUS;"
     for ((i = 0; i < B_CPUS; i++)); do
-      echo "  cpu$i = $B_CPU { speed = 1000M;$tpus }"
+      echo "  cpu$i = $B_CPU { speed = $SPEED;$tpus }"
     done
     echo "  serial0 = serial { address = \"127.0.0.1\"; port = $port; }"
     echo '  serial1 = serial { null_attach = true; }'
@@ -380,7 +385,7 @@ if [ "${BOARDS_INIT:-1}" != 0 ]; then
   mv=
   for b in $BOARDS; do case $b in es47|es80|gs1280) mv="$mv $b" ;; esac; done
   if [ -n "$mv" ]; then
-    BOARDS_PORT_BASE=$BASE BOARDS_PROMPT_TMO=$PTMO BOARDS_MIN_FREE_GB=$MINFREE \
+    BOARDS_PORT_BASE=$BASE BOARDS_PROMPT_TMO=$PTMO BOARDS_MIN_FREE_GB=$MINFREE BOARDS_SPEED=$SPEED \
       ALPHABOX_WORK=$WORK ALPHABOX_ROMS=$ROMS "$T/marvel_init_check.sh" "$BIN" "$LABEL" $mv
     [ $? = 0 ] || rc_all=1
     cat "$OUT/init-summary.txt" >> "$OUT/summary.txt"

@@ -34,6 +34,7 @@
 #   BOARDS_MIN_FREE_GB     stop if the data volume has less free (default 3)
 #   BOARDS_EV7_CPU         the processor class (default ev7; ev7z, or ev8,
 #                          the 21464 in EV7-compatible mode)
+#   BOARDS_SPEED           every processor's `speed` (default 1000M)
 #   BOARDS_EV8_TPUS        with ev8: each chip's TPUs, 1 to 4, written as its
 #                          `tpus` (unset: no key, the row's one processor
 #                          per chip). Each TPU is a processor
@@ -53,6 +54,7 @@ MINFREE=${BOARDS_MIN_FREE_GB:-3}
 INITS=${MARVEL_INIT_INITS:-2}
 RUNS=${MARVEL_INIT_RUNS:-1}
 CPU=${BOARDS_EV7_CPU:-ev7}
+SPEED=${BOARDS_SPEED:-1000M}
 TPUS=1; CPUOPT=
 if [ "$CPU" = ev8 ] && [ -n "${BOARDS_EV8_TPUS:-}" ]; then
   TPUS=$BOARDS_EV8_TPUS; CPUOPT=" tpus = $TPUS;"
@@ -188,7 +190,7 @@ for spec in $BOARDS; do
       echo '  memory.bits = 29;'
       echo '  rom.srm = "SRM_V7_3.EXE";'
       echo '  rom.nvram = "cmm_nvram.bin";'
-      for ((i = 0; i < n; i++)); do echo "  cpu$i = $CPU { speed = 1000M;$CPUOPT }"; done
+      for ((i = 0; i < n; i++)); do echo "  cpu$i = $CPU { speed = $SPEED;$CPUOPT }"; done
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '  serial1 = serial { null_attach = true; }'
       echo '  pci2.2 = cmd649 { }'
