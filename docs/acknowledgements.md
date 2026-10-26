@@ -77,7 +77,7 @@ keeps its own notice in the header of the file that holds it:
 | --- | --- | --- | --- |
 | es40 | most of `src/` | Camiel Vanderhoeven and the ES40 Emulator Project | GPL-2.0-or-later |
 | AXPbox | most of `src/` | Tomáš Glozar, Remy van Elst and contributors | GPL-2.0-or-later |
-| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT core, the ALi M7101 PMU, the SPD EEPROM and the MAME shims BSD-1-Clause |
+| ES40-Emu | the files listed above | gdwnldsKSC and the ES40-Emu contributors | GPL-2.0-or-later; the JIT core, the ALi M7101 PMU, the SPD EEPROM and the MAME shims BSD-1-Clause; the VGA core and the S3 Trio64 BSD-3-Clause |
 | MAME | `devices/video/`: `VGA.*`, `VGACard.*`, `s3/S3Trio64.*`, `ibm8514a.*`, `attotime`, `coretmpl`, `logmacro`, `xtal`, `address_map` | Nathan Woods, Peter Trauner, Angelo Salese, Barry Rodewald, Aaron Giles, Vas Crabb, Olivier Galibert | BSD-3-Clause |
 | Bochs | `gui/`, the CD-ROM commands in `storage/Disk.cpp`, `isa/Keyboard.*` | MandrakeSoft S.A. (and the plex86 developers in `gui/plugin.hpp`) | LGPL, version 2 or later |
 | GXemul | `common/es40_debug.*`, `net/Ethernet.*`, `pci/tulip/` | Anders Gavare | BSD-3-Clause style |
@@ -96,10 +96,19 @@ for the same reason):
   (`pci/AliM1543C_pmu.*`) are BSD-1-Clause as a whole: they hold only
   ES40-Emu's code, which ES40-Emu distributes under BSD-1-Clause, and this
   repository's;
-- `VGA.*`, `VGACard.*` and `s3/S3Trio64.*` also hold GPL-2.0-or-later code
-  from es40 and AXPbox besides MAME's and ES40-Emu's BSD-3-Clause code, so
-  they stay `GPL-2.0-or-later AND BSD-3-Clause`, and this repository's
-  changes to them are also distributed under BSD-3-Clause;
+- `VGA.*` and `s3/S3Trio64.*` are BSD-3-Clause as a whole, as ES40-Emu
+  distributes them. They came to AXPbox from ES40-Emu in July 2026, under
+  the GPL header ES40-Emu then used; ES40-Emu moved them to BSD-3-Clause
+  in September 2026, and its maintainer confirmed on issue #2 that the
+  versions they wrote are BSD-3-Clause throughout. What is left in them
+  from es40 and AXPbox is interface scaffolding (the constructor and
+  destructor declarations, the one-VGA check, `break` and `default`
+  lines), not authorship;
+- `VGACard.*`, this repository's base class for the cards, also holds
+  GPL-2.0-or-later code moved there from es40's card files (the display
+  thread, saving and restoring state, the I/O dispatch), so it stays
+  `GPL-2.0-or-later AND BSD-3-Clause`, and this repository's changes to
+  it are also distributed under BSD-3-Clause;
 - the files under a permissive licence alone (`i2c_spd.*`,
   `mame_shims.hpp`, MAME's `ibm8514a.*`, `attotime`, `coretmpl`,
   `logmacro`, `xtal` and `address_map`) keep it, this repository's

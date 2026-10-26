@@ -1,39 +1,22 @@
 /* Alphabox Alpha Emulator
- * Copyright (C) 2020 Tomáš Glozar
- * Copyright (C) 2026 Artur Goulão
- * Website: https://github.com/lenticularis39/axpbox
- *          https://github.com/artur/alphabox
  *
- * Forked from: ES40 emulator
- * Copyright (C) 2007-2008 by the ES40 Emulator Project
- * Copyright (C) 2007 by Camiel Vanderhoeven
- *
- * Contains code from ES40-Emu:
- * Copyright (C) 2025-2026 gdwnldsKSC and the ES40-Emu contributors
+ * Ported from: the S3 Trio64 of ES40-Emu
+ * Copyright (C) 2023-2026 gdwnldsKSC and the ES40-Emu contributors
  * Website: https://github.com/ES40-Emu/es40
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301,
- * USA.
- *
- * Although this is not required, the author would appreciate being notified of,
- * and receiving any modifications you may make to the source code that might
- * serve the general public.
- *
  * Contains code from MAME (https://www.mamedev.org/), brought in and
- * adapted by ES40-Emu, under the BSD 3-Clause licence:
+ * adapted by ES40-Emu:
  * Copyright (C) 2012-2019 Barry Rodewald
+ *
+ * Copyright (C) 2026 Artur Goulão
+ * Website: https://github.com/artur/alphabox
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * ES40-Emu distributes this file under the BSD 3-Clause licence, as MAME
+ * does the code it is built on, and this fork's changes to it are
+ * distributed under the same licence, so that they can go back to
+ * ES40-Emu and MAME:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -60,11 +43,6 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * Artur Goulão's changes to this file are also distributed under the BSD
- * 3-Clause licence above, so that they can go back to ES40-Emu and MAME.
- *
- * SPDX-License-Identifier: GPL-2.0-or-later AND BSD-3-Clause
  */
 
 /**
