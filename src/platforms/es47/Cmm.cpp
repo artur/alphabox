@@ -137,6 +137,25 @@ constexpr u32 kNvramSize = 0x800;
 constexpr u32 kToyNvSize = 0x100;
 constexpr u32 kMbmConfigSize = 0xd8;
 
+/**
+ * The VRMs a module holds, bit n for VRM n, as get_vrm_status (SMLAN 0x090f)
+ * reports them and EEPROM 0x16 + n describes them. n is the console's own
+ * place for the VRM: build_vrm_hw (0x2f8990) takes bit n of the reply for
+ * VRM n and build_vrm_fru (0x2fa850) names it from its table at 0x403500
+ * and reads its EEPROM 0x16 + n, so VRM0-5.CPU are n 0-5, VRM0-4.RIMM n
+ * 6-10 and VRM0.TERM n 11 (an emulated `show fru`, whose serial numbers
+ * carry the index, shows the pairing). A real ES47 7/1300's dual processor
+ * module lists nine: VRM0-4.CPU, VRM2-4.RIMM and VRM0.TERM
+ * (test/platforms/es47/show-fru.txt), bits 0-4, 8-10 and 11. Every module
+ * of every Marvel board reports those nine [decision: the one module whose
+ * VRMs are known; a module of another configuration may hold others].
+ */
+constexpr u16 kVrmPresent = 0x0f1f;
+/// The VRMs that are good: the present ones, and bit 12, without which the
+/// console takes VRM 11 (TERM) as bad (build_vrm_hw) [inference: a module
+/// with every VRM good; what bit 12 stands for is not known].
+constexpr u16 kVrmGood = kVrmPresent | 0x1000;
+
 u16 get16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
 u32 get32(const u8 *p) { return get16(p) | (u32)get16(p + 2) << 16; }
 void put16(u8 *p, u16 v) {
@@ -928,7 +947,7 @@ std::string CEs47Cmm::system_serial() const {
  *     (build_cpu_module_fru; and the system serial number, read_system_serial
  *     0x2e2360: offset 0x80, 12 bytes), 2 + n RIMM n of the module's first
  *     processor and 12 + n of its second (build_rimm_fru), 0x16 + n VRM n
- *     (build_vrm_fru);
+ *     (build_vrm_fru), for the VRMs of kVrmPresent;
  *   a drawer's MBM: the drawer's control panel, 0 on an ES47/ES80 and 1 on
  *     a GS1280 (build_drawer_ocp_fru); its own, 1 and 2 (build_mbm_fru); 2
  *     the 2P drawer's I/O expander (build_io_exp_fru); 3 + n power supply n
@@ -1003,7 +1022,7 @@ bool CEs47Cmm::eerom(u32 ip, u32 index, u8 *image) {
     memcpy(image + 0x80, serial, 10);
     return true;
   }
-  if (index >= 0x16 && index < 0x16 + 12)
+  if (index >= 0x16 && index < 0x16 + 12 && (kVrmPresent >> (index - 0x16)) & 1)
     return fru("EM-VRM");
   return false;
 }
@@ -1161,13 +1180,13 @@ void CEs47Cmm::answer(u32 n, const u8 *req, u32 len) {
     // VRMs there and <6> u16 those that are good, one bit each (VRM 11 is
     // good only with bit 12 as well), as build_vrm_hw (0x2f8990) reads them
     // for the module's 12 VRM slots (the User Information: "12 slots for
-    // voltage regulator modules"). All twelve there and good [inference:
-    // a full module; bit 12's own meaning is not known].
+    // voltage regulator modules"). The nine of a real ES47's module, all
+    // good (kVrmPresent).
     u8 d[8] = {};
-    put16(d, 0x0fff);
-    put16(d + 6, 0x1fff);
-    note("PID %u: SMLAN %04x (VRMs of %s) id %u: 12, all good", n, cmd,
-         micro_name(get32(req + M_DEST)), id);
+    put16(d, kVrmPresent);
+    put16(d + 6, kVrmGood);
+    note("PID %u: SMLAN %04x (VRMs of %s) id %u: %04x, all good", n, cmd,
+         micro_name(get32(req + M_DEST)), id, kVrmPresent);
     respond(n, req, 0, d, sizeof(d));
     return;
   }
