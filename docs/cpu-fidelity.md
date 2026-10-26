@@ -731,7 +731,7 @@ and the topology ([development.md](development.md)).
 | `EXC_SUM[63:48]` is not the sign extension of `SET_IOV` | `AlphaCPU_ieeefloat.cpp` | PALcode testing EXC_SUM's sign as a fast "did IOV happen" check. We also set FPCR ourselves, so nothing reads it |
 | Performance-counter, corrected-read and serial-line interrupts are never raised | `ISUM`, `int_deliverable` | Nothing on this machine uses them |
 | The instruction cache is 2 MB with 2 KB lines; a real EV6 has 64 KB with 64-byte lines | `AlphaCPU.hpp` | Legal, but a guest that gets away with a missing `IMB` on real hardware can fail here (below); another processor's `IMB` drops the lines since 2026-10-24 |
-| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set as an inference: neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. The EV8 row has the same set; its own instructions are gated by the row (`CPU_EXT_EV8`), not by `AMASK`, which reports each of them only once its stage is done (above). It matters the day a row is added for a part that lacks one of the set |
+| `AMASK` is advertisement, not a gate: the CIX/MVI/BWX/FIX instructions execute whatever a CPU row claims | `CpuModels.cpp`, `cpu_misc.hpp` | Correct for the EV68CB, which implements all of them. The EV7 rows claim the same set, and a real EV7z reports it: an ES47 7/1300 reads AMASK 0x1307 and IMPLVER 3 on each processor under Linux (`test/platforms/es47/linux-implver-amask.txt`, 2026-10-26); for the `ev7` row's revision 2.1 it remains an inference, the same core. Neither EV7 PALcode nor the ES47 console executes `AMASK` ([marvel.md](platforms/marvel.md), E1). Their `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24. The EV8 row has the same set; its own instructions are gated by the row (`CPU_EXT_EV8`), not by `AMASK`, which reports each of them only once its stage is done (above). It matters the day a row is added for a part that lacks one of the set |
 | Some written IPR fields have nothing behind them: `M_CTL<5:4>`, `DC_CTL` and `PCTR_CTL` (its counters never count) are kept; `C_SHFT`, index 0x2d (`M_FIX`), `HW_INT_CLR<28>`, `VA_CTL<0>` (byte order) and `VA_CTL<3>` are dropped; `C_DATA` and `I_CTL<23>`/`<14>` read 0 | `cpu_pal.hpp` | None seen. The ES40's and both EV7 PALcodes configure caches and error reporting through them, mask `I_CTL<23>`/`<14>` off before saving it, and read `C_DATA` only on their error path, where 0 is "no error" (E1) |
 
 **The instruction cache** is architecturally legal: a virtual I-cache need
@@ -759,8 +759,12 @@ hardware, which the architecture allows.
 
 **`AMASK`**: no document lists the 21364's AMASK, and neither EV7 PALcode
 nor the ES47 console executes `AMASK` or `IMPLVER` (E1), so the EV7 rows'
-value is an inference (`CpuModels.cpp` marks it as one). Their `IMPLVER`
-is not: the Alpha Architecture Reference Manual (4th ed., Table D-4) gives
+value was an inference (`CpuModels.cpp` marks it as one). A real ES47
+7/1300 has since settled it for the EV7z: Linux reads AMASK 0x1307 (BWX,
+FIX, CIX, MVI, precise arithmetic traps, prefetch with modify intent) and
+IMPLVER 3 on both processors (`test/platforms/es47/linux-implver-amask.txt`,
+2026-10-26); the `ev7` row's revision 2.1 is the same core, and its value
+an inference still. Their `IMPLVER` was never in doubt: the Alpha Architecture Reference Manual (4th ed., Table D-4) gives
 3 for the 21364/EV7 and EV79, which the rows return since 2026-10-24. Two
 of Linux's three uses of `implver()` test for `IMPLVER_EV6` (2) only, so
 on an EV7 Linux takes the other path, as on a real one: `fpu.h`'s

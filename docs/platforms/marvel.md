@@ -117,7 +117,7 @@ From [backlog.md](../backlog.md), where the order of work is:
 
 | Gap | Plan |
 | --- | --- |
-| `AMASK`: nothing executes it, so it stays the EV68's (the internal registers were checked in E1). `IMPLVER` is 3, the ARM's value for the 21364 (Table D-4), since 2026-10-24 | AMASK left: an inference |
+| `AMASK` 0x1307, the EV68's, and `IMPLVER` 3, the ARM's value for the 21364 (Table D-4): a real ES47 7/1300 reads both on each processor under Linux (2026-10-26, "Captures from a real ES47 7/1300") | settled |
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
@@ -133,7 +133,9 @@ Left, by choice or because only a real machine could settle them:
   for recordable media, which a real RRD42 rejects too (M5);
 - the GS1280's power supply tray (SMLAN 0x090e), its cabinet control
   panel and its I/O drawers' PBM EEPROMs, which only a GS1280 asks for, and
-  the FRU EEPROMs' real contents (M10 invents them).
+  the FRU EEPROMs' real contents (M10 invents them; a real ES47's part
+  numbers and its nine VRMs are known since 2026-10-26, "Captures from a
+  real ES47 7/1300").
 
 **[guess]** marks reasoning without a source, and **[inference]** marks
 something derived from sources but not stated in them. The working files
@@ -514,8 +516,10 @@ where Linux has RBX_IREQ_OFF/RBX_INTA_OFF.
   **RBOX_IT**, cleared by the console's PALcode early in our probe. The
   console's own test "41, Local Interval Timer Interrupts" confirms that
   each EV7 has one **[inference]**. Its rate was found by M4: the console
-  writes RBOX_IT = 7 and tells the OS the tick runs at
-  cpu_hz / ((n + 1) * 2^17).
+  writes RBOX_IT = n and tells the OS the tick runs at
+  cpu_hz / ((n + 1) * 2^17). n follows the clock: 7 at 1000 MHz, 9 at
+  1300 MHz, on the emulator and on a real ES47 7/1300 (991.82 Hz;
+  "Captures from a real ES47 7/1300").
 - **TOY/RTC**: not a chip the OS reaches. Linux emulates port 0x70 as an
   index latch and reads or writes through **`cserve` 0x49 (GET_TOY) / 0x48
   (PUT_TOY)**, on the boot CPU only (`__marvel_access_rtc`), passing every
@@ -743,15 +747,25 @@ Saved in `lab/docs-ev7/` (git-ignored):
 
 ## Reference output
 
-`test/platforms/es47/`:
+`test/platforms/es47/`, all from one real ES47 7/1300 running SRM
+V7.3-11 (Matt Turner's; the README says where each came from):
 
-- `show-config.txt`, from a real ES47 7/1300 running SRM V7.3-11;
-- a README pointing at the GS1280 `show mem`/`show cpu` examples in the
-  SRM reference.
+- `show-config.txt`, first from mattst88.com, then with the rest in
+  [issue #3](https://github.com/artur/alphabox/issues/3) (2026-10-25);
+- `power-up.log`, the whole start from the MBM's loader to the console's
+  banner;
+- `show-version.txt`, `show-cpu.txt`, `show-memory.txt`,
+  `show-device.txt`, `show-pal.txt`, `show-fru.txt`, `show-fru-e.txt`,
+  `show-hwrpb.txt`, `show-power.txt`, `show-error.txt`;
+- `linux-implver-amask.txt`, IMPLVER, AMASK and `/proc/cpuinfo` under
+  Linux;
+- a README, which also points at the GS1280 `show mem`/`show cpu`
+  examples in the SRM reference.
 
-There is no ES47 `show memory` or `show device` of the machine we
-configure. L3 can compare structure (PIDs, memory placement, hoses, CPU
-type and revision), not whole listings.
+The real machine has 4 GB per processor and its own cards, so L3 compares
+structure (PIDs, memory placement, hoses, CPU type and revision) and the
+fields that do not depend on them; what that comparison found is in
+"Captures from a real ES47 7/1300".
 
 ## The acceptance ladder for Marvel
 
@@ -849,6 +863,92 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### Captures from a real ES47 7/1300 (2026-10-26)
+
+Matt Turner (`mattst88`), whose site gave the `show config` above, sent
+the rest of their ES47's output in
+[issue #3](https://github.com/artur/alphabox/issues/3): the power-up log,
+ten `show` commands and IMPLVER and AMASK under Linux, now in
+`test/platforms/es47/`. The machine: two EV7z at 1300 MHz, 4 GB each, one
+IO7 pass 3, one 2P drawer, SRM V7.3-11. They were compared with the
+emulated ES47 with the same processors: two `ev7z` at `speed = 1300M`,
+512 MB each, the board check's devices, console V7.3-1
+(`lab/runs/boards-mattst88-ev7z-1300`, which ran the same commands, and
+`boards-mattst88-io7trace` with `ALPHABOX_TRACE_IO7` and
+`ALPHABOX_TRACE_CSR`).
+
+**The same on both:**
+
+- IMPLVER 3 and AMASK 0x1307 (BWX, FIX, CIX, MVI, precise arithmetic
+  traps, prefetch with modify intent), on each processor: the `ev7` and
+  `ev7z` rows.
+- `show cpu` (`Type Major 15, Minor 5`), `show pal`, and `show config`'s
+  processor lines (`EV7 rev 3.0, 1300 MHz`, 1.75 MB, NS,EW (0,0) and
+  (1,0), Hard ID 0 and 1), the IO7 (`IO7 pass 3`, `Backplane rev 2`),
+  hoses 1 to 3 (33 MHz, 33 MHz, `AGP 1x/4x`) and PID 1's memory at
+  0x400000000.
+- `show power` and `show error` print nothing on V7.3-11 too; `show fru
+  -e` prints its header alone.
+- The HWRPB, but for the fields below: version 14, 8 KB pages, 44
+  physical address bits, ASN 255, system type 0x27 and subtype
+  0x1_00000005, 64 processors supported, every offset, and in both slots
+  CPU_TYPE 0x5_0000000F, CPU_VAR 7, PAL_REV 0x01000019_0001020B,
+  BCACHE_INFO, CC_FREQ 1300000000 and ICLK_FREQ 0x3DFD24.
+- **The interval timer.** ICLK_FREQ 0x3DFD24 is 991.82 Hz times 4096,
+  cpu_hz / (10 x 2^17), on both, so the console chooses n from the
+  clock: the emulated machine's RBOX_IT reads 9 at 1300 MHz, and Linux on
+  a 1000 MHz row showed 953.67 Hz, n = 7 (`lab/runs/ev8-s1-reference`).
+  n + 1 = ceil(cpu_hz / 2^27), the fastest rate not above 1024 Hz, fits
+  both **[inference]**. The model takes n from what the console writes,
+  so nothing changes. The real machine's Linux ran 3% slow with HZ = 1024,
+  about 992 ticks a second against wall time: the hardware ticks at the
+  rate the console reports, as the emulator's wall-clock tick does.
+- The FRU list's names and order. The RIMMs: five per processor, their
+  part from the console's table by size. With 4 GB per processor the real
+  machine shows 20-1F18B-01, the table's 1 GB RIMM, which is M10's rule:
+  the memory per processor over four RIMMs, the fifth the RAID channel
+  the diagnostics test (confirmed: it was an inference).
+- The power supplies' EEPROM layout (M10): part `140641-001.01`, serial
+  fourteen characters (`534B70A4DQ008U`).
+- The console's start, from `starting console on CPU 0` to the banner,
+  but for the lines below.
+
+**Different because the configuration is:** the memory (4 GB against
+512 MB per processor, which also changes the RIMM part, the memory
+descriptors, the bitmap's place and the console's reserve in PID 1's
+memory, 0x40 pages against 0x39: the 4 GB bitmap needs 7 pages more), the
+cards, the console build (the CRB's 0x7A4 pages against 0x7AB) and the
+system serial number (ours `ES47EM000000`; the real HWRPB holds "SET").
+
+**Different, to fix or to find out:**
+
+| Point | Real ES47 | Emulated | Next |
+| --- | --- | --- | --- |
+| VRMs in `show fru` | nine: VRM0-4.CPU, VRM2-4.RIMM, VRM0.TERM | twelve: VRM0-5.CPU, VRM0-4.RIMM, VRM0.TERM; `get_vrm_status` (0x090f) reports all twelve | report the nine; which bit is which place stays an inference until the CMM's real 0x090f reply is known |
+| FRU part numbers | 54-30398-02.D3 (DOCP), 54-30252-LG.C1 (DUO), 54-30672-02.A1 (CMM), 54-30444-01.D3 (MBM), 54-30392-02.A3 (I/O expander), 20-50928-04.C1, -05.B3 and -06.B5 (CPU, RIMM and TERM VRMs), 140641-001.01 (power supplies) | `EM-` and the kind | the owner's decision: real part numbers with the `EM` serial numbers kept |
+| RIMM serial | sixteen `?`: the EEPROM's bytes are not printable | an `EM` serial | keep, or bytes as a real RIMM's |
+| `spcount` at the start | 2: `Default_SP` and `Free_Pool`, in `Default_HP` | 1: `sub_partition0`, in `hard_partition0` | the partition database (0x0323): a second, empty sub partition and the real names |
+| IO7 North port speed | 216 MHz | 650 MHz | find what the console reads to print it (its string is at 0x4015f0; `POx_RST3`, read right after the IO7's revision, is the AGP PLL range); then ask for that register |
+| Hose 0 speed | 66 MHz, a DEGX2-TA in slot 1 | 33 MHz, empty | a run with a 66 MHz card there, and what the console reads (`POx_CTRL`; `HP_DEV_CAP` already says 66 MHz) |
+| Card FRUs | hose 0 slot 1 `CAB0.DRW0.PCI0.SLOT1`, hose 1 slot 3 `CAB0.DRW0.PCI2.SLOT1`, the Radeon `CAB0.DRW0.AGP` | M10 checked hose 0 slot 1 only | a run with cards in hose 1 slot 3 and the AGP slot |
+| HWRPB slot 1 | HALT_PCBB 0x10400, HALT_PS 0x1F00; TXLEN 0x12 with TX ready bit 1, a message from CPU 1 not yet read | zero | not known: how the secondary started |
+| CTB TERM_IN_PROTOCOL | 0 | 1 | not known (the emulated machine has a USB keyboard) |
+
+The comment in `Ev7Csr.cpp` (`interval_period_ns`) still says the console
+writes 7; it changes with the next code change there. The power-up log's
+first part, the MBM's failsafe loader and firmware (VxWorks 5.4.2, ES47
+Server Management V2.7-7), its topology map and its diagnostics (tests 10
+to 50, on both EV7s or the one with the IO7), runs before the console and
+is not emulated.
+
+**What they offered to read**: console register values (RBOX_ROUTE,
+RBOX_WHOAMI, RBOX_IT, BBOX_CTL), the CMM's replies to the console's SMLAN
+requests (sensors, fans, power supplies, VRM status, the partition
+database), the CMM's per-processor memory areas, and their tooling for the
+System Management protocol. The replies to 0x090f (VRM status) and 0x0323
+(the partition database) would replace two inferences in the table;
+RBOX_IT should read 9 and BBOX_CTL seven ways.
 
 ### EV8 S11b: the boards in 21464 mode (2026-10-25)
 
@@ -2539,8 +2639,8 @@ M5 (byte 10, above); `SET TIME` was checked 2026-10-05.
 
 **Things M4 had to fix outside the CMM:**
 
-- **The interval timer.** The console writes RBOX_IT = 7 and tells the
-  operating system (HWRPB intr_freq, `get_iclk_freq` 0x2e2270) that the
+- **The interval timer.** The console writes RBOX_IT = 7 (at 1000 MHz;
+  9 at 1300 MHz, found 2026-10-26) and tells the operating system (HWRPB intr_freq, `get_iclk_freq` 0x2e2270) that the
   tick runs at cpu_hz / ((n + 1) * 2^17), a quarter of that on a
   revision-1.0 part. M2's tick was the machine's 1 Hz fallback, and the
   console printed "*** no timer interrupts on CPU 0 ***" and ran its
