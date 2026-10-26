@@ -932,7 +932,7 @@ system serial number (ours `ES47EM000000`; the real HWRPB holds "SET").
 | --- | --- | --- | --- |
 | VRMs in `show fru` | nine: VRM0-4.CPU, VRM2-4.RIMM, VRM0.TERM | twelve: VRM0-5.CPU, VRM0-4.RIMM, VRM0.TERM; `get_vrm_status` (0x090f) reports all twelve | **done**: the nine, on every Marvel board; the code settles which bit is which place |
 | FRU part numbers | 54-30398-02.D3 (DOCP), 54-30252-LG.C1 (DUO), 54-30672-02.A1 (CMM), 54-30444-01.D3 (MBM), 54-30392-02.A3 (I/O expander), 20-50928-04.C1, -05.B3 and -06.B5 (CPU, RIMM and TERM VRMs), 140641-001.01 (power supplies) | `EM-` and the kind | **done**: made up in the real format (54-99001-01.A1 ...), the `EM` serial numbers kept |
-| RIMM serial | sixteen `?`: the EEPROM's bytes are not printable | an `EM` serial | kept (the owner's decision) |
+| RIMM serial | sixteen `?`: the EEPROM's bytes are not printable | an `EM` serial | kept, as every serial number here stays an `EM` one **[decision]** |
 | `spcount` at the start | 2: `Default_SP` and `Free_Pool`, in `Default_HP` | 1: `sub_partition0`, in `hard_partition0` | **done**: 2, the real names; the GCT and every `show` unchanged |
 | IO7 North port speed | 216 MHz | 650 MHz | **done**: RBOX_IO_CFG<8:5>, the I/O clock ratio's code; 216 MHz at 1300 MHz |
 | Hose 0 speed | 66 MHz, a DEGX2-TA in slot 1 | 33 MHz, empty | **done**: POx_HP_DEV_CAP<s> is the card's 66 MHz capability; a Radeon 7500 PCI there prints 66 MHz, an empty hose 0 33 MHz on both |
