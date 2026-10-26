@@ -13,12 +13,16 @@
 #            which the console reaches its prompt;
 #   udp6     a DE500 on the UDP back end with both ends on ::1 and
 #            net_peer.py at the other: "boot ewa0 -protocols bootp" gets
-#            the BOOTP reply and the TFTP image, and runs it to its HALT.
+#            the BOOTP reply and the TFTP image, and runs it to its HALT;
+#   loopback serial0 with no address, the default: it listens on
+#            127.0.0.1 and ::1 and says this host only; a client over each
+#            reaches the prompt, and one at this host's own network address
+#            (the interface toward 192.0.2.1, no packet sent) is refused.
 #
 # usage: PORT=<base port> ipv6_check.sh <alphabox> <label> [section ...]
-#   Uses ports PORT to PORT+6 (default 21860). Runs in
+#   Uses ports PORT to PORT+7 (default 21860). Runs in
 #   $ALPHABOX_WORK/runs/ipv6-<label>/<section> (ALPHABOX_WORK defaults to
-#   <repo>/lab). Sections: the four above, all by default.
+#   <repo>/lab). Sections: the five above, all by default.
 #
 # Prints a PASS/FAIL line per check and PASS or FAIL last; exit status 0
 # when every check passed. On a host without an IPv6 loopback it says so,
@@ -32,7 +36,7 @@ BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 shift 2
 SECTIONS=("$@")
-[ ${#SECTIONS[@]} -gt 0 ] || SECTIONS=(serial6 dual gdb6 udp6)
+[ ${#SECTIONS[@]} -gt 0 ] || SECTIONS=(serial6 dual gdb6 udp6 loopback)
 PORT=${PORT:-21860}
 WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/runs/ipv6-$LABEL
@@ -234,12 +238,50 @@ run_udp6() {
   no_mismatch
 }
 
+run_loopback() {
+  local p=$((PORT + 7)) lan
+  section loopback --port $p --serial-address none
+  start_emu
+  python3 -I "$T/srm_console.py" --host 127.0.0.1 --port $p --log axp4.log \
+    --cmd-log cmds4.txt --timeout 300 --cmd "show version" > console4.status 2>&1
+  # This host's address on its network, if it has one: the interface a
+  # packet to a documentation address would leave by (nothing is sent).
+  lan=$(python3 -I -c 'import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("192.0.2.1", 9))
+print(s.getsockname()[0])' 2>/dev/null)
+  case $lan in "" | 127.* | 0.0.0.0) lan= ;; esac
+  if [ -n "$lan" ]; then
+    python3 -I -c 'import socket, sys
+try:
+    socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=5)
+    print("connected")
+except OSError as e:
+    print("refused", e)' "$lan" $p > lan.status 2>&1
+  fi
+  python3 -I "$T/srm_console.py" --host ::1 --port $p --log axp6.log \
+    --cmd-log cmds6.txt --timeout 60 --wake --cmd "show cpu" --pid "$PID" \
+    --after sigterm --exit-timeout 30 > console6.status 2>&1
+  stop_emu
+  check "serial0 listens on 127.0.0.1:$p and [::1]:$p" in_log alphabox.out "Waiting for connection on 127\.0\.0\.1:$p and \[::1\]:$p\.$"
+  check "and says this host only" in_log alphabox.out 'this host only; address = "0\.0\.0\.0" or "::" opens the port to other hosts'
+  check "a client over 127.0.0.1 reached P00>>> and ran show version" bash -c "grep -aq '^status=prompt' console4.status && grep -aqE '^version[[:space:]]+V7\.3' cmds4.txt"
+  check "a client over ::1 got the prompt and ran show cpu" bash -c "grep -aq '^status=prompt' console6.status && grep -aqE 'Primary CPU|CPU 0' cmds6.txt"
+  if [ -n "$lan" ]; then
+    check "a client at this host's address $lan:$p is refused" in_log lan.status '^refused'
+  else
+    echo "SKIP: this host has no IPv4 address but its loopback"
+  fi
+  no_mismatch
+}
+
 for s in "${SECTIONS[@]}"; do
   case $s in
   serial6) run_serial6 ;;
   dual) run_dual ;;
   gdb6) run_gdb6 ;;
   udp6) run_udp6 ;;
+  loopback) run_loopback ;;
   *) echo "ipv6_check: no section $s"; exit 2 ;;
   esac
 done

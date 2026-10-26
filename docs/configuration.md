@@ -316,9 +316,13 @@ the machine starts at once, and the client that comes later first gets
 what the guest printed meanwhile. Ports left out of the configuration are
 added as `null_attach` automatically.
 
-By default the port listens on every IPv4 interface (`0.0.0.0`).
-`address` limits it, to an IPv4 address, an IPv6 one or a host name:
+By default the port listens on this host only, at `127.0.0.1` and `::1`
+(the console and its BREAK menu ask for no password), and the startup
+line says so. `address` sets where it listens, to an IPv4 address, an
+IPv6 one or a host name:
 
+- `address = "0.0.0.0";`: every IPv4 interface, so other hosts can
+  connect (the default until 2026-10-26);
 - `address = "127.0.0.1";`: IPv4 clients on this host only;
 - `address = "::1";`: IPv6 clients on this host only (`nc ::1 21264`);
 - `address = "localhost";`: every address the name has, both of those on

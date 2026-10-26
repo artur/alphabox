@@ -148,8 +148,7 @@ void CSerial::init() {
   disabled = myCfg->get_bool_value("disabled");
   raw_mode = myCfg->get_bool_value("raw_mode");
   null_attach = myCfg->get_bool_value("null_attach");
-  if (!(listenAddress = myCfg->get_text_value("address")))
-    listenAddress = "0.0.0.0";
+  listenAddress = myCfg->get_text_value("address"); // null: the loopbacks
 
   cSystem->RegisterMemory(this, 0,
                           U64(0x00000801fc0003f8) - (0x100 * state.iNumber), 8);
@@ -220,12 +219,24 @@ void CSerial::init() {
   // "::1", and "::" for every interface, IPv4 clients too. A name is
   // listened on at every address it has, "localhost" at 127.0.0.1 and ::1
   // (HostSocket.hpp).
+  //
+  // With no address, the loopback interface in both families, as the gdb
+  // stub has it: the port is the machine's console and its BREAK menu,
+  // with no password, so it is open to this host only unless the
+  // configuration says otherwise. It was every IPv4 interface (0.0.0.0).
   std::vector<hostsock::Endpoint> addrs;
   std::string why;
-  if (!hostsock::resolve(listenAddress, std::to_string(listenPort), SOCK_STREAM,
-                         true, &addrs, &why))
-    FAILURE_3(Configuration, "%s: cannot listen on address \"%s\": %s",
-              devid_string, listenAddress, why.c_str());
+  std::vector<std::string> hosts = {"127.0.0.1", "::1"};
+  if (listenAddress)
+    hosts = {listenAddress};
+  for (const std::string &host : hosts) {
+    std::vector<hostsock::Endpoint> found;
+    if (!hostsock::resolve(host, std::to_string(listenPort), SOCK_STREAM, true,
+                           &found, &why))
+      FAILURE_3(Configuration, "%s: cannot listen on address \"%s\": %s",
+                devid_string, host.c_str(), why.c_str());
+    addrs.insert(addrs.end(), found.begin(), found.end());
+  }
   // A busy port stops here too: listen() on an unbound socket binds an
   // ephemeral one, so the emulator used to announce the configured port
   // and then wait for a connection that could never arrive.
@@ -247,15 +258,20 @@ void CSerial::init() {
   // wait = false: the machine starts at once. The port's thread takes the
   // first client when it comes, and what the guest printed until then
   // follows the greeting (the newest 256 KB of it).
-  if (!myCfg->get_bool_value("wait", true)) {
+  const bool wait = myCfg->get_bool_value("wait", true);
+  if (wait)
+    printf("%s: Waiting for connection on %s.\n", devid_string,
+           listener.where().c_str());
+  else
     printf("%s: listening on %s; the machine starts without waiting for a "
            "client.\n",
            devid_string, listener.where().c_str());
-    return;
-  }
-  printf("%s: Waiting for connection on %s.\n", devid_string,
-         listener.where().c_str());
-  WaitForConnection();
+  if (!listenAddress)
+    printf("%s: this host only; address = \"0.0.0.0\" or \"::\" opens the "
+           "port to other hosts.\n",
+           devid_string);
+  if (wait)
+    WaitForConnection();
 }
 
 void CSerial::start_threads() {

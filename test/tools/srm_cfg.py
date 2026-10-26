@@ -7,7 +7,9 @@ change it for the SRM probes:
 
   --port N              serial0 telnet port
   --serial-address A    serial0's address (default the base's 127.0.0.1):
-                        IPv4, IPv6 (::1, :: for both families) or a name
+                        IPv4, IPv6 (::1, :: for both families) or a name;
+                        "none" leaves the key out (the emulator's default,
+                        127.0.0.1 and ::1)
   --cpus N              1-4 CPUs (copies of cpu0)
   --membits N           memory.bits
   --cpu-opt KEY=VALUE   extra setting on every CPU (repeatable),
@@ -141,7 +143,11 @@ def main():
     if n != 1:
         sys.exit("srm_cfg: serial port setting not found in base config")
 
-    if args.serial_address is not None:
+    if args.serial_address == "none":
+        t, n = re.subn(r'\n[ \t]*address = "[^"]*";[^\n]*', '', t, count=1)
+        if n != 1:
+            sys.exit("srm_cfg: serial address setting not found in base config")
+    elif args.serial_address is not None:
         t, n = re.subn(r'address = "[^"]*";', 'address = "%s";' % args.serial_address,
                        t, count=1)
         if n != 1:

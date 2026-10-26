@@ -38,7 +38,7 @@ gives its usage and variables.
 | `srm_dwell.sh` | Boot to the prompt and sit there for N seconds: what the console's polling loop costs. |
 | `srm_cfg.py` | The test machine's configuration, generated from `test/rom/es40.cfg`; the three scripts above and `gdb_check.sh` use it. |
 | `gdb_check.sh` | The gdb stub against the console: attach at reset, breakpoints (one inside a compiled loop), steps, registers, memory, the monitor commands, the clock across a stop, Ctrl-C, one or more CPUs ([debugging.md](debugging.md)). `GDB_HOST='[::1]'` connects over IPv6. |
-| `ipv6_check.sh` | The emulator's own endpoints over IPv6, against the console (below): the serial port on `::1` and on `::` (an IPv4 client, then an IPv6 one), the gdb stub over `::1` without gdb, a NIC's UDP link on `::1` to `net_peer.py`. |
+| `ipv6_check.sh` | The emulator's own endpoints over IPv6, against the console (below): the serial port on `::1` and on `::` (an IPv4 client, then an IPv6 one), the gdb stub over `::1` without gdb, a NIC's UDP link on `::1` to `net_peer.py`, and the serial port's default (this host only). |
 | `srm_console.py` | Drives the console over its telnet port: waits for the prompt (`--wake` asks a restored console for it), runs commands, stops the emulator or saves it (`--after sigusr1`). `--host` is the port's address (IPv4, IPv6 or a name). |
 | `net_peer.py` | The other end of a NIC's UDP link: answers ARP, BOOTP and TFTP with a CALL_PAL HALT image. `--host ::1` for a link over IPv6. |
 | `make_halt_floppy.py` | A floppy whose boot block runs CALL_PAL HALT. |
@@ -50,7 +50,7 @@ Give each `srm_run.sh` its own `PORT` to run several builds at once.
 `ipv6_check.sh <alphabox> <label> [section ...]` is the check for a
 change to the serial port's sockets, the gdb stub's or the UDP back
 end's ([configuration.md](configuration.md#serial-consoles)). It runs
-four machines, one after another, on ports `PORT` to `PORT + 6` (default
+five machines, one after another, on ports `PORT` to `PORT + 7` (default
 21860), in `$ALPHABOX_WORK/runs/ipv6-<label>/<section>`:
 
 - `serial6`: `serial0` on `address = "::1"`; a client over IPv6 reaches
@@ -64,13 +64,17 @@ four machines, one after another, on ports `PORT` to `PORT + 6` (default
   after which the console reaches its prompt;
 - `udp6`: a DE500 on the UDP back end with both ends on `::1` and
   `net_peer.py --host ::1` at the other: `boot ewa0 -protocols bootp`
-  gets the BOOTP reply and the TFTP image and runs it to its HALT.
+  gets the BOOTP reply and the TFTP image and runs it to its HALT;
+- `loopback`: `serial0` with no `address`, the default; it listens on
+  `127.0.0.1` and `::1` and says this host only, a client over each
+  reaches the prompt, and one at this host's own network address is
+  refused (skipped on a host with no address but its loopback).
 
 Each prints PASS or FAIL lines, with the JIT_VERIFY mismatch count, and
 the script exits 0 only if all passed. On a host without an IPv6 loopback
 it says so, with the commands that add one, and exits 2.
-`srm_cfg.py --serial-address ADDR` and `--nic-udp-host ADDR` make the
-same machines by hand.
+`srm_cfg.py --serial-address ADDR` (`none` for no `address` key) and
+`--nic-udp-host ADDR` make the same machines by hand.
 
 `boards_check.sh <alphabox> <label> [board ...]` is the gate for a change to
 a shared board or chipset file, which `srm_run.sh` (the ES40 only) cannot
