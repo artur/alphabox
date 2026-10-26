@@ -697,7 +697,8 @@ void CEs47Cmm::nvram_save() {
  * byte (in a longword) followed by its entries.
  *
  *   hard partitions, 0x1c each: <0> number, <4> u32 0xff, <8> name
- *   sub partitions, 0x20 each:  <0> hard partition, <2> 4, <6> name
+ *   sub partitions, 0x20 each:  <0> hard partition, <1> number (0xff: the
+ *                               free pool), <2> 4, <6> name
  *   processors, 12 each:        <0> 0x80 the sub partition's primary,
  *                               0 another member, <1> N/S, <2> E/W,
  *                               <3> PID, <4> hard partition,
@@ -710,13 +711,27 @@ void CEs47Cmm::nvram_save() {
  *                               them with the processors' <1> and <2>),
  *                               <5> present
  *
- * One hard and one sub partition holding every processor and every IO7,
- * at the coordinates the topology gives them (Topology.hpp); coord2id
- * turns those into the Hard ID and CPU number `show config` prints (a real
- * ES47: NS,EW (0,0) and (1,0), Hard ID 0 and 1). [guess] the meaning of
- * 0xff and 4, copied from the console's built-in database; the console
- * also takes the hard partition's 0xff as the number of PIDs to size its
- * route table for (start_secondaries).
+ * As a real ES47's (its power-up log, test/platforms/es47/power-up.log:
+ * "hpcount = 1, spcount = 2", the MBM's HP:Default_HP, SP:Default_SP and
+ * SP:Free_Pool): one hard partition, Default_HP, holding the sub partition
+ * Default_SP, with every processor and every IO7 at the coordinates the
+ * topology gives them (Topology.hpp), and Free_Pool, empty. coord2id turns
+ * the coordinates into the Hard ID and CPU number `show config` prints (a
+ * real ES47: NS,EW (0,0) and (1,0), Hard ID 0 and 1).
+ *
+ * A sub partition's <1> is its number, which a processor's <6> names; 0xff
+ * marks an entry that is not one: gct_init$platform_tree (0x2f53e0) makes a
+ * GCT partition node for every other entry of its hard partition, and
+ * memconfig's count of sub partitions (0x2f101c, on a hard partition whose
+ * <5> is 1) skips it. Free_Pool is that entry [inference: what else 0xff
+ * would mark; its <2> is Default_SP's, which nothing reads for it]: the
+ * console counts it in spcount and the GCT, the HWRPB, the memory and the
+ * processors are as before (marvel.md, "Captures from a real ES47").
+ * Default_SP before Free_Pool, the MBM's order. [guess] the meaning of 0xff
+ * and 4, copied from the console's built-in database (0x3095e0, one
+ * hard_partition0 and one sub_partition0); the console also takes the hard
+ * partition's 0xff as the number of PIDs to size its route table for
+ * (start_secondaries), and the MBM's partitions have a "max CPUs".
  */
 void CEs47Cmm::partition_database(u8 *db) {
   memset(db, 0, kNvramSize);
@@ -727,14 +742,17 @@ void CEs47Cmm::partition_database(u8 *db) {
   p += 4;
   p[0] = 0;
   put32(p + 4, 0xff);
-  strcpy((char *)p + 8, "hard_partition0");
+  strcpy((char *)p + 8, "Default_HP");
   p += 0x1c;
-  *p = 1; // sub partitions
+  *p = 2; // sub partitions
   p += 4;
-  p[0] = 0;
-  p[2] = 4;
-  strcpy((char *)p + 6, "sub_partition0");
-  p += 0x20;
+  static const char *const kSubPartitions[2] = {"Default_SP", "Free_Pool"};
+  for (int i = 0; i < 2; i++, p += 0x20) {
+    p[0] = 0;
+    p[1] = i == 0 ? 0 : 0xff; // Default_SP is 0, which the processors name
+    p[2] = 4;
+    strcpy((char *)p + 6, kSubPartitions[i]);
+  }
   const int cpus = present();
   *p = (u8)cpus; // processors
   p += 4;
