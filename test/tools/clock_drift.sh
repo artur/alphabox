@@ -26,7 +26,12 @@
 #              is when its line arrives there. If nothing arrives, the
 #              command window is read from the screen instead (tesseract):
 #              `echo %TIME%`, the host's time then being when its Enter key
-#              was handed to the key pipe, good to about 0.15 s a reading
+#              was handed to the key pipe, good to about 0.15 s a reading.
+#              NOT WORKING YET (2026-10-26): the RC2 image's COM1 gave
+#              nothing, and tesseract misreads the console's raster font
+#              (18:13:44.21 as "18 213=44_.21"); the time is on the screen,
+#              so the next step is matching its glyphs exactly, as
+#              guests_check.sh reads the taskbar clock
 #
 # A reading is DRIFT_READS clock reads in a row (default 5). For each read the
 # offset is the guest's clock minus the host's when the line arrived; a
