@@ -287,8 +287,9 @@ linux_guest() { # linux_guest <guest> <guests_check guest> [cpu] [tpus]
   # the firmware is git-ignored: a worktree has none of its own
   local roms=${ALPHABOX_ROMS:-$R/roms}
   [ -d "$roms" ] || roms=$(cd "$(git -C "$R" rev-parse --git-common-dir)/.." && pwd)/roms
-  ALPHABOX_ROMS=$roms GUESTS_EXTRA_CMDS="$cmds" GUESTS_PORT_BASE=${AZ_PORT_BASE:-24600} GUESTS_OUT="$D/gc" GUESTS_KEEP=1 \
-    ${cpu:+GUESTS_EV7_CPU=$cpu} ${tpus:+GUESTS_EV8_TPUS=$tpus} \
+  # env, so that the optional NAME=value words count as assignments
+  env ALPHABOX_ROMS="$roms" GUESTS_EXTRA_CMDS="$cmds" GUESTS_PORT_BASE="${AZ_PORT_BASE:-24600}" GUESTS_OUT="$D/gc" \
+    GUESTS_KEEP=1 ${cpu:+GUESTS_EV7_CPU=$cpu} ${tpus:+GUESTS_EV8_TPUS=$tpus} \
     "$T/guests_check.sh" "$BIN" "alphaz-$LABEL-$g" "$gc" > "$D/guests_check.out" 2>&1 &
   local gpid=$! load0
   load0=$(host_load)
