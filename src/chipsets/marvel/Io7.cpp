@@ -47,6 +47,7 @@
 #include "Ev7.hpp"
 #include "Io7.hpp"
 #include "Marvel.hpp"
+#include "PCIDevice.hpp"
 #include "PciWindows.hpp"
 #include "System.hpp"
 
@@ -409,8 +410,15 @@ u64 CIo7::pci_phys(u32 port, u32 address) {
  *    power fault, <16+s> and <24+s> both set for an empty slot (the
  *    console powers a slot only when not both are) [inference: PRSNT1# and
  *    PRSNT2#, high with no card];
- *  - HP_DEV_CAP: what each slot supports: <s> 66 MHz, <8+s> PCI-X, <16+s>
- *    PCI-X 133 [inference from the console's "%s MHz PCI-X" strings];
+ *  - HP_DEV_CAP: what the card in each slot supports: <s> 66 MHz, <8+s>
+ *    PCI-X, <16+s> PCI-X 133, <31> the register invalid (the routine at
+ *    0x2e59f0 copies them into its slot table, which php_get_port_speed
+ *    0x2e65a0 reads). The console runs a hose at 66 MHz only when every
+ *    card on it is 66 MHz capable, the PCI rule (M66EN), and a hose with no
+ *    card at 33; on the ES47 (backplane MARVEL 2P [inference]) hose 0 so,
+ *    hose 1 by its own rule of which slots hold cards, hose 2 always at 33.
+ *    <s> is the card's PCI status <5>, 66 MHz capable [inference: the
+ *    hot-plug controller senses the slot's M66EN]; no card here is PCI-X;
  *  - HP_EVNT: events (presence, user request), written with ones to clear;
  *    none happen here. HP_LED and HP_EVNT_MASK hold what is written.
  */
@@ -428,10 +436,13 @@ u64 CIo7::hp_read(u32 port, u32 r) {
         v |= (U64(1) << (16 + s)) | (U64(1) << (24 + s));
     return v;
   }
-  case HP_DEV_CAP:
-    // The ES47's hose 0 is its 66 MHz PCI-X slot, the others 33 MHz PCI
-    // [the slots' PCI-X capabilities are not known].
-    return port == 0 ? 0x3f : 0;
+  case HP_DEV_CAP: {
+    u64 v = 0;
+    for (u32 s = 0; s < kHpSlots; s++)
+      if (slot_66mhz(port, s + 1))
+        v |= U64(1) << s;
+    return v;
+  }
   case HP_EVNT:
     return 0;
   }
@@ -468,6 +479,17 @@ bool CIo7::hp_write(u32 port, u32 r, u64 data) {
 bool CIo7::slot_occupied(u32 port, u32 dev) const {
   return m_sys->device_at(m_marvel->map().io7_base(m_pid, port) + 0xFE000000 +
                           (u64)dev * 0x800);
+}
+
+bool CIo7::slot_66mhz(u32 port, u32 dev) const {
+  const int hose = (int)(m_pid * 4 + port);
+  for (int i = 0; i < m_sys->component_count(); i++) {
+    CPCIDevice *d = dynamic_cast<CPCIDevice *>(m_sys->component(i));
+    if (d && d->pci_bus() == hose && d->pci_dev() == (int)dev &&
+        !d->upstream_bridge())
+      return d->config_read(0, 0x06, 16) & 0x20;
+  }
+  return false;
 }
 
 void CIo7::lsi(u32 n, bool assert) {

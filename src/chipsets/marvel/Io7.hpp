@@ -160,6 +160,10 @@ private:
   bool hp_write(u32 port, u32 r, u64 data);
   /// Whether a card sits in slot (device) `dev` of bus 0 on `port`.
   bool slot_occupied(u32 port, u32 dev) const;
+  /// Whether the card in slot `dev` of bus 0 on `port` can run at 66 MHz:
+  /// its function 0's PCI status <5> (the card's M66EN pin); false for an
+  /// empty slot.
+  bool slot_66mhz(u32 port, u32 dev) const;
 
   CSystem *m_sys;
   CMarvel *m_marvel;
