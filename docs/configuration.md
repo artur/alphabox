@@ -341,7 +341,9 @@ A client can leave and come back: the port takes the next connection, and
 what the guest printed in between (the newest 256 KB) is sent to it first.
 A client that stops reading costs no more than that: the guest never waits
 for it. With `raw_mode = true;` (a debugger's byte stream) nothing is kept
-for the next client.
+for the next client. It is meant for the Windows kernel debugger on
+serial1, which no test here has driven: its host program runs on Windows
+only ([backlog.md](backlog.md#debugging-a-guest)).
 
 `log = "serial0.log";` appends everything the guest sends on the port to
 that file, as it is sent, with or without a client (`null_attach` too):

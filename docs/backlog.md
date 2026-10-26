@@ -99,6 +99,12 @@ settle them:
 | No reference listings for the DS boards (no L3) | published listings if they turn up; otherwise stays |
 | The ES40 console prints "4-Way" for every `memory.arrays` layout, unequal arrays included | its own rule, not read; nothing else depends on it |
 
+## Debugging a guest
+
+| Gap | To close it |
+| --- | --- |
+| The Windows kernel debugger on a serial port (`raw_mode = true;`) is untested here: its host side, `alphakd.exe`, runs on Windows only. ES40-Emu's maintainer drives it through a virtual COM port (VSPE, a TCP client to serial1 in raw mode, serial0 `null_attach`); ARC prints a lot to it | **K1**, when a Windows guest's problem cannot be read from its screen: a listener of our own for the debugger's serial protocol, written from its public documentation, that prints the guest's debug output and a bugcheck's code and parameters as text, headless on any host |
+
 ## The plan
 
 In order. Each step is one agent with one question, merged through the
