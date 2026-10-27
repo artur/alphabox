@@ -658,7 +658,9 @@ win_guest() {
   fi
   # WIN_GUEST_PREP: a command run on the copied configuration before the
   # start (clock_drift.sh puts serial0 on a telnet port with it)
-  if [ -n "${WIN_GUEST_PREP:-}" ]; then "$WIN_GUEST_PREP" "$D/$cfg" || return 2; fi
+  if [ -n "${WIN_GUEST_PREP:-}" ]; then
+    "$WIN_GUEST_PREP" "$D/$cfg" || { W_WHAT="WIN_GUEST_PREP failed ($WIN_GUEST_PREP)"; return 2; }
+  fi
   start_emu "$D" "$cfg"
   if [ -n "$logon" ]; then
     r=$(H fbsplash "$D/fb" "$tmo" "$PID" 2>&1 | tail -1)
