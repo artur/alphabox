@@ -465,6 +465,7 @@ bool CDebugTarget::boundary(CAlphaCPU *c, int *span, int *whole) {
       {
         std::lock_guard<std::mutex> g(m_mx);
         k.reported_bp = pc;
+        ++k.bp_hits;
         if (!m_stop_req.load(std::memory_order_relaxed)) {
           m_stop.cpu = c->get_cpuid();
           m_stop.signal = kSigTrap;

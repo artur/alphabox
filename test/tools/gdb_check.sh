@@ -193,6 +193,46 @@ detach
 EOF
 deadline 120 "$GDB" --batch -nx -x s2.gdb > s2.log 2>&1
 
+# Session 3, two or more processors: every breakpoint hit is reported. The
+# interrupt entry (0x8680) is where all the processors go on the interval
+# timer's tick, and they tick together, so they often hit it at the same
+# moment; whichever the stub reports, the others' hits must come back as
+# stops of their own. The stub counts the hits it records for each
+# processor ("breakpoint hits" in "monitor cpu"); gdb's own trace of the
+# protocol counts the stop replies that carry one (a continue from a
+# breakpoint is a step over it, with a breakpoint of gdb's on the next
+# instruction, so there are two replies per stop gdb shows).
+if [ "$CPUS" -gt 1 ]; then
+  cat > s3.gdb <<EOF
+set pagination off
+set confirm off
+set breakpoint always-inserted on
+target remote $GDB_HOST:$GDB_PORT
+break *0x8680
+python
+import gdb, re
+def hits():
+    out = gdb.execute("monitor cpu", to_string=True)
+    return [int(x) for x in re.findall(r"breakpoint hits ([0-9]+)", out)]
+before = hits()
+gdb.execute("set debug remote 1")
+seen = {}
+for i in range(1000):
+    gdb.execute("continue")
+    t = gdb.selected_thread().num
+    seen[t] = seen.get(t, 0) + 1
+gdb.execute("set debug remote 0")
+after = hits()
+print("@@ twohits")
+for i in range(len(after)):
+    print("CPU%d SHOWN=%d RECORDED=%d" % (i, seen.get(i + 1, 0), after[i] - before[i]))
+end
+delete
+detach
+EOF
+  deadline 240 "$GDB" --batch -nx -x s3.gdb > s3.log 2>&1
+fi
+
 fails=0
 check() { # <name> <condition...>
   local name=$1
@@ -273,6 +313,22 @@ check "the machine runs after the last detach" in_log alphabox.out 'GDB-I-DETACH
 if [ "$CPUS" -gt 1 ]; then
   check "thread $CPUS runs (started by the console)" \
     in_log s2.log "^THREAD$CPUS-PC=0x[0-9a-f]{2,}"
+fi
+
+if [ "$CPUS" -gt 1 ]; then
+  lost=0
+  both=1
+  while read -r name shown rec; do
+    shown=${shown#SHOWN=}
+    rec=${rec#RECORDED=}
+    n=${name#CPU}
+    sent=$(grep -ac "Packet received: T05thread:$((n + 1));swbreak" s3.log)
+    [ "$shown" -gt 0 ] || both=0
+    lost=$((lost + rec - sent))
+  done < <(sect s3.log twohits | grep -a '^CPU')
+  check "every breakpoint hit by $CPUS processors is reported ($lost lost)" \
+    [ "$lost" -eq 0 ]
+  check "and each of the processors hit it, so that was tested" [ "$both" -eq 1 ]
 fi
 
 # The console's output is what it is without a debugger: guest time stood

@@ -147,6 +147,7 @@ private:
     u64 seen_gen = 0;     ///< the m_run_gen it last resumed at
     Action action = Action::Continue;
     u64 reported_bp = ~U64(0); ///< where it reported a breakpoint
+    u64 bp_hits = 0;           ///< breakpoint hits it has recorded
     bool flush = false;        ///< guest memory was written: flush on resume
     // The processor's own thread only.
     u64 bp_gen = ~U64(0);  ///< m_bp_gen its copy was taken at

@@ -140,10 +140,11 @@ std::string CDebugTarget::mon_cpu() {
                                 : "running";
     out +=
         fmt("cpu%d: %-11s pc %016llx %s %-10s asn %3d pal_base %llx "
-            "instructions %llu%s\n",
+            "instructions %llu breakpoint hits %llu%s\n",
             i, st, (unsigned long long)s.pc, (s.pc & 1) ? "PAL   " : "native",
             mode_name(s.cm), s.asn, (unsigned long long)s.pal_base,
             (unsigned long long)s.instruction_count,
+            (unsigned long long)k.bp_hits,
             (m_stop_req && m_stop.cpu == i) ? "  <- stopped the machine" : "");
   }
   return out;
