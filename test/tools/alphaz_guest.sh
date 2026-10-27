@@ -13,14 +13,15 @@
 #   w2k-ev8     the same with two `ev8` processors, w2k-ev7 and w2k-ev7z
 #               with `ev7` and `ev7z`: ALPHABOX_CPU_ANY_BOARD=1, a test
 #               hook that lets the ES40 take another family's row
-#   xp64        Windows XP 64-bit (lab/xp64-installed, es40-window.cfg, C:
-#               the logical drive at byte 209731584): whether a PE32 runs
+#   xp64        Windows XP 64-bit (lab/xp64-installed, es40-window.cfg; its
+#               Windows volume is D:, the FAT at byte 209731584, C: being the
+#               ARC system partition): whether a PE32 runs
 #   linux       guests_check.sh's `linux` (Gentoo on the ES40, one ev68cb)
 #   es47-ev7, es47-ev7z, es47-ev8, es47-ev8t4
 #               guests_check.sh's `linux-es47` with GUESTS_EV7_CPU ev7,
 #               ev7z or ev8, and ev8 with GUESTS_EV8_TPUS=4
 #
-# Windows: C:\NADA is staged on the clone with mtools (nt_bench.sh's
+# Windows: \NADA on the Windows volume (C:, D: on xp64) is staged on the clone with mtools (nt_bench.sh's
 # method): ALPHAZ.EXE, the guest's SHUTDOWN.EXE (ntbench/shutdown.c), and a
 # RUN.BAT hooked from the All Users Startup folder, which runs
 # `ALPHAZ.EXE /report C:\NADA\OUT.TXT`, then the window, then shuts
@@ -150,11 +151,13 @@ focus_click() {
   sleep 25
 }
 
-# win_guest <guest> <cpu row> [install dir] [cfg] [C:'s byte offset]: the
-# installed Windows in $WORK/<install dir> (default win2k-installed,
-# es40-window-smp.cfg, C: at 16384), its ev68cb rows made <cpu row>
+# win_guest <guest> <cpu row> [install dir] [cfg] [the Windows volume's
+# byte offset] [its drive letter]: the installed Windows in
+# $WORK/<install dir> (default win2k-installed, es40-window-smp.cfg, C: at
+# 16384), its ev68cb rows made <cpu row>
 win_guest() {
   local g=$1 cpu=$2 inst=${3:-win2k-installed} cfg=${4:-es40-window-smp.cfg} off=${5:-16384}
+  local W="${6:-C}:\NADA" # where the guest sees \NADA (%s keeps the backslash)
   local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
   local IMG any= f ref i n name names done_at start rows load0
   rm -rf "$D" "$run"; mkdir -p "$D"
@@ -173,16 +176,16 @@ win_guest() {
   mkdir -p "$S"
   cp "$B/ALPHAZ.EXE" "$B/SHUTDOWN.EXE" "$S/"
   {
-    printf '@echo off\r\n'
-    printf 'if exist C:\\NADA\\RAN goto over\r\n'
-    printf 'echo ran > C:\\NADA\\RAN\r\n'
-    printf 'start /wait C:\\NADA\\ALPHAZ.EXE /report C:\\NADA\\OUT.TXT\r\n'
-    printf 'start /wait C:\\NADA\\ALPHAZ.EXE /close 900 /keylog C:\\NADA\\KEYS.TXT\r\n'
-    printf 'echo DONE >> C:\\NADA\\OUT.TXT\r\n'
-    printf ':over\r\n'
-    printf 'C:\\NADA\\SHUTDOWN.EXE\r\n'
+    printf '%s\r\n' '@echo off' \
+      "if exist $W\\RAN goto over" \
+      "echo ran > $W\\RAN" \
+      "start /wait $W\\ALPHAZ.EXE /report $W\\OUT.TXT" \
+      "start /wait $W\\ALPHAZ.EXE /close 900 /keylog $W\\KEYS.TXT" \
+      "echo DONE >> $W\\OUT.TXT" \
+      ':over' \
+      "$W\\SHUTDOWN.EXE"
   } > "$S/RUN.BAT"
-  printf '@echo off\r\nif exist C:\\NADA\\RUN.BAT call C:\\NADA\\RUN.BAT\r\n' > "$S/NADARUN.BAT"
+  printf '%s\r\n' '@echo off' "if exist $W\\RUN.BAT call $W\\RUN.BAT" > "$S/NADARUN.BAT"
   mmd -i "$IMG" ::/NADA 2>/dev/null
   for f in "$S"/*; do mcopy -o -i "$IMG" "$f" "::/NADA/$(basename "$f")" || { report "$g" FAIL "mcopy $f"; return 1; }; done
   local hooked=0 p
@@ -261,7 +264,7 @@ win_guest() {
   grep -a "ANYBOARD\|ANY_BOARD" "$run/run.log" | head -2
   [ "${KEEP:-0}" = 1 ] || rm -rf "$run"
   if ! grep -q "^== CPU" "$D/report.txt"; then
-    report "$g" FAIL "no report in C:\\NADA\\OUT.TXT ($n tabs shot)"
+    report "$g" FAIL "no report in $W\\OUT.TXT ($n tabs shot)"
     return 1
   fi
   $FB check "$D/report.txt" $(expect "$D/$cfg" windows) ${ev8_cases:+ev8=$ev8_cases} > "$D/check.txt"
@@ -362,7 +365,7 @@ main() {
     w2k-ev7) win_guest "$g" ev7 ;;
     w2k-ev7z) win_guest "$g" ev7z ;;
     w2k-ev8) ev8_cases=$ev8_n; win_guest "$g" ev8 ;;
-    xp64) win_guest "$g" ev68cb xp64-installed es40-window.cfg 209731584 ;;
+    xp64) win_guest "$g" ev68cb xp64-installed es40-window.cfg 209731584 D ;;
     linux) linux_guest "$g" linux ;;
     es47-ev7) linux_guest "$g" linux-es47 ev7 ;;
     es47-ev7z) linux_guest "$g" linux-es47 ev7z ;;
