@@ -753,8 +753,17 @@ row, and `show cpu` and `show config` list them as above; the CPU oracle
 passes on `ev7`, `ev7z` and `ev8` with `ALPHABOX_CPU_ANY_BOARD=0`, with
 the same counts as under the hook and as before the change (group
 `tarantula` sets VEN through the window); Windows 2000 RC2 reaches its
-desktop with the host's time and shuts down on two `ev8`s (158 s;
-TODO two `ev7`s, not yet run). Before the
+desktop with the host's time and shuts down on two `ev8`s (158 s), two
+`ev7`s (153 s) and two `ev7z`s (138 s), each run once, as far as
+`guests_check.sh w2k` looks (desktop, clock, shutdown; it does not count
+the processors Windows started). The `ev7z` run kept the emulator's whole
+output: no `%CPU-W-OPCDEC` line, and processor 1 executed JIT blocks.
+Another run of Windows 2000 on two `ev7z`s, through the hook and with a
+guest program that asks `GetSystemInfo`, saw one processor started and
+three `%CPU-W-OPCDEC` lines (at PCs 0xa001 and 0x8401); it saw two on
+`ev7`, `ev8` and `ev68cb`. That did not reproduce in the run here, which
+did not count processors, so whether Windows started both `ev7z`s here is
+not known, and the OPCDEC lines were not seen. Before the
 construction, under the hook, SRM came up on two `ev8`s, Windows 2000
 reached its desktop and shut down, and nada's EV8 SIMD self-check passed
 39 of 39 there. OpenVMS and Linux on these processors were not tried.
