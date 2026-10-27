@@ -39,18 +39,66 @@ static void copy(char *dst, int size, const char *src)
     dst[k] = 0;
 }
 
-void az_add(int page, const char *label, const char *source, const char *fmt, ...)
+struct az_row *az_add(int page, const char *label, const char *source, const char *fmt, ...)
 {
     struct az_page *p = &az_pages[page];
     struct az_row *r;
     va_list ap;
-    if (p->n >= AZ_ROWS) return;
+    if (p->n >= AZ_ROWS) return 0;
     r = &p->rows[p->n++];
     copy(r->label, AZ_LABEL, label);
     copy(r->source, AZ_SOURCE, source);
     va_start(ap, fmt);
     vsnprintf(r->value, AZ_VALUE, fmt, ap);
     va_end(ap);
+    r->brief[0] = 0;
+    return r;
+}
+
+void az_brief(struct az_row *r, const char *fmt, ...)
+{
+    va_list ap;
+    if (!r) return;
+    va_start(ap, fmt);
+    vsnprintf(r->brief, AZ_BRIEF, fmt, ap);
+    va_end(ap);
+}
+
+const struct az_row *az_find(int page, const char *label)
+{
+    struct az_page *p = &az_pages[page];
+    int k;
+    for (k = 0; k < p->n; k++)
+        if (!strcmp(p->rows[k].label, label)) return &p->rows[k];
+    return 0;
+}
+
+const struct az_row *az_more(int page, const struct az_row *r)
+{
+    struct az_page *p = &az_pages[page];
+    int k = r ? (int)(r - p->rows) + 1 : p->n;
+    if (k <= 0 || k >= p->n) return 0;
+    return p->rows[k].label[0] == ' ' && p->rows[k].label[1] == ' ' ? &p->rows[k] : 0;
+}
+
+void az_brief_part(char *buf, int size, const struct az_row *r, int k)
+{
+    const char *s;
+    int n = 0;
+    buf[0] = 0;
+    if (!r) return;
+    if (!r->brief[0]) {
+        if (k == 0) copy(buf, size, r->value);
+        return;
+    }
+    for (s = r->brief; k > 0 && *s; s++)
+        if (*s == '\t') k--;
+    if (k > 0) return;
+    while (s[n] && s[n] != '\t' && n < size - 1) {
+        buf[n] = s[n];
+        n++;
+    }
+    buf[n] = 0;
 }
 
 int az_snprintf(char *buf, int size, const char *fmt, ...)
@@ -132,15 +180,15 @@ u64 az_rpcc(void) { return 0; }
  * Alphabox's EV8 sheet gives bits 3 and 11 (docs/platforms/ev8-isa.md,
  * section 2). */
 const struct az_feature az_features[] = {
-    {0, "BWX", "byte and word loads and stores"},
-    {1, "FIX", "square root, integer-FP moves"},
-    {2, "CIX", "count instructions"},
-    {3, "Tarantula", "the vector extension (bit 3)"},
-    {8, "MVI", "multimedia instructions"},
-    {9, "Precise traps", "trap PC is the instruction's"},
-    {10, "SMT", "LDx_ARM and QUIESCE (bit 10)"},
-    {11, "EV8 SIMD, paired single", "opcodes 1C and 07 (bit 11)"},
-    {12, "Prefetch, modify intent", "prefetch with modify intent"},
+    {0, "BWX", "BWX", "byte and word loads and stores"},
+    {1, "FIX", "FIX", "square root, integer-FP moves"},
+    {2, "CIX", "CIX", "count instructions"},
+    {3, "Tarantula", "Tarantula", "the vector extension (bit 3)"},
+    {8, "MVI", "MVI", "multimedia instructions"},
+    {9, "Precise traps", "precise traps", "trap PC is the instruction's"},
+    {10, "SMT", "SMT", "LDx_ARM and QUIESCE (bit 10)"},
+    {11, "EV8 SIMD, paired single", "SIMD and paired single", "opcodes 1C and 07 (bit 11)"},
+    {12, "Prefetch, modify intent", "prefetch with modify intent", "prefetch with modify intent"},
 };
 const int az_nfeatures = sizeof az_features / sizeof az_features[0];
 
@@ -160,6 +208,14 @@ const char *az_implver_name(u64 implver)
     case 4: return "EV8 (21464)";
     }
     return "not in the table";
+}
+
+void az_implver_chip(u64 implver, const char **part, const char **core)
+{
+    static const char *const parts[] = {"21064", "21164", "21264", "21364", "21464"};
+    static const char *const cores[] = {"EV4", "EV5", "EV6", "EV7", "EV8"};
+    *part = implver <= 4 ? parts[implver] : 0;
+    *core = implver <= 4 ? cores[implver] : 0;
 }
 
 static const char *const type_names[] = {
@@ -302,23 +358,33 @@ void az_fmt_windows(char *buf, int size, const struct az_clock *c)
 void az_cache_rows(void)
 {
     const char *src21264 = "table value: 21264 HRM";
+    const char *l1 = "64 KB\t2-way\t64 bytes\ton the chip";
     switch (az_cpu.implver) {
     case 2:
-        az_add(AZ_CACHES, "L1 instruction (documented)", src21264, "64 KB, 2-way, 64-byte lines");
-        az_add(AZ_CACHES, "L1 data (documented)", src21264, "64 KB, 2-way, 64-byte lines");
-        az_add(AZ_CACHES, "L2 (documented)", src21264, "off the chip (the Bcache): its size is the board's");
+        az_brief(az_add(AZ_CACHES, "L1 instruction (documented)", src21264, "64 KB, 2-way, 64-byte lines"), "%s", l1);
+        az_brief(az_add(AZ_CACHES, "L1 data (documented)", src21264, "64 KB, 2-way, 64-byte lines"), "%s", l1);
+        az_brief(az_add(AZ_CACHES, "L2 (documented)", src21264, "off the chip (the Bcache): its size is the board's"),
+                 "the board's\t\t\toff the chip (the Bcache)");
         break;
     case 3:
-        az_add(AZ_CACHES, "L1 instruction (documented)", "table value: the EV68 core", "64 KB, 2-way, 64-byte lines");
-        az_add(AZ_CACHES, "L1 data (documented)", "table value: the EV68 core", "64 KB, 2-way, 64-byte lines");
-        az_add(AZ_CACHES, "L2 (documented)", "table value: 21364 (Linux setup.c)", "on the chip, 1.75 MB, 7-way");
+        az_brief(az_add(AZ_CACHES, "L1 instruction (documented)", "table value: the EV68 core",
+                        "64 KB, 2-way, 64-byte lines"),
+                 "%s", l1);
+        az_brief(az_add(AZ_CACHES, "L1 data (documented)", "table value: the EV68 core", "64 KB, 2-way, 64-byte lines"),
+                 "%s", l1);
+        az_brief(az_add(AZ_CACHES, "L2 (documented)", "table value: 21364 (Linux setup.c)",
+                        "on the chip, 1.75 MB, 7-way"),
+                 "1.75 MB\t7-way\t\ton the chip");
         az_add(AZ_CACHES, "  as consoles list it", "table value: ES47 consoles",
                "1.50 MB on rev 2 parts (six ways on), 1.75 MB on rev 3.0");
         break;
     case 4:
-        az_add(AZ_CACHES, "L1 instruction (documented)", "table value: 21464 IDS pp. 42-43", "64 KB");
-        az_add(AZ_CACHES, "L1 data (documented)", "table value: 21464 IDS pp. 42-43", "64 KB");
-        az_add(AZ_CACHES, "L2 (documented)", "table value: 21464 IDS pp. 42-43", "on the chip, 3 MB");
+        az_brief(az_add(AZ_CACHES, "L1 instruction (documented)", "table value: 21464 IDS pp. 42-43", "64 KB"),
+                 "64 KB\t\t\ton the chip");
+        az_brief(az_add(AZ_CACHES, "L1 data (documented)", "table value: 21464 IDS pp. 42-43", "64 KB"),
+                 "64 KB\t\t\ton the chip");
+        az_brief(az_add(AZ_CACHES, "L2 (documented)", "table value: 21464 IDS pp. 42-43", "on the chip, 3 MB"),
+                 "3 MB\t\t\ton the chip");
         az_add(AZ_CACHES, "  as an EV7 console sees it", "table value: Alphabox's ev8 row",
                "1.75 MB: seven 256 KB ways in BBOX_CTL");
         break;
@@ -394,8 +460,10 @@ static void bench_row(struct az_bench *b)
 {
     u64 per_s = b->ticks ? b->rounds * bench_now_ticks / b->ticks : 0;
     u64 cpr10 = b->rounds ? b->cycles * 10 / b->rounds : 0;
-    az_add(AZ_BENCH, b->name, "measured: OS timer and RPCC", "%llu rounds/s, %llu.%llu cycles a round (%llu ops a round)",
-           per_s, cpr10 / 10, cpr10 % 10, b->work);
+    struct az_row *r;
+    r = az_add(AZ_BENCH, b->name, "measured: OS timer and RPCC",
+               "%llu rounds/s, %llu.%llu cycles a round (%llu ops a round)", per_s, cpr10 / 10, cpr10 % 10, b->work);
+    az_brief(r, "%llu\t%llu.%llu\t%llu\t%016llx", per_s, cpr10 / 10, cpr10 % 10, b->work, b->check);
 }
 
 void az_bench_rows(void)

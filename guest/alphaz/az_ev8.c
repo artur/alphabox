@@ -246,7 +246,8 @@ void az_ev8_rows(void)
         if (got[i] == want[i])
             az_add(AZ_EV8, cases[i].name, src, "ok %016llx", got[i]);
         else
-            az_add(AZ_EV8, cases[i].name, src, "MISMATCH %016llx, C says %016llx", got[i], want[i]);
+            az_brief(az_add(AZ_EV8, cases[i].name, src, "MISMATCH %016llx, C says %016llx", got[i], want[i]),
+                     "MISMATCH");
     }
 }
 

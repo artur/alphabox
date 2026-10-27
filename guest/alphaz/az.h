@@ -30,14 +30,19 @@ typedef unsigned int u32;
 #define AZ_LABEL 40
 #define AZ_VALUE 120
 #define AZ_SOURCE 72
+#define AZ_BRIEF 64
 
 /* One fact: what it is, its value, and where the value came from (an
  * instruction, an OS call, the registry, /proc, or "table value" for what
- * a document says rather than what this machine answered). */
+ * a document says rather than what this machine answered). The brief is
+ * the value in short for a window's fields, where the value is too long
+ * for one or is several fields: its parts separated by tabs. The report
+ * never prints it. */
 struct az_row {
     char label[AZ_LABEL];
     char value[AZ_VALUE];
     char source[AZ_SOURCE];
+    char brief[AZ_BRIEF];
 };
 
 struct az_page {
@@ -52,8 +57,19 @@ enum { AZ_CPU, AZ_CACHES, AZ_SYSTEM, AZ_EV8, AZ_BENCH, AZ_ABOUT, AZ_NPAGES };
 extern struct az_page az_pages[AZ_NPAGES];
 
 void az_pages_init(void);
-/* a row: label, source, then the value as printf would format it */
-void az_add(int page, const char *label, const char *source, const char *fmt, ...);
+/* a row: label, source, then the value as printf would format it; the
+ * row, or 0 when the page is full */
+struct az_row *az_add(int page, const char *label, const char *source, const char *fmt, ...);
+/* the row's brief, as printf would format it (nothing when r is 0) */
+void az_brief(struct az_row *r, const char *fmt, ...);
+/* the first row of a page with this label, or 0 */
+const struct az_row *az_find(int page, const char *label);
+/* the row after r on its page when that one's label starts with two
+ * spaces (it says more about r), or 0 */
+const struct az_row *az_more(int page, const struct az_row *r);
+/* part k of a row's brief, or its value as part 0 when it has no brief;
+ * "" for no such part or no row */
+void az_brief_part(char *buf, int size, const struct az_row *r, int k);
 /* whether a page is shown: EV8 only when IMPLVER is 4 */
 int az_page_shown(int page);
 /* the report: every shown page as "label: value [source]" lines */
@@ -73,6 +89,7 @@ u64 az_rpcc(void);
 struct az_feature {
     int bit;
     const char *name;
+    const char *brief; /* the name in a list of them */
     const char *what;
 };
 extern const struct az_feature az_features[];
@@ -94,6 +111,9 @@ void az_probe(void);
 /* what IMPLVER means, from the Architecture Reference Manual's Table D-4
  * and the 21464 IDS: a table value */
 const char *az_implver_name(u64 implver);
+/* the part number and the core IMPLVER names ("21264", "EV6"), for an
+ * emblem: 0 for both when the table has none */
+void az_implver_chip(u64 implver, const char **part, const char **core);
 
 /* The CPU page's rows that come from instructions alone. */
 void az_cpu_rows(void);
@@ -135,7 +155,8 @@ void az_fmt_hz(char *buf, int size, u64 hz);
 /* ---- the caches ---- */
 
 /* The Caches page's rows that a table gives: the documented sizes of the
- * part IMPLVER names. */
+ * part IMPLVER names. Each level's brief is its size, ways, line and
+ * where it is, a part the document does not give left empty. */
 void az_cache_rows(void);
 
 /* ---- the benchmarks ----
@@ -150,6 +171,8 @@ struct az_bench {
     u64 check;  /* the loop's result, so it cannot be left out */
 };
 void az_bench_all(u64 (*now)(void), u64 freq, u64 ms);
+/* a row a loop; its brief: rounds a second, cycles a round, operations a
+ * round, the check value */
 void az_bench_rows(void);
 
 /* ---- the EV8 ----
