@@ -85,6 +85,8 @@ public:
   /// A stop was asked for and every processor has parked (or has not been
   /// started by the console yet).
   bool stopped();
+  /// A stop was asked for (the processors may not all have parked yet).
+  bool stop_requested() const { return m_stop_req.load(); }
   StopInfo stop_info();
   /// Let the processors go, each with its own action. Only while stopped.
   void resume(const std::vector<Action> &actions);

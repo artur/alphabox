@@ -788,6 +788,41 @@ speed is` line: on `ev8` in two runs of four, and on the default `ev68cb`
 in one of three. It is the same race, lost earlier: processor 1 is still
 measuring its speed when the prompt comes.
 
+### A processor that halts another waits until it has stopped (Marvel, 2026-10-27)
+
+On a Marvel a halt is RBOX_IREQ<22> written to a processor's register
+block (R_INT_REQ<11:8> in 21464 mode). On the machine it arrives in about a
+microsecond and the processor stops at its next instruction: the console's
+PALcode leaves EI4 enabled at every IPL, 31 included. The sender goes on at
+once and is never ahead of the processors it stopped.
+
+Here every processor is a host thread, and a busy host may not run one for
+tens of milliseconds (36 ms measured, at a load of 45). `init` sends every
+processor a halt, the sender itself first; it takes its own and starts the
+console again, which sets its data up afresh 0.4 to 1.1 ms after the first. A processor whose thread had not run took its
+halt after that and ran the console's code on the new data first. On
+2026-10-26 one ran the scheduler lock's acquire, took the lock's interlock
+word, halted holding it, and the console waited for that word for ever
+(`init` on a 16-processor ES80; [marvel.md](platforms/marvel.md),
+"`init` with sixteen processors").
+
+So the sender waits (`CEv7Csr::halt_wait`). A write of a halt to another
+running processor returns once that processor has taken an interrupt since
+the write (`CAlphaCPU::interrupts_taken`, counted at the interrupt entry).
+It also returns when the processor can no longer run native code before it
+next looks for an interrupt: parked, in PALmode, being stopped, the machine
+being reset or held by a debugger. It waits on a condition variable in
+1 ms slices, 100 ms at most for each processor (`%MVL-W-HALT`): one with EI4
+masked would not stop on the machine either.
+
+**The divergence:** the sender's store lasts as long as the thread it
+halts takes to run: microseconds on an idle host, milliseconds on a busy
+one (of the waits of 50 us or more in 30 `init`s at a load of 60 to 180,
+half were under 1.6 ms and the longest 40 ms). The sender's guest clock
+runs on across that store. The order is the machine's and the
+timing is the host's. No wait is longer than 100 ms, so a host that sleeps
+cannot turn it into a failure.
+
 ### Smaller ones
 
 | What | Where | Consequence |

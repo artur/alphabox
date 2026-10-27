@@ -83,6 +83,7 @@ On the ES47 in particular:
 | The chipset (`CMarvel`): decode, memory per PID | `chipsets/marvel/Marvel.*` |
 | Each EV7's 4 MB register block (`CEv7Csr`): Rbox interrupts, timer, start protocol, routes | `chipsets/marvel/Ev7Csr.*` |
 | The start hand-off's order through RBOX_SCRATCH1 (M11) | `chipsets/marvel/StartHandoff.hpp` |
+| A halt's order: the sender waits until the processor has stopped | `CEv7Csr::halt_wait` (`chipsets/marvel/Ev7Csr.cpp`), `CAlphaCPU::wait_interrupt_taken` |
 | The GIO port to the management processor | `chipsets/marvel/Gio.*` |
 | The IO7 and its four hoses | `chipsets/marvel/Io7.*` |
 | The processors' topology and routes (`CMarvelTopology`) | `chipsets/marvel/Topology.*` |
@@ -867,6 +868,61 @@ emulator code.
 Each packet's record as written at its date, newest first. Later packets
 changed some of what an earlier one says; where that matters, the earlier
 text says so. The packets' order of work is in [Plan](#plan).
+
+### `init` with sixteen processors (2026-10-27)
+
+**Result**: `init` on sixteen processors no longer leaves the console
+waiting for ever. An overnight loop of `marvel_init_check.sh` (3 `init`s a
+run, `ALPHABOX_TRACE_MP`) had caught it on the EV8 ES80 with four TPUs a
+chip (16 processors) in both of its runs there, and earlier on the
+`gs1280` with 16 EV7s: the console stops in its own start-up after `init`
+("initializing driver structures"), processor 0 spinning at 0x423854 and
+the other 15 parked in the PALcode's loop at 0x390e4.
+
+**The cause.** The lock at 0x428180 is the console's scheduler lock, a
+ticket lock with an interlock word taken by LDL_L/STL_C (acquire 0x423834,
+release 0x423998; +0 the interlock, +0x14 the owner, +0x1c the next
+ticket, +0x20 the ticket served). The stopped machine (restored under gdb:
+it stays stopped) held the interlock word set, with no owner and no ticket
+outstanding. One processor had been halted at 0x423880, the instruction
+after the acquire's STL_C took the word and before it drew a ticket. At
+`init` the console's PALcode writes RBOX_IREQ<22> to every processor
+(0x3f3f4) and then starts the console again, which sets its data up afresh
+0.4 to 1.1 ms after the first write. A debug trace of when each processor
+takes its halt (lab/runs/stall-r1, its `debug-trace.patch`) showed
+processors taking it after that point: 14 in the six `init`s of one run,
+0.8 to 36 ms after their request, their threads having run no dispatch
+batch in between (the host had not run them), some running the lock's
+back-off on the new data. The deadlock is the case where the late code was
+the acquire. The same trace with one processor's thread stopped 5 ms at its
+LDL_L of the lock just after `init`'s broadcast (a debug injection standing
+for the host) reproduced it: halted at 0x4238a4 holding the word,
+the console stopped as before.
+
+**The fix**: a processor that sends another a halt waits until it has
+stopped ([cpu-fidelity.md](../cpu-fidelity.md), "A processor that halts
+another waits until it has stopped"; `CEv7Csr::halt_wait`).
+
+**The check**, on the EV8 ES80 with four TPUs a chip, six `init`s a run,
+the host's load 30 to 190:
+
+| | Before | After |
+| --- | --- | --- |
+| Runs that stopped in this deadlock | 2 of 2 (the overnight loop, 3 `init`s each) | none in 18 runs, 103 `init`s |
+| Processors that ran native code after the console's restart (the trace) | 14 in the 6 `init`s of one run | none in 30 `init`s |
+| One thread stopped 5 ms at its LDL_L of the lock just after the halts were sent | the console stopped (the one `init` of three in which it fired) | the console went on each time (7 of 12 `init`s) |
+
+Six halts in those 30 `init`s were still taken after the restart: each
+processor was in PALmode when asked (a 12-instruction CALL_PAL 0x9d, a
+cycle-counter read), so the sender did not wait, and each took its halt
+at the CALL_PAL's return, before any native instruction. Each of the
+seven stopped threads was at 0x423850, the acquire's entry, where stall
+2's processor was. Five took their halt at 0x423880 holding the interlock
+word, as that one did, but processor 0 waited for them (5.4 to 10.7 ms)
+and the console's restart then cleared the word; the other two woke
+before their halt was sent. The sender's waits of 50 us or
+more (142 in the 30 `init`s): median 1.6 ms, at most 40 ms; none reached
+the 100 ms bound.
 
 ### Captures from a real ES47 7/1300 (2026-10-26)
 

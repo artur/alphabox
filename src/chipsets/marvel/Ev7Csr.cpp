@@ -653,6 +653,22 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
       m_marvel->resend_iids();
     return;
   }
+  if (off == RBOX_IREQ) {
+    // A halt is not done with when the register is written (see "The
+    // halt"): the wait for its targets is outside this block's lock.
+    HaltWait hw;
+    {
+      std::lock_guard<std::mutex> g(m_lock);
+      if (trace_csr_on())
+        trace_csr(m_pid, off, true, data, m_21464);
+      if (m_21464)
+        write_ireq_21464(data, hw);
+      else
+        write_ireq(data, hw);
+    }
+    halt_wait(hw);
+    return;
+  }
   std::lock_guard<std::mutex> g(m_lock);
   if (trace_csr_on() && (reg_name(off, m_21464) || off == 0x28020))
     trace_csr(m_pid, off, true, data, m_21464);
@@ -696,23 +712,6 @@ void CEv7Csr::write(u32 off, int dsize, u64 data) {
     return; // the port's configuration, the XSROM's [read-only here]
   case RBOX_IMASK:
     m_regs[RBOX_IMASK] = data;
-    update_irq();
-    return;
-  case RBOX_IREQ:
-    // A request to this processor: the bits appear in its RBOX_INT. The
-    // register itself reads back what was last written.
-    if (CSystem::trace_mp_on() && (data & ~INT_SYNC))
-      trace_mp("write =", off, data);
-    m_regs[RBOX_IREQ] = data;
-    if (data & INT_SYNC) {
-      if (m_sync_waiting)
-        m_sync_waiting = false; // the rendezvous it is waiting for
-      else {
-        m_sync_held = true; // not waiting yet: kept for its clear
-        data &= ~INT_SYNC;
-      }
-    }
-    m_regs[RBOX_INT] |= data;
     update_irq();
     return;
   case RBOX_SCRATCH1:
@@ -775,13 +774,6 @@ bool CEv7Csr::write_21464(u32 off, int dsize, u64 data) {
     m_regs[RBOX_INT] &= ~(data & 0xffffffff & ~INT8_QUEUE);
     update_irq();
     return true;
-  case RBOX_IREQ:
-    if (CSystem::trace_mp_on())
-      trace_mp("write =", off, data);
-    m_regs[RBOX_IREQ] = data;
-    m_regs[RBOX_INT] |= data & INT8_REQUESTABLE;
-    update_irq();
-    return true;
   case RBOX_INTA:
     m_regs[RBOX_INTA] = data;
     if (!queue_iid(data)) {
@@ -795,6 +787,81 @@ bool CEv7Csr::write_21464(u32 off, int dsize, u64 data) {
     return true;
   }
   return false;
+}
+
+/// A request to this processor: the bits appear in its RBOX_INT. The
+/// register itself reads back what was last written.
+void CEv7Csr::write_ireq(u64 data, HaltWait &hw) {
+  if (CSystem::trace_mp_on() && (data & ~INT_SYNC))
+    trace_mp("write =", RBOX_IREQ, data);
+  m_regs[RBOX_IREQ] = data;
+  if (data & INT_HALT)
+    note_halt(cpu(), hw);
+  if (data & INT_SYNC) {
+    if (m_sync_waiting)
+      m_sync_waiting = false; // the rendezvous it is waiting for
+    else {
+      m_sync_held = true; // not waiting yet: kept for its clear
+      data &= ~INT_SYNC;
+    }
+  }
+  m_regs[RBOX_INT] |= data;
+  update_irq();
+}
+
+/// 21464 mode: R_INT_REQ (write_21464's table); <8 + t> halts TPU t.
+void CEv7Csr::write_ireq_21464(u64 data, HaltWait &hw) {
+  if (CSystem::trace_mp_on())
+    trace_mp("write =", RBOX_IREQ, data);
+  m_regs[RBOX_IREQ] = data;
+  for (int t = 0; t < m_tpus && t < 4; t++)
+    if (data & (U64(0x100) << t))
+      note_halt(tpu_cpu(t), hw);
+  m_regs[RBOX_INT] |= data & INT8_REQUESTABLE;
+  update_irq();
+}
+
+/**
+ * The halt. At `init` the console's PALcode writes RBOX_IREQ<22> to every
+ * processor, itself first (0x3f3f4), takes its own halt and starts the
+ * console again, which sets up its data afresh: its scheduler's spinlock
+ * (0x428180 in SRM V7.3-1) among them, 0.4 to 1.1 ms after the first write
+ * when processor 0 runs throughout (ALPHABOX_TRACE_MP; lab/runs/stall-r1).
+ * On the machine the other processors have stopped long before: each takes
+ * the halt at its next instruction, since the console's PALcode leaves EI4
+ * enabled at every IPL, 31 included (its IPL table, PAL_BASE + 0xd00). Here
+ * each is a host thread, and one the host has not run for a while took its
+ * halt up to 36 ms after the request, running the console's code on the
+ * data set up afresh until then. When that code was the spinlock's
+ * acquire, it took the lock's interlock word, halted holding it, and the
+ * console waited for it for ever (`init` on a 16-processor ES80, 2026-10-26).
+ *
+ * So a processor that asks another, running, one to halt goes on only once
+ * that one has taken an interrupt since (CAlphaCPU::interrupts_taken), or
+ * can no longer run native code before it next looks for one: parked, in
+ * PALmode, being stopped, the machine being reset or held by a debugger.
+ * The wait is bounded at 100 ms for each processor asked, with a warning:
+ * one that has EI4 masked would not take it on the machine either.
+ */
+void CEv7Csr::note_halt(CAlphaCPU *target, HaltWait &hw) {
+  if (!target || !t_running_cpu || target == t_running_cpu ||
+      target->get_waiting() || hw.n >= 4)
+    return;
+  hw.cpu[hw.n] = target;
+  hw.seen[hw.n] = target->interrupts_taken();
+  hw.n++;
+}
+
+void CEv7Csr::halt_wait(const HaltWait &hw) {
+  for (int i = 0; i < hw.n; i++) {
+    CAlphaCPU *c = hw.cpu[i];
+    const auto until =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    if (!c->wait_interrupt_taken(hw.seen[i], until))
+      printf("%%MVL-W-HALT: processor %d has not taken the halt processor %d "
+             "sent it within 100 ms; going on.\n",
+             c->get_cpuid(), t_running_cpu ? t_running_cpu->get_cpuid() : -1);
+  }
 }
 
 /// With m_lock held.

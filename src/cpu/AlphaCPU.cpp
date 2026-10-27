@@ -1319,6 +1319,31 @@ void CAlphaCPU::report_opcdec(u32 opcode, int function) {
            opcode, function, state.current_pc);
 }
 
+bool CAlphaCPU::may_run_native() {
+  return !state.wait_for_start && !(get_pc() & 1) && !StopThread &&
+         !cSystem->IsSystemResetRequested() &&
+         !(m_debug_on.load() && m_debug && m_debug->stop_requested());
+}
+
+bool CAlphaCPU::wait_interrupt_taken(
+    u64 seen, std::chrono::steady_clock::time_point until) {
+  std::unique_lock<std::mutex> lk(m_int_mx);
+  ++m_int_waiters; // before the count is looked at: see execute()
+  bool in_time = true;
+  while (m_int_taken.load() == seen && may_run_native()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= until) {
+      in_time = false;
+      break;
+    }
+    // Wake at least every millisecond to look at may_run_native() again.
+    const auto slice = now + std::chrono::milliseconds(1);
+    m_int_cv.wait_until(lk, slice < until ? slice : until);
+  }
+  --m_int_waiters;
+  return in_time;
+}
+
 void CAlphaCPU::check_state() {
   if (myThreadDead.load())
     FAILURE(Thread, "CPU thread has died");
@@ -1552,6 +1577,13 @@ _next_instruction:
           g_irqstats.cpu_ast.fetch_add(1, std::memory_order_relaxed);
         g_irqstats.cpu_int.fetch_add(1, std::memory_order_relaxed);
         irq_trace_entry();
+      }
+      // A processor that sent this one a halt waits for this (halt_wait in
+      // Ev7Csr.cpp): count it, and wake it only when somebody waits.
+      m_int_taken.fetch_add(1);
+      if (m_int_waiters.load()) {
+        std::lock_guard<std::mutex> g(m_int_mx);
+        m_int_cv.notify_all();
       }
       GO_PAL(INTERRUPT);
       // check_int was cleared to take this one; what is still pending is

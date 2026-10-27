@@ -101,6 +101,9 @@ constexpr u64 INT_IOQ = U64(1) << 12; ///< an IID waits in RBOX_INTQ
 /// The primary's clock-window broadcast (Ev7Csr.cpp, "The clock
 /// rendezvous"): masked in RBOX_IMASK, polled by the secondaries.
 constexpr u64 INT_SYNC = U64(1) << 23;
+/// RBOX_INT<22>: a halt, which the console sends every processor at `init`
+/// (Ev7Csr.cpp, "The halt").
+constexpr u64 INT_HALT = U64(1) << 22;
 /// RBOX_INTQ <24>: the IID at the head of the queue is valid.
 constexpr u64 INTQ_VALID = U64(1) << 24;
 /// RBOX_INT<9>: the management side's (GIO) interrupt on the EV7, as the
@@ -186,6 +189,23 @@ private:
   /// in 21464 mode R_INT_STAT & R_INT_MASK[t] to each TPU's (N22).
   void update_irq();
   void update_irq_21464();
+  /// The processors a write to RBOX_IREQ asked to halt, each with its
+  /// interrupts_taken() from before the request: the writer waits for them
+  /// after m_lock is released (halt_wait; Ev7Csr.cpp, "The halt").
+  struct HaltWait {
+    CAlphaCPU *cpu[4] = {};
+    u64 seen[4] = {};
+    int n = 0;
+  };
+  /// With m_lock held: a write to RBOX_IREQ (EV7) or R_INT_REQ (21464 mode).
+  void write_ireq(u64 data, HaltWait &hw);
+  void write_ireq_21464(u64 data, HaltWait &hw);
+  /// With m_lock held, before the request can be seen: note `target` in `hw`
+  /// if the writer must wait for it.
+  static void note_halt(CAlphaCPU *target, HaltWait &hw);
+  /// Without m_lock: wait, at most 100 ms each, until every processor in
+  /// `hw` has taken an interrupt or cannot run native code any more.
+  void halt_wait(const HaltWait &hw);
   /// With m_lock held: the IID queued, or false when the queue is full.
   bool queue_iid(u64 iid);
   /// With m_lock held: a write to a 21464 interrupt register; false for

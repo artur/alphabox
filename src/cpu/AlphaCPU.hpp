@@ -213,6 +213,17 @@ public:
   void restore_icache();
 
   bool get_waiting() { return state.wait_for_start; };
+  /// The interrupts this processor has taken, counted at execute()'s
+  /// interrupt entry. A processor that sends it a halt waits for the count
+  /// to move before it goes on (CEv7Csr::halt_wait).
+  u64 interrupts_taken() const { return m_int_taken.load(); }
+  /// Wait until interrupts_taken() is no longer `seen`, or this processor
+  /// cannot run native code before it next looks for an interrupt (it is
+  /// parked waiting for its start, in PALmode, or being stopped, or the
+  /// machine is being reset or held by a debugger), or until `until`. False
+  /// only when `until` came first.
+  bool wait_interrupt_taken(u64 seen,
+                            std::chrono::steady_clock::time_point until);
   /// Release a parked processor. Whoever starts one -- the console's DPR
   /// register, or start_secondaries() -- sets its PC first and then calls
   /// this, from ITS OWN thread. The release must therefore publish those
@@ -978,6 +989,14 @@ public:
   /// What a STx_C passes to CSystem::cpu_stx_c: did a listed memory
   /// operation run since the LDx_L?
   bool llsc_intervened() const { return m_llsc_memop && !m_llsc_clean; }
+
+  // interrupts_taken() and the waits for it: the count moves at the
+  // interrupt entry, which notifies only while somebody waits.
+  std::atomic<u64> m_int_taken{0};
+  std::atomic<int> m_int_waiters{0};
+  std::mutex m_int_mx;
+  std::condition_variable m_int_cv;
+  bool may_run_native();
 
 #ifdef ES40_JIT
   // JIT block-discovery engine (per-CPU), allocated in init().
