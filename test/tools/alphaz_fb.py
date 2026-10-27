@@ -5,7 +5,11 @@
 #
 #   window DIR TMO PID      wait for a frame with AlphaZ's window up (its
 #                           band, RGB 0,128,128, one of Windows' twenty
-#                           static colours, so solid at any depth); print it
+#                           static colours, so solid at any depth; XP 64 at
+#                           16 colours shows it, and its desktop, as
+#                           85,170,170, so that one counts only as a strip
+#                           of band height clear of both screen edges);
+#                           print it
 #   change DIR REF TMO PID  wait for a frame newer than REF whose AlphaZ
 #                           window differs from REF's, then for the next to
 #                           agree with it (the page has finished drawing);
@@ -26,6 +30,7 @@ import tempfile
 import time
 
 TEAL = b"\x00\x80\x80"
+TEAL16 = b"\x55\xaa\xaa"  # the same teal on XP 64's 16-colour screen
 
 
 def read_ppm(path):
@@ -50,6 +55,23 @@ def alive(pid):
         return False
 
 
+def teal_rows(w, h, b, colour):
+    """The rows that are `colour` for most of a 300-pixel run."""
+    rows = []
+    for y in range(h):
+        line = b[y * w * 3:(y + 1) * w * 3]
+        n = sum(1 for x in range(0, w, 2) if line[3 * x:3 * x + 3] == colour)   # every other pixel
+        if n * 2 >= 300:
+            rows.append(y)
+    return rows
+
+
+def row_span(w, b, y, colour):
+    line = b[y * w * 3:(y + 1) * w * 3]
+    xs = [x for x in range(w) if line[3 * x:3 * x + 3] == colour]
+    return xs[0], xs[-1] + 1
+
+
 def band_box(path):
     """The teal band's box (x0, y0, x1, y1) or None: the rows that are
     teal for most of a 300-pixel run."""
@@ -57,18 +79,27 @@ def band_box(path):
         w, h, b = read_ppm(path)
     except (OSError, AttributeError):
         return None
-    rows = []
-    for y in range(h):
-        line = b[y * w * 3:(y + 1) * w * 3]
-        n = sum(1 for x in range(0, w, 2) if line[3 * x:3 * x + 3] == TEAL)   # every other pixel
-        if n * 2 >= 300:
-            rows.append(y)
-    if len(rows) < 12:
-        return None
-    y0, y1 = rows[0], rows[-1] + 1
-    line = b[y0 * w * 3:(y0 + 1) * w * 3]
-    xs = [x for x in range(w) if line[3 * x:3 * x + 3] == TEAL]
-    return xs[0], y0, xs[-1] + 1, y1
+    rows = teal_rows(w, h, b, TEAL)
+    if len(rows) >= 12:
+        y0, y1 = rows[0], rows[-1] + 1
+        x0, x1 = row_span(w, b, y0, TEAL)
+        return x0, y0, x1, y1
+    # XP 64: the desktop is the band's colour too, so the band is a run of
+    # 12 to 48 such rows whose teal stops short of both screen edges
+    rows = teal_rows(w, h, b, TEAL16)
+    runs, start = [], None
+    for i, y in enumerate(rows):
+        if start is None:
+            start = y
+        if i + 1 == len(rows) or rows[i + 1] != y + 1:
+            runs.append((start, y + 1))
+            start = None
+    for y0, y1 in runs:
+        if 12 <= y1 - y0 <= 48:
+            x0, x1 = row_span(w, b, y0, TEAL16)
+            if x0 > 0 and x1 < w:
+                return x0, y0, x1, y1
+    return None
 
 
 def window_box(path):

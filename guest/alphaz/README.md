@@ -105,8 +105,10 @@ read the right IMPLVER, AMASK, processors and memory, but their RPCC clock
 came out 7 to 14 percent above the configured speed when the host's load
 was 90 to 210 (the guest's timer lags the host, see the status file);
 `ev8t4` timed out typing the EV8 binary at the console; Windows 2000 on
-`ev7z` started one processor of two. XP 64 runs `ALPHAZ64.EXE` (the
-owner, by hand, 2026-10-27); `ALPHAZ.EXE` does not load there. A guest's
+`ev7z` started one processor of two (a secondary starved by the host,
+not the row: docs/cpu-fidelity.md). XP 64 (`xp64`, one `ev68cb`) PASS with
+`ALPHAZ64.EXE`, every value as configured; `ALPHAZ.EXE` does not load
+there. A guest's
 clock reading is only as good as its OS
 timer, and on a loaded host that timer lags.
 
