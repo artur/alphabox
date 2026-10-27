@@ -94,6 +94,18 @@ and runs it in emulated guests, each on a clone of its disk, and checks
 each value against the configuration it ran with (see
 [docs/development.md](../../docs/development.md), "Test tools").
 
+Tested (2026-10-27, build at nada 90ed176f, Alphabox 503dd1e, every value as
+configured): Windows 2000 on `ev68cb` (2 CPUs), `ev8` (6 tabs, the 12 EV8
+checks agree) and `ev7` (through `ALPHABOX_CPU_ANY_BOARD`), and Linux on
+the ES40 (`linux`). Not yet clean: the ES47 Linux guests (`ev7z`, `ev8`)
+read the right IMPLVER, AMASK, processors and memory, but their RPCC clock
+came out 7 to 14 percent above the configured speed when the host's load
+was 90 to 210 (the guest's timer lags the host, see the status file);
+`ev8t4` timed out typing the EV8 binary at the console; Windows 2000 on
+`ev7z` started one processor of two; XP 64 reached the desktop but no
+AlphaZ window appeared. A guest's clock reading is only as good as its OS
+timer, and on a loaded host that timer lags.
+
 ## Files
 
 | File | What it is |
