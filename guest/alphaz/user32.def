@@ -7,13 +7,16 @@ EXPORTS
     DefWindowProcA
     DestroyWindow
     DispatchMessageA
+    DrawEdge
     DrawTextA
     EndPaint
     FillRect
     GetClientRect
+    GetDlgItem
     GetKeyState
     GetMessageA
     GetSysColor
+    GetSysColorBrush
     GetSystemMetrics
     InvalidateRect
     LoadCursorA
@@ -28,5 +31,6 @@ EXPORTS
     SetScrollRange
     SetTimer
     ShowWindow
+    TrackMouseEvent
     TranslateMessage
     UpdateWindow

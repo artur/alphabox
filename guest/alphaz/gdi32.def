@@ -2,8 +2,11 @@
 LIBRARY gdi32.dll
 EXPORTS
     CreateFontA
+    CreateFontIndirectA
     CreateSolidBrush
+    GetObjectA
     GetStockObject
     SelectObject
+    SetBkColor
     SetBkMode
     SetTextColor

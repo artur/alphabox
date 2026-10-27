@@ -24,6 +24,60 @@ system does not give is shown as "not reported".
 | EV8 | only when IMPLVER is 4: SMT (AMASK bit 10), the SIMD and paired-single sets (bit 11), Tarantula (bit 3), and a live check of twelve instructions | each instruction's result against a C model of what Alphabox's EV8 sheet ([ev8-isa.md](../../docs/platforms/ev8-isa.md), sections 3.3 and 3.4) says it does: VADDUB8, VADDSW4, VSUBUB8, TABSERRUB8, TMULSW4, PKUWB8, UPKUBW4, PMUL, PADD, PSUB, PHADD, PCMPLT. None of them runs unless AMASK reports bit 11 |
 | Bench | an integer loop (xorshift64), a floating-point loop (a multiply-add chain), and on the EV8 VADDUB8 against the same in C | each runs for about 300 ms of the OS timer; rounds a second, and RPCC cycles a round. **These are this guest's own measurement of AlphaZ's loops**, compiled by nada without an optimizer; they are not performance claims about Alphabox, which come from `test/tools/perf_ab.py` only |
 | About | the version, the nada commit it was built with, the licence | build.sh |
+| Details | (the window only) every row of every page above, its label, value and source, as the report has them | the rows themselves |
+
+### The window
+
+`ALPHAZ.EXE`'s window, 624 by 444 so that it fits XP 64's 640 by 480
+screen, is laid out the way CPU-Z lays out its own, in AlphaZ's look:
+each tab is a fixed page of group boxes (an etched frame, its caption in
+the top edge), each group a grid of fields (a label, and the value
+centred in a white sunken box), and only Details scrolls. Every field
+shows a row of the page, or a part of the row's **brief**, a short form
+kept beside the row for fields (the report never prints it), so the
+window and the report cannot disagree.
+
+- **CPU**: the group *Processor* holds the name, the part, IMPLVER and
+  the family, `GetSystemInfo`'s type, level, revision (as model and pass)
+  and architecture, and *Instructions*, the AMASK mask with every feature
+  present by name; at its top right an emblem, a teal tile with the part
+  number and the core IMPLVER names, drawn by AlphaZ (no maker's logo).
+  *Clocks (processor 0)*: the clock, its three windows, the second
+  opinion, the performance counter's rate, and "QPC is RPCC" beside the
+  clock when the counter is the cycle counter itself. *Cache
+  (documented)*: level 1 data and instruction and level 2, size and ways,
+  and what Windows reports. A last line: the processor count and whether
+  every processor answered the same IMPLVER and AMASK.
+- **Caches**: a group a level (size, ways, line, where it is), and what
+  the system reports.
+- **System**: *Machine* (the registry's identifier, the firmware's
+  version and date, the address bits), *Windows* (product, type, version,
+  service pack) and *Memory* (physical memory, page file and virtual
+  space, each with what is free, the page size, the allocation
+  granularity). One tab rather than CPU-Z's Mainboard and Memory: the
+  three groups fit one screen, and a tab fewer is a tab fewer to step
+  through.
+- **EV8**: IMPLVER and the three AMASK bits, the threads, and the
+  self-check, its result the group's caption, as a grid of the twelve
+  instructions, each with its result (a MISMATCH in red).
+- **Bench**: a group a loop (rounds a second, cycles a round, operations
+  a round, the loop's check value), on the EV8 the SIMD loop beside the
+  same in C, and what the figures are and are not.
+- **About**: AlphaZ's tile, the version, the program and its build, the
+  nada commit, the licence, the source, the keys.
+- **Details**: every row of every page, label, value and source, page by
+  page: the rows no field shows (every registry value of every
+  processor, the clock's counts) are here.
+
+A table value is drawn grey and italic, and the status line at the foot
+of every page keeps the legend at its right end, in that style. Pointing
+at a field names its source in the status line ("Name: registry
+CentralProcessor\0"); on Details, pointing at a row shows all of it.
+Under the tabs is the footer, AlphaZ's teal band with its wordmark, the
+version and the build (PE32, or PE32+ for `ALPHAZ64.EXE`), and two
+buttons: **Report** writes the report into `ALPHAZ.TXT` beside the
+program (or in the temporary directory when that cannot be written) and
+says where in the status line; **Close** closes.
 
 **The clock** is the cycle counter counted against the operating system's
 timer over 500 ms on processor 0: Windows' `QueryPerformanceCounter`
@@ -55,7 +109,7 @@ Windows 2000 (and NT 4.0, if it runs a PE32 for the Alpha). On XP 64-bit
 
 In the window, Ctrl+Tab and Ctrl+Shift+Tab move to the next and the
 previous tab (Left and Right too, when the tabs have the focus), PgDn,
-PgUp, Up and Down scroll a page longer than the window, Esc closes it.
+PgUp, Up and Down scroll Details, Esc closes it.
 
 Linux: `alphaz-linux` prints the report on standard output, between the
 lines `ALPHAZ-REPORT-BEGIN` and `ALPHAZ-REPORT-END`. It is a static ELF and
@@ -95,7 +149,10 @@ comctl32, advapi32, and the kernel32 calls beyond those of nada's own
 `test/tools/alphaz_guest.sh <alphabox> <label> <guest>...` builds AlphaZ
 and runs it in emulated guests, each on a clone of its disk, and checks
 each value against the configuration it ran with (see
-[docs/development.md](../../docs/development.md), "Test tools").
+[docs/development.md](../../docs/development.md), "Test tools"). On
+Windows it also shoots the window, a PNG a tab and on Details one a PgDn
+until the last, finding the window by the footer's teal band and moving
+through it with Ctrl+Tab.
 
 Tested (2026-10-27, build at nada 90ed176f, Alphabox 503dd1e, every value as
 configured): Windows 2000 on `ev68cb` (2 CPUs), `ev8` (6 tabs, the 12 EV8
@@ -108,9 +165,12 @@ was 90 to 210 (the guest's timer lags the host, see the status file);
 `ev7z` started one processor of two (a secondary starved by the host,
 not the row: docs/cpu-fidelity.md). XP 64 (`xp64`, one `ev68cb`) PASS with
 `ALPHAZ64.EXE`, every value as configured; `ALPHAZ.EXE` does not load
-there. A guest's
-clock reading is only as good as its OS
-timer, and on a loaded host that timer lags.
+there. The window as it is laid out now (2026-10-27, nada 3de071b3,
+Alphabox 504776d): Windows 2000 on `ev68cb` (6 tabs, Details in 4
+frames) and `ev8` (7 tabs, Details in 5, the 12 EV8 checks agree), and
+XP 64 at 16 colours (6 tabs), each PASS, every value as configured. A
+guest's clock reading is only as good as its OS timer, and on a loaded
+host that timer lags.
 
 ## Files
 

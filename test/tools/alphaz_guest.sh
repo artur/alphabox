@@ -28,9 +28,10 @@
 # `ALPHAZ.EXE /report C:\NADA\OUT.TXT`, then the window, then shuts
 # Windows down, which flushes FAT. While the window is up this script
 # takes a frame per tab: Ctrl+Tab through ALPHABOX_KEYPIPE moves to the
-# next, PgDn shows the rest of the CPU and System pages, Esc closes it.
-# alphaz_fb.py finds the window by its band's colour and waits for each
-# page to finish drawing.
+# next, PgDn steps through Details (the last tab, every row, the one that
+# scrolls) until it changes nothing, Esc closes it. alphaz_fb.py finds
+# the window by its band's colour (the footer under the tabs) and waits
+# for each page to finish drawing.
 # Linux: alphaz-linux, gzip'd and in base64 lines of 2000 characters,
 # through the serial console as guests_check.sh's GUESTS_EXTRA_CMDS, then
 # run; the report is read back from the console log.
@@ -38,7 +39,8 @@
 # Output in $ALPHABOX_WORK/runs/alphaz-<label>/ (ALPHABOX_WORK defaults to
 # <repo>/lab): build/ (build.sh's, NADA-COMMIT.txt), and for each guest
 # <guest>/report.txt, check.txt (each value against the configuration),
-# tab-N-<name>.png, the guest's log and the build's NADA-COMMIT.txt;
+# tab-N-<name>.png (Details also tab-N-Details-2.png and on, a PgDn
+# each), the guest's log and the build's NADA-COMMIT.txt;
 # summary.txt, a PASS or FAIL line a guest, each run's lines added. Exit 0
 # only if every guest passed.
 #
@@ -158,7 +160,9 @@ winr_launch() {
 }
 
 # focus_click <frame> <keypipe>: the PS/2 mouse to the middle of the band
-# AlphaZ's frame shows, and a left click there
+# AlphaZ's frame shows, and a left click there: the band is the window's
+# footer, whose middle is clear of its text (at the left) and of its
+# buttons (at the right)
 focus_click() {
   local frame=$1 keys=$2 box x y h dx dy
   box=$($FB band "$frame" | sed -n 's/^band \([0-9]*\),\([0-9]*\)-\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
@@ -188,7 +192,7 @@ win_guest() {
   local bits=${7:-}
   local W="${6:-C}:\NADA" # where the guest sees \NADA (%s keeps the backslash)
   local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
-  local IMG any= f ref i n name names done_at start rows load0
+  local IMG any= f ref i n name names done_at start rows load0 pg
   rm -rf "$D" "$run"; mkdir -p "$D"
   cp "$B/NADA-COMMIT.txt" "$D/" # the build this guest ran
   cp -c -R "$WORK/$inst" "$run" || { report "$g" FAIL "no $WORK/$inst"; return 1; }
@@ -246,16 +250,23 @@ win_guest() {
   echo "   window up after $(( $(date +%s) - start ))s"
   # let the first page settle, then a frame a tab
   f=$($FB change "$run/fb" "$ref" 6 "$PID"); [ "$f" != same ] && ref=$f
-  names="CPU Caches System Bench About"
-  [ "$cpu" = ev8 ] || [ "$cpu" = ev8n ] && names="CPU Caches System EV8 Bench About"
+  names="CPU Caches System Bench About Details"
+  [ "$cpu" = ev8 ] || [ "$cpu" = ev8n ] && names="CPU Caches System EV8 Bench About Details"
   i=0
   for name in $names; do
     python3 -I "$T/ppm2png.py" "$ref" "$D/tab-$i-$name.png"
     echo "   tab $i $name: $($FB band "$ref")"
-    if [ "$name" = CPU ] || [ "$name" = System ]; then
-      echo pgdn >> "$run/keys.txt"
-      f=$($FB change "$run/fb" "$ref" 12 "$PID")
-      if [ "$f" != same ]; then python3 -I "$T/ppm2png.py" "$f" "$D/tab-$i-$name-2.png"; ref=$f; fi
+    if [ "$name" = Details ]; then
+      # Details scrolls: a frame a PgDn, until one changes nothing
+      pg=2
+      while [ $pg -le 9 ]; do
+        echo pgdn >> "$run/keys.txt"
+        f=$($FB change "$run/fb" "$ref" 12 "$PID")
+        [ "$f" = same ] && break
+        python3 -I "$T/ppm2png.py" "$f" "$D/tab-$i-$name-$pg.png"
+        ref=$f
+        pg=$((pg + 1))
+      done
     fi
     i=$((i + 1))
     [ "$i" -lt "$(echo $names | wc -w | tr -d " ")" ] || break

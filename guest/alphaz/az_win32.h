@@ -4,10 +4,10 @@
  * Copyright (C) 2026 Artur Goulão
  *
  * Written from the Win32 documentation. The constants are guarded, so one
- * that nada's headers come to define is taken from there; the two
- * structures have AlphaZ's own names, so a later NMHDR or TCITEMA in
- * nada's commctrl.h cannot collide with them. Each function named here is
- * imported through this directory's .def files. */
+ * that nada's headers come to define is taken from there; the structures
+ * have AlphaZ's own names, so a later NMHDR, TCITEMA, LOGFONTA or
+ * TRACKMOUSEEVENT in nada's headers cannot collide with them. Each
+ * function named here is imported through this directory's .def files. */
 #ifndef AZ_WIN32_H
 #define AZ_WIN32_H
 
@@ -23,6 +23,42 @@ BOOL WINAPI SetForegroundWindow(HWND w);
 BOOL WINAPI BringWindowToTop(HWND w);
 BOOL WINAPI SetScrollRange(HWND w, int bar, int lo, int hi, BOOL redraw);
 int WINAPI SetScrollPos(HWND w, int bar, int pos, BOOL redraw);
+BOOL WINAPI DrawEdge(HDC dc, RECT *r, UINT edge, UINT flags);
+
+/* the pointer leaving a window: WM_MOUSELEAVE, once per request */
+typedef struct {
+    DWORD cbSize;
+    DWORD dwFlags;
+    HWND hwndTrack;
+    DWORD dwHoverTime;
+} az_trackmouse;
+BOOL WINAPI TrackMouseEvent(az_trackmouse *t);
+#ifndef TME_LEAVE
+#define TME_LEAVE 0x0002
+#endif
+#ifndef WM_MOUSEMOVE
+#define WM_MOUSEMOVE 0x0200
+#endif
+#ifndef WM_MOUSELEAVE
+#define WM_MOUSELEAVE 0x02A3
+#endif
+#ifndef BN_CLICKED
+#define BN_CLICKED 0
+#endif
+
+/* DrawEdge's edges and sides */
+#ifndef BDR_SUNKENOUTER
+#define BDR_RAISEDOUTER 0x0001
+#define BDR_SUNKENOUTER 0x0002
+#define BDR_RAISEDINNER 0x0004
+#define BDR_SUNKENINNER 0x0008
+#endif
+#ifndef EDGE_ETCHED
+#define EDGE_ETCHED (BDR_SUNKENOUTER | BDR_RAISEDINNER)
+#endif
+#ifndef BF_RECT
+#define BF_RECT 0x000F
+#endif
 
 #ifndef SB_VERT
 #define SB_VERT 1
@@ -52,6 +88,12 @@ int WINAPI SetScrollPos(HWND w, int bar, int pos, BOOL redraw);
 #ifndef DT_LEFT
 #define DT_LEFT 0x0000
 #endif
+#ifndef DT_RIGHT
+#define DT_RIGHT 0x0002
+#endif
+#ifndef DT_WORDBREAK
+#define DT_WORDBREAK 0x0010
+#endif
 #ifndef DT_NOPREFIX
 #define DT_NOPREFIX 0x0800
 #endif
@@ -69,6 +111,26 @@ HFONT WINAPI CreateFontA(int height, int width, int escapement, int orientation,
 #ifndef DEFAULT_GUI_FONT
 #define DEFAULT_GUI_FONT 17
 #endif
+
+/* a font's description: GetObjectA fills one in, CreateFontIndirectA
+ * makes the font (AlphaZ's italic is the system's font made italic) */
+typedef struct {
+    LONG lfHeight;
+    LONG lfWidth;
+    LONG lfEscapement;
+    LONG lfOrientation;
+    LONG lfWeight;
+    BYTE lfItalic;
+    BYTE lfUnderline;
+    BYTE lfStrikeOut;
+    BYTE lfCharSet;
+    BYTE lfOutPrecision;
+    BYTE lfClipPrecision;
+    BYTE lfQuality;
+    BYTE lfPitchAndFamily;
+    CHAR lfFaceName[32];
+} az_logfont;
+HFONT WINAPI CreateFontIndirectA(const az_logfont *f);
 #ifndef FW_NORMAL
 #define FW_NORMAL 400
 #endif

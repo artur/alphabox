@@ -4,19 +4,19 @@
 # ALPHABOX_DUMP_FB writes (one every ~2 s).
 #
 #   window DIR TMO PID      wait for a frame with AlphaZ's window up (its
-#                           band, RGB 0,128,128, one of Windows' twenty
-#                           static colours, so solid at any depth; XP 64 at
-#                           16 colours shows it, and its desktop, as
-#                           85,170,170, so that one counts only as a strip
-#                           of band height clear of both screen edges);
-#                           print it
+#                           band, the footer under the tabs, RGB 0,128,128,
+#                           one of Windows' twenty static colours, so solid
+#                           at any depth; XP 64 at 16 colours shows it, and
+#                           its desktop, as 85,170,170, so that one counts
+#                           only as a strip of band height whose longest
+#                           run stops short of both screen edges); print it
 #   change DIR REF TMO PID  wait for a frame newer than REF whose AlphaZ
 #                           window differs from REF's, then for the next to
 #                           agree with it (the page has finished drawing);
 #                           print it, or "same" when nothing changed
 #   gone DIR TMO PID        wait for a frame without the window
 #   band FILE               the band's box and its text (tesseract, if it is
-#                           installed): what tab the frame shows
+#                           installed): AlphaZ's wordmark, version and build
 #   check REPORT EXPECT...  compare report values with the configuration's:
 #                           EXPECT items are key=value (see alphaz_guest.sh)
 # Copyright (C) 2026 Artur Goulão
@@ -72,6 +72,21 @@ def row_span(w, b, y, colour):
     return xs[0], xs[-1] + 1
 
 
+def row_run(w, b, y, colour):
+    """The longest run of `colour` in row y, (x0, x1)."""
+    line = b[y * w * 3:(y + 1) * w * 3]
+    best, start = (0, 0), None
+    for x in range(w + 1):
+        on = x < w and line[3 * x:3 * x + 3] == colour
+        if on and start is None:
+            start = x
+        elif not on and start is not None:
+            if x - start > best[1] - best[0]:
+                best = (start, x)
+            start = None
+    return best
+
+
 def band_box(path):
     """The teal band's box (x0, y0, x1, y1) or None: the rows that are
     teal for most of a 300-pixel run."""
@@ -85,7 +100,9 @@ def band_box(path):
         x0, x1 = row_span(w, b, y0, TEAL)
         return x0, y0, x1, y1
     # XP 64: the desktop is the band's colour too, so the band is a run of
-    # 12 to 48 such rows whose teal stops short of both screen edges
+    # 12 to 48 such rows whose longest stretch of teal stops short of both
+    # screen edges (the desktop shows beside the window, at the footer's
+    # height, as stretches of its own)
     rows = teal_rows(w, h, b, TEAL16)
     runs, start = [], None
     for i, y in enumerate(rows):
@@ -96,20 +113,21 @@ def band_box(path):
             start = None
     for y0, y1 in runs:
         if 12 <= y1 - y0 <= 48:
-            x0, x1 = row_span(w, b, y0, TEAL16)
-            if x0 > 0 and x1 < w:
+            x0, x1 = row_run(w, b, y0, TEAL16)
+            if x0 > 0 and x1 < w and x1 - x0 >= 300:
                 return x0, y0, x1, y1
     return None
 
 
 def window_box(path):
-    """The part of the screen AlphaZ draws: from the band's top less the
-    tab row to some 380 pixels below, or None."""
+    """The part of the screen AlphaZ draws, or None: the band is the
+    footer along the bottom of the window, which is 444 pixels high, so
+    from 444 above the band's bottom to just under it."""
     bb = band_box(path)
     if not bb:
         return None
     x0, y0, x1, y1 = bb
-    return max(0, x0 - 8), max(0, y0 - 30), x1 + 8, y0 + 380
+    return max(0, x0 - 8), max(0, y1 - 444), x1 + 8, y1 + 4
 
 
 def differs(a, b, box):
@@ -187,6 +205,7 @@ def cmd_band(path):
     if shutil.which("tesseract"):
         w, h, b = read_ppm(path)
         x0, y0, x1, y1 = bb
+        x1 = (x0 + x1) // 2  # the wordmark and version: the buttons are at the right
         scale = 4
         rows = []
         for y in range(y0, y1):

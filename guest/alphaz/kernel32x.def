@@ -6,9 +6,11 @@ LIBRARY kernel32.dll
 EXPORTS
     GetCurrentProcess
     GetCurrentThread
+    GetModuleFileNameA
     GetModuleHandleA
     GetProcessAffinityMask
     GetSystemInfo
+    GetTempPathA
     GetTickCount
     GetVersionExA
     GlobalMemoryStatus
