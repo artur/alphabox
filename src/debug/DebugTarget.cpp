@@ -464,9 +464,15 @@ bool CDebugTarget::boundary(CAlphaCPU *c, int *span, int *whole) {
     if (at && pc != k.skip_pc) {
       {
         std::lock_guard<std::mutex> g(m_mx);
-        k.reported_bp = pc;
-        ++k.bp_hits;
+        // Only the hit that stops the machine is reported, and only that
+        // one is remembered as reported, so that resuming steps over it.
+        // A hit while a stop is already asked for (another processor's, a
+        // step's, Ctrl-C) is not taken: the processor parks in front of
+        // the breakpoint, and meets it again after the resume, as a stop
+        // of its own.
         if (!m_stop_req.load(std::memory_order_relaxed)) {
+          k.reported_bp = pc;
+          ++k.bp_hits;
           m_stop.cpu = c->get_cpuid();
           m_stop.signal = kSigTrap;
           m_stop.swbreak = true;

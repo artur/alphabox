@@ -133,6 +133,16 @@ entry at PAL_BASE 0x8000) stops in PALmode.
 A processor stops before it executes the instruction at the breakpoint.
 Resuming from it runs that instruction once without stopping again.
 
+When two processors hit breakpoints at about the same time (the interrupt
+entry, where they meet on the timer's tick, is one place), the stub reports
+one and the other stays in front of its breakpoint, unreported and not yet
+executed: it is parked there with the rest, and meets the breakpoint again
+after the next resume, as a stop of its own. So every hit is reported
+once, in an order that depends on which processor got there first; none is
+stepped over unseen. The same goes for a hit while a step or Ctrl-C has
+already stopped the machine. `monitor cpu` shows how many hits each
+processor has had reported ("breakpoint hits").
+
 gdb steps an Alpha the way its `alpha-tdep` does on any target: it decodes
 the instruction at the PC, plants breakpoints on the instruction's
 possible successors and continues. So a `stepi` is a short continue, with
@@ -230,6 +240,11 @@ console reach `P00>>>`, then attaches again and:
 - checks that the cycle counter did not move across a two-second stop;
 - steps from the head of that compiled block, one instruction per step;
 - stops the running machine with Ctrl-C.
+
+With two or more processors it also breakpoints the interrupt entry, which
+every processor reaches on the timer's tick, continues a thousand times and
+checks from gdb's protocol trace that each hit the stub recorded was sent
+as a stop reply.
 
 It finally diffs the console log against `test/rom/axp_correct.log` (one
 processor) and counts JIT_VERIFY mismatches.
