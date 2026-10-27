@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # build.sh: build AlphaZ with nada, both programs from the same core:
 #   ALPHAZ.EXE    Windows on the Alpha, the window (-t alpha-windows)
+#   ALPHAZ64.EXE  the same window for 64-bit Windows on the Alpha (AXP64,
+#                 Whistler build 2210, -t alpha64-windows), which loads no
+#                 32-bit Alpha program
 #   alphaz-linux  Linux on the Alpha, the text report, static (-t alpha)
 # into OUT, and write OUT/NADA-COMMIT.txt: the nada commit, the commands,
 # and the sha256 of every input and output.
@@ -60,29 +63,33 @@ CORE="$HERE/az_core.c $HERE/az_ev8.c"
 WIN_CMD="$NADA/nada -t alpha-windows -mcpu=ev6 -I $NADA/include -I $NADA/include/windows -I $OUT -I $HERE \
 -o $OUT/ALPHAZ.EXE $HERE/alphaz_win.c $CORE $L/windows.c $LIBC $L/windows/kernel32.def $OUT/kernel32x.def \
 $HERE/user32.def $HERE/gdi32.def $HERE/comctl32.def $HERE/advapi32.def $OUT/alphaz.rc"
+WIN64_CMD=$(echo "$WIN_CMD" | sed "s| -t alpha-windows | -t alpha64-windows |; s|$OUT/ALPHAZ.EXE |$OUT/ALPHAZ64.EXE |")
 LINUX_CMD="$NADA/nada -t alpha -mcpu=ev6 -I $NADA/include -I $OUT -I $HERE \
 -o $OUT/alphaz-linux $HERE/alphaz_linux.c $CORE $L/linux.c $LIBC"
 
-rm -f "$OUT/ALPHAZ.EXE" "$OUT/alphaz-linux"
+rm -f "$OUT/ALPHAZ.EXE" "$OUT/ALPHAZ64.EXE" "$OUT/alphaz-linux"
 $WIN_CMD || { echo "build.sh: ALPHAZ.EXE failed"; exit 1; }
+$WIN64_CMD || { echo "build.sh: ALPHAZ64.EXE failed"; exit 1; }
 $LINUX_CMD || { echo "build.sh: alphaz-linux failed"; exit 1; }
 
-# nada writes every PE as a console program (Subsystem 3); ALPHAZ.EXE is
-# a window, so its optional header says WINDOWS_GUI (2): no console opens
-# behind it. The checksum is 0, which the loader does not check for an EXE.
-python3 -I - "$OUT/ALPHAZ.EXE" <<'PY' || exit 1
+# nada writes every PE as a console program (Subsystem 3); AlphaZ is a
+# window, so its optional header says WINDOWS_GUI (2): no console opens
+# behind it. The field is at the same offset in PE32 and PE32+. The
+# checksum is 0, which the loader does not check for an EXE.
+python3 -I - "$OUT/ALPHAZ.EXE" 0x184 0x10B "$OUT/ALPHAZ64.EXE" 0x284 0x20B <<'PY' || exit 1
 import struct, sys
-p = sys.argv[1]
-b = bytearray(open(p, "rb").read())
-pe = struct.unpack_from("<I", b, 0x3C)[0]
-assert b[pe:pe + 4] == b"PE\0\0", "no PE signature"
-machine = struct.unpack_from("<H", b, pe + 4)[0]
-opt = pe + 24
-magic, sub = struct.unpack_from("<H", b, opt)[0], struct.unpack_from("<H", b, opt + 68)[0]
-assert machine == 0x184 and magic == 0x10B and sub == 3, (hex(machine), hex(magic), sub)
-struct.pack_into("<H", b, opt + 68, 2)
-open(p, "wb").write(b)
-print("ALPHAZ.EXE: subsystem 3 (console) -> 2 (GUI)")
+a = sys.argv[1:]
+for p, want_machine, want_magic in zip(a[0::3], a[1::3], a[2::3]):
+    b = bytearray(open(p, "rb").read())
+    pe = struct.unpack_from("<I", b, 0x3C)[0]
+    assert b[pe:pe + 4] == b"PE\0\0", "no PE signature"
+    machine = struct.unpack_from("<H", b, pe + 4)[0]
+    opt = pe + 24
+    magic, sub = struct.unpack_from("<H", b, opt)[0], struct.unpack_from("<H", b, opt + 68)[0]
+    assert (machine, magic, sub) == (int(want_machine, 16), int(want_magic, 16), 3), (p, hex(machine), hex(magic), sub)
+    struct.pack_into("<H", b, opt + 68, 2)
+    open(p, "wb").write(b)
+    print("%s: subsystem 3 (console) -> 2 (GUI)" % p.rsplit("/", 1)[-1])
 PY
 
 # --- the EV8 words against nada's assembler ---------------------------------
@@ -103,11 +110,11 @@ while read -r name word mnem; do
   ev8_one "$name" "$mnem" || { echo "build.sh: nada did not assemble '$mnem'"; exit 1; }
   n=$((n + 1))
 done < "$CHK/words.txt"
-python3 -I - "$CHK" "$OUT/ALPHAZ.EXE" "$OUT/alphaz-linux" <<'PY' || exit 1
+python3 -I - "$CHK" "$OUT/ALPHAZ.EXE" "$OUT/ALPHAZ64.EXE" "$OUT/alphaz-linux" <<'PY' || exit 1
 import os, struct, sys
-chk, exe, elf = sys.argv[1:4]
+chk = sys.argv[1]
 base = open(os.path.join(chk, "base"), "rb").read()
-progs = [open(exe, "rb").read(), open(elf, "rb").read()]
+progs = [open(p, "rb").read() for p in sys.argv[2:]]
 bad = 0
 for line in open(os.path.join(chk, "words.txt")):
     name, word, mnem = line.split(" ", 2)
@@ -128,12 +135,13 @@ sha() { shasum -a 256 "$@" | sed "s|  $HERE/|  guest/alphaz/|; s|  $OUT/|  |"; }
   echo
   echo "Commands:"
   echo "  $WIN_CMD" | sed "s|$NADA|\$NADA|g; s|$HERE|guest/alphaz|g; s|$OUT|\$OUT|g"
-  echo "  then the PE's Subsystem 3 (console) set to 2 (GUI)"
+  echo "  $WIN64_CMD" | sed "s|$NADA|\$NADA|g; s|$HERE|guest/alphaz|g; s|$OUT|\$OUT|g"
+  echo "  then each PE's Subsystem 3 (console) set to 2 (GUI)"
   echo "  $LINUX_CMD" | sed "s|$NADA|\$NADA|g; s|$HERE|guest/alphaz|g; s|$OUT|\$OUT|g"
   echo
   echo "sha256:"
-  sha "$OUT/ALPHAZ.EXE" "$OUT/alphaz-linux"
+  sha "$OUT/ALPHAZ.EXE" "$OUT/ALPHAZ64.EXE" "$OUT/alphaz-linux"
   sha "$HERE"/*.c "$HERE"/*.h "$HERE"/*.def "$HERE"/*.rc "$HERE"/mkicon.py "$OUT/alphaz.ico"
 } > "$OUT/NADA-COMMIT.txt"
-ls -l "$OUT/ALPHAZ.EXE" "$OUT/alphaz-linux" | awk '{print $5, $9}'
+ls -l "$OUT/ALPHAZ.EXE" "$OUT/ALPHAZ64.EXE" "$OUT/alphaz-linux" | awk '{print $5, $9}'
 echo "build.sh: done, $OUT/NADA-COMMIT.txt"

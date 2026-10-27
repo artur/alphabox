@@ -15,7 +15,8 @@
 #               hook that lets the ES40 take another family's row
 #   xp64        Windows XP 64-bit (lab/xp64-installed, es40-window.cfg; its
 #               Windows volume is D:, the FAT at byte 209731584, C: being the
-#               ARC system partition): whether a PE32 runs
+#               ARC system partition), with ALPHAZ64.EXE: Whistler 2210
+#               loads no 32-bit Alpha program (PE32, 0x184)
 #   linux       guests_check.sh's `linux` (Gentoo on the ES40, one ev68cb)
 #   es47-ev7, es47-ev7z, es47-ev8, es47-ev8t4
 #               guests_check.sh's `linux-es47` with GUESTS_EV7_CPU ev7,
@@ -105,11 +106,16 @@ build() {
     { cat "$OUT/build.log"; echo "alphaz_guest: build failed"; return 1; }
   tail -2 "$OUT/build.log"
   local L=$NADA/lib
-  "$NADA/nada" -t alpha-windows -o "$B/SHUTDOWN.EXE" -I "$NADA/include" \
-    "$T/ntbench/shutdown.c" "$T/ntbench/user32.def" "$T/ntbench/advapi32.def" \
-    "$L/windows.c" "$L/printf.c" "$L/stdio.c" "$L/scanf.c" "$L/string.c" "$L/stdlib.c" \
-    "$L/ctype.c" "$L/math.c" "$L/fltconv.c" "$L/time.c" "$L/setjmp.c" "$L/windows/kernel32.def" ||
-    { echo "alphaz_guest: SHUTDOWN.EXE failed"; return 1; }
+  local t exe
+  # SHUTDOWN64.EXE for xp64, which loads no 32-bit Alpha program
+  for t in alpha-windows alpha64-windows; do
+    exe=SHUTDOWN.EXE; [ $t = alpha64-windows ] && exe=SHUTDOWN64.EXE
+    "$NADA/nada" -t $t -o "$B/$exe" -I "$NADA/include" \
+      "$T/ntbench/shutdown.c" "$T/ntbench/user32.def" "$T/ntbench/advapi32.def" \
+      "$L/windows.c" "$L/printf.c" "$L/stdio.c" "$L/scanf.c" "$L/string.c" "$L/stdlib.c" \
+      "$L/ctype.c" "$L/math.c" "$L/fltconv.c" "$L/time.c" "$L/setjmp.c" "$L/windows/kernel32.def" ||
+      { echo "alphaz_guest: $exe failed"; return 1; }
+  done
 }
 
 # the configuration's values for check: expect <cfg> <os> [ev8 cases]
@@ -152,11 +158,13 @@ focus_click() {
 }
 
 # win_guest <guest> <cpu row> [install dir] [cfg] [the Windows volume's
-# byte offset] [its drive letter]: the installed Windows in
+# byte offset] [its drive letter] [64]: the installed Windows in
 # $WORK/<install dir> (default win2k-installed, es40-window-smp.cfg, C: at
-# 16384), its ev68cb rows made <cpu row>
+# 16384), its ev68cb rows made <cpu row>; with 64, the AXP64 builds
+# (ALPHAZ64.EXE, SHUTDOWN64.EXE) go on the guest under the usual names
 win_guest() {
   local g=$1 cpu=$2 inst=${3:-win2k-installed} cfg=${4:-es40-window-smp.cfg} off=${5:-16384}
+  local bits=${7:-}
   local W="${6:-C}:\NADA" # where the guest sees \NADA (%s keeps the backslash)
   local D=$OUT/$1 run=$WORK/runs/alphaz-$LABEL-$1-run
   local IMG any= f ref i n name names done_at start rows load0
@@ -174,7 +182,8 @@ win_guest() {
   IMG="$run/disk0.img@@$off"
   local S=$run/stage
   mkdir -p "$S"
-  cp "$B/ALPHAZ.EXE" "$B/SHUTDOWN.EXE" "$S/"
+  cp "$B/ALPHAZ$bits.EXE" "$S/ALPHAZ.EXE" && cp "$B/SHUTDOWN$bits.EXE" "$S/SHUTDOWN.EXE" ||
+    { report "$g" FAIL "no ALPHAZ$bits.EXE or SHUTDOWN$bits.EXE in $B"; return 1; }
   {
     printf '%s\r\n' '@echo off' \
       "if exist $W\\RAN goto over" \
@@ -365,7 +374,7 @@ main() {
     w2k-ev7) win_guest "$g" ev7 ;;
     w2k-ev7z) win_guest "$g" ev7z ;;
     w2k-ev8) ev8_cases=$ev8_n; win_guest "$g" ev8 ;;
-    xp64) win_guest "$g" ev68cb xp64-installed es40-window.cfg 209731584 D ;;
+    xp64) win_guest "$g" ev68cb xp64-installed es40-window.cfg 209731584 D 64 ;;
     linux) linux_guest "$g" linux ;;
     es47-ev7) linux_guest "$g" linux-es47 ev7 ;;
     es47-ev7z) linux_guest "$g" linux-es47 ev7z ;;

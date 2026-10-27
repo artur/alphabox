@@ -1,7 +1,8 @@
 # AlphaZ
 
 AlphaZ shows what an Alpha guest of Alphabox says about its processors and
-its machine: a window of tabs on Windows (`ALPHAZ.EXE`), and the same pages
+its machine: a window of tabs on Windows (`ALPHAZ.EXE`, and `ALPHAZ64.EXE`
+for 64-bit Windows), and the same pages
 as a text report on Linux (`alphaz-linux`), both from one core written in C
 and compiled by nada, a C compiler with its own assembler and linker that
 targets Windows NT and Linux on the Alpha. It is guest-side software:
@@ -42,7 +43,9 @@ board: the machine is what the system's own words say.
 
 ## Running it
 
-Windows (2000, and NT 4.0 or XP 64-bit if they run a PE32 for the Alpha):
+Windows 2000 (and NT 4.0, if it runs a PE32 for the Alpha). On XP 64-bit
+(Whistler build 2210, AXP64), which loads no 32-bit Alpha program, run
+`ALPHAZ64.EXE` instead, with the same switches:
 
     ALPHAZ.EXE                 the window
     ALPHAZ.EXE /report FILE    every page as text into FILE, no window
@@ -102,8 +105,9 @@ read the right IMPLVER, AMASK, processors and memory, but their RPCC clock
 came out 7 to 14 percent above the configured speed when the host's load
 was 90 to 210 (the guest's timer lags the host, see the status file);
 `ev8t4` timed out typing the EV8 binary at the console; Windows 2000 on
-`ev7z` started one processor of two; XP 64 reached the desktop but no
-AlphaZ window appeared. A guest's clock reading is only as good as its OS
+`ev7z` started one processor of two. XP 64 runs `ALPHAZ64.EXE` (the
+owner, by hand, 2026-10-27); `ALPHAZ.EXE` does not load there. A guest's
+clock reading is only as good as its OS
 timer, and on a loaded host that timer lags.
 
 ## Files
