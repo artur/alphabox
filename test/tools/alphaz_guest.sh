@@ -137,6 +137,26 @@ expect() {
 }
 
 # --- Windows -------------------------------------------------------------------
+# winr_launch <run dir> <pid> <command>: once the desktop has been still
+# for 40 s (and at least 120 s after the start), Win+R and the command,
+# typed through the key pipe (lab/xp64/power_probe.sh's way): XP 64 runs
+# nothing from the All Users Startup folder
+winr_launch() {
+  local run=$1 pid=$2 cmd=$3 t=0 still=0 last= f h
+  while [ $t -lt "$BOOT_TMO" ] && kill -0 "$pid" 2>/dev/null; do
+    f=$(ls -t "$run/fb" 2>/dev/null | grep -m1 ppm)
+    h=$([ -n "$f" ] && shasum "$run/fb/$f" | cut -c1-16)
+    if [ -n "$h" ] && [ "$h" = "$last" ]; then still=$((still + 5)); else still=0; last=$h; fi
+    [ $t -ge 120 ] && [ $still -ge 40 ] && break
+    sleep 5; t=$((t + 5))
+  done
+  kill -0 "$pid" 2>/dev/null || return 0
+  echo "   desktop still after ${t}s: Win+R $cmd"
+  echo win-r >> "$run/keys.txt"; sleep 3
+  python3 -I "$T/keys_for.py" "$cmd" >> "$run/keys.txt"; sleep 2
+  echo enter >> "$run/keys.txt"
+}
+
 # focus_click <frame> <keypipe>: the PS/2 mouse to the middle of the band
 # AlphaZ's frame shows, and a left click there
 focus_click() {
@@ -160,8 +180,9 @@ focus_click() {
 # win_guest <guest> <cpu row> [install dir] [cfg] [the Windows volume's
 # byte offset] [its drive letter] [64]: the installed Windows in
 # $WORK/<install dir> (default win2k-installed, es40-window-smp.cfg, C: at
-# 16384), its ev68cb rows made <cpu row>; with 64, the AXP64 builds
-# (ALPHAZ64.EXE, SHUTDOWN64.EXE) go on the guest under the usual names
+# 16384), its ev68cb rows made <cpu row>; with 64 (XP 64), the AXP64 builds
+# (ALPHAZ64.EXE, SHUTDOWN64.EXE) go on the guest under the usual names, and
+# RUN.BAT is started by Win+R (winr_launch) instead of the Startup folder
 win_guest() {
   local g=$1 cpu=$2 inst=${3:-win2k-installed} cfg=${4:-es40-window-smp.cfg} off=${5:-16384}
   local bits=${7:-}
@@ -198,19 +219,22 @@ win_guest() {
   mmd -i "$IMG" ::/NADA 2>/dev/null
   for f in "$S"/*; do mcopy -o -i "$IMG" "$f" "::/NADA/$(basename "$f")" || { report "$g" FAIL "mcopy $f"; return 1; }; done
   local hooked=0 p
-  for p in "::/DOCUME~1/ALLUSE~1/STARTM~1/PROGRAMS/STARTUP" "::/DOCUME~1/ALLUSE~1.WIN/STARTM~1/PROGRAMS/STARTUP"; do
-    mdir -i "$IMG" "$p" >/dev/null 2>&1 && mcopy -o -i "$IMG" "$S/NADARUN.BAT" "$p/NADARUN.BAT" && hooked=$((hooked + 1))
-  done
-  [ "$hooked" -gt 0 ] || { report "$g" FAIL "no Startup folder on C:"; return 1; }
+  if [ -z "$bits" ]; then
+    for p in "::/DOCUME~1/ALLUSE~1/STARTM~1/PROGRAMS/STARTUP" "::/DOCUME~1/ALLUSE~1.WIN/STARTM~1/PROGRAMS/STARTUP"; do
+      mdir -i "$IMG" "$p" >/dev/null 2>&1 && mcopy -o -i "$IMG" "$S/NADARUN.BAT" "$p/NADARUN.BAT" && hooked=$((hooked + 1))
+    done
+    [ "$hooked" -gt 0 ] || { report "$g" FAIL "no Startup folder on C:"; return 1; }
+  fi
   host_ready || { report "$g" FAIL "the host stayed busy (memory pressure or disk)"; return 1; }
 
-  echo "== $g: $inst, $rows $cpu, startup hooks $hooked"
+  echo "== $g: $inst, $rows $cpu, ${bits:+AXP64, Win+R, }startup hooks $hooked"
   ( cd "$run" && mkdir -p fb && : > keys.txt &&
     exec env ${any:+ALPHABOX_CPU_ANY_BOARD=1} SDL_VIDEO_DRIVER=dummy ALPHABOX_DUMP_FB=fb/fb \
       ALPHABOX_KEYPIPE=keys.txt "$BIN" run "$cfg" ) > "$run/run.log" 2>&1 &
   PID=$!
   load0=$(host_load)
   start=$(date +%s)
+  [ -n "$bits" ] && winr_launch "$run" "$PID" "$(printf '%s' "$W" | tr 'A-Z' 'a-z')\\run.bat" &
   ref=$($FB window "$run/fb" "$BOOT_TMO" "$PID")
   if [ "$ref" = none ]; then
     f=$(ls -t "$run/fb" 2>/dev/null | grep -m1 ppm)
