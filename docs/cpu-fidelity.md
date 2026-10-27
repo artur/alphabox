@@ -760,17 +760,33 @@ the processors Windows started). The `ev7z` run kept the emulator's whole
 output: no `%CPU-W-OPCDEC` line, and processor 1 executed JIT blocks.
 Another run of Windows 2000 on two `ev7z`s, through the hook and with a
 guest program that asks `GetSystemInfo`, saw one processor started and
-three `%CPU-W-OPCDEC` lines (at PCs 0xa001 and 0x8401); it saw two on
-`ev7`, `ev8` and `ev68cb`. That did not reproduce in the run here, which
-did not count processors, so whether Windows started both `ev7z`s here is
-not known, and the OPCDEC lines were not seen. Before the
+three `%CPU-W-OPCDEC` lines (at PCs 0xa001 and 0x8401), twice; `ev7`,
+`ev8` and `ev68cb` started two. That is not the row (2026-10-27): two
+`ev7z`s started both processors in ten runs of ten (six on this
+branch's binary and the one that had failed, with the hook and without;
+four on an instrumented build) at load averages of 50 to 200, and
+starving processor 1's host thread while it runs the console (the
+instrumented build, not committed) gives the failed runs' result on
+`ev7z` (two runs of two) and on the default `ev68cb` (one of one); on
+`ev7` processor 1 finished just in time (one run).
+It is the emulator's interval timer, which the host's load exposes
+([below](#a-secondary-loses-interval-timer-ticks-when-the-host-starves-it)):
+processor 1 finished its console start-up too late, the console handed
+over to AlphaBIOS without it, Windows was given one processor, and
+processor 1 stayed on the console's PALcode (PAL_BASE 0x8000) until
+Windows reused that memory; 0xa000 and 0x8400 are that PALcode's
+`CALL_PAL HALT` and OPCDEC entries. That the two failed runs lost that
+race to the host's load is an **[inference]**: the second booted at a
+load average of 147 (182 over five minutes), the first's was not
+recorded. Before the
 construction, under the hook, SRM came up on two `ev8`s, Windows 2000
 reached its desktop and shut down, and nada's EV8 SIMD self-check passed
 39 of 39 there. OpenVMS and Linux on these processors were not tried.
 On a host loaded far past its cores (load average 200), the console
 sometimes leaves processor 1 out of `Configured CPUs`, with no `CPU 1
 speed is` line: on `ev8` in two runs of four, and on the default `ev68cb`
-in one of three, so the host's load and not the row **[inference]**.
+in one of three. It is the same race, lost earlier: processor 1 is still
+measuring its speed when the prompt comes.
 
 ### Smaller ones
 
@@ -1372,6 +1388,41 @@ measures 800 MHz and the timer runs at 1024 Hz. A console calibrating
 on a starved thread measures a wrong speed with or without the fix (its
 cycle counter follows the host, the ticks wait for the thread). The
 measurements are in [development.md](development.md), "Guest clocks".
+
+### A secondary loses interval-timer ticks when the host starves it
+
+Found 2026-10-27 (two `ev7z`s on the ES40 starting one processor under
+Windows 2000, [above](#the-es40-with-ev7-family-processors-an-alphabox-construction-2026-10-26)).
+Processor 0's thread keeps the interval timer's schedule and its catch-up
+(above); every other processor's tick comes from it. On the Tsunami a
+tick sets each processor's `MISC<ITINTR>` bit and raises its interrupt,
+so a secondary that has not acknowledged its last tick when the next one
+comes loses it: the bit is set already. A secondary the host gives
+little of a core counts one tick per time slice. A real processor
+answers in microseconds and loses none.
+
+What shows it: the ES40 console's start-up on each processor measures
+its speed with `RSCC` over 100 of its own ticks and repeats until its
+last measurements agree, up to 100 times. Processor 0 makes its own
+ticks and agrees at once (0.4 s). A secondary losing ticks reads high
+(`CPU 1 speed is 1136 MHz` for 800 on this loaded host) and, starved
+further, repeats for tens of seconds. The console's primary does not
+wait for it indefinitely: at the prompt processor 1 can be missing from
+`Configured CPUs`, and
+when the console loads AlphaBIOS it hands over without it, so Windows
+starts one processor. Measured with an instrumented build that sleeps
+processor 1's thread 10 ms in every 2000 dispatches while it runs the
+console: no `CPU 1 speed is` in the 48 s before AlphaBIOS, and Windows
+started one processor.
+
+A fix is proposed, not made: each processor keeping its own schedule
+and catch-up, its tick setting only its own bit (and processor 0 alone
+counting the period). Prototyped behind a switch on the same build: at
+a load average of about 85 processor 1 read 800 MHz in 0.4 s; under the
+starvation above
+it read 952 MHz after 16 s and joined before the handover (Windows: two
+processors). It narrows the window and does not close it: below about
+a fifth of a core the catch-up itself falls behind.
 
 ### What is left
 
