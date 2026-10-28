@@ -188,6 +188,9 @@ _EV8_OWN = {(0x18, 0xEC00): "CCB", (0x11, 0x68): "CMOV2",
             (0x18, 0xB400): "LDQ_ARM", (0x18, 0xB800): "QUIESCE"}
 _EV8_OWN.update({(0x1C, f): n for n, f in alpha_asm.SIMD1C.items()})
 _EV8_OWN.update({(0x07, f): n for f, n in alpha_asm.paired_codes().items()})
+# Tarantula's DRAINM (ev8-isa.md 4.8, S8): an 18.xxxx code, so a word of
+# its own; its other instructions are found by the need TARANTULA.
+_EV8_OWN[(0x18, alpha_asm.DRAINM_FN)] = "DRAINM"
 
 _EV68 = AMASK_BITS["BWX"] | AMASK_BITS["FIX"] | AMASK_BITS["CIX"] | \
     AMASK_BITS["MVI"] | AMASK_BITS["TRAP"] | AMASK_BITS["PREFETCH"]

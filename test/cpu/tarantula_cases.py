@@ -803,10 +803,6 @@ def g_fields(g):
         ("getvl with L", A.vop(0x05, 0x04, 31, 0, 2, lit=3)),
         ("getvs with L", A.vop(0x05, 0x05, 31, 0, 2, lit=3)),
         ("getvm with L", A.vop(0x05, 0x06, 31, 0, 2, lit=3)),
-        ("vloadq (SM, S8's)", 0x0C100000),
-        ("vstoreq (SM, S8's)", 0x0C100020),
-        ("vgathq (RM, S8's)", 0x10620001),
-        ("vscatq (RM, S8's)", 0x10620021),
         ("opcode 06", 0x18221003),
         ("opcode 06, 3F", 0x18000FE0),
     ]

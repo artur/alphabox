@@ -386,6 +386,27 @@ def vc(name, rb=R31, rc=R31, lit=None, ra=R31):
     return vop(0x05, VC_FNC[name], ra, rb, rc, False, lit)
 
 
+# SM (03) and RM (04), ev8-isa.md 4.5 and 4.6: the memory-function format
+# with no displacement, Vt <25:21>, Rb <20:16>, <15:12> SBZ, M <11>, the
+# function <10:5>, and <4:0> zero (SM) or Vx (RM). `sbz` and `fnc` can be
+# forced, for the cases of the field rules.
+VMEM = {"vloadq": (0x03, 0x00), "vstoreq": (0x03, 0x01),
+        "vgathq": (0x04, 0x00), "vscatq": (0x04, 0x01)}
+
+
+def vmem(name, vt, rb, vx=0, m=False, sbz=0, fnc=None):
+    op, f = VMEM[name]
+    if fnc is not None:
+        f = fnc
+    return (op << 26) | ((vt & 31) << 21) | ((rb & 31) << 16) | \
+        ((sbz & 15) << 12) | ((1 if m else 0) << 11) | ((f & 0x3F) << 5) | \
+        (vx & 31)
+
+
+# DRAINM, 18.5000 with Ra = Rb = $31 (ev8-isa.md 4.8).
+DRAINM_FN = 0x5000
+
+
 def ins_op(name, ra, b, rc, lit=False):
     op, fn = IOP[name]
     return opl(op, fn, ra, b, rc) if lit else opr(op, fn, ra, b, rc)

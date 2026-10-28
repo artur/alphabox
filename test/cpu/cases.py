@@ -25,6 +25,7 @@ import paired_cases
 import rows
 import simd_cases
 import tarantula_cases
+import tarantula_mem_cases
 from image import R_SCR, R_TR, TR_COUNT
 
 M64 = (1 << 64) - 1
@@ -50,7 +51,7 @@ GROUPS = [
     ("quiesce", "the 21464's LDL_ARM, LDQ_ARM and QUIESCE where the row has "
                 "them (one processor: the timeout), AMASK bit 10"),
 ] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS + \
-    simd_cases.GROUPS + paired_cases.GROUPS
+    simd_cases.GROUPS + paired_cases.GROUPS + tarantula_mem_cases.GROUPS
 
 # The image a group runs in (cpu_oracle.py), when not the first. One image
 # holds 736 KB of code (image.CODE_PA to CODE_TOP), which the EV8 rows'
@@ -59,7 +60,7 @@ GROUPS = [
 # exactly as when the first was the only one. Each image starts with the
 # harness's state (image.Builder.build): a group in another image sets up
 # what it needs itself.
-IMAGE_OF = {}
+IMAGE_OF = {"tarmem": 2}   # EV8 S8 (tarantula_mem_cases.py)
 
 
 def image_of(group):
@@ -1400,6 +1401,7 @@ EMIT.update(ev8n_cases.EMIT)
 EMIT.update(tarantula_cases.EMIT)
 EMIT.update(simd_cases.EMIT)
 EMIT.update(paired_cases.EMIT)
+EMIT.update(tarantula_mem_cases.EMIT)
 
 
 def emit(b, groups):
