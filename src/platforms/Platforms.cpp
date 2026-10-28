@@ -86,6 +86,12 @@ static const tsunami_revisions ds10_revisions = {1, 0, 0, 0x41, 0xfe, 0xfe};
 // https://www.manualsdir.com/manuals/99104/hp-ds20l.html?page=97
 static const tsunami_revisions ds20l_revisions = {1, 1, 0, 0x8f, 0x48, 0x01};
 
+/// The highest `speed` the Tsunami and Titan boards' consoles can report
+/// (Platform.hpp max_cpu_hz, docs/cpu-fidelity.md, "The console's frequency
+/// is a longword"): 2083 MHz (480 ps) reads back whole, 2222 MHz (450 ps)
+/// negative, on every board listed below.
+static const u64 kConsoleLongwordHz = 2100000000;
+
 static const platform_config platforms[] = {
     // It also takes the EV7 family's rows (ev7, ev7z, ev8), as an Alphabox
     // construction (construction_cpu_model; docs/cpu-fidelity.md): the
@@ -95,7 +101,7 @@ static const platform_config platforms[] = {
      "cl67srmrom.exe", FW_LFU_BUNDLE, 2, SECONDARIES_BY_CONSOLE,
      es40_board_devices, es40_pci_interrupt, es40_slot_refusal,
      es40_console_patches, 0, nullptr, nullptr, nullptr, 0, 0, es40_functions,
-     &es40_revisions, nullptr, "ev7"},
+     &es40_revisions, nullptr, "ev7", kConsoleLongwordHz},
     // docs/platforms/ds20e.md. The processor is the
     // EV68CB row because it is the only one there; the board took EV6,
     // EV67 and EV68AL, so the console will name the processor wrongly
@@ -103,7 +109,8 @@ static const platform_config platforms[] = {
     {"ds20e", "AlphaServer DS20E", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20e_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, nullptr, 0,
-     nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20e_revisions},
+     nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20e_revisions,
+     nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/ds20.md: the DS20E's console, interrupt table and
     // slots; the console knows it from the DS20E by its I2C bus
     // (ds20_board_devices). The board took EV6 processors, for which there
@@ -111,13 +118,15 @@ static const platform_config platforms[] = {
     {"ds20", "AlphaServer DS20", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 32,
      "PC264SRM.ROM", FW_ROM_HEADER, 2, SECONDARIES_AFTER_ARBITRATION,
      ds20_board_devices, ds20e_pci_interrupt, ds20e_slot_refusal, nullptr, 0,
-     nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20_revisions},
+     nullptr, nullptr, nullptr, 0, 1024, ds20e_functions, &ds20_revisions,
+     nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/ds10.md: one processor, one PCI
     // bus. The processor row is the EV68CB for now, as on the DS20E.
     {"ds10", "AlphaServer DS10", CHIPSET_TSUNAMI, "ev68cb", 1, 26, 31,
      "DS10SRM.ROM", FW_ROM_HEADER, 1, SECONDARIES_AFTER_ARBITRATION,
      ds10_board_devices, ds10_pci_interrupt, ds10_slot_refusal, nullptr, 0,
-     nullptr, nullptr, nullptr, 0x3, 1024, ds10_functions, &ds10_revisions},
+     nullptr, nullptr, nullptr, 0x3, 1024, ds10_functions, &ds10_revisions,
+     nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/ds20l.md: its console image comes
     // as an update file, with no header in front of it.
     // Memory: its console lists arrays 0 and 1 only, of up to 1 GB each
@@ -125,7 +134,8 @@ static const platform_config platforms[] = {
     {"ds20l", "AlphaServer DS20L", CHIPSET_TSUNAMI, "ev68cb", 2, 26, 31,
      "DS20L_V6_6.EXE", FW_RAW_IMAGE, 2, SECONDARIES_AFTER_ARBITRATION,
      es40_board_devices, ds20l_pci_interrupt, ds20l_slot_refusal, nullptr, 0,
-     nullptr, nullptr, nullptr, 0x3, 1024, ds20l_functions, &ds20l_revisions},
+     nullptr, nullptr, nullptr, 0x3, 1024, ds20l_functions, &ds20l_revisions,
+     nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/marvel.md: two EV7s, each with its
     // own memory (memory.bits is per processor; ES47 per EV7: 512 MB to
     // 8 GB, GS1280 Technical Summary), the console in an update bundle like
@@ -164,20 +174,23 @@ static const platform_config platforms[] = {
     {"es45", "AlphaServer ES45", CHIPSET_TITAN, "ev68cb", 4, 26, 35,
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45_slot_refusal, nullptr,
-     0x680000, nullptr, &es45_titan, nullptr, 0, 0, es45_functions},
+     0x680000, nullptr, &es45_titan, nullptr, 0, 0, es45_functions, nullptr,
+     nullptr, nullptr, kConsoleLongwordHz},
     // The same machine on its Model 1 backplane (the owner's guide's "Model
     // 1B"): six PCI slots and an AGP slot, hose 2 device 5. The console
     // tells it from the others by the A-port's AGP_PRESENT alone.
     {"es45m1", "AlphaServer ES45 Model 1", CHIPSET_TITAN, "ev68cb", 4, 26, 35,
      "ES45_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      es45_board_devices, es45_pci_interrupt, es45m1_slot_refusal, nullptr,
-     0x680000, nullptr, &es45m1_titan, nullptr, 0, 0, es45_functions},
+     0x680000, nullptr, &es45m1_titan, nullptr, 0, 0, es45_functions,
+     nullptr, nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/ds25.md: the second Titan board,
     // its console from an update utility like the ES45's.
     {"ds25", "AlphaServer DS25", CHIPSET_TITAN, "ev68cb", 2, 26, 34,
      "DS25_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds25_board_devices, ds25_pci_interrupt, ds25_slot_refusal, nullptr,
-     0x680000, nullptr, &ds25_titan, ds25_onboard, 0, 0, es45_functions},
+     0x680000, nullptr, &ds25_titan, ds25_onboard, 0, 0, es45_functions,
+     nullptr, nullptr, nullptr, kConsoleLongwordHz},
     // docs/platforms/ds15.md: the one-processor Titan
     // board, its console from an update utility like the DS25's, which runs
     // up to 0x702000 (console_bytes). One PA-chip: the slot table uses
@@ -185,12 +198,25 @@ static const platform_config platforms[] = {
     {"ds15", "AlphaServer DS15", CHIPSET_TITAN, "ev68cb", 1, 26, 32,
      "DS15_V7_3.EXE", FW_RAW_IMAGE, 4, SECONDARIES_BY_CONSOLE,
      ds15_board_devices, ds15_pci_interrupt, ds15_slot_refusal, nullptr,
-     0x710000, nullptr, &ds15_titan, nullptr, 0x5, 0, ds15_functions},
+     0x710000, nullptr, &ds15_titan, nullptr, 0x5, 0, ds15_functions,
+     nullptr, nullptr, nullptr, kConsoleLongwordHz},
 };
 
 const platform_config *platform_at(size_t i) {
   return i < sizeof(platforms) / sizeof(platforms[0]) ? &platforms[i]
                                                       : nullptr;
+}
+
+void platform_check_speed(const platform_config &board, const char *cpu,
+                          u64 hz) {
+  if (board.max_cpu_hz && hz > board.max_cpu_hz)
+    FAILURE_4(Configuration,
+              "%s: speed = %llu Hz is more than the %s's console can report: "
+              "it keeps a processor's frequency in a 32-bit longword that "
+              "reaches the HWRPB sign-extended, and OpenVMS then divides by "
+              "zero at start-up; speed is at most %llu Hz",
+              cpu, (unsigned long long)hz, board.description,
+              (unsigned long long)board.max_cpu_hz);
 }
 
 const platform_config *find_platform(const char *name) {

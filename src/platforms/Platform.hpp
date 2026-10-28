@@ -237,6 +237,17 @@ struct platform_config {
   /// ES40 with EV7-family processors"). Every processor of such a machine is
   /// of one family, as with other_cpu_model.
   const char *construction_cpu_model = nullptr;
+
+  /// The highest `speed` (Hz) the board's console can report, or 0 for no
+  /// limit known (the Marvel boards': not checked). The Tsunami and Titan
+  /// boards' consoles keep a processor's frequency as a 32-bit longword and
+  /// copy it into the HWRPB's cycle counter frequency (HWRPB+0x70) with LDL,
+  /// so 2^31 Hz or more arrives negative and OpenVMS divides by zero in its
+  /// start-up. The console rounds the cycle time to 10 ps, so 460 ps
+  /// (2174 MHz) is the first reading that crashes; the limit leaves the
+  /// console's measurement some room (docs/cpu-fidelity.md, "The console's
+  /// frequency is a longword").
+  u64 max_cpu_hz = 0;
 };
 
 /// The board named `name`, or nullptr.
@@ -251,6 +262,12 @@ bool platform_takes(const platform_config &board, const cpu_model &cpu);
 /// Whether `board` takes `cpu` as an Alphabox construction only: a row of
 /// its construction_cpu_model's family, which is neither of the others.
 bool platform_construction(const platform_config &board, const cpu_model &cpu);
+
+/// Refuses (a Configuration failure) a processor `speed` of `hz` that
+/// `board`'s console cannot report (max_cpu_hz); `cpu` names the processor
+/// for the message.
+void platform_check_speed(const platform_config &board, const char *cpu,
+                          u64 hz);
 
 /// The boards, in the order of their table: the `i`th, or nullptr past the
 /// last.

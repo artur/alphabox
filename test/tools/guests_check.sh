@@ -61,6 +61,8 @@
 #                        900; the Windows guests take 2 to 5 minutes)
 #   GUESTS_MIN_FREE_GB   stop if the data volume has less free (default 3)
 #   GUESTS_KEEP=1        keep the run directories (clones included)
+#   GUESTS_SPEED         the `speed` of the ES40 guests' processors (default
+#                        833M); the ES40 refuses more than 2100M
 #   GUESTS_EV7_CPU       the processor class of vms-es47 and linux-es47
 #                        (default ev7; ev7z, or ev8, the 21464 in
 #                        EV7-compatible mode)
@@ -705,7 +707,7 @@ serial_cfg() {
     echo '  rom.decompressed = "decompressed.rom";'
     echo '  rom.flash = "flash.rom";'
     echo '  rom.dpr = "dpr.rom";'
-    for ((i = 0; i < cpus; i++)); do echo "  cpu$i = ev68cb { speed = 833M; }"; done
+    for ((i = 0; i < cpus; i++)); do echo "  cpu$i = ev68cb { speed = ${GUESTS_SPEED:-833M}; }"; done
     echo "  serial0 = serial { address = \"127.0.0.1\"; port = $port; }"
     echo '  serial1 = serial { null_attach = true; }'
     echo '  pci0.7 = ali { vga_console = false; }'

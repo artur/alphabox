@@ -423,6 +423,9 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
              m_model->part, system->platform().description, board->part);
     }
   }
+  // A frequency the board's console cannot report (Platform.hpp max_cpu_hz).
+  platform_check_speed(system->platform(), cfg->get_myName(),
+                       cfg->get_num_value("speed", true, 500000000));
 }
 
 /**

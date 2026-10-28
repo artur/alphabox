@@ -1383,6 +1383,8 @@ void CConfigurator::check_device() {
               "(the ALPHABOX_CPU_ANY_BOARD test hook)\n",
               cpu->part, board().description, takes->part);
     }
+    platform_check_speed(board(), myName,
+                         get_num_value("speed", true, 500000000));
     if (++s_check_cpus > board().max_cpus)
       FAILURE_2(Configuration, "this machine takes at most %d processors (%s)",
                 board().max_cpus, board().description);
