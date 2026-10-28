@@ -529,13 +529,14 @@ and must raise OPCDEC (VEN is 0 outside the group's window, so the other
 groups' OPCDEC cases of those opcodes hold on these rows too). The
 expected values are the sheet's rules, and an FP element's the scalar
 /SUI instruction's (`test/cpu/tfloat.py`, exact arithmetic with
-fractions). S7 has no vector loads or stores, so operands go in and
-results come out through a test hook, the `ALPHABOX_TARANTULA_PEEK`
-window ([headless.md](headless.md)), which the oracle sets for these rows:
-`t_fill` fills a register from a table of 64 quadwords, `t_read` copies
-elements to the results. On `ev8` VEN is set by a store to the VCTL CSR,
-which the ES40 answers under the test hook; on `ev8n` through the IPR, in
-PALmode.
+fractions). Operands go in and results come out through memory, the
+sheet's route: `t_fill` writes a register's 128 quadwords from a table of
+64 to a buffer and loads them with VLOADQ, `t_read` stores one with
+VSTOREQ and copies its elements to the results (both at vl 128 and vs 8,
+put back after). Until S8 the group used a test hook for this,
+`ALPHABOX_TARANTULA_PEEK`, retired with it ([headless.md](headless.md)).
+On `ev8` VEN is set by a store to the VCTL CSR, which the ES40 answers;
+on `ev8n` through the IPR, in PALmode.
 
 ```
 test/cpu/tarantula_vv.py <alphabox-binary> [label] [--cpu ev8|ev8n] [--port N]
@@ -549,10 +550,51 @@ masked update (VSCMPGT, SETVM, VSADDQ under the mask, VVMRG) and a
 strip-mined loop over 300 quadwords, SETVL giving each pass its length.
 Values go in by the route the sheet gives (an index vector built from VC
 and VS, then one element at a time with a one-element mask and VSMRG)
-and come out through the window. The image counts the elements that
+and come out by VSTOREQ. The image counts the elements that
 differ; the script checks the counts, the scalar results against its own
 computation, three passes of the loop and no exception taken. About a
 second.
+
+**Tarantula's memory instructions.** Group `tarmem`
+(`test/cpu/tarantula_mem_cases.py`), the first group in the oracle's
+second image, checks SM, RM and DRAINM ([ev8-isa.md](platforms/ev8-isa.md)
+4.3, 4.5, 4.6, 4.8 and section 5) on the rows with Tarantula, and what
+every other row does with the same words (OPCDEC; 18.5000 an unused
+code; AMASK #8). It first checks VSTOREQ of registers no load wrote (a
+broadcast, the iota built by VC and VS), then reads registers with that
+route (`dump`) and fills them with VLOADQ (`fill`). Memory is known: a
+2 MB load region above the image holds a function of each quadword's
+address, written in the first pass, and before a store the cases set a
+sentinel at, before and after each element's quadword of a 4 MB store
+region, then read each element's quadword and sum the 384 around them.
+It covers strides of 8, -8, 0, 24, -40, 136, 8200, -8200, 8184 and, under
+a mask of every eighth element, 1 and -1; vector lengths 0 to 128 with
+and without masks; gathers and scatters through a permutation, duplicate
+indices (the highest active element's value remains) and the iota;
+$vr31; instructions with nothing active; and every fault the sheet names
+(UNALIGN, a kernel DTB miss, a page crossing through the DTB, user-mode
+access violations, faults on read and write and a DTB miss, each on a
+middle element), with the trap record and the registers and memory
+unchanged. About 13,300 results on `ev8` and `ev8n`.
+
+```
+test/cpu/tarantula_mem.py <alphabox-binary> [label] [--port N] [--iterations N]
+```
+
+boots two `ev8` processors on the ES40 with the image's PALcode and a
+DTB-miss handler of its own, which fills the DTB from a table and returns
+to the faulting instruction, as an operating system's PALcode would,
+taking a second TB entry first, as an EV7 PALcode's virtual page-table
+fetch does. A VLOADQ over 128 pages (a stride of 8 KB + 8) must take 128
+misses; one at a stride of 32 MB, whose pages share one slot of the TB
+shadow, 128 too (the instruction keeps its translations for its restart;
+without them it never completes, and the handler gives up after 5000);
+a VSCATQ over 128 pages with page 64 absent must find element 0's
+quadword unchanged when the page fault is taken, then write every
+element. Then processor 1 sends processor 0 N messages (2000) of 128
+quadwords, by VSTOREQ or STQ, WMB and a flag; processor 0 waits for the
+flag, executes MB or DRAINM and reads them with VLOADQ; no element may be
+wrong. About a second.
 
 **A code change across processors.** `test/cpu/codepage_mp.py
 <alphabox-binary> [label] [--cpu ROW] [--port N] [--iterations N]

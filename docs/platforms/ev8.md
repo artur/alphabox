@@ -703,7 +703,7 @@ toolchain.
 | S5 | The short-vector SIMD set | interpreter, then JIT | cpu_oracle cases from D8's table; a Linux program checked against scalar code | D8; **done 2026-10-26** ([below](#s5-and-s6-2026-10-26)): the JIT calls the interpreter's routine |
 | S6 | Paired single precision | interpreter, then JIT | the FP self-test extended (`alphabox_fptest`) per half; cpu_oracle cases | D9; **done 2026-10-26** ([below](#s5-and-s6-2026-10-26)), and AMASK bit 11 with it |
 | S7 | Tarantula state, VC and VV/VS groups, SaveState/RestoreState of vector state | interpreter | boot-image kernels (daxpy and the like) checked against scalar results | D10, D11, D13, D14; **done 2026-10-25** ([below](#s7-2026-10-25)): the values go in by VS and come out through a test hook until S8 |
-| S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15 |
+| S8 | Tarantula memory: SM, RM, masks, prefetch to v31, DrainM, faults and restart | interpreter | page-crossing and faulting vectors, scatter conflicts, DrainM cases | D12, D15; **done 2026-10-28** ([below](#s8-2026-10-28)): AMASK bit 3 with it, the S7 test hook retired |
 | S9 | Tarantula under an OS: Linux enables vectors and saves them on switch | interpreter | two processes using vectors at once | D11 |
 | S10 | Tarantula in the JIT (helpers first, host SIMD later) | JIT | JIT_VERIFY extended to compare vector state; any speed claim through `perf_ab.py` | S7-S9 |
 | S11 | The native EV8 privileged interface (option B), from the IDS: its IPR table, RET for PALmode exit, IFETCHB, the HW_MFPR/HW_LD layouts, SuperPALmode, the new PALcode entry offsets, 52-bit VA and 48-bit PA, TPU groups in the TBs, the TPUs the IDS's way (one network node, one register window per chip, the TPU from TPU_CNFG<57:56>, started through WAKEUP); every TBD and conflict settled by inference, marked | interpreter, then JIT | test/cpu cases per register and trap, written from the IDS; a native-mode `ev8n` row beside the EV7-compatible one | S1-S4; **done 2026-10-25** ([ev8-native.md](ev8-native.md), "S11"): the `ev8n` row, its TPUs started at 0xB00 and parked by PALcode (N17) |
@@ -1483,7 +1483,7 @@ section), the decode in `cpu/AlphaCPU.cpp`, VCTL in
   and SETVS only.
 - **SM and RM until S8** **[decision]**: opcodes 03 and 04 raise OPCDEC on
   every row until their stage, which AMASK bit 3, still clear, tells
-  software to expect.
+  software to expect. (S8 implemented them, and set the bit.)
 - **PALmode** **[decision]**: the instructions execute as in any mode;
   they are UNPREDICTABLE there (section 5).
 - **VEN for the CPU oracle** **[decision]**: the oracle runs `--cpu ev8`
@@ -1600,10 +1600,194 @@ to DONE. The runs are in `lab/runs/ev8-s7-proofs/`,
 - The sheet gives no way out of a vector register but memory (point 13),
   so until S8 any test of the operate instructions needs a hook or the
   FPCR as a side channel; the hook is test-only and dies with S8's
-  VSTOREQ as the tests' route.
+  VSTOREQ as the tests' route. (It did: [S8](#s8-2026-10-28).)
 - The sheet's example words are what `alpha_asm.py` assembles; group
   `tarantula` checks them first. [ev8-isa.md](ev8-isa.md) needed no
   correction for S7.
+
+## S8 (2026-10-28)
+
+Tarantula's memory instructions, in the interpreter, on the `ev8` and
+`ev8n` rows: SM and RM ([ev8-isa.md](ev8-isa.md) 4.5, 4.6) with the rules
+of 4.3, DRAINM (4.8), the faults and the restart of section 5, and AMASK
+bit 3. The code is `cpu/AlphaCPU_vector.cpp` (`tarantula_mem`,
+`tarantula_unalign`), `cpu/Tarantula.hpp` (`Restart`) and DRAINM in
+`cpu/AlphaCPU.cpp`'s opcode 18; every decision and inference below is in
+[cpu-fidelity.md](../cpu-fidelity.md) too. The oracle's image had no room
+left for the cases, so S8 began by giving the oracle a second image
+([development.md](../development.md), "More than one image").
+
+**What is implemented, as the sheet gives it.**
+
+- **SM**: VLOADQ and VSTOREQ, element i at Rbv + i x vs (64-bit
+  arithmetic, vs a signed byte distance); **RM**: VGATHQ and VSCATQ at
+  Vx[i] + Rbv. An element is active when i < vl and, under the mask,
+  vm[i] = 1; an inactive one makes no access and raises nothing, and an
+  inactive element of a load's destination is left unchanged (4.3, the
+  sheet's Alphabox choice).
+- **Each element** an aligned quadword, single-copy atomic as LDQ and STQ
+  are; an address that is not a multiple of 8 raises the alignment fault.
+  The accesses go in increasing i, so when two active elements of a store
+  or scatter write one address the higher one's value remains (4.3), and
+  a gather computes every address before it writes, so Vx may be Vt.
+- **$vr31**: a load or gather into it is a prefetch, nothing translated,
+  nothing accessed, no fault (4.3, [TAR p. 283]); a store or scatter of it
+  stores zeros.
+- **The field rules**: <15:12> SBZ, SM's <4:0> zero, and functions 02 to
+  3F raise OPCDEC whatever VEN is (4.3, 4.9); then VEN = 0 raises OPCDEC
+  (section 5). No FEN: there are no T forms (4.5).
+- **Faults** (section 5): every active element is checked, in increasing
+  i, before any element is accessed: its alignment, then its translation
+  for a read or a write by the core's own `virt2phys` (the TB, the
+  superpages, the access and fault-on bits, the 21464's on `ev8n`). The
+  first that fails is the lowest-numbered active faulting element, and it
+  is reported as the core reports a scalar access's: the TB miss
+  (DTBM_SINGLE), the access violation or fault on read or write (DFAULT),
+  or UNALIGN, with VA that element's address, MM_STAT its opcode (03 or
+  04) and WR for a store or scatter, EXC_ADDR the instruction's own PC
+  (DTBMS_RET_ADDR on `ev8n`). No element has been accessed, so neither
+  memory nor a register has changed; after the handler the instruction
+  restarts from its first element and completes. No element completes
+  before a fault, so there is no partial state to report or save.
+- **DRAINM** (18.5000) on the rows with Tarantula, whatever VEN is: an
+  MB. It orders as the sheet asks, and the emulator executes memory in
+  program order, so a store is visible to a later vector load already
+  (4.8). On every other row 18.5000 stays an unused code (a no-op on the
+  EV6 and EV7 families).
+- **AMASK bit 3** on both EV8 rows: AMASK 0x1F0F. Every other row's AMASK
+  is as it was.
+
+**What Alphabox decided or inferred** (the gaps the sheet leaves).
+
+- **Forward progress** **[decision]**. Section 5 makes it the emulator's
+  to guarantee, and the plain TB cannot: an EV7 PALcode's DTB-miss handler
+  fetches the PTE through a virtual address, which takes a TB entry of
+  its own when it misses, so 128 data pages can need 256 entries of a
+  128-entry TB; and the TB shadow (`cpu/AlphaCPU.hpp`), which refills an
+  evicted page without PALcode, keeps one translation per value of
+  VA<24:13>, so a 32 MB stride puts all 128 pages in one slot. When an
+  element faults, the translations of the elements before it are kept
+  for the instruction's restart (`tarantula::Restart`), and on the restart
+  an element whose address is the one kept takes it instead of the TB. So
+  each fault the handler resolves moves the instruction on by at least an
+  element. They serve only the re-execution of the same word at the same
+  PC, in the same mode and address space, and every TB invalidation drops
+  them (TBIA, TBIAP, TBIS, an M_CTL or VA_CTL write; on the 21464 DTB_IM,
+  DTB_IS, a group change or an M_CTL write), as it does the TB shadow's
+  entries: software sees exactly the TB it filled, and at most one miss
+  per element. Not a lane TLB in the paper's sense, and not state: a
+  restored state starts without them. `tarantula_mem.py` shows a 32 MB
+  stride over 128 pages complete with 128 misses; with the kept
+  translations disabled (an experiment, not kept) the same instruction
+  took 5000 misses and the handler gave up.
+- **A memory operation for a pending STx_C** **[inference]**: an
+  instruction that accesses an element clears the LL/SC "clean" flag as
+  LDQ and STQ do (HRM D.19): each element is "an aligned quadword access,
+  single-copy atomic as LDQ's" (4.5). A prefetch, and an instruction with
+  no active element, accesses nothing.
+- **EXC_SUM<REG>** **[inference]**: the Vt field, where a scalar memory
+  instruction's fault reports Ra; the sheet names no register.
+- **I/O space** **[decision]**: an element may translate to I/O space, and
+  is then an access of the device, as LDQ's or STQ's would be; since all
+  translations come first, a device sees each element's access once, in
+  increasing i, and never the accesses of an instruction that faults.
+- **DRAINM's Ra and Rb**: ignored, as 4.3 has every unused register
+  field.
+- **The JIT**: nothing changed. `classify()` compiles nothing of opcodes
+  01-06 and leaves 18.5000 to the interpreter on every row, so a block
+  ends before each and JIT_VERIFY never meets one (S10).
+- **The state file** **[decision]**: unchanged. S8 adds no architectural
+  state (the kept translations are not state), so TAR1 is S7's, and every
+  state file that restored before restores as before.
+- **The test hook ALPHABOX_TARANTULA_PEEK is retired**, as S7 planned: the
+  tests move values with VLOADQ and VSTOREQ, the sheet's route
+  ([headless.md](../headless.md)).
+
+**The tests**, written from the sheet before the code.
+
+- `test/cpu` group `tarmem` (`tarantula_mem_cases.py`, in the oracle's
+  second image): the sheet's words and their masked forms raising OPCDEC
+  on every row with VEN = 0 or no Tarantula, DRAINM completing on every
+  row, AMASK #8; then on the Tarantula rows VSTOREQ of registers no load
+  wrote (a broadcast, the iota built by VC and VS); VLOADQ and VSTOREQ at
+  strides of 8, -8, 0, 24, -40, 136, 8200, -8200 and 8184, and of 1 and
+  -1 under a mask of every eighth element, at vl 0, 1, 33, 64, 65, 77,
+  100 and 128, unmasked and with masks all on, all off and mixed; gathers
+  and scatters through a permutation over six pages, through duplicate
+  indices and through the iota, and a gather into its own index register;
+  $vr31 as a prefetch (unmapped and misaligned addresses, no fault) and as
+  zeros; nothing active (vl 0, all masked off) with unmapped and
+  misaligned addresses; UNALIGN at element 0, at element 7 under a mask,
+  at element 9 of a gather and a scatter; a kernel DTB miss at element 5
+  of a gather and a scatter, and element 5 masked off; a load and a store
+  across two pages the DTB maps to one physical page, elements 0-3 at its
+  end and 4-7 at its start;
+  user mode: an access violation at element 4 of a load and a store, a
+  fault on read at element 3 of a gather, a fault on write at element 6
+  of a scatter, a DTB miss at element 2 of a store going down; every fault
+  with its vector, EXC_ADDR, VA and MM_STAT and the registers and memory
+  unchanged; a scalar store, DRAINM and a vector load of it; no FEN; the
+  field rules; VEN = 0. A store case reads every element's quadword and
+  sums the 384 around them, so a stray write shows. 13,322 results in 130
+  cases on `ev8` and `ev8n`, 38 on every other row.
+- Group `tarantula` now fills and reads registers with VLOADQ and VSTOREQ;
+  its four cases of SM and RM raising OPCDEC went (group `tarmem` has the
+  instructions).
+- `test/cpu/tarantula_mem.py`, a boot image with two `ev8` processors and a
+  DTB-miss handler of its own that fills the DTB from a table and returns
+  to the instruction, taking a second entry first, as an EV7 PALcode's
+  virtual PTE fetch would: VLOADQ over 128 pages at a stride of 8 KB + 8
+  (128 misses), and at 32 MB (128 misses, all in one TB-shadow slot); a
+  scatter over 128 pages with a page fault on element 64, where element
+  0's quadword is still the old one when the fault is taken (129 misses,
+  every element written after); then 2000 messages from processor 1 to
+  processor 0, written by VSTOREQ or STQ, WMB and a flag, read after MB or
+  DRAINM by VLOADQ, with no element wrong.
+- `tarantula_vv.py` takes its results out by VSTOREQ.
+
+**The proofs**, on 98a1816 and the image room (410efea). Every lane built
+and passed `ctest` (the interpreter, the AArch64 JIT with SDL, JIT_VERIFY,
+the x86-64 JIT, a headless JIT), and every commit of the series built on
+the interpreter and the headless JIT with `ctest`. The CPU oracle on the
+interpreter, JIT, JIT_VERIFY and x86-64 lanes, alike on all four:
+`ev68cb` and `ev7` PASS 20,910, KNOWN 61, FAIL 0 (main's 20,872 and group
+`tarmem`'s 38); `ev8` PASS 63,944, KNOWN 73, FAIL 0; `ev8n` PASS 67,203,
+KNOWN 70, FAIL 0 (on both, main's results less 16, group `tarantula`'s
+four SM and RM OPCDEC cases and the misc group's "unused 18.5000 is a
+NOP", now skipped as DRAINM is the row's own, and group `tarmem`'s
+13,322); JIT_VERIFY 0 mismatches. A model made wrong
+on purpose failed: one that writes a store's elements as it translates
+them failed the five fault cases that check memory (30 results a pass),
+one that also accesses in decreasing i 581; the binary of 98a1816
+failed 11,144 of group `tarmem`'s. `tarantula_vv.py` on `ev8` and `ev8n`,
+`tarantula_mem.py`, `quiesce_mp.py` and `tpu_mp.py` passed on the same
+four lanes. The SRM console-log check is clean on the interpreter, JIT and
+JIT_VERIFY lanes (JIT_VERIFY: 110 million compiled-block executions, 0
+mismatches). `boards_check.sh` on the ES47 with the `ev8` row passes its
+board and its `init` check, and `--diff` against the last gate's
+(`boards-gate-oct28a-ev8`) gives the same console: the console never
+executes AMASK or a vector instruction. `snap_roundtrip.sh` on the ES40
+and the ES47, and on the ES47 with the `ev8` row: the state files
+identical, the console answering after the restore. State files written
+by 98a1816's binary at the console prompt (the ES40, the ES47 on the
+`ev8` row) restore on this branch's binary, the console answering with
+main's own output; restored and saved again before anything runs, the
+ES47's is byte for byte what 98a1816 saves from it. The runs are in
+`lab/runs/ev8-s8-proofs/` (with the experiments above), `boards-ev8-s8-es47`,
+`snap-ev8-s8`, `snap-ev8-s8-ev8` and `snap-ev8-s8-main-*`.
+
+**Findings.**
+
+- [ev8-isa.md](ev8-isa.md) needed no correction for S8, and nothing in it
+  changed meaning. Two places say less than an implementation needs, for
+  the owner: section 5 says both that "the emulator keeps no lane TLBs"
+  and that forward progress is the emulator's to guarantee, without saying
+  how a TB that the PALcode's own page-table fetches share can guarantee
+  it (above: translations kept for the restart, which are not lane TLBs);
+  and it gives a vector fault's VA, MM_STAT and EXC_ADDR but not
+  EXC_SUM<REG> (here Vt, as a scalar access's Ra).
+- The oracle's image was full: 721 KB of its 736 KB of code on `ev8n`
+  before any S8 case.
 
 ## Findings
 
