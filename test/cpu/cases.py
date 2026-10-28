@@ -52,6 +52,19 @@ GROUPS = [
 ] + jit_cases.GROUPS + ev8n_cases.GROUPS + tarantula_cases.GROUPS + \
     simd_cases.GROUPS + paired_cases.GROUPS
 
+# The image a group runs in (cpu_oracle.py), when not the first. One image
+# holds 736 KB of code (image.CODE_PA to CODE_TOP), which the EV8 rows'
+# groups had all but filled (721 KB on `ev8n`), so a group added since then
+# names an image of its own; every group of the first image is laid out
+# exactly as when the first was the only one. Each image starts with the
+# harness's state (image.Builder.build): a group in another image sets up
+# what it needs itself.
+IMAGE_OF = {}
+
+
+def image_of(group):
+    return IMAGE_OF.get(group, 1)
+
 # --- operand sets ------------------------------------------------------------
 
 E20 = [0, 1, 2, 0x7F, 0x80, 0xFF, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF,

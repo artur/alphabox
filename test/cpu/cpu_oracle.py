@@ -9,7 +9,10 @@ It builds an image of test cases (cases.py) whose expected results come
 from aarm.py, a model written from the manual, boots it on the emulator in
 place of the console firmware (image.py), reads every result back over
 COM1, and compares. No firmware is needed and nothing else is booted: a run
-is about a second.
+is about a second. One image's code area holds 736 KB, so the groups are
+spread over images (cases.IMAGE_OF: a group runs in the first unless it
+names another), each built and booted in turn, and their results are
+counted together.
 
 The processor is a row of the emulator's (--cpu, default ev68cb, the ES40's
 own), always on the ES40 board: plain instructions do not depend on the
@@ -211,7 +214,8 @@ def main():
 
     if args.list:
         for g, doc in cases.GROUPS:
-            print("%-10s %s" % (g, doc))
+            n = cases.image_of(g)
+            print("%-10s %s%s" % (g, doc, "" if n == 1 else " [image %d]" % n))
         print()
         for r in rows.ROWS.values():
             print("--cpu %s" % r.describe())
@@ -235,12 +239,23 @@ def main():
         print("cpu_oracle: %s is not executable" % binary)
         return 2
     groups = args.group or [g for g, _ in cases.GROUPS]
-    b = image.Builder(args.passes, blocks=not args.no_blocks, row=row)
-    try:
-        img = b.build(lambda bb: cases.emit(bb, groups))
-    except ValueError as e:
-        print("cpu_oracle: %s" % e)
-        return 2
+    # The images, each with the groups that name it (cases.IMAGE_OF; the
+    # first unless a group names another), in the order of `groups`: one
+    # image's code area holds 736 KB (image.CODE_PA to CODE_TOP), and the
+    # EV8 rows' cases outgrew it. An image is built and booted as before;
+    # the runs' results are put together.
+    by_image = {}
+    for g in groups:
+        by_image.setdefault(cases.image_of(g), []).append(g)
+    images = []
+    for n in sorted(by_image):
+        b = image.Builder(args.passes, blocks=not args.no_blocks, row=row)
+        try:
+            img = b.build(lambda bb, gs=by_image[n]: cases.emit(bb, gs))
+        except ValueError as e:
+            print("cpu_oracle: %s" % e)
+            return 2
+        images.append((n, b, img))
 
     work = os.environ.get("ALPHABOX_WORK",
                           os.path.join(HERE, "..", "..", "lab"))
@@ -261,28 +276,46 @@ def main():
     if "TARANTULA" in row.ext:
         env["ALPHABOX_TARANTULA_PEEK"] = "1"
     env.update(kv.split("=", 1) for kv in args.env)
-    # COM1 keeps its newest 256 KB when its reader falls behind
-    # (src/devices/isa/Serial.cpp, OUT_QUEUE_MAX), and the results are about
-    # 550 KB: a reader the host stalls loses some (%SRL-W-DROPPED). That is
-    # the host, not the processor, so the image runs once more.
-    for attempt in (1, 2):
-        shutil.rmtree(workdir, ignore_errors=True)
-        os.makedirs(workdir)
-        image.write_rom(os.path.join(workdir, "oracle.rom"), img)
-        text, emu, secs = run(binary, workdir, row.name, port, env, args.timeout)
-        dropped = re.search(r"(\d+) bytes of output dropped", emu)
-        if not dropped:
-            break
-        print("  CPU ORACLE: COM1 dropped %s bytes of results, its reader fell "
-              "behind (host load)%s" % (dropped.group(1), ", running again"
-                                        if attempt == 1 else ""))
-    with open(os.path.join(workdir, "serial.txt"), "w") as f:
-        f.write(text)
+    runs = []
+    for n, b, img in images:
+        # The first image runs in the run directory, any other in a
+        # directory of its own inside it.
+        rundir = workdir if n == images[0][0] else os.path.join(
+            workdir, "image%d" % n)
+        # COM1 keeps its newest 256 KB when its reader falls behind
+        # (src/devices/isa/Serial.cpp, OUT_QUEUE_MAX), and the results are
+        # about 550 KB: a reader the host stalls loses some
+        # (%SRL-W-DROPPED). That is the host, not the processor, so the
+        # image runs once more.
+        for attempt in (1, 2):
+            shutil.rmtree(rundir, ignore_errors=True)
+            os.makedirs(rundir)
+            image.write_rom(os.path.join(rundir, "oracle.rom"), img)
+            text, emu, secs = run(binary, rundir, row.name, port, env,
+                                  args.timeout)
+            dropped = re.search(r"(\d+) bytes of output dropped", emu)
+            if not dropped:
+                break
+            print("  CPU ORACLE: COM1 dropped %s bytes of results, its reader "
+                  "fell behind (host load)%s" % (
+                      dropped.group(1), ", running again"
+                      if attempt == 1 else ""))
+        with open(os.path.join(rundir, "serial.txt"), "w") as f:
+            f.write(text)
+        runs.append((n, b, text, emu, secs, dropped, rundir))
 
+    nres = sum(len(r[1].results) for r in runs)
     print("== cpu oracle %s: %d results (%d cases), %d instruction words, "
-          "%d passes, %.1f s" % (args.label, len(b.results),
-                                 len({r[0] for r in b.results}),
-                                 b.code_words, args.passes, secs))
+          "%d passes, %.1f s" % (
+              args.label, nres,
+              sum(len({x[0] for x in r[1].results}) for r in runs),
+              sum(r[1].code_words for r in runs), args.passes,
+              sum(r[4] for r in runs)))
+    if len(runs) > 1:
+        for n, b, text, emu, secs, dropped, rundir in runs:
+            print("  image %d: %d results, %d instruction words, %.1f s: %s"
+                  % (n, len(b.results), b.code_words, secs,
+                     " ".join(by_image[n])))
     print("  row %s%s" % (row.describe(), "" if diffs is not None else
                           " (src/cpu/CpuModels.cpp not found: not checked)"))
     # The ES40 takes the EV7 family's rows as an Alphabox construction and
@@ -290,45 +323,58 @@ def main():
     # through the hook alone, which says so too (%CPU-W-ANYBOARD).
     said = ("%%CPU-W-ANYBOARD: a %s on" % row.part,
             "%%CPU-I-CONSTRUCT: %s processors on" % row.part)
-    if hook and not any(s in emu for s in said):
-        print("  the emulator did not say it runs a %s (%%CPU-W-ANYBOARD or "
-              "%%CPU-I-CONSTRUCT)" % row.part)
-        for ln in emu.splitlines()[-8:]:
-            print("   |", ln)
-        print("  CPU ORACLE: FAIL")
-        print("  run directory: %s" % workdir)
-        return 1
-    if "@@FATAL" in text:
-        tail = text[text.index("@@FATAL"):].split()
-        print("  FATAL: an exception the image cannot resume from:", " ".join(tail[1:8]))
-        print("  (count, vector, EXC_ADDR, EXC_SUM, MM_STAT, VA, total)")
-        print("  CPU ORACLE: FAIL")
-        print("  run directory: %s" % workdir)
-        return 1
-    first, last = parse(text)
-    if first is None:
-        if dropped:
-            print("  no results: COM1 dropped some, twice (see %s)" % workdir)
-        else:
-            print("  no results: the image did not finish (see %s)" % workdir)
-        for ln in emu.splitlines()[-8:]:
-            print("   |", ln)
-        print("  CPU ORACLE: FAIL")
-        return 1
+    results, first, last, skipped, mism, vlines = [], [], [], [], [], []
+    for n, b, text, emu, secs, dropped, rundir in runs:
+        which = "" if len(runs) == 1 else " (image %d)" % n
+        if hook and not any(s in emu for s in said):
+            print("  the emulator did not say it runs a %s (%%CPU-W-ANYBOARD "
+                  "or %%CPU-I-CONSTRUCT)%s" % (row.part, which))
+            for ln in emu.splitlines()[-8:]:
+                print("   |", ln)
+            print("  CPU ORACLE: FAIL")
+            print("  run directory: %s" % rundir)
+            return 1
+        if "@@FATAL" in text:
+            tail = text[text.index("@@FATAL"):].split()
+            print("  FATAL%s: an exception the image cannot resume from:"
+                  % which, " ".join(tail[1:8]))
+            print("  (count, vector, EXC_ADDR, EXC_SUM, MM_STAT, VA, total)")
+            print("  CPU ORACLE: FAIL")
+            print("  run directory: %s" % rundir)
+            return 1
+        f1, l1 = parse(text)
+        if f1 is None:
+            if dropped:
+                print("  no results%s: COM1 dropped some, twice (see %s)"
+                      % (which, rundir))
+            else:
+                print("  no results%s: the image did not finish (see %s)"
+                      % (which, rundir))
+            for ln in emu.splitlines()[-8:]:
+                print("   |", ln)
+            print("  CPU ORACLE: FAIL")
+            return 1
+        # The pass's trap total must be what the image's cases' windows
+        # saw: anything more is a trap no case expected.
+        counted = [k for k, r in enumerate(b.results)
+                   if r[1] == image.TRAP_COUNT]
+        for k, r in enumerate(b.results):
+            if r[1] == image.TRAPS_IN_PASS:
+                b.results[k] = (r[0], "traps in the pass, outside the cases' "
+                                "windows", 0, r[3], None)
+                for buf in (f1, l1):
+                    buf[k] -= sum(buf[j] for j in counted)
+        results += b.results
+        first += f1
+        last += l1
+        skipped += b.skipped
+        mism += [ln for ln in emu.splitlines() if "MISMATCH" in ln]
+        vlines += [ln.strip() for ln in emu.splitlines()
+                   if "compiled-block execs" in ln][-1:]
 
-    mism = [ln for ln in emu.splitlines() if "MISMATCH" in ln]
-    # The pass's trap total must be what the cases' windows saw: anything
-    # more is a trap no case expected.
-    counted = [k for k, r in enumerate(b.results) if r[1] == image.TRAP_COUNT]
-    for k, r in enumerate(b.results):
-        if r[1] == image.TRAPS_IN_PASS:
-            b.results[k] = (r[0], "traps in the pass, outside the cases' "
-                            "windows", 0, r[3], None)
-            for buf in (first, last):
-                buf[k] -= sum(buf[j] for j in counted)
     counts = {}
     fails, newly, differ = [], [], []
-    for k, res in enumerate(b.results):
+    for k, res in enumerate(results):
         vs = {}
         for tag, val in (("first pass", first[k]), ("last pass", last[k])):
             v = verdict(res, val, tag)
@@ -350,15 +396,15 @@ def main():
             counts.get((tag, "FAIL"), 0)))
     # Skipped results are not run on this row, in either pass.
     why = {}
-    for name, reason, n in b.skipped:
+    for name, reason, n in skipped:
         ent = why.setdefault(reason, [0, 0, name])
         ent[0] += 1
         ent[1] += n
     print("  SKIP %d results (%d cases or parts) that need what row %s lacks"
-          % (sum(n for _, _, n in b.skipped), len(b.skipped), row.name))
-    for reason, (ncase, nres, first) in sorted(why.items()):
+          % (sum(n for _, _, n in skipped), len(skipped), row.name))
+    for reason, (ncase, nres, first_case) in sorted(why.items()):
         print("    SKIP %d results, %d cases or parts (the first: %s): %s" % (
-            nres, ncase, first, reason))
+            nres, ncase, first_case, reason))
     shown = 0
     for tag, (case, fld, expect, mask, known), val in fails:
         if shown < 60:
@@ -368,7 +414,7 @@ def main():
         shown += 1
     if shown > 60:
         print("  ... %d more FAIL lines" % (shown - 60))
-    known_refs = sorted({r[4][1] for r in b.results if r[4] is not None})
+    known_refs = sorted({r[4][1] for r in results if r[4] is not None})
     if known_refs:
         print("  known divergences exercised: %s" % ", ".join(known_refs))
     for res in newly:
@@ -385,9 +431,8 @@ def main():
         print("  ... %d more cases differ" % (len(by_case) - 20))
     if mism:
         print("  JIT_VERIFY: %d MISMATCH lines in the emulator's output" % len(mism))
-    vlines = [ln for ln in emu.splitlines() if "compiled-block execs" in ln]
-    if vlines:
-        print("  %s" % vlines[-1].strip())
+    for ln in vlines:
+        print("  %s" % ln)
     ok = not fails and not mism
     print("  CPU ORACLE: %s" % ("PASS" if ok else "FAIL"))
     if ok and not args.keep:

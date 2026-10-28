@@ -334,6 +334,26 @@ and so never traps).
   JIT cases' interrupt, I_CTL, PALshadow and IC_FLUSH services). The
   results go out over COM1, which the tool reads; `exit_on_pal_halt` ends
   the run.
+- **More than one image** **[decision]** (2026-10-28, before EV8 S8).
+  An image's code area is 736 KB (`image.CODE_PA` to `CODE_TOP`), inside
+  the 2 MB that the decompressed-console loader reads, and the EV8 rows'
+  groups had filled 721 KB of it (`ev8n`; `ev8` 672 KB). So a group may
+  name an image of its own (`cases.IMAGE_OF`; the first otherwise), and
+  the tool builds and boots each image in turn, with the same
+  configuration and checks, and counts their results together (a run
+  directory of its own, `image<n>`, inside the run's). Each image has its
+  own literal pool, tables and harness results (one more "traps in the
+  pass" result per image), and a group in another image sets up what it
+  needs itself (VEN, for Tarantula's). Of the choices this one moves
+  nothing: the first image keeps every group it had, laid out exactly as
+  before (the image built for each row is byte for byte main's, checked
+  at 98a1816), where moving `CODE_TOP` would have moved the pool, the
+  trap record and the scratch pages under every case and every boot-image
+  script that uses them. On 98a1816 the verdicts and counts of every row
+  (`ev68cb`, `ev7`, `ev8`, `ev8n`) were main's on the interpreter, JIT,
+  JIT_VERIFY and x86-64 lanes, and with groups `simd` and `paired` put in
+  a second image on purpose `ev8` gave the same verdicts, one PASS more
+  (the second image's harness result).
 - **Both engines in one run.** Every case runs 20 times. The first pass
   is stored apart: it is always interpreted, and on a JIT lane the last
   pass is compiled code (the default compile threshold is 16; a
