@@ -20,10 +20,11 @@
 
 /**
  * \file
- * Tarantula's instructions in the interpreter (stage S7 of
- * docs/platforms/ev8.md): VC (opcode 05), VV (01) and VS (02), and the
- * vector enable. The memory groups SM (03) and RM (04) are S8's; opcode 06 is
- * spare. Every encoding and rule is docs/platforms/ev8-isa.md's, section 4
+ * Tarantula's instructions in the interpreter (stages S7 and S8 of
+ * docs/platforms/ev8.md): VC (opcode 05), VV (01) and VS (02), the vector
+ * enable, and the memory groups SM (03) and RM (04); DRAINM is decoded with
+ * opcode 18 (AlphaCPU.cpp). Opcode 06 is spare. Every encoding and rule is
+ * docs/platforms/ev8-isa.md's, section 4
  * (the contract with the nada toolchain), cited by section; the paper is
  * Espasa et al., ISCA 2002 [TAR p. n]. What the sheet leaves to the
  * implementation is marked [inference] or [decision] here, in ev8.md's
@@ -208,9 +209,9 @@ void CAlphaCPU::WriteMem(int index, u64 address, int dsize, u64 data) {
  * raises OPCDEC whatever VEN is (4.3); then VEN = 0 raises OPCDEC (section
  * 5); then a floating-point function with the FPU disabled takes FEN.
  *
- * - SM (03) and RM (04) are S8's: until then they are no instructions of the
- *   row and raise OPCDEC, which AMASK bit 3, clear until S8, lets software
- *   expect [decision]. Opcode 06 is spare: all OPCDEC (4.2).
+ * - SM (03) and RM (04), S8's: <15:12> SBZ, functions 00 and 01, and SM's
+ *   <4:0> zero (4.5, 4.6, 4.9). They take no FEN: no T forms (4.5).
+ *   Opcode 06 is spare: all OPCDEC (4.2).
  * - VV's <12> "must be 0" (4.4): a field that must be zero, so OPCDEC
  *   [inference: the sheet does not say SBZ, and it is no register field,
  *   the only kind it lets Alphabox ignore].
@@ -244,7 +245,13 @@ void CAlphaCPU::tarantula(u32 ins) {
   case 0x05: // VC
     valid = !m && sbz && vc_assigned(fnc) && (!lit || fnc <= 0x01);
     break;
-  default: // 03 SM and 04 RM (S8), 06 spare
+  case 0x03: // SM: <15:12> SBZ, <4:0> zero
+    valid = ((ins >> 12) & 0xf) == 0 && (ins & 0x1f) == 0 && fnc <= 0x01;
+    break;
+  case 0x04: // RM: <15:12> SBZ, Vx in <4:0>
+    valid = ((ins >> 12) & 0xf) == 0 && fnc <= 0x01;
+    break;
+  default: // 06 spare
     valid = false;
     break;
   }
@@ -262,6 +269,10 @@ void CAlphaCPU::tarantula(u32 ins) {
   }
   if (op == 0x05) {
     tarantula_vc(ins);
+    return;
+  }
+  if (op == 0x03 || op == 0x04) {
+    tarantula_mem(ins);
     return;
   }
   if (fnc >= 0x20) {
@@ -522,6 +533,100 @@ void CAlphaCPU::tarantula_fp(u32 ins) {
   m_vec_defer = false;
   if (m_vec_trap)
     tarantula_trap(m_vec_trap | TRAP_SWC, sw);
+}
+
+/**
+ * SM and RM (4.5, 4.6): VLOADQ and VSTOREQ, element i at Rbv + i x vs (vs a
+ * signed byte stride, the product wrapping); VGATHQ and VSCATQ at Vx[i] +
+ * Rbv. An element is active when i < vl and, with M, vm[i] = 1 (4.3); an
+ * inactive one makes no access and raises nothing, and an inactive element
+ * of a load's destination is left unchanged (4.3, the Alphabox choice).
+ *
+ * Faults (section 5). Every active element is checked, in increasing i,
+ * before any is accessed: its address a multiple of 8, else the alignment
+ * fault; then its translation for a read or a write (virt2phys, the core's
+ * own: the TB, the superpages, the access and fault-on bits), else the TB
+ * miss, access violation or fault on read or write the core raises for a
+ * scalar access, VA that element's address and MM_STAT<OPCODE> 03 or 04
+ * with WR for a store or scatter. So the fault reported is the
+ * lowest-numbered active faulting element's, EXC_ADDR is the instruction's
+ * own PC, and nothing has changed, neither memory nor a register; after the
+ * handler the instruction restarts from its first element.
+ *
+ * Then the accesses, in increasing i, each an aligned quadword as LDQ and
+ * STQ make it: so when two active elements of a store or scatter write one
+ * address, the higher one's value remains (4.3, the Alphabox choice), and
+ * a gather computes every address before it writes an element, so Vx may
+ * be Vt. A load or gather into $vr31 is a prefetch: nothing checked,
+ * nothing accessed, no fault (4.3, [TAR p. 283]); a store or scatter of
+ * $vr31 stores zeros. As a scalar LDQ or STQ is, the instruction is a
+ * memory operation for a pending STx_C (HRM D.19) when an element is
+ * accessed [inference: each element "an aligned quadword access, single-copy
+ * atomic as LDQ's", 4.5].
+ **/
+void CAlphaCPU::tarantula_mem(u32 ins) {
+  tarantula::State &v = *m_vec;
+  const bool rm = (ins >> 26) == 0x04;
+  const bool st = ((ins >> 5) & 0x3f) == 0x01;
+  const bool m = (ins >> 11) & 1;
+  const u32 vt = I_GETRA(ins), vx = ins & 0x1f;
+  const u64 base = state.r[REG_2];
+  if (!st && vt == 31)
+    return; // a prefetch
+  const int flags = st ? ACCESS_WRITE : ACCESS_READ;
+  int act[kElems];
+  u64 pa[kElems];
+  int n = 0;
+  for (u64 k = 0; k < v.vl; k++) {
+    const int i = (int)k;
+    if (m && !v.mask(i))
+      continue;
+    const u64 ea = rm ? v.vr[vx][i] + base : base + k * v.vs;
+    if (ea & 7) {
+      tarantula_unalign(ea, st, ins);
+      return;
+    }
+    // A fault is taken here, virt2phys having set it up.
+    if (virt2phys(ea, &pa[n], flags, nullptr, ins))
+      return;
+    act[n++] = i;
+  }
+  if (!n)
+    return;
+  m_llsc_clean = 0; // as LLSC_MEMOP (cpu_memory.hpp)
+  for (int k = 0; k < n; k++) {
+    const u64 p = pa[k];
+    if (st) {
+      const u64 d = vt == 31 ? 0 : v.vr[vt][act[k]];
+      if (p < dram_size) {
+        dram_write(dram_ptr, p, 64, d);
+        note_dram_write(p);
+      } else {
+        sys_write(p, 64, d);
+      }
+    } else {
+      v.vr[vt][act[k]] =
+          p < dram_size ? dram_read(dram_ptr, p, 64) : sys_read(p, 64);
+    }
+  }
+}
+
+/**
+ * An element's alignment fault (4.5, section 5), as the core reports a
+ * scalar access's (GO_PAL_UNALIGN, cpu_defs.hpp): VA the element's address,
+ * EXC_SUM<REG> the Vt field, MM_STAT the opcode and WR; on the native EV8
+ * its EXC_SUM and M_STAT. No operating system's fixup knows opcodes 03 and
+ * 04, so the program gets the signal.
+ **/
+void CAlphaCPU::tarantula_unalign(u64 va, bool wr, u32 ins) {
+  const u64 op = ins >> 26;
+  state.fault_va = va;
+  state.va_form_va = va;
+  state.exc_sum = (u64)(I_GETRA(ins) & 0x1f) << 8;
+  state.mm_stat = (op << 4) | (wr ? 1 : 0);
+  if (m_ev8n)
+    state.exc_sum = ev8_regs_of(ins);
+  GO_PAL(UNALIGN);
 }
 
 void CAlphaCPU::tarantula_trap(u64 flags, u32 ins) {

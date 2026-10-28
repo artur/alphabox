@@ -1582,8 +1582,9 @@ private:
 
   // --- Tarantula (CPU_EXT_TARANTULA: the `ev8` and `ev8n` rows) -------------
   // The vector extension proposed for the EV8, as docs/platforms/ev8-isa.md,
-  // section 4, fixes it; S7 of docs/platforms/ev8.md: the state, VC, VV and
-  // VS, in the interpreter (opcodes 01-06 end every compiled block). The code
+  // section 4, fixes it; S7 and S8 of docs/platforms/ev8.md: the state, VC,
+  // VV, VS, SM, RM and DRAINM, in the interpreter (opcodes 01-06 and DRAINM
+  // end every compiled block). The code
   // is AlphaCPU_vector.cpp; the state and its file section Tarantula.hpp. At
   // the end of the class, away from what compiled code addresses.
 public:
@@ -1631,6 +1632,10 @@ private:
   void tarantula_vc(u32 ins);
   void tarantula_int(u32 ins);
   void tarantula_fp(u32 ins);
+  /// SM (03) and RM (04): VLOADQ, VSTOREQ, VGATHQ, VSCATQ.
+  void tarantula_mem(u32 ins);
+  /// The alignment fault of a vector element at `va`.
+  void tarantula_unalign(u64 va, bool wr, u32 ins);
   /// The ARITH trap a vector FP instruction raises, reported as the scalar
   /// instruction `ins` (registers 31) would report it.
   void tarantula_trap(u64 flags, u32 ins);
