@@ -105,8 +105,7 @@ enum : u32 {
   /// every row without it, as the ARM reserves them. A flag of its own
   /// beside CPU_EXT_EV8, since Tarantula was "a follow-on candidate to the
   /// EV8" and has an AMASK bit of its own (bit 3, D14) [decision]. S7: the
-  /// state, VCTL, VC, VV and VS; AMASK bit 3 waits for the memory
-  /// instructions (S8).
+  /// state, VCTL, VC, VV and VS; S8: SM, RM and DRAINM, and AMASK bit 3.
   CPU_EXT_TARANTULA = 0x0002,
 };
 
@@ -132,9 +131,9 @@ struct cpu_model {
 };
 
 /// Architecture extension bits, as AMASK reports them [ARM D-4]. The EV8's
-/// bit 3 (Tarantula) gets its name with the stage that implements it
-/// (docs/platforms/ev8-isa.md, section 2); bit 10 has its with S3, bit 11
-/// with S5 and S6.
+/// bits got their names with the stages that implement them
+/// (docs/platforms/ev8-isa.md, section 2): bit 10 with S3, bit 11 with S5
+/// and S6, bit 3 with S8.
 #define AMASK_BWX U64(0x0001)      ///< byte and word access
 #define AMASK_FIX U64(0x0002)      ///< square root and FP conversions
 #define AMASK_CIX U64(0x0004)      ///< count extension
@@ -148,6 +147,10 @@ struct cpu_model {
 /// in the ARM [p. 808]; both sets, by the owner's decision of 2026-10-24
 /// (ev8-isa.md, section 2)
 #define AMASK_EV8SIMD U64(0x0800)
+/// Tarantula: opcodes 01 to 05 and DRAINM, the first free bit of the low
+/// byte, which the ARM keeps for standard extensions [ARM p. 204]
+/// (decision D14, the owner's, 2026-10-24; ev8-isa.md section 2)
+#define AMASK_TARANTULA U64(0x0008)
 
 /// The part named `name`, or nullptr.
 const cpu_model *find_cpu_model(const char *name);

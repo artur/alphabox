@@ -71,9 +71,12 @@ int main() {
   // The native EV8 (ev8-native.md, N16): a family of its own, the `ev8`
   // row's user instructions and AMASK, type 18, chip ID 0, four TPUs.
   check_row("ev8n", CPU_FAMILY_EV8, 4, CPU_EXT_EV8 | CPU_EXT_TARANTULA);
-  // AMASK bit 3 (Tarantula, D14) stays clear until its memory instructions
-  // execute (S8): the row reports only what it implements.
+  // AMASK bit 3 (Tarantula, D14) since its memory instructions execute
+  // (S8), on the rows with Tarantula only.
   for (const char *r : {"ev8", "ev8n"})
+    if (const cpu_model *m = find_cpu_model(r))
+      CHECK_EQ(m->amask & 0x8, 0x8);
+  for (const char *r : {"ev68cb", "ev7", "ev7z"})
     if (const cpu_model *m = find_cpu_model(r))
       CHECK_EQ(m->amask & 0x8, 0);
   if (const cpu_model *m = find_cpu_model("ev8n")) {
@@ -84,14 +87,14 @@ int main() {
     CHECK_EQ(m->chip_id, 0);
     CHECK_EQ(m->max_tpus, 4);
   }
-  // The EV8 reports only what it implements of the IDS's 0x1F07: never
-  // more, and the bits of every stage not yet done are clear (Tarantula:
-  // bit 3). Bit 10 (SMT) is set since S3, with LDx_ARM and QUIESCE, and
-  // bit 11 since S5 and S6, with the 1C SIMD set and paired single: 0x1F07.
+  // The EV8 reports what it implements: the IDS's 0x1F07 (bit 10, SMT,
+  // since S3, with LDx_ARM and QUIESCE; bit 11 since S5 and S6, with the 1C
+  // SIMD set and paired single) and bit 3, Tarantula's, since S8, with its
+  // memory instructions: 0x1F0F (ev8-isa.md section 2).
   if (const cpu_model *m = find_cpu_model("ev8")) {
-    CHECK_EQ(m->amask & ~U64(0x1F07), 0);
-    CHECK_EQ(m->amask & U64(0x0008), 0);
-    CHECK_EQ(m->amask, 0x1F07);
+    CHECK_EQ(m->amask & ~U64(0x1F0F), 0);
+    CHECK_EQ(m->amask & U64(0x0008), U64(0x0008));
+    CHECK_EQ(m->amask, 0x1F0F);
   }
   CHECK_EQ(find_cpu_model("ev5") == nullptr, 1);
   printf("cpumodels: %d checks, %d failures\n", checks, failures);

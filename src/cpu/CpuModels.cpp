@@ -82,7 +82,8 @@ static const cpu_model models[] = {
     // (SMT), whose LDx_ARM and QUIESCE it has since S3 [IDS pp. 668, 674],
     // and bit 11, its 1C SIMD and opcode 07 paired-single sets, since S5 and
     // S6 [the bit's meaning the owner's decision, ev8-isa.md section 2]:
-    // 0x1F07; bit 3 with Tarantula (S7, S8) [decision;
+    // 0x1F07; and bit 3, Tarantula's, since S8, when its memory
+    // instructions joined the rest: 0x1F0F [decision D14;
     // docs/cpu-fidelity.md]. Chip ID 4,
     // the EV7z's, which the console names "EV7 rev 3.0", type 15 minor 5
     // [decision D2: the IDS gives CPU_CNFG<CHIP_ID> no value, p. 487, and
@@ -94,10 +95,11 @@ static const cpu_model models[] = {
     // Marvel console as processors of their own, an Alphabox construction
     // (S4; Configurator.cpp, processor_tpus). Tarantula's state and its
     // operate and control instructions since S7 (CPU_EXT_TARANTULA), with
-    // VCTL a CSR of each processor's register window; AMASK bit 3 with S8.
+    // VCTL a CSR of each processor's register window; its memory
+    // instructions and AMASK bit 3 since S8.
     {"ev8", "21464 (EV8)", 4, 15, 5, 4,
-     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
-         AMASK_EV8SIMD | AMASK_PREFETCH,
+     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_TARANTULA | AMASK_MVI |
+         AMASK_TRAP | AMASK_SMT | AMASK_EV8SIMD | AMASK_PREFETCH,
      CPU_FAMILY_EV7, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
     // 21464 (EV8) on its own privileged interface, the IDS's
     // (docs/platforms/ev8-native.md, S11, decision N16): a family of its
@@ -114,8 +116,8 @@ static const cpu_model models[] = {
     // on the ES40 through ALPHABOX_CPU_ANY_BOARD. Tarantula as on the `ev8`
     // row, its VCTL the IPR 0xAC (N8).
     {"ev8n", "21464 (EV8), native interface", 0, 18, 0, 4,
-     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_MVI | AMASK_TRAP | AMASK_SMT |
-         AMASK_EV8SIMD | AMASK_PREFETCH,
+     AMASK_BWX | AMASK_FIX | AMASK_CIX | AMASK_TARANTULA | AMASK_MVI |
+         AMASK_TRAP | AMASK_SMT | AMASK_EV8SIMD | AMASK_PREFETCH,
      CPU_FAMILY_EV8, CPU_EXT_EV8 | CPU_EXT_TARANTULA, 64, 64, 3072, 4},
 };
 
