@@ -263,6 +263,10 @@ def main():
         'rounds': a.rounds, 'workload': a.workload, 'section': a.section, 'scale': a.scale,
         'mode': 'snapshot' if a.snapshot else 'cold-boot',
         'expect': expect, 'env': env_arm,
+        # odd rounds time base first, even rounds head first, so an effect of
+        # order (warmer host, cache, thermal state) does not land on one arm
+        'order': 'alternating: odd rounds base,head; even rounds head,base',
+        'round_order': [['base', 'head'] if r % 2 else ['head', 'base'] for r in range(1, a.rounds + 1)],
     }
     known = {'Apple M3 Max': 4.05, 'Apple M3 Pro': 4.05, 'Apple M3': 4.05, 'Apple M2': 3.49, 'Apple M1': 3.2, 'Apple M4': 4.4}
     for k, v in known.items():
@@ -272,7 +276,9 @@ def main():
 
     runs = {'base': [], 'head': []}
     for r in range(1, a.rounds + 1):
-        for arm, binary in (('base', base), ('head', head)):
+        print(f"-- round {r}: {' then '.join(meta['round_order'][r - 1])}", flush=True)
+        for arm in meta['round_order'][r - 1]:
+            binary = base if arm == 'base' else head
             for _ in range(8):
                 refuse_if_busy(f'{arm} round {r}')
                 print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)

@@ -62,6 +62,11 @@ All of these live in `test/tools/` and are described in
   and records both binaries' hashes and HEAD.
 - `--expect section:pct` predictions are written down before the run and
   marked hit or miss after it.
+- Within a round the arms alternate: odd rounds time base first, even
+  rounds head first, so an effect of order (a warmer host, a cache,
+  thermal state) does not fall on one arm only. Each round's order is
+  printed and recorded in the JSON (`order`, `round_order`); results from
+  before 2026-10-28 always timed base first.
 - It waits for a quiet host (no build, no other guest) before each round,
   for up to four hours, and watches the host while the round runs: a round
   that anything else overlapped is thrown away and timed again, up to eight
