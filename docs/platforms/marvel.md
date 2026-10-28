@@ -122,6 +122,7 @@ From [backlog.md](../backlog.md), where the order of work is:
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
+| The console crawls with 16 processors on a host with more runnable threads than cores: its scheduler lock waits, hand-off by hand-off, for the thread holding the next ticket ("`init` with sixteen processors") | open: the host's load, registered only |
 
 Left, by choice or because only a real machine could settle them:
 
@@ -923,6 +924,21 @@ and the console's restart then cleared the word; the other two woke
 before their halt was sent. The sender's waits of 50 us or
 more (142 in the 30 `init`s): median 1.6 ms, at most 40 ms; none reached
 the 100 ms bound.
+
+**What is left: the crawl.** The overnight loop's other stop was not a
+deadlock: the console printed `show hwrpb` a few bytes a minute, every
+processor in the scheduler lock's back-off, the lock moving. The lock
+hands itself on in ticket order, so each hand-off waits for the thread
+holding the next ticket, which a host with more runnable threads than
+cores often is not running. Restoring that stopped machine at a load of
+50 to 150, six 40 s restores did not reach `P00>>>`. Two changes were
+tried and not taken. Serving each processor's own RBOX_SCRATCH1, which the
+back-off reads and writes on every turn, without the register block's
+lock ended the threads' sleeps on that lock (about 800 a second to none
+or one), but its 40 s restores reached the prompt in one try of two, as
+they did without it; a yield in the back-off's read did no better. With
+the fix alone, `marvel_init_check.sh` on the `gs1280` with 16 processors
+passed in 519 s at a load of 101.
 
 ### Captures from a real ES47 7/1300 (2026-10-26)
 
