@@ -1600,9 +1600,8 @@ public:
   void vctl_csr_write(u64 v) {
     m_vctl.store(v & tarantula::kVen, std::memory_order_relaxed); // <63:1> RAZ
   }
-  /// The window of a board without EV7 register windows (the ES40, under
-  /// ALPHABOX_CPU_ANY_BOARD): index 0 is VCTL, index 1 the
-  /// ALPHABOX_TARANTULA_PEEK test window (tarantula_init).
+  /// VCTL on a board without EV7 register windows (the ES40, or another
+  /// under ALPHABOX_CPU_ANY_BOARD): range 0 (tarantula_init).
   virtual u64 ReadMem(int index, u64 address, int dsize);
   virtual void WriteMem(int index, u64 address, int dsize, u64 data);
 

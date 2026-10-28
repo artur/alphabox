@@ -8,17 +8,16 @@ docs/platforms/ev8.md; the expected values are computed here from the sheet
 (and, for an FP element, from tfloat.py, the scalar /SUI instruction), not
 from the emulator.
 
-How a case gets values in and out. S7 has no vector loads or stores (SM and
-RM are S8), and the sheet moves no element between vector and scalar
-registers (point 13): a scalar enters through VS, a vector leaves through
-memory only. So the cases use a test hook, ALPHABOX_TARANTULA_PEEK=1
-(docs/headless.md), which the oracle sets for these rows: the processor's
-vector registers in the last 32 KB of its EV7 register window, element i of
-$vrN at offset 0x3F8000 + 0x400 x N + 8 x i, read and written with
-quadword loads and stores. The image fills a register from a table of 64
-quadwords (element i <- T[(start + i x step) mod 64], the subroutine t_fill)
-and copies elements into the result buffer (t_read). The boot-image test
-(tarantula_vv.py) puts values in through VS instead.
+How a case gets values in and out. Memory is the sheet's way (point 13: no
+element moves between vector and scalar registers), through the memory
+instructions of S8 (group tarmem checks those on their own): the image
+fills a register from a table of 64 quadwords (element i <- T[(start + i x
+step) mod 64]) by writing the 128 quadwords to a buffer in scratch page 1
+and loading them with VLOADQ at vl 128 and vs 8 (the subroutine t_fill),
+and reads one by VSTOREQ to the buffer and quadword loads into the results
+(t_read); both put vl and vs back. S7 had no vector loads or stores, and
+used a test hook for this, ALPHABOX_TARANTULA_PEEK, retired with S8. The
+boot-image test (tarantula_vv.py) puts values in through VS instead.
 
 VEN: on the `ev8` row VCTL is the CSR at offset 0x3F0000 of the
 processor's window, which the ES40 answers under the
@@ -28,31 +27,31 @@ S7]; on the `ev8n` row it is the IPR 0xAC (N8), written in PALmode
 window, so the other groups' OPCDEC cases of opcodes 01-07 hold on these
 rows too, and the group starts with such words on every row.
 
-Registers: R14 the table area's address and R15 the window's, for the
+Registers: R14 the table area's address and R15 the buffer's, for the
 whole group; R16-R22 and R23 (the link) are the subroutines'.
 """
 import alpha_asm as A
-from alpha_asm import OP, R31, call_pal, fop, jmp, mem, opl, opr
+from alpha_asm import OP, R31, bra, call_pal, fop, jmp, mem, opl, opr
 import image
 import rows
 import tfloat as T
 from image import R_RES, kseg
 
 M64 = (1 << 64) - 1
-R_TAB, R_WIN, R_LINK = 14, 15, 23
+R_TAB, R_BUF, R_LINK = 14, 15, 23
+# The transfer buffer: 128 quadwords in scratch page 1.
+BUF_OFF = 0x2000
 I8 = A.IPR8
 
-# PID 0's EV7 register window (cpu/ev7/Ev7.hpp, kEv7Map.csr_base): VCTL
-# and the hook's register window in it (src/cpu/Tarantula.hpp).
+# PID 0's EV7 register window (cpu/ev7/Ev7.hpp, kEv7Map.csr_base) and
+# VCTL in it (src/cpu/Tarantula.hpp).
 WIN_PA = 0xFFFFFC00000
 VCTL_PA = WIN_PA + 0x3F0000
-PEEK_PA = WIN_PA + 0x3F8000
-# The native EV8's: PID 0's block in the 21464 mode's map (N18), which the
-# processor's window follows on that row (AlphaCPU_vector.cpp); the ES40
-# folds both maps' addresses into one.
+# The native EV8's: PID 0's block in the 21464 mode's map (N18), where the
+# native EV8's VCTL is not decoded (it is the IPR 0xAC); the ES40 folds
+# both maps' addresses into one.
 WIN8_PA = 0xFFFFFFC00000
 VCTL8_PA = WIN8_PA + 0x3F0000
-PEEK8_PA = WIN8_PA + 0x3F8000
 
 GROUPS = [("tarantula", "Tarantula (ev8-isa.md 4): OPCDEC for 01-06 with VEN "
                         "0 and on every other row, VCTL, VC, every VV and VS "
@@ -287,7 +286,7 @@ class G:
             b.emit(ldq(3, 1, 0))
         b.store(3, field, expect)
 
-    # registers through the window
+    # registers through memory (VLOADQ, VSTOREQ)
     def fill(self, n, table, start=0, step=1):
         b = self.b
         b.emit(lda(16, R31, n))
@@ -308,8 +307,9 @@ class G:
             b.slot("%s[%d]" % (name or "$vr%d" % n, first + k), want[k])
         d = base - b.res_base
         b.asm._add32(17, R_RES, d)
-        b.emit(lda(16, R31, n * 0x400 + 8 * first))
+        b.emit(lda(16, R31, n))
         b.emit(lda(18, R31, count))
+        b.emit(lda(19, R31, 8 * first))
         b.asm.branch(OP["BSR"], R_LINK, "t_read")
 
     def setvl(self, n, rc=R31):
@@ -454,13 +454,35 @@ def harness(g):
     b.begin("tarantula: the harness, VCTL")
     b.need(rows.TARANTULA)
     b.li(R_TAB, kseg(image.TAB_PA))
-    b.li(R_WIN, g.seg | (PEEK8_PA if g.ev8n else PEEK_PA))
+    b.li(R_BUF, b.scratch + BUF_OFF)
     a = b.asm
     a.branch(OP["BR"], R31, "t_over")
-    # t_fill: $vr(r16)[i] <- tab[r17 + ((r18 + i x r19) mod 64)], i < 128.
+
+    def dispatch(tag, ins):
+        """vl <- 128 and vs <- 8 (the old ones in r20, r21), then `ins` of
+        $vr(r16) at R_BUF, through a table of 32 such words, each followed
+        by a branch to tag_done, where vs and vl are put back."""
+        a.emit(A.vc("getvl", rc=20))
+        a.emit(A.vc("getvs", rc=21))
+        a.emit(A.vc("setvl", lit=128))
+        a.emit(A.vc("setvs", lit=8))
+        a.emit(opl(0x12, 0x39, 16, 3, 16))         # SLL r16,3: the entry
+        a.emit(bra(OP["BR"], 22, 0))               # r22 <- the next word
+        a.emit(opr(0x10, 0x20, 22, 16, 22))
+        a.emit(lda(22, 22, 16))                    # the table, 4 words on
+        a.emit(jmp(0, R31, 22))
+        a.emit(0x47FF041F)                         # (never run)
+        for n in range(32):
+            a.emit(A.vmem(ins, n, R_BUF))
+            a.branch(OP["BR"], R31, tag + "_done")
+        a.label(tag + "_done")
+        a.emit(A.vc("setvs", rb=21))
+        a.emit(A.vc("setvl", rb=20))
+
+    # t_fill: $vr(r16)[i] <- tab[r17 + ((r18 + i x r19) mod 64)], i < 128:
+    # the quadwords into the buffer, then VLOADQ at vl 128, vs 8.
     a.label("t_fill")
-    a.emit(opl(0x12, 0x39, 16, 10, 20))          # SLL r16,10,r20
-    a.emit(opr(0x10, 0x20, R_WIN, 20, 20))       # ADDQ: element 0
+    a.emit(opr(0x11, 0x20, R_BUF, R_BUF, 20))    # BIS: the buffer
     a.emit(opr(0x10, 0x32, 17, R_TAB, 17))       # S8ADDQ: the table
     a.emit(lda(21, R31, 128))
     a.label("t_fill_loop")
@@ -472,10 +494,13 @@ def harness(g):
     a.emit(lda(20, 20, 8))
     a.emit(opl(0x10, 0x29, 21, 1, 21))           # SUBQ r21,1,r21
     a.branch(OP["BGT"], 21, "t_fill_loop")
+    dispatch("t_fill", "vloadq")
     a.emit(jmp(2, R31, R_LINK))
-    # t_read: r18 quadwords from the window at offset r16 to r17.
+    # t_read: $vr(r16) to the buffer (VSTOREQ at vl 128, vs 8), then r18
+    # quadwords from the buffer at r19 on to r17.
     a.label("t_read")
-    a.emit(opr(0x10, 0x20, R_WIN, 16, 16))
+    dispatch("t_read", "vstoreq")
+    a.emit(opr(0x10, 0x20, R_BUF, 19, 16))
     a.label("t_read_loop")
     a.emit(ldq(20, 16, 0))
     a.emit(stq(20, 17, 0))
@@ -745,8 +770,8 @@ def g_vr31(g):
     b = g.b
     b.begin("tarantula: $vr31 as sources and destination")
     b.need(rows.TARANTULA)
-    g.fill(31, "mix")                    # through the window: discarded
-    g.read(31, 0, 4, name="$vr31 after a store")
+    g.fill(31, "mix")                    # VLOADQ into $vr31: a prefetch
+    g.read(31, 0, 4, name="$vr31 after a load")
     g.fill(7, "fill")
     g.fill(8, "int")
     g.setvl(16)

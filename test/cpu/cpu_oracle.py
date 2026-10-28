@@ -271,10 +271,6 @@ def main():
     # slept from one that did not (cases.QUIESCE_TIMEOUT).
     if row.own_instruction(cases.QUIESCE):
         env["ALPHABOX_QUIESCE_TIMEOUT"] = str(cases.QUIESCE_TIMEOUT)
-    # Tarantula's registers through a window of their own, a test hook:
-    # S7 has no vector loads or stores (tarantula_cases.py).
-    if "TARANTULA" in row.ext:
-        env["ALPHABOX_TARANTULA_PEEK"] = "1"
     env.update(kv.split("=", 1) for kv in args.env)
     runs = []
     for n, b, img in images:

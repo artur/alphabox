@@ -107,17 +107,18 @@ u32 scalar_word(u32 fnc) {
  * board without EV7 register windows -- the ES40, which takes the `ev8` row
  * as an Alphabox construction, or any board under the
  * ALPHABOX_CPU_ANY_BOARD test hook, where the CPU oracle runs every row --
- * the part of the processor's window Tarantula owns: VCTL (the `ev8` row
- * only) and, with ALPHABOX_TARANTULA_PEEK=1, the register window
- * (docs/headless.md). On the Marvel boards CEv7Csr answers VCTL.
+ * the `ev8` row's VCTL, at its offset in the processor's EV7 window. On the
+ * Marvel boards CEv7Csr answers VCTL; the native EV8's is the IPR 0xAC.
  *
  * [decision] The window is answered on such a board so that software (the
  * oracle's cases, an operating system) sets and clears VEN with a quadword
  * store to the address ev8-isa.md gives. The Tsunami and the Titan
  * decode 44 physical address bits and ignore PA<42:35> in their I/O space
  * (their "Bits <42:35> are don't cares if bit <43> is asserted"), so every
- * PID's window lands on one address there, in either map; each processor
- * that reaches it gets its own.
+ * PID's window lands on one address there; each processor that reaches it
+ * gets its own. (S7 had a test hook here too, ALPHABOX_TARANTULA_PEEK, the
+ * vector registers in the window's last 32 KB, for tests that had no vector
+ * loads or stores; S8 retired it.)
  **/
 void CAlphaCPU::tarantula_init() {
   if (!(m_model->ext & CPU_EXT_TARANTULA))
@@ -131,30 +132,11 @@ void CAlphaCPU::tarantula_init() {
   // construction or through the test hook; either way the board has no
   // EV7 register windows.
   const cpu_model *board = find_cpu_model(cSystem->platform().cpu_model);
-  if (!board || board->family == CPU_FAMILY_EV7)
+  if (!board || board->family == CPU_FAMILY_EV7 || m_ev8n)
     return;
-  // The window by the processor's own map: the EV7's for the `ev8` row,
-  // whose VCTL the sheet places there; on the native EV8 the 21464 mode's
-  // (N18, PID 0's block at 0xFFFF_FFC0_0000), the map its Marvel boards
-  // use, for the hook's register window alone [decision]. The board then
-  // folds the address into its own space.
-  const ev7::address_map &map = m_ev8n ? ev7::k21464Map : ev7::kEv7Map;
-  const u64 win = map.csr_base(m_pid) & cSystem->chipset()->phys_mask();
-  if (!m_ev8n)
-    cSystem->RegisterMemory(this, 0, win + tarantula::kVctlOffset, 8);
-  static const bool peek = [] {
-    const char *e = getenv("ALPHABOX_TARANTULA_PEEK");
-    return e && *e && strcmp(e, "0") != 0;
-  }();
-  if (peek) {
-    cSystem->RegisterMemory(this, 1, win + tarantula::kPeekOffset,
-                            tarantula::kPeekSize);
-    if (state.iProcNum == 0)
-      printf("%%CPU-W-TARPEEK: the vector registers are readable and "
-             "writable at offset %x of the register window (the "
-             "ALPHABOX_TARANTULA_PEEK test hook)\n",
-             tarantula::kPeekOffset);
-  }
+  const u64 win =
+      ev7::kEv7Map.csr_base(m_pid) & cSystem->chipset()->phys_mask();
+  cSystem->RegisterMemory(this, 0, win + tarantula::kVctlOffset, 8);
 }
 
 void CAlphaCPU::tarantula_reset() {
@@ -168,21 +150,14 @@ void CAlphaCPU::tarantula_reset() {
 }
 
 /**
- * The window of a board without EV7 register windows (tarantula_init): the
+ * VCTL on a board without EV7 register windows (tarantula_init): the
  * processor that accesses it, which on such a board can only mean its own.
  **/
 u64 CAlphaCPU::ReadMem(int index, u64 address, int dsize) {
   CAlphaCPU *c = (t_running_cpu && t_running_cpu->m_vec) ? t_running_cpu : this;
-  if (!c->m_vec)
+  if (!c->m_vec || index != 0)
     return 0;
-  u64 v = 0;
-  if (index == 0) {
-    v = c->vctl_is_csr() ? c->vctl_csr_read() : 0;
-  } else if (index == 1 && address < tarantula::kPeekSize) {
-    const u32 n = (u32)(address / tarantula::kPeekStride);
-    const u32 i = (u32)((address % tarantula::kPeekStride) / 8);
-    v = c->m_vec->vr[n][i];
-  }
+  u64 v = c->vctl_is_csr() ? c->vctl_csr_read() : 0;
   if (dsize == 32)
     v = (address & 4) ? (v >> 32) : (v & 0xffffffff);
   return v;
@@ -190,19 +165,10 @@ u64 CAlphaCPU::ReadMem(int index, u64 address, int dsize) {
 
 void CAlphaCPU::WriteMem(int index, u64 address, int dsize, u64 data) {
   CAlphaCPU *c = (t_running_cpu && t_running_cpu->m_vec) ? t_running_cpu : this;
-  if (!c->m_vec)
+  if (!c->m_vec || index != 0)
     return;
-  if (index == 0) {
-    if (c->vctl_is_csr() && !(address & 4))
-      c->vctl_csr_write(data);
-    return;
-  }
-  if (index != 1 || address >= tarantula::kPeekSize || dsize != 64)
-    return;
-  const u32 n = (u32)(address / tarantula::kPeekStride);
-  const u32 i = (u32)((address % tarantula::kPeekStride) / 8);
-  if (n != tarantula::kRegs - 1) // $vr31 discards writes
-    c->m_vec->vr[n][i] = data;
+  if (c->vctl_is_csr() && !(address & 4))
+    c->vctl_csr_write(data);
 }
 
 /**

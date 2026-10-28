@@ -20,17 +20,16 @@ VCTL<VEN> (on the `ev8` row the CSR at offset 0x3F0000 of its window, on
   4 strip-mined  z <- x k + y over 300 quadwords, SETVL giving each pass
                  its length (128, 128, 44): VSMULQ, VVADDQ
 
-How values get in and out. S7 has no vector loads or stores (S8), and the
-sheet moves no element between vector and scalar registers (point 13).
-In: the VS route the sheet gives. The image builds $vr30 = 0, 1, ..., 127
+How values get in and out. The sheet moves no element between vector and
+scalar registers (point 13). In: the VS route the sheet gives. The image builds $vr30 = 0, 1, ..., 127
 with SETVL, a broadcast (VSBIS from $vr31), SETVM (which clears every mask
 bit at or above vl) and VVMRG, then puts element i in with a one-element
-mask: VSCMPEQ $vr30, i, then SETVM, then VSMRG of the scalar. Out: the
-ALPHABOX_TARANTULA_PEEK test hook (docs/headless.md), quadword loads from
-the register window; the dot product's reduction is scalar code over those
-loads, since the sheet has neither an element move (GETVL, GETVS and GETVM
-give no element) nor a way to move an element to another position for a
-reduction by halving.
+mask: VSCMPEQ $vr30, i, then SETVM, then VSMRG of the scalar. Out: VSTOREQ
+(S8; S7 read the registers through a test hook, ALPHABOX_TARANTULA_PEEK,
+retired with S8); the dot product's reduction is scalar code over the
+stored products, since the sheet has neither an element move (GETVL, GETVS
+and GETVM give no element) nor a way to move an element to another
+position for a reduction by halving.
 
 The image counts the elements where the vector result and the scalar one
 differ, and sums both; this script checks the counts are 0, the scalar sums
@@ -57,13 +56,6 @@ from image import kseg  # noqa: E402
 M64 = (1 << 64) - 1
 WIN_PA = 0xFFFFFC00000
 VCTL_PA = WIN_PA + 0x3F0000
-PEEK_PA = WIN_PA + 0x3F8000
-# The native EV8's: PID 0's block in the 21464 mode's map (N18), which the
-# processor's window follows on that row (AlphaCPU_vector.cpp); the ES40
-# folds both maps' addresses into one.
-WIN8_PA = 0xFFFFFFC00000
-VCTL8_PA = WIN8_PA + 0x3F0000
-PEEK8_PA = WIN8_PA + 0x3F8000
 
 DATA_PA = 0x1E8000            # results, inputs (past the EV8 PAL's snippets)
 N1, N3, N4 = 128, 100, 300
@@ -139,7 +131,6 @@ def build(ev8n):
     seg = image.SEG52 if ev8n else image.SEG48
     uart = image.UART_VA8 if ev8n else image.UART_VA
     D = 20                    # r20: the data area
-    W = 21                    # r21: the register window
     a.branch(OP["BR"], R31, "main")
     image.emit_print_hex(a)
     a.label("fatal")
@@ -166,17 +157,23 @@ def build(ev8n):
         a.emit(opr(0x10, 0x4D, 4, 3, 6))           # CMPLT r4,r3,r6
         a.branch(OP["BNE"], 6, "ins_loop_%d" % n)
         a.emit(jmp(2, R31, 26))
-    # extract: r3 elements of $vr(r1) to r2 (the window, quadword loads).
+    # extract: r3 elements of $vr(r1) to r2: VSTOREQ at vl r3 and vs 8, vl
+    # put back; through a table of the 32 VSTOREQs. Clobbers r4-r6.
     a.label("extract")
-    a.emit(opl(0x12, 0x39, 1, 10, 4))          # SLL r1,10,r4
-    a.emit(addq(W, 4, 4))
-    a.label("ext_loop")
-    a.emit(ldq(5, 4, 0))
-    a.emit(stq(5, 2, 0))
-    a.emit(lda(4, 4, 8))
-    a.emit(lda(2, 2, 8))
-    a.emit(opl(0x10, 0x29, 3, 1, 3))
-    a.branch(OP["BGT"], 3, "ext_loop")
+    a.emit(A.vc("getvl", rc=4))
+    a.emit(A.vc("setvl", rb=3))
+    a.emit(A.vc("setvs", lit=8))
+    a.emit(opl(0x12, 0x39, 1, 3, 5))           # SLL r1,3,r5: the entry
+    a.emit(A.bra(OP["BR"], 6, 0))              # r6 <- the next word
+    a.emit(addq(6, 5, 6))
+    a.emit(lda(6, 6, 16))                      # the table, 4 words on
+    a.emit(jmp(0, R31, 6))
+    a.emit(0x47FF041F)                         # (never run)
+    for n in range(32):
+        a.emit(A.vmem("vstoreq", n, 2))
+        a.branch(OP["BR"], R31, "ext_done")
+    a.label("ext_done")
+    a.emit(A.vc("setvl", rb=4))
     a.emit(jmp(2, R31, 26))
     # compare: r3 quadwords at r1 and r2: r0 <- how many differ, r7 <- the
     # sum of r1's, r8 <- the sum of r2's.
@@ -212,7 +209,6 @@ def build(ev8n):
     a.label("main")
     a.li(image.R_UART, uart)
     a.li(D, kseg(DATA_PA))
-    a.li(W, seg | (PEEK8_PA if ev8n else PEEK_PA))
     # VEN = 1.
     if ev8n:
         snips = Asm(image.PAL8_SNIP_PA)
@@ -506,7 +502,7 @@ def main():
     os.makedirs(workdir)
     image.write_rom(os.path.join(workdir, "oracle.rom"), build(ev8n))
     port = args.port or cpu_oracle.free_port()
-    env = {"ALPHABOX_CPU_ANY_BOARD": "1", "ALPHABOX_TARANTULA_PEEK": "1"}
+    env = {"ALPHABOX_CPU_ANY_BOARD": "1"}
     text, emu, secs = cpu_oracle.run(os.path.abspath(args.binary), workdir,
                                      args.cpu, port, env, args.timeout)
     with open(os.path.join(workdir, "serial.txt"), "w") as f:

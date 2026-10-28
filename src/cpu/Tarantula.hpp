@@ -49,13 +49,6 @@ constexpr u64 kVen = 1;
 /// VCTL's offset in each processor's own EV7 register window, the 4 MB block
 /// of its PID [decision, the owner's, 2026-10-25; ev8-isa.md, section 2].
 constexpr u32 kVctlOffset = 0x3F0000;
-/// ALPHABOX_TARANTULA_PEEK's window, a test hook (docs/headless.md): element
-/// i of $vrN at kPeekOffset + N x kPeekStride + 8 x i of the processor's
-/// window, on a board without EV7 windows only. The last 32 KB of the
-/// 64 KB that ev8-isa.md section 2 finds unclaimed.
-constexpr u32 kPeekOffset = 0x3F8000;
-constexpr u32 kPeekStride = kElems * 8;
-constexpr u32 kPeekSize = kRegs * kPeekStride;
 
 /// One processor's vector state (ev8-isa.md 4.1). Cleared at power-up and
 /// by a reset: the paper leaves the values UNPREDICTABLE, Alphabox clears
