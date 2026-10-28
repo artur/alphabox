@@ -123,7 +123,6 @@ From [backlog.md](../backlog.md), where the order of work is:
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
 | The console crawls with 16 processors on a host with more runnable threads than cores: its scheduler lock waits, hand-off by hand-off, for the thread holding the next ticket ("`init` with sixteen processors", "What is left: the crawl") | open: the host's load, registered only |
-| After `init` processor 0 runs at 7 to 130 MIPS for tens of seconds: it takes each processor's register-block lock to deliver that processor's tick, and the 15 parked processors poll their own RBOX_SCRATCH1 under the same lock ("`init` with sixteen processors", "The slowdown after `init`") | being fixed: each processor ticking itself; the lock-free RBOX_SCRATCH1 if that is not enough |
 
 Left, by choice or because only a real machine could settle them:
 
@@ -941,32 +940,40 @@ they did without it; a yield in the back-off's read did no better. With
 the fix alone, `marvel_init_check.sh` on the `gs1280` with 16 processors
 passed in 519 s at a load of 101.
 
-**The slowdown after `init`** (2026-10-28) is the emulator's own, not the
-host's. A gate run of the EV8 ES80 with four TPUs a chip didn't get back
-to `P00>>>` within 600 s of its first `init` (load about 30). The machine
-saved at that point was not stuck: restored, it reached the prompt. In
-it processor 0 was filling memory and had moved on by one 8 KB page
-between the dump and the snapshot taken seconds later. The 15 others
-were parked in the console PALcode's loop (0x390e4).
+**The slowdown after `init`** (2026-10-28) was the emulator's own, not
+the host's. A gate run of the EV8 ES80 with four TPUs a chip didn't get
+back to `P00>>>` within 600 s of its first `init` (load about 30). The
+machine saved at that point was not stuck: restored, it reached the
+prompt. In it processor 0 was filling memory and had moved on by one 8 KB
+page between the dump and the snapshot taken seconds later. The 15
+others were parked in the console PALcode's loop (0x390e4).
 - **The cause:** that loop reads the processor's RBOX_SCRATCH1 every six
-  instructions, under its register block's lock. Processor 0 takes every
-  block's lock to deliver each processor's tick (`CEv7Csr::interval_tick`).
-- **The effect:** a sample of processor 0's thread after `init` found it
-  waiting for those locks in `interval_tick` in 3034 of 3417 samples.
-  Processor 0 runs at 7 to 130 MIPS, against about 1900, for tens of
-  seconds after every `init`. Whether that outlasts a test's timeout
-  depends on the host.
+  instructions, under its register block's lock, and processor 0 took
+  every block's lock to deliver each processor's tick
+  (`CEv7Csr::interval_tick`).
+- **The effect:** a sample of processor 0's thread from a second after
+  `init` found it waiting for those locks in `interval_tick` in 3034 of
+  3417 samples (3172 of 3397 on main `d69b9ba`, `lab/runs/tick/es80/s-main`).
+  Over four `init`s (`es80_rate.sh`, 5 s windows) main ran processor 0 at
+  a median of 426 MIPS, down to 6 to 45 for 100 to 150 s after each
+  `init` (load 196).
 - **Not the halt fix:** the code before it behaved the same (3197 of 3245
   samples).
-- **What cures it:** serving a processor's own RBOX_SCRATCH1 without the
-  lock (the change tried for the crawl above) does. Processor 0 then
-  waited in 121 of 4145 samples, none in `interval_tick`, and stayed at
-  2000 to 2500 MIPS.
+- **The cure:** every processor now fires its own tick on its own thread
+  under its own block's lock ([cpu-fidelity.md](../cpu-fidelity.md),
+  "Every processor keeps its own interval timer"), so no thread takes
+  another's lock to tick it. The same `init` sampled the same way blocked
+  processor 0's thread in 24 of 3811 samples, none of them in
+  `interval_tick` (`s-new`). Over four `init`s it ran at a median of 1630
+  MIPS, never under 392 (load 64 to 170).
+- **Not needed:** serving a processor's own RBOX_SCRATCH1 without the lock
+  (the change tried for the crawl above) cured it too (121 of 4145
+  samples, 2000 to 2500 MIPS). It is held, not taken.
 
-Each processor keeping its own interval-timer schedule, so that no
-thread takes another processor's lock to tick it, should cure it from
-the other side. That change is in progress, and the lock-free register
-is taken as well if it doesn't.
+The console's own crawl, ticket by ticket, is the host's and stays open:
+that second run then went through `show hwrpb` too slowly for the check's
+timeout, every processor in the scheduler lock's back-off, and its
+snapshot restored printed the rest and reached the prompt in 90 s.
 
 ### Captures from a real ES47 7/1300 (2026-10-26)
 
@@ -3200,9 +3207,10 @@ What it did not give yet, for M1/M5/M6 to add, and what became of each:
   (es45.md).
 - **The LL/SC I/O bit** (`CPU_LOCK_IO_MASK`, PA<43>) is the Tsunami's and
   the EV7's alike; the line mask now follows `phys_mask()`.
-- **`interval_tick()` is one call from CPU 0** for the whole machine; a
-  per-CPU RBOX_IT is driven from it (M2), and CPU 0's schedule stays the
-  clock.
+- **`interval_tick(cpu)` is each processor's own**, from its own thread,
+  under its own register block's lock only (2026-10-28; until then it was
+  one call from CPU 0 that took every block's lock in turn, M2); every
+  processor's schedule runs at PID 0's period and in CPU 0's phase.
 - The JIT's device-access statistics (`AlphaCPU_jit.cpp`, JIT_STATS only)
   classify Tsunami CSR addresses by constant.
 

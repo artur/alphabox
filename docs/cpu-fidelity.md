@@ -555,7 +555,7 @@ encodings and results are [ev8-isa.md](platforms/ev8-isa.md)'s. IDS is the
 | WH64EN, MAP_ALIGN | no-ops, on every row as before | [ARM 4.11.11]; MAP_ALIGN is `XOR R31,R31,R31` [IDS p. 75] |
 | LDL_ARM, LDQ_ARM (18.B000, 18.B400) | Ra <- MEM[Rbv], LDL_ARM's sign-extended; no displacement; the faults are LDQ's, here this core's (misaligned only across a page, [above](#unaligned-data-accesses-do-not-trap)); then, if it did not fault, the watch on the 64-byte line read and watch_flag set | [IDS pp. 669-670]. The line is the LDx_L lock range, which the IDS requires the watched range to be [p. 670]. Performed whatever Ra, as LDx_L, and a memory operation for a pending STx_C, as LDQ: **[inference]** from "as similar as possible to the LDx_L instructions" [p. 669]. Fails to arm while an interrupt the processor would take is pending, in any mode [p. 678; the mode, **Alphabox decision**]; an address outside memory is never armed (**Alphabox decision**: nothing tells a processor of a store to I/O space) |
 | What clears watch_flag | another processor's store or successful STx_C, a device's DMA write, in the line; an interrupt the processor would take; the timeout; every CALL_PAL; every exception or interrupt that clears the load lock (not the TB-miss fills); stopping the processor's thread, a reset, a remote write to its RBOX_SCRATCH1 (the Marvel start hand-off) | stores, STx_C, the timeout and REI, rti, rfe, retsys, urti [IDS p. 670]; the interrupt [p. 677]. **Alphabox decisions**: every CALL_PAL, where the IDS leaves the others UNPREDICTABLE [p. 670], so no PALcode's function codes need knowing; the exceptions, which "may" clear it for implementation-specific reasons; the processor's own store does not (**[inference]**: the IDS names another processor's). WH64 changes no data here, so it clears nothing [p. 671] |
-| QUIESCE (18.B800) | with watch_flag clear, nothing; set, the host thread waits on a condition variable until it clears, bounded by QUIESCE_TIMEOUT (10240 cycles at the configured clock); never a trap, in any mode | [IDS pp. 668, 672-673, 678]; 10240 cycles as from power-up, since no IPR sets it in EV7-compatible mode (**Alphabox decision**, D16, [ev8.md](platforms/ev8.md)). A wake-up on the host's timer comes late, never early: the timeout is a minimum. Processor 0 fires the machine's interval timer from inside the wait. The QUIESCE does not sleep while another running processor may still store into a newly watched page through a translation cached as inline-writable (compiled code); it then fails, which the IDS allows [p. 671] |
+| QUIESCE (18.B800) | with watch_flag clear, nothing; set, the host thread waits on a condition variable until it clears, bounded by QUIESCE_TIMEOUT (10240 cycles at the configured clock); never a trap, in any mode | [IDS pp. 668, 672-673, 678]; 10240 cycles as from power-up, since no IPR sets it in EV7-compatible mode (**Alphabox decision**, D16, [ev8.md](platforms/ev8.md)). A wake-up on the host's timer comes late, never early: the timeout is a minimum. The processor fires its own interval timer from inside the wait. The QUIESCE does not sleep while another running processor may still store into a newly watched page through a translation cached as inline-writable (compiled code); it then fails, which the IDS allows [p. 671] |
 | After a snapshot | every watch_flag clear | not in the state file (no format change): a wake-up the IDS allows, since software tests its lock again after QUIESCE [p. 674]. **Alphabox decision** |
 | TPUs, by default | one processor per chip (`tpus` absent or 1): TPU 0, the chip's PID, nothing of TPUs 1-3 | the faithful EV8 under the EV7 console: the four TPUs share the chip's network address (R_WHOAMI [IDS p. 527]) and differ only in TPU_CNFG<57:56> [p. 488], and with no WAKEUP entry in the EV7 PALcode TPUs 1-3 would most likely never start **[inference]**; the owner's default (2026-10-25). In the native interface (S11-S13) TPUs are done the IDS's way: one node per chip, the TPU from TPU_CNFG |
 | TPUs as processors (`tpus = 2..4`) | each TPU a processor of its own, a `CAlphaCPU` with its own registers, IPRs, TBs (Mode 2: every TPU its own TB group [IDS p. 306]), cycle counter, LL/SC lock and watch_flag; TPU 0 keeps the chip's PID, TPU t is PID \| t << s, s the lowest bit pair no configured chip's PID uses (ES47 and ES80: PID + 2t); TPUs 1-3 have a 4 MB register block of their own, no memory and no IO7, and start parked on their RBOX_SCRATCH1 like a Marvel secondary | **Alphabox construction** [decision, the owner's, 2026-10-24 (D4, D5, D7) and 2026-10-25 (the numbering, in place of D6, and the default)]: per-TPU state is the IDS's [pp. 46, 477-479, 482-483], the PIDs and register blocks of TPUs 1-3 are invented, so that OpenVMS and Linux see and use the threads. TPU 0 keeping the chip's PID matches R_WHOAMI. Interrupts (D5) follow the blocks: each TPU's RBOX_INT/IMASK/IREQ, its interval timer and its GIO port, an IO7 LSI or MSI naming the TPU's PID; the IDS leaves steering "TBD" [pp. 527-528] |
@@ -715,7 +715,7 @@ are untouched by all of it.
 | R_INT_STAT | 0x050, one per chip, 32 bits: IPIs <3:0> (level 3), ticks <7:4> (2), halts <11:8> (4), the queue <12> (1), GIO_INT <13> and GIO_HINT <14> (4), performance <15> and correctable <16> (0), uncorrectable <17> (5), software <31:18> (3); written with ones to clear, <12> only by the queue emptying | **decision N22** |
 | R_INT_MASK | one per TPU, 32 bits: TPU 0's at 0x060 and 0x3F0000, TPU t's at 0x3F0000 + 0x40 x t; TPU t's level L is asserted while a bit of level L is set in R_INT_STAT & R_INT_MASK[t], into its own ISUM<EI>, gated by its own IER_CM<EIEN> | **decision N22** (N7 for the IPRs) |
 | R_INT_REQ | 0x070: sets its bits of <3:0>, <11:8> and <31:18> in R_INT_STAT; reads back what was last written | the fields N22's table gives it **[inference]**; the read-back as the EV7's **[decision]** |
-| The interval timer | R_INTER_TIM's ITV <7:0>; period (ITV + 1) x 2^17 cycles; 0 off; every tick sets <7:4> on each chip whose ITV is not 0; the machine's schedule follows PID 0's | the period **[inference]** (the EV7's, N22); 0 off **[inference]**, as the EV7 model |
+| The interval timer | R_INTER_TIM's ITV <7:0>; period (ITV + 1) x 2^17 cycles; 0 off; a tick sets its TPU's bit of <7:4> on a chip whose ITV is not 0; every processor's schedule runs at PID 0's period ([Guest time](#every-processor-keeps-its-own-interval-timer-2026-10-28)) | the period **[inference]** (the EV7's, N22); 0 off **[inference]**, as the EV7 model |
 | The interrupt queue | four IIDs of 24 bits; R_INT_QUE reads the head with <24> valid, a write removes it; a fifth refused | **decision N21** [IDS pp. 464, 528] |
 | A processor's write to a full R_INT_QUEADD | dropped and counted | **[decision]**: a store cannot see the WrIONack [IDS p. 528] |
 | The IO7's refused IID | kept, and sent again as soon as an entry of that queue is taken; not in the state file | "retry the same one" [IDS p. 465]; when **[decision]**; the state file **[decision]** |
@@ -777,8 +777,9 @@ starving processor 1's host thread while it runs the console (the
 instrumented build, not committed) gives the failed runs' result on
 `ev7z` (two runs of two) and on the default `ev68cb` (one of one); on
 `ev7` processor 1 finished just in time (one run).
-It is the emulator's interval timer, which the host's load exposes
-([below](#a-secondary-loses-interval-timer-ticks-when-the-host-starves-it)):
+It was the emulator's interval timer, which the host's load exposed
+([below](#every-processor-keeps-its-own-interval-timer-2026-10-28); each
+processor keeps its own since 2026-10-28):
 processor 1 finished its console start-up too late, the console handed
 over to AlphaBIOS without it, Windows was given one processor, and
 processor 1 stayed on the console's PALcode (PAL_BASE 0x8000) until
@@ -794,7 +795,7 @@ On a host loaded far past its cores (load average 200), the console
 sometimes leaves processor 1 out of `Configured CPUs`, with no `CPU 1
 speed is` line: on `ev8` in two runs of four, and on the default `ev68cb`
 in one of three. It is the same race, lost earlier: processor 1 is still
-measuring its speed when the prompt comes.
+measuring its speed when the prompt comes. (Both before 2026-10-28.)
 
 ### A processor that halts another waits until it has stopped (Marvel, 2026-10-27)
 
@@ -1364,7 +1365,7 @@ changed since. The measured drift and calibration are in
 | Clock | Who keeps time by it | How it follows the host |
 | --- | --- | --- |
 | The cycle counter (`RPCC`) | Linux on one processor (clocksource `rpcc`); the console's and Linux's processor-speed calibrations; Windows' `KeStallExecutionProcessor` | `state.cc` advances by host time times the configured speed at every dispatch batch and every read (`sync_cc_wallclock`); two reads never return the same value (`rpcc_read`'s floor, repaid out of later progress); a gap over a second (a debugger stop, a host sleep) counts as one second. The JIT's inline stub does the same arithmetic (`ALPHABOX_JIT_RPCCTEST=1` compares them). |
-| The interval timer | OpenVMS and Windows count it for the time of day; the console calibrates the processor's speed in cycles per tick | Processor 0 fires it from its dispatch loop (`interval_timer_poll`), at the rate register A of the TOY clock selects (0x26, 1024 Hz, from power on, as a battery-backed part keeps it), the first tick at once. The schedule advances one period a tick, so ticks a busy or descheduled thread missed are repaid: at least half a period apart (at most twice the rate, the gaps modulated so the console's calibration windows never agree), and a backlog over a second is dropped. |
+| The interval timer | OpenVMS and Windows count it for the time of day; the console calibrates each processor's speed in cycles per tick of its own | Every processor fires its own from its dispatch loop (`interval_timer_poll`, `TickSchedule.hpp`), at the rate register A of the TOY clock selects (0x26, 1024 Hz, from power on, as a battery-backed part keeps it), the first tick at once, in processor 0's phase ([below](#every-processor-keeps-its-own-interval-timer-2026-10-28)). The schedule advances one period a tick, so ticks a busy or descheduled thread missed are repaid: at least half a period apart (at most twice the rate, the gaps modulated so the console's calibration windows never agree), and a backlog over a second is dropped. |
 | The TOY clock (MC146818) | every guest at boot, for the time of day | the host's wall clock plus the offset the guest last set; UIP in the last 244 us of each of the clock's own seconds; PF at the programmed rate, counted from a fixed epoch |
 | The 8254 | Linux's speed calibration (counter 2 in mode 0, OUT polled on port 61h bit 5); stall loops counting port 61h's refresh toggle | each counter's count and OUT derived from host time since its load; the ALi thread steps the counters every millisecond for IRQ0, with a 30 ms catch-up cap |
 
@@ -1387,7 +1388,7 @@ made.
 | `f1fc924`, `c62e69a` | `RPCC` through a generated stub, rebuilt after a code reclaim | the per-read sync and floor of `2766e04` | yes: the stub does `rpcc_read`'s arithmetic, the one-second cap included |
 | `77a7a87` | `KeStallExecutionProcessor`'s loop is handed the cycles it waits for | time of day from the interval timer | yes for the time of day; `RPCC` runs ahead, a divergence of its own ([above](#a-busy-wait-is-handed-the-time-it-is-waiting-for)) |
 | `db8a902` | a guest spinning on port 61h sleeps to the next refresh toggle | the toggle every 15 us of host time | yes: the toggle comes at the same host instants, the reads in between are not answered early |
-| `39f040a`, `04b0d86` | the idle pacer does not sleep on a masked interrupt; a learned idle loop does not survive a restore | processor 0 never sleeps past its next tick | yes: `jit_idle_pause` sleeps until the earlier of 1 ms and `next_timer_fire`, and the batch ends after it, so the next fires the tick with a fresh time |
+| `39f040a`, `04b0d86` | the idle pacer does not sleep on a masked interrupt; a learned idle loop does not survive a restore | processor 0 never sleeps past its next tick | yes: `jit_idle_pause` sleeps until the earlier of 1 ms and the processor's next tick (every processor's own since 2026-10-28), and the batch ends after it, so the next fires the tick with a fresh time |
 | `15b74a4`, `e1cd0d3` | the delayed interrupt countdown is one read-modify-write; the Cchip's DRIR, DIM, DIR and MISC read under their writers' lock | the tick sets MISC<7:4> and raises IRQ2 at once | yes |
 | `649b418` | the dead "speed factor" loop goes | `RPCC` from host time, not from instructions | yes: the loop fed only itself |
 | `7631d98` | `interval_timer_poll` out of the two dispatch loops, for QUIESCE | the count-preserving schedule | yes: the same code, called from the same places, and from QUIESCE's wait |
@@ -1413,8 +1414,8 @@ catch-up gaps) is before `2aa5e11` and was taken in September
 
 ### Found by this check: a starved thread lost ticks
 
-`interval_timer_poll` repays missed ticks at least half a period apart
-(0.7 of one on average, `tick_next_gap_ns`), so a processor 0 thread
+The schedule repays missed ticks at least half a period apart
+(0.7 of one on average, `TickSchedule::next_gap`), so a processor 0 thread
 repays at most about 1.4 times the rate while it runs. A thread the host
 gives less than about 70% of a core falls behind for good: the backlog
 grows past a second, is dropped, and a guest that counts ticks loses the
@@ -1425,47 +1426,140 @@ lost 108 s in ten minutes; unthrottled on the shared host, at a load of 9
 to 30, it lost 22.5 s in twenty. Since `3a0b44f` a backlog of more than
 32 periods (a thread starved, not one stalled for a moment) is repaid
 with a quarter of the gap, still modulated: at the same share the timer
-runs at 1018 to 1030 Hz and OpenVMS keeps time to 0.1 s an hour. A
+runs at 1018 to 1030 Hz and OpenVMS keeps time to 0.1 s an hour (an
+eighth since 2026-10-28, [below](#every-processor-keeps-its-own-interval-timer-2026-10-28)). A
 thread that keeps up never reaches it, so unthrottled the console still
 measures 800 MHz and the timer runs at 1024 Hz. A console calibrating
 on a starved thread measures a wrong speed with or without the fix (its
 cycle counter follows the host, the ticks wait for the thread). The
 measurements are in [development.md](development.md), "Guest clocks".
 
-### A secondary loses interval-timer ticks when the host starves it
+### Every processor keeps its own interval timer (2026-10-28)
 
 Found 2026-10-27 (two `ev7z`s on the ES40 starting one processor under
 Windows 2000, [above](#the-es40-with-ev7-family-processors-an-alphabox-construction-2026-10-26)).
-Processor 0's thread keeps the interval timer's schedule and its catch-up
-(above); every other processor's tick comes from it. On the Tsunami a
-tick sets each processor's `MISC<ITINTR>` bit and raises its interrupt,
-so a secondary that has not acknowledged its last tick when the next one
-comes loses it: the bit is set already. A secondary the host gives
-little of a core counts one tick per time slice. A real processor
-answers in microseconds and loses none.
+Until 2026-10-28 processor 0's thread kept the interval timer's schedule
+and its catch-up (above), and every other processor's tick came from it:
+on the Tsunami and the Titan a tick set every processor's `MISC<ITINTR>`
+bit and raised its interrupt, and on a Marvel processor 0 took every
+register block's lock in turn to set its RBOX_INT<15>. A secondary that
+had not acknowledged its last tick when the next one came lost it: the
+bit was set already. A secondary the host gave little of a core counted
+one tick per time slice. A real processor answers in microseconds and
+loses none.
 
-What shows it: the ES40 console's start-up on each processor measures
+What showed it: the ES40 console's start-up on each processor measures
 its speed with `RSCC` over 100 of its own ticks and repeats until its
 last measurements agree, up to 100 times. Processor 0 makes its own
-ticks and agrees at once (0.4 s). A secondary losing ticks reads high
-(`CPU 1 speed is 1136 MHz` for 800 on this loaded host) and, starved
-further, repeats for tens of seconds. The console's primary does not
-wait for it indefinitely: at the prompt processor 1 can be missing from
-`Configured CPUs`, and
-when the console loads AlphaBIOS it hands over without it, so Windows
-starts one processor. Measured with an instrumented build that sleeps
-processor 1's thread 10 ms in every 2000 dispatches while it runs the
-console: no `CPU 1 speed is` in the 48 s before AlphaBIOS, and Windows
-started one processor.
+ticks and agrees at once (0.4 s). A secondary losing ticks read high
+(`CPU 1 speed is 1136 MHz` for 800 on a loaded host) and, starved
+further, repeated for tens of seconds. The console's primary does not
+wait for it indefinitely: at the prompt processor 1 could be missing
+from `Configured CPUs`, and when the console loads AlphaBIOS it hands
+over without it, so Windows started one processor (an instrumented
+build that slept processor 1's thread 10 ms in every 2000 dispatches
+while it ran the console: no `CPU 1 speed is` in the 48 s before
+AlphaBIOS, one processor). On the 16-processor Marvels the same
+broadcast was a lock problem: after `init` the 15 secondaries poll
+RBOX_SCRATCH1 in the PALcode's park loop (0x390e4), each read under its
+own block's lock, and processor 0 waited for those locks at every tick
+(gate oct28a's ES80: a `sample` put processor 0's thread in a mutex wait
+from `CEv7Csr::interval_tick` in 3034 of 3417 samples, and processor 0
+ran at 7 to 130 MIPS for tens of seconds after each `init`).
 
-A fix is proposed, not made: each processor keeping its own schedule
-and catch-up, its tick setting only its own bit (and processor 0 alone
-counting the period). Prototyped behind a switch on the same build: at
-a load average of about 85 processor 1 read 800 MHz in 0.4 s; under the
-starvation above
-it read 952 MHz after 16 s and joined before the handover (Windows: two
-processors). It narrows the window and does not close it: below about
-a fifth of a core the catch-up itself falls behind.
+**What is done now** (`cpu/TickSchedule.hpp`,
+`CAlphaCPU::interval_timer_poll`, `Chipset::interval_tick(cpu)`). Each
+processor keeps its own schedule and fires its own tick, from its own
+thread at its dispatch batches, with the catch-up processor 0 had: one
+period a tick, repaid at least half a period apart and modulated, a
+backlog over a second dropped; once more than 32 periods behind, an
+eighth of that gap (a quarter until now: below). Its tick sets only its own state: its `MISC<ITINTR>` bit
+and b_irq<2> (Tsunami, Titan), its register block's RBOX_INT<15> under
+that block's lock alone, or its TPU's bit of R_INT_STAT<7:4> in 21464
+mode. Processor 0's ticks alone count the machine's periods
+(`ALPHABOX_IRQSTATS`'s cchip-timer, the ES47 CMM's terminal check) and set
+the ITINTR bits of the processors the board does not have, which the
+chip's one timer sets too. A processor's sleeps end by its own next tick:
+the idle pause, QUIESCE (which fires the tick from inside the wait) and
+the instruction-paced hold (`timer.max_instr_per_tick`). A processor
+parked until its start owes no ticks: its schedule starts when it is
+released, its first tick at once, as one left pending by the broadcast
+was taken at once. Nothing is saved: a snapshot keeps the latched bits
+as before and the schedules start again with the threads, so state files
+from before still restore.
+
+All processors' ticks are due together, as the machine's are: processor 0
+publishes its next tick, and at every tick of another processor its next
+one moves to the nearest instant of processor 0's schedule, at most half
+a period away (zero once in step; it follows processor 0's when that
+moves, after a dropped backlog or a restart). That matters to the Marvel
+PALcode's clock rendezvous every 128 ticks (Ev7Csr.cpp): a secondary that
+gets there first spins with its interrupts off until the primary's
+broadcast, a period at most with the schedules apart.
+
+**The divergence:** the machine broadcasts one tick, which every processor
+takes within microseconds. Here every processor's thread fires its own at
+the same instants, within its dispatch batch (microseconds), or late when
+the host is not running its thread, and is then repaid. A tick fired
+while the guest's interrupts are off merges with the one pending, as on
+the machine, and is not repaid.
+
+**Measured** (2026-10-28, `lab/runs/tick`: an instrumented build, never
+committed, with the old broadcast behind a switch in the same binary;
+the ES40 with two `ev7z`s or `ev68cb`s at 800 MHz; processor 1's thread
+slept 10 ms in every 2000 dispatches while it ran the console, "2000:10",
+about a fifth of a core, or 5 to 14 ms, "jittered"; the host's own load
+on top). The console's line for processor 1, from power-on:
+
+| Load | Old broadcast | Each processor its own |
+| --- | --- | --- |
+| 5 to 55 | 5882 MHz at 5 s, twice; `ev68cb` 5000 MHz at 30 s, after the prompt | 719 and 1053 MHz at 11 s, 758 MHz at 19 s; jittered 1449 MHz at 29 s |
+| 80 to 180 | 4762, 4000 MHz at 44, 69 s; jittered 8333, 4348 and (`ev68cb`) 5000 MHz at 87, 74, 76 s: all after the prompt (21 to 28 s) | `ev68cb` 952 MHz at 26 s, 1754 MHz at 31 s; jittered 877 and (`ev68cb`) 1075 MHz at 28, 30 s: at the prompt or before |
+| unstarved | 800 MHz at 1 s | 800 MHz at 1 s |
+
+The first version repaid a starved schedule with a quarter of the gap,
+as processor 0's had: at 2000:10 and a load of 10 to 33 processor 1 read
+862 to 1471 MHz after 18 to 31 s (six runs), the catch-up just short of
+its thread's share; an eighth reads as above.
+
+Windows 2000 (`count.sh`: `NUMBER_OF_PROCESSORS` and `GetSystemInfo`)
+started both processors in all 14 runs of both arms at loads of 6 to 94
+(2000:10, 200:10 and jittered, `ev7z` and `ev68cb`). At loads of 70 to
+200 and 2000:10 the broadcast started one processor in two runs of three
+(`ev7z`, `ev68cb`), each processor's own tick both in all three. Without
+starvation, the default `ev68cb`s at a load of 165, the broadcast once
+started one (processor 1 left on the console's PALcode, the
+`%CPU-W-OPCDEC` at 0xa001 of 2026-10-27, and spinning there at 10 to 18%
+of the host's CPU) where the other arm, at 167, started two. Host CPU at
+Windows 2000's idle desktop on two processors otherwise: 1.9 to 2.7%
+with the broadcast, 1.8 to 2.5% and 2.2 to 2.5% with each processor's
+own tick (`win_bench.sh`'s samples near the end). On four processors
+unstarved every `CPU n speed is` reads 800 MHz, as before.
+
+On the EV8 ES80 with four TPUs a chip (16 processors), a `sample` of the
+process from a second after `init` (main at a load of 60 to 100): before,
+processor 0's thread waited for a register block's lock in
+`CEv7Csr::interval_tick` in 3172 of 3397 samples and ran at 14 to 228
+MIPS for about fifty seconds; after, it waited in 24 of 3811, none in
+`interval_tick`, and its rate fell no lower than 335 MIPS, what a host
+running a hundred threads on sixteen cores gives it anyway
+([marvel.md](platforms/marvel.md), "`init` with sixteen processors").
+Over four `init`s each, with `ALPHABOX_RATE`'s 5 s windows: main at a
+load of 196 ran processor 0 at a median of 426 MIPS, 113 windows of 219
+under 500, down to 6 to 45 MIPS for 100 to 150 s after each `init`;
+after, at 64 to 170, at a median of 1630 MIPS, 6 of 221 under 500 and
+none under 392.
+
+**What remains.** The catch-up has a floor, so the prototype's finding
+holds with another number: below about a tenth of a core (an eighth of
+the gap; a fifth with the quarter) a thread cannot repay its ticks, the
+backlog passes a second and is dropped, and its console measures its
+speed high (200:10, about 2% of a core: 9091 MHz before, 4762 and 10000
+after). Above the floor the speed a starved secondary measures is still
+not exactly the configured one: its cycle counter follows the host while
+its ticks wait for its thread, so a measurement window is off by up to
+the thread's sleep, and the host's load adds its own (the 1449 and 1754
+MHz above).
 
 ### What is left
 

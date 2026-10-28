@@ -364,8 +364,10 @@ controllers derive from `CDiskController` and have `CDisk` children.
 Guest time follows the wall clock:
 
 - `state.cc` (RPCC) advances by real elapsed time.
-- CPU 0 fires the chipset's interval timer (`interval_tick()`, the
-  Cchip's on the Tsunami) at dispatch-batch boundaries.
+- Every CPU fires its own interval-timer tick (`interval_tick(cpu)`, its
+  MISC<ITINTR> bit on the Tsunami, its RBOX_INT<15> on a Marvel) at its
+  dispatch-batch boundaries, on its own schedule (`cpu/TickSchedule.hpp`)
+  in CPU 0's phase; CPU 0's ticks also count the machine's periods.
 - The ALi's 8254 PIT and TOY clock are paced by the wall clock too.
 
 The comments in `cpu/AlphaCPU.hpp` give the details.

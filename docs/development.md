@@ -141,8 +141,10 @@ menu. It writes
 guest passed. A whole run takes about 15 minutes. `GUESTS_EV7_CPU` boots
 `vms-es47` and `linux-es47` on another processor class than `ev7` (`ev7z`,
 `ev8`; with `ev8`, `GUESTS_EV8_TPUS` sets each chip's `tpus`, and SHOW
-CPU and Linux's "cpus active" must count every TPU), and
-`GUESTS_EXTRA_CMDS` gives those two and `linux` more commands (separated
+CPU and Linux's "cpus active" must count every TPU), `GUESTS_ES40_CPUS`
+boots `vms-es40` and `linux` on that many EV68s (1 to 4, default 1; SHOW
+CPU and "cpus active" must count them), and
+`GUESTS_EXTRA_CMDS` gives `vms-es47`, `linux-es47` and `linux` more commands (separated
 by `;`) before they shut down; the Linux guests read their date after
 them, since it is compared with the host's clock.
 
@@ -222,6 +224,23 @@ between the five reads of one reading, the resolution the run had.
 - Windows 2000 reached its desktop with the taskbar clock on the host's
   minute both times, and the command window showed `%TIME%`, but neither
   reading path took it (above): no drift figure yet.
+
+With every processor keeping its own interval timer (2026-10-28,
+[cpu-fidelity.md](cpu-fidelity.md), "Every processor keeps its own
+interval timer"), the same guests on the shared host, ten minutes each,
+`GUESTS_ES40_CPUS` setting the processors (`lab/runs/clock-tick-*`):
+
+| Guest | Processors | Load | Spread | Drift | |
+| --- | --- | --- | --- | --- | --- |
+| OpenVMS 8.4 | 1 | 16.4, 12.2, 25.8 | 0.008 s | -0.057 s/h | PASS |
+| OpenVMS 8.4 | 2 | 14.7, 20.0, 14.5 | 0.008 s | -0.086 s/h | PASS |
+| Linux 7.0.1 | 1 | 56.0, 78.4, 152.8 | 0.117 s | +0.778 s/h | PASS |
+| Linux 7.0.1 | 2 | 118.0, 105.5, 131.6 | 0.188 s | +0.098 s/h | PASS |
+
+The time of day comes from processor 0's ticks either way. Linux's timer
+(the count in `/proc/interrupts`) ran at 1023.88 Hz over its run on one
+processor and 1023.63 Hz on two, at those loads, against the HWRPB's
+1024.
 
 - The first OpenVMS run lost 22.5 s in twenty minutes on an unthrottled
   emulator while the host's load ran from 9 to 30: processor 0's thread
