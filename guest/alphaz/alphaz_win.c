@@ -25,6 +25,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <windows.h>
+#include <commctrl.h>
+
 #include "az_win32.h"
 #include "az.h"
 #include "az_build.h"
@@ -1097,16 +1100,16 @@ static HWND button(HWND parent, const char *text, int id)
 static LRESULT WINAPI main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_CREATE) {
-        az_tcitem it;
+        TCITEMA it;
         int i;
-        tab_w = CreateWindowExA(0, AZ_WC_TABCONTROL, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0, 10,
+        tab_w = CreateWindowExA(0, WC_TABCONTROLA, "", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0, 10,
                                 10, h, (HMENU)100, self, 0);
         SendMessageA(tab_w, WM_SETFONT, (WPARAM)font, 0);
         for (i = 0; i < ntabs; i++) {
             memset(&it, 0, sizeof it);
             it.mask = TCIF_TEXT;
             it.pszText = (LPSTR)(tabs[i] == AZ_DETAILS ? "Details" : az_pages[tabs[i]].title);
-            SendMessageA(tab_w, AZ_TCM_INSERTITEMA, i, (LPARAM)&it);
+            SendMessageA(tab_w, TCM_INSERTITEMA, i, (LPARAM)&it);
         }
         page_w = CreateWindowExA(0, "AlphaZPage", "", WS_CHILD | WS_VISIBLE | WS_VSCROLL, 0, 0, 10, 10, h, (HMENU)101,
                                  self, 0);
@@ -1125,7 +1128,7 @@ static LRESULT WINAPI main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     if (msg == WM_NOTIFY) {
-        az_nmhdr *n = (az_nmhdr *)lp;
+        NMHDR *n = (NMHDR *)lp;
         if (n->hwndFrom == tab_w && n->code == TCN_SELCHANGE) {
             cur = (int)SendMessageA(tab_w, TCM_GETCURSEL, 0, 0);
             note[0] = 0;
@@ -1164,9 +1167,11 @@ static int key(MSG *m)
     vis = detail_visible();
     switch (m->wParam) {
     case VK_TAB:
-        /* the key is down when the SHORT's bit 15 is set: tested as a bit,
-         * since the caller cannot count on the SHORT being sign-extended
-         * (under Wine, nada's i386 build saw 0xff81 for a held Ctrl) */
+        /* the key is down when the SHORT's bit 15 is set, which is how
+         * the call documents it, so it is tested as that bit. (On the
+         * Alpha, Windows sign-extends $0 itself; nada's x86 builds now
+         * extend a short result where the ABI leaves it to the caller,
+         * so the test no longer depends on either.) */
         if (!(GetKeyState(VK_CONTROL) & 0x8000)) return 0;
         select_tab(cur + (GetKeyState(VK_SHIFT) & 0x8000 ? -1 : 1));
         return 1;

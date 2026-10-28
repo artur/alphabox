@@ -119,29 +119,33 @@ needs nothing from the system but `/proc`.
 
     guest/alphaz/build.sh
 
-needs nada (`NADA=`, default `~/Documents/proj/nada`), which it uses
-read-only (its `./nada`, `include/` and `lib/`), and python3. It writes to
+needs nada at commit b8db5784 or later (`NADA=`, default
+`~/Documents/proj/nada`; build.sh stops and says so if it is older), which
+it uses read-only (its `./nada`, `include/` and `lib/`), and python3. It writes to
 `OUT` (default `$ALPHABOX_WORK/runs/alphaz-build`, `ALPHABOX_WORK` being
 the repository's `lab/` unless set):
 
 - `ALPHAZ.EXE`, built with `-t alpha-windows -mcpu=ev6`: PE32 for the
-  Alpha. nada writes every PE as a console program, so build.sh sets the
-  optional header's Subsystem to 2 (WINDOWS_GUI) afterwards and no console
-  opens behind the window.
+  Alpha. `-mwindows` gives the PE Subsystem 2 (WINDOWS_GUI), so no console
+  opens behind the window; build.sh checks each PE's Machine, Magic and
+  Subsystem.
 - `alphaz-linux`, built with `-t alpha -mcpu=ev6`.
 - `NADA-COMMIT.txt`: the nada commit (and whether its tree had changes),
   the commands, and the sha256 of every input and output.
 
 Both programs are built for the 21264, whose BWX, FIX and MVI every
-processor Alphabox emulates has. The EV8 instructions cannot be written as
-mnemonics at that level, so `az_ev8.c` has each as its `.long` word, in a
-function of its own; build.sh assembles each mnemonic with nada at
-`-mcpu=ev8` and fails unless the word is the one nada writes.
+processor Alphabox emulates has. The EV8 instructions of `az_ev8.c` are mnemonics after `.arch ev8`, which
+raises nada's assembler for that one asm text only, each in a function of
+its own; the sheet's word is written beside each, and build.sh fails
+unless every program contains it and nada's assembler at `-mcpu=ev8`
+writes it too.
 
 The `.def` files name the DLL calls AlphaZ makes (user32, gdi32,
-comctl32, advapi32, and the kernel32 calls beyond those of nada's own
-`lib/windows/kernel32.def`), and `az_win32.h` declares what nada's
-`include/windows/` does not yet have (the tab control, among others).
+comctl32, advapi32, which nada has no `.def` for, and the kernel32 calls
+beyond those of nada's own `lib/windows/kernel32.def`). nada's
+`include/windows/` declares what AlphaZ calls except DrawEdge,
+TrackMouseEvent, CreateFontIndirectA and their structures and constants,
+which `az_win32.h` declares.
 `mkicon.py` draws the icon; `alphaz.rc` holds it and the version.
 
 ## Testing it
@@ -177,7 +181,7 @@ host that timer lags.
 | File | What it is |
 | --- | --- |
 | `az.h`, `az_core.c` | the core: pages of rows, the instructions, the clock, the part and cache tables, the loops, the report |
-| `az_ev8.c` | the EV8 page: the words, their C models, the check, the SIMD loop |
+| `az_ev8.c` | the EV8 page: the instructions and their words, their C models, the check, the SIMD loop |
 | `alphaz_win.c`, `az_win32.h` | the Windows front end: Windows' own words, the window, `/report` |
 | `alphaz_linux.c` | the Linux front end: `/proc`, the report |
 | `*.def`, `alphaz.rc`, `mkicon.py` | imports, resources, the icon |

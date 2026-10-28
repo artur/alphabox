@@ -5,28 +5,30 @@
  * (docs/platforms/ev8-isa.md, sections 3.3 and 3.4).
  * Copyright (C) 2026 Artur Goulão
  *
- * AlphaZ is built for the 21264 (-mcpu=ev6), so the assembler takes none
- * of these mnemonics: each EV8 instruction is its word, a .long, in a
- * function of its own with no prologue, the operands in $a0 and $a1 and
- * the result in $v0 ($f10, $f11 and $f12 for paired single, reached with
- * ITOFT and FTOIT). build.sh checks every word here against the word
- * nada's own assembler writes for the mnemonic in its comment at
- * -mcpu=ev8. Nothing calls them unless AMASK has said bit 11 is present:
- * an EV6 or EV7 never executes one. */
+ * AlphaZ is built for the 21264 (-mcpu=ev6), and each EV8 instruction is
+ * written as its mnemonic after `.arch ev8`, which raises nada's assembler
+ * to the EV8 for that one asm text and leaves the rest of the program at
+ * the 21264. Each is in a function of its own with no prologue, the
+ * operands in $a0 and $a1 and the result in $v0 ($f10, $f11 and $f12 for
+ * paired single, reached with ITOFT and FTOIT). The word beside each
+ * mnemonic is the sheet's encoding: build.sh requires every program to
+ * contain it, and nada's assembler at -mcpu=ev8 to write it too. Nothing
+ * calls them unless AMASK has said bit 11 is present: an EV6 or EV7 never
+ * executes one. */
 #include <string.h>
 
 #include "az.h"
 
 #ifdef __nada_alpha__
-/* AZ_EV8_INT(name, word, mnemonic): an integer operate instruction;
- * AZ_EV8_PAIR(name, word, mnemonic): a paired-single one. build.sh reads
- * these lines. */
-#define AZ_EV8_INT(name, word, mnemonic) \
+/* AZ_EV8_INT(name, word, instruction): an integer operate instruction;
+ * AZ_EV8_PAIR(name, word, instruction): a paired-single one. The word is
+ * not assembled, only checked: build.sh reads these lines. */
+#define AZ_EV8_INT(name, word, instruction) \
     static u64 __attribute__((naked)) name(u64 a, u64 b) \
-    { __asm__("    .long " word "\n    ret\n"); }
-#define AZ_EV8_PAIR(name, word, mnemonic) \
+    { __asm__("    .arch ev8\n    " instruction "\n    ret\n"); }
+#define AZ_EV8_PAIR(name, word, instruction) \
     static u64 __attribute__((naked)) name(u64 a, u64 b) \
-    { __asm__("    itoft $a0, $f10\n    itoft $a1, $f11\n    .long " word "\n    ftoit $f12, $v0\n    ret\n"); }
+    { __asm__("    .arch ev8\n    itoft $a0, $f10\n    itoft $a1, $f11\n    " instruction "\n    ftoit $f12, $v0\n    ret\n"); }
 
 AZ_EV8_INT(w_vaddub8, "0x72110200", "vaddub8 $a0, $a1, $v0")
 AZ_EV8_INT(w_vaddsw4, "0x72110260", "vaddsw4 $a0, $a1, $v0")

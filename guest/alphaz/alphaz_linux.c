@@ -7,43 +7,45 @@
  * kernel prints it), /proc/meminfo and /proc/version; the processor's from
  * its instructions (az_core.c); the clock from RPCC against
  * clock_gettime(CLOCK_MONOTONIC), with the process on one processor so
- * that one counter is read throughout. nada's libc has no clock_gettime or
- * sched_setaffinity, so both are system calls made here. */
+ * that one counter is read throughout. */
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "az.h"
 #include "az_build.h"
 
-/* nada's runtime stub (lib/linux.c declares it the same way) */
-long long __syscall6(long long n, long long a, long long b, long long c, long long d, long long e, long long f);
-
-/* Linux's system call numbers on the Alpha (arch/alpha/kernel/syscalls/
- * syscall.tbl) */
-#define AZ_SYS_SCHED_SETAFFINITY 395
-#define AZ_SYS_SCHED_GETAFFINITY 396
-#define AZ_SYS_CLOCK_GETTIME 420
-#define AZ_CLOCK_MONOTONIC 1
-
 static u64 mono_now(void)
 {
-    long long ts[2];
-    ts[0] = 0;
-    ts[1] = 0;
-    __syscall6(AZ_SYS_CLOCK_GETTIME, AZ_CLOCK_MONOTONIC, (long long)ts, 0, 0, 0, 0);
-    return (u64)ts[0] * 1000000000ULL + (u64)ts[1];
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (u64)ts.tv_sec * 1000000000ULL + (u64)ts.tv_nsec;
 }
 
+/* the first 64 processors of the mask, bit n for processor n */
 static int set_cpus(u64 mask)
 {
-    return (int)__syscall6(AZ_SYS_SCHED_SETAFFINITY, 0, sizeof mask, (long long)&mask, 0, 0, 0);
+    cpu_set_t set;
+    int n;
+    CPU_ZERO(&set);
+    for (n = 0; n < 64; n++)
+        if ((mask >> n) & 1) CPU_SET(n, &set);
+    return sched_setaffinity(0, sizeof set, &set);
 }
 
 static u64 get_cpus(void)
 {
+    cpu_set_t set;
     u64 mask = 0;
-    if (__syscall6(AZ_SYS_SCHED_GETAFFINITY, 0, sizeof mask, (long long)&mask, 0, 0, 0) < 0) return 0;
+    int n;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof set, &set) < 0) return 0;
+    for (n = 0; n < 64; n++)
+        if (CPU_ISSET(n, &set)) mask |= 1ULL << n;
     return mask;
 }
 
