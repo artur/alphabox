@@ -2092,6 +2092,13 @@ _next_instruction:
         OP(CCB, NOP);
       }
       goto unused_misc;
+    // DRAINM, Tarantula's (docs/platforms/ev8-isa.md 4.8), whatever VEN is;
+    // elsewhere an unused code. The JIT leaves it to this switch.
+    case 0x5000:
+      if (m_vec) {
+        OP(DRAINM, NOP);
+      }
+      goto unused_misc;
     // LDL_ARM, LDQ_ARM, QUIESCE, the 21464's; elsewhere unused codes. The
     // JIT leaves them to this switch, and ends its block before them.
     case 0xB000:

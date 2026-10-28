@@ -108,6 +108,11 @@
 // acquire fence/load on another thread; it does NOT impose store-store
 // ordering visible to unsynchronized observers.
 #define DO_WMB std::atomic_thread_fence(std::memory_order_seq_cst);
+// DRAINM (Tarantula, docs/platforms/ev8-isa.md 4.8): it orders as MB does,
+// and makes every earlier store visible to later vector loads and gathers.
+// The emulator executes memory in program order, so the second half is
+// already true: an MB.
+#define DO_DRAINM memory_barrier();
 // FETCH/FETCH_M/ECB/WH64/WH64EN are hints — safe as no-ops.
 #define DO_FETCH ;   /* hint: no effect */
 #define DO_FETCH_M ; /* hint: no effect */
