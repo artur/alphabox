@@ -22,6 +22,7 @@ first audit was made on 2026-09-18; later entries carry their dates.
 | [Known divergences](#known-divergences) | where the processor differs, ranked by what a guest would notice |
 | [What was checked and found correct](#what-was-checked-and-found-correct) | so that it does not get re-litigated |
 | [Guest time](#guest-time-checked-2026-10-26) | what keeps a guest's clock, our changes since September and ES40-Emu's, checked |
+| [The console's frequency is a longword](#the-consoles-frequency-is-a-longword) | why a `speed` above 2100M is refused on the Tsunami and Titan boards |
 | [A guest's floating-point exception that is the guest's own](#a-guests-floating-point-exception-that-is-the-guests-own) | Direct3D 7 on Windows 2000 RC2 |
 | [The rule this audit produced](#the-rule-this-audit-produced) | two references, not one |
 
@@ -1577,6 +1578,41 @@ MHz above).
   emulator runs, and 833M as 833333333 (400 ppm). The real parts ran at
   those reported rates; a `speed` that is a whole number of picoseconds
   agrees with its HWRPB.
+
+## The console's frequency is a longword
+
+Found on 2026-10-28 (`lab/runs/interp-crash/status.md`), after an
+interpreter boot of OpenVMS on the ES40 stopped with a GENTRAP, "Unexpected
+exception or interrupt through vector 00000440", at start-up.
+
+- **Cause.** The ES40's console (V7.3-1) keeps each processor's frequency
+  in Hz as a 32-bit longword and copies it into the HWRPB's cycle counter
+  frequency (HWRPB+0x70) with `LDL`, which sign-extends. From 2^31 Hz
+  (2147.48 MHz) the quadword is negative. OpenVMS's start-up computes
+  (10^7 << 20) / frequency, gets 0 and divides by it (the exec's unsigned
+  quadword divide, divisor 0, integer divide by zero). It is the console's
+  behaviour and no instruction is computed wrong.
+- **Threshold.** The console rounds the cycle time to 10 ps, so 470 ps
+  (2128 MHz) is the last reading that works and 460 ps (2174 MHz) the first
+  that crashes. `speed = 2100M` is read as 2083 MHz (480 ps) and boots
+  OpenVMS on both engines; 2200M is read as 2222 MHz (450 ps) and crashes
+  on both, as 2400M (2381 MHz) does.
+- **How a reading gets that high without the setting.** The console
+  measures the speed by counting the cycle counter over its interval-timer
+  ticks, and a starved processor 0 (a loaded host) counts the host's time
+  while its ticks wait for the thread; readings of 2.2 to 3.7 GHz were seen
+  at 800M to 1000M on a busy host. A `speed` limit does not touch those.
+- **What Alphabox does.** The board row's `max_cpu_hz` (Platform.hpp) is
+  2100000000 on the ES40, DS20E, DS20, DS10, DS20L, ES45, ES45 Model 1, DS25
+  and DS15, and a larger `speed` is refused at startup and by `alphabox run
+  --check`, with the reason. `HWRPB+0x70` read with `e -q pmem:2070` on
+  each of those boards' consoles: `000000007C2D24D5` (2083333333) at
+  `speed = 2100M`, `FFFFFFFF84746B8E` (2222222222, sign-extended) at 2200M.
+  OpenVMS itself was booted only on the ES40.
+- **Open.** The ES47, ES80 and GS1280: their consoles print the configured
+  MHz (2100 and 2200) and `pmem:2070` is 0 there (their HWRPB is not at
+  physical 2000h), so the frequency in their HWRPB was not read and they
+  have no limit.
 
 ## A guest's floating-point exception that is the guest's own
 

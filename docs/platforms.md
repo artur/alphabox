@@ -46,7 +46,8 @@ Three layers, each added in a different way:
   `platforms/Platforms.cpp`, chosen with `platform = "<name>";` (default
   `es40`). It carries the chipset, the processor and CPU count, the memory
   limits, the slot-to-interrupt wiring that the PCI code asks for, the slots
-  that refuse add-in devices, the firmware image and its format, how the
+  that refuse add-in devices, the highest `speed` its console can report
+  (`max_cpu_hz`), the firmware image and its format, how the
   secondary processors start, the console patches, and a function that
   builds the board's own hardware. The functions and hardware live in
   `platforms/<board>/`.
