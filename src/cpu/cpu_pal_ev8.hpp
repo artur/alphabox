@@ -205,6 +205,7 @@ inline void CAlphaCPU::ev8_mtpr(u32 index, u64 value) {
       flush_icache(); // a fetch may now translate otherwise
     } else {
       flush_data_page_cache();
+      vec_xlate_drop();
     }
     break;
   }

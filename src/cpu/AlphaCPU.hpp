@@ -1627,6 +1627,12 @@ private:
     return (m_ev8n ? m_ev8.vctl : m_vctl.load(std::memory_order_relaxed)) &
            tarantula::kVen;
   }
+  /// The translations of a vector memory instruction that faulted, for its
+  /// restart (Tarantula.hpp, Restart), and what drops them: every TB
+  /// invalidation counts here (vec_xlate_drop), on every row.
+  std::unique_ptr<tarantula::Restart> m_vec_rs;
+  u64 m_vec_xlate_gen = 0;
+  void vec_xlate_drop() { ++m_vec_xlate_gen; }
   /// Opcodes 01-06 on a row with Tarantula (the interpreter's only).
   void tarantula(u32 ins);
   void tarantula_vc(u32 ins);

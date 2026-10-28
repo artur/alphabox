@@ -124,6 +124,8 @@ void CAlphaCPU::tarantula_init() {
     return;
   if (!m_vec)
     m_vec.reset(new tarantula::State);
+  if (!m_vec_rs)
+    m_vec_rs.reset(new tarantula::Restart);
   tarantula_reset();
   // A Tarantula row is on a board of another family only as the ES40's
   // construction or through the test hook; either way the board has no
@@ -159,6 +161,7 @@ void CAlphaCPU::tarantula_reset() {
   if (!m_vec)
     return;
   m_vec->clear();
+  m_vec_rs->clear();
   m_vctl.store(0, std::memory_order_relaxed); // VCTL resets to 0 (section 2)
   m_vec_defer = false;
   m_vec_trap = 0;
@@ -551,7 +554,9 @@ void CAlphaCPU::tarantula_fp(u32 ins) {
  * with WR for a store or scatter. So the fault reported is the
  * lowest-numbered active faulting element's, EXC_ADDR is the instruction's
  * own PC, and nothing has changed, neither memory nor a register; after the
- * handler the instruction restarts from its first element.
+ * handler the instruction restarts from its first element. The
+ * translations already made are kept for that restart (Restart, in
+ * Tarantula.hpp), which guarantees forward progress [decision].
  *
  * Then the accesses, in increasing i, each an aligned quadword as LDQ and
  * STQ make it: so when two active elements of a store or scatter write one
@@ -566,6 +571,7 @@ void CAlphaCPU::tarantula_fp(u32 ins) {
  **/
 void CAlphaCPU::tarantula_mem(u32 ins) {
   tarantula::State &v = *m_vec;
+  tarantula::Restart &rs = *m_vec_rs;
   const bool rm = (ins >> 26) == 0x04;
   const bool st = ((ins >> 5) & 0x3f) == 0x01;
   const bool m = (ins >> 11) & 1;
@@ -574,6 +580,11 @@ void CAlphaCPU::tarantula_mem(u32 ins) {
   if (!st && vt == 31)
     return; // a prefetch
   const int flags = st ? ACCESS_WRITE : ACCESS_READ;
+  // The kept translations serve this word's restart only.
+  if (!(rs.valid && rs.pc == state.current_pc && rs.ins == ins &&
+        rs.cm == state.cm && rs.asn == state.asn0 && rs.gen == m_vec_xlate_gen))
+    rs.clear();
+  rs.valid = false;
   int act[kElems];
   u64 pa[kElems];
   int n = 0;
@@ -586,13 +597,29 @@ void CAlphaCPU::tarantula_mem(u32 ins) {
       tarantula_unalign(ea, st, ins);
       return;
     }
-    // A fault is taken here, virt2phys having set it up.
-    if (virt2phys(ea, &pa[n], flags, nullptr, ins))
-      return;
+    if (rs.has(i) && rs.va[i] == ea) {
+      pa[n] = rs.pa[i];
+    } else {
+      u64 p;
+      if (virt2phys(ea, &p, flags, nullptr, ins)) {
+        // The fault is taken (virt2phys set it up); keep what was
+        // translated for the restart.
+        rs.valid = true;
+        rs.pc = state.current_pc;
+        rs.ins = ins;
+        rs.cm = state.cm;
+        rs.asn = state.asn0;
+        rs.gen = m_vec_xlate_gen;
+        return;
+      }
+      rs.put(i, ea, p);
+      pa[n] = p;
+    }
     act[n++] = i;
   }
   if (!n)
     return;
+  rs.clear();
   m_llsc_clean = 0; // as LLSC_MEMOP (cpu_memory.hpp)
   for (int k = 0; k < n; k++) {
     const u64 p = pa[k];

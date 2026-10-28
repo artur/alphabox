@@ -438,8 +438,10 @@ void CAlphaCPU::ev8_add_tb(int t, u64 virt, u64 pte) {
 
 /// What caches a TB's translations, after entries left it.
 void CAlphaCPU::ev8_tb_changed(int t) {
-  if (t == TB_INDEX_DATA)
+  if (t == TB_INDEX_DATA) {
     flush_data_page_cache();
+    vec_xlate_drop();
+  }
 #ifdef ES40_JIT
   else if (m_jit)
     m_jit->note_itb_invalidate(CJitEngine::EPOCH_TBIA);
@@ -501,8 +503,10 @@ void CAlphaCPU::ev8_tb_is(int t, u64 va) {
     if (!itb)
       flush_data_page_cache_range(e.virt, e.match_mask);
   }
-  if (!itb)
+  if (!itb) {
     flush_data_page_cache_range(va, U64(0x000fffffffffe000));
+    vec_xlate_drop();
+  }
 #ifdef ES40_JIT
   else if (m_jit)
     m_jit->note_itb_invalidate(CJitEngine::EPOCH_TBIS);

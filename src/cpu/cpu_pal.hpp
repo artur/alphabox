@@ -296,6 +296,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
     state.smc = (int)(value >> 4) & 3;
     state.m_ctl_spe = (int)(value >> 1) & 7;
     flush_data_page_cache();
+    vec_xlate_drop();
     break;
 
   case 0x29: /* DC_CTL */
@@ -347,6 +348,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
     state.va_ctl_vptb = sext_u64_48(value & U64(0x0000ffffc0000000));
     state.va_ctl_va_mode = (int)(value >> 1) & 3;
     flush_data_page_cache();
+    vec_xlate_drop();
     tbia(ACCESS_READ);
     break;
 

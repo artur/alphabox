@@ -76,6 +76,44 @@ struct State {
   void clear() { memset(this, 0, sizeof(*this)); }
 };
 
+/// The translations a vector memory instruction (SM, RM) had made when one
+/// of its elements faulted, kept for its restart: forward progress, which
+/// ev8-isa.md section 5 leaves to the emulator. The instruction restarts
+/// from its first element and translates every active element again; an
+/// element whose address is the one kept takes the kept translation
+/// instead of the TB, so each fault the handler resolves moves the
+/// instruction on by at least one element, whatever the TB evicted
+/// meanwhile -- a strided access may need 128 pages, and an EV7 PALcode's
+/// miss handler takes TB entries of its own for the page tables.
+/// [decision] Not a lane TLB: it serves only the re-execution of the same
+/// word at the same PC, in the same mode and address space, and every TB
+/// invalidation drops it (CAlphaCPU::m_vec_xlate_gen), as it does the TB
+/// shadow's entries; so software sees the TB it filled, and no more
+/// misses than one per element. Not architectural state: a restored state
+/// starts without it, and the instruction translates again.
+struct Restart {
+  bool valid = false;
+  u64 pc = 0;
+  u32 ins = 0;
+  int cm = 0;
+  int asn = 0;
+  u64 gen = 0;
+  u64 have[2] = {0, 0}; ///< element i kept: bit i % 64 of have[i / 64]
+  u64 va[kElems];
+  u64 pa[kElems];
+
+  bool has(int i) const { return (have[i >> 6] >> (i & 63)) & 1; }
+  void put(int i, u64 v, u64 p) {
+    va[i] = v;
+    pa[i] = p;
+    have[i >> 6] |= U64(1) << (i & 63);
+  }
+  void clear() {
+    valid = false;
+    have[0] = have[1] = 0;
+  }
+};
+
 /// The state file's section, after the processor's own block (and, on the
 /// native EV8, after its IPRs): a magic word, the payload's size, VCTL (the
 /// CSR's value; the native EV8 keeps its VCTL among its IPRs), vl, vs, the

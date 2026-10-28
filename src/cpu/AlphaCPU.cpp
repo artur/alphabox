@@ -2657,6 +2657,9 @@ int CAlphaCPU::RestoreState(FILE *f) {
     } else {
       m_vctl.store(vctl);
     }
+    // A faulted vector instruction's kept translations are not in the file
+    // (Tarantula.hpp, Restart): it translates again.
+    m_vec_rs->clear();
   }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
@@ -3604,9 +3607,12 @@ void CAlphaCPU::add_tb_i(u64 virt, u64 pte) {
 void CAlphaCPU::tbia(int flags) {
   // The shadow of data translations is a translation cache too: it obeys
   // every invalidate the TB does. Selected from flags exactly as t is below.
-  if (!(flags & ACCESS_EXEC))
+  // So do the translations a faulted vector instruction kept.
+  if (!(flags & ACCESS_EXEC)) {
     for (int k = 0; k < kTbShadowEntries; k++)
       m_tb_shadow[k].valid = false;
+    vec_xlate_drop();
+  }
 
 
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
@@ -3638,10 +3644,12 @@ void CAlphaCPU::tbia(int flags) {
  * \param flags   ACCESS_EXEC determines which translation buffer to use.
  **/
 void CAlphaCPU::tbiap(int flags) {
-  if (!(flags & ACCESS_EXEC))
+  if (!(flags & ACCESS_EXEC)) {
     for (int k = 0; k < kTbShadowEntries; k++)
       if (!m_tb_shadow[k].asm_bit)
         m_tb_shadow[k].valid = false;
+    vec_xlate_drop();
+  }
 
 
   int t = (flags & ACCESS_EXEC) ? TB_INDEX_ITB : TB_INDEX_DATA;
@@ -3703,6 +3711,7 @@ void CAlphaCPU::tbis(u64 virt, int flags) {
 }
 
 void CAlphaCPU::tbis_d(u64 virt, int asn) {
+  vec_xlate_drop();
   {
     STBEntry &sh = m_tb_shadow[tb_shadow_index(virt)];
     if (sh.valid && sh.virt == (virt & sh.match_mask) &&
