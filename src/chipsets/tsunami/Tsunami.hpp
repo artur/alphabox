@@ -84,7 +84,7 @@ public:
                 CSystemComponent *source) override;
 
   void interrupt(int number, bool assert) override;
-  void interval_tick() override { interrupt(-1, true); }
+  void interval_tick(int cpu) override;
 
   u64 pci_space_base(int hose, pci_space space) const override;
   u64 pci_phys(int hose, u32 address) override;
@@ -106,6 +106,9 @@ private:
   u8 tig_read(u32 address);
   void tig_write(u32 address, u8 data);
   void tig_update_halt_lines();
+  /// b_irq<1> and b_irq<0> of processor `i` from DRIR and its DIM; with
+  /// m_lock held.
+  void drive_lines(int i);
   u64 pci_phys_direct_mapped(u32 address, u64 wsm, u64 tba);
   u64 pci_phys_scatter_gather(u32 address, u64 wsm, u64 tba);
   void power_on_state();

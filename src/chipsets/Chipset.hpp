@@ -148,11 +148,15 @@ public:
   /// input as the board's interrupt map gives it (Tsunami: a DRIR bit).
   virtual void interrupt(int number, bool assert) = 0;
 
-  /// One interval-timer period has elapsed. Processor 0's dispatch loop
-  /// keeps the wall-clock schedule (cpu/AlphaCPU.hpp); the chipset decides
-  /// which processors see it and how (Tsunami: MISC<ITINTR> and b_irq<2> on
-  /// every processor; Marvel: each EV7's own RBOX_IT).
-  virtual void interval_tick() = 0;
+  /// One period of processor `cpu`'s interval timer has elapsed. Every
+  /// processor keeps its own wall-clock schedule and fires its own tick, on
+  /// its own thread (CAlphaCPU::interval_timer_poll, TickSchedule.hpp), and
+  /// the tick is that processor's alone (Tsunami and Titan: its
+  /// MISC<ITINTR> bit and b_irq<2>; Marvel: its register block's RBOX_IT
+  /// tick). Processor 0's tick is also the machine's period: whatever counts
+  /// periods for the machine as a whole advances on it alone. No processor
+  /// takes another's register-block lock to tick it.
+  virtual void interval_tick(int cpu) = 0;
 
   /// The interval timer's period when the chipset's own registers set it,
   /// or 0: on boards with the ALi its PIT sets it (CAliM1543C), and with

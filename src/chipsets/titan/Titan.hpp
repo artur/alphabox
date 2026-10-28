@@ -95,7 +95,7 @@ public:
                 CSystemComponent *source) override;
 
   void interrupt(int number, bool assert) override;
-  void interval_tick() override { interrupt(-1, true); }
+  void interval_tick(int cpu) override;
 
   u64 pci_space_base(int hose, pci_space space) const override;
   u64 pci_phys(int hose, u32 address) override;

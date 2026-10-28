@@ -170,16 +170,16 @@ static inline bool nt_park_head(const char *dram, u64 dram_size, u64 phys) {
 }
 
 // Sleep a CPU that is spinning in the idle loop until an interrupt is raised
-// for it (irq_h -> idle_wake: clock ticks, IPIs, devices) or 1 ms passes: the
-// loop also polls the DPC queue and NextThread, which another CPU may fill
-// without an IPI. CPU0 also wakes by its next interval-timer deadline, which
-// its own dispatch batches fire. Guest time is wall-clock based, so sleeping
-// only slows the spin.
+// for it (irq_h -> idle_wake: IPIs, devices) or 1 ms passes: the loop also
+// polls the DPC queue and NextThread, which another CPU may fill without an
+// IPI. It also wakes by its next interval-timer tick, which its own
+// dispatch batches fire. Guest time is wall-clock based, so sleeping only
+// slows the spin.
 void CAlphaCPU::jit_idle_pause() {
   auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
-  if (state.iProcNum == 0 && next_timer_fire < deadline)
-    deadline = next_timer_fire;
+  if (m_tick.due() < deadline)
+    deadline = m_tick.due();
   const auto t0 = std::chrono::steady_clock::now();
   std::unique_lock<std::mutex> lk(m_idle_mx);
   m_idle_sleeping.store(true);
@@ -366,37 +366,30 @@ void CAlphaCPU::jit_run(int budget) {
   // JIT runs (see sync_cc_wallclock; guest RPCC reads sync it too).
   sync_cc_wallclock();
 
-  // Drive the Cchip interval timer once per dispatch batch (CPU0 only), not
-  // once per instruction the way the in-execute() poll did.
+  // Drive this processor's interval timer once per dispatch batch, not once
+  // per instruction the way the in-execute() poll did.
   interval_timer_poll(now);
 
   // Instruction-paced interval-tick envelope (timer.max_instr_per_tick; off by
   // default), for every CPU. Not under the firmware/VMS PALcode (base 0x8000,
   // or before PALcode is set up): SRM's speed calibration counts cycles per
-  // tick in a tight spin. A CPU that retires the envelope before the
-  // wall-clock tick is due is held until the tick lands, so the guest never
+  // tick in a tight spin. A CPU that retires the envelope before its
+  // wall-clock tick is due is held until the tick is due, so the guest never
   // sees more instructions per tick than configured; RPCC stays wall-clock.
-  const u64 pace_period_ns =
-      (m_max_instr_per_tick && theAli && state.pal_base &&
-       state.pal_base != U64(0x8000))
-          ? theAli->get_interval_period_ns()
-          : 0; // 0: pacing off, or the guest hasn't programmed the tick yet
-  if (pace_period_ns) {
+  const bool pace =
+      m_max_instr_per_tick && theAli && state.pal_base &&
+      state.pal_base != U64(0x8000) &&
+      theAli->get_interval_period_ns() != 0; // the guest has programmed it
+  if (pace) {
     const u64 ic = state.instruction_count;
-    const u32 seq = cSystem->get_tick_seq();
+    const u32 seq = m_tick.fired();
     if (seq != tick_seen_seq) {
       tick_seen_seq = seq;
       tick_last_icount = ic;
     } else if (ic - tick_last_icount >= m_max_instr_per_tick) {
-      switch (tick_hold(pace_period_ns)) {
-      case TickHold::Ticked: // landed, or CPU0 fires it on re-entry
-        return;
-      case TickHold::Expired: // secondary with CPU0 late: re-open the window
-        tick_last_icount = ic;
-        break;
-      case TickHold::Doorbell: // interrupt/stop/reset: run this batch
-        break;
-      }
+      if (tick_hold())
+        return; // due: the next batch fires it
+      // an interrupt, a stop or a reset: run this batch
     }
   }
 

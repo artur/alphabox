@@ -130,9 +130,10 @@ void CAlphaCPU::run() {
 
     // Re-base the timing epoch to when execution actually begins: a
     // secondary parks (wait_for_start) before the primary releases it.
+    // Its interval timer starts now too, its first tick due at once: a
+    // processor parked until its start owes no ticks.
     start_time = std::chrono::steady_clock::now();
-    next_timer_fire = start_time;
-    tick_last_fire = start_time;
+    m_tick.start(start_time);
     cc_last_sync = host_ticks();
     state.instruction_count = 0;
 
@@ -428,47 +429,20 @@ CAlphaCPU::CAlphaCPU(CConfigurator *cfg, CSystem *system, int tpu)
  * Initialize the CPU.
  **/
 /**
- * Draw the minimum spacing before the next catch-up fire. Repay gaps are
- * modulated so consecutive SRM cycles-per-tick windows (~100 ticks) never agree
- * during a repay stretch: per-fire noise alone averages out over a window, the
- * triangle wave's ~2.8-window wavelength survives the averaging, and the noise
- * breaks symmetric-alignment ties. Always between 0.5 and 0.91 of a period,
- * 0.7 on average: a thread that runs at all repays at most 1.4 times the
- * rate on average (interval_timer_poll's starved case goes faster).
+ * The instruction-paced envelope (timer.max_instr_per_tick) is full and this
+ * processor's wall-clock interval tick isn't due yet: hold its thread until
+ * the tick is due (true: the next batch fires it), or until an interrupt is
+ * raised or the thread is stopped (false).
  **/
-u64 CAlphaCPU::tick_next_gap_ns(u64 period_ns) {
-  tick_fire_idx++;
-  const u32 ph = tick_fire_idx % 277;
-  const u32 tri = (ph <= 138) ? ph : (277 - ph);
-  tick_pace_lcg = tick_pace_lcg * 1664525u + 1013904223u;
-  return period_ns / 2 + period_ns * tri / 400 +
-         period_ns * ((tick_pace_lcg >> 24) & 0x3f) / 1024;
-}
-
-/**
- * The instruction-paced envelope (timer.max_instr_per_tick) is full and the
- * wall-clock interval tick isn't due yet: hold this CPU thread until the tick
- * lands (or, on CPU0, until it must fire it), an interrupt is raised, or the
- * thread is stopped.
- **/
-CAlphaCPU::TickHold CAlphaCPU::tick_hold(u64 period_ns) {
+bool CAlphaCPU::tick_hold() {
   using namespace std::chrono;
-  const u32 seq = tick_seen_seq;
-  // Secondaries: backstop in case CPU0 is late firing the tick.
-  auto deadline = steady_clock::now() + nanoseconds(2 * period_ns);
-  if (state.iProcNum == 0) {
-    deadline = next_timer_fire;
-    if (tick_last_fire + nanoseconds(tick_gap_ns) > deadline)
-      deadline = tick_last_fire + nanoseconds(tick_gap_ns);
-  }
+  const auto deadline = m_tick.due();
   for (;;) {
-    if (cSystem->get_tick_seq() != seq)
-      return TickHold::Ticked;
     if (state.check_int || StopThread || cSystem->IsSystemResetRequested())
-      return TickHold::Doorbell;
+      return false;
     const auto now = steady_clock::now();
     if (now >= deadline)
-      return state.iProcNum == 0 ? TickHold::Ticked : TickHold::Expired;
+      return true;
     auto nap = deadline - now;
     if (nap > microseconds(100))
       nap = microseconds(100);
@@ -521,50 +495,28 @@ void CAlphaCPU::honour_dpc_flush_request() {
 }
 
 /**
- * Processor 0's part of the machine's interval timer, from its dispatch loop
- * (jit_run, the interpreter's execute()) and from a QUIESCE that sleeps.
+ * This processor's interval timer, from its dispatch loop (jit_run, the
+ * interpreter's execute()) and from a QUIESCE that sleeps. Each processor
+ * keeps its own schedule and its tick is its own (Chipset::interval_tick);
+ * processor 0's also counts the machine's periods, and its schedule's phase
+ * is the one the others keep (TickSchedule.hpp).
  **/
 void CAlphaCPU::interval_timer_poll(std::chrono::steady_clock::time_point now) {
-  if (state.iProcNum != 0 || now < next_timer_fire)
+  if (now < m_tick.next())
     return;
   const u64 period_ns = theAli ? theAli->get_interval_period_ns()
                                : cSystem->chipset()->interval_period_ns();
-  if (period_ns) {
-    // Count-preserving, paced catch-up: the schedule advances one period
-    // per fire so ticks lost to a busy/stalled CPU0 thread are repaid and
-    // the guests' tick-counted clocks (VMS never resyncs) stay true to wall
-    // time. Repayment is paced to >= half a period between fires (max 2x
-    // nominal, never a burst - burst/compressed ticks skew RPCC-vs-tick
-    // calibrations), an eighth when starved (below). Backlog beyond 1s
-    // (debugger pause, host sleep) is dropped.
-    // Repay gaps are modulated (tick_next_gap_ns).
-    if (now - tick_last_fire >= std::chrono::nanoseconds(tick_gap_ns)) {
-      cSystem->interval_tick();
-      tick_last_fire = now;
-      tick_gap_ns = tick_next_gap_ns(period_ns);
-      next_timer_fire += std::chrono::nanoseconds(period_ns);
-      // A thread the host gives less than about 70% of a core cannot repay
-      // at those gaps: the backlog grows until it passes a second and is
-      // dropped, and a guest counting ticks loses the time (at a 60% share
-      // the console's timer ran at 810-860 Hz instead of 1024). More than 32
-      // periods behind, the thread is starved, not stalled for a moment:
-      // repay four times as fast, still modulated, which keeps up down to
-      // about a fifth of a core. A thread that keeps up never gets here.
-      if (now - next_timer_fire > std::chrono::nanoseconds(32 * period_ns))
-        tick_gap_ns /= 4;
-      if (now - next_timer_fire > std::chrono::seconds(1))
-        next_timer_fire = now;
-    }
-  } else {
-    cSystem->interval_tick();
-    tick_last_fire = now;
-    // No period yet. With the ALi, once a second until its timer is
-    // programmed; a chipset that sets the period itself (Marvel's RBOX_IT)
-    // is looked at again within a millisecond, so its first tick is not a
-    // second late.
-    next_timer_fire = now + (theAli ? std::chrono::nanoseconds(1000000000)
-                                    : std::chrono::nanoseconds(1000000));
-  }
+  // No period yet: with the ALi, a tick once a second until its timer is
+  // programmed; a chipset that sets the period itself (Marvel's RBOX_IT) is
+  // looked at again within a millisecond, so its first tick is not a second
+  // late.
+  const u64 unset_ns = theAli ? 1000000000 : 1000000;
+  const int cpu = (int)state.iProcNum;
+  if (!m_tick.poll(now, period_ns, unset_ns, cpu ? cSystem->tick_phase() : 0))
+    return;
+  cSystem->interval_tick(cpu);
+  if (cpu == 0 && period_ns)
+    cSystem->set_tick_phase(m_tick.next());
 }
 
 // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ------------------------
@@ -626,10 +578,11 @@ void CAlphaCPU::quiesce_wake(WatchWake why) {
  *     way (check_timers) as one;
  *   - the timeout (m_quiesce_ns), and anything that needs the thread
  *     (stop_threads, a reset, the Marvel start hand-off: quiesce_wake).
- * Processor 0 fires the machine's interval timer from here while it sleeps,
- * so its sleep does not hold back the clock of the others, and is woken by
- * its own tick like any other interrupt. A wait slice of a millisecond at
- * most keeps anything not listed from waiting longer than that.
+ * The processor fires its own interval timer from here while it sleeps, so
+ * its sleep does not hold back its clock (or, on processor 0, the
+ * machine's), and is woken by that tick like any other interrupt. A wait
+ * slice of a millisecond at most keeps anything not listed from waiting
+ * longer than that.
  * Execution resumes at the next instruction; an interrupt is taken there
  * [IDS p. 673].
  **/
@@ -699,21 +652,17 @@ void CAlphaCPU::quiesce() {
         break;
       }
       auto until = timeout_at;
-      if (state.iProcNum == 0) {
-        auto tick = next_timer_fire;
-        if (tick_last_fire + nanoseconds(tick_gap_ns) > tick)
-          tick = tick_last_fire + nanoseconds(tick_gap_ns);
-        if (now >= tick) {
-          // Our own tick is due: fire it, outside the lock (irq_h on this
-          // processor takes it), and look again.
-          lk.unlock();
-          interval_timer_poll(now);
-          lk.lock();
-          continue;
-        }
-        if (tick < until)
-          until = tick;
+      const auto tick = m_tick.due();
+      if (now >= tick) {
+        // Our own tick is due: fire it, outside the lock (irq_h on this
+        // processor takes it), and look again.
+        lk.unlock();
+        interval_timer_poll(now);
+        lk.lock();
+        continue;
       }
+      if (tick < until)
+        until = tick;
       if (now + milliseconds(1) < until)
         until = now + milliseconds(1);
       m_quiesce_cv.wait_until(lk, until);
@@ -975,7 +924,7 @@ void CAlphaCPU::init() {
   myThread = nullptr;
 
   start_time = std::chrono::steady_clock::now();
-  next_timer_fire = start_time;
+  m_tick.start(start_time);
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 
@@ -1057,7 +1006,7 @@ void CAlphaCPU::ResetForSystemReset() {
   myThread = nullptr;
 
   start_time = std::chrono::steady_clock::now();
-  next_timer_fire = start_time;
+  m_tick.start(start_time);
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 

@@ -50,6 +50,7 @@
 #include "System.hpp"
 #include "SystemComponent.hpp"
 #include "Tarantula.hpp"
+#include "TickSchedule.hpp"
 #include "WakeSemaphore.hpp"
 #include "cpu_defs.hpp"
 #ifdef ALPHABOX_HVF
@@ -358,23 +359,17 @@ private:
   std::chrono::steady_clock::time_point start_time;
   u64 cpu_hz;
 
-  // Wall-clock-paced Cchip interval timer (b_irq<2>).  CPU 0 fires once
-  // per period as it passes batch-flush boundaries.  Avoids cross-thread
-  // edge coalescing seen with AliM1543C-thread firing.  next_timer_fire is
-  // the count-preserving schedule (+= period per fire); tick_last_fire paces
-  // catch-up so backlog repays at no more than 2x the nominal rate.
-  std::chrono::steady_clock::time_point next_timer_fire;
-  std::chrono::steady_clock::time_point tick_last_fire;
-  u32 tick_pace_lcg = 0x9e3779b9; // noise term of the catch-up gap modulation
-  u32 tick_fire_idx = 0;          // triangle-wave phase of that modulation
-  u64 tick_gap_ns = 0; // min spacing after tick_last_fire for the next fire
-                       // (0: the first fire is immediate)
+  // This processor's interval timer: its own wall-clock schedule, which its
+  // thread fires as it passes dispatch-batch boundaries
+  // (interval_timer_poll), count-preserving and paced (TickSchedule.hpp).
+  // Only this thread reads it.
+  TickSchedule m_tick;
   u64 tick_last_icount = 0;     // instruction_count at the last observed tick
-  u32 tick_seen_seq = 0;        // last CSystem tick sequence this CPU observed
+  u32 tick_seen_seq = 0;        // m_tick.fired() when last looked at
   u64 m_max_instr_per_tick = 0; // timer.max_instr_per_tick (0 = pacing off)
-  u64 tick_next_gap_ns(u64 period_ns);
-  enum class TickHold { Ticked, Expired, Doorbell };
-  TickHold tick_hold(u64 period_ns);
+  /// The instruction-paced envelope is full: hold until this processor's
+  /// tick is due (true) or something needs the thread first (false).
+  bool tick_hold();
 
   // The host's monotonic clock, read as cheaply as the host allows.
   //
@@ -1560,9 +1555,9 @@ private:
   void watch_arm(u64 phys);
   /// QUIESCE: sleep while watch_flag is set, at most the quiesce timeout.
   void quiesce();
-  /// Processor 0 drives the machine's interval timer from its own loop
-  /// (jit_run, execute()): fire it if it is due. QUIESCE does it too, so
-  /// a long quiesce does not hold the clock up.
+  /// Every processor drives its own interval timer from its own loop
+  /// (jit_run, execute()): fire its tick if it is due. QUIESCE does it
+  /// too, so a long quiesce does not hold its clock up.
   void interval_timer_poll(std::chrono::steady_clock::time_point now);
   void quiesce_report(); // ALPHABOX_TRACE_QUIESCE=1, when the CPU goes away
   std::mutex m_quiesce_mx;

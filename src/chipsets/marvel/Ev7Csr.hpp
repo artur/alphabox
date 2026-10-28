@@ -140,8 +140,10 @@ public:
   u64 read(u32 off, int dsize);
   void write(u32 off, int dsize, u64 data);
 
-  /// One interval-timer period has elapsed.
-  void interval_tick();
+  /// One period of a processor's interval timer has elapsed, on that
+  /// processor's thread: this block's own (EV7), or in 21464 mode TPU
+  /// `tpu`'s of this chip.
+  void interval_tick(int tpu);
   /// The period RBOX_IT sets on a processor clocked at `cpu_hz`, or 0 when
   /// the timer is off.
   u64 interval_period_ns(u64 cpu_hz) const;

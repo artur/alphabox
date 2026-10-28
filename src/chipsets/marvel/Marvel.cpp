@@ -245,15 +245,18 @@ void CMarvel::interrupt(int number, bool assert) {
     io->lsi((u32)number & 0xff, assert);
 }
 
-void CMarvel::interval_tick() {
-  // Each register block once: a 21464 chip's TPUs share theirs, which
-  // ticks for all of them (R_INT_STAT<7:4>, N22).
-  for (int i = 0; i < present() && i < m_topology.count(); i++)
-    if (!m_21464 || !m_topology.node(i).tpu)
-      if (CEv7Csr *c = csr(m_topology.node(i).pid))
-        c->interval_tick();
-  m_gio->tick();
-  m_sys->note_interval_tick();
+/// Processor `cpu`'s tick, on its own thread: its own register block's, or
+/// in 21464 mode its TPU's bit in its chip's block (R_INT_STAT<7:4>, N22),
+/// under that block's lock and no other. Processor 0's tick is also the
+/// period the CMM's side of GIO counts.
+void CMarvel::interval_tick(int cpu) {
+  if (cpu < present() && cpu < m_topology.count()) {
+    const ev7_node &n = m_topology.node(cpu);
+    if (CEv7Csr *c = n.pid < (u32)kMaxPids ? m_csr[n.pid].get() : nullptr)
+      c->interval_tick(m_21464 ? (int)n.tpu : 0);
+  }
+  if (cpu == 0)
+    m_gio->tick();
 }
 
 /// The schedule follows PID 0's RBOX_IT (CEv7Csr::interval_period_ns).

@@ -253,15 +253,10 @@ void CTitan::drive_lines(int i) {
 }
 
 void CTitan::interrupt(int number, bool assert) {
+  if (number < 0)
+    return;
   std::lock_guard<std::mutex> g(m_lock);
-  if (number == -1) {
-    // The interval timer: MISC<ITINTR> and b_irq<2> on every processor.
-    g_irqstats.cchip_timer.fetch_add(1, std::memory_order_relaxed);
-    state.cchip.misc |= 0xf0;
-    for (int i = 0; i < m_sys->get_cpu_num(); i++)
-      m_sys->get_cpu(i)->irq_h(2, true, 0);
-    m_sys->note_interval_tick();
-  } else if (assert) {
+  if (assert) {
     if (!(state.cchip.drir & (U64(1) << number)))
       g_irqstats.drir_rise[number].fetch_add(1, std::memory_order_relaxed);
     state.cchip.drir |= U64(1) << number;
@@ -270,6 +265,25 @@ void CTitan::interrupt(int number, bool assert) {
   }
   for (int i = 0; i < m_sys->get_cpu_num(); i++)
     drive_lines(i);
+}
+
+/**
+ * Processor `cpu`'s interval-timer tick, on its own thread: its MISC<ITINTR>
+ * bit and b_irq<2>, and its device lines driven again, as on the Tsunami
+ * (CTsunami::interval_tick): processor 0's tick also sets the ITINTR bits
+ * of the processors the machine does not have, and counts the period.
+ **/
+void CTitan::interval_tick(int cpu) {
+  std::lock_guard<std::mutex> g(m_lock);
+  u64 itintr = U64(0x10) << cpu;
+  if (cpu == 0) {
+    g_irqstats.cchip_timer.fetch_add(1, std::memory_order_relaxed);
+    for (int i = m_sys->get_cpu_num(); i < 4; i++)
+      itintr |= U64(0x10) << i;
+  }
+  state.cchip.misc |= itintr;
+  m_sys->get_cpu(cpu)->irq_h(2, true, 0);
+  drive_lines(cpu);
 }
 
 /**

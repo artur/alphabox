@@ -567,6 +567,13 @@ target_include_directories(start_handoff_test PRIVATE src/chipsets/marvel)
 target_link_libraries(start_handoff_test Threads::Threads)
 add_test(NAME start_handoff COMMAND start_handoff_test)
 
+# One processor's interval-timer schedule (TickSchedule.hpp) on a made-up
+# clock: the count kept for a thread that runs and for one the host starves,
+# the catch-up's spacing, a processor keeping processor 0's phase.
+add_executable(tick_schedule_test test/unit/tick_schedule_test.cpp)
+target_include_directories(tick_schedule_test PRIVATE src/cpu)
+add_test(NAME tick_schedule COMMAND tick_schedule_test)
+
 # The 21464's TPUs as processors on the Marvel boards: their numbers on each
 # layout, memory and IO7 with TPU 0, a register block and interrupt target
 # per TPU (Topology.cpp; docs/platforms/ev8.md, S4).

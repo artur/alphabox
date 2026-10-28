@@ -664,21 +664,13 @@ u64 CTsunami::read_io(u64 a, u64 address, int dsize, CSystemComponent *source) {
  *
  **/
 void CTsunami::interrupt(int number, bool assert) {
-  int i;
-
+  if (number < 0)
+    return;
   // Serialize drir RMW + delivery against other device threads; irq_h() is
   // lock-free and never re-enters here, so this is deadlock-free.
   std::lock_guard<std::mutex> drirGuard(m_lock);
 
-  if (number == -1) {
-
-    // timer int...
-    g_irqstats.cchip_timer.fetch_add(1, std::memory_order_relaxed);
-    state.cchip.misc |= 0xf0;
-    for (i = 0; i < m_sys->get_cpu_num(); i++)
-      m_sys->get_cpu(i)->irq_h(2, true, 0); // timer interrupt is immediate
-    m_sys->note_interval_tick();
-  } else if (assert) {
+  if (assert) {
 
     //    if (!(state.cchip.drir & (1i64<<number)))
     //      printf("%%TYP-I-INTERRUPT: Interrupt %d asserted.\n",number);
@@ -692,16 +684,39 @@ void CTsunami::interrupt(int number, bool assert) {
     state.cchip.drir &= ~(U64(0x1) << number);
   }
 
-  // Device interrupts are delayed by 100 clocks.
-  for (i = 0; i < m_sys->get_cpu_num(); i++) {
-    if (state.cchip.drir & state.cchip.dim[i] & U64(0x00ffffffffffffff))
-      m_sys->get_cpu(i)->irq_h(1, true, 100);
-    else
-      m_sys->get_cpu(i)->irq_h(1, false, 0);
+  for (int i = 0; i < m_sys->get_cpu_num(); i++)
+    drive_lines(i);
+}
 
-    if (state.cchip.drir & state.cchip.dim[i] & U64(0xfc00000000000000))
-      m_sys->get_cpu(i)->irq_h(0, true, 100);
-    else
-      m_sys->get_cpu(i)->irq_h(0, false, 0);
+/// Device interrupts are delayed by 100 clocks.
+void CTsunami::drive_lines(int i) {
+  if (state.cchip.drir & state.cchip.dim[i] & U64(0x00ffffffffffffff))
+    m_sys->get_cpu(i)->irq_h(1, true, 100);
+  else
+    m_sys->get_cpu(i)->irq_h(1, false, 0);
+
+  if (state.cchip.drir & state.cchip.dim[i] & U64(0xfc00000000000000))
+    m_sys->get_cpu(i)->irq_h(0, true, 100);
+  else
+    m_sys->get_cpu(i)->irq_h(0, false, 0);
+}
+
+/**
+ * Processor `cpu`'s interval-timer tick, on its own thread: its MISC<ITINTR>
+ * bit and b_irq<2>, which is immediate, and its device lines driven again,
+ * as every tick has done. The Cchip has four ITINTR bits and the interval
+ * timer sets them all: processor 0's tick sets those of the processors the
+ * machine does not have, and counts the machine's period.
+ **/
+void CTsunami::interval_tick(int cpu) {
+  std::lock_guard<std::mutex> drirGuard(m_lock);
+  u64 itintr = U64(0x10) << cpu;
+  if (cpu == 0) {
+    g_irqstats.cchip_timer.fetch_add(1, std::memory_order_relaxed);
+    for (int i = m_sys->get_cpu_num(); i < 4; i++)
+      itintr |= U64(0x10) << i;
   }
+  state.cchip.misc |= itintr;
+  m_sys->get_cpu(cpu)->irq_h(2, true, 0);
+  drive_lines(cpu);
 }

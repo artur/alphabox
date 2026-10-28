@@ -973,9 +973,10 @@ void CEv7Csr::check_pending(int ms) {
  * intr_freq, get_iclk_freq at 0x2e2270) that the timer runs at
  * cpu_hz / ((n + 1) * 2^17), times another 1/4 on a revision 1.0 part: so
  * RBOX_IT<21:0> is taken as n, a period of n + 1 times 2^17 processor
- * cycles [inference]. The machine's schedule (CPU 0's, cpu/AlphaCPU.hpp)
- * runs at PID 0's period (CMarvel::interval_period_ns); a processor whose
- * RBOX_IT is zero takes no tick, with the missed-tick count left as written.
+ * cycles [inference]. Every processor's schedule (its own,
+ * cpu/TickSchedule.hpp, in processor 0's phase) runs at PID 0's period
+ * (CMarvel::interval_period_ns); a processor whose RBOX_IT is zero takes no
+ * tick, with the missed-tick count left as written.
  */
 u64 CEv7Csr::interval_period_ns(u64 cpu_hz) const {
   // 21464 mode: R_INTER_TIM's ITV <7:0> [IDS p. 528], the same period for
@@ -988,17 +989,24 @@ u64 CEv7Csr::interval_period_ns(u64 cpu_hz) const {
   return (n + 1) * (U64(1) << 17) * 1000000000 / cpu_hz;
 }
 
-void CEv7Csr::interval_tick() {
+void CEv7Csr::interval_tick(int tpu) {
   std::lock_guard<std::mutex> g(m_lock);
   // 21464 mode: one timer per chip, a tick for each TPU in R_INT_STAT<7:4>
-  // (N22), which each TPU clears.
+  // (N22), which each TPU clears. Each TPU's thread sets its own bit; TPU
+  // 0's sets those of the TPUs the chip has no processor for, which the
+  // chip's one timer sets too.
   if (m_21464) {
     if (!(reg(RBOX_IT) & 0xff))
       return;
+    u64 bit = U64(0x10) << tpu;
     ++m_ticks;
-    if (m_regs[RBOX_INT] & INT8_TIMER)
+    if (m_regs[RBOX_INT] & bit)
       ++m_ticks_merged;
-    m_regs[RBOX_INT] |= INT8_TIMER;
+    if (tpu == 0)
+      for (int t = 1; t < 4; t++)
+        if (!tpu_cpu(t))
+          bit |= U64(0x10) << t;
+    m_regs[RBOX_INT] |= bit;
     update_irq();
     return;
   }

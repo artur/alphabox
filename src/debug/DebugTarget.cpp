@@ -364,8 +364,7 @@ u64 CDebugTarget::next_bp(const Cpu &k, u64 pc) {
 void CDebugTarget::shift_clock(CAlphaCPU *c, u64 ns) {
   c->cc_last_sync += CAlphaCPU::ns_to_host_ticks(ns);
   const auto d = std::chrono::nanoseconds(ns);
-  c->next_timer_fire += d;
-  c->tick_last_fire += d;
+  c->m_tick.shift(d);
   c->start_time += d;
 }
 

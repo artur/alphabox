@@ -32,6 +32,7 @@
 #include "Platform.hpp"
 #include "SystemComponent.hpp"
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -281,15 +282,20 @@ public:
       m_chipset->interrupt(n, level);
     });
   }
-  /// One interval-timer period has elapsed (Chipset::interval_tick).
-  void interval_tick() { m_chipset->interval_tick(); }
-  // Interval-tick sequence, bumped on every interval-timer tick the chipset
-  // delivers (CPU instruction pacing, see CAlphaCPU::jit_run).
-  u32 get_tick_seq() const {
-    return m_tick_seq.load(std::memory_order_relaxed);
+  /// One period of processor `cpu`'s interval timer has elapsed, on its
+  /// own thread (Chipset::interval_tick).
+  void interval_tick(int cpu) { m_chipset->interval_tick(cpu); }
+  /// An instant of processor 0's interval-timer schedule, in nanoseconds of
+  /// the steady clock, or 0 before it has one: the phase every processor's
+  /// schedule keeps (TickSchedule.hpp). Processor 0 sets it at every tick.
+  s64 tick_phase() const {
+    return m_tick_phase.load(std::memory_order_relaxed);
   }
-  void note_interval_tick() {
-    m_tick_seq.fetch_add(1, std::memory_order_relaxed);
+  void set_tick_phase(std::chrono::steady_clock::time_point next) {
+    m_tick_phase.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           next.time_since_epoch())
+                           .count(),
+                       std::memory_order_relaxed);
   }
   /// The PCI reset of one hose (a Pchip's SPRST): RST# on that hose's bus
   /// resets every device on it, those behind its bridges included, and
@@ -602,7 +608,7 @@ private:
   std::unique_ptr<CGdbStub> m_gdb;          // sys0 gdb, or ALPHABOX_GDB
   std::atomic<bool> m_pal_halt_exit{false}; // set by a CPU on CALL_PAL HALT
 
-  std::atomic<u32> m_tick_seq{0}; // interval-tick sequence
+  std::atomic<s64> m_tick_phase{0}; // tick_phase()
 
   int iNumCPUs;
   int m_tpus = 1;  ///< tpus_per_chip()
