@@ -122,7 +122,8 @@ From [backlog.md](../backlog.md), where the order of work is:
 | Native PALcode fast paths, off on the EV7 | E3: measure first |
 | One partition; one I/O layout per machine; one IO7 on the GS1280; 16 processors at most; the route table's I/O entries | M9 |
 | The ES47's on-board AIC-7892 (a 53C895 stands in) | A1 |
-| The console crawls with 16 processors on a host with more runnable threads than cores: its scheduler lock waits, hand-off by hand-off, for the thread holding the next ticket ("`init` with sixteen processors") | open: the host's load, registered only |
+| The console crawls with 16 processors on a host with more runnable threads than cores: its scheduler lock waits, hand-off by hand-off, for the thread holding the next ticket ("`init` with sixteen processors", "What is left: the crawl") | open: the host's load, registered only |
+| After `init` processor 0 runs at 7 to 130 MIPS for tens of seconds: it takes each processor's register-block lock to deliver that processor's tick, and the 15 parked processors poll their own RBOX_SCRATCH1 under the same lock ("`init` with sixteen processors", "The slowdown after `init`") | being fixed: each processor ticking itself; the lock-free RBOX_SCRATCH1 if that is not enough |
 
 Left, by choice or because only a real machine could settle them:
 
@@ -939,6 +940,33 @@ or one), but its 40 s restores reached the prompt in one try of two, as
 they did without it; a yield in the back-off's read did no better. With
 the fix alone, `marvel_init_check.sh` on the `gs1280` with 16 processors
 passed in 519 s at a load of 101.
+
+**The slowdown after `init`** (2026-10-28) is the emulator's own, not the
+host's. A gate run of the EV8 ES80 with four TPUs a chip didn't get back
+to `P00>>>` within 600 s of its first `init` (load about 30). The machine
+saved at that point was not stuck: restored, it reached the prompt. In
+it processor 0 was filling memory and had moved on by one 8 KB page
+between the dump and the snapshot taken seconds later. The 15 others
+were parked in the console PALcode's loop (0x390e4).
+- **The cause:** that loop reads the processor's RBOX_SCRATCH1 every six
+  instructions, under its register block's lock. Processor 0 takes every
+  block's lock to deliver each processor's tick (`CEv7Csr::interval_tick`).
+- **The effect:** a sample of processor 0's thread after `init` found it
+  waiting for those locks in `interval_tick` in 3034 of 3417 samples.
+  Processor 0 runs at 7 to 130 MIPS, against about 1900, for tens of
+  seconds after every `init`. Whether that outlasts a test's timeout
+  depends on the host.
+- **Not the halt fix:** the code before it behaved the same (3197 of 3245
+  samples).
+- **What cures it:** serving a processor's own RBOX_SCRATCH1 without the
+  lock (the change tried for the crawl above) does. Processor 0 then
+  waited in 121 of 4145 samples, none in `interval_tick`, and stayed at
+  2000 to 2500 MIPS.
+
+Each processor keeping its own interval-timer schedule, so that no
+thread takes another processor's lock to tick it, should cure it from
+the other side. That change is in progress, and the lock-free register
+is taken as well if it doesn't.
 
 ### Captures from a real ES47 7/1300 (2026-10-26)
 
