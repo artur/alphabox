@@ -75,7 +75,7 @@ nada_build() { # <out> <source-or-def>...
 }
 if [ "$WORKLOAD" = axp ]; then
   [ -x "$NADA/nada" ] || { echo "nt_bench: no nada at $NADA"; exit 2; }
-  nada_build "$STAGE/AXPBENCH.EXE" "$T/ntbench/axpbench.c" || exit 2
+  nada_build "$STAGE/AXPBENCH.EXE" "$T/ntbench/axpbench.c" "$T/ntbench/kernel32x.def" || exit 2
 fi
 # The shutdown helper is what flushes FAT: without it the results never reach
 # the image. Vendored here (ntbench/shutdown.c) rather than referenced out of
