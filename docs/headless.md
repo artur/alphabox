@@ -417,7 +417,7 @@ logs the image's CRC-32 and, for a known image, its name
 | Variable | Effect |
 | --- | --- |
 | `ALPHABOX_PC_SAMPLE=1` | Print each CPU's program counter every state poll (~100 ms); finds where a guest is stuck. |
-| `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates. Spots interrupt storms. |
+| `ALPHABOX_IRQSTATS=1` | Every 5 s, print interrupt rates (spots interrupt storms), flushed per window, and the partial window at exit. |
 | `ALPHABOX_IRQTRACE=<n>` | Log interrupt entries `n`..`n+39`, with the IER/SIRR/CM writes and ISUM reads between them. |
 | `ALPHABOX_TRACE_ARITH=<n>` | Report the first `n` IEEE arithmetic traps (200 for `=1`). |
 | `ALPHABOX_TRACE_GUILOCK=1\|<ms>` | Report long waits for, and long holds of, the GUI lock. |

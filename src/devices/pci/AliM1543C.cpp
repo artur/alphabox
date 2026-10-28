@@ -670,6 +670,10 @@ static void print_irqstats(double secs) {
       len += snprintf(buf + len, sizeof(buf) - len, " #%d:%llu", i,
                       (unsigned long long)v);
   printf("%s\n", buf);
+  // A log file makes stdout block-buffered, and a run that ends by SIGKILL
+  // (or any exit that skips the flush) loses the last windows: flush here,
+  // once per window.
+  fflush(stdout);
 }
 
 /**
@@ -681,8 +685,14 @@ void CAliM1543C::run() {
   try {
     for (;;) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      if (StopThread)
+      if (StopThread) {
+        // The window in progress when the run ends is printed too.
+        if (irqstats)
+          print_irqstats(std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - irq_last)
+                             .count());
         return;
+      }
       do_pit_clock();
       if (irqstats) {
         const auto now = std::chrono::steady_clock::now();
