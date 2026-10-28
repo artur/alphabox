@@ -69,6 +69,9 @@
 #                        each TPU is a processor (docs/platforms/ev8.md, S4),
 #                        and SHOW CPU's active set and Linux's "cpus active"
 #                        must count 2 * TPUs
+#   GUESTS_ES40_CPUS     the processors of vms-es40 and linux, 1 to 4
+#                        (default 1); with more than one, SHOW CPU's active
+#                        set and Linux's "cpus active" must count them
 #   GUESTS_EXTRA_CMDS    more commands for vms-es47, linux and linux-es47,
 #                        after their own and before the shutdown (the Linux
 #                        guests: before their date, which is compared with
@@ -742,6 +745,8 @@ extra_steps() {
   done
 }
 EV7CPU=${GUESTS_EV7_CPU:-ev7}
+# The ES40 guests' processors (vms-es40, linux; clock_drift.sh's too).
+ES40N=${GUESTS_ES40_CPUS:-1}
 # The ES47's two chips; with ev8 and GUESTS_EV8_TPUS each of that many TPUs,
 # each a processor (docs/platforms/ev8.md, S4).
 EV7OPT=; EV7N=2
@@ -863,7 +868,7 @@ vms_es40_setup() {
   rm -rf "$D"; mkdir -p "$D"
   cp "$R/test/rom/cl67srmrom.exe" "$D/" && chmod u+w "$D/cl67srmrom.exe"
   cp -c "$src" "$D/disk.img" || { SETUP_WHY="no image $src"; return 1; }
-  serial_cfg "$D" "$PORT" 1 30 disk.img
+  serial_cfg "$D" "$PORT" "$ES40N" 30 disk.img
 }
 
 # linux_setup: the linux guest's run directory $D: the console, a flash
@@ -877,7 +882,7 @@ linux_setup() {
     cp "$src/run-disk/$f" "$D/" || { SETUP_WHY="no $src/run-disk/$f"; return 1; }
   done
   cp -c "$src/disk/gentoo-installed.img" "$D/disk.img" || { SETUP_WHY="no image"; return 1; }
-  serial_cfg "$D" "$PORT" 1 30 disk.img
+  serial_cfg "$D" "$PORT" "$ES40N" 30 disk.img
 }
 
 # linux_login_steps: the dialogue that boots the linux guest and logs in as
@@ -936,15 +941,19 @@ for g in $GUESTS; do
   vms-es40)
     vms_es40_setup || { fail "$SETUP_WHY"; continue; }
     steps=(); while IFS= read -r l; do steps+=("$l"); done < <(vms_steps dqa0 "$BTMO")
-    steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW SYSTEM" "expect=\\$ \$@60"
-            "send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
+    steps+=("send=SHOW TIME" "expect=\\$ \$@60" "send=SHOW SYSTEM" "expect=\\$ \$@60")
+    [ "$ES40N" -gt 1 ] && steps+=("send=SHOW CPU" "expect=\\$ \$@60")
+    steps+=("send=@SYS\$SYSTEM:SHUTDOWN" "reply=(\\]\\??:?|\\?) ?\$>" "expect=SHUTDOWN COMPLETE|halted CPU|P00>>>@300")
     if serial_guest "$g" "$PORT" "${steps[@]}"; then
       # the emulated RTC keeps the host's local time (see linux below); the
       # day without its leading zero, as SHOW TIME prints it
       d=$(date +%e-%b-%Y | tr a-z A-Z | sed 's/^ //')
-      if grep -aqE "(^|[^0-9])0?$d" "$D/console.log" && grep -aq 'Pid *Process Name' "$D/console.log"; then
-        stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW SYSTEM, SHUTDOWN"
-      else fail "logged in, but SHOW TIME/SHOW SYSTEM output not as expected"; continue; fi
+      na=$ES40N; cpus=
+      if [ "$ES40N" -gt 1 ]; then na=$(vms_active_count "$D/console.log"); cpus=", SHOW CPU ($na active)"; fi
+      if grep -aqE "(^|[^0-9])0?$d" "$D/console.log" && grep -aq 'Pid *Process Name' "$D/console.log" &&
+         [ "$na" = "$ES40N" ]; then
+        stop_emu; report "$g" PASS "$(secs)" "DCL login, SHOW TIME ($d), SHOW SYSTEM$cpus, SHUTDOWN"
+      else fail "logged in, but SHOW TIME/SHOW SYSTEM/SHOW CPU output not as expected ($na active, not $ES40N)"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
   vms-es47)
     src=$WORK/platforms/marvel/m7/disk-installed.img
@@ -979,8 +988,9 @@ for g in $GUESTS; do
   linux)
     linux_setup || { fail "$SETUP_WHY"; continue; }
     steps=(); while IFS= read -r l; do steps+=("$l"); done < <(linux_login_steps)
-    steps+=("send=uname -a; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
-           "send=echo '#include <stdio.h>' > /tmp/t.c; echo 'int main(){printf(\"gc-sum=%d\\n\",6*7);return 0;}' >> /tmp/t.c; gcc -O1 -o /tmp/t /tmp/t.c && /tmp/t; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@300")
+    steps+=("send=uname -a; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60")
+    [ "$ES40N" -gt 1 ] && steps+=("send=grep 'cpus active' /proc/cpuinfo; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60")
+    steps+=("send=echo '#include <stdio.h>' > /tmp/t.c; echo 'int main(){printf(\"gc-sum=%d\\n\",6*7);return 0;}' >> /tmp/t.c; gcc -O1 -o /tmp/t /tmp/t.c && /tmp/t; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@300")
     extra_steps linux
     # the date last, as on the ES47
     steps+=("send=date; echo GC-DONE-\$?" "expect=^GC-DONE-[0-9]@60"
@@ -993,9 +1003,14 @@ for g in $GUESTS; do
       gt=$(echo "$gt" | grep -o '[0-9][0-9]:[0-9][0-9]:[0-9][0-9]' | head -1)
       gm=$(( 10#${gt:0:2} * 60 + 10#${gt:3:2} )); hm=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
       dm=$(( gm > hm ? gm - hm : hm - gm )); [ $dm -gt 720 ] && dm=$((1440 - dm))
+      cpus=; nok=1
+      if [ "$ES40N" -gt 1 ]; then
+        cpus=", $ES40N CPUs active"
+        tr -d '\r\000' < "$D/console.log" | grep -aqE "cpus active[[:space:]]*: $ES40N\$" || nok=0
+      fi
       if grep -aq 'Linux es40 [0-9]' "$D/console.log" && grep -aq "gc-sum=42" "$D/console.log" &&
-         [ -n "$gt" ] && [ $dm -le 5 ]; then
-        stop_emu; report "$g" PASS "$(secs)" "login, uname -a, date (${gt:0:5}, host local time within ${dm} min), gcc compile and run, poweroff"
+         [ -n "$gt" ] && [ $dm -le 5 ] && [ $nok = 1 ]; then
+        stop_emu; report "$g" PASS "$(secs)" "login, uname -a$cpus, date (${gt:0:5}, host local time within ${dm} min), gcc compile and run, poweroff"
       else fail "logged in, but uname/date/gcc output not as expected (date '$gt')"; continue; fi
     else fail "console dialogue: $SG_RESULT"; continue; fi ;;
   linux-es47)

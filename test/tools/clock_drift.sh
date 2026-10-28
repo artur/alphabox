@@ -10,10 +10,11 @@
 # PASS or FAIL against a bound (default 2 s per hour).
 #
 # The guests, and how their clock is read:
-#   vms-es40   OpenVMS 8.4 on the ES40 (one EV68 at 833 MHz): WRITE
-#              SYS$OUTPUT F$TIME() on the serial console, the time SHOW TIME
-#              prints, with hundredths (SHOW TIME itself is logged beside it)
-#   linux      Gentoo on the ES40 (one EV68 at 833 MHz): date +%s.%N on the
+#   vms-es40   OpenVMS 8.4 on the ES40 (EV68s at 833 MHz, one unless
+#              GUESTS_ES40_CPUS says more): WRITE SYS$OUTPUT F$TIME() on
+#              the serial console, the time SHOW TIME prints, with
+#              hundredths (SHOW TIME itself is logged beside it)
+#   linux      Gentoo on the ES40 (as vms-es40): date +%s.%N on the
 #              serial console, nanoseconds. Also the cycle and timer
 #              frequencies of /proc/cpuinfo (the HWRPB's), the kernel's
 #              clocksource and what it said of its cycle counter, and the
@@ -57,7 +58,8 @@
 #   DRIFT_READS          clock reads per reading (5)
 #   GUESTS_PORT_BASE     as guests_check.sh: the guest's telnet port is the
 #                        base plus its place in guests_check.sh's list
-#   GUESTS_BOOT_TMO, GUESTS_KEEP, ALPHABOX_WORK   as guests_check.sh
+#   GUESTS_BOOT_TMO, GUESTS_KEEP, GUESTS_ES40_CPUS, ALPHABOX_WORK
+#                        as guests_check.sh
 #   DRIFT_DUTY=<run_ms>:<stop_ms>  from the first reading on, stop and
 #                        continue the emulator (SIGSTOP, SIGCONT) so that it
 #                        runs run_ms out of every run_ms + stop_ms: a host
