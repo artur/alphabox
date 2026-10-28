@@ -14,7 +14,7 @@ sys0 = tsunami
   exit_on_pal_halt = "false";
   cpu0 = ev68cb
   {
-    speed = "2G512M";
+    speed = "1G512M";
   }
   serial0 = serial
   {
