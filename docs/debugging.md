@@ -239,6 +239,8 @@ console reach `P00>>>`, then attaches again and:
   JIT has compiled by then;
 - checks that the cycle counter did not move across a two-second stop;
 - steps from the head of that compiled block, one instruction per step;
+- stops at a breakpoint below the PC, at the loop's head, on the first trip
+  round (the interpreter's batches once ran past it);
 - stops the running machine with Ctrl-C.
 
 With two or more processors it also breakpoints the interrupt entry, which

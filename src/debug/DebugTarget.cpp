@@ -515,8 +515,11 @@ void CDebugTarget::interp_run(CAlphaCPU *c, int budget) {
 #else
   if (!boundary(c, &span, &whole))
     return;
-  if (span == INT_MAX) {
-    c->execute(); // no breakpoint to watch for: an ordinary batch
+  // A batch is ordinary only with no breakpoint at all: span is also
+  // INT_MAX when every breakpoint lies below the PC, and a backward branch
+  // or a call inside the batch would reach one unchecked.
+  if (m_cpus[c->get_cpuid()].bps.empty()) {
+    c->execute();
     return;
   }
   // A batch checks nothing between its instructions, so take it down to

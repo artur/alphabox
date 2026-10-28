@@ -182,6 +182,16 @@ monitor cpu
 eval "maint packet vCont;s:%x", \$_thread
 maint flush register-cache
 printf "HWSTEP=%#lx\n", \$pc
+echo @@ below-pc\n
+break *0x5c104
+continue
+delete
+monitor cpu
+break *0x5c0fc
+continue
+printf "BELOW=%#lx THREAD=%d\n", \$pc, \$_thread
+monitor cpu
+delete
 echo @@ interrupt\n
 shell (sleep 1; kill -INT \$PPID) > /dev/null 2>&1 &
 continue
@@ -305,6 +315,16 @@ steps="${#ic[@]}:$(( ${#ic[@]} == 3 ? ic[1] - ic[0] : -1 )),$(( ${#ic[@]} == 3 ?
 check "each of those steps ran one instruction (counts $steps)" [ "$steps" = "3:1,1" ]
 check "and the stub's own single step (vCont;s) takes one instruction" \
   in_log s2.log '^HWSTEP=0x5c10[8c]$|^HWSTEP=0x5c160$'
+# A breakpoint below the PC, reached by the loop's backward branch, must
+# stop the run on its first trip: the interpreter's batch of 512
+# instructions once ran on past it unchecked when no breakpoint lay at or
+# above the PC (the loop is a few instructions, so a miss costs hundreds).
+bt=$(grep -a '^BELOW=' s2.log | sed 's/.*THREAD=//')
+ic=($(sect s2.log below-pc | awk -v c="cpu$((${bt:-1} - 1)):" '$1 == c {
+  for (i = 1; i < NF; i++) if ($i == "instructions") print $(i + 1) }'))
+dn=$(( ${#ic[@]} == 2 ? ic[1] - ic[0] : -1 ))
+check "a breakpoint below the PC stops the run on its first trip ($dn instructions)" \
+  bash -c "grep -aq '^BELOW=0x5c0fc ' s2.log && [ $dn -ge 0 -a $dn -lt 100 ]"
 check "Ctrl-C stops a running machine" in_log s2.log 'received signal SIGINT'
 check "and it stopped somewhere" in_log s2.log '^INT-PC=0x[0-9a-f]+'
 check "$CPUS thread(s) at the prompt" \
