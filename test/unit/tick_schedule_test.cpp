@@ -23,8 +23,8 @@
  * every dispatch batch is played by a loop that advances the clock and
  * polls, and a thread the host starves by one that polls only in bursts.
  * Checked: the first tick at once; the count kept to wall time for a
- * thread that runs, and down to about a fifth of a core; the spacing of
- * repaid ticks (half a period, an eighth when starved) and its modulation
+ * thread that runs, and down to about a tenth of a core; the spacing of
+ * repaid ticks (half a period, a sixteenth when starved) and its modulation
  * across the console's 100-tick windows; a backlog over a second dropped;
  * a processor other than 0 keeping processor 0's phase after its first
  * tick, after a drop and after a period change, and following it when
@@ -126,13 +126,13 @@ static void keeps_count_starved() {
   printf("  60%% of a core: %lld ticks of %lld, %lld owed\n", (long long)n,
          (long long)want, (long long)owed);
   CHECK(n >= want - 1 && n <= want + 1 && owed <= 64);
-  // A quarter of a core, 2 ms in 8: still kept.
-  n = share_ticks(2000, 8000, &owed);
-  printf("  25%% of a core: %lld ticks of %lld, %lld owed\n", (long long)n,
+  // An eighth of a core, 1 ms in 8: still kept.
+  n = share_ticks(1000, 8000, &owed);
+  printf("  12.5%% of a core: %lld ticks of %lld, %lld owed\n", (long long)n,
          (long long)want, (long long)owed);
   CHECK(n >= want - 1 && n <= want + 1 && owed <= 64);
   // 5% (1 ms in 20): the catch-up falls behind and backlogs are dropped,
-  // as the documentation says of less than about a fifth of a core.
+  // as the documentation says of less than about a tenth of a core.
   n = share_ticks(1000, 20000, &owed);
   printf("  5%% of a core: %lld ticks of %lld, %lld owed\n", (long long)n,
          (long long)want, (long long)owed);
@@ -154,8 +154,8 @@ static void repay_spacing() {
     if (ticks[i] - ticks[i - 1] < least)
       least = ticks[i] - ticks[i - 1];
   CHECK(least >= (int64_t)P / 2);
-  // Stalled 400 periods: repaid four times as fast while more than 32
-  // behind, never closer than an eighth of a period.
+  // Stalled 400 periods: repaid eight times as fast while more than 32
+  // behind, never closer than a sixteenth of a period.
   TickSchedule q;
   q.start(at(T0));
   CHECK(q.poll(at(T0), P, UNSET, 0));
@@ -167,7 +167,7 @@ static void repay_spacing() {
   for (size_t i = 1; i < ticks.size(); i++)
     if (ticks[i] - ticks[i - 1] < least)
       least = ticks[i] - ticks[i - 1];
-  CHECK(least >= (int64_t)P / 8);
+  CHECK(least >= (int64_t)P / 16);
   CHECK(least < (int64_t)P / 2);
   CHECK(first100 > 0 && first100 < 50 * (int64_t)P);
 }

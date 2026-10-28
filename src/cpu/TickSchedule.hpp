@@ -37,8 +37,8 @@
  *    never in a burst (ticks crowded together skew a guest's calibration
  *    of its cycle counter against them), the gaps modulated so that the
  *    console's calibration windows (100 ticks against the cycle counter,
- *    repeated until two agree) never agree during a repay stretch; a
- *    quarter of that gap once more than 32 periods behind (a thread
+ *    repeated until two agree) never agree during a repay stretch; an
+ *    eighth of that gap once more than 32 periods behind (a thread
  *    starved, not stalled for a moment).
  *  - A backlog over a second (a debugger stop, a host sleep, a thread that
  *    gets almost nothing) is dropped.
@@ -117,10 +117,13 @@ public:
     // dropped, and a guest counting ticks loses the time (at a 60% share
     // the console's timer ran at 810-860 Hz instead of 1024). More than 32
     // periods behind, the thread is starved, not stalled for a moment:
-    // repay four times as fast, still modulated, which keeps up down to
-    // about a fifth of a core. A thread that keeps up never gets here.
+    // repay eight times as fast, still modulated, which keeps up down to
+    // about a tenth of a core (four times, until 2026-10-28, kept up down
+    // to a fifth: a secondary the host gave 18% of a core then measured
+    // its speed at 1.1 to 1.8 times the configured one, after 18 to 31 s).
+    // A thread that keeps up never gets here.
     if (now - m_next > nanoseconds(32 * period_ns))
-      m_gap_ns /= 4;
+      m_gap_ns /= 8;
     if (now - m_next > std::chrono::seconds(1))
       m_next = now;
     if (phase_ns)
