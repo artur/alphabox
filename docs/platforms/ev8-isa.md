@@ -13,6 +13,10 @@ AMASK bits 3 and 11 are decided, the 1C size order is agreed. No code yet
 ([ev8.md](ev8.md), plan S2 to S10).
 Revision 1.1, 2026-10-26: one result rule in 3.4, no encoding: the
 estimate of the root of +-0 raises division by zero (the owner).
+Revision 1.2, 2026-10-28: two things section 5 left out, no encoding, as
+stage S8 found them (the owner): a vector memory fault's EXC_SUM<REG>,
+and what keeping a faulting instruction moving on through its restarts
+requires of an implementation.
 
 ## 1. How to read it
 
@@ -828,7 +832,7 @@ faulting instruction, but no extra information on which element"
   nothing has changed, neither memory nor any register. An emulator
   translates and checks every active element before it writes anything
   **[decision]**. After the handler returns, the instruction restarts from
-  its first element.
+  its first element (and moves on: **Forward progress**, below).
 - **Arithmetic traps** are traps, as on every Alpha: the EV8 reports them
   precisely, "the trap PC is the same as the instruction PC after the
   trapping instruction is executed" (AMASK bit 9, [ARM p. 808]), which
@@ -845,7 +849,10 @@ lane TLBs [TAR p. 286]. A vector access that misses raises the ordinary
 DTB miss of the mode (in EV7-compatible mode the 21264's DTBM_SINGLE
 flow) for the lowest-numbered active element whose translation misses:
 VA holds that element's address, MM_STAT its opcode (03 or 04) and WR for
-a store or scatter, EXC_ADDR the instruction's PC. The PALcode fills the
+a store or scatter, EXC_SUM<REG> the instruction's Vt field <25:21>, where
+a scalar memory instruction's Ra is (on the native interface EXC_SUM
+carries the instruction's register fields as for any instruction, Vt
+among them), EXC_ADDR the instruction's PC. The PALcode fills the
 entry and returns; the instruction restarts. Other faults are reported the
 same way, for the lowest-numbered faulting element, and reach the OS
 through its memory-management entry (on Linux, the cause is 0 for a load
@@ -854,10 +861,33 @@ the alignment fault with that VA; no OS's alignment fixup knows opcodes
 03 and 04, so the program gets the signal. The paper's
 alternative, PALcode refilling every mapping the instruction may need by
 reading vs [TAR p. 286], stays open to a PALcode of our own (S12).
+EXC_SUM<REG> **[decision]** (the owner, 2026-10-28; S8 had inferred it
+from the memory format) holds for every memory fault above, the alignment
+fault included.
+
 **Forward progress** is the emulator's to guarantee: a strided access
 can touch 128 pages, more than a small TB holds, and the paper made each
-lane TLB at least 8-way for that reason [TAR p. 286]. S8 must show that
-such an instruction completes.
+lane TLB at least 8-way for that reason [TAR p. 286].
+
+- **What an implementation must do.** An instruction whose every active
+  element can be mapped completes: each fault its handler resolves moves
+  it on, so that restarting from the first element never loses the
+  progress already made. This must hold when the instruction's pages,
+  with the TB entries the PALcode's own miss handling takes (an EV7
+  PALcode reads the page table through a virtual address), outnumber the
+  TB's entries, and whatever the TB evicts between two restarts. What the
+  OS and the PALcode see is unchanged: the faults above, the TB they
+  filled, and no miss repeated for a translation the PALcode has already
+  written, unless a TB invalidation has dropped it since.
+- **How Alphabox does it** **[decision]** (S8): the elements before a
+  faulting one keep their translations for the instruction's restart,
+  used only when the same word runs again at the same PC, in the same
+  mode and address space; every TB invalidation drops them. They are
+  neither lane TLBs nor architectural state. So an access to 128 pages
+  completes whatever the TB evicts. The choice and its reasons are
+  recorded in [ev8.md](ev8.md), "S8" ("Forward progress"), and
+  [cpu-fidelity.md](../cpu-fidelity.md), the `ev8` row's table;
+  `test/cpu/tarantula_mem.py` shows it.
 
 **OPCDEC with VEN = 0.** Every Tarantula instruction, all of opcodes 01
 to 05, raises OPCDEC with VEN = 0, with no exception, and EXC_ADDR is the
