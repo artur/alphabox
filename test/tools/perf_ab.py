@@ -76,7 +76,12 @@ def busy_host():
         if exe in ('clang', 'clang++', 'cc1plus', 'cc', 'c++', 'ld', 'ld64.lld', 'ninja', 'make', 'gmake') \
            or (exe == 'cmake' and '--build' in args):
             reasons.append('a build: ' + args[:70])
-        elif exe.startswith('qemu-system') or re.search(r'(lab/bin/\S+|alphabox|axpbox) run\b', args):
+        # An emulator is a guest whatever its binary is called: a copy kept
+        # for a run (alphabox-tick-wip, alphabox-d69b9ba) is one too, and
+        # the pattern alone missed it.
+        elif exe.startswith('qemu-system') or \
+             (exe.startswith(('alphabox', 'axpbox')) and args.split()[1:2] == ['run']) or \
+             re.search(r'(lab/bin/\S+|alphabox|axpbox) run\b', args):
             reasons.append('a guest: ' + args[:70])
     return reasons
 
