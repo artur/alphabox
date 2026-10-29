@@ -31,7 +31,9 @@
  * processor 0's schedule moves; the unset period; a debugger's shift;
  * the cycle counter's bound (CcBound): the console's 100-tick calibration
  * windows on a starved thread read one period a tick, a thread that runs
- * is untouched, a dropped backlog is reported and skipped.
+ * is untouched, a dropped backlog is reported and skipped; a thread that
+ * sleeps until its ticks and wakes late keeps its schedule and counts the
+ * whole sleep.
  * Built with every lane as `tick_schedule_test`; exit
  * status 0 when every check passes.
  */
@@ -396,6 +398,69 @@ static void counter_keeps_to_ticks() {
   CHECK(!cc_bound_after_tick(u, at(T0), 0).bounded);
 }
 
+/// A thread that sleeps until its next tick and wakes `late_ns` (and up to
+/// `jitter_ns` more) after it, as QUIESCE and the idle pause do, for
+/// `dur_ns`; it fires its ticks from the sleep (present) and reads its
+/// counter when the sleep ends. Returns the counter's shortfall against the
+/// time slept, and the largest lateness of a tick.
+static int64_t sleeper(int64_t late_ns, int64_t jitter_ns, int64_t dur_ns,
+                       int64_t *worst_late) {
+  TickSchedule s;
+  s.start(at(T0));
+  CHECK(s.poll(at(T0), P, UNSET, 0)); // running before it sleeps
+  int64_t lag = 0, lim = INT64_MAX, billed = T0;
+  const auto ns = [](TickSchedule::clock::duration d) {
+    return (int64_t)std::chrono::duration_cast<nanoseconds>(d).count();
+  };
+  CcBound b = cc_bound_after_tick(s, at(T0), P);
+  lag = ns(b.lag);
+  lim = ns_of(b.limit);
+  const int64_t end = T0 + dur_ns;
+  uint32_t lcg = 12345;
+  int64_t t = T0;
+  *worst_late = 0;
+  for (;;) {
+    lcg = lcg * 1664525u + 1013904223u;
+    const int64_t wake =
+        ns_of(s.due()) + late_ns + (jitter_ns ? (lcg >> 8) % jitter_ns : 0);
+    if (wake >= end)
+      break;
+    t = wake;
+    CHECK(s.poll(at(t), P, UNSET, 0));
+    const int64_t l = t - ns_of(s.fired_due());
+    *worst_late = l > *worst_late ? l : *worst_late;
+    b = cc_bound_after_tick(s, at(t), P, true);
+    lag = ns(b.lag);
+    lim = ns_of(b.limit);
+    billed += ns(b.skip);
+  }
+  t = end; // the sleep ends (its timeout)
+  b = cc_bound_after_sleep(s, at(t), P);
+  lag = ns(b.lag);
+  if (ns_of(b.limit) > lim)
+    lim = ns_of(b.limit);
+  int64_t to = t - lag;
+  to = to > lim ? lim : to;
+  to = to < billed ? billed : to;
+  return (end - T0) - (to - T0);
+}
+
+static void sleeper_keeps_schedule() {
+  // QUIESCE's 335 ms timeout (2^28 cycles at 800 MHz), the host waking the
+  // thread 0.33 ms late (what macOS did in quiesce_mp), steadily or with
+  // up to 0.15 ms more: no tick later than its wake-up, and the whole sleep
+  // on the counter.
+  for (int64_t jitter : {(int64_t)0, (int64_t)150000}) {
+    int64_t worst;
+    const int64_t shortfall = sleeper(330000, jitter, 335544320, &worst);
+    printf("  a thread asleep 335 ms, woken 0.33 ms late (+%lld us): latest "
+           "tick %.3f ms late, counter %lld ns short\n",
+           (long long)jitter / 1000, worst / 1e6, (long long)shortfall);
+    CHECK(worst <= 330000 + jitter);
+    CHECK(shortfall == 0);
+  }
+}
+
 static void dropped_backlog_reported() {
   TickSchedule s;
   s.start(at(T0));
@@ -425,6 +490,7 @@ int main() {
   unset_period();
   debugger_shift();
   counter_keeps_to_ticks();
+  sleeper_keeps_schedule();
   dropped_backlog_reported();
   printf("%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;

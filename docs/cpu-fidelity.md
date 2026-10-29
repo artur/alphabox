@@ -1476,7 +1476,12 @@ processor keeps its own schedule and fires its own tick, from its own
 thread at its dispatch batches, with the catch-up processor 0 had: one
 period a tick, repaid at least half a period apart and modulated, a
 backlog over a second dropped; once more than 32 periods behind, an
-eighth of that gap (a quarter until now: below). Its tick sets only its own state: its `MISC<ITINTR>` bit
+eighth of that gap (a quarter until now: below). A tick fired less than
+half a period late is spaced from its due instant, not from when it
+fired (since 2026-10-29): a thread that sleeps until its next tick and
+wakes a little late, as QUIESCE and the idle pause do, used to fall
+behind at every tick, 15 to 25 ms into a 335 ms QUIESCE with the host
+waking it 0.33 ms late. Its tick sets only its own state: its `MISC<ITINTR>` bit
 and b_irq<2> (Tsunami, Titan), its register block's RBOX_INT<15> under
 that block's lock alone, or its TPU's bit of R_INT_STAT<7:4> in 21464
 mode. Processor 0's ticks alone count the machine's periods
@@ -1602,6 +1607,22 @@ and its counter is the host's clock times the speed, as before. The
 quarter period is that margin; what it costs is that a 100-tick window on
 a starved thread is right to a quarter period in a hundred, 0.25%, where
 the console rounds the cycle time to 10 ps in 1200 (0.8%).
+
+A processor that sleeps by design is not a starved one: QUIESCE (the
+21464 counts its timeout in cycles), the idle pause and the
+instruction-paced hold. A tick it fires from such a sleep, or first thing
+after one, sets no lag (its lateness is the host's wake-up latency), and
+the sleep's end lets the counter run to its end
+(`cc_bound_after_sleep`). Found by gate oct29a: without it the `ev8` and
+`ev8n` oracle's QUIESCE timeout read short and `quiesce_mp.py` measured
+its 21 ms waits as 17.2 to 20.9 ms and its 335 ms timeout as 318 to 324
+ms, on every lane; with it all pass on all four (`build`, `build-jit`, `build-jit-verify`,
+`build-jit-x64`). Other waits of a processor's thread are not sleeps of
+its own and keep the bound: a debugger stop moves the counter, its
+schedule and the limit together; a processor parked before its start
+starts both afresh; a wait inside a guest access for another processor
+(a halt's, the start hand-off's) is time the guest's processor would
+not have spent.
 
 **The divergence:** on a starved thread the counter runs behind the host's
 clock by up to the ticks still owed (a second at most, then they are

@@ -186,6 +186,9 @@ void CAlphaCPU::jit_idle_pause() {
   if (!state.check_int && !state.check_timers && !state.eir)
     m_idle_cv.wait_until(lk, deadline);
   m_idle_sleeping.store(false);
+  // A sleep of the thread's own: the time counts in full on its cycle
+  // counter (cc_bound_after_sleep).
+  cc_bound_after_sleep(std::chrono::steady_clock::now());
   ++m_idle_sleeps;
   m_idle_slept_ns += (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::steady_clock::now() - t0)

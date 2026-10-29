@@ -461,11 +461,15 @@ bool CAlphaCPU::tick_hold() {
   using namespace std::chrono;
   const auto deadline = m_tick.due();
   for (;;) {
-    if (state.check_int || StopThread || cSystem->IsSystemResetRequested())
+    if (state.check_int || StopThread || cSystem->IsSystemResetRequested()) {
+      cc_bound_after_sleep(steady_clock::now());
       return false;
+    }
     const auto now = steady_clock::now();
-    if (now >= deadline)
+    if (now >= deadline) {
+      cc_bound_after_sleep(now); // held by design: the time counts
       return true;
+    }
     auto nap = deadline - now;
     if (nap > microseconds(100))
       nap = microseconds(100);
@@ -561,7 +565,8 @@ const bool g_cc_bound = [] {
  **/
 void CAlphaCPU::cc_bound_after_tick(std::chrono::steady_clock::time_point now,
                                     u64 period_ns) {
-  const CcBound b = ::cc_bound_after_tick(m_tick, now, period_ns);
+  const CcBound b = ::cc_bound_after_tick(m_tick, now, period_ns, m_cc_present);
+  m_cc_present = false;
   if (!b.bounded) {
     cc_bound_reset();
     return;
@@ -584,6 +589,34 @@ void CAlphaCPU::cc_bound_after_tick(std::chrono::steady_clock::time_point now,
     cc_last_sync += ns_to_host_ticks(skip_ns);
     m_cc_skip_ns += skip_ns;
   }
+}
+
+/**
+ * A sleep of this processor's own has ended at `now` (QUIESCE, the idle
+ * pause, the instruction-paced hold). It was not a thread the host failed
+ * to run: the time it slept counts in full, and the tick it fires next (or
+ * fired from inside the sleep) sets no lag, whatever the host's wake-up
+ * latency made of its lateness (TickSchedule.hpp, cc_bound_after_sleep).
+ **/
+void CAlphaCPU::cc_bound_after_sleep(
+    std::chrono::steady_clock::time_point now) {
+  if (!g_cc_bound)
+    return;
+  m_cc_present = true;
+  if (cc_lim == ~U64(0))
+    return; // no bound yet (no tick fired, or no period): nothing to lift
+  const u64 period_ns = theAli ? theAli->get_interval_period_ns()
+                               : cSystem->chipset()->interval_period_ns();
+  const CcBound b = ::cc_bound_after_sleep(m_tick, now, period_ns);
+  if (!b.bounded)
+    return;
+  using std::chrono::duration_cast;
+  using std::chrono::nanoseconds;
+  const s64 to_limit = duration_cast<nanoseconds>(b.limit - now).count();
+  const u64 lim = host_ticks() + ns_to_host_ticks((u64)to_limit);
+  cc_lag = 0;
+  if (lim > cc_lim)
+    cc_lim = lim;
 }
 
 // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ------------------------
@@ -722,8 +755,10 @@ void CAlphaCPU::quiesce() {
       const auto tick = m_tick.due();
       if (now >= tick) {
         // Our own tick is due: fire it, outside the lock (irq_h on this
-        // processor takes it), and look again.
+        // processor takes it), and look again. The thread is here to fire
+        // it, so its cycle counter keeps running (cc_bound_after_sleep).
         lk.unlock();
+        m_cc_present = true;
         interval_timer_poll(now);
         lk.lock();
         continue;
@@ -736,6 +771,9 @@ void CAlphaCPU::quiesce() {
     }
     m_quiescing.store(false);
   }
+  // The 21464's cycle counter runs through a QUIESCE (its timeout is
+  // counted in cycles): the sleep counts in full.
+  cc_bound_after_sleep(steady_clock::now());
   // "By definition, the watch_flag is clear at the end of the quiescent
   // period" [IDS p. 673].
   cSystem->cpu_clear_watch(id);

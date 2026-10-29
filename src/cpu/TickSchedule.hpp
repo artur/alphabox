@@ -40,6 +40,11 @@
  *    repeated until two agree) never agree during a repay stretch; an
  *    eighth of that gap once more than 32 periods behind (a thread
  *    starved, not stalled for a moment).
+ *    A tick fired less than half a period late is spaced from its due
+ *    instant, not from when it fired: a thread that sleeps until its next
+ *    tick and wakes late by the host's wake-up latency (QUIESCE, the idle
+ *    pause) would otherwise fall behind a little at every tick, to 32
+ *    periods (until 2026-10-29: 15 to 25 ms in a 335 ms QUIESCE).
  *  - A backlog over a second (a debugger stop, a host sleep, a thread that
  *    gets almost nothing) is dropped.
  *  - The first tick is due at once.
@@ -120,7 +125,12 @@ public:
       return false;
     m_fired_due = m_next;
     m_dropped = clock::duration::zero();
-    m_last = now;
+    // The spacing is for repaying a backlog. A tick fired within half a
+    // period of its due instant (a thread that sleeps until it and wakes a
+    // little late: QUIESCE, the idle pause) is spaced from that instant,
+    // so the next is due a period after it and the schedule does not
+    // drift; repaid ticks are still at least half a period apart.
+    m_last = (now - m_next <= nanoseconds(period_ns / 2)) ? m_next : now;
     m_gap_ns = next_gap(period_ns);
     m_next += nanoseconds(period_ns);
     // A thread the host gives less than about 70% of a core cannot repay
@@ -212,7 +222,10 @@ private:
  * A thread that fires each tick within a quarter period of its due instant
  * (one the host runs: a dispatch batch is microseconds) has no lag and
  * never reaches the limit: its counter is the host's clock times the speed,
- * as before. The quarter period is that margin.
+ * as before. The quarter period is that margin. A thread that sleeps by
+ * design until its next tick (QUIESCE, the idle pause) is not starved
+ * either: the ticks it fires from the sleep set no lag (`present`), and
+ * the sleep's end lets the counter run to it (cc_bound_after_sleep).
  **/
 struct CcBound {
   TickSchedule::clock::duration lag{};  ///< behind the host's clock
@@ -222,9 +235,13 @@ struct CcBound {
 };
 
 /// The bound after `s` fired a tick at `now`, the period `period_ns`.
+/// `present`: the thread fired it from a sleep of its own, or first thing
+/// after one (QUIESCE, the idle pause, the instruction-paced hold). It was
+/// there to fire the tick, and any lateness is the host's wake-up latency,
+/// not a thread the host did not run: no lag.
 inline CcBound cc_bound_after_tick(const TickSchedule &s,
                                    TickSchedule::time_point now,
-                                   uint64_t period_ns) {
+                                   uint64_t period_ns, bool present = false) {
   using std::chrono::nanoseconds;
   CcBound b;
   if (!period_ns)
@@ -233,9 +250,25 @@ inline CcBound cc_bound_after_tick(const TickSchedule &s,
   b.bounded = true;
   b.limit = s.next() + margin;
   const auto late = now - s.fired_due();
-  if (late > margin)
+  if (late > margin && !present)
     b.lag = late - margin;
   b.skip = s.dropped();
+  return b;
+}
+
+/// The bound when a sleep of the thread's own ends at `now`: the time it
+/// slept counts in full (no lag, and the limit not before `now`), and from
+/// there the limit is a quarter period past the next tick's due instant
+/// as usual, or past `now` when that tick is overdue (it is fired next).
+inline CcBound cc_bound_after_sleep(const TickSchedule &s,
+                                    TickSchedule::time_point now,
+                                    uint64_t period_ns) {
+  CcBound b;
+  if (!period_ns)
+    return b;
+  b.bounded = true;
+  b.limit = (s.next() > now ? s.next() : now) +
+            std::chrono::nanoseconds(period_ns / 4);
   return b;
 }
 

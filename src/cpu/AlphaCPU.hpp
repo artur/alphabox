@@ -435,6 +435,10 @@ private:
   // the emitter's one-displacement layout.)
   void cc_bound_after_tick(std::chrono::steady_clock::time_point now,
                            u64 period_ns);
+  /// A sleep of the thread's own ends (QUIESCE, the idle pause, the
+  /// instruction-paced hold): the time slept counts in full, and the next
+  /// tick it fires sets no lag (CcBound, cc_bound_after_sleep).
+  void cc_bound_after_sleep(std::chrono::steady_clock::time_point now);
   void cc_bound_reset() {
     cc_lag = 0;
     cc_lim = ~U64(0);
@@ -1393,6 +1397,9 @@ public:
   // at any offset.
   u64 cc_lag = 0;
   u64 cc_lim = ~U64(0);
+  /// The thread is firing ticks from a sleep of its own, or has just ended
+  /// one: the next tick sets no lag (cc_bound_after_sleep).
+  bool m_cc_present = false;
   // How the bound acted, for ALPHABOX_RATE: ticks late by more than a
   // quarter period (a lag set), the largest lag in ns, the backlog skipped.
   u64 m_cc_late = 0, m_cc_lag_max_ns = 0, m_cc_skip_ns = 0;
