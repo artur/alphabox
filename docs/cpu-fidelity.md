@@ -1558,6 +1558,10 @@ under 500, down to 6 to 45 MIPS for 100 to 150 s after each `init`;
 after, at 64 to 170, at a median of 1630 MIPS, 6 of 221 under 500 and
 none under 392.
 
+What it costs a guest's speed: about 2% on the two-processor Windows
+desktop, unresolved ([performance.md](performance.md), "Each processor's
+own tick").
+
 **What remains.** The catch-up has a floor, so the prototype's finding
 holds with another number: below about a tenth of a core (an eighth of
 the gap; a fifth with the quarter) a thread cannot repay its ticks, the
@@ -1630,8 +1634,7 @@ dropped) and catches up as they are repaid: read against the host it runs
 slow, then fast, and against the processor's own ticks it is right. Time
 the ticks give up (a host sleep, a thread starved below about a tenth of
 a core) is not counted, where a gap over a second used to count as one
-second. `ALPHABOX_CC_BOUND=0` restores the counter as it was (an A/B
-switch, [headless.md](headless.md)).
+second.
 
 **Measured** (2026-10-28, `lab/runs/interp-crash`, its `status.md`): the
 ES40 with one `ev68cb` at 833M, the whole emulator stopped and continued
@@ -1668,9 +1671,11 @@ duty, booting at a host load of about 20, 3 to 143 ticks in each 10 s
 window (of 10240) came that late, with lags up to 49 ms.
 
 What it costs the JIT's `RPCC` stub (two loads and six instructions a
-read) was measured only on a busy host, inconclusive both ways (+0.1% and
-+2.1%: [performance.md](performance.md), "The cycle counter"); the switch
-stays until a quiet host settles it.
+read): +0.4% on axpbench and -0.4% on makecab, inconclusive, and at most
++1.5% and +0.5% comparing the slowest run with the bound against the
+fastest without ([performance.md](performance.md), "The cycle counter").
+The A/B switch (`ALPHABOX_CC_BOUND=0`, the counter as it was) was removed
+on that, 2026-10-29.
 
 ### What is left
 

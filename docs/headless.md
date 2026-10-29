@@ -481,7 +481,6 @@ stopped process, shows up as one long wait or hold.
 | `ALPHABOX_IDLESTATS=1` | JIT builds: print idle-pacing counters every 2000 idle-loop visits. |
 | `ALPHABOX_STALL_SKIP=0` | JIT builds: make a guest's `RPCC` delay loop wait in real time, as the hardware would, instead of handing it the cycles it is waiting for. |
 | `ALPHABOX_PORT61_PACE=0` | Spin on the ISA refresh-toggle bit of port 61h instead of sleeping to the next edge. |
-| `ALPHABOX_CC_BOUND=0` | The cycle counter follows the host's clock alone, as before 2026-10-28, instead of keeping to the processor's interval timer. An A/B switch. |
 | `ALPHABOX_RATE=<sec>` | JIT builds: every `<sec>` seconds (fractions allowed), print each processor's instruction rate and what its `IMB`s, cycle-counter reads and delay loops cost, and its interval-timer ticks: how many, how many came over a quarter period late and the largest lag that gave its cycle counter, and the backlog dropped (`%CPUn-I-TICK`). |
 
 `ALPHABOX_STALL_SKIP=0` costs a Windows 2000 boot 35 seconds; see
@@ -490,13 +489,6 @@ diverges on.
 
 `ALPHABOX_PORT61_PACE=0` leaves the guest's timing the same; it only
 decides whether a host core burns while the guest waits.
-
-`ALPHABOX_CC_BOUND=0` changes nothing for a processor the host runs. A
-starved one counts the host's time again while its ticks wait, so the
-console measures its speed high (see
-[cpu-fidelity.md](cpu-fidelity.md), "The cycle counter keeps to the
-interval timer"). It is kept for the performance comparison of the `RPCC`
-stub.
 
 `ALPHABOX_RATE` is accurate enough to measure with: it looks at the clock
 once every 256 batches. `cpu_bench.sh` and `sect_mips.sh` read it rather

@@ -2282,14 +2282,10 @@ void CAlphaCPU::jit_rpcc_selftest() {
   };
 
   int bad = 0;
-  unsigned run = 0;
-  for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-    // Where the bound decides it, the last sync is known: compare it. With
-    // ALPHABOX_CC_BOUND=0 the stub has no bound to compare.
+  const unsigned n = sizeof cases / sizeof cases[0];
+  for (unsigned i = 0; i < n; i++) {
+    // Where the bound decides it, the last sync is known: compare it.
     const bool bound_decides = cases[i].lim != none || cases[i].lag != 0;
-    if (bound_decides && !g_cc_bound)
-      continue;
-    run++;
     load(cases[i]);
     const u64 want = jit_misc(this, 0);
     const CcState after_helper = save();
@@ -2322,7 +2318,7 @@ void CAlphaCPU::jit_rpcc_selftest() {
     }
   }
   load(entry);
-  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n", run, bad);
+  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n", n, bad);
   exit(bad ? 1 : 0);
 }
 

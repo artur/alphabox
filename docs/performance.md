@@ -1701,22 +1701,62 @@ to have.**
 ([cpu-fidelity.md](cpu-fidelity.md), "The cycle counter keeps to the
 interval timer"): the AArch64 stub loads two more fields and runs six more
 instructions a read, and each tick computes the bound. Measured inside one
-binary (`build-default` at `fd64252`, `ALPHABOX_CC_BOUND=0` in the base
-arm, the desktop snapshot, three rounds), with `--busy-ok`: another
-project's builds and guests kept the host busy for over two hours, and the
-quiet-host run threw away four timed rounds for overlapping them. Ledger
-`rpccbound-axp-busy` [8015, 7921, 7906] -> [7929, 7875, 7992] ms, +0.1%,
-and `rpccbound-cab-busy` [7070, 6300, 6080] -> [6430, 6610, 6090] ms,
-+2.1%: both inconclusive, every section's results identical. The switch
-stays until a quiet host resolves it:
+binary, with the bound off in the base arm (`ALPHABOX_CC_BOUND=0`, an A/B
+switch removed after these runs), the desktop snapshot, three rounds:
+
+- On a busy host (`--busy-ok`, a JIT build at `fd64252`): another
+  project's builds and guests kept the host busy for over two hours.
+  Ledger `rpccbound-axp-busy` [8015, 7921, 7906] -> [7929, 7875, 7992]
+  ms, +0.1%, and `rpccbound-cab-busy` [7070, 6300, 6080] -> [6430, 6610,
+  6090] ms, +2.1%: both inconclusive.
+- With perf_ab waiting out that project's builds (twenty minutes at a
+  time; one axp run gave up after eight overlapped rounds), `build-jit` at
+  `e6ae3ce`: ledger `rpccbound-axp-jit2` [8398, 8210, 8179] -> [8226,
+  8242, 8304] ms, +0.4%, and `rpccbound-cab-jit` [7700, 7740, 7750] ->
+  [7710, 7520, 7740] ms, -0.4%: both inconclusive, every section's results
+  identical. The slowest run with the bound against the fastest without
+  it is +1.5% (axp) and +0.5% (cab). In each workload one arm spread 2.7%
+  or 2.9%, each by a single run, and each such run makes the arm without
+  the bound look the slower. The switch was removed on that bound.
+- The interpreter, timed first by mistake: `build-default` in a checkout
+  configured before the JIT became the default (2026-10-23) was still an
+  interpreter build, and stays one until `ES40_DISABLE_ASMJIT` is dropped
+  from its cache. Check that `alphabox --version` lists the JIT before
+  timing it. Ledger `rpccbound-axp-quiet` +0.9% (spreads 1.3% and 1.9%)
+  and `rpccbound-cab-quiet` -0.9% (2.8% and 6.8%).
+
+The commands, on `9892207` or earlier (the switch is gone after it):
 
 ```
-B=build-default/alphabox
+B=build-jit/alphabox
 for wl in axp cab; do
   test/tools/perf_ab.py rpccbound-$wl $B $B --env-base ALPHABOX_CC_BOUND=0 \
     --workload $wl --rounds 3 --snapshot
 done
 ```
+
+## Each processor's own tick
+
+*2026-10-29.* Each processor fires its own interval tick
+([cpu-fidelity.md](cpu-fidelity.md), "Every processor keeps its own
+interval timer"), where processor 0 used to tick them all. Measured
+against that broadcast inside one binary built only for the comparison
+(the broadcast behind a switch, never committed:
+`lab/runs/tick/ab-switch-9892207.patch`), the two-processor desktop
+snapshot, the cycle counter's bound off in both arms: with the broadcast
+processor 1 fires no tick of its own, so the bound would hold processor
+0's counter alone. Ledger `tick-percpu-smp2c`, four rounds, [8226, 8210,
+8281, 8062] -> [8460, 8359, 8203, 8453] ms, +2.3%, inconclusive (spreads
+2.7% and 3.1%), every section's results identical. With
+`tick-percpu-smp2b` (2026-10-28, two rounds, +1.6%) the runs with each
+processor's own tick were the slower in five rounds of six, paired. It
+may cost about 2%, unresolved. It stays, as a fidelity fix: it ended the
+sixteen-processor ES80's slowdown after `init`. Not chased further.
+
+The per-section MIPS that perf_ab prints are not usable on this
+snapshot: they come from processor 0's rate windows only, and Windows
+moves the benchmark between the two processors. MIPS figures come from
+the one-processor snapshot (`sect_mips.sh`).
 
 ## The drawing engine
 

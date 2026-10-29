@@ -324,10 +324,9 @@ void CAlphaCPU::rate_tick() {
     const u64 skip = m_cc_skip_ns - m_rate_cc_skip_ns;
     fprintf(stderr,
             "%%CPU%d-I-TICK: %.0f ticks/s, %llu late by over a quarter "
-            "period (lag up to %.3f ms), %.1f ms of backlog skipped%s\n",
+            "period (lag up to %.3f ms), %.1f ms of backlog skipped\n",
             get_cpuid(), (u32)(fired - m_rate_ticks) / secs,
-            (unsigned long long)late, m_cc_lag_max_ns / 1e6, skip / 1e6,
-            g_cc_bound ? "" : " (bound off)");
+            (unsigned long long)late, m_cc_lag_max_ns / 1e6, skip / 1e6);
     m_rate_ticks = fired;
     m_rate_cc_late = m_cc_late;
     m_rate_cc_skip_ns = m_cc_skip_ns;
@@ -544,18 +543,8 @@ void CAlphaCPU::interval_timer_poll(std::chrono::steady_clock::time_point now) {
   cSystem->interval_tick(cpu);
   if (cpu == 0 && period_ns)
     cSystem->set_tick_phase(m_tick.next());
-  if (g_cc_bound)
-    cc_bound_after_tick(now, period_ns);
+  cc_bound_after_tick(now, period_ns);
 }
-
-// ALPHABOX_CC_BOUND=0: the cycle counter follows the host's clock alone, as
-// before 2026-10-28 (an A/B switch; docs/cpu-fidelity.md, "The cycle
-// counter keeps to the interval timer"). Read by the A64 RPCC stub's
-// emitter too.
-const bool g_cc_bound = [] {
-  const char *e = getenv("ALPHABOX_CC_BOUND");
-  return !(e && e[0] == '0');
-}();
 
 /**
  * After a tick: how far the cycle counter may run until the next one
@@ -600,8 +589,6 @@ void CAlphaCPU::cc_bound_after_tick(std::chrono::steady_clock::time_point now,
  **/
 void CAlphaCPU::cc_bound_after_sleep(
     std::chrono::steady_clock::time_point now) {
-  if (!g_cc_bound)
-    return;
   m_cc_present = true;
   if (cc_lim == ~U64(0))
     return; // no bound yet (no tick fired, or no period): nothing to lift

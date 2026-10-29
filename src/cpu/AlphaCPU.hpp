@@ -78,11 +78,6 @@ extern const bool g_jit05_mb;
 /// ALPHABOX_JIT08_XLATE=0 selects the copies they had before.
 extern const bool g_jit08_xlate;
 
-/// A/B switch, read once at startup (AlphaCPU.cpp): the cycle counter keeps
-/// to the processor's interval timer (CAlphaCPU::cc_bound_after_tick, the
-/// RPCC stub). ALPHABOX_CC_BOUND=0 turns it off.
-extern const bool g_cc_bound;
-
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
 // cache when another CPU flushed: compiled blocks are per-CPU, but guest code
@@ -430,9 +425,8 @@ private:
   // CcBound): it is billed up to the host's clock less cc_lag, and never
   // past cc_lim, both in host ticks and set after each tick
   // (interval_timer_poll). A processor the host runs has no lag and never
-  // reaches the limit. ALPHABOX_CC_BOUND=0 leaves them at 0 and ~0. (The
-  // two fields are at the end of the class, with the others added since
-  // the emitter's one-displacement layout.)
+  // reaches the limit. (The two fields are at the end of the class, with the
+  // others added since the emitter's one-displacement layout.)
   void cc_bound_after_tick(std::chrono::steady_clock::time_point now,
                            u64 period_ns);
   /// A sleep of the thread's own ends (QUIESCE, the idle pause, the
