@@ -1697,6 +1697,27 @@ Finding that took three tries, and the two failures are the lesson:
 **A change can be real and still be invisible to every benchmark you happen
 to have.**
 
+*2026-10-29.* The counter keeps to the processor's interval timer
+([cpu-fidelity.md](cpu-fidelity.md), "The cycle counter keeps to the
+interval timer"): the AArch64 stub loads two more fields and runs six more
+instructions a read, and each tick computes the bound. Measured inside one
+binary (`build-default` at `fd64252`, `ALPHABOX_CC_BOUND=0` in the base
+arm, the desktop snapshot, three rounds), with `--busy-ok`: another
+project's builds and guests kept the host busy for over two hours, and the
+quiet-host run threw away four timed rounds for overlapping them. Ledger
+`rpccbound-axp-busy` [8015, 7921, 7906] -> [7929, 7875, 7992] ms, +0.1%,
+and `rpccbound-cab-busy` [7070, 6300, 6080] -> [6430, 6610, 6090] ms,
++2.1%: both inconclusive, every section's results identical. The switch
+stays until a quiet host resolves it:
+
+```
+B=build-default/alphabox
+for wl in axp cab; do
+  test/tools/perf_ab.py rpccbound-$wl $B $B --env-base ALPHABOX_CC_BOUND=0 \
+    --workload $wl --rounds 3 --snapshot
+done
+```
+
 ## The drawing engine
 
 *2026-09-19.* Listing 5551 files in a console window draws **903,099,931

@@ -1646,6 +1646,11 @@ to 133 ms, 1021 to 1026 ticks a second and no backlog dropped; before the
 duty, booting at a host load of about 20, 3 to 143 ticks in each 10 s
 window (of 10240) came that late, with lags up to 49 ms.
 
+What it costs the JIT's `RPCC` stub (two loads and six instructions a
+read) was measured only on a busy host, inconclusive both ways (+0.1% and
++2.1%: [performance.md](performance.md), "The cycle counter"); the switch
+stays until a quiet host settles it.
+
 ### What is left
 
 - **The learned loops survive a TIG reset.** `ResetForSystemReset`
