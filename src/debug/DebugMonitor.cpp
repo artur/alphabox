@@ -188,7 +188,8 @@ std::string CDebugTarget::mon_ipr(int cpu) {
     std::lock_guard<std::mutex> g(m_mx);
     const u64 at =
         m_cpus[cpu].parked ? m_cpus[cpu].parked_ticks : CAlphaCPU::host_ticks();
-    u64 d = at > c->cc_last_sync ? at - c->cc_last_sync : 0;
+    const u64 to = c->cc_billable(at); // as far as the interval timer lets it
+    u64 d = to > c->cc_last_sync ? to - c->cc_last_sync : 0;
     if (d > c->cc_tick_hz)
       d = c->cc_tick_hz; // as sync_cc_wallclock caps it
     cc += (u64)(((__uint128_t)d * c->cc_cycles_per_tick_q32) >> 32);

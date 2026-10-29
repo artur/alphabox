@@ -142,6 +142,9 @@ enum WatchWake {
 /// JIT-05's A/B switches (AlphaCPU.cpp, System.cpp), read once at startup.
 extern const bool g_jit05_mb;
 extern const int g_jit05_fence;
+/// ALPHABOX_CC_BOUND's A/B switch (AlphaCPU.cpp): the cycle counter keeps
+/// to the interval timer; the JIT's RPCC stub reads it when it is built.
+extern const bool g_cc_bound;
 
 class CCodePageMap {
 public:

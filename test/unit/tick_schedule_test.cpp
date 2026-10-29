@@ -28,7 +28,10 @@
  * across the console's 100-tick windows; a backlog over a second dropped;
  * a processor other than 0 keeping processor 0's phase after its first
  * tick, after a drop and after a period change, and following it when
- * processor 0's schedule moves; the unset period; a debugger's shift.
+ * processor 0's schedule moves; the unset period; a debugger's shift;
+ * the cycle counter's bound (CcBound): the console's 100-tick calibration
+ * windows on a starved thread read one period a tick, a thread that runs
+ * is untouched, a dropped backlog is reported and skipped.
  * Built with every lane as `tick_schedule_test`; exit
  * status 0 when every check passes.
  */
@@ -309,6 +312,107 @@ static void debugger_shift() {
   CHECK(s.poll(at(T0 + 5 * SEC + (int64_t)P), P, UNSET, 0));
 }
 
+/// The console's speed calibration on a thread the host runs `run` ns of
+/// every `cycle` for 20 s: the guest reads its cycle counter at each of its
+/// ticks (the interrupt) and takes 100 ticks' cycles over 100 periods. The
+/// counter is the host's clock in nanoseconds (1 GHz), billed at every poll
+/// as sync_cc_wallclock bills it, with the interval timer's bound
+/// (cc_bound_after_tick) or, `bound` false, without. Returns the window
+/// furthest from one period a tick, as a fraction (0.01: 1% fast or slow).
+static double worst_window(int64_t run, int64_t cycle, bool bound) {
+  TickSchedule s;
+  s.start(at(T0));
+  int64_t billed = T0, lag = 0, lim = INT64_MAX, cc = 0;
+  std::vector<int64_t> reads;
+  const auto sync = [&](int64_t now) {
+    int64_t to = now - lag;
+    if (to > lim)
+      to = lim;
+    if (to < billed)
+      to = billed;
+    cc += to - billed;
+    billed = to;
+  };
+  const auto ns = [](TickSchedule::clock::duration d) {
+    return (int64_t)std::chrono::duration_cast<nanoseconds>(d).count();
+  };
+  for (int64_t t = T0; t < T0 + 20 * SEC; t += 2000) {
+    if ((t - T0) % cycle >= run)
+      continue;
+    sync(t); // the dispatch batch
+    if (!s.poll(at(t), P, UNSET, 0))
+      continue;
+    if (bound) {
+      const CcBound b = cc_bound_after_tick(s, at(t), P);
+      CHECK(b.bounded);
+      lag = ns(b.lag);
+      lim = ns_of(b.limit);
+      billed += ns(b.skip);
+    }
+    sync(t); // the guest's interrupt reads RPCC
+    reads.push_back(cc);
+  }
+  double worst = 0;
+  for (size_t i = 0; i + 100 < reads.size(); i++) {
+    double e = (double)(reads[i + 100] - reads[i]) / (100.0 * (double)P) - 1;
+    e = e < 0 ? -e : e;
+    worst = e > worst ? e : worst;
+  }
+  return worst;
+}
+
+static void counter_keeps_to_ticks() {
+  // The console's cycle time is 1200 ps at 833 MHz, rounded to 10 ps: a
+  // window within 0.4% reads the right speed.
+  static const struct {
+    int64_t run_us, cycle_us;
+    const char *what;
+  } shares[] = {{1, 1, "a thread that runs"}, {30000, 50000, "60% of a core"},
+                {25000, 100000, "25%"},       {10000, 100000, "10%"},
+                {5000, 100000, "5%"},         {1000, 20000, "5%, 1 ms in 20"},
+                {2000, 100000, "2%"}};
+  for (const auto &sh : shares) {
+    const double with =
+        worst_window(sh.run_us * 1000, sh.cycle_us * 1000, true);
+    const double without =
+        worst_window(sh.run_us * 1000, sh.cycle_us * 1000, false);
+    printf("  %s: worst 100-tick window %.3f%% off with the bound, %.3f%% "
+           "without\n",
+           sh.what, with * 100, without * 100);
+    CHECK(with < 0.004);
+  }
+  // A thread that runs is untouched: no lag, never at the limit.
+  TickSchedule s;
+  s.start(at(T0));
+  CHECK(s.poll(at(T0 + 3000), P, UNSET, 0));
+  const CcBound b = cc_bound_after_tick(s, at(T0 + 3000), P);
+  CHECK(b.lag == TickSchedule::clock::duration::zero());
+  CHECK(b.limit == at(T0 + (int64_t)P + (int64_t)P / 4));
+  CHECK(b.skip == TickSchedule::clock::duration::zero());
+  // No period yet: no bound.
+  TickSchedule u;
+  u.start(at(T0));
+  CHECK(u.poll(at(T0), 0, UNSET, 0));
+  CHECK(!cc_bound_after_tick(u, at(T0), 0).bounded);
+}
+
+static void dropped_backlog_reported() {
+  TickSchedule s;
+  s.start(at(T0));
+  CHECK(s.poll(at(T0), P, UNSET, 0));
+  CHECK(s.dropped() == TickSchedule::clock::duration::zero());
+  // Five seconds late: the tick due at T0 + P is fired, and the backlog
+  // after it given up.
+  const tp late = at(T0 + 5 * SEC);
+  CHECK(s.poll(late, P, UNSET, 0));
+  CHECK(s.fired_due() == at(T0 + (int64_t)P));
+  CHECK(s.dropped() == late - at(T0 + 2 * (int64_t)P));
+  CHECK(s.next() == late);
+  const CcBound b = cc_bound_after_tick(s, late, P);
+  CHECK(b.skip == s.dropped());
+  CHECK(b.lag == late - at(T0 + (int64_t)P) - nanoseconds(P / 4));
+}
+
 int main() {
   first_tick_at_once();
   keeps_count_running();
@@ -320,6 +424,8 @@ int main() {
   rejoins_after_drop_and_period_change();
   unset_period();
   debugger_shift();
+  counter_keeps_to_ticks();
+  dropped_backlog_reported();
   printf("%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

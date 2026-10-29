@@ -135,6 +135,7 @@ void CAlphaCPU::run() {
     start_time = std::chrono::steady_clock::now();
     m_tick.start(start_time);
     cc_last_sync = host_ticks();
+    cc_bound_reset(); // until its first tick, nothing to keep to
     state.instruction_count = 0;
 
   } catch (CException &e) {
@@ -312,6 +313,25 @@ void CAlphaCPU::rate_tick() {
               get_cpuid(), (skipped + done_f) / secs,
               100.0 * (double)skipped / (double)(skipped + done_f),
               (unsigned long long)(m_code_map ? m_code_map->code_pages() : 0));
+  }
+  {
+    // The interval timer, and how its bound held the cycle counter: a tick
+    // fired more than a quarter period late gives the counter a lag (the
+    // thread was not run), and a backlog dropped is skipped by both. A
+    // processor the host runs shows none of either.
+    const u32 fired = m_tick.fired();
+    const u64 late = m_cc_late - m_rate_cc_late;
+    const u64 skip = m_cc_skip_ns - m_rate_cc_skip_ns;
+    fprintf(stderr,
+            "%%CPU%d-I-TICK: %.0f ticks/s, %llu late by over a quarter "
+            "period (lag up to %.3f ms), %.1f ms of backlog skipped%s\n",
+            get_cpuid(), (u32)(fired - m_rate_ticks) / secs,
+            (unsigned long long)late, m_cc_lag_max_ns / 1e6, skip / 1e6,
+            g_cc_bound ? "" : " (bound off)");
+    m_rate_ticks = fired;
+    m_rate_cc_late = m_cc_late;
+    m_rate_cc_skip_ns = m_cc_skip_ns;
+    m_cc_lag_max_ns = 0;
   }
 }
 
@@ -520,6 +540,50 @@ void CAlphaCPU::interval_timer_poll(std::chrono::steady_clock::time_point now) {
   cSystem->interval_tick(cpu);
   if (cpu == 0 && period_ns)
     cSystem->set_tick_phase(m_tick.next());
+  if (g_cc_bound)
+    cc_bound_after_tick(now, period_ns);
+}
+
+// ALPHABOX_CC_BOUND=0: the cycle counter follows the host's clock alone, as
+// before 2026-10-28 (an A/B switch; docs/cpu-fidelity.md, "The cycle
+// counter keeps to the interval timer"). Read by the A64 RPCC stub's
+// emitter too.
+const bool g_cc_bound = [] {
+  const char *e = getenv("ALPHABOX_CC_BOUND");
+  return !(e && e[0] == '0');
+}();
+
+/**
+ * After a tick: how far the cycle counter may run until the next one
+ * (TickSchedule.hpp, CcBound), in host ticks for sync_cc_wallclock and the
+ * RPCC stub. `now` and the host's tick counter are the same clock read
+ * moments apart; only differences of them are used.
+ **/
+void CAlphaCPU::cc_bound_after_tick(std::chrono::steady_clock::time_point now,
+                                    u64 period_ns) {
+  const CcBound b = ::cc_bound_after_tick(m_tick, now, period_ns);
+  if (!b.bounded) {
+    cc_bound_reset();
+    return;
+  }
+  using std::chrono::duration_cast;
+  using std::chrono::nanoseconds;
+  const u64 t = host_ticks();
+  const s64 to_limit = duration_cast<nanoseconds>(b.limit - now).count();
+  cc_lim = to_limit >= 0 ? t + ns_to_host_ticks((u64)to_limit)
+                         : t - ns_to_host_ticks((u64)-to_limit);
+  const u64 lag_ns = (u64)duration_cast<nanoseconds>(b.lag).count();
+  cc_lag = ns_to_host_ticks(lag_ns);
+  if (lag_ns) {
+    ++m_cc_late;
+    if (lag_ns > m_cc_lag_max_ns)
+      m_cc_lag_max_ns = lag_ns;
+  }
+  if (b.skip.count() > 0) { // the count gave this up: so does the counter
+    const u64 skip_ns = (u64)duration_cast<nanoseconds>(b.skip).count();
+    cc_last_sync += ns_to_host_ticks(skip_ns);
+    m_cc_skip_ns += skip_ns;
+  }
 }
 
 // --- LDx_ARM and QUIESCE (the 21464's, CPU_EXT_EV8) ------------------------
@@ -850,6 +914,8 @@ void CAlphaCPU::init() {
     o.state_cc = (uint32_t)((char *)&state.cc - (char *)this);
     o.cc_ena = (uint32_t)((char *)&state.cc_ena - (char *)this);
     o.cc_offset = (uint32_t)((char *)&state.cc_offset - (char *)this);
+    o.cc_lag = (uint32_t)((char *)&cc_lag - (char *)this);
+    o.cc_lim = (uint32_t)((char *)&cc_lim - (char *)this);
     o.exc_addr = (uint32_t)((char *)&state.exc_addr - (char *)this);
     o.pal_base = (uint32_t)((char *)&state.pal_base - (char *)this);
     o.sde = (uint32_t)((char *)&state.sde - (char *)this);
@@ -928,6 +994,7 @@ void CAlphaCPU::init() {
 
   start_time = std::chrono::steady_clock::now();
   m_tick.start(start_time);
+  cc_bound_reset();
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 
@@ -1010,6 +1077,7 @@ void CAlphaCPU::ResetForSystemReset() {
 
   start_time = std::chrono::steady_clock::now();
   m_tick.start(start_time);
+  cc_bound_reset();
 
   state.r[22] = state.r[22 + 32] = state.iProcNum;
 
@@ -2623,6 +2691,7 @@ int CAlphaCPU::RestoreState(FILE *f) {
   cc_borrow = 0;
   cc_wall_remainder = 0;
   cc_last_sync = host_ticks();
+  cc_bound_reset();
   // RAM and TB state now belong to the restored state: drop the data page
   // cache, the sequential icache cursor and every compiled block (the epoch
   // bump makes them re-hash against the restored RAM before they run).

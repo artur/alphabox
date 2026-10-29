@@ -282,11 +282,13 @@ error; Linux would estimate its own, if it accepted the part's speed. A
 `speed` that is a whole number of picoseconds (500M, 1000M, or 666666667
 and 833333333 written out) has none.
 
-Under a starved thread the console's own speed calibration is wrong,
-before the fix and after, since its cycle counter follows the host while
-the ticks wait for the thread: at 800 MHz with a 60% share from power on
+Under a starved thread the console's own speed calibration was wrong,
+before the fix and after, since its cycle counter followed the host while
+the ticks waited for the thread: at 800 MHz with a 60% share from power on
 it printed 962 MHz before and 654 after, at a 25% share 1923 and 1042.
-Unthrottled it prints 800 with both.
+Unthrottled it prints 800 with both. Since the cycle counter keeps to the
+interval timer (2026-10-28, [cpu-fidelity.md](cpu-fidelity.md)) it prints
+the configured speed down to a 2% share: 833 MHz in every run at 833M.
 
 ### Configuration
 

@@ -77,6 +77,7 @@ public:
   void shift(clock::duration d) {
     m_next += d;
     m_last += d;
+    m_fired_due += d;
   }
 
   /// When the next tick is due by the count, not counting the spacing.
@@ -92,6 +93,12 @@ public:
   /// How many ticks the schedule has fired.
   uint32_t fired() const { return m_fired; }
 
+  /// The instant the last tick fired was due at, by the count.
+  time_point fired_due() const { return m_fired_due; }
+
+  /// The backlog the last poll that fired dropped (0: none).
+  clock::duration dropped() const { return m_dropped; }
+
   /// Whether a tick is due at `now`, taking it off the schedule if so. The
   /// period is `period_ns`; with none set yet (0) a tick comes every
   /// `unset_ns`. `phase_ns` is an instant of processor 0's schedule (the
@@ -102,6 +109,8 @@ public:
     if (now < m_next)
       return false;
     if (!period_ns) {
+      m_fired_due = m_next;
+      m_dropped = clock::duration::zero();
       m_last = now;
       m_next = now + nanoseconds(unset_ns);
       ++m_fired;
@@ -109,6 +118,8 @@ public:
     }
     if (now - m_last < nanoseconds(m_gap_ns))
       return false;
+    m_fired_due = m_next;
+    m_dropped = clock::duration::zero();
     m_last = now;
     m_gap_ns = next_gap(period_ns);
     m_next += nanoseconds(period_ns);
@@ -124,8 +135,10 @@ public:
     // A thread that keeps up never gets here.
     if (now - m_next > nanoseconds(32 * period_ns))
       m_gap_ns /= 8;
-    if (now - m_next > std::chrono::seconds(1))
+    if (now - m_next > std::chrono::seconds(1)) {
+      m_dropped = now - m_next;
       m_next = now;
+    }
     if (phase_ns)
       m_next = nearest(m_next, period_ns, phase_ns);
     ++m_fired;
@@ -166,10 +179,64 @@ private:
 
   time_point m_next{};         ///< due by the count (+= period per tick)
   time_point m_last{};         ///< the last tick, for the spacing
+  time_point m_fired_due{};    ///< when the last tick fired was due
+  clock::duration m_dropped{}; ///< the backlog the last tick dropped
   uint64_t m_gap_ns = 0;       ///< the spacing after m_last (0: none)
   uint32_t m_lcg = 0x9e3779b9; ///< the spacing's noise
   uint32_t m_idx = 0;          ///< the spacing's triangle phase
   uint32_t m_fired = 0;
 };
+
+/**
+ * How far a processor's cycle counter may run, set by its interval timer
+ * after each tick (docs/cpu-fidelity.md, "The cycle counter keeps to the
+ * interval timer").
+ *
+ * On the machine both are hardware, and the cycles between two ticks are
+ * one period's. Here the counter follows the host's clock while a tick
+ * waits for the processor's thread, so a thread the host does not run
+ * counts many periods of cycles for one tick, and the console, which
+ * measures the processor's speed in cycles per tick, read 2.2 to 3.7 GHz
+ * for 833 MHz; from 2^31 Hz OpenVMS cannot start ("The console's frequency
+ * is a longword"). So after each tick the counter may run:
+ *
+ *  - behind the host's clock by how late the tick was, less a quarter
+ *    period (`lag`): read right after a tick, the counter is what it was at
+ *    the tick's due instant, to the quarter period;
+ *  - no further than a quarter period past the next tick's due instant
+ *    (`limit`): a thread that is not run does not count the cycles its
+ *    ticks do not;
+ *  - not over a backlog the schedule dropped (`skip`): the time the count
+ *    gives up, the counter gives up too.
+ *
+ * A thread that fires each tick within a quarter period of its due instant
+ * (one the host runs: a dispatch batch is microseconds) has no lag and
+ * never reaches the limit: its counter is the host's clock times the speed,
+ * as before. The quarter period is that margin.
+ **/
+struct CcBound {
+  TickSchedule::clock::duration lag{};  ///< behind the host's clock
+  TickSchedule::time_point limit{};     ///< never past this instant
+  TickSchedule::clock::duration skip{}; ///< not billed (a dropped backlog)
+  bool bounded = false;                 ///< false: no period, no bound
+};
+
+/// The bound after `s` fired a tick at `now`, the period `period_ns`.
+inline CcBound cc_bound_after_tick(const TickSchedule &s,
+                                   TickSchedule::time_point now,
+                                   uint64_t period_ns) {
+  using std::chrono::nanoseconds;
+  CcBound b;
+  if (!period_ns)
+    return b; // no period yet: nothing to keep to
+  const auto margin = nanoseconds(period_ns / 4);
+  b.bounded = true;
+  b.limit = s.next() + margin;
+  const auto late = now - s.fired_due();
+  if (late > margin)
+    b.lag = late - margin;
+  b.skip = s.dropped();
+  return b;
+}
 
 #endif

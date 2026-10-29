@@ -2207,17 +2207,20 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
 // -- so every case starts with cc_last_sync far enough in the past that
 // the elapsed time is clamped to its one-second ceiling, which makes the
 // arithmetic the same whatever the host clock says. cc_last_sync itself
-// is therefore excluded from the comparison.
+// is therefore excluded from the comparison, except in the cases where the
+// interval timer's bound (cc_lag, cc_lim) decides it: there it is the
+// bound, not the clock, and must agree too.
 void CAlphaCPU::jit_rpcc_selftest() {
   struct CcState {
     u64 last_sync, remainder, borrow, last_read, cc;
     u32 offset;
     bool ena;
+    u64 lag, lim;
   };
   auto save = [&]() {
-    return CcState{cc_last_sync,  cc_wall_remainder, cc_borrow,
-                   cc_last_read,  state.cc,          state.cc_offset,
-                   state.cc_ena};
+    return CcState{cc_last_sync, cc_wall_remainder, cc_borrow,    cc_last_read,
+                   state.cc,     state.cc_offset,   state.cc_ena, cc_lag,
+                   cc_lim};
   };
   auto load = [&](const CcState &s) {
     cc_last_sync = s.last_sync;
@@ -2227,6 +2230,8 @@ void CAlphaCPU::jit_rpcc_selftest() {
     state.cc = s.cc;
     state.cc_offset = s.offset;
     state.cc_ena = s.ena;
+    cc_lag = s.lag;
+    cc_lim = s.lim;
   };
   const CcState entry = save();
 
@@ -2247,23 +2252,41 @@ void CAlphaCPU::jit_rpcc_selftest() {
     exit(2);
   }
 
+  const u64 none = ~U64(0); // no bound: the counter follows the clock
   const CcState cases[] = {
       // clamped elapsed, counter running, nothing owed
-      {0, 0, 0, 0, 0, 0, true},
+      {0, 0, 0, 0, 0, 0, true, 0, none},
       // a carry waiting in the sub-cycle remainder
-      {0, 0xffffffffull, 0, 0, 12345, 7, true},
+      {0, 0xffffffffull, 0, 0, 12345, 7, true, 0, none},
       // counter stopped: RPCC must not move it
-      {0, 0, 0, 999, 999, 3, false},
+      {0, 0, 0, 999, 999, 3, false, 0, none},
       // the floor is ahead of the counter: lend, and report floor + 1
-      {~U64(0), 0, 0, 1000000, 5, 0, true},
+      {~U64(0), 0, 0, 1000000, 5, 0, true, 0, none},
       // something already lent, to be repaid out of this tick's progress
-      {0, 0, 4000, 0, 0, 1, true},
+      {0, 0, 4000, 0, 0, 1, true, 0, none},
       // offset in the high half, counter near the 32-bit wrap
-      {0, 0, 0, 0xfffffff0ull, 0xfffffff0ull, 0x5a5a5a5a, true},
+      {0, 0, 0, 0xfffffff0ull, 0xfffffff0ull, 0x5a5a5a5a, true, 0, none},
+      // the interval timer's limit, long past: billed up to it exactly
+      {1000, 0, 0, 0, 77, 0, true, 0, 6000},
+      // the limit at or behind the last sync: nothing billed, not back
+      {7000, 0x80000000ull, 0, 0, 77, 0, true, 0, 5000},
+      // a lag longer than the clock has run: nothing billed
+      {0, 0, 0, 0, 77, 0, true, ~U64(0), none},
+      // a lag and a limit: the limit decides
+      {0, 0, 0, 0, 77, 0, true, 1, 9000},
+      // held at the limit with the floor ahead: lend
+      {9000, 0, 0, 500, 300, 0, true, 0, 9000},
   };
 
   int bad = 0;
+  unsigned run = 0;
   for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    // Where the bound decides it, the last sync is known: compare it. With
+    // ALPHABOX_CC_BOUND=0 the stub has no bound to compare.
+    const bool bound_decides = cases[i].lim != none || cases[i].lag != 0;
+    if (bound_decides && !g_cc_bound)
+      continue;
+    run++;
     load(cases[i]);
     const u64 want = jit_misc(this, 0);
     const CcState after_helper = save();
@@ -2273,11 +2296,13 @@ void CAlphaCPU::jit_rpcc_selftest() {
     const CcState after_stub = save();
 
     const bool same_value = want == got;
-    const bool same_state = after_helper.remainder == after_stub.remainder &&
-                            after_helper.borrow == after_stub.borrow &&
-                            after_helper.last_read == after_stub.last_read &&
-                            after_helper.cc == after_stub.cc &&
-                            after_helper.ena == after_stub.ena;
+    const bool same_state =
+        after_helper.remainder == after_stub.remainder &&
+        after_helper.borrow == after_stub.borrow &&
+        after_helper.last_read == after_stub.last_read &&
+        after_helper.cc == after_stub.cc &&
+        after_helper.ena == after_stub.ena &&
+        (!bound_decides || after_helper.last_sync == after_stub.last_sync);
     if (!same_value || !same_state) {
       bad++;
       printf("%%RPCC-F-SELFTEST: case %u\n"
@@ -2294,8 +2319,7 @@ void CAlphaCPU::jit_rpcc_selftest() {
     }
   }
   load(entry);
-  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n",
-         (unsigned)(sizeof cases / sizeof cases[0]), bad);
+  printf("%%RPCC-I-SELFTEST: %u cases, %d disagreement(s)\n", run, bad);
   exit(bad ? 1 : 0);
 }
 

@@ -323,6 +323,8 @@ public:
     // scratch registers only, so the pins stay put.
     uint32_t cc_last_sync, cc_tick_hz, cc_q32, cc_remainder, cc_borrow,
         cc_last_read, state_cc, cc_ena, cc_offset;
+    // The interval timer's bound on it (CAlphaCPU::cc_lag, cc_lim).
+    uint32_t cc_lag, cc_lim;
   };
   void set_offsets(const JitOffsets &o) { m_off = o; }
   // Hotness threshold: a block is compiled only after it has been interpreted

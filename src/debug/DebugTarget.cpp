@@ -363,6 +363,8 @@ u64 CDebugTarget::next_bp(const Cpu &k, u64 pc) {
 // of ticks behind.
 void CDebugTarget::shift_clock(CAlphaCPU *c, u64 ns) {
   c->cc_last_sync += CAlphaCPU::ns_to_host_ticks(ns);
+  if (c->cc_lim != ~U64(0)) // the interval timer's bound moves with it
+    c->cc_lim += CAlphaCPU::ns_to_host_ticks(ns);
   const auto d = std::chrono::nanoseconds(ns);
   c->m_tick.shift(d);
   c->start_time += d;

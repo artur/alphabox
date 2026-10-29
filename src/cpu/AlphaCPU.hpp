@@ -78,6 +78,11 @@ extern const bool g_jit05_mb;
 /// ALPHABOX_JIT08_XLATE=0 selects the copies they had before.
 extern const bool g_jit08_xlate;
 
+/// A/B switch, read once at startup (AlphaCPU.cpp): the cycle counter keeps
+/// to the processor's interval timer (CAlphaCPU::cc_bound_after_tick, the
+/// RPCC stub). ALPHABOX_CC_BOUND=0 turns it off.
+extern const bool g_cc_bound;
+
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
 // cache when another CPU flushed: compiled blocks are per-CPU, but guest code
@@ -421,6 +426,24 @@ private:
   u64 cc_wall_remainder = 0; // sub-cycle numerator carried across syncs (Q32)
   u64 cc_last_read = 0; // last RPCC value returned (forward-progress floor)
   u64 cc_borrow = 0;    // cycles lent to that floor, repaid from wall progress
+  // The counter keeps to this processor's interval timer (TickSchedule.hpp,
+  // CcBound): it is billed up to the host's clock less cc_lag, and never
+  // past cc_lim, both in host ticks and set after each tick
+  // (interval_timer_poll). A processor the host runs has no lag and never
+  // reaches the limit. ALPHABOX_CC_BOUND=0 leaves them at 0 and ~0. (The
+  // two fields are at the end of the class, with the others added since
+  // the emitter's one-displacement layout.)
+  void cc_bound_after_tick(std::chrono::steady_clock::time_point now,
+                           u64 period_ns);
+  void cc_bound_reset() {
+    cc_lag = 0;
+    cc_lim = ~U64(0);
+  }
+  /// The host instant the counter may be billed up to at `now`.
+  u64 cc_billable(u64 now) const {
+    u64 at = now >= cc_lag ? now - cc_lag : 0;
+    return at < cc_lim ? at : cc_lim;
+  }
 
   // Advance the wall-clock cc to now. Called at dispatch-batch boundaries and
   // on every guest RPCC read: a stale batch-start value makes NetBSD's PCC
@@ -430,8 +453,13 @@ private:
     if (cc_last_sync > now)
       cc_last_sync = now; // a stall can't exceed real elapsed; never bill
                           // negative
-    u64 cc_delta = now - cc_last_sync;
-    cc_last_sync = now;
+    // Up to where the interval timer lets it, and never back: a thread
+    // starved past its ticks bills nothing until they are repaid.
+    u64 to = cc_billable(now);
+    if (to < cc_last_sync)
+      to = cc_last_sync;
+    u64 cc_delta = to - cc_last_sync;
+    cc_last_sync = to;
     if (state.cc_ena) {
       // Cap (not drop) odd deltas at 1s: dropping made the cc run slow through
       // early-boot device-init stalls, and SRM's cycles-per-tick calibration
@@ -1359,6 +1387,17 @@ public:
   u64 m_rate_escapes = 0, m_rate_entries = 0, m_rate_bulk = 0;
   u64 m_rate_flush_skipped = 0, m_rate_flush_done = 0;
   u64 m_rate_stall_skips = 0, m_rate_stall_cycles = 0;
+  // The cycle counter's bound by the interval timer (cc_billable): behind
+  // the host's clock by cc_lag, never past cc_lim, in host ticks. Here and
+  // not beside the counter for the reason above: the RPCC stub reaches them
+  // at any offset.
+  u64 cc_lag = 0;
+  u64 cc_lim = ~U64(0);
+  // How the bound acted, for ALPHABOX_RATE: ticks late by more than a
+  // quarter period (a lag set), the largest lag in ns, the backlog skipped.
+  u64 m_cc_late = 0, m_cc_lag_max_ns = 0, m_cc_skip_ns = 0;
+  u64 m_rate_cc_late = 0, m_rate_cc_skip_ns = 0;
+  u32 m_rate_ticks = 0;
 
 public:
   /// How often compiled code leaves for the miscellaneous helper, by kind:

@@ -494,7 +494,19 @@ void *CJitEngine::a64_rpcc_stub() {
   a.ldr(a64::x1, F(m_off.cc_last_sync, 3));
   a.cmp(a64::x1, a64::x0);
   a.csel(a64::x1, a64::x0, a64::x1, a64::CondCode::kHI); // never bill negative
-  a.sub(a64::x2, a64::x0, a64::x1);                      // delta
+  if (g_cc_bound) {
+    // cc_billable(): up to now - cc_lag (0 if that is negative), at most
+    // cc_lim, and never back from the last sync.
+    a.ldr(a64::x2, F(m_off.cc_lag, 3));
+    a.subs(a64::x0, a64::x0, a64::x2);
+    a.csel(a64::x0, a64::xzr, a64::x0, a64::CondCode::kLO);
+    a.ldr(a64::x2, F(m_off.cc_lim, 3));
+    a.cmp(a64::x0, a64::x2);
+    a.csel(a64::x0, a64::x2, a64::x0, a64::CondCode::kHI);
+    a.cmp(a64::x0, a64::x1);
+    a.csel(a64::x0, a64::x1, a64::x0, a64::CondCode::kLO);
+  }
+  a.sub(a64::x2, a64::x0, a64::x1); // delta
   a.str(a64::x0, F(m_off.cc_last_sync, 3));
   a.ldrb(a64::w3, F(m_off.cc_ena, 0));
   a.cbz(a64::w3, no_add);

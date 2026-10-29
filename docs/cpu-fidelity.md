@@ -1365,7 +1365,7 @@ changed since. The measured drift and calibration are in
 
 | Clock | Who keeps time by it | How it follows the host |
 | --- | --- | --- |
-| The cycle counter (`RPCC`) | Linux on one processor (clocksource `rpcc`); the console's and Linux's processor-speed calibrations; Windows' `KeStallExecutionProcessor` | `state.cc` advances by host time times the configured speed at every dispatch batch and every read (`sync_cc_wallclock`); two reads never return the same value (`rpcc_read`'s floor, repaid out of later progress); a gap over a second (a debugger stop, a host sleep) counts as one second. The JIT's inline stub does the same arithmetic (`ALPHABOX_JIT_RPCCTEST=1` compares them). |
+| The cycle counter (`RPCC`) | Linux on one processor (clocksource `rpcc`); the console's and Linux's processor-speed calibrations; Windows' `KeStallExecutionProcessor` | `state.cc` advances by host time times the configured speed at every dispatch batch and every read (`sync_cc_wallclock`), but no faster than the processor's own interval timer: a thread the host does not run counts no cycles its ticks do not ([below](#the-cycle-counter-keeps-to-the-interval-timer-2026-10-28)); two reads never return the same value (`rpcc_read`'s floor, repaid out of later progress); a backlog of ticks the schedule drops (over a second: a host sleep) is not counted either, and a debugger stop is not counted at all. The JIT's inline stub does the same arithmetic (`ALPHABOX_JIT_RPCCTEST=1` compares them). |
 | The interval timer | OpenVMS and Windows count it for the time of day; the console calibrates each processor's speed in cycles per tick of its own | Every processor fires its own from its dispatch loop (`interval_timer_poll`, `TickSchedule.hpp`), at the rate register A of the TOY clock selects (0x26, 1024 Hz, from power on, as a battery-backed part keeps it), the first tick at once, in processor 0's phase ([below](#every-processor-keeps-its-own-interval-timer-2026-10-28)). The schedule advances one period a tick, so ticks a busy or descheduled thread missed are repaid: at least half a period apart (at most twice the rate, the gaps modulated so the console's calibration windows never agree), and a backlog over a second is dropped. |
 | The TOY clock (MC146818) | every guest at boot, for the time of day | the host's wall clock plus the offset the guest last set; UIP in the last 244 us of each of the clock's own seconds; PF at the programmed rate, counted from a fixed epoch |
 | The 8254 | Linux's speed calibration (counter 2 in mode 0, OUT polled on port 61h bit 5); stall loops counting port 61h's refresh toggle | each counter's count and OUT derived from host time since its load; the ALi thread steps the counters every millisecond for IRQ0, with a 30 ms catch-up cap |
@@ -1431,8 +1431,10 @@ runs at 1018 to 1030 Hz and OpenVMS keeps time to 0.1 s an hour (an
 eighth since 2026-10-28, [below](#every-processor-keeps-its-own-interval-timer-2026-10-28)). A
 thread that keeps up never reaches it, so unthrottled the console still
 measures 800 MHz and the timer runs at 1024 Hz. A console calibrating
-on a starved thread measures a wrong speed with or without the fix (its
-cycle counter follows the host, the ticks wait for the thread). The
+on a starved thread measured a wrong speed with or without the fix (its
+cycle counter followed the host, the ticks waited for the thread) until
+the counter was made to keep to the interval timer
+([below](#the-cycle-counter-keeps-to-the-interval-timer-2026-10-28)). The
 measurements are in [development.md](development.md), "Guest clocks".
 
 ### Every processor keeps its own interval timer (2026-10-28)
@@ -1556,11 +1558,93 @@ holds with another number: below about a tenth of a core (an eighth of
 the gap; a fifth with the quarter) a thread cannot repay its ticks, the
 backlog passes a second and is dropped, and its console measures its
 speed high (200:10, about 2% of a core: 9091 MHz before, 4762 and 10000
-after). Above the floor the speed a starved secondary measures is still
-not exactly the configured one: its cycle counter follows the host while
-its ticks wait for its thread, so a measurement window is off by up to
-the thread's sleep, and the host's load adds its own (the 1449 and 1754
-MHz above).
+after). Above the floor the speed a starved secondary measures was still
+not exactly the configured one: its cycle counter followed the host while
+its ticks waited for its thread, so a measurement window was off by up to
+the thread's sleep, and the host's load added its own (the 1449 and 1754
+MHz above). Since the cycle counter keeps to the interval timer (next
+section) neither is so, above the floor or below it.
+
+### The cycle counter keeps to the interval timer (2026-10-28)
+
+Found with the crash in
+[the console's frequency is a longword](#the-consoles-frequency-is-a-longword):
+on a loaded host the ES40's console measured processor 0 at 2273 and 2381
+MHz for `speed = 833M`, and OpenVMS could not start.
+
+On the machine the cycle counter and the interval timer are both
+hardware, and the cycles between two ticks are one period's. Here the
+counter followed the host's clock at every read while a tick waited for
+the processor's thread, so a thread the host did not run counted every
+cycle of that time and none of its ticks, and the ticks repaid after came
+closer together than a period. The console measures the speed as `RSCC`
+over 100 of its ticks, repeated until two measurements agree: a window
+with a stop in it read high, one in a repay stretch low, and two of
+either could agree.
+
+**What is done now** (`TickSchedule.hpp`'s `CcBound`,
+`CAlphaCPU::cc_bound_after_tick`, `sync_cc_wallclock` and the AArch64
+`RPCC` stub; the x86-64 JIT calls `rpcc_read`). After each of its ticks a
+processor's counter may run:
+
+- behind the host's clock by how late the tick was, less a quarter
+  period: read right after a late tick, the counter is what it was at the
+  tick's due instant, to a quarter period;
+- no further than a quarter period past the next tick's due instant: a
+  thread the host does not run counts no cycles its ticks do not;
+- not over a backlog the schedule drops (over a second behind): the time
+  the ticks give up, the counter gives up too.
+
+It still never goes back, and two reads still differ (the floor). A
+processor the host runs fires each tick within its dispatch batch,
+microseconds after it is due: it has no lag and never reaches the limit,
+and its counter is the host's clock times the speed, as before. The
+quarter period is that margin; what it costs is that a 100-tick window on
+a starved thread is right to a quarter period in a hundred, 0.25%, where
+the console rounds the cycle time to 10 ps in 1200 (0.8%).
+
+**The divergence:** on a starved thread the counter runs behind the host's
+clock by up to the ticks still owed (a second at most, then they are
+dropped) and catches up as they are repaid: read against the host it runs
+slow, then fast, and against the processor's own ticks it is right. Time
+the ticks give up (a host sleep, a thread starved below about a tenth of
+a core) is not counted, where a gap over a second used to count as one
+second. `ALPHABOX_CC_BOUND=0` restores the counter as it was (an A/B
+switch, [headless.md](headless.md)).
+
+**Measured** (2026-10-28, `lab/runs/interp-crash`, its `status.md`): the
+ES40 with one `ev68cb` at 833M, the whole emulator stopped and continued
+(SIGSTOP and SIGCONT) from power-on, run and stop in milliseconds; the
+console's line for processor 0, one binary per engine with the switch off
+and on, at loads of 5 to 12:
+
+| Run:stop | Interpreter, off | Interpreter | JIT, off | JIT |
+| --- | --- | --- | --- | --- |
+| 10:90 | 943, 1020, 901, 971, 943 MHz | 833 (5 runs) | 1010, 943, 952, 952, 1020 | 833 (5) |
+| 5:95 | 917, 935, 943, 917, 943 | 833 (5) | 1000, 1818, 926, 926, 935 | 833 (5) |
+| 2:98 | 1818, 1887, 1923, 1887 | 833 (4) | 1818, 1852, 1818, 2778 | 833 (4) |
+| 5:195 | 1852, 1852, 1818, 1818 | 833 (4) | | |
+| 20:380 | 64, 79, 80, 3448 | 833 (4) | 84, 3333, 77, 77 | 833 (4) |
+
+`tick_schedule_test` models the console's windows on a made-up clock:
+with the bound every 100-tick window is within 0.25% of a period a tick at
+60% of a core down to 2%; without it the worst is 37% to 514% off.
+
+OpenVMS 8.4 cold boots on the interpreter, starved at 20:380 from power-on
+until the console's speed line and not after (`repro2.sh` in
+`lab/runs/interp-crash/tools`): with the switch off, 3 of 8 stopped at
+start-up with the GENTRAP (the console read 3333, 3333 and 7143 MHz; the
+other five read 64 to 86 MHz and booted with that in their HWRPB); with
+the bound all 20 read 833 MHz and ran start-up to its end, at loads of 5
+to 54.
+
+Time of day is the ticks' and is unchanged: `clock_drift.sh vms-es40` on
+the JIT, the emulator run 30 ms in every 50 for ten minutes
+(`DRIFT_DUTY=30:20`), drifted -0.18 s an hour (bound 2). `ALPHABOX_RATE`
+showed every tick of that stretch late by over a quarter period, lags up
+to 133 ms, 1021 to 1026 ticks a second and no backlog dropped; before the
+duty, booting at a host load of about 20, 3 to 143 ticks in each 10 s
+window (of 10240) came that late, with lags up to 49 ms.
 
 ### What is left
 
@@ -1599,9 +1683,12 @@ exception or interrupt through vector 00000440", at start-up.
   on both, as 2400M (2381 MHz) does.
 - **How a reading gets that high without the setting.** The console
   measures the speed by counting the cycle counter over its interval-timer
-  ticks, and a starved processor 0 (a loaded host) counts the host's time
-  while its ticks wait for the thread; readings of 2.2 to 3.7 GHz were seen
-  at 800M to 1000M on a busy host. A `speed` limit does not touch those.
+  ticks, and a starved processor 0 (a loaded host) counted the host's time
+  while its ticks waited for the thread; readings of 2.2 to 3.7 GHz were
+  seen at 800M to 1000M on a busy host. A `speed` limit does not touch
+  those. Since 2026-10-28 the cycle counter keeps to the processor's
+  interval timer, and a starved processor 0 reads its configured speed
+  ([above](#the-cycle-counter-keeps-to-the-interval-timer-2026-10-28)).
 - **What Alphabox does.** The board row's `max_cpu_hz` (Platform.hpp) is
   2100000000 on the ES40, DS20E, DS20, DS10, DS20L, ES45, ES45 Model 1, DS25
   and DS15, and a larger `speed` is refused at startup and by `alphabox run
