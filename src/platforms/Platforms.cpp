@@ -92,6 +92,14 @@ static const tsunami_revisions ds20l_revisions = {1, 1, 0, 0x8f, 0x48, 0x01};
 /// negative, on every board listed below.
 static const u64 kConsoleLongwordHz = 2100000000;
 
+/// The highest `speed` the Marvel boards' console (V7.3) can report: it takes
+/// the processor's clock in whole MHz from the CMM (es47/Cmm.cpp, A_SPEED)
+/// and keeps it in Hz as a longword, which it copies into the HWRPB
+/// sign-extended, as the consoles above do. It does not measure, so the
+/// limit is the last whole MHz under 2^31 Hz: 2147 MHz reads back as
+/// 0x7ff89ec0, 2148 MHz as 0xffffffff8007e100, on the ES47, ES80 and GS1280.
+static const u64 kCmmLongwordHz = 2147000000;
+
 static const platform_config platforms[] = {
     // It also takes the EV7 family's rows (ev7, ev7z, ev8), as an Alphabox
     // construction (construction_cpu_model; docs/cpu-fidelity.md): the
@@ -148,7 +156,7 @@ static const platform_config platforms[] = {
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      es47_board_devices, es47_pci_interrupt, es47_slot_refusal, nullptr,
      0x480000, &es47_layout, nullptr, nullptr, 0, 0, marvel_functions, nullptr,
-     "ev8n"},
+     "ev8n", nullptr, kCmmLongwordHz},
     // docs/platforms/marvel.md, M6c: up to four ES47
     // drawers in one N/S ring, eight EV7s, an IO7 on each drawer's first
     // processor (PIDs 0, 8, 16, 24: hoses 0-3, 32-35, 64-67, 96-99). The
@@ -158,14 +166,15 @@ static const platform_config platforms[] = {
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 100, SECONDARIES_BY_CONSOLE,
      es80_board_devices, marvel_pci_interrupt, marvel_slot_refusal, nullptr,
      0x480000, &es80_layout, nullptr, nullptr, 0, 0, marvel_functions, nullptr,
-     "ev8n"},
+     "ev8n", nullptr, kCmmLongwordHz},
     // docs/platforms/marvel.md, M6c: 8P drawers in a
     // torus, here up to two (sixteen EV7s, PIDs 0-15), one I/O drawer on
     // PID 0: a standard I/O drawer ("3.3V PCI-X I/O"), no slot remap (M7c).
     {"gs1280", "AlphaServer GS1280", CHIPSET_MARVEL, "ev7", 16, 29, 34,
      "SRM_V7_3.EXE", FW_LFU_BUNDLE, 4, SECONDARIES_BY_CONSOLE,
      gs1280_board_devices, marvel_pci_interrupt, marvel_slot_refusal, nullptr,
-     0x480000, &gs1280_layout, nullptr, nullptr, 0, 0, nullptr, nullptr, "ev8n"},
+     0x480000, &gs1280_layout, nullptr, nullptr, 0, 0, nullptr, nullptr, "ev8n",
+     nullptr, kCmmLongwordHz},
     // docs/platforms/es45.md: the first Titan board.
     // Its console comes as an update utility, which installs it into the
     // flash, and the utility runs up to 0x648000 (console_bytes). No

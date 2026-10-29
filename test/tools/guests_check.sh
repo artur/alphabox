@@ -66,6 +66,9 @@
 #   GUESTS_EV7_CPU       the processor class of vms-es47 and linux-es47
 #                        (default ev7; ev7z, or ev8, the 21464 in
 #                        EV7-compatible mode)
+#   GUESTS_EV7_SPEED     the `speed` of vms-es47's and linux-es47's
+#                        processors (default 1000M); the ES47 refuses more
+#                        than 2147M
 #   GUESTS_EV8_TPUS      with ev8: each chip's TPUs, 1 to 4, written as its
 #                        `tpus` (unset: no key, one processor per chip);
 #                        each TPU is a processor (docs/platforms/ev8.md, S4),
@@ -747,6 +750,7 @@ extra_steps() {
   done
 }
 EV7CPU=${GUESTS_EV7_CPU:-ev7}
+EV7SPEED=${GUESTS_EV7_SPEED:-1000M}
 # The ES40 guests' processors (vms-es40, linux; clock_drift.sh's too).
 ES40N=${GUESTS_ES40_CPUS:-1}
 # The ES47's two chips; with ev8 and GUESTS_EV8_TPUS each of that many TPUs,
@@ -966,7 +970,7 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 30;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo "  cpu0 = $EV7CPU { speed = 1000M;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = 1000M;$EV7OPT }"
+      echo "  cpu0 = $EV7CPU { speed = $EV7SPEED;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = $EV7SPEED;$EV7OPT }"
       echo '  pci2.1 = sym53c895 { disk0.0 = file { file = "disk.img"; } }'
       echo '  pci0.1 = dec21143 { type = "null"; }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
@@ -1026,7 +1030,7 @@ for g in $GUESTS; do
       echo '  platform = "es47";'; echo '  memory.bits = 29;'
       echo "  rom.srm = \"$ROMS/alpha-firmware-v7.3/GS1280/SRM_V7_3.EXE\";"
       echo '  rom.nvram = "cmm_nvram.bin";'
-      echo "  cpu0 = $EV7CPU { speed = 1000M;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = 1000M;$EV7OPT }"
+      echo "  cpu0 = $EV7CPU { speed = $EV7SPEED;$EV7OPT }"; echo "  cpu1 = $EV7CPU { speed = $EV7SPEED;$EV7OPT }"
       echo '  pci2.2 = cmd649 { disk0.0 = file { file = "disk.img"; } }'
       echo "  serial0 = serial { address = \"127.0.0.1\"; port = $PORT; }"
       echo '}'

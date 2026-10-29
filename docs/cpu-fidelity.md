@@ -22,7 +22,7 @@ first audit was made on 2026-09-18; later entries carry their dates.
 | [Known divergences](#known-divergences) | where the processor differs, ranked by what a guest would notice |
 | [What was checked and found correct](#what-was-checked-and-found-correct) | so that it does not get re-litigated |
 | [Guest time](#guest-time-checked-2026-10-26) | what keeps a guest's clock, our changes since September and ES40-Emu's, checked |
-| [The console's frequency is a longword](#the-consoles-frequency-is-a-longword) | why a `speed` above 2100M is refused on the Tsunami and Titan boards |
+| [The console's frequency is a longword](#the-consoles-frequency-is-a-longword) | why a `speed` above 2100M is refused on the Tsunami and Titan boards, and above 2147M on the Marvel boards |
 | [A guest's floating-point exception that is the guest's own](#a-guests-floating-point-exception-that-is-the-guests-own) | Direct3D 7 on Windows 2000 RC2 |
 | [The rule this audit produced](#the-rule-this-audit-produced) | two references, not one |
 
@@ -1717,15 +1717,23 @@ exception or interrupt through vector 00000440", at start-up.
   ([above](#the-cycle-counter-keeps-to-the-interval-timer-2026-10-28)).
 - **What Alphabox does.** The board row's `max_cpu_hz` (Platform.hpp) is
   2100000000 on the ES40, DS20E, DS20, DS10, DS20L, ES45, ES45 Model 1, DS25
-  and DS15, and a larger `speed` is refused at startup and by `alphabox run
-  --check`, with the reason. `HWRPB+0x70` read with `e -q pmem:2070` on
+  and DS15, and 2147000000 on the ES47, ES80 and GS1280 (below), and a
+  larger `speed` is refused at startup and by `alphabox run --check`, with
+  the reason. `HWRPB+0x70` read with `e -q pmem:2070` on
   each of those boards' consoles: `000000007C2D24D5` (2083333333) at
   `speed = 2100M`, `FFFFFFFF84746B8E` (2222222222, sign-extended) at 2200M.
   OpenVMS itself was booted only on the ES40.
-- **Open.** The ES47, ES80 and GS1280: their consoles print the configured
-  MHz (2100 and 2200) and `pmem:2070` is 0 there (their HWRPB is not at
-  physical 2000h), so the frequency in their HWRPB was not read and they
-  have no limit.
+- **The Marvel boards** (2026-10-29, `lab/runs/hwrpb-speed/`). The ES47,
+  ES80 and GS1280 console (V7.3) does not measure: it takes each
+  processor's clock in whole MHz from the CMM (`es47/Cmm.cpp`, `A_SPEED`)
+  and keeps it in Hz as a longword, which reaches the HWRPB sign-extended in
+  the same way. Their HWRPB is at physical 10000h (`show hwrpb`), and
+  `e -q pmem:10070` reads `000000007FF89EC0` (2147000000) at
+  `speed = 2147M` and `FFFFFFFF8007E100` at 2148M on all three. The limit
+  is the last whole MHz under 2^31 Hz, 2147000000, with no room needed for
+  a measurement. OpenVMS on the ES47 (`vms-es47`, two processors) reaches
+  DCL at 2147M and stops at 2148M with the ES40's GENTRAP (vector 440,
+  exception PC FFFFFFFF8000A098).
 
 ## A guest's floating-point exception that is the guest's own
 

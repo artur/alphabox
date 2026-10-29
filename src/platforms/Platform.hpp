@@ -239,14 +239,15 @@ struct platform_config {
   const char *construction_cpu_model = nullptr;
 
   /// The highest `speed` (Hz) the board's console can report, or 0 for no
-  /// limit known (the Marvel boards': not checked). The Tsunami and Titan
-  /// boards' consoles keep a processor's frequency as a 32-bit longword and
-  /// copy it into the HWRPB's cycle counter frequency (HWRPB+0x70) with LDL,
-  /// so 2^31 Hz or more arrives negative and OpenVMS divides by zero in its
-  /// start-up. The console rounds the cycle time to 10 ps, so 460 ps
-  /// (2174 MHz) is the first reading that crashes; the limit leaves the
-  /// console's measurement some room (docs/cpu-fidelity.md, "The console's
-  /// frequency is a longword").
+  /// limit known. The Tsunami, Titan and Marvel boards' consoles keep a
+  /// processor's frequency as a 32-bit longword and copy it into the HWRPB's
+  /// cycle counter frequency (HWRPB+0x70) with LDL, so 2^31 Hz or more
+  /// arrives negative and OpenVMS divides by zero in its start-up. The
+  /// Tsunami and Titan consoles measure the clock and round the cycle time to
+  /// 10 ps, so 460 ps (2174 MHz) is the first reading that crashes and their
+  /// limit leaves the measurement some room; the Marvel console takes whole
+  /// MHz from the CMM, so its limit is 2147 MHz (docs/cpu-fidelity.md, "The
+  /// console's frequency is a longword").
   u64 max_cpu_hz = 0;
 };
 
