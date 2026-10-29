@@ -387,11 +387,15 @@ def build(layout):
     a.label("tp_loop")
     a.li(17, 1 << 35)                           # IER_CM: level 2, the timer
     a.emit(call_pal(0x8C))
+    # Arm, test, QUIESCE [IDS p. 670]: armed after the test, a tick taken at
+    # the LDQ_ARM (the PALcode counts it and disables it) would leave the
+    # QUIESCE nothing to wake it. One taken at the QUIESCE returns to it with
+    # the flag clear: an interrupt to the TPU clears it [IDS p. 513].
     a.label("tp_wait")
+    a.emit(mfc(A.MISC["LDQ_ARM"], 2, 15))
     ldq(1, 14, image.TR_COUNT)
     ins("SUBQ", 1, 20, 1)
     a.branch(OP["BNE"], 1, "tp_tick")
-    a.emit(mfc(A.MISC["LDQ_ARM"], 2, 15))
     a.emit(mfc(A.MISC["QUIESCE"]))
     a.branch(OP["BR"], R31, "tp_wait")
     a.label("tp_tick")
@@ -430,11 +434,11 @@ def build(layout):
     ins("AND", 9, 7, 1, lit=True)               # w % 8 == 1: a wait loop
     ins("CMPEQ", 1, 1, 1, lit=True)
     a.branch(OP["BNE"], 1, "ipi_spin")
-    a.label("ipi_q")
+    a.label("ipi_q")                            # arm, test, QUIESCE, as tp_wait
+    a.emit(mfc(A.MISC["LDQ_ARM"], 2, 15))
     ldq(1, 14, image.TR_COUNT)
     ins("SUBQ", 1, 20, 1)
     a.branch(OP["BNE"], 1, "ipi_woke")
-    a.emit(mfc(A.MISC["LDQ_ARM"], 2, 15))
     a.emit(mfc(A.MISC["QUIESCE"]))
     a.branch(OP["BR"], R31, "ipi_q")
     a.label("ipi_spin")
