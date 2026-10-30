@@ -48,6 +48,30 @@ Then the configurations that must be refused, each checked for its
 reason: a GS1280 of nine chips of four TPUs (36 processors, more than 32),
 a machine mixing `ev7` and `ev8n`, a 21464-mode machine with no boot image.
 Exit status 0 when everything holds.
+
+Each wait of TPU 0's for another processor, a device or this script (the
+others ready, each woken, each done with its ticks, its own IPI, chip 0's
+four tick bits, the SCSI interrupt, the typed character) ends on elapsed
+time: at most WAIT_S, 1 s, of its cycle counter (ECHO_S, 2 s, for the
+character), a deadline set from RPCC and compared as a signed longword,
+since only the counter's low 32 bits count. Alphabox keeps the counter to
+the host's clock times the speed while the processor runs, and behind it
+on a thread the host starves, by the ticks still owed
+(docs/cpu-fidelity.md, "The cycle counter keeps to the interval timer"):
+so a starved TPU 0 waits longer, never shorter. Until 2026-10-30 the
+bound was 1 << 22 loop turns, which last 4.5 ms on the native JIT (23 to
+38 ms on x86-64, 96 ms on the interpreter, 750 ms on JIT_VERIFY), and a
+loaded host ran a woken TPU later than that: three runs of --layout es47
+at once on build-jit, 100 each, failed 18 of 300 at a load of 26 to 46 (a
+TPU taking its IPI, starting or finishing its ticks after TPU 0 had
+stopped waiting); with the time bound 0 of 300 at 28 to 48, and in
+another 300 at 25 to 38 the longest wait was 10 ms. A real failure costs
+a second a wait (a TPU sent no IPI: two, 3 s for --layout es47). The
+fixed delays (a GIO write that must not complete, time for a wrong TPU to
+wake, the SCSI line reaching the IO7) are not bounds: a starved thread
+there can only let a check pass that should fail, and the SCSI controller
+raises its line before the store that starts it completes (its SCRIPTS
+run inline).
 """
 import argparse
 import os
@@ -85,7 +109,9 @@ SCRIPTS_PA = 0x220000        # the SCSI controller's program
 SIG_OFF = 0x2000             # each chip's word at its memory base + this
 SIG = 0x51500000
 NTICKS = 2
-BOUND = 1 << 22              # a bound on each wait, in loop turns
+SPEED_MHZ = 800              # every processor's `speed`, so RPCC's rate
+WAIT_S = 1.0                 # a bound on each wait, in seconds of RPCC
+ECHO_S = 2.0                 # the wait for the character this script types
 
 # Each processor's slot, quadwords.
 SLOT_FIELDS = ("TPU_CNFG", "CPU_BASE", "WHOAMI own", "WHOAMI next",
@@ -196,16 +222,35 @@ def build(layout):
         n_labels[0] += 1
         return "%s_%d" % (stem, n_labels[0])
 
+    def deadline(seconds):
+        """r6 <- RPCC + `seconds` of cycles: a wait's deadline (r6). Only
+        the counter's low 32 bits count (OFFSET is <63:32>), which wrap
+        every 5.4 s at 800 MHz, so a bound is under 2^31 cycles."""
+        cycles = int(seconds * SPEED_MHZ * 10 ** 6)
+        assert 0 < cycles < 0x7FFF8000
+        lo = cycles & 0xFFFF
+        lo = lo - 0x10000 if lo >= 0x8000 else lo
+        a.emit(mfc(A.MISC["RPCC"], 6))
+        a.emit(mem(OP["LDAH"], 6, 6, (cycles - lo) >> 16))
+        a.emit(mem(OP["LDA"], 6, 6, lo))
+
+    def until(top):
+        """Back to `top` while the deadline in r6 is ahead (r7): its
+        distance from RPCC as a signed longword (SUBL)."""
+        a.emit(mfc(A.MISC["RPCC"], 7))
+        ins("SUBL", 6, 7, 7)
+        a.branch(OP["BGT"], 7, top)
+
     def wait_nonzero(va):
-        """Spin, bounded, until the quadword at `va` is not zero (r5, r6)."""
+        """Spin, for at most WAIT_S, until the quadword at `va` is not zero
+        (r1, r5-r7)."""
         top, out = fresh("wnz"), fresh("wnz_out")
         a.li(5, va)
-        a.li(6, BOUND)
+        deadline(WAIT_S)
         a.label(top)
         ldq(1, 5, 0)
         a.branch(OP["BNE"], 1, out)
-        ins("SUBQ", 6, 1, 6, lit=True)
-        a.branch(OP["BGT"], 6, top)
+        until(top)
         a.label(out)
 
     def delay(turns):
@@ -549,13 +594,12 @@ def build(layout):
     lda(1, R31, 1)
     stq(1, 12, R_INT_REQ)
     mb()
-    a.li(6, BOUND)
+    deadline(WAIT_S)
     a.label("self_ipi")
     ldq(1, 14, image.TR_COUNT)
     ins("SUBQ", 1, 19, 1)
     a.branch(OP["BNE"], 1, "self_ipi_done")
-    ins("SUBQ", 6, 1, 6, lit=True)
-    a.branch(OP["BGT"], 6, "self_ipi")
+    until("self_ipi")
     a.label("self_ipi_done")
     mstore(1, M_SELF_IPI)
     lda(1, R31, 1)
@@ -576,14 +620,13 @@ def build(layout):
     lda(1, R31, 7)
     stq(1, 12, R_INTER_TIM)
     mb()
-    a.li(6, BOUND)
+    deadline(WAIT_S)
     a.label("tick_all")
     ldq(1, 12, R_INT_STAT)
     ins("AND", 1, 0xF0, 1, lit=True)
     ins("CMPEQ", 1, 0xF0, 2, lit=True)
     a.branch(OP["BNE"], 2, "tick_all_done")
-    ins("SUBQ", 6, 1, 6, lit=True)
-    a.branch(OP["BGT"], 6, "tick_all")
+    until("tick_all")
     a.label("tick_all_done")
     mstore(1, M_TICK_ALL)
     stq(R31, 12, R_INTER_TIM)                   # stopped while it looks
@@ -657,12 +700,11 @@ def build(layout):
     a.li(1, SCRIPTS_PA)
     a.emit(mem(OP["STL"], 1, 5, 0x2C))          # DSP: the SCRIPTS run
     mb()
-    a.li(6, BOUND)
+    deadline(WAIT_S)
     a.label("sym_wait")
     a.emit(mem(OP["LDBU"], 1, 5, 0x14))         # ISTAT: DIP
     a.branch(OP["BLBS"], 1, "sym_done")
-    ins("SUBQ", 6, 1, 6, lit=True)
-    a.branch(OP["BGT"], 6, "sym_wait")
+    until("sym_wait")
     a.label("sym_done")
     mstore(1, M_ISTAT)
     delay(1 << 16)                              # the line reaches the IO7
@@ -684,13 +726,12 @@ def build(layout):
 
     # The terminal: a character typed at the CMM's terminal, echoed.
     print_text("@@ECHO?\n")
-    a.li(19, 1 << 26)
+    deadline(ECHO_S)
     a.label("echo_wait")
     gio_read(0)                                 # ST_RXREADY <8>
     ins("SRL", 1, 8, 2, lit=True)
     a.branch(OP["BLBS"], 2, "echo_got")
-    ins("SUBQ", 19, 1, 19, lit=True)
-    a.branch(OP["BGT"], 19, "echo_wait")
+    until("echo_wait")
     lda(16, R31, ord("?"))
     a.branch(OP["BR"], R31, "echo_show")
     a.label("echo_got")
@@ -754,7 +795,8 @@ def config(layout, port, chips=None, tpus=None, cpu="ev8n",
     for i in range(chips):
         row = "ev7" if mixed and i == 1 else cpu
         opt = " tpus = %d;" % tpus if row == "ev8n" else ""
-        lines.append("  cpu%d = %s { speed = 800M;%s }" % (i, row, opt))
+        lines.append("  cpu%d = %s { speed = %dM;%s }" % (i, row, SPEED_MHZ,
+                                                          opt))
     lines += ['  serial0 = serial { address = "127.0.0.1"; port = %d; }'
               % port, "  pci0.%d = sym53c810 { }" % SYM_SLOT, "}", ""]
     return "\n".join(lines)

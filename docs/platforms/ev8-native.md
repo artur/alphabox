@@ -1520,7 +1520,15 @@ and the board side in [marvel.md](marvel.md), "21464 mode".
   four TPUs, `ev7` and `ev8n` mixed, no boot image. 129, 447 and 455
   results (JIT_VERIFY's mismatch count among them) and 3 refusals, 1034
   in all. A deliberately broken steering (every TPU's lines from all four
-  masks) failed 19 of the ES47's.
+  masks) failed 19 of the ES47's. Since 2026-10-30 each of TPU 0's waits
+  (for the others to be ready, each to wake, each to finish its ticks,
+  its own IPI, chip 0's tick bits, the SCSI interrupt, the typed
+  character) ends on elapsed time, a second of RPCC (two for the
+  character), where it ended after 1 << 22 loop turns, 4.5 ms on the
+  native JIT and 750 ms on JIT_VERIFY: three runs of `--layout es47` at
+  once on the native JIT, 100 each, failed 18 of 300 at a load of 26 to
+  46, every failure a TPU the host ran after TPU 0 had stopped waiting
+  for it, and passed 300 of 300 with the time bound at 28 to 48.
 - `test/unit/marvel21464_test.cpp`: the map for all 1024 PIDs (decode,
   memory, the KSEG property for PIDs 0-31, the fields no PID has, the
   EV7's map unchanged), the dense topology on the three layouts, the IO7

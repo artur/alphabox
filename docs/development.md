@@ -517,7 +517,12 @@ entries and an IO7 interrupt (a sym53c810's SCRIPTS INT) refused by the
 full queue and resent, and that three configurations are refused for
 their reasons ([ev8-native.md](platforms/ev8-native.md), S11b). About
 1030 results, a few seconds; `test/unit/marvel21464_test` is the map and
-topology without an image.
+topology without an image. Each wait of TPU 0's for another TPU, a device
+or the typed character ends after a second of its cycle counter (two for
+the character), which follows the host's clock while the processor runs
+([cpu-fidelity.md](cpu-fidelity.md), "The cycle counter keeps to the
+interval timer"): a bound in loop turns failed on a loaded host, where a
+woken TPU was run after it ran out.
 
 **The EV8's 1C SIMD set and paired single.** Group `simd`
 (`test/cpu/simd_cases.py`) checks every row of
