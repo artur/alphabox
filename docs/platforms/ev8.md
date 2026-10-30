@@ -1742,7 +1742,15 @@ left for the cases, so S8 began by giving the oracle a second image
   0's quadword is still the old one when the fault is taken (129 misses,
   every element written after); then 2000 messages from processor 1 to
   processor 0, written by VSTOREQ or STQ, WMB and a flag, read after MB or
-  DRAINM by VLOADQ, with no element wrong.
+  DRAINM by VLOADQ, with no element wrong. S8 ran it on `ev8` only: its
+  PALcode and handler were the 21264's. Since 2026-10-30 it takes
+  `--cpu ev8n` too, with the same scenarios and counts on the 21464's
+  interface: the EV8 PALcode, a handler entered at DTBM_SINGLE that writes
+  each entry with the IDS's DTB writer block (DTB_TAG0/1, DTB_PTE0/1 with
+  VALID set) and returns through DTBMS_RET_ADDR, DTB_IM for CALL_PAL 90,
+  VEN through the IPR 0xAC (N8), and processor 1 released from the
+  PALcode's mailbox (N17: the 21464's reset has already started it, so the
+  ES40's DPR finds it running and does not redirect it).
 - `tarantula_vv.py` takes its results out by VSTOREQ.
 
 **The proofs**, on 98a1816 and the image room (410efea). Every lane built

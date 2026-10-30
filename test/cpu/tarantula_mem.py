@@ -3,13 +3,14 @@
 processors: a boot image of its own (docs/platforms/ev8.md, S8;
 docs/development.md, "The oracle").
 
-    tarantula_mem.py <alphabox-binary> [label] [--port N] [--keep]
-                     [--iterations N]
+    tarantula_mem.py <alphabox-binary> [label] [--cpu ROW] [--port N]
+                     [--keep] [--iterations N]
 
-Two `ev8` processors on the ES40 board, through the ALPHABOX_CPU_ANY_BOARD
-test hook, as the CPU oracle runs one; the image replaces the console
-(image.py's PALcode and loader, with a DTB-miss handler of its own).
-What docs/platforms/ev8-isa.md says, and this checks:
+Two processors of the row (default ev8; ev8n too) on the ES40 board,
+through the ALPHABOX_CPU_ANY_BOARD test hook, as the CPU oracle runs one;
+the image replaces the console (image.py's PALcode and loader, the 21264's
+or the EV8's, with a DTB-miss handler of its own). What
+docs/platforms/ev8-isa.md says, and this checks:
 
   - a TB miss is reported for the lowest-numbered active element whose
     translation misses, with the instruction's PC; the PALcode fills the
@@ -47,6 +48,47 @@ processor 1 writes 128 quadwords (by VSTOREQ in even rounds, by STQ in odd
 ones), WMB, a flag; processor 0 waits for the flag, MB (even) or DRAINM
 (odd), VLOADQ, and counts the elements that are not what was written.
 
+On `ev8` (the EV7-compatible interface) the PALcode is image.py's
+build_pal, the handler reads the VA and EXC_ADDR, fills the DTB through
+DTB_TAG0/1 and DTB_PTE0/1 and returns with HW_RET; CALL_PAL 90 is DTB_IA;
+VEN is the VCTL CSR at offset 0x3F0000 of the processor's window; and
+processor 1 waits from power-up until processor 0 writes the ES40's DPR
+byte 0x3428, which the console uses to start it.
+
+On `ev8n` (the 21464's own interface, docs/platforms/ev8-native.md, S11)
+the same scenarios run on the EV8 PALcode, build_pal8, and the same counts
+are expected: the handler does the same work in the 21464's form. The
+miss enters DTBM_SINGLE (0x300), which writes DTBMS_RET_ADDR, EXC_SUM, VA,
+VA_FORM and M_STAT, not EXC_ADDR [IDS pp. 483, 633]; the handler takes its
+trap record from PAL_TEMP1 and keeps R1-R7 there while it runs, since the
+21464 has two shadow registers, S0 and S1, where the 21264 has eight
+[IDS p. 580]. Each entry is written by the IDS's DTB writer block: S0 to
+DTB_TAG0 and DTB_TAG1, S1 to DTB_PTE0 and DTB_PTE1, the PTE with VALID
+<0> set [IDS pp. 504-506, 576]; an IFETCHB separates the two blocks
+(Restriction 7), and the instruction is restarted by RET through
+DTBMS_RET_ADDR, read at 0xA7 inside the block, or at 0xA6 and then an
+IFETCHB on the page fault's path (Restriction 6) [IDS pp. 575-577]. An
+absent page's table entry is never written to the DTB (a PTE with VALID
+clear hangs the chip, Restriction 9). CALL_PAL 90 is DTB_IM with mode
+0x10, every entry and the write pointer reset [IDS p. 503], where the
+`ev8` row's is DTB_IA; VEN is the IPR 0xAC (N8), set through the PALcode
+(CALL_PAL 91 runs a PALmode snippet). The `ev8n` row keeps no TB shadow
+(its fills do not write one), so there scenario 2 is 128 more pages
+through the DTB alone.
+
+Processor 1 on `ev8n` is chip 1 (each chip one TPU, `tpus = 1`), started
+through the EV8 PALcode's mailbox, as marvel8_mp.py starts a TPU, and not
+through the DPR: the 21464 enters MILD_RESET on every TPU at power-up (N17),
+so processor 1 is already running when the DPR's start byte is written,
+and the DPR does not redirect a running processor (it says so: "CPU 1 is
+already running"). The PALcode numbers it CPU_BASE x 4 + TPU_ID = 4 (N25),
+gives it its own trap record and parks it on its mailbox with LDQ_ARM and
+QUIESCE; processor 0 releases it by storing the image's entry there, and
+it finds WHO set as the `ev8` row's processor 1 does. The rest of the
+image (the UART, the memory map, the board) is the `ev8` row's, so only
+the interface under test differs; on the ES47, the board marvel8_mp.py
+uses, the console would be the CMM's terminal instead.
+
 Exit status 0 when every count is as stated and no element is wrong.
 """
 import argparse
@@ -61,6 +103,7 @@ sys.path.insert(0, HERE)
 import alpha_asm as A  # noqa: E402
 import cpu_oracle  # noqa: E402
 import image  # noqa: E402
+import rows  # noqa: E402
 from alpha_asm import (IPR, OP, R31, Asm, bra, call_pal, hw_ld, hw_mfpr,  # noqa: E402
                        hw_mtpr, hw_ret, hw_st, mem, mfc, opl, opr)
 from image import P4, P5, P6, P7, P21, P22, P23, kseg  # noqa: E402
@@ -73,6 +116,10 @@ DATA_PA = 0x1E8000           # results and the shared lines
 RES = 0x000                  # results: quadwords from here
 NRES = 16
 WHO, ALIVE, FLAG, ACK = 0x400, 0x440, 0x480, 0x4C0
+# `ev8n`: the EV8 PALcode's start words, + 0x40 x the processor's number,
+# which is CPU_BASE x 4 + TPU_ID (N25): chip 1's TPU 0 is 4.
+MAILBOX_PA = DATA_PA + 0x800
+CPU1_NUM = 4
 IOTA_PA = 0x1EA000           # 8 x i, i < 128: the scatter's offsets
 DUMP_PA = 0x1EA400           # vector registers out, to be checked
 BUF_PA = 0x1EA800            # part 2's message
@@ -91,25 +138,26 @@ DUMMY_VA = 0x300000000             # the page-table pages of the handler
 PF_ELEMENT = 64
 
 
-def pte(pa):
-    """A DTB_PTE value: the PFN <52:32>, read and write in every mode, ASM
-    (image.py's user data page's)."""
-    return ((pa >> 13) << 32) | 0xFF10
+def pte(pa, ev8n=False):
+    """A DTB_PTE value: the PFN <52:32> (the 21464's <63:32>), read and
+    write in every mode, ASM (image.py's user data page's); on the 21464
+    VALID <0> too [IDS p. 504]."""
+    return ((pa >> 13) << 32) | 0xFF10 | (1 if ev8n else 0)
 
 
 def pool_page(k):
     return POOL_PA + 8192 * k
 
 
-def mapping():
+def mapping(ev8n=False):
     """(VA page, PTE, PTE once present) for every page the scenarios use."""
     out = []
     for i in range(128):
-        out.append((R1 + 8192 * i, pte(pool_page(i)), 0))
+        out.append((R1 + 8192 * i, pte(pool_page(i), ev8n), 0))
     for i in range(128):
-        out.append((R2 + S2 * i, pte(pool_page(128 + i)), 0))
+        out.append((R2 + S2 * i, pte(pool_page(128 + i), ev8n), 0))
     for i in range(128):
-        p = pte(pool_page(i))
+        p = pte(pool_page(i), ev8n)
         out.append((R3 + 8192 * i, 0 if i == PF_ELEMENT else p, p))
     assert len(out) <= MAP_ENTRIES
     # The handler takes the first entry of a page: the regions, and the
@@ -203,14 +251,131 @@ def handler():
     return h
 
 
-def build(iterations):
+def handler8():
+    """The `ev8n` DTB-miss handler, at PAL_BASE + 0x6000: the same work in
+    the 21464's form (the module's docstring). S0 is this processor's trap
+    record (PAL_TEMP1, as image.py's EV8 PALcode keeps it) until the last
+    writer block; R1-R7 are the instruction's and are kept in the record's
+    save area."""
+    I = A.IPR8
+    mf, mt = A.hw_mfpr8, A.hw_mtpr8
+    S0A, S1A, S0B, S1B = A.S0A, A.S1A, A.S0B, A.S1B
+    h = Asm(image.PAL_PA + 0x6000)
+    regs = (1, 2, 3, 4, 5, 6, 7)
+
+    def ld(ra, disp):                       # ra <- [S0 + disp], physical
+        return A.hw_ld8(ra, S0B, disp)
+
+    def st(ra, disp):
+        return A.hw_st8(ra, S0B, disp)
+
+    def restore():
+        for k, r in enumerate(regs):
+            h.emit(ld(r, image.TR8_SAVE + 8 * k))
+
+    def bump(r, disp):
+        h.emit(ld(r, disp))
+        h.emit(opl(0x10, 0x20, r, 1, r))
+        h.emit(st(r, disp))
+
+    def writer_block():
+        """The IDS's [p. 576]: S0 the tag, S1 the PTE, each written twice
+        (one copy per load/store bus, Restriction 3)."""
+        h.emit(mt(S0B, I["dtb_tag0"]))
+        h.emit(mt(S0B, I["dtb_tag1"]))
+        h.emit(mt(S1B, I["dtb_pte0"]))
+        h.emit(mt(S1B, I["dtb_pte1"]))
+
+    h.emit(mf(S0A, I["pal_temp1"]))
+    for k, r in enumerate(regs):
+        h.emit(st(r, image.TR8_SAVE + 8 * k))
+    h.emit(mf(1, I["va"]))
+    # A livelock ends here: the common handler records it and skips.
+    bump(2, T_MISS)
+    h.li(3, MISS_LIMIT)
+    h.emit(opr(0x10, 0x4D, 3, 2, 3))            # CMPLT limit, count
+    h.branch(OP["BNE"], 3, "give_up")
+    # Find the page: r5 the entry, r6 entries left.
+    h.emit(opl(0x12, 0x34, 1, 13, 4))           # SRL va, 13
+    h.emit(opl(0x12, 0x39, 4, 13, 4))           # SLL: the page
+    h.li(5, MAP_PA)
+    h.li(6, MAP_ENTRIES)
+    h.label("find")
+    h.emit(A.hw_ld8(7, 5, 0))
+    h.emit(opr(0x10, 0x2D, 7, 4, 7))            # CMPEQ
+    h.branch(OP["BNE"], 7, "found")
+    h.emit(lda(5, 5, 32))
+    h.emit(opl(0x10, 0x29, 6, 1, 6))
+    h.branch(OP["BGT"], 6, "find")
+    h.branch(OP["BR"], R31, "give_up")
+    h.label("found")
+    h.emit(A.hw_ld8(7, 5, 8))
+    h.branch(OP["BNE"], 7, "fill")
+    # Absent: a page fault. What memory holds at T_SNAP_PA now, then the
+    # page present, and back to the instruction, which misses again.
+    bump(2, T_PF)
+    h.emit(ld(2, T_SNAP_PA))
+    h.emit(A.hw_ld8(2, 2, 0))
+    h.emit(st(2, T_SNAP))
+    h.emit(A.hw_ld8(2, 5, 16))
+    h.emit(A.hw_st8(2, 5, 8))
+    restore()
+    h.emit(mf(S1A, I["dtbms_ret_addr"]))       # 0xA6, then (Restriction 6)
+    h.emit(A.ifetchb())
+    h.emit(A.ret(S1B))
+    h.label("fill")
+    # The page-table page's entry first, at a VA of its own each time.
+    bump(2, T_DUMMY)
+    h.emit(opl(0x11, 0x00, 2, 0xFF, 2))         # AND 255
+    h.emit(opl(0x12, 0x39, 2, 13, 2))
+    h.li(3, DUMMY_VA)
+    h.emit(addq(2, 3, 2))
+    h.li(3, pte(pool_page(255), True))
+    h.emit(opr(0x11, 0x20, R31, 2, S0A))        # BIS: S0 <- the tag
+    h.emit(opr(0x11, 0x20, R31, 3, S1A))        # S1 <- the PTE
+    writer_block()
+    h.emit(A.ifetchb())                         # Restriction 7
+    # Then the page itself: its PTE in S1, the registers back, its VA in S0,
+    # and back to the instruction through DTBMS_RET_ADDR.
+    h.emit(opr(0x11, 0x20, R31, 7, S1A))
+    h.emit(mf(S0A, I["pal_temp1"]))
+    restore()
+    h.emit(mf(S0A, I["va"]))
+    writer_block()
+    h.emit(mf(S1A, I["dtbms_ret_addr_blk"]))   # 0xA7, the block's own
+    h.emit(A.ret(S1B))
+    h.label("give_up")
+    restore()
+    h.emit(lda(S1A, R31, 0x300))                # the common handler's vector
+    h.emit(bra(OP["BR"], R31, (image.PAL_PA + 0x4800 - (h.here + 4)) // 4))
+    return h
+
+
+def build(iterations, ev8n=False):
     a = Asm(image.CODE_PA)
     D = 20
     seg = image.SEG48
+    uart = image.UART_VA8 if ev8n else image.UART_VA
+    snips = Asm(image.PAL8_SNIP_PA)
+    if ev8n:                                    # VEN = 1: VCTL, the IPR 0xAC
+        for w in [lda(1, R31, 1), A.hw_mtpr8(1, A.IPR8["vctl"]),
+                  A.ifetchb()] + image.PAL8_RETURN:
+            snips.emit(w)
+
+    def set_ven():
+        """VEN = 1, this processor's own (r1, r2, and r16 on `ev8n`)."""
+        if ev8n:
+            a.li(16, image.PAL8_SNIP_PA)
+            a.emit(call_pal(0x91))
+        else:
+            a.li(1, seg | VCTL_PA)
+            a.emit(lda(2, R31, 1))
+            a.emit(stq(2, 1, 0))
+
     a.branch(OP["BR"], R31, "main")
     image.emit_print_hex(a)
     a.label("fatal")
-    a.li(image.R_UART, image.UART_VA)
+    a.li(image.R_UART, uart)
     image.emit_print_text(a, "\n@@FATAL\n")
     a.li(16, kseg(image.TR_PA))
     a.li(17, 7)
@@ -260,7 +425,7 @@ def build(iterations):
         a.emit(stq(R31, 5, T_PF))
 
     a.label("main")
-    a.li(image.R_UART, image.UART_VA)
+    a.li(image.R_UART, uart)
     a.li(D, kseg(DATA_PA))
     a.emit(ldq(1, D, WHO))
     a.branch(OP["BNE"], 1, "secondary")
@@ -268,9 +433,7 @@ def build(iterations):
     a.emit(stq(1, D, WHO))
     a.emit(mfc(A.MISC["MB"]))
     # VEN = 1 (each processor reaches its own VCTL on the ES40).
-    a.li(1, seg | VCTL_PA)
-    a.emit(lda(2, R31, 1))
-    a.emit(stq(2, 1, 0))
+    set_ven()
     a.li(11, MAGIC)
     # The pool: PA ^ MAGIC in every quadword.
     a.li(1, kseg(POOL_PA))
@@ -345,9 +508,16 @@ def build(iterations):
     res(9, 0)
     res(15, 10)
 
-    # Part 2: processor 1 starts and sends; processor 0 receives.
-    a.li(5, seg | DPR_START1)
-    a.emit(stq(R31, 5, 0))
+    # Part 2: processor 1 starts and sends; processor 0 receives. On `ev8n`
+    # the store to its mailbox wakes it from QUIESCE [IDS pp. 511, 513].
+    if ev8n:
+        a.li(5, kseg(MAILBOX_PA + 0x40 * CPU1_NUM))
+        a.li(1, kseg(a.labels["main"]))
+        a.emit(stq(1, 5, 0))
+        a.emit(mfc(A.MISC["MB"]))
+    else:
+        a.li(5, seg | DPR_START1)
+        a.emit(stq(R31, 5, 0))
     a.emit(lda(12, R31, 1))
     wait_eq(ALIVE, 12, "w_alive")
     a.li(13, iterations)
@@ -389,6 +559,10 @@ def build(iterations):
     res(11, 15)
     a.li(5, kseg(image.TR_PA))
     a.emit(ldq(1, 5, image.TR_TOTAL))
+    if ev8n:                                      # processor 1's own record
+        a.li(5, kseg(image.TR_PA + image.TR8_BLOCK * CPU1_NUM))
+        a.emit(ldq(2, 5, image.TR_TOTAL))
+        a.emit(addq(1, 2, 1))
     res(12, 1)
     image.emit_print_text(a, "\n@@BEGIN\n")
     a.li(16, kseg(DATA_PA + RES))
@@ -399,9 +573,7 @@ def build(iterations):
 
     # Processor 1: VEN, then the messages.
     a.label("secondary")
-    a.li(1, seg | VCTL_PA)
-    a.emit(lda(2, R31, 1))
-    a.emit(stq(2, 1, 0))
+    set_ven()
     a.emit(A.vc("setvl", lit=128))
     a.emit(A.vc("setvs", lit=8))
     a.li(1, kseg(IOTA_PA))
@@ -435,26 +607,43 @@ def build(iterations):
     code = a.finish()
 
     img = bytearray(image.IMAGE_TOP)
-    pal = image.build_pal(image.TR_PA, kseg(a.labels["main"]),
-                          kseg(a.labels["fatal"]))
-    h = handler()
+    if ev8n:
+        # TPU 0 of chip 0 goes on to `main`; chip 1's (number 4) parks.
+        pal = image.build_pal8(image.TR_PA, kseg(a.labels["main"]),
+                               kseg(a.labels["fatal"]), by_chip=True,
+                               mailbox_pa=MAILBOX_PA)
+        h = handler8()
+    else:
+        pal = image.build_pal(image.TR_PA, kseg(a.labels["main"]),
+                              kseg(a.labels["fatal"]))
+        h = handler()
     hw = h.finish()
     for i, w in enumerate(hw):
+        assert h.base + 4 * i not in pal, hex(h.base + 4 * i)
         pal[h.base + 4 * i] = w
     # The DTB-miss vector: a branch to the handler.
     vec = image.PAL_PA + 0x300
     pal[vec] = bra(OP["BR"], R31, (h.base - (vec + 4)) // 4)
-    # CALL_PAL 90: DTB_IA.
+    # CALL_PAL 90: DTB_IA; on `ev8n` DTB_IM, every entry and the write
+    # pointer (mode 10), IFETCHB (Restriction 1), RET through S1.
     e = image.PAL_PA + 0x2000 + 0x1000 + (0x10 << 6)
-    pal[e] = hw_mtpr(R31, IPR["DTB_IA"])
-    pal[e + 4] = hw_ret(P23)
+    if ev8n:
+        for k, w in enumerate((lda(A.S0A, R31, 0x10),
+                               A.hw_mtpr8(A.S0B, A.IPR8["dtb_im"]),
+                               A.ifetchb(), A.ret(A.S1B))):
+            pal[e + 4 * k] = w
+    else:
+        pal[e] = hw_mtpr(R31, IPR["DTB_IA"])
+        pal[e + 4] = hw_ret(P23)
     for ad, w in pal.items():
         struct.pack_into("<I", img, ad, w)
     for i, w in enumerate(code):
         struct.pack_into("<I", img, image.CODE_PA + 4 * i, w)
+    for i, w in enumerate(snips.finish()):
+        struct.pack_into("<I", img, image.PAL8_SNIP_PA + 4 * i, w)
     for i in range(128):
         struct.pack_into("<Q", img, IOTA_PA + 8 * i, 8 * i)
-    for k, (va, p, p2) in enumerate(mapping()):
+    for k, (va, p, p2) in enumerate(mapping(ev8n)):
         struct.pack_into("<QQQ", img, MAP_PA + 32 * k, va, p, p2)
     return img
 
@@ -470,11 +659,11 @@ CFG = """sys0 = tsunami
 
   cpu0 = %(cpu)s
   {
-    speed = 800M;
+    speed = 800M;%(tpus)s
   }
   cpu1 = %(cpu)s
   {
-    speed = 800M;
+    speed = 800M;%(tpus)s
   }
 
   serial0 = serial
@@ -512,26 +701,30 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("binary")
     ap.add_argument("label", nargs="?", default="tarantula-mem")
+    ap.add_argument("--cpu", default="ev8", choices=("ev8", "ev8n"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "0")))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--iterations", type=int, default=2000)
     ap.add_argument("--timeout", type=float, default=120)
     args = ap.parse_args()
+    ev8n = rows.ROWS[args.cpu].family == "EV8"
     work = os.environ.get("ALPHABOX_WORK", os.path.join(HERE, "..", "..", "lab"))
     workdir = os.path.join(os.path.abspath(work), "runs", args.label)
     shutil.rmtree(workdir, ignore_errors=True)
     os.makedirs(workdir)
-    image.write_rom(os.path.join(workdir, "oracle.rom"), build(args.iterations))
+    image.write_rom(os.path.join(workdir, "oracle.rom"),
+                    build(args.iterations, ev8n))
     port = args.port or cpu_oracle.free_port()
     env = {"ALPHABOX_CPU_ANY_BOARD": "1"}
     orig = cpu_oracle.CFG
-    cpu_oracle.CFG = CFG
+    cpu_oracle.CFG = CFG          # cpu_oracle gives an EV8 chip `tpus = 1`
     text, emu, secs = cpu_oracle.run(os.path.abspath(args.binary), workdir,
-                                     "ev8", port, env, args.timeout)
+                                     args.cpu, port, env, args.timeout)
     cpu_oracle.CFG = orig
     with open(os.path.join(workdir, "serial.txt"), "w") as f:
         f.write(text)
-    print("== tarantula_mem %s: two ev8s on the ES40, %.1f s" % (args.label, secs))
+    print("== tarantula_mem %s: two %ss on the ES40, %.1f s" % (
+        args.label, args.cpu, secs))
     vals = []
     i = text.find("@@BEGIN")
     if i >= 0:

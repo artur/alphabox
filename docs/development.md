@@ -599,10 +599,11 @@ middle element), with the trap record and the registers and memory
 unchanged. About 13,300 results on `ev8` and `ev8n`.
 
 ```
-test/cpu/tarantula_mem.py <alphabox-binary> [label] [--port N] [--iterations N]
+test/cpu/tarantula_mem.py <alphabox-binary> [label] [--cpu ROW] [--port N] [--iterations N]
 ```
 
-boots two `ev8` processors on the ES40 with the image's PALcode and a
+boots two processors of the row (`ev8` by default, or `ev8n`) on the ES40
+with the image's PALcode and a
 DTB-miss handler of its own, which fills the DTB from a table and returns
 to the faulting instruction, as an operating system's PALcode would,
 taking a second TB entry first, as an EV7 PALcode's virtual page-table
@@ -615,7 +616,14 @@ quadword unchanged when the page fault is taken, then write every
 element. Then processor 1 sends processor 0 N messages (2000) of 128
 quadwords, by VSTOREQ or STQ, WMB and a flag; processor 0 waits for the
 flag, executes MB or DRAINM and reads them with VLOADQ; no element may be
-wrong. About a second.
+wrong. About a second. On `ev8n` the counts are the same and the
+interface is the 21464's: the EV8 PALcode, the miss at DTBM_SINGLE, each
+entry written by the IDS's DTB writer block (DTB_TAG0/1, then DTB_PTE0/1
+with VALID set) and the instruction restarted by RET through
+DTBMS_RET_ADDR; CALL_PAL 90 is DTB_IM and VEN the IPR 0xAC. Each chip has
+one TPU (`tpus = 1`), and processor 1, which the 21464's reset has already
+started (N17, so the DPR's start byte finds it running), waits in the
+PALcode's mailbox until processor 0 stores the image's entry there.
 
 **A code change across processors.** `test/cpu/codepage_mp.py
 <alphabox-binary> [label] [--cpu ROW] [--port N] [--iterations N]
