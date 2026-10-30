@@ -68,15 +68,15 @@ extern thread_local class CAlphaCPU *t_running_cpu;
 /// AlphaCPU_jit.cpp have to ask the same question before translating.
 bool alpha_valid_va_form(u64 virt, bool va48);
 
-/// JIT-05 A/B switch, read once at startup (AlphaCPU.cpp): an MB honours a
-/// pending page-cache flush request (CAlphaCPU::memory_barrier).
-/// ALPHABOX_JIT05_MB=0 turns it off.
-extern const bool g_jit05_mb;
-
-/// JIT-08 A/B switch, read once at startup (AlphaCPU.cpp): virt2phys and the
-/// JIT's memory helpers translate through CAlphaCPU::virt2phys_fast.
-/// ALPHABOX_JIT08_XLATE=0 selects the copies they had before.
-extern const bool g_jit08_xlate;
+/// For a routine on the path of every page-cache miss, from the interpreter
+/// and from the JIT's memory helpers: `inline` alone left virt2phys_fast a
+/// function of its own in the AArch64 JIT build, a call on that path that
+/// the copies it replaced did not make.
+#if defined(_MSC_VER)
+#define ALPHABOX_FORCE_INLINE __forceinline
+#else
+#define ALPHABOX_FORCE_INLINE inline __attribute__((always_inline))
+#endif
 
 // Bumped by every CPU's instruction-cache flush (IC_FLUSH / IMB). Each CPU's
 // JIT compares it at the start of a dispatch batch and flushes its own block
@@ -253,10 +253,10 @@ public:
     XL_MISS = 2,  // not in the TB
     XL_FAULT = 3, // the entry's fault-on-read, -write or -execute bit set
   };
-  int virt2phys_old(u64 virt, u64 *phys, int flags, bool *asm_bit, u32 ins);
   /// virt2phys without its side effects (defined below the class).
-  inline int virt2phys_fast(u64 virt, int flags, int cm, u64 *phys,
-                            bool *asm_bit, int *entry);
+  ALPHABOX_FORCE_INLINE int virt2phys_fast(u64 virt, int flags, int cm,
+                                           u64 *phys, bool *asm_bit,
+                                           int *entry);
 
   virtual void init();
   virtual void start_threads();
@@ -955,10 +955,10 @@ public:
   /// flush. The fence first makes it a Dekker pair with the compiler, which
   /// asks before its own fence and re-check (CJitEngine::compile_block):
   /// either the re-check sees this processor's stores, or this load sees
-  /// the request. ALPHABOX_JIT05_MB=0 leaves the fence alone (A/B switch).
+  /// the request.
   inline void memory_barrier() {
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    if (g_jit05_mb && m_dpc_flush_req.load(std::memory_order_relaxed))
+    if (m_dpc_flush_req.load(std::memory_order_relaxed))
       honour_at_mb();
   }
   /// The request honoured, then the fence again: the guest's next store,
@@ -1066,11 +1066,12 @@ public:
   // value to va. Return 0 on success, 1 on fault/unaligned (caller bails to the
   // interpreter).
   static int jit_read(CAlphaCPU *cpu, u64 va, int size_bits, u64 *out);
-  int jit_spe_data(u64 va, int cm, u64 *phys) const; // data superpage probe
-  /// The memory helpers' translation (JIT-08): virt2phys_fast, or with
-  /// ALPHABOX_JIT08_XLATE=0 the copies the helpers had (jit_xlate_old).
-  int jit_xlate(u64 va, int flags, int cm, u64 *phys);
-  int jit_xlate_old(u64 va, int flags, int cm, u64 *phys);
+  /// The memory helpers' translation: virt2phys_fast (JIT-08), its entry
+  /// left out.
+  int jit_xlate(u64 va, int flags, int cm, u64 *phys) {
+    int entry;
+    return virt2phys_fast(va, flags, cm, phys, nullptr, &entry);
+  }
   static int jit_read_phys(CAlphaCPU *cpu, u64 phys, int size_bits,
                            u64 *out); // HW_LD physical: no translation
   static int jit_read_locked(CAlphaCPU *cpu, u64 va, int size_bits,
@@ -1737,8 +1738,7 @@ inline void CAlphaCPU::flush_icache() {
     // against its look at the map below, and an executor's read of a flag
     // against its read of the write count, whether or not the PALcode's IMB
     // executes an MB of its own (JIT-05).
-    if (g_jit05_mb)
-      std::atomic_thread_fence(std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     if (m_code_map->code_pages() != m_code_pages_seen)
       honour_new_code_pages(); // a page became code: drop stale inline writes
     const u64 gen = m_code_map->write_gen();

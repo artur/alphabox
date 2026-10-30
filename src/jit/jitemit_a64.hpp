@@ -849,21 +849,19 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
 #endif
       a.dmb(asmjit::a64::Predicate::DB::kISH);
-      if (g_jit05_mb) {
-        Label slow = a.new_label(), back = a.new_label();
-        a.ldrb(w1, fld(m_off.dpc_flush_req, 0));
+      Label slow = a.new_label(), back = a.new_label();
+      a.ldrb(w1, fld(m_off.dpc_flush_req, 0));
 #ifndef JIT_VERIFY
-        if (cold_record(slow, back)) {
-          a.cbnz(w1, slow);
-          a.bind(back);
-          continue;
-        }
-#endif
-        a.cbz(w1, back);
-        mb_helper();
+      if (cold_record(slow, back)) {
+        a.cbnz(w1, slow);
         a.bind(back);
-        (void)slow;
+        continue;
       }
+#endif
+      a.cbz(w1, back);
+      mb_helper();
+      a.bind(back);
+      (void)slow;
       continue;
     }
 

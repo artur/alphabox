@@ -66,10 +66,6 @@
 #error "ES40_JIT requires an x86-64 or AArch64 host"
 #endif
 
-// JIT-05's A/B switch (AlphaCPU.cpp): compiled MB tests the page-cache
-// flush request.
-extern const bool g_jit05_mb;
-
 namespace {
 
 // ALPHABOX_JIT_INLMEM=0: every load and store calls its helper, as on a
@@ -1861,13 +1857,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
     // may have made, through the misc helper (CAlphaCPU::memory_barrier).
     if (op == OP_MB) {
       a.mfence();
-      if (g_jit05_mb) {
-        Label none = a.new_label();
-        a.cmp(x86::byte_ptr(x86::rbp, m_off.dpc_flush_req), imm(0));
-        a.je(none);
-        emit_call(misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)kMiscMbFlush}});
-        a.bind(none);
-      }
+      Label none = a.new_label();
+      a.cmp(x86::byte_ptr(x86::rbp, m_off.dpc_flush_req), imm(0));
+      a.je(none);
+      emit_call(misc_helper, {{JA_CPU, 0}, {JA_I32, (uint64_t)kMiscMbFlush}});
+      a.bind(none);
       continue;
     }
 

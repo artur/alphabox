@@ -1289,12 +1289,10 @@ until they were fixed:
   `smc_test.sh` passes on one processor and on two. Windows 2000 RC2 on two
   processors, OpenVMS 8.4 on the ES40, on the DS20E with two processors
   and on the ES47, Gentoo Linux and Windows XP 64-bit passed
-  `guests_check.sh`. The fixes are behind switches still
-  (`ALPHABOX_JIT05_MB=0` and `ALPHABOX_JIT05_FENCE=0` restore the old
-  paths, [headless.md](headless.md)): `perf_ab.py` measured more than 2%
-  on one workload each, on a busy host and two rounds, and the owner
-  decides ([performance.md](performance.md), "The code-page map's fences,
-  and one translation").
+  `guests_check.sh`. The switches that kept the old paths (`MB`'s request
+  check, `IC_FLUSH`'s fence, `note_code`'s mutex, the store's fence) were
+  removed on 2026-10-30 ([performance.md](performance.md), "The code-page
+  map's fences, and one translation").
 - **What a block marks as code** (JIT-04). A compiled block copied,
   checked again, hashed and marked in the code-page map its whole
   interpreted span, up to a dispatch batch of 2000 instructions, though
@@ -1318,7 +1316,8 @@ until they were fixed:
   2000 RC2 reached its desktop and OpenVMS 8.4 logged in. The data
   helpers' translation, still a copy of `virt2phys`'s fast path then, is
   one routine since 2026-10-25: `CAlphaCPU::virt2phys_fast`
-  (`AlphaCPU.hpp`, inline, so no call is added): the address's form, the
+  (`AlphaCPU.hpp`; forced inline since 2026-10-30, as `inline` alone left
+  it a function of its own and added a call): the address's form, the
   superpages, the TB and the entry's access and fault bits, by each
   row's rules (the native EV8's through `ev8_superpage` and its TB
   groups), with no page-table walk, no fault vectored and no TB fill.
@@ -1336,10 +1335,9 @@ until they were fixed:
   dispatcher. Group `jitxlate` runs a compiled load through the helper
   on each superpage, a TB hit, a miss, an access violation and a
   fault-on-read, on every row; the other proofs are JIT-05's, above
-  (the same branch). `ALPHABOX_JIT08_XLATE=0` selects the old copies
-  until the quiet-host measurement the owner asked for on 2026-10-25
-  settles the switch ([performance.md](performance.md), "The code-page
-  map's fences, and one translation").
+  (the same branch). The old copies and their switch were removed on
+  2026-10-30 ([performance.md](performance.md), "The code-page map's
+  fences, and one translation").
 - **A chained entry to the PAL reset vector** (JIT-13). The dispatcher
   flushes the instruction cache and the compiled blocks when it enters
   `PAL_BASE` (a firmware updater rewrote the image in place, or a

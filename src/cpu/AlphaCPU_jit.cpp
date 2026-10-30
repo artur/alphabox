@@ -1275,69 +1275,6 @@ void CAlphaCPU::jit_run(int budget) {
   }
 }
 
-// Side-effect-free data superpage probe for the JIT memory helpers, mirroring
-// virt2phys (VA form check, then SPE[2]/[1]/[0] before the TB). The TB never
-// holds superpage translations, so without this every kernel superpage access
-// that misses the data page cache bailed to the interpreter. Returns 1 with
-// *phys set on a hit, 0 when va is not a superpage address (use the TB), or
-// -1 when the interpreter must take it (bad VA form, or a hit outside kernel
-// mode -> ACV).
-int CAlphaCPU::jit_spe_data(u64 va, int cm, u64 *phys) const {
-  // The native EV8: Appendix C's superpages and sign check, the 21464's
-  // (ev8_superpage). The TB behind it is the 21464's too: the entries
-  // ev8_add_tb makes, valid only in their TPU group, with their own masks;
-  // the page cache holds 8 KB pieces of any page, as for a granularity hint.
-  if (m_ev8n) {
-    const int r = ev8_superpage(va, false, cm, phys);
-    return r < 0 ? -1 : r;
-  }
-  if (!alpha_valid_va_form(va, state.va_ctl_va_mode & 1))
-    return -1;
-  const int spe = state.m_ctl_spe;
-  if (!spe)
-    return 0;
-  if (((va & SPE_2_MASK) == SPE_2_MATCH) && (spe & 4))
-    *phys = va & SPE_2_MAP;
-  else if (((va & SPE_1_MASK) == SPE_1_MATCH) && (spe & 2))
-    *phys = (va & SPE_1_MAP) | ((va & SPE_1_TEST) ? SPE_1_ADD : 0);
-  else if (((va & SPE_0_MASK) == SPE_0_MATCH) && (spe & 1))
-    *phys = va & SPE_0_MAP;
-  else
-    return 0;
-  return cm ? -1 : 1;
-}
-
-// The copies of virt2phys's fast path the helpers had before JIT-08, as
-// each checked it: jit_spe_data, then FindTBEntry and the entry's access and
-// fault bits (both for WRCHK); a VPTE fetch went straight to the TB.
-int CAlphaCPU::jit_xlate_old(u64 va, int flags, int cm, u64 *phys) {
-  if (!(flags & VPTE)) {
-    const int spe = jit_spe_data(va, cm, phys);
-    if (spe < 0)
-      return XL_ACV;
-    if (spe)
-      return XL_OK;
-  }
-  const int rw = (flags & ACCESS_WRITE) ? 1 : 0;
-  const int i = FindTBEntry(va, rw ? ACCESS_WRITE : ACCESS_READ);
-  if (i < 0)
-    return XL_MISS;
-  const auto &e = state.tb[TB_INDEX_DATA][i];
-  if (!e.access[rw][cm] || ((flags & WRCHK) && !e.access[1][cm]))
-    return XL_ACV;
-  if (e.fault[rw] || ((flags & WRCHK) && e.fault[1]))
-    return XL_FAULT;
-  *phys = e.phys | (va & e.keep_mask);
-  return XL_OK;
-}
-
-int CAlphaCPU::jit_xlate(u64 va, int flags, int cm, u64 *phys) {
-  if (!g_jit08_xlate)
-    return jit_xlate_old(va, flags, cm, phys);
-  int entry;
-  return virt2phys_fast(va, flags, cm, phys, nullptr, &entry);
-}
-
 // JIT load helper (static). Reads size_bits from virtual address va into *out,
 // mirroring DATA_PHYS_NT's normal-read fast path. Returns 0 on success, or 1 on
 // a translation fault / unaligned access - the caller bails to the interpreter
@@ -2173,18 +2110,8 @@ void *CAlphaCPU::jit_indirect(CAlphaCPU *cpu, u64 target) {
   // entry's execute right and fault bit in this mode); anything it does not
   // translate is the dispatcher's, which faults it in.
   u64 live;
-  if (g_jit08_xlate) {
-    int entry;
-    if (cpu->virt2phys_fast(target, ACCESS_EXEC, cpu->state.cm, &live, nullptr,
-                            &entry) != XL_OK)
-      return nullptr;
-  } else {
-    const int i = cpu->FindTBEntry(target, ACCESS_EXEC);
-    if (i < 0)
-      return nullptr; // ITB miss: let the dispatcher fault it in
-    const auto &e = cpu->state.tb[TB_INDEX_ITB][i];
-    live = e.phys | (target & e.keep_mask);
-  }
+  if (cpu->jit_xlate(target, ACCESS_EXEC, cpu->state.cm, &live) != XL_OK)
+    return nullptr;
   if (live != b->phys) {
     // Caught a stale block: the page was remapped without flushing the JIT
     // cache. Bail so the dispatcher re-records/recompiles. Rate-limited log --

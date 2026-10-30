@@ -768,6 +768,69 @@ for sw in JIT05_MB JIT05_FENCE JIT08_XLATE; do
 done
 ```
 
+The first quiet-host sitting (2026-10-26, ledger rows `jit0508-*-q`) is
+not used: `perf_ab.py` did not yet count another session's load, and
+`JIT05_MB` on `cab` spread 25% in one arm ([7600, 6100, 6330] ms).
+
+*2026-10-30.* The same commands with `-q2` labels, on `build-jit` at
+e42104b, with `perf_ab.py` holding a round back while the load average is
+above 12; then the rows labelled `-inl`, `-q3`, `-q4`, `-inl2` and
+`cab-aa-null`, on that build with `JIT05_MB` collapsed and
+`virt2phys_fast` forced inline (below). The spread is each arm's (max -
+min) over its median; the worst pair is the slowest run with the switch
+on over the fastest with it off:
+
+| ledger row | total, switch off -> on | spreads | worst pair | verdict |
+| --- | --- | --- | --- | --- |
+| `jit0508-JIT05_MB-axp-q2` | [8476, 8210, 8085] -> [7953, 7992, 8171] ms, -2.7% | 4.8% / 2.7% | +1.1% | inconclusive |
+| `jit0508-JIT05_MB-cab-q2` | [6780, 6700, 6730] -> [6710, 6860, 6570] ms, -0.3% | 1.2% / 4.3% | +2.4% | inconclusive |
+| `jit0508-JIT05_FENCE-axp-q2` | [8000, 7992, 8015] -> [8000, 7992, 7984] ms, -0.1% | 0.3% / 0.2% | +0.1% | inconclusive |
+| `jit0508-JIT05_FENCE-cab-q2` | [7840, 7410, 7430] -> [7590, 7610, 7320] ms, +2.2% | 5.8% / 3.8% | +2.7% | inconclusive |
+| `jit0508-JIT08_XLATE-axp-q2` | [8000, 8265, 7867] -> [7898, 8039, 8007] ms, +0.1% | 5.0% / 1.8% | +2.2% | inconclusive |
+| `jit0508-JIT08_XLATE-cab-q2` | [6560, 6800, 6390] -> [7100, 7370, 6850] ms, +8.2% | 6.2% / 7.3% | +15.3% | resolved |
+| `jit0508-JIT08_XLATE-axp-inl` | [8078, 8062, 8093] -> [7968, 7968, 7929] ms, -1.4% | 0.4% / 0.5% | -1.2% | resolved |
+| `jit0508-JIT08_XLATE-cab-inl` | [6310, 6270, 6250] -> [6260, 6410, 6730] ms, +2.2% | 1.0% / 7.3% | +7.7% | inconclusive |
+| `jit0508-JIT05_FENCE-cab-q3` | [5970, 6000, 5950] -> [6430, 6260, 6410] ms, +7.4% | 0.8% / 2.7% | +8.1% | resolved |
+| `cab-aa-null` | [6750, 6120, 6150, 6250, 6350] -> [6600, 6590, 5950, 7250, 7050] ms, +5.6% | 10.1% / 19.7% | +18.5% | inconclusive |
+| `jit0508-JIT05_FENCE-cab-q4` | [6040, 6120, 6110, 6520, 5950] -> [6700, 7470, 6120, 6250, 6510] ms, +6.5% | 9.3% / 20.7% | +25.5% | inconclusive |
+| `jit0508-JIT08_XLATE-cab-inl2` | [6450, 6080, 6170, 6030, 6090] -> [5930, 6050, 6940, 6110, 6110] ms, +0.3% | 6.9% / 16.5% | +15.1% | inconclusive |
+
+Every section computed the same results in both arms.
+
+`makecab` cannot settle 2% on this host. Timed against itself
+(`cab-aa-null`: one binary, the base arm given a variable nothing reads,
+five rounds on a quiet host) it moved the median 5.6%, and its arms
+spread 10% and 20%, as far as any `cab` row above: the three "resolved"
+`cab` rows are within that noise. `axpbench` stays within half a per cent
+per arm on a quiet host, and settles what it can.
+
+- **`ALPHABOX_JIT05_MB` is gone** (the owner): with the switch on, both
+  medians were faster, and the worst pair is over 2% on `cab` only
+  through one run (6860 ms, beside 6570 and 6710). The fix closes a
+  stale-code window and stays whatever it costs, so the measurement
+  could only record a cost, and it found none.
+- **`ALPHABOX_JIT08_XLATE` is gone** (the owner), and `virt2phys_fast` is
+  forced inline (`ALPHABOX_FORCE_INLINE`, `AlphaCPU.hpp`). The 2026-10-25
+  description above, that a page-cache miss gains no call, was wrong for
+  every build since: `inline` alone left `virt2phys_fast` a function of
+  its own on the AArch64 JIT build, so `jit_xlate` called it where it had
+  jumped to the old copy, and `virt2phys` called it too. Forced inline,
+  no copy is left (`nm`), and `axp` measured the switch on 1.4% faster,
+  resolved (`-inl`); `cab`'s +8.2% before the change and +2.2% and +0.3%
+  after it are inside its noise.
+- **`ALPHABOX_JIT05_FENCE` is gone** (the owner): `axp` -0.1%, each arm
+  within 0.3%. Its three `cab` sittings (+2.2%, +7.4%, +6.5%) are no
+  further from zero than `cab` against itself, and a scratch build that
+  counted the fences (one run each from the snapshot, not committed) found
+  them outside the timed work: 3.07M fenced stores in a `cab` run and
+  3.05M in an `axp` run, 0.76M of each on a code line, from 46 and 45 of
+  about 1,080 marked pages. A count that does not change with the program,
+  or with how long the run lasts, comes from what every run shares (the
+  resume, the Run dialog, the batch file), not from the program measured.
+  Nor is it pages left marked after their code went: few pages fence, and
+  a quarter of the fenced stores land on a compiled line, so these are
+  pages that mix code and data.
+
 ## One binary at a time
 
 *2026-09-19.* The per-block items, extended blocks and the exact TB index,
