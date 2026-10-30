@@ -67,10 +67,12 @@ All of these live in `test/tools/` and are described in
   thermal state) does not fall on one arm only. Each round's order is
   printed and recorded in the JSON (`order`, `round_order`); results from
   before 2026-10-28 always timed base first.
-- It waits for a quiet host (no build, no other guest) before each round,
-  for up to four hours, and watches the host while the round runs: a round
-  that anything else overlapped is thrown away and timed again, up to eight
-  times. `--busy-ok` times anyway and says so in the ledger.
+- It waits for a quiet host (no build, no other guest, the 1-minute load
+  average at most `--max-load`, by default three quarters of the logical
+  processors) before each round, for up to four hours, and watches the host
+  while the round runs: a round that anything else overlapped is thrown away
+  and timed again, up to 24 times. `--busy-ok` times anyway and says so
+  in the ledger. Under 6 GB free it waits for space the same way.
 - Everything it measures is appended to `lab/results/ledger.md`; quote that
   file, not memory.
 

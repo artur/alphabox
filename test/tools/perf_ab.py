@@ -7,9 +7,9 @@ usage: perf_ab.py <label> <base-binary> <head-binary> [--rounds N] [--workload a
 Every performance claim in this project goes through here, because the ways
 it has gone wrong are all mechanical and a script can refuse each of them:
 
-  - a build or another guest running during a timed round (refused up front,
-    re-checked before every boot, and watched for during it: a round that
-    overlapped one is thrown away and timed again);
+  - a build, another guest or a loaded host during a timed round (refused up
+    front, re-checked before every boot, and watched for during it: a round
+    that overlapped one is thrown away and timed again);
   - a delta quoted from a single pair (fewer than 2 interleaved rounds is a
     hard error, not a warning);
   - phases mixed up (the guest times each section itself; nothing here reads
@@ -50,12 +50,19 @@ def sha(path):
             h.update(chunk)
     return h.hexdigest()[:12]
 
+# The 1-minute load average above which the host is not quiet (--max-load).
+# Another session's work is not all compilers and guests: its own test binaries
+# and scripts have no name to look for, and they once cost one arm 25% with
+# nothing here to see.
+MAX_LOAD = (os.cpu_count() or 4) * 3 // 4
+
 def busy_host():
     """Anything that would perturb a timed round: a compiler actually running,
-    or another guest. Judged by the EXECUTABLE, not by command text -- a shell
-    whose script mentions `cmake --build` is not a build, and the wrapper this
-    tool is launched from usually mentions it. Our own ancestry is excluded,
-    and so is everything we started: the round's own guest runs under a script."""
+    another guest, or a loaded host. Judged by the EXECUTABLE, not by command
+    text -- a shell whose script mentions `cmake --build` is not a build, and
+    the wrapper this tool is launched from usually mentions it. Our own
+    ancestry is excluded, and so is everything we started: the round's own
+    guest runs under a script."""
     procs = sh("ps -Ao pid,ppid,args")
     table = {}
     for ln in procs.splitlines()[1:]:
@@ -83,6 +90,8 @@ def busy_host():
              (exe.startswith(('alphabox', 'axpbox')) and args.split()[1:2] == ['run']) or \
              re.search(r'(lab/bin/\S+|alphabox|axpbox) run\b', args):
             reasons.append('a guest: ' + args[:70])
+    if MAX_LOAD and os.getloadavg()[0] > MAX_LOAD:
+        reasons.append(f'host load above {MAX_LOAD}')
     return reasons
 
 BUSY_OK = False    # --busy-ok: time anyway, and say so in the ledger
@@ -112,11 +121,24 @@ def refuse_if_busy(when, wait_s=4 * 3600):
     # by hundreds of MB; a snapshot is the whole of guest RAM. A full disk does
     # not fail cleanly -- it failed the state save mid-write once, after the
     # guest had booted, and the failure read as "no snapshot" not "no space".
-    st = os.statvfs(WORK)
-    free_gb = st.f_bavail * st.f_frsize / 2**30
-    if free_gb < 6:
-        sys.exit(f"perf_ab: refusing ({when}): only {free_gb:.1f} GB free under {WORK}; "
+    # Space another session takes comes back as it does, so wait for it like a
+    # busy host: exiting threw away the rounds already timed.
+    waited = 0
+    while free_gb() < 6 and waited < wait_s:
+        if waited == 0:
+            print(f"perf_ab: only {free_gb():.1f} GB free under {WORK} ({when}); waiting for 6 GB", flush=True)
+        time.sleep(30); waited += 30
+    if free_gb() < 6:
+        sys.exit(f"perf_ab: refusing ({when}): only {free_gb():.1f} GB free under {WORK} after {waited // 60} min; "
                  "old run clones (lab/work-*, lab/bench-*, lab/ntbench-*) are the usual cause")
+    if waited:
+        # The host may have got busy while the space came back.
+        print(f"perf_ab: {free_gb():.1f} GB free after {waited // 60} min", flush=True)
+        refuse_if_busy(when, wait_s)
+
+def free_gb():
+    st = os.statvfs(WORK)
+    return st.f_bavail * st.f_frsize / 2**30
 
 def run_watched(*args, **kw):
     """run_one, polling busy_host while it runs: returns (run_one's result, what
@@ -219,6 +241,7 @@ def run_one(label, binary, workload, section, scale, snapshot=False, env_extra=N
     return ms, res, total, p.stdout, mips
 
 def main():
+    global MAX_LOAD
     ap = argparse.ArgumentParser()
     ap.add_argument('label'); ap.add_argument('base'); ap.add_argument('head')
     ap.add_argument('--rounds', type=int, default=2)
@@ -228,6 +251,9 @@ def main():
     ap.add_argument('--busy-ok', action='store_true',
                     help='time even while other builds or guests run; the ledger row says "busy host". '
                          'A last resort: the verdict is weaker, and says so')
+    ap.add_argument('--max-load', type=int, default=MAX_LOAD,
+                    help='1-minute load average above which the host counts as busy; 0 looks at '
+                         f'processes only (default {MAX_LOAD}, 3/4 of the logical processors)')
     ap.add_argument('--snapshot', action='store_true',
                     help='resume the desktop snapshot (nt_snap.sh run) instead of cold-booting each run')
     ap.add_argument('--env-base', action='append', default=[], metavar='K=V',
@@ -238,6 +264,7 @@ def main():
     a = ap.parse_args()
     global BUSY_OK, SECTIONS
     BUSY_OK = a.busy_ok
+    MAX_LOAD = a.max_load
     if a.workload not in WORKLOAD_SECTIONS:
         sys.exit(f"perf_ab: unknown workload {a.workload}; one of {', '.join(WORKLOAD_SECTIONS)}")
     SECTIONS = WORKLOAD_SECTIONS[a.workload]
@@ -279,7 +306,10 @@ def main():
         print(f"-- round {r}: {' then '.join(meta['round_order'][r - 1])}", flush=True)
         for arm in meta['round_order'][r - 1]:
             binary = base if arm == 'base' else head
-            for _ in range(8):
+            # Eight was too few: another session's bursts let rounds through,
+            # only not every time, and giving up at a pair's last round threw
+            # away the five before it (JIT05_FENCE axp, 2026-10-30).
+            for _ in range(24):
                 refuse_if_busy(f'{arm} round {r}')
                 print(f"== {arm} round {r}: {os.path.basename(binary)}", flush=True)
                 (ms, res, total, log, mips), during = run_watched(
@@ -293,7 +323,7 @@ def main():
             else:
                 # Another session that never stays quiet for one round: no
                 # amount of waiting gets a clean round out of it.
-                sys.exit(f"perf_ab: gave up ({arm} round {r}): other work overlapped it 8 times")
+                sys.exit(f"perf_ab: gave up ({arm} round {r}): other work overlapped it 24 times")
             if total is None:
                 sys.exit(f"perf_ab: {arm} round {r} produced no result:\n{log[-800:]}")
             runs[arm].append({'ms': ms, 'result': res, 'total': total, 'mips': mips})
