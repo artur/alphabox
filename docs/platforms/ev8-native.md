@@ -11,8 +11,9 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 **Status**: plan, 2026-10-25; N1 to N31 accepted as proposed by the owner
 the same day. S11, the native interface on an `ev8n` row, done the same
 day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode,
-done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, is
-next. The owner's decisions that
+done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, phase
+1 done 2026-10-31 ([below](#s12a-phase-1-2026-10-31)), phase 2 after the
+owner's checkpoint, which also decides N8's call. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -1000,6 +1001,9 @@ batch after its item 3; Artur on both sides):
 - **The macro** `__nada_alpha_pal__` is defined under `-mpal`.
 - **Restrictions 3 to 8**: no warnings in the first version; S12a does not
   need them.
+- At S12a (2026-10-31) nada main 9152b521 assembled every form above; RET
+  through another register than `$ra` it does not take, and the PALcode
+  writes it as a word ([S12a](#s12a-phase-1-2026-10-31)).
 
 **The IPR names** (for assemblers). The names are Alphabox's: the IDS has
 none for assemblers. A field-select variant is a name of its own. Combined
@@ -1209,7 +1213,8 @@ Each is a gap, a conflict or a choice the native track needs. The
 owner accepted all of them as proposed on 2026-10-25, N22's revision of
 D5 for the native track included (D5 stands for EV7-compatible mode); a
 stage that changes one says so. N8's PALcode call (the OS's way to set
-VCTL) gets its function code when S12a starts.
+VCTL) gets its function code when S12a starts: S12a proposes 0x3B
+([below](#s12a-phase-1-2026-10-31)), for the owner to decide.
 
 | # | Area | What is missing or in conflict | Proposal | Why |
 | --- | --- | --- | --- | --- |
@@ -1561,6 +1566,229 @@ lane was built again with `ctest`, `marvel8_mp.py`, the oracle with
 counts, JIT_VERIFY 0 mismatches), and the ES47 alone passed
 `boards_check.sh` and its `init` check, its `--diff` against main the
 same (`lab/runs/ev8-s11b-proof-final/`, `boards-ev8-s11b-es47`).
+
+## S12a, phase 1 (2026-10-31)
+
+The PALcode of section 3, the first of two phases: `firmware/ev8/pal.c`
+and `firmware/ev8/layout.h`, nada assembler source, and
+`firmware/ev8/build.py`, which assembles them and writes the
+`rom.decompressed` a machine in 21464 mode starts from (N27, N28). Phase 1
+is the reset, the parking and start of TPUs, the TB fills, entMM and the
+interprocessor interrupt, and the CALL_PALs below; phase 2, the rest of
+3.1 and 3.2, follows the owner's checkpoint.
+
+**How it is assembled** (3.5):
+
+- nada main 9152b521, the copy in `lab/tools/nada/`, run as `nada -t
+  alpha-none -mcpu=ev8 -mpal -n -f flat -B 0xfffffffffffffff0`. A flat
+  image starts with nada's `br $31, _start` padded to 16 bytes, and
+  `.align` counts from the code after it: linked 16 bytes below PAL_BASE,
+  every label is its physical address and every `.align` is absolute, and
+  build.py drops the 16 bytes **[decision]**.
+- Every form of the agreement assembles, `$s0` and `$s1` in every position
+  included. One it implies does not: nada takes only the bare `ret`
+  (`ret $31, ($ra), 1`), not RET through another register, and RET is the
+  21464's PALmode exit [IDS p. 573]; a JMP would leave PALmode the same way
+  under N2 but needs an IFETCHB after it (Restriction 14). The PALcode
+  writes RET $31, (S1) and RET $31, (S0) as `.long` words, which build.py
+  checks against `test/cpu/alpha_asm.py`'s `ret()`.
+- A conditional branch reaches only a label of its own asm text (nada's
+  rule), so the entries' text uses two near trampolines.
+- Each entry and CALL_PAL slot starts with `lda $31, offset($31)`, a no-op
+  naming its own offset, and build.py finds each at its offset: the
+  layout's proof **[decision]**.
+
+**The layout** (N28, `layout.h`) **[decision]**: the PALcode's text from 0
+to 0x7FFF (the entries, their bodies from 0x1000, the CALL_PAL slots,
+theirs from 0x4000); data the TPUs share at 0x8000 (unused in phase 1);
+the impure areas at 0xA000 + WHAMI x 0x200, room for 32; the HWRPB at
+0x10000, built by the console, with its per-CPU slots at the offset and
+size it gives; the console at 0x20000, entered at its first instruction
+through its KSEG address. The PALcode knows the HWRPB by that address only.
+
+**What it does**, by the section it implements:
+
+- **Reset** (3.2). Every TPU takes WHAMI = CPU_BASE x 4 + TPU_ID (N25),
+  clears its impure area and puts its PA in PAL_TEMP1, writes the IPL table
+  there, then sets I_CTL and M_CTL (SPE52 and SPE43, 43-bit VA, 8 KB
+  pages), CM kernel with both CONSOLE bits clear and IER_CM 0 (IPL 7),
+  I_PCTX and M_PCTX with TPU_GRP = TPU_ID and ASN 0, FP enabled for the
+  console **[decision]**, ITB_IM and DTB_IM mode 01 and IC_FLUSH (a reused
+  group is flushed [IDS p. 311]), CC enabled with offset and count 0, and
+  QUIESCE_TIMEOUT's WATCH_EN with the reset TIMEOUT. R_INT_MASK[t] gets the
+  TPU's interprocessor bit, the one source phase 1 takes **[decision,
+  phase 1]**. Processor 0 (PID 0, TPU 0) is the console's **[decision]**:
+  it goes to the console in kernel mode at IPL 7 with a0 = 0 (power-up) and
+  a1 = its WHAMI **[decision]**, and the console sets its own stack. Every
+  other TPU parks.
+- **Parking and the start** (N17, 3.4). LDQ_ARM on the HWRPB's RXRDY
+  through KSEG, the TPU's bit tested, QUIESCE, and again: any store to the
+  line wakes it to look. With its bit set it acts as the ARM's console
+  secondary [ARM pp. 693-694, 725-726]: it reads RXLEN and the RX buffer,
+  clears its RXRDY bit with LDQ_L/STQ_C through KSEG (the bitmask is
+  shared), and for "START\r\n" (RXLEN 7) with CV set in its slot it sets
+  BIP and clears RC, writes the halt PCBB (the slot's HWPCB) and zeroes the
+  halt PC, PS and R25-R27, loads the HWPCB (KSP into SP, USP, PTBR, the
+  process cycle count as CC<OFFSET>, the ASN, UNIQUE, FEN) with PCBB the
+  slot, flushes its group's TB entries and the I-cache, loads HWRPB[120]
+  into VPTE_BASE, sets MCES 8 and IPL 7 [Table 27-9, ARM p. 720], R27 the
+  restart data and R26 and R25 zero (R25 by a legacy CMOV, the one way to it
+  in PALmode [IDS p. 580]), and RETs to CPU_restart. Any other command, or
+  CV clear, is ignored and the TPU parks again **[decision]**. The ASN is
+  the HWPCB's **[decision]**: Table 27-9 says zero, swppal's Table 27-3 the
+  PCB's [ARM p. 704], and Linux writes 0 there.
+- **DTBM_SINGLE** and _CONS (3.2). S0 = VA_FORM, `HW_LD/PTE` into S1; with
+  VALID clear entMM, translation not valid, the cause M_STAT<WR>
+  (Restriction 9); else the IDS's DTB writer block with its read and write
+  classes [IDS p. 576], aligned to a fetch block with ALIGN_NOP in slot 7
+  (Restrictions 4 to 8), and RET through DTBMS_RET_ADDR, read at the
+  blocking index 0xA7 **[inference]**.
+- **A DTB miss in PALmode halts the TPU**, kernel stack not valid (reason
+  2) **[decision, phase 1]**. The flows keep live values in S0 and S1,
+  which the miss flow uses; the PALcode's own virtual accesses (the kernel
+  stack, RXRDY) are KSEG addresses, and so are Linux's kernel stacks. The
+  ARM halts on a fault at the kernel stack [ARM p. 607]; halting on a mere
+  miss is this PALcode's restriction, which phase 2 can lift by keeping S0
+  in PAL_TEMP2 across the fill.
+- **DTBM_DOUBLE** and _ALT, pulled forward from phase 2, since the single
+  miss cannot work without them. The miss flows put the PTE's VA in S0 and
+  load into S1, so the double miss finds the VA intact in S0 **[decision]**:
+  it walks level 1 and level 2 physically from PTBR with the indexes
+  VPTE<32:23> and VPTE<22:13> (43-bit VA, 8 KB pages), writes the level 2
+  PTE as the entry of the page of level 3 PTEs (valid level 1 and 2 PTEs
+  allow kernel reads [ARM p. 582]), and RETs to the `HW_LD/PTE` at
+  EXC_ADDR. An invalid level 1 or level 2 PTE, or a valid level 2 PTE
+  without KRE, is entMM for the access that missed, ACV with KRE clear and
+  TNV with it set [ARM p. 594]; the access was an instruction fetch when
+  the `HW_LD/PTE` is ITB_MISS's, in the 0x580 slot (0x880 branches there)
+  **[decision]**.
+- **ITB_MISS** and _CONS (3.2). EXC_ADDR into PAL_TEMP2 and IVA_FORM into
+  S0 before the `HW_LD/PTE`, because a double miss rewrites EXC_ADDR and
+  IVA_FORM is derived from it [IDS pp. 497, 633] **[inference]**. VALID and
+  FOE are checked here, the ITB having neither [IDS pp. 495-496]: entMM,
+  TNV or fault on execute (3), cause -1 [ARM p. 593]; else ITB_TAG,
+  ITB_PTE, IFETCHB and RET to the instruction.
+- **INTERRUPT**, phase 1. ISUM's EI3 with this TPU's bit in its chip's
+  R_INT_STAT: the bit written with one to clear it (N22), then entInt type
+  0 at IPL 5 [ARM p. 605]. Any other halts the TPU (0x10680) until phase 2.
+- **Entering the OS** [ARM pp. 601-607]. One flow takes the entry, its a0
+  to a2, the frame's PC and the new IPL (or the same one): from user mode
+  USP is kept and SP becomes KSP; CM becomes kernel before the frame's
+  stores; the frame holds PS, PC, GP, a0, a1, a2; PS becomes kernel at the
+  IPL and IER_CM the IPL table's; GP is KGP; the entry's address goes with
+  <1:0> cleared, so that no value written by wrent enters PALmode
+  **[decision]**.
+- **The CALL_PALs**: halt, wripir, wrval, rdval, wrent, swpipl, rdps and
+  whami, as 3.1 has them, and rti and wrkgp, pulled forward from phase 2 so
+  that the entries can be returned from and their GP checked. wripir
+  writes 1 << (a0 & 3) to R_INT_REQ of PID a0 >> 2 at ((~PID << 15 |
+  0x7FFC) << 20) & (2^48 - 1), which is ipe8(PID) | 0x7FFC << 20, after an
+  MB **[decision]**. swpipl writes IER_CM from the IPL table (3.1). wrent
+  ignores a1 above 5 [ARM p. 568]. rti [ARM p. 559] clears the lock flag
+  with a STQ_C to a quadword of the TPU's impure area **[decision]**,
+  clears the popped PC's <1:0> **[decision]**, and writes IER_CM, mode and
+  enables, last, after the frame's loads. halt writes the TPU's slot when
+  the HWRPB carries its id and a slot for the TPU **[decision]**: PCBB, the
+  PC after the CALL_PAL **[decision]**, PS, R25 to R27 (R25 read as operand
+  B, the architectural register) and reason 5 [ARM pp. 634-635]; then IPL
+  7 in kernel mode, and processor 0 re-enters the console with a0 = the
+  reason while any other parks.
+- **MT_FPCR**: the IDS's own flow [IDS p. 581].
+- **Every other entry and CALL_PAL** halts its TPU with reason 0x10000 |
+  its offset, an implementation-specific code [ARM p. 635] **[decision,
+  phase 1]**.
+- **The restrictions** [IDS pp. 575-582]: an IFETCHB after a flow's last
+  IPR write (1) and between writes to one Ibox group (2), Mbox IPRs written
+  twice in a row (3), the writer block (4 to 8), VALID checked (9), TAG
+  before PTE (10), no PALmode JMP (14), and an IFETCHB in a flow that reads
+  DTBMS_RET_ADDR outside the writer block (6).
+
+**Size**: 1207 instructions in 0x4090 bytes, about 630 of them phase 1's
+stubs (five in each untaken CALL_PAL slot, three in each untaken entry),
+so about 570 do the work; 3.7 guessed 2000 to 3000 for the whole.
+
+**The test**: `test/cpu/pal8_test.py` builds the PALcode with
+`build.py`, puts a test program in the console's place with the page
+tables, the HWRPB and the pages it maps, and boots the ES47 in 21464 mode
+(2 chips of 4 `ev8n` TPUs), its output on the CMM's terminal. 1054
+results, written from the ARM's Alpha Linux chapters and the IDS: the
+console's entry; each CALL_PAL against its ARM description; a wripir to
+itself pending in R_INT_STAT at IPL 7 and 5 and taken at IPL 4, entInt
+type 0 at IPL 5 with the frame and GP, and rti restoring a0 to a2, GP and
+the PS; the start of each secondary as Linux's `secondary_cpu_start` does
+it, with R27, R26, R25, SP, PS, FEN, the process cycle count; on each
+secondary a load, a store and a call through the hand-built three-level
+table with Linux's self-map at VPTB 0xFFFFFFFE00000000, and entMM for ten
+faults (an invalid level 3 PTE on a load, a store and a fetch, FOE,
+invalid level 2 PTEs with KRE clear and set, the double miss of a fetch,
+an invalid level 1 PTE, a level 2 PTE without KRE, a load from user mode
+after rti into a user page whose data page it filled), each with VA,
+MMCSR, cause, the frame's PC, PS, GP and a0 to a2, and rti's return; a
+wripir to each secondary in turn waking it alone from QUIESCE at IPL 0;
+each secondary's halt in its slot and its parking, one started again from
+there; processor 0's halt back to the console with a0 = 5; and each TPU's
+impure area (the white box: WHAMI, its register window ipe8(PID), the
+HWPCB's fields).
+
+**The proofs**, with main's binaries at 4b90085 (no `src/` change):
+PASS 1054 on the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64
+lanes; 25 of 25 on the JIT, 10 of 10 on the interpreter and on x86-64; 3
+loops of 30 and then 6 loops of 25 at once on the JIT, 240 of 240. A first
+concurrent run failed 10 of 90 on the test's reads of the R_INT_MASKs,
+made before a TPU the host ran late had taken its reset; they are now made
+at the end. Made wrong on purpose in ten ways in a scratch copy (a wrong
+level 2 index in the double miss, no FOE check, IPL 5 enabling EI3, the
+next TPU's IPI bit, no kernel stack from user mode, rti not restoring a0,
+BIP not set, no halt record, the IPI bit not cleared, ACV and TNV swapped)
+the test fails each time, at the results that name the fault
+(`lab/runs/ev8-s12a-status.md`).
+
+**No emulator problem** was found: every flow ran as the IDS describes on
+the `ev8n` row, on the four lanes.
+
+**N8's call, proposed** (for the owner, not implemented): CALL_PAL
+**0x3B**, privileged, `v0 <- VCTL; VCTL<VEN> <- a0<0>`, t0 and t8 to t11
+UNPREDICTABLE, as for the other calls. Why:
+
+- 0x3B is free in the three PALcode tables of the ARM, OpenVMS, Tru64 UNIX
+  and Alpha Linux [ARM pp. 798-801], in Linux's `pal.h` (whose own
+  additions are 0x29, 0x2E and 0xBE), and in qemu-palcode, which sends it
+  to OPCDEC.
+- It is the one free code in 0x38 to 0x3F, the range the ARM reserves "for
+  processor implementation-specific PALcode instructions" [ARM p. 799],
+  and VCTL is the 21464's alone.
+- It is privileged (0x00 to 0x3F), so from user mode it is OPCDEC (1.5)
+  and only the kernel sets VEN, as [ev8-isa.md](ev8-isa.md) section 2 has
+  it.
+- Returning the old value makes it a swap, as swpipl is: the lazy enable
+  of [ev8-isa.md](ev8-isa.md) section 5 reads and sets VEN in one call, and
+  an OS keeping VEN per thread restores it with the same call.
+- The others considered: 0x2C or 0x2F, free in the three tables but among
+  the codes the ARM reserves to Compaq; a cserve function, which the ARM
+  calls "not intended for operating system use" [ARM p. 553]; a bit of the
+  HWPCB's flags loaded by swpctx, against section 5's "PALcode saves
+  nothing; SWPCTX leaves VEN as the kernel set it".
+
+**Phase 2**, each part's tests written from the ARM and the IDS before
+the code, in `pal8_test.py`:
+
+- The rest of 3.1: swpctx (its load half is the start's), tbi, imb, wrfen
+  and clrfen, wrvptptr, wrusp and rdusp, rdunique and wrunique, retsys,
+  callsys, bpt, bugchk and gentrap (entIF), draina, cflush, swppal (N24),
+  wrperfmon (0), rdmces and wrmces, wtint (N26), cserve 0x48 and 0x49 (the
+  TOY through the CMM's byte window, under a GIO lock word in the shared
+  data page, GIO_CNFG's divisor written first), and the N8 call once
+  decided.
+- The rest of 3.2: DFAULT, IACV and BAD_JUMP_IVA (entMM, MMCSR from
+  M_STAT), UNALIGN (entUna), OPCDEC and FEN (entIF types 4 and 3), ARITH
+  (entArith with EXC_SUM's bits and the register mask), the entries never
+  raised halting with a message on the CMM's terminal.
+- The interrupt entry's other sources: the timer (type 1), the queue (type
+  3, the vector Linux decodes from the IID), halt and GIO; R_INT_MASK's
+  full set at reset.
+- The HWRPB slot fields 3.3 gives the PALcode, the kernel stack's checks,
+  and a DTB miss in PALmode taken rather than halting, if the owner wants
+  it.
 
 ## Findings
 

@@ -524,6 +524,20 @@ the character), which follows the host's clock while the processor runs
 interval timer"): a bound in loop turns failed on a loaded host, where a
 woken TPU was run after it ran out.
 
+**The EV8 PALcode.** `test/cpu/pal8_test.py <alphabox-binary> [label]
+[--port N] [--nada PATH]` builds the Alphabox PALcode for the native 21464
+(`firmware/ev8/build.py`, which runs nada: `lab/tools/nada/nada` by
+default, or `NADA`) and boots it on the ES47 in 21464 mode (2 chips of 4
+`ev8n` TPUs) with a test program in the console's place, its output on the
+CMM's terminal. It checks the reset and parking of every TPU, the start of
+each secondary through the HWRPB's RXRDY as Linux starts one, the DTB and
+ITB fills through the virtual page table and the double miss, entMM for
+ten faults (one from user mode), entInt for interprocessor interrupts, the
+CALL_PALs of S12a's phase 1 against the ARM, the halts and each TPU's
+impure area ([ev8-native.md](platforms/ev8-native.md), "S12a"). About 1050
+results, under a second; `firmware/ev8/build.py` alone writes the
+`rom.decompressed` into `lab/firmware-ev8/`.
+
 **The EV8's 1C SIMD set and paired single.** Group `simd`
 (`test/cpu/simd_cases.py`) checks every row of
 [ev8-isa.md](platforms/ev8-isa.md) 3.3 on the rows with `CPU_EXT_EV8`, in
