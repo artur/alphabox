@@ -30,7 +30,7 @@
  *
  *   0x000000  the PALcode, PAL_BASE 0: entries 0x000-0xF80, CALL_PAL
  *             slots 0x2000-0x3FC0, the flows' bodies in between and after
- *   0x008000  PALcode data shared by every TPU (unused in S12a phase 1)
+ *   0x008000  PALcode data shared by every TPU: the GIO lock words
  *   0x00A000  the impure areas, one per TPU, indexed by WHAMI (N25)
  *   0x010000  the HWRPB, built by the console; its per-CPU slots after it
  *   0x020000  the console, entered at its first instruction
@@ -90,9 +90,28 @@
 #define PCB_UNIQUE 0x20
 #define PCB_FLAGS 0x28
 
-/* Halt reasons [ARM p. 635]; 0x10000 | the PALcode offset: an entry or
-   CALL_PAL this PALcode does not take yet [decision, implementation
+/* The PALcode's own fields of a slot [ARM pp. 632-633], written at a
+   START: its memory (text and shared data) and scratch (the impure areas),
+   and its revision: <63:48> the processors that may share it, <47:32>
+   compatibility 1, <23:16> variation 2 (Tru64 UNIX and Alpha Linux [ARM
+   p. 808]), major 1, minor 0 [decision] */
+#define SLOT_PAL_MEM_LEN 0x88
+#define SLOT_PAL_SCR_LEN 0x90
+#define SLOT_PAL_MEM_PA 0x98
+#define SLOT_PAL_SCR_PA 0xa0
+#define SLOT_PAL_REV 0xa8
+#define PAL_MEM_PA 0x0
+#define PAL_MEM_LEN 0xa000
+#define PAL_SCR_PA 0xa000
+#define PAL_SCR_LEN 0x4000
+#define PAL_REVISION 0x0020000100020100
+#define FLAG_OH 0x10
+#define FLAG_PALOK 0x1c0 /* PL, PMV, PV */
+
+/* Halt reasons [ARM p. 635]; 0x10000 | the PALcode offset: an entry
+   never raised, or a fault inside the PALcode [decision, implementation
    specific] */
+#define HALT_OPERATOR 1
 #define HALT_KSNV 2
 #define HALT_CALLPAL 5
 #define HALT_UNIMPL 0x10000
@@ -100,8 +119,32 @@
 /* The Rbox registers in a chip's window (ev8-native.md 2.3, N22) */
 #define R_INT_STAT 0x50
 #define R_INT_REQ 0x70
+#define R_INT_QUE 0x80
 #define R_INT_MASK_TPU 0x3f0000
 #define CSR_WINDOW 0x7ffc /* << 20 */
+
+/* GIO (2.5, N23) and the CMM's far-side registers (marvel.md, M4): the
+   byte window's status (GO, the lanes), data and address, the terminal */
+#define GIO_CNFG 0x100
+#define GIO_DATA 0x110
+#define GIO_ADDR 0x120
+#define CMM_STATUS 0
+#define CMM_DATA 1
+#define CMM_ADDRESS 2
+#define CMM_TX 4
+#define CMM_GO 1
+#define CMM_AREA 0x40000      /* + (PID & 1) x 0x6000 */
+#define CMM_TOY 0x1aac        /* + index, 0-11: the MC146818's registers */
+#define CMM_TOY_NV 0x4b8c     /* + index, 12-0x10b: 0x4b98 + (index - 12) */
+#define TOY_LAST 0x10b
+/* One GIO lock word per PID (2.5, part of N22): the console takes it too */
+#define PAL_GIO_LOCK 0x8100   /* PAL_DATA + 0x100, + PID x 0x40 */
+#define KSEG_GIO_LOCK 0xfffffc0000008100
+
+/* An IO7 port's registers: ipe8(PE) | (~port & 7) << 32 | 0xFF800000, and
+   its EOI_DAT (Linux's io7_ioport_csrs) */
+#define IO7_EOI_HI 0xff8      /* << 20 */
+#define IO7_EOI_DAT 0x2400
 
 /* The impure area of a TPU (3.3): its PA is in PAL_TEMP1 */
 #define IMP_ENTINT 0x000 /* wrent's a1 x 8 [ARM p. 568] */
@@ -134,13 +177,28 @@
 #define IMP_INT_R1 0x0d8
 #define IMP_DM_R1 0x0e0
 #define IMP_DM_R2 0x0e8
+#define IMP_INT_R2 0x0f0
+#define IMP_RET 0x0f8    /* a CALL_PAL's return PC, kept across calls */
 #define IMP_IERTAB 0x100 /* IER_CM for each IPL, 8 quadwords */
+#define IMP_EOI 0x140    /* the IID in service, <32> valid */
+#define IMP_E_R1 0x148   /* do_eoi's saves */
+#define IMP_E_R2 0x150
+#define IMP_E_R16 0x158
+#define IMP_T1 0x160     /* scratch */
+#define IMP_T2 0x168
+#define IMP_T3 0x170
+#define IMP_T4 0x178
 #define IMP_CPCB 0x180   /* the console's PCB, 16 quadwords */
 
 /* post's selector: <7:0> the IMP_ENT* offset, <15:8> the new IPL + 1
    (0: unchanged) */
+#define SEL_ARITH 0x008
 #define SEL_MM 0x010
-#define SEL_IPI 0x600 /* entInt, IPL 5 [ARM p. 605] */
+#define SEL_IF 0x018
+#define SEL_UNA 0x020
+#define SEL_SYS 0x028
+#define SEL_IPI 0x600   /* entInt, IPL 5: interprocessor and clock */
+#define SEL_DEVICE 0x500 /* entInt, IPL 4: a device [ARM p. 605; 3.1] */
 
 /* IER_CM's EIEN <38:33> for each IPL (3.1, part of N22): EI1 and EI4
    below 4, EI2 and EI3 below 5, EI0 below 6, EI5 below 7 */
@@ -152,5 +210,6 @@
 /* I_CTL and M_CTL at reset: 43-bit VA, 8 KB pages, SPE52 and SPE43 */
 #define CTL_RESET 0x6000000
 #define QT_PARK 0x2802 /* QUIESCE_TIMEOUT: WATCH_EN, the reset TIMEOUT */
+#define QT_WTINT 0xffff3 /* WATCH_EN, TIMEOUT_EN, the largest TIMEOUT */
 
 #endif

@@ -37,7 +37,7 @@ TPU then resets at PAL_BASE + 0xB00. Nothing is committed but the sources;
 the default output is <ALPHABOX_WORK or lab>/firmware-ev8/rom.decompressed.
 
 nada assembles only the bare `ret` (`ret $31, ($ra), 1`), not RET through
-another register: the PALcode's RET $31, (S1) and (S0) are words, which
+another register: the PALcode's RET $31, (S1), (S0) and (R6) are words, which
 this script checks against test/cpu/alpha_asm.py's ret() (S12a, a form the
 agreement of ev8-native.md 3.5 implies and nada does not take).
 """
@@ -105,14 +105,29 @@ def check_layout(L):
     need(L["HWRPB_ID_VALUE"] == int.from_bytes(b"HWRPB\0\0\0", "little"),
          "HWRPB_ID_VALUE")
     need(L["SEL_IPI"] == (5 + 1) << 8 | L["IMP_ENTINT"], "SEL_IPI")
-    need(L["SEL_MM"] == L["IMP_ENTMM"], "SEL_MM")
+    need(L["SEL_DEVICE"] == (4 + 1) << 8 | L["IMP_ENTINT"], "SEL_DEVICE")
+    for sel, ent in (("SEL_ARITH", "IMP_ENTARITH"), ("SEL_MM", "IMP_ENTMM"),
+                     ("SEL_IF", "IMP_ENTIF"), ("SEL_UNA", "IMP_ENTUNA"),
+                     ("SEL_SYS", "IMP_ENTSYS")):
+        need(L[sel] == L[ent], sel)
+    need(L["IMP_CPCB"] + 16 * 8 <= L["IMPURE_SIZE"], "IMP_CPCB")
+    need(L["KSEG_GIO_LOCK"] == L["KSEG"] | L["PAL_GIO_LOCK"], "KSEG_GIO_LOCK")
+    need(L["PAL_DATA"] <= L["PAL_GIO_LOCK"] and
+         L["PAL_GIO_LOCK"] + 0x40 * (L["MAX_WHAMI"] // 4) <= L["PAL_IMPURE"],
+         "PAL_GIO_LOCK")
+    need(L["CMM_TOY_NV"] == 0x4b98 - 12, "CMM_TOY_NV")
+    need(L["PAL_MEM_PA"] == L["PAL_BASE"] and
+         L["PAL_MEM_LEN"] == L["PAL_IMPURE"] - L["PAL_BASE"], "PAL_MEM_LEN")
+    need(L["PAL_SCR_PA"] == L["PAL_IMPURE"] and
+         L["PAL_SCR_LEN"] == L["MAX_WHAMI"] * L["IMPURE_SIZE"], "PAL_SCR_LEN")
+    need(L["FLAG_PALOK"] == 0x1c0, "FLAG_PALOK")
 
 
 def check_ret_words():
-    """pal.c's RET words are alpha_asm's RET $31, (S1) and (S0)."""
+    """pal.c's RET words are alpha_asm's RET $31, (S1), (S0) and (R6)."""
     with open(SOURCE) as f:
         src = f.read()
-    for name, rb in (("RET_S1", A.S1B), ("RET_S0", A.S0B)):
+    for name, rb in (("RET_S1", A.S1B), ("RET_S0", A.S0B), ("RET_R6", 6)):
         m = re.search(r'#define %s "\s*\.long (0x[0-9a-fA-F]+)' % name, src)
         if not m or int(m.group(1), 16) != A.ret(rb):
             raise SystemExit("pal.c: %s is not RET $31, ($%d) (%#x)"
