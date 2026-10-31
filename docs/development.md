@@ -562,7 +562,7 @@ the console started, every secondary started as `smp.c` starts it, and the
 halt back to the console's prompt, where `show` and `boot` are typed. More
 runs: `auto_action = "halt"` with a kernel of physical program headers,
 no kernel, a GS1280 of 16 chips (refused by the console: the PALcode's 32
-processor numbers), and six configurations the emulator refuses
+processor numbers), and nine configurations the emulator refuses
 ([ev8-native.md](platforms/ev8-native.md), S12b). About 3600 results, a
 few seconds a run.
 

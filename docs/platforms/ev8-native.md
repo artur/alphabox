@@ -2087,7 +2087,9 @@ reads and enters the kernel. The emulator's part is
   0x1010000, `KERNEL_START_PHYS` + 0x10000, setup.h's START_ADDR
   **[inference]**. A segment must lie in PID 0's memory above the
   console's 2 MB and clear of Linux's zero page, else the kernel is
-  refused with the segment's address. The entry is the KSEG address of
+  refused with the segment's address; every range is checked so that no
+  sum of the file's values can wrap (the coordinator's review found three
+  that could, fixed in their own commit). The entry is the KSEG address of
   `e_entry`'s physical address, `e_entry` taken as virtual (vmlinux) or,
   when the program headers' physical addresses differ from their virtual
   ones, as physical (nada writes it so with `-B vaddr=paddr`)
@@ -2266,8 +2268,9 @@ command line, then `show`, `boot` and an unknown word at the prompt; the
 same with `auto_action = "halt"` and a kernel of physical program headers,
 no initrd and no command line, booted by typing `boot`; the ES80 and the
 GS1280, 8 chips of 4 TPUs each (31 secondaries); no kernel; a GS1280 of 16
-chips (the console's refusal); six configurations the emulator refuses.
-3603 results. Written before the console, the test's first full run on
+chips (the console's refusal); nine configurations the emulator refuses,
+three of them malformed ELFs whose sizes or offsets would wrap a sum
+past 2^64. 3606 results. Written before the console, the test's first full run on
 the ES47 passed; two of its own expectations were then corrected: a race
 (the kernel read a secondary's BIP after the secondary's halt had cleared
 it again; the secondary now notes its flags at its start) and the
@@ -2276,19 +2279,19 @@ p. 726], where the first expectation kept smp.c's RC. A check of the
 ticks' spacing failed 2 of 6 concurrent runs on JIT_VERIFY (a loaded host
 bunches the ticks) and became a read of each chip's ITV.
 
-**The proofs**, the emulator's part built on the four lanes
-(`ctest` 23 of 23 on the interpreter and JIT_VERIFY lanes): PASS 3603 on
-the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64 lanes; 20 of
-20 again on the JIT; four concurrent loops, 10 of 10 on the JIT and on
-x86-64, 6 of 6 on the interpreter and on JIT_VERIFY. `pal8_test.py` (2693)
-on the four lanes and `marvel8_mp.py` (1034) and the CPU oracle with
-`--cpu ev8n` on the JIT pass; before the last formatting of `src/`
-(whitespace and the allow-list's packing) the oracle on `ev68cb`, `ev7`,
-`ev7z`, `ev8` and `ev8n`, `tarantula_vv.py` and `tarantula_mem.py` with
+**The proofs**, with the emulator's part and its range-check fix built on
+the four lanes (`ctest` 23 of 23 on the interpreter and JIT_VERIFY lanes):
+PASS 3606 on the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64
+lanes; before the fix, 3603 again 20 of 20 on the JIT and in four
+concurrent loops, 10 of 10 on the JIT and on x86-64, 6 of 6 on the
+interpreter and on JIT_VERIFY. `pal8_test.py` (2693) on the four lanes;
+on the JIT, with the final binaries, the CPU oracle on `ev68cb`, `ev7`,
+`ev7z` (PASS 20910, KNOWN 61), `ev8` (63986, KNOWN 73) and `ev8n` (67245,
+KNOWN 70), FAIL 0 each, `tarantula_vv.py` and `tarantula_mem.py` with
 `--cpu ev8n`, `tpu_mp.py`, `srm_run.sh` (diff clean, 0 mismatches) and
-`boards_check.sh` on the ES47, ES80 and GS1280 (the same as the S12a
-gate's run) passed on the JIT. Made wrong on purpose in 30 ways in
-scratch copies of `console.c` (the HWRPB's and the memory descriptors'
+`boards_check.sh` on the ES47, ES80 and GS1280 and their `init` checks
+(the same as the S12a gate's run), and `marvel8_mp.py` (1034). Made wrong
+on purpose in 30 ways in scratch copies of `console.c` (the HWRPB's and the memory descriptors'
 checksums, a secondary's PV flag, PID 1's memory at n << 35, a GCT node's
 magic and id, TERM_TYPE graphics, the CRB's dispatch VA, the map's page
 count, GETC's not-ready status, PUTS's and GET_ENV's statuses, an unknown
