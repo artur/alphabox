@@ -15,7 +15,9 @@ done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, phase
 1 done 2026-10-31 ([below](#s12a-phase-1-2026-10-31)); at the checkpoint
 the same day the owner decided N8's call (CALL_PAL 0x3B) and started
 phase 2, done the same day ([below](#s12a-phase-2-2026-10-31)): every
-CALL_PAL and entry of section 3 is in. The owner's decisions that
+CALL_PAL and entry of section 3 is in. S12b, the console of section 4
+with the emulator's direct load of a kernel (N29), done the same day
+([below](#s12b-2026-10-31)). The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -2046,6 +2048,283 @@ Linux cost the host noticeably is S13's to measure.
   and the jump to the kernel in kernel mode; Linux calls wrent, wrkgp and
   swpipl itself (`head.S`, `setup.c`).
 
+## S12b (2026-10-31)
+
+The minimal console of section 4, way B (N29): the emulator loads a
+kernel, an initrd and a command line, and the console builds what Linux
+reads and enters the kernel. The emulator's part is
+`src/chipsets/marvel/DirectBoot.{hpp,cpp}` and the keys; the console is
+`firmware/ev8/console.c`, C compiled by nada, with its constants in
+`layout.h` and its build in `build.py`; the test is
+`test/cpu/console8_test.py` with a test kernel, `test/cpu/console8_kernel.c`.
+
+**The emulator** (the system block's keys, 21464 mode only):
+
+- `kernel`, `initrd`, `cmdline`, and `auto_action` (`boot`, the default,
+  or `halt`) are in the system block's allow-list; every machine whose
+  chipset does not take a kernel (`CChipset::loads_kernel`, true only for
+  a Marvel board in 21464 mode) refuses them at configuration, naming the
+  key and the board. `auto_action` is a fourth key **[decision]**: the
+  console must either boot at once or wait, and SRM's own choice is its
+  AUTO_ACTION variable [ARM p. 642], whose value GET_ENV returns.
+- **The boot block** **[decision]**: a page of the console's cluster
+  (`BOOT_BLOCK`, PA 0x1FE000) whose magic ("EV8BOOT") and version
+  `build.py` writes into the console's image; at every start (power-up and
+  a system reset, `CMarvel::console_started`) the emulator fills the rest:
+  the cycle counter frequency (processor 0's `speed`), the chips, the TPUs
+  per chip, the memory per PID, which PIDs have an IO7, the board's name,
+  the kernel's entry and extent, the initrd's place and size, the command
+  line and the `auto_action` flag. On a real machine the console would
+  learn the machine from the CMM and load the kernel from a disk (way A);
+  here both come from the emulator. An image without the magic (the
+  tests' own, `pal8_test.py`, `marvel8_mp.py`) is left as it is, and one
+  with a kernel configured is refused: "the boot image has no console".
+- **The ELF loader**: a 64-bit little-endian ELF of `e_machine` 0x9026;
+  each PT_LOAD at its `p_paddr`. A KSEG address (VA<63:41> 0x7FFFFE, VA<40>
+  clear) is the physical address SPE43 maps it to, its low 41 bits; any
+  other below 2^48 is taken as physical. Linux's `vmlinux.lds` gives no
+  `AT()`, so `p_paddr` is `p_vaddr`, 0xFFFFFC0001010000, which is PA
+  0x1010000, `KERNEL_START_PHYS` + 0x10000, setup.h's START_ADDR
+  **[inference]**. A segment must lie in PID 0's memory above the
+  console's 2 MB and clear of Linux's zero page, else the kernel is
+  refused with the segment's address. The entry is the KSEG address of
+  `e_entry`'s physical address, `e_entry` taken as virtual (vmlinux) or,
+  when the program headers' physical addresses differ from their virtual
+  ones, as physical (nada writes it so with `-B vaddr=paddr`)
+  **[decision]**.
+- **The initrd** goes at the top of PID 0's memory, page aligned
+  **[decision]**: Linux takes its first pages right after its `_end`
+  (`callback_init`'s two pages and the console's page tables), so an
+  initrd just above the kernel would be overwritten; at the top
+  `setup_memory` reserves it where it is. A kernel and initrd that leave no
+  room are refused.
+- 357 lines in `src/`, about 225 of them code (4.2 guessed 200);
+  `DirectBoot.cpp` is 234 with its comments. The 21464 reset and every
+  other board are unchanged: without the magic nothing is written.
+
+**The console** (`console.c`, 918 lines, an image of 0x5C28 bytes; 1.5 to
+2.5 k lines were guessed in 4.2):
+
+- **Built** by nada 9152b521 as `nada -t alpha-none -mcpu=ev8
+  -mcmodel=large -n -f flat -B 0xfffffc0000020000`: at its KSEG address,
+  where the PALcode enters it, with the large code model, since the small
+  one forms addresses with LDAH/LDA pairs that reach only the low and the
+  top 2 GB. The flat image starts with nada's `br $31, _start` and holds
+  the data and the zeroed variables; `build.py` checks it ends below
+  `CONSOLE_TOP` (0x80000). nada's C takes no operands in `asm`, so the
+  entry points (the start, the CALL_PALs, the GIO lock, the kernel's entry,
+  the callbacks' doors) are one asm text of labels C calls by BSR.
+- **Its memory** (`layout.h`, all in the first cluster, N28): the HWRPB
+  and its blocks at 0x10000 (S12a's place) up to 0x20000, the console's
+  image 0x20000 to 0x80000, the bootstrap page tables at 0x1E0000, its own
+  stack below 0x1F8000, the kernel's first stack below 0x1FC000, the boot
+  block at 0x1FE000.
+- **Entered** at power-up with a0 0 (S12a's list): it reads the boot
+  block, builds everything below, starts the timer and enters the kernel,
+  or stops at its prompt; entered again (a halt), it reports the halt and
+  gives the prompt. It runs on processor 0 alone, at KSEG addresses only.
+- **The HWRPB** [ARM pp. 618-626], field by field: its PA 0x10000 and
+  "HWRPB"; revision 14, the real Marvel console's (marvel.md)
+  **[decision]**, above Linux's 5 for the DSR; the size of the HWRPB and
+  its blocks; primary 0; page size 8192; 48 PA bits, no extended VA; max
+  ASN 255 [IDS p. 43]; system serial "EV8EM00000" (not "MILO", so
+  `alpha_using_srm`) **[decision]**; system type 39 (ST_DEC_MARVEL), its
+  variation 5, MPCAP and an embedded console [ARM pp. 628-629] and none of
+  the real one's bit 32 (VIRBND, an OpenVMS PALcode's) **[decision]**;
+  revision 0; the interval clock frequency 4096 x hz / ((n + 1) x 2^17)
+  and the cycle counter frequency hz (below); the VPTB 0xFFFFFFFE00000000,
+  Linux's, so `switch_to_system_map` need not move it; the TB hint block
+  at +0x140, eight zero quadwords, as no console through the EV7 had one
+  [ARM p. 629]; a slot per WHAMI, 4 x the chips (N25), 640 bytes each at
+  +0x200; one CTB; the CRB, the memory descriptors and the GCT after
+  them; no CONFIG block; the save, restore and restart fields zero [ARM
+  p. 625]; RXRDY and TXRDY 0 (variation <33> clear: the bitmasks are at
+  +296, where Linux reads them); the checksum; the DSRDB at +0x180.
+- **The DSRDB** as Linux's `dsr_struct` reads it (`platform_string`): SMM
+  0, an empty LURT at +0x18, the system's name at +0x20 after its length:
+  the board's name **[inference]** of the layout from Linux, **[decision]**
+  of the values; the ARM's text layer lacks the DSRDB's figure.
+- **The slots** [ARM pp. 630-639]: zero for a WHAMI with no TPU; else
+  PA, PP, PL, PMV and PV (0x1CC, which `smp.c` counts), the PALcode's
+  fields with S12a's values (the console writes them for every slot at a
+  cold start [ARM p. 637, notes 3 and 4]; the PALcode again at a START),
+  type 18 (D3), variation IEEE and VAX FP and PE for processor 0
+  **[decision]**, revision "B1" and serial "EV8EM000" and the WHAMI
+  (made up, as Alphabox's serials are) **[decision]**, the halt PCBB the
+  slot's HWPCB [ARM p. 634], the first PALcode-available quadword the
+  console's revision and the third (variation 2) the PALcode's [ARM
+  p. 636]. Processor 0's slot adds BIP and CV with RC clear [ARM pp.
+  718-721] and the boot HWPCB: KSP a KSEG stack in the console's cluster,
+  PTBR the level 1 table, FEN set, ASN, PCC and UNIQUE zero (Table 27-10
+  but FEN, which S12a's list asks for) **[decision]**. The ARM's bootstrap
+  stack is virtual, in region 1 [p. 714], and the PALcode halts on a DTB
+  miss in PALmode (S12a), so the boot KSP is a KSEG address
+  **[decision]**; Linux's `head.S` takes its own stack at once. The
+  secondaries' CV is Linux's to set (`smp.c`).
+- **The memory descriptors** [ARM pp. 705-707]: the first 2 MB of PID 0,
+  usage 1 (N28); the rest of PID 0's memory, usage 0; each other PID's
+  memory at N18's place, usage 0; in PFN order, untested, with no bitmaps
+  **[decision]**; the checksum.
+- **The GCT** at `frut_offset`, as `gct.c` walks it from
+  `GCT_NODE_PTR(0)`: a root node (type 1, subtype 1 **[decision]**) whose
+  child is the first of one node per IO7, type 0x0E, subtype 0x2C, id the
+  PID << 8 (`core_marvel.c`), linked by `next`, 'GLXY' in every node,
+  handles the offsets from the table **[decision]**. 4.1's "a header and
+  one node per IO7" needs the header to be a node: `gct6_find_nodes`
+  checks the magic at offset 0 (Findings).
+- **The CTB** [ARM pp. 689-690]: one, type 2 (a serial line), a
+  device-specific part of 0xE0 bytes, zero but for the quadword at +56,
+  which `core_marvel.c` reads as TERM_TYPE (3 graphics): 2 **[inference]**,
+  the ARM's number for a serial line.
+- **The CRB** [ARM pp. 685-689]: DISPATCH and FIXUP by procedure
+  descriptors in the console's data (the kind quadword 0, then the entry),
+  one map entry for the console's pages (0x20000 to 0x80000, 48 pages),
+  which region 0 maps after the HWRPB's. The routines run at KSEG
+  addresses, and so do the entries their descriptors hold **[decision]**:
+  no remapping moves them, provided SPE43 stays on, which our PALcode sets
+  at reset and Linux never changes. So **FIXUP** has nothing to relocate:
+  it notes the new HWRPB address and returns success [ARM p. 680].
+- **The callbacks** [ARM pp. 645-660], entered by the OpenVMS standard
+  (R16 the function, R17 up the arguments, R26 the return, R27 the
+  descriptor), keep R2-R15, R29 and SP: the door saves R2-R8 and R29,
+  nada's code keeps R9-R15 and never names R29. **GETC** reads the CMM's
+  register 0 and, with a character waiting (<8>), register 5: the
+  character with status 000, or 001 when another waits; else 100, not
+  ready [p. 650]. **PUTS** writes every byte to register 4 and returns the
+  count, status 000 [p. 652]. **GET_ENV** [p. 676] knows IDs 1 to 15
+  [pp. 642-644]: AUTO_ACTION "BOOT" or "HALT", BOOT_OSFLAGS and
+  BOOTED_OSFLAGS the command line, BOOT_RESET "OFF", ENABLE_AUDIT "ON",
+  CHAR_SET "0", LANGUAGE "36", TTY_DEV "0", the device, file and dump
+  names and LICENSE empty **[decision]**; the value's bytes with no
+  terminator, 001 when cut short, 110 for any other ID. Every other
+  function returns 110 **[decision]**: RESET_TERM, SET_TERM_INT,
+  SET_TERM_CTL, the generic I/O routines and SET_ENV are not in this
+  console, as N29 has it. Each terminal routine works on the caller's
+  processor through its own chip's GIO port under the chip's lock word,
+  GIO_CNFG's divisor written first if zero, as S12a's PALcode does; the
+  ARM allows the terminal routines on the primary alone [p. 649], and
+  Linux's `srmcons` calls them from any CPU. No lock of the terminal's own
+  (S12a's finding): the console prints from processor 0 alone, and
+  `srmcons` holds `srmcons_callback_lock` around its callbacks.
+- **The bootstrap page tables** [ARM pp. 713-717], 43-bit VA and 8 KB
+  pages: level 1 maps itself at entry 1023 (Linux's VPTB) and at entry 1
+  (the ARM's region 3, 0x200000000, where Linux's `srm_paging_stop` puts
+  the VPTB back before it reloads the console's PCB) **[decision]**, and
+  region 0 from 0x10000000: the HWRPB's pages, then the console's to
+  0x80000, kernel read and write. Regions 1 and 2 are not built
+  **[decision]**: the kernel is in KSEG and Linux reads only INIT_HWRPB
+  through the console's map.
+- **The zero page** (`setup.h`), with a kernel: the command line at
+  ZERO_PGE (PA 0x100A000, below the kernel's text), INITRD_START at +0x100
+  as a KSEG address (`setup_memory` takes `virt_to_phys` of it)
+  **[inference]**, INITRD_SIZE at +0x108.
+- **The interval timer** **[decision]**: the console starts R_INTER_TIM
+  on every chip as it enters the kernel. Linux's Marvel code starts no
+  timer (`marvel_init_rtc` only takes its interrupt) and takes the rate
+  from the HWRPB, as the EV7 console leaves its RBOX_IT running; the rate
+  is the EV7 console's rule (marvel.md, M4): ITV n with n + 1 = ceil(hz /
+  2^27), the fastest not above 1024 Hz, 1017 Hz at 800 MHz. At its prompt
+  the console stops the timers and clears the ticks left pending, so
+  that its WTINT between polls of the terminal sleeps (N26).
+- **The kernel's entry**, S12a's list: MCES 8 (wrmces) and the TB
+  invalidated [ARM p. 720], wrvptptr with Linux's VPTB, swpctx to
+  processor 0's slot (KSP, PTBR, FEN; the console's own PCB, the impure
+  area's, saved), and a jump in kernel mode at IPL 7 with R27 the entry.
+- **The prompt**, `P00>>>` on the CMM's terminal: `boot` (once: after the
+  kernel has run, "reset the machine to load it again" **[decision]**,
+  since its image has changed), `show` (what the console built), `help`.
+  It prints its lines as `%CON8-x-NAME`. A halt comes back with `a0` its
+  reason: `%CON8-I-HALT` with the reason, the slot's halt PC, PS, R25 to
+  R27 and the halt requested in the flags (Linux's poweroff asks 4,
+  "remain halted"), then the prompt. A reboot request (2 or 3) stops at
+  the prompt too **[decision]**: nothing resets the machine from here.
+- **Refused**: a machine of more than 8 chips **[decision]**. The
+  PALcode's impure areas hold 32 processor numbers below the HWRPB
+  (`MAX_WHAMI`, S12a), and WHAMI = PID x 4 + TPU (N25) passes them from
+  the ninth chip on whatever `tpus` is; a GS1280 of 16 chips of 2 TPUs,
+  which the emulator takes (32 processors), has numbers up to 61, whose
+  impure areas fall on the HWRPB. The console says so and stays at its
+  prompt (Findings).
+
+**The test**, written from the Linux sources and the ARM before the
+console: `console8_kernel.c` is a "kernel" that nada links as an ELF where
+vmlinux goes; it reads INIT_HWRPB through the console's map and walks the
+HWRPB as `setup.c`, `smp.c`, `gct.c` and `core_marvel.c` do, calls GETC,
+PUTS and GET_ENV through the CRB as `callback_srm.S` does (with patterns in
+R2-R15 and R29 to see that none changes), calls FIXUP and moves to page
+tables of its own with the CRB's pages at VMALLOC_START and its own PCB as
+`callback_init` and `switch_to_system_map` do, calls the console again
+through the remapped descriptors, takes the timer's interrupts and reads
+each chip's R_INTER_TIM (the ticks' spacing is the host's to keep), starts
+every secondary as `secondary_cpu_start` does (the HWPCB, CPU_restart,
+"START" through RXRDY) and has each swap to its idle PCB, take two ticks
+and halt, and halts as Linux's poweroff does (`srm_paging_stop`, CALL_PAL
+HALT). It prints every value; `console8_test.py` compares them with the
+ARM's and Linux's requirements and S12b's decisions. Runs: the ES47 (2
+chips of 4 TPUs) with a kernel of KSEG program headers, an initrd and a
+command line, then `show`, `boot` and an unknown word at the prompt; the
+same with `auto_action = "halt"` and a kernel of physical program headers,
+no initrd and no command line, booted by typing `boot`; the ES80 and the
+GS1280, 8 chips of 4 TPUs each (31 secondaries); no kernel; a GS1280 of 16
+chips (the console's refusal); six configurations the emulator refuses.
+3603 results. Written before the console, the test's first full run on
+the ES47 passed; two of its own expectations were then corrected: a race
+(the kernel read a secondary's BIP after the secondary's halt had cleared
+it again; the secondary now notes its flags at its start) and the
+PALcode's START, which clears RC as the ARM's console secondary does [ARM
+p. 726], where the first expectation kept smp.c's RC. A check of the
+ticks' spacing failed 2 of 6 concurrent runs on JIT_VERIFY (a loaded host
+bunches the ticks) and became a read of each chip's ITV.
+
+**The proofs**, the emulator's part built on the four lanes
+(`ctest` 23 of 23 on the interpreter and JIT_VERIFY lanes): PASS 3603 on
+the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64 lanes; 20 of
+20 again on the JIT; four concurrent loops, 10 of 10 on the JIT and on
+x86-64, 6 of 6 on the interpreter and on JIT_VERIFY. `pal8_test.py` (2693)
+on the four lanes and `marvel8_mp.py` (1034) and the CPU oracle with
+`--cpu ev8n` on the JIT pass; before the last formatting of `src/`
+(whitespace and the allow-list's packing) the oracle on `ev68cb`, `ev7`,
+`ev7z`, `ev8` and `ev8n`, `tarantula_vv.py` and `tarantula_mem.py` with
+`--cpu ev8n`, `tpu_mp.py`, `srm_run.sh` (diff clean, 0 mismatches) and
+`boards_check.sh` on the ES47, ES80 and GS1280 (the same as the S12a
+gate's run) passed on the JIT. Made wrong on purpose in 30 ways in
+scratch copies of `console.c` (the HWRPB's and the memory descriptors'
+checksums, a secondary's PV flag, PID 1's memory at n << 35, a GCT node's
+magic and id, TERM_TYPE graphics, the CRB's dispatch VA, the map's page
+count, GETC's not-ready status, PUTS's and GET_ENV's statuses, an unknown
+GET_ENV ID recognized, INITRD_START physical, the command line, the timer
+not started, the interval frequency, the VPTB, slot 0's BIP, the dispatch
+door not keeping R2-R8, FIXUP failing, cluster 0's usage, the DSR's name,
+a physical boot KSP, MCES, region 0's pages, the HWRPB's size, the
+secondaries' PALcode fields, the halt report, the TB hint block), the test
+fails each time, at the check that names the fault; a wrong region 0
+beyond the HWRPB's first page fails at the CRB's descriptors read through
+it, the HWRPB fitting in that page.
+
+**nada** did everything the console needed; nothing was worked around.
+Two things to know: the large code model is needed at a KSEG address, and
+with `-B vaddr=paddr` nada writes a physical `e_entry` (GNU ld keeps it
+virtual), which the loader takes.
+
+**Emulator problems**: none found.
+
+**What S13 needs from this console**:
+
+- A kernel at `KERNEL_START_PHYS` 0x1000000 (not the legacy start), the
+  Marvel machine vector (`sys_type` 39 takes `marvel_ev7_mv`; the CPU
+  type 18 is "Unknown" to `cpu_names` and unvalidated by
+  `validate_cc_value`), `CONFIG_SRM_CONSOLE` and `console=srm0`, and the
+  changes of 5.1 (N30's PCI: the console configures no device).
+- The console's routines run at KSEG addresses: SPE43 must stay on in
+  I_CTL and M_CTL, as our PALcode leaves it.
+- Linux uses PID 0's and PID 1's memory only: `setup_memory` limits it to
+  32 GB, and PID 2's starts there (N18).
+- `NR_CPUS` of 32 covers 8 chips of 4 TPUs, the most this console takes;
+  more needs the PALcode's layout changed first (Findings).
+- The timer ticks at 1017 Hz at 800 MHz (HZ 1024), the EV7 console's
+  rule, as on a real ES47.
+- `poweroff` and `reboot` both end at the console's prompt.
+
 ## Findings
 
 On the way, against [ev8.md](ev8.md) and [ev8-isa.md](ev8-isa.md)
@@ -2139,6 +2418,36 @@ S12a (2026-10-31):
   IMB were <61>; the rendered pages put IMB at <32> of the flags
   quadword, in Linux's PCB (+40, PME <62>, FEN <0>, Figure 23-1 [ARM
   p. 596]) as in OpenVMS's HWPCB (+56, Figure 12-1 [p. 388]).
+
+S12b (2026-10-31):
+
+- **4.1's GCT row said "a header and one node per IO7"**: `gct6_find_nodes`
+  checks the magic of the node at `GCT_NODE_PTR(0)`, the table's first
+  bytes, so the table starts with a node, a root, whose child is the first
+  IO7's. Corrected in its own commit.
+- **4.1's command line row said "if the zero page is empty,
+  `callback_getenv`"**: the `setup.c` read here (mainline,
+  `lab/docs-ev7`) takes COMMAND_LINE alone; the GET_ENV fallback is older
+  kernels'. Corrected in its own commit.
+- **More than 8 chips do not fit the PALcode's layout**: its impure areas
+  hold 32 processor numbers (`MAX_WHAMI`) between 0xA000 and the HWRPB at
+  0x10000, and WHAMI = PID x 4 + TPU (N25) reaches 32 at the ninth chip
+  whatever `tpus` is. The emulator takes a GS1280 of up to 16 chips with
+  `tpus` 1 or 2 (32 processors), whose processor numbers go to 61: their
+  TPUs' resets write impure areas over the HWRPB. The console refuses such
+  a machine; taking it needs room for 64 impure areas (the HWRPB moved, or
+  the areas), and Linux `NR_CPUS` 64 (5.1). For the owner.
+- **The ARM's bootstrap stack is virtual** (region 1 [p. 714]), and our
+  PALcode halts on a DTB miss in PALmode (S12a), so a fault pushed onto
+  it would halt the processor: the console's boot KSP is a KSEG address.
+  Linux never notices (`head.S` takes its own stack at once).
+- **Linux's `srm_paging_stop` puts the VPTB at 0x200000000** (level 1
+  entry 1, the ARM's region 3 for 8 KB pages) and reloads the console's
+  PCB before its halt: a console whose level 1 table maps itself only at
+  entry 1023 would take a double miss there. Ours maps itself at both.
+- **The console terminal routines are the primary's alone** [ARM p. 649],
+  and Linux's `srmcons` calls them from any CPU. Ours work on any: each
+  takes its own chip's GIO port and lock word.
 
 ## Rules
 

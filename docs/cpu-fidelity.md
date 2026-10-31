@@ -725,7 +725,8 @@ are untouched by all of it.
 | The EV7 console's GIO lock (0x80000) | not decoded | 2.5: our PALcode's lock is a word in memory |
 | The management side's interrupt | R_INT_STAT<13> | N22 |
 | Halts, GIO_HINT, errors, performance | <11:8> set by R_INT_REQ only; <14> to <17> never raised | nothing modelled raises them (N22's table: "not raised") |
-| Start | no console: a boot image given as `rom.decompressed`, refused without one; every TPU of every chip at its PAL_BASE + 0xB00 | N17; the refusal **[decision]**: the EV7 console's decompressor would run on the 21464 |
+| Start | no EV7 console: a boot image given as `rom.decompressed`, refused without one; every TPU of every chip at its PAL_BASE + 0xB00 | N17; the refusal **[decision]**: the EV7 console's decompressor would run on the 21464 |
+| A kernel for the console | with `firmware/ev8`'s console in the image (its boot block's magic), the emulator fills the block at every start (the cycle frequency, chips, TPUs, memory per PID, IO7s, the board's name) and loads the system block's `kernel` (an ELF, at its program headers' physical addresses, KSEG ones as SPE43 maps them), `initrd` (at the top of PID 0's memory) and `cmdline`; a real console would learn the machine from the CMM and read the kernel from a disk | N29; the block, the initrd's place and `auto_action` **[decision]** ([ev8-native.md](platforms/ev8-native.md), S12b) |
 | 32 processors | WHAMI = PID x 4 + TPU within Alphabox's 32: more is refused at configuration | N25 and `CSystem::kMaxCPUs` |
 
 `test/cpu/marvel8_mp.py` checks the table on the three layouts, from a boot

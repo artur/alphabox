@@ -19,9 +19,10 @@
  */
 
 /*
- * The EV8 firmware's memory layout and the constants its PALcode uses
- * (docs/platforms/ev8-native.md, sections 3.3, 3.6 and S12a). Read by
- * pal.c through the C preprocessor and by build.py, which parses the
+ * The EV8 firmware's memory layout and the constants its PALcode and
+ * console use (docs/platforms/ev8-native.md, sections 3.3, 3.6, S12a and
+ * S12b). Read by pal.c and console.c through the C preprocessor and by
+ * build.py, which parses the
  * #define lines (numbers only: nada's assembler evaluates no expression,
  * so every value an asm text names is written out here, and build.py
  * checks the ones derived from others).
@@ -32,8 +33,10 @@
  *             slots 0x2000-0x3FC0, the flows' bodies in between and after
  *   0x008000  PALcode data shared by every TPU: the GIO lock words
  *   0x00A000  the impure areas, one per TPU, indexed by WHAMI (N25)
- *   0x010000  the HWRPB, built by the console; its per-CPU slots after it
- *   0x020000  the console, entered at its first instruction
+ *   0x010000  the HWRPB, built by the console, and its blocks (S12b)
+ *   0x020000  the console, entered at its first instruction, to 0x80000
+ *   0x1e0000  the console's bootstrap page tables, then its stack, the
+ *             kernel's first stack and the emulator's boot block
  *   0x200000  the end of what the firmware may use
  */
 #ifndef EV8_LAYOUT_H
@@ -211,5 +214,65 @@
 #define CTL_RESET 0x6000000
 #define QT_PARK 0x2802 /* QUIESCE_TIMEOUT: WATCH_EN, the reset TIMEOUT */
 #define QT_WTINT 0xffff3 /* WATCH_EN, TIMEOUT_EN, the largest TIMEOUT */
+
+/* ------------------------------------------------------------------------
+ * The console (S12b, console.c): its memory, all in PID 0's first 2 MB,
+ * the HWRPB's first memory cluster (usage 1) [decision, N28]
+ * ------------------------------------------------------------------------ */
+#define CONSOLE_TOP 0x80000 /* the console's image: CONSOLE_PA to here */
+#define CON_L1 0x1e0000     /* the bootstrap page tables, levels 1 to 3 */
+#define CON_L2 0x1e2000
+#define CON_L3 0x1e4000
+#define CON_STACK_TOP 0x1f8000  /* the console's own stack, 32 KB */
+#define BOOT_STACK_TOP 0x1fc000 /* the kernel's first KSP, 16 KB */
+#define KSEG_CON_STACK 0xfffffc00001f8000
+#define KSEG_BOOT_STACK 0xfffffc00001fc000
+
+/* Region 0 of the bootstrap address space: the HWRPB at its base
+   [ARM p. 713], and after it, page for page, the console's pages up to
+   CONSOLE_TOP (the CRB's one map entry) */
+#define REGION0_VA 0x10000000
+#define VPTB_LINUX 0xfffffffe00000000 /* level 1 entry 1023 maps level 1 */
+#define VPTB_ARM 0x200000000          /* entry 1, [ARM p. 715] */
+#define ZERO_PAGE 0x100a000 /* Linux's KERNEL_START_PHYS + 0xA000 (setup.h) */
+
+/* The boot block the emulator fills (src/chipsets/marvel/DirectBoot.cpp,
+   which repeats these): build.py writes the magic and the version into the
+   console's image, the emulator the rest at each start [decision] */
+#define BOOT_BLOCK 0x1fe000
+#define BB_MAGIC_VALUE 0x00544f4f42385645 /* "EV8BOOT\0" */
+#define BB_VERSION_VALUE 1
+#define BB_MAGIC 0x00
+#define BB_VERSION 0x08
+#define BB_FILLED 0x10
+#define BB_CYCLE_HZ 0x18
+#define BB_CHIPS 0x20
+#define BB_TPUS 0x28
+#define BB_MEM_PER_PID 0x30
+#define BB_IO7_MASK 0x38
+#define BB_ENTRY 0x40       /* the kernel's entry, KSEG; 0: no kernel */
+#define BB_KERNEL_LOW 0x48  /* its lowest PA and its end */
+#define BB_KERNEL_HIGH 0x50
+#define BB_INITRD_PA 0x58
+#define BB_INITRD_SIZE 0x60
+#define BB_FLAGS 0x68       /* <0> auto_action boot */
+#define BB_SYSNAME 0x70     /* the board's name, NUL-terminated */
+#define BB_CMDLINE 0x100    /* 256 bytes, NUL-terminated */
+
+/* The HWRPB's blocks and what goes in them [ARM pp. 617-639, 685-692,
+   706-707] */
+#define HWRPB_REVISION 14   /* the real Marvel console's (marvel.md) */
+#define HW_TBB 0x140        /* the TB hint block, zero [ARM p. 629] */
+#define HW_DSR 0x180        /* the DSRDB as Linux reads it (setup.c) */
+#define HW_SLOTS 0x200
+#define SLOT_SIZE 0x280     /* 640: SLOT[632] is the last quadword */
+#define CTB_SIZE 0x100      /* Linux reads quadwords 7 and 30 */
+#define SLOT_TYPE 0xb0
+#define SLOT_VARIATION 0xb8
+#define SLOT_REVISION 0xc0
+#define SLOT_SERIAL 0xc8
+#define SLOT_PAL_AVAIL 0x1d0
+#define CPU_TYPE_EV8 18     /* D3 */
+#define CONSOLE_REVISION 0x0020000100000100 /* SLOT[464]: 1.0, build 1 */
 
 #endif

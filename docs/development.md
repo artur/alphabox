@@ -543,6 +543,29 @@ phase 1" and "phase 2"). About 2700 results in under a second;
 `firmware/ev8/build.py` alone writes the `rom.decompressed` into
 `lab/firmware-ev8/`.
 
+**The EV8 console.** `test/cpu/console8_test.py <alphabox-binary> [label]
+[--port N] [--nada PATH] [--only RUN,...]` builds the PALcode and the
+console (`firmware/ev8/console.c`) and a test kernel,
+`test/cpu/console8_kernel.c`, which nada links as an ELF where Linux's
+vmlinux goes, and boots it through the machine block's `kernel`, `initrd`
+and `cmdline` on the ES47 (2 chips of 4 TPUs), the ES80 and the GS1280 (8
+of 4 each). The kernel reads what the console built the way Linux does
+(`setup.c`, `smp.c`, `gct.c`, `core_marvel.c`, `mm/init.c`'s
+`callback_init` and `switch_to_system_map`) and prints every value; the
+script checks them against the ARM and Linux: the HWRPB field by field
+through INIT_HWRPB and region 0, every slot, the memory descriptors at
+N18's places, the GCT's IO7 nodes, the CTB, the CRB's map and descriptors,
+GETC (a character the script types), PUTS and GET_ENV before and after
+FIXUP and the kernel's own page tables, that no callback changes R2-R15,
+R29 or SP, the zero page's command line and initrd (its bytes), the timer
+the console started, every secondary started as `smp.c` starts it, and the
+halt back to the console's prompt, where `show` and `boot` are typed. More
+runs: `auto_action = "halt"` with a kernel of physical program headers,
+no kernel, a GS1280 of 16 chips (refused by the console: the PALcode's 32
+processor numbers), and six configurations the emulator refuses
+([ev8-native.md](platforms/ev8-native.md), S12b). About 3600 results, a
+few seconds a run.
+
 **The EV8's 1C SIMD set and paired single.** Group `simd`
 (`test/cpu/simd_cases.py`) checks every row of
 [ev8-isa.md](platforms/ev8-isa.md) 3.3 on the rows with `CPU_EXT_EV8`, in

@@ -12,7 +12,8 @@
 in 21464 mode with it (docs/platforms/ev8-native.md, sections 3.5 and 3.6,
 N27 and N28; S12a).
 
-    build.py [--nada PATH] [--console FILE] [--out PATH] [--size N]
+    build.py [--nada PATH] [--console FILE | --no-console] [--out PATH]
+             [--size N]
 
 The PALcode is pal.c, nada assembler source: nada main 9152b521
 (lab/tools/nada/NADA-COMMIT.txt), invoked as
@@ -24,11 +25,20 @@ the code follows; linked 16 bytes below PAL_BASE (0), every label is its
 physical address and every `.align` counts from PAL_BASE. This script drops
 those 16 bytes, checks the layout (each entry and CALL_PAL slot starts with
 `lda $31, offset($31)`, a no-op naming its own offset), and places the
-PALcode at physical 0 of the image. A console, if given (a flat binary),
-goes at CONSOLE_PA. Without one, processor 0's first instruction there is a
-zero word, CALL_PAL HALT, whose halt re-enters the same place: until S12b
-writes the console, the image serves tools that add their own, as
-test/cpu/pal8_test.py does.
+PALcode at physical 0 of the image.
+
+The console (S12b) is console.c, C that nada compiles at the console's KSEG
+address, KSEG | CONSOLE_PA, with the large code model:
+
+    nada -t alpha-none -mcpu=ev8 -mcmodel=large -n -f flat -B 0xfffffc0000020000
+
+It goes at CONSOLE_PA, where processor 0 enters it, and the boot block's
+magic and version at BOOT_BLOCK tell the emulator to fill the block and load
+the system block's kernel, initrd and cmdline (docs/platforms/ev8-native.md,
+S12b). --console FILE puts a flat binary there instead, and --no-console
+nothing: processor 0's first instruction there is then a zero word, CALL_PAL
+HALT, whose halt re-enters the same place. Tools that add their own program
+(test/cpu/pal8_test.py) call image() with it and no boot block.
 
 The output is the decompressed-console file CSystem::load_decompressed_console
 reads: the entry PC (PAL_BASE | 1), PAL_BASE, the board's console bytes
@@ -57,6 +67,7 @@ sys.path.insert(0, os.path.join(REPO, "test", "cpu"))
 import alpha_asm as A  # noqa: E402
 
 SOURCE = os.path.join(HERE, "pal.c")
+CONSOLE_SOURCE = os.path.join(HERE, "console.c")
 LAYOUT = os.path.join(HERE, "layout.h")
 NADA_COMMIT = "9152b521cfa37aa88d7afb41bd52cff9fc2967de"
 NADA_SHA256 = "47c4e6509ce8e09a6d0707d585c4a7cd7d7f039bd6406c2cc4a1c82973138914"
@@ -121,6 +132,26 @@ def check_layout(L):
     need(L["PAL_SCR_PA"] == L["PAL_IMPURE"] and
          L["PAL_SCR_LEN"] == L["MAX_WHAMI"] * L["IMPURE_SIZE"], "PAL_SCR_LEN")
     need(L["FLAG_PALOK"] == 0x1c0, "FLAG_PALOK")
+    # S12b: the console's memory
+    need(L["CONSOLE_PA"] < L["CONSOLE_TOP"] <= L["CON_L1"], "CONSOLE_TOP")
+    need(L["CON_L2"] == L["CON_L1"] + 0x2000 and
+         L["CON_L3"] == L["CON_L2"] + 0x2000 and
+         L["CON_L3"] + 0x2000 <= L["CON_STACK_TOP"] - 0x8000, "CON_L1-L3")
+    need(L["CON_STACK_TOP"] <= L["BOOT_STACK_TOP"] - 0x4000 and
+         L["BOOT_STACK_TOP"] <= L["BOOT_BLOCK"] < L["FIRMWARE_TOP"],
+         "the stacks and the boot block")
+    need(L["KSEG_CON_STACK"] == L["KSEG"] | L["CON_STACK_TOP"],
+         "KSEG_CON_STACK")
+    need(L["KSEG_BOOT_STACK"] == L["KSEG"] | L["BOOT_STACK_TOP"],
+         "KSEG_BOOT_STACK")
+    need(L["BB_MAGIC_VALUE"] == int.from_bytes(b"EV8BOOT\0", "little"),
+         "BB_MAGIC_VALUE")
+    need(L["BB_CMDLINE"] + 256 <= 0x2000, "BB_CMDLINE")
+    need(L["HW_TBB"] >= 0x140 and L["HW_DSR"] >= L["HW_TBB"] + 64 and
+         L["HW_SLOTS"] % 128 == 0 and L["SLOT_SIZE"] % 128 == 0 and
+         L["SLOT_SIZE"] >= 632, "the HWRPB's blocks")
+    need(L["VPTB_LINUX"] == (1 << 64) - (1 << 33) and
+         L["VPTB_ARM"] == 1 << 33, "VPTB_LINUX, VPTB_ARM")
 
 
 def check_ret_words():
@@ -192,6 +223,42 @@ def build_pal(nada=None):
     return pal, L
 
 
+def build_console(nada=None, L=None):
+    """The console (console.c, S12b): C compiled by nada at its KSEG address
+    with the large code model (the small one reaches only the low or top
+    2 GB), a flat image entered at its first word, nada's `br $31, _start`.
+    The image holds the console's data and zeroed variables too, and must
+    end below CONSOLE_TOP, the end of the CRB's map."""
+    L = L or layout()
+    nada = nada or default_nada()
+    if not os.path.exists(nada):
+        raise SystemExit("no nada at %s (--nada, or NADA)" % nada)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "console.img")
+        cmd = [nada, "-t", "alpha-none", "-mcpu=ev8", "-mcmodel=large", "-n",
+               "-f", "flat", "-B", "%#x" % L["KSEG_CONSOLE"], "-o", out,
+               CONSOLE_SOURCE]
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        if p.returncode != 0:
+            raise SystemExit("nada failed on console.c:\n" + p.stdout + p.stderr)
+        with open(out, "rb") as f:
+            con = f.read()
+    if struct.unpack_from("<I", con, 0)[0] >> 21 != (0x30 << 5 | 31):
+        raise SystemExit("console.c's image does not start with br $31, _start")
+    if L["CONSOLE_PA"] + len(con) > L["CONSOLE_TOP"]:
+        raise SystemExit("the console is %#x bytes, past CONSOLE_TOP"
+                         % len(con))
+    return con
+
+
+def boot_block(L):
+    """The boot block's magic and version, which tell the emulator that the
+    image is the console's and takes a kernel (S12b): an (address, bytes)
+    for image()'s `extra`."""
+    return (L["BOOT_BLOCK"], struct.pack("<QQ", L["BB_MAGIC_VALUE"],
+                                         L["BB_VERSION_VALUE"]))
+
+
 def image(pal, L, console=None, extra=(), size=CONSOLE_BYTES):
     """The console bytes: the PALcode at 0, `console` at CONSOLE_PA, and
     each (pa, bytes) of `extra`."""
@@ -219,20 +286,27 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--nada", default=None)
-    ap.add_argument("--console", help="a flat binary placed at CONSOLE_PA")
+    ap.add_argument("--console", help="a flat binary placed at CONSOLE_PA "
+                    "in place of console.c")
+    ap.add_argument("--no-console", action="store_true",
+                    help="the PALcode alone (a zero word at CONSOLE_PA)")
     ap.add_argument("--out", default=os.path.join(work_dir(), "firmware-ev8",
                                                   "rom.decompressed"))
     ap.add_argument("--size", type=lambda s: int(s, 0), default=CONSOLE_BYTES)
     args = ap.parse_args()
     pal, L = build_pal(args.nada)
-    console = None
+    console, extra = None, []
     if args.console:
         with open(args.console, "rb") as f:
             console = f.read()
-    write_rom(args.out, image(pal, L, console, size=args.size), L)
+    elif not args.no_console:
+        console = build_console(args.nada, L)
+        extra = [boot_block(L)]
+    write_rom(args.out, image(pal, L, console, extra, size=args.size), L)
     words = struct.unpack("<%dI" % (len(pal) // 4), pal)
-    print("PALcode %#x bytes, %d instructions; %s"
-          % (len(pal), sum(1 for w in words if w), args.out))
+    print("PALcode %#x bytes, %d instructions; console %#x bytes; %s"
+          % (len(pal), sum(1 for w in words if w), len(console or b""),
+             args.out))
     return 0
 
 

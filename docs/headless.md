@@ -686,7 +686,15 @@ image named by `rom.decompressed`, in the decompressed console's format
 one. Every TPU of every chip enters the image's PALcode at PAL_BASE +
 0xB00, and `%MVL-I-21464` lines say so. The image talks to the outside
 through GIO and the CMM: its terminal is `serial0`, as the console's is.
-`test/cpu/marvel8_mp.py` is the worked example. With
+`test/cpu/marvel8_mp.py` is the worked example. `firmware/ev8/build.py`
+writes the image with Alphabox's PALcode and console for the 21464
+([ev8-native.md](platforms/ev8-native.md), S12a and S12b): the console
+prints what it built (`%CON8-I-...` lines) and enters the kernel the
+machine block's `kernel`, `initrd` and `cmdline` name, which the emulator
+loads and reports in a `%MVL-I-KERNEL` line, or waits at its `P00>>>`
+prompt (`auto_action = "halt"`, or no kernel) for `boot`, `show` or
+`help`; a halt (Linux's `poweroff`) comes back to that prompt with a
+`%CON8-I-HALT` line. `test/cpu/console8_test.py` drives it. With
 `ALPHABOX_TRACE_IO7=1` an IO7 also says when a full interrupt queue
 refused one of its IIDs and when the IID it sent again was taken.
 
