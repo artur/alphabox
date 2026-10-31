@@ -680,6 +680,21 @@ def run_refusals(binary, work, port, nada):
     with open(os.path.join(wd, "notelf.bin"), "wb") as f:
         f.write(b"not an ELF file at all" * 4)
     build_kernel(nada, os.path.join(wd, "far.elf"), base=0xFFFFFC0040000000)
+    # Malformed ELFs whose sizes and offsets wrap a sum: a p_memsz that
+    # brings the segment's end round past 2^64 to just above 0, a p_offset
+    # that does the same with the file's end, an e_phoff past it
+    with open(os.path.join(wd, "kernel.elf"), "rb") as f:
+        elf = bytearray(f.read())
+    phoff = struct.unpack_from("<Q", elf, 32)[0]
+    pa = struct.unpack_from("<Q", elf, phoff + 24)[0] & ((1 << 41) - 1)
+    for name, at, value in (
+            ("memsz.elf", phoff + 40, (1 << 64) - pa + 0x1000),
+            ("offset.elf", phoff + 8, (1 << 64) - 0x100),
+            ("phoff.elf", 32, (1 << 64) - 0x10)):
+        bad = bytearray(elf)
+        struct.pack_into("<Q", bad, at, value)
+        with open(os.path.join(wd, name), "wb") as f:
+            f.write(bad)
     es40 = """sys0 = tsunami
 {
   platform = "es40";
@@ -712,16 +727,30 @@ def run_refusals(binary, work, port, nada):
                                      keys=[("auto_action", "maybe")],
                                      serial=False),
          "boot or halt"),
+        ("kernel with a p_memsz past 2^64", config(
+            "es47", port, 2, 4, keys=[("kernel", "memsz.elf")], serial=False),
+         "is not in PID 0's memory"),
+        ("kernel with a p_offset past 2^64", config(
+            "es47", port, 2, 4, keys=[("kernel", "offset.elf")], serial=False),
+         "a segment's bytes are not in the file"),
+        ("kernel with an e_phoff past 2^64", config(
+            "es47", port, 2, 4, keys=[("kernel", "phoff.elf")], serial=False),
+         "the program headers are not in the file"),
     )
     c = Checks("refusals")
     for what, cfg, reason in cases:
         with open(os.path.join(wd, "es40.cfg"), "w") as f:
             f.write(cfg)
-        p = subprocess.run([binary, "run"], cwd=wd, capture_output=True,
-                           timeout=60)
-        out = (p.stdout + p.stderr).decode("latin-1")
-        c.ok("refused: " + what, p.returncode != 0 and reason in out, True)
-        if not (p.returncode != 0 and reason in out):
+        try:
+            p = subprocess.run([binary, "run"], cwd=wd, capture_output=True,
+                               timeout=60)
+            rc, out = p.returncode, (p.stdout + p.stderr).decode("latin-1")
+        except subprocess.TimeoutExpired as e:   # killed: our own emulator
+            rc = None
+            out = ((e.stdout or b"") + (e.stderr or b"")).decode("latin-1")
+        c.ok("refused: %s (rc %s)" % (what, rc),
+             rc is not None and rc > 0 and reason in out, True)
+        if not (rc is not None and rc > 0 and reason in out):
             for ln in out.splitlines()[-4:]:
                 print("   |", ln)
     print("  %-10s: PASS %d, FAIL %d" % ("refusals", c.passes, len(c.fails)))

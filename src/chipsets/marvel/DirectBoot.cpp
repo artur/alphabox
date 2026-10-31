@@ -124,38 +124,46 @@ loaded load_elf(CSystem *sys, const std::string &path, u64 mem) {
     what = "not an Alpha ELF (e_machine 0x9026)";
   if (what)
     FAILURE_2(Configuration, "kernel = \"%s\": %s", path.c_str(), what);
-  const u64 phoff = get64(&f[32]), ent = get64(&f[24]);
+  const u64 phoff = get64(&f[32]), ent = get64(&f[24]), size = f.size();
   const u32 phsize = get16(&f[54]), phnum = get16(&f[56]);
   loaded k;
+  // Every range below is checked as "start > limit - length", the length
+  // checked against the limit first, so that no sum of the file's values
+  // can wrap past 2^64 (i x phsize is below 2^32).
   for (u32 i = 0; i < phnum; i++) {
-    const u64 h = phoff + (u64)i * phsize;
-    if (phsize < 56 || h + 56 > f.size())
-      FAILURE_1(Configuration, "kernel = \"%s\": program headers cut short",
+    if (phsize < 56 || phoff > size || size - phoff < 56 ||
+        (u64)i * phsize > size - phoff - 56)
+      FAILURE_1(Configuration,
+                "kernel = \"%s\": the program headers are not in the file",
                 path.c_str());
-    const u8 *p = &f[h];
+    const u8 *p = f.data() + phoff + (u64)i * phsize;
     const u64 off = get64(p + 8), va = get64(p + 16), filesz = get64(p + 32),
               memsz = get64(p + 40);
     if ((p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24) != 1 || !memsz)
       continue; // PT_LOAD only
     const u64 paddr = get64(p + 24), pa = load_pa(paddr);
-    if (pa == ~U64(0) || pa < kFirmwareTop || pa + memsz > mem ||
-        filesz > memsz || off + filesz > f.size() ||
-        (pa < kZeroPage + 0x2000 && pa + memsz > kZeroPage))
+    if (filesz > memsz || filesz > size || off > size - filesz)
+      FAILURE_1(Configuration,
+                "kernel = \"%s\": a segment's bytes are not in the file",
+                path.c_str());
+    if (pa == ~U64(0) || pa < kFirmwareTop || memsz > mem || pa > mem - memsz ||
+        (pa < kZeroPage + 0x2000 &&
+         (pa >= kZeroPage || memsz > kZeroPage - pa)))
       FAILURE_3(Configuration,
                 "kernel = \"%s\": a segment at %" PRIx64 " (%" PRIx64
                 " bytes) is not in PID 0's memory between the console's 2 MB "
                 "and its end, clear of Linux's zero page",
                 path.c_str(), paddr, memsz);
     u8 *to = (u8 *)sys->PtrToMem(pa);
-    memcpy(to, &f[off], filesz);
+    memcpy(to, f.data() + off, filesz);
     memset(to + filesz, 0, memsz - filesz);
     k.low = std::min(k.low, pa);
     k.high = std::max(k.high, pa + memsz);
     // e_entry is virtual (vmlinux), or physical where the linker gave the
     // segments physical addresses of their own (nada's -B v=p).
-    if (ent >= va && ent < va + memsz)
+    if (ent >= va && ent - va < memsz)
       k.entry = U64(0xfffffc0000000000) | (pa + (ent - va));
-    else if (paddr != va && ent >= paddr && ent < paddr + memsz)
+    else if (paddr != va && ent >= paddr && ent - paddr < memsz)
       k.entry = U64(0xfffffc0000000000) | (pa + (ent - paddr));
   }
   if (!k.entry)
@@ -214,12 +222,12 @@ void direct_boot_load(CSystem *sys, const CMarvel &mv,
       FAILURE_1(Configuration, "initrd = \"%s\": cannot read it",
                 boot.initrd.c_str());
     rd_size = r.size();
-    rd = (mem - rd_size) & ~U64(0x1fff);
-    if (rd_size > mem || rd < k.high)
+    if (!rd_size || rd_size > mem || ((mem - rd_size) & ~U64(0x1fff)) < k.high)
       FAILURE_1(Configuration,
                 "initrd = \"%s\": no room between the kernel and the end of "
                 "PID 0's memory",
                 boot.initrd.c_str());
+    rd = (mem - rd_size) & ~U64(0x1fff);
     memcpy(sys->PtrToMem(rd), r.data(), r.size());
   }
   put64(b + BB_INITRD_PA, rd);
