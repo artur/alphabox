@@ -895,14 +895,15 @@ void cmain(u64 reason, u64 whami)
     rd_size = rq(b + BB_INITRD_SIZE);
     auto_boot = rq(b + BB_FLAGS) & 1;
     built = 1;
-    /* The PALcode's impure areas hold 32 processor numbers (MAX_WHAMI):
-       WHAMI = PID x 4 + TPU (N25) passes them from the ninth chip on, where
-       the areas run into the HWRPB [decision: refused] */
+    /* The PALcode's impure areas and the HWRPB's slots hold 64 processor
+       numbers (MAX_WHAMI), WHAMI = PID x 4 + TPU (N25): 16 chips [decision,
+       the owner 2026-10-31: 16 chips], as many as the GS1280 has; a machine
+       the emulator could make bigger is refused */
     if (4 * chips > MAX_WHAMI || !chips || !tpus || tpus > 4) {
         puts_("%CON8-F-TOOMANY, ");
         put_dec(chips);
-        puts_(" chips: the PALcode keeps 32 processor numbers, PID x 4 + "
-              "TPU, 8 chips at most\r\n");
+        puts_(" chips: the PALcode keeps 64 processor numbers, PID x 4 + "
+              "TPU, 16 chips at most\r\n");
         entry = 0;
         prompt();
     }

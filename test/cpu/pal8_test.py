@@ -169,7 +169,7 @@ SYM_SLOT = 1                 # pci0.1: hose 0 (PID 0's IO7 port 0), slot 1
 SYM_BAR = 0x10000000
 SYM_LSI = 0 << 5 | SYM_SLOT << 2 | 0    # port 0, slot 1, INTA (Io7.hpp)
 LSI_IID, MSI_IID = 0x23, 1 << 13 | 5    # IIDs of PE 0 written to the queue
-PAL_REVISION = 0x0020000100020100  # layout.h's PAL_REVISION
+PAL_REVISION = 0x0040000100020100  # 64 processors may share it (16 chips)
 
 MAIN_FIELDS = ("a0 at power-up", "a1 at power-up", "rdps at power-up",
                "whami", "rdval after wrval", "swpipl(0) old", "rdps",

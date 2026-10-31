@@ -108,6 +108,11 @@ def check_layout(L):
     need(L["IMPURE_SIZE"] == 1 << L["IMPURE_SHIFT"], "IMPURE_SHIFT")
     need(L["PAL_IMPURE"] + L["MAX_WHAMI"] * L["IMPURE_SIZE"] <= L["HWRPB_PA"],
          "the impure areas run into the HWRPB")
+    need(L["MAX_WHAMI"] == 64, "MAX_WHAMI: 4 x 16 PIDs (the owner, 2026-10-31)")
+    need(L["HWRPB_PA"] % 0x2000 == 0, "HWRPB_PA: page aligned [ARM p. 617]")
+    need(L["PAL_REVISION"] >> 48 == L["MAX_WHAMI"] and
+         L["CONSOLE_REVISION"] >> 48 == L["MAX_WHAMI"],
+         "the revisions' processor counts")
     need(L["PAL_TEXT_TOP"] <= L["PAL_DATA"] <= L["PAL_IMPURE"], "PAL_DATA")
     need(L["CONSOLE_PA"] < L["FIRMWARE_TOP"] <= 0x200000, "FIRMWARE_TOP")
     for ipl, eien in ((0, 0x3F), (4, 0x2D), (5, 0x21), (6, 0x20)):
@@ -152,6 +157,15 @@ def check_layout(L):
          L["SLOT_SIZE"] >= 632, "the HWRPB's blocks")
     need(L["VPTB_LINUX"] == (1 << 64) - (1 << 33) and
          L["VPTB_ARM"] == 1 << 33, "VPTB_LINUX, VPTB_ARM")
+    # The HWRPB's blocks at their largest (console.c's build_all): MAX_WHAMI
+    # slots, the CTB, the CRB, a memory cluster per PID and one more, a GCT
+    # node per PID and the root, all below the console
+    pids = L["MAX_WHAMI"] // 4
+    mem = (L["HW_SLOTS"] + L["MAX_WHAMI"] * L["SLOT_SIZE"] + L["CTB_SIZE"] +
+           128 + (3 + 7 * (pids + 1)) * 8 + 127) & ~127
+    need(L["HWRPB_PA"] + mem + 0x80 * (1 + pids) <= L["CONSOLE_PA"],
+         "the HWRPB's blocks for %d processors run into the console"
+         % L["MAX_WHAMI"])
 
 
 def check_ret_words():

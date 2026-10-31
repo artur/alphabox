@@ -33,8 +33,8 @@ The runs (each a boot of its own):
   es80        8 chips x 4 TPUs (32 processors, 31 secondaries started)
   gs1280      8 chips x 4 TPUs on the GS1280's layout
   nokernel    no kernel: the prompt, boot refused, show
-  toomany     a GS1280 of 16 chips x 2 TPUs: processor numbers past the
-              PALcode's 32 impure areas, refused by the console
+  gs1280-16   16 chips x 2 TPUs (32 processors, WHAMIs up to 61: the
+              owner's 16 chips, 2026-10-31)
   refusals    configurations the emulator refuses, each for its reason
 
 Run output goes to $ALPHABOX_WORK/runs/<label> (kept on failure or --keep).
@@ -401,7 +401,7 @@ def check_kernel(c, r, m):
     c.ok("PID 0's memory, all of it", (cl[0][1] + cl[1][1]) << 13, mem)
     c.ok("mem.1 the OS's", (cl[1][0], cl[1][2]), (cl[0][1], 0))
     for p in range(1, chips):
-        c.ok("mem for PID %d (N18)" % p, cl[1 + p],
+        c.ok("mem for PID %d (N18)" % p, cl[1 + p] if 1 + p < n else None,
              (pid_base(p) >> 13, mem >> 13, 0))
     for i in range(n):
         for f in ("numtested", "bitmap_va", "bitmap_pa", "bitmap_chksum"):
@@ -584,7 +584,7 @@ def kernel_run(binary, work, label, port, keys, m, steps=None, checks=None):
     r = results(text)
     try:
         check_kernel(c, r, m)
-    except (TypeError, ValueError, ZeroDivisionError) as e:
+    except (TypeError, ValueError, ZeroDivisionError, IndexError) as e:
         c.ok("the kernel's values could be checked (%s)" % e, False, True)
     check_halt(c, text)
     mism = [ln for ln in emu.splitlines() if "MISMATCH" in ln]
@@ -629,11 +629,12 @@ def run_es47_halt(binary, work, port, entry):
     return kernel_run(binary, work, "es47-halt", port, keys, m, steps, more)
 
 
-def run_big(binary, work, port, entry, platform, io7):
-    m = machine(platform, 8, 4, io7, entry, initrd_bytes(), CMDLINE)
+def run_big(binary, work, port, entry, platform, io7, chips=8, tpus=4,
+            label=None):
+    m = machine(platform, chips, tpus, io7, entry, initrd_bytes(), CMDLINE)
     keys = [("kernel", "kernel.elf"), ("initrd", "initrd.img"),
             ("cmdline", CMDLINE)]
-    return kernel_run(binary, work, platform, port, keys, m)
+    return kernel_run(binary, work, label or platform, port, keys, m)
 
 
 def run_nokernel(binary, work, port):
@@ -651,22 +652,6 @@ def run_nokernel(binary, work, port):
     check_console(c, text, m)
     c.ok("no kernel line", "%CON8-I-KERNEL" in text, False)
     print("  %-10s %5.1f s: PASS %d, FAIL %d" % ("nokernel", secs, c.passes,
-                                                 len(c.fails)))
-    return c
-
-
-def run_toomany(binary, work, port):
-    wd = os.path.join(work, "toomany")
-    os.makedirs(wd, exist_ok=True)
-    shutil.copy(os.path.join(work, "console8.rom"), wd)
-    shutil.copy(os.path.join(work, "kernel.elf"), wd)
-    cfg = config("gs1280", port, 16, 2, keys=[("kernel", "kernel.elf")])
-    steps = [(b"%CON8-F-TOOMANY", None), (b"P00>>>", None)]
-    text, emu, done, secs = run(binary, wd, cfg, port, steps, timeout=60)
-    c = Checks("toomany")
-    c.ok("steps reached", done, len(steps))
-    c.ok("the kernel not entered", "@@BEGIN" in text, False)
-    print("  %-10s %5.1f s: PASS %d, FAIL %d" % ("toomany", secs, c.passes,
                                                  len(c.fails)))
     return c
 
@@ -736,6 +721,10 @@ def run_refusals(binary, work, port, nada):
         ("kernel with an e_phoff past 2^64", config(
             "es47", port, 2, 4, keys=[("kernel", "phoff.elf")], serial=False),
          "the program headers are not in the file"),
+        ("a GS1280 of 16 chips x 4 TPUs (the emulator's 32 processors)",
+         config("gs1280", port, 16, 4, keys=[("kernel", "kernel.elf")],
+                serial=False),
+         "Alphabox runs at most 32"),
     )
     c = Checks("refusals")
     for what, cfg, reason in cases:
@@ -758,7 +747,7 @@ def run_refusals(binary, work, port, nada):
 
 
 SHOW_FAILS = 200
-RUNS = ("es47", "es47-halt", "es80", "gs1280", "nokernel", "toomany",
+RUNS = ("es47", "es47-halt", "es80", "gs1280", "gs1280-16", "nokernel",
         "refusals")
 
 
@@ -807,8 +796,9 @@ def main():
         checks.append(run_big(binary, work, port, entry, "gs1280", [0]))
     if "nokernel" in only:
         checks.append(run_nokernel(binary, work, port))
-    if "toomany" in only:
-        checks.append(run_toomany(binary, work, port))
+    if "gs1280-16" in only:
+        checks.append(run_big(binary, work, port, entry, "gs1280", [0],
+                              chips=16, tpus=2, label="gs1280-16"))
     if "refusals" in only:
         checks.append(run_refusals(binary, work, port, nada))
     passes = sum(c.passes for c in checks)

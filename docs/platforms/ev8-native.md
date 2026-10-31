@@ -1168,7 +1168,7 @@ Measured against the Marvel sources (`lab/docs-ev7/linux-*`, mainline):
 | `kernel/sys_marvel.c` | the PE of a CPU is `cpu >> 2` where the code uses `hard_smp_processor_id()` or `boot_cpuid` as a PE (`marvel_smp_callin`, `marvel_init_irq`: IO7 redirection, `init_one_io7_lsi`, the "Interrupts reported to CPU at PE" message); only TPU 0 of a chip redirects its IO7 | WHAMI = PID x 4 + TPU (N25) |
 | `kernel/sys_marvel.c` | no PCI_PROBE_ONLY; `marvel_map_irq` computes the LSI | N30 |
 | `kernel/setup.c` | "EV8" in `cpu_names` for type 18, and its caches in `determine_cpu_caches`: L1 64 KB 2-way each, L2 3 MB 6-way [IDS pp. 42-43] | D3; otherwise "Unknown" and no cache shape, harmless |
-| `Kconfig` | NR_CPUS above 32 (64, the HWRPB's `rxrdy` and `txrdy` bitmasks being 64 bits) for a sixteen-chip GS1280 | "The kernel supports at most 32 CPUs" (Kconfig); 8 chips x 4 TPUs fit as it is |
+| `Kconfig` | NR_CPUS's range 2 to 32 (`arch_alpha_Kconfig`: "The kernel supports at most 32 CPUs", default 32 for ALPHA_MARVEL and ALPHA_GENERIC) widened to 64, and the kernel built with 64 | Linux's CPU number is the WHAMI (`hard_smp_processor_id`, and `setup_smp` takes slot i as CPU i), PID x 4 + TPU (N25): from the ninth chip on it passes 31 even with 32 processors in all, a GS1280 of 16 chips of 2 TPUs numbering them 0, 1, 4, 5, ... 61 (the owner's 16 chips, 2026-10-31, S12b). In what was read (`smp.c`, `sys_marvel.c`, `core_marvel.c`, `irq_alpha.c`, `time.c`, `smp.h`, `mmu_context.h`) nothing else holds a CPU in 32 bits: `cpu_data`, `ipi_data` and the per-CPU ASNs are arrays of NR_CPUS, the HWRPB's `rxrdy` and `txrdy` are 64-bit and tested with `1UL << cpuid`, and the one print of `cpu_present_mask` shows its first long, 64 CPUs **[inference]**; the Kconfig range is the change. `sys_marvel.c`'s CPU-as-PE uses are the row above's |
 | `kernel/core_marvel.c` | nothing for PIDs below 256 (the GCT's `(id >> 8) & 0xff`), nor the memory placement (N18) | |
 | `kernel/time.c`, `rtc.c`, `smp.c`, `irq_alpha.c` | nothing: the timer arrives per CPU as entInt type 1, IPIs as type 0, the TOY through cserve | sections 2.4, 3.1 |
 | `arch/alpha/mm` | nothing: 43-bit VA and 8 KB pages are a 21464 mode [IDS p. 690]; `MAX_ASN` 255 is its ASN width | |
@@ -1613,6 +1613,8 @@ the impure areas at 0xA000 + WHAMI x 0x200, room for 32; the HWRPB at
 0x10000, built by the console, with its per-CPU slots at the offset and
 size it gives; the console at 0x20000, entered at its first instruction
 through its KSEG address. The PALcode knows the HWRPB by that address only.
+(Since S12b's 16 chips, the owner's decision of 2026-10-31: room for 64
+impure areas, to 0x12000, and the HWRPB at 0x12000; [below](#s12b-2026-10-31).)
 
 **What it does**, by the section it implements:
 
@@ -1822,7 +1824,8 @@ entry or call halts for want of code.
   at 0xA000, 0x4000 bytes (32 impure areas), and its revision
   0x0020000100020100: 32 processors may share it, compatibility 1,
   variation 2 (Tru64 UNIX and Alpha Linux, [ARM p. 808]), version 1.0
-  **[decision]**; and the flags PL, PMV and PV with BIP **[decision]**: the
+  **[decision]** (since S12b's 16 chips: 0x8000 bytes, 64 impure areas,
+  and 0x0040000100020100, 64 processors); and the flags PL, PMV and PV with BIP **[decision]**: the
   console sets them for processor 0 (S12b).
 - **The entries** (3.2), the faults among them halting the TPU when
   raised in PALmode (below):
@@ -2026,7 +2029,8 @@ Linux cost the host noticeably is S13's to measure.
   0x10000 | an offset for an entry never raised); a1 = its WHAMI (0) at
   power-up, 0 after a halt. Its PCB is the impure area's, PCBB =
   0xA000 + 0x180, PTBR 0, until it swaps to its own with swpctx.
-- **The HWRPB at PA 0x10000**, which it builds: the PALcode reads the id
+- **The HWRPB at PA 0x10000** (0x12000 since S12b's 16 chips), which it
+  builds: the PALcode reads the id
   ("HWRPB" at +8) before writing any halt record, the VPTB (+0x78), the
   number of processors, the slot size and offset (+0x90 to +0xA0), the
   restart routine and its data (+0x100, +0x108) and RXRDY (+0x128); slots
@@ -2116,8 +2120,9 @@ reads and enters the kernel. The emulator's part is
   `CONSOLE_TOP` (0x80000). nada's C takes no operands in `asm`, so the
   entry points (the start, the CALL_PALs, the GIO lock, the kernel's entry,
   the callbacks' doors) are one asm text of labels C calls by BSR.
-- **Its memory** (`layout.h`, all in the first cluster, N28): the HWRPB
-  and its blocks at 0x10000 (S12a's place) up to 0x20000, the console's
+- **Its memory** (`layout.h`, all in the first cluster, N28): the
+  impure areas at 0xA000 for 64 processor numbers and the HWRPB and its
+  blocks at 0x12000 up to 0x20000 (16 chips, below), the console's
   image 0x20000 to 0x80000, the bootstrap page tables at 0x1E0000, its own
   stack below 0x1F8000, the kernel's first stack below 0x1FC000, the boot
   block at 0x1FE000.
@@ -2125,7 +2130,7 @@ reads and enters the kernel. The emulator's part is
   block, builds everything below, starts the timer and enters the kernel,
   or stops at its prompt; entered again (a halt), it reports the halt and
   gives the prompt. It runs on processor 0 alone, at KSEG addresses only.
-- **The HWRPB** [ARM pp. 618-626], field by field: its PA 0x10000 and
+- **The HWRPB** [ARM pp. 618-626], field by field: its PA 0x12000 and
   "HWRPB"; revision 14, the real Marvel console's (marvel.md)
   **[decision]**, above Linux's 5 for the DSR; the size of the HWRPB and
   its blocks; primary 0; page size 8192; 48 PA bits, no extended VA; max
@@ -2240,13 +2245,26 @@ reads and enters the kernel. The emulator's part is
   R27 and the halt requested in the flags (Linux's poweroff asks 4,
   "remain halted"), then the prompt. A reboot request (2 or 3) stops at
   the prompt too **[decision]**: nothing resets the machine from here.
-- **Refused**: a machine of more than 8 chips **[decision]**. The
-  PALcode's impure areas hold 32 processor numbers below the HWRPB
-  (`MAX_WHAMI`, S12a), and WHAMI = PID x 4 + TPU (N25) passes them from
-  the ninth chip on whatever `tpus` is; a GS1280 of 16 chips of 2 TPUs,
-  which the emulator takes (32 processors), has numbers up to 61, whose
-  impure areas fall on the HWRPB. The console says so and stays at its
-  prompt (Findings).
+- **Sixteen chips** **[decision, the owner 2026-10-31: 16 chips]**.
+  WHAMI = PID x 4 + TPU (N25) reaches 63 on sixteen chips whatever `tpus`
+  is: a GS1280 of 16 chips of 2 TPUs, which the emulator takes (32
+  processors), has processor numbers up to 61. S12a's layout held 32
+  impure areas between 0xA000 and the HWRPB at 0x10000; now `MAX_WHAMI`
+  is 64, the impure areas run to 0x12000 and the HWRPB starts there
+  (page aligned [ARM p. 617]), with 64 slots: its blocks for sixteen PIDs
+  (64 slots of 640 bytes, the CTB, the CRB, 17 memory clusters, a GCT
+  node per PID) end by 0x1D000, below the console at 0x20000, which stays
+  **[decision]**. The slots' PALcode scratch is 0x8000 bytes, and the
+  revisions say 64 processors may share the PALcode and the console
+  (<63:48>). Nothing else assumed fewer: the PALcode's WHAMI is 6 bits
+  wide wherever it is used (the impure index, the RXRDY bit, the slot
+  index), wripir's target takes PIDs up to 15 through ipe8, the GIO lock
+  words of sixteen PIDs end at 0x84C0, and the console's slots, memory
+  clusters, GCT nodes and IO7 mask are counted from the chips, up to 64
+  processor numbers; `build.py` checks the room. The remaining limit is
+  the emulator's 32 processors (`CSystem::kMaxCPUs`): a GS1280 of 16
+  chips of 4 TPUs is refused at configuration. The console refuses a
+  machine past 16 chips, which the emulator cannot make.
 
 **The test**, written from the Linux sources and the ARM before the
 console: `console8_kernel.c` is a "kernel" that nada links as an ELF where
@@ -2267,10 +2285,13 @@ chips of 4 TPUs) with a kernel of KSEG program headers, an initrd and a
 command line, then `show`, `boot` and an unknown word at the prompt; the
 same with `auto_action = "halt"` and a kernel of physical program headers,
 no initrd and no command line, booted by typing `boot`; the ES80 and the
-GS1280, 8 chips of 4 TPUs each (31 secondaries); no kernel; a GS1280 of 16
-chips (the console's refusal); nine configurations the emulator refuses,
-three of them malformed ELFs whose sizes or offsets would wrap a sum
-past 2^64. 3606 results. Written before the console, the test's first full run on
+GS1280, 8 chips of 4 TPUs each (31 secondaries); the GS1280 of 16 chips
+of 2 TPUs (31 secondaries, processor numbers to 61, 64 slots, 17 memory
+clusters: the owner's 16 chips); no kernel; ten configurations the
+emulator refuses, three of them malformed ELFs whose sizes or offsets
+would wrap a sum past 2^64, one a GS1280 of 16 chips of 4 TPUs (its 32
+processors). 4993 results (3606 before the 16 chips, with the console's
+refusal of the 16-chip GS1280 in place of its run). Written before the console, the test's first full run on
 the ES47 passed; two of its own expectations were then corrected: a race
 (the kernel read a secondary's BIP after the secondary's halt had cleared
 it again; the secondary now notes its flags at its start) and the
@@ -2281,8 +2302,18 @@ bunches the ticks) and became a read of each chip's ITV.
 
 **The proofs**, with the emulator's part and its range-check fix built on
 the four lanes (`ctest` 23 of 23 on the interpreter and JIT_VERIFY lanes):
-PASS 3606 on the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64
-lanes; before the fix, 3603 again 20 of 20 on the JIT and in four
+with the 16 chips, PASS 4993 on the interpreter, JIT, JIT_VERIFY (0
+mismatches) and x86-64 lanes, the 16-chip run 10 of 10 again on the JIT
+and in three concurrent loops, 5 of 5 on the JIT and on x86-64 and 3 of 3
+on JIT_VERIFY; `pal8_test.py` (2693, its PALcode's revision expectation
+now 64 processors) on the four lanes and `marvel8_mp.py` (1034) on the
+JIT. Six deliberate breaks of the new limit fail at the checks that name
+them: the console's slots built for WHAMIs below 32 only (slot 0x20 on),
+32 slots in the HWRPB (`hw.nr_processors`), memory clusters for PIDs
+below 8 only (`mem.numclusters`), the slots' PALcode scratch for 32 areas
+(`pal_scr_size`), and in the PALcode the impure index and the RXRDY bit
+taken modulo 32 (the secondaries' starts). Before the 16 chips: PASS 3606
+on the four lanes after the range-check fix; 3603 again 20 of 20 on the JIT and in four
 concurrent loops, 10 of 10 on the JIT and on x86-64, 6 of 6 on the
 interpreter and on JIT_VERIFY. `pal8_test.py` (2693) on the four lanes;
 on the JIT, with the final binaries, the CPU oracle on `ev68cb`, `ev7`,
@@ -2322,8 +2353,9 @@ virtual), which the loader takes.
   I_CTL and M_CTL, as our PALcode leaves it.
 - Linux uses PID 0's and PID 1's memory only: `setup_memory` limits it to
   32 GB, and PID 2's starts there (N18).
-- `NR_CPUS` of 32 covers 8 chips of 4 TPUs, the most this console takes;
-  more needs the PALcode's layout changed first (Findings).
+- `NR_CPUS` 64 (5.1): processor numbers are WHAMIs, PID x 4 + TPU, so
+  from the ninth chip on they pass 31 even with 32 processors in all (a
+  GS1280 of 16 chips of 2 TPUs numbers them 0, 1, 4, 5, ... 61).
 - The timer ticks at 1017 Hz at 800 MHz (HZ 1024), the EV7 console's
   rule, as on a real ES47.
 - `poweroff` and `reboot` both end at the console's prompt.
@@ -2432,14 +2464,14 @@ S12b (2026-10-31):
   `callback_getenv`"**: the `setup.c` read here (mainline,
   `lab/docs-ev7`) takes COMMAND_LINE alone; the GET_ENV fallback is older
   kernels'. Corrected in its own commit.
-- **More than 8 chips do not fit the PALcode's layout**: its impure areas
-  hold 32 processor numbers (`MAX_WHAMI`) between 0xA000 and the HWRPB at
-  0x10000, and WHAMI = PID x 4 + TPU (N25) reaches 32 at the ninth chip
-  whatever `tpus` is. The emulator takes a GS1280 of up to 16 chips with
-  `tpus` 1 or 2 (32 processors), whose processor numbers go to 61: their
-  TPUs' resets write impure areas over the HWRPB. The console refuses such
-  a machine; taking it needs room for 64 impure areas (the HWRPB moved, or
-  the areas), and Linux `NR_CPUS` 64 (5.1). For the owner.
+- **More than 8 chips did not fit the PALcode's layout**: its impure
+  areas held 32 processor numbers (`MAX_WHAMI`) between 0xA000 and the
+  HWRPB at 0x10000, and WHAMI = PID x 4 + TPU (N25) reaches 32 at the
+  ninth chip whatever `tpus` is. The emulator takes a GS1280 of up to 16
+  chips with `tpus` 1 or 2 (32 processors), whose processor numbers go to
+  61: their TPUs' resets wrote impure areas over the HWRPB. The owner
+  decided on 16 chips (2026-10-31): 64 impure areas, the HWRPB at 0x12000
+  (S12b, above), and Linux's `NR_CPUS` 64 (5.1).
 - **The ARM's bootstrap stack is virtual** (region 1 [p. 714]), and our
   PALcode halts on a DTB miss in PALmode (S12a), so a fault pushed onto
   it would halt the processor: the console's boot KSP is a KSEG address.

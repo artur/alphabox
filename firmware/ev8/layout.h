@@ -32,8 +32,11 @@
  *   0x000000  the PALcode, PAL_BASE 0: entries 0x000-0xF80, CALL_PAL
  *             slots 0x2000-0x3FC0, the flows' bodies in between and after
  *   0x008000  PALcode data shared by every TPU: the GIO lock words
- *   0x00A000  the impure areas, one per TPU, indexed by WHAMI (N25)
- *   0x010000  the HWRPB, built by the console, and its blocks (S12b)
+ *   0x00A000  the impure areas, one per TPU, indexed by WHAMI (N25): 64,
+ *             WHAMI 0-63, sixteen chips [decision, the owner 2026-10-31:
+ *             16 chips]
+ *   0x012000  the HWRPB, built by the console, and its blocks (S12b): 64
+ *             per-CPU slots fit below the console
  *   0x020000  the console, entered at its first instruction, to 0x80000
  *   0x1e0000  the console's bootstrap page tables, then its stack, the
  *             kernel's first stack and the emulator's boot block
@@ -48,15 +51,15 @@
 #define PAL_IMPURE 0xa000
 #define IMPURE_SIZE 0x200
 #define IMPURE_SHIFT 9
-#define MAX_WHAMI 32
-#define HWRPB_PA 0x10000
+#define MAX_WHAMI 64 /* 4 x 16 PIDs (N25): the owner, 2026-10-31 */
+#define HWRPB_PA 0x12000
 #define CONSOLE_PA 0x20000
 #define FIRMWARE_TOP 0x200000
 
 /* Linux's KSEG, SPE43's form (IDS pp. 688-689): KSEG | PA */
 #define KSEG 0xfffffc0000000000
 #define KSEG_CONSOLE 0xfffffc0000020000 /* KSEG | CONSOLE_PA */
-#define KSEG_RXRDY 0xfffffc0000010128   /* KSEG | HWRPB_PA + HWRPB_RXRDY */
+#define KSEG_RXRDY 0xfffffc0000012128   /* KSEG | HWRPB_PA + HWRPB_RXRDY */
 
 /* The HWRPB's fields the PALcode reads [ARM pp. 617-629, 726] */
 #define HWRPB_ID 0x08
@@ -95,9 +98,9 @@
 
 /* The PALcode's own fields of a slot [ARM pp. 632-633], written at a
    START: its memory (text and shared data) and scratch (the impure areas),
-   and its revision: <63:48> the processors that may share it, <47:32>
-   compatibility 1, <23:16> variation 2 (Tru64 UNIX and Alpha Linux [ARM
-   p. 808]), major 1, minor 0 [decision] */
+   and its revision: <63:48> the processors that may share it (64, its
+   impure areas), <47:32> compatibility 1, <23:16> variation 2 (Tru64 UNIX
+   and Alpha Linux [ARM p. 808]), major 1, minor 0 [decision] */
 #define SLOT_PAL_MEM_LEN 0x88
 #define SLOT_PAL_SCR_LEN 0x90
 #define SLOT_PAL_MEM_PA 0x98
@@ -106,8 +109,8 @@
 #define PAL_MEM_PA 0x0
 #define PAL_MEM_LEN 0xa000
 #define PAL_SCR_PA 0xa000
-#define PAL_SCR_LEN 0x4000
-#define PAL_REVISION 0x0020000100020100
+#define PAL_SCR_LEN 0x8000
+#define PAL_REVISION 0x0040000100020100
 #define FLAG_OH 0x10
 #define FLAG_PALOK 0x1c0 /* PL, PMV, PV */
 
@@ -273,6 +276,6 @@
 #define SLOT_SERIAL 0xc8
 #define SLOT_PAL_AVAIL 0x1d0
 #define CPU_TYPE_EV8 18     /* D3 */
-#define CONSOLE_REVISION 0x0020000100000100 /* SLOT[464]: 1.0, build 1 */
+#define CONSOLE_REVISION 0x0040000100000100 /* SLOT[464]: 1.0, build 1 */
 
 #endif

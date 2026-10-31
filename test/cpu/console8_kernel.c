@@ -45,10 +45,10 @@ typedef unsigned char u8;
 #define TK_PCB0 (TK + 0x6000)
 #define TK_ORIG (TK + 0x6100)
 #define TK_BAD (TK + 0x6200)
-#define TK_IPCB (TK + 0x7000) /* + w x 0x80 */
-#define TK_REC (TK + 0x8000)  /* + w x 0x100 */
-#define TK_STACK (TK + 0x10000) /* + w x 0x4000 */
-#define MAXW 32
+#define TK_IPCB (TK + 0x7000) /* + w x 0x80, to 0x9000 */
+#define TK_REC (TK + 0xa000)  /* + w x 0x100, to 0xe000 */
+#define TK_STACK (TK + 0x10000) /* + w x 0x4000, to 0x110000 */
+#define MAXW 64 /* the HWRPB's slots: 4 x 16 PIDs */
 
 /* hwrpb_struct (hwrpb.h) */
 #define H_PHYS 0
@@ -706,7 +706,7 @@ static void gct_walk(u64 off, u64 depth)
     rep(nm("gct.", k, ".id"), rq(node + 0x18));
     rep(nm("gct.", k, ".parent"), rq(node + 0x40));
     rep(nm("gct.", k, ".magic"), rl(node + 0x7c));
-    if (rl(node + 0x7c) != 0x59584c47 || gct_visits > 40 || depth > 8)
+    if (rl(node + 0x7c) != 0x59584c47 || gct_visits > 40 || depth > 40)
         return;
     if (rb(node) == 0x0e && rb(node + 1) == 0x2c)
         rep("gct.io7_pid", (rq(node + 0x18) >> 8) & 0xff);
