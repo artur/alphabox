@@ -85,11 +85,12 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
   if (!marvel)
     FAILURE(Configuration, "a Marvel board needs the Marvel chipset");
   // 21464 mode (docs/platforms/ev8-native.md, section 2): the EV7 console
-  // cannot drive a 21464, and the 21464's own console is to come (S12), so
-  // the machine starts from a boot image, loaded as a decompressed console
-  // is (rom.decompressed: entry, PAL_BASE, the image, the tag), whose
-  // PALcode every TPU enters at PAL_BASE + 0xB00 (N17). Without one the
-  // console image would be decompressed and run on the 21464: refused.
+  // cannot drive a 21464, so the machine starts from a boot image, loaded as
+  // a decompressed console is (rom.decompressed: entry, PAL_BASE, the image,
+  // the tag), whose PALcode every TPU enters at PAL_BASE + 0xB00 (N17):
+  // firmware/ev8's PALcode and console, or a test's image. Without one the
+  // console image would be decompressed and run on the 21464: refused. The
+  // kernel, initrd and command line are for firmware/ev8's console (S12b).
   if (marvel->mode_21464()) {
     const char *image = cfg->get_text_value("rom.decompressed", (char *)0);
     FILE *f = image ? fopen(image, "rb") : nullptr;
@@ -97,10 +98,20 @@ void marvel_board_devices(CConfigurator *cfg, CSystem *sys) {
       FAILURE_1(Configuration,
                 "the %s in 21464 mode (ev8n processors) starts from a boot "
                 "image, rom.decompressed, which it cannot read: the EV7 "
-                "console cannot drive a 21464, and the 21464's own console "
-                "does not exist yet",
+                "console cannot drive a 21464 (firmware/ev8/build.py writes "
+                "the 21464's)",
                 sys->platform().description);
     fclose(f);
+    direct_boot_config boot;
+    boot.kernel = cfg->get_text_value("kernel", "");
+    boot.initrd = cfg->get_text_value("initrd", "");
+    boot.cmdline = cfg->get_text_value("cmdline", "");
+    const std::string action = cfg->get_text_value("auto_action", "boot");
+    if (action != "boot" && action != "halt")
+      FAILURE_1(Configuration, "auto_action = \"%s\": boot or halt",
+                action.c_str());
+    boot.auto_boot = action == "boot";
+    marvel->set_direct_boot(boot);
   }
   // The CMM's clock starts at the host's local time, as the ES40's RTC does:
   // the system block's `time` or `timezone` (ToySeed.hpp).

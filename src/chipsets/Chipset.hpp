@@ -185,6 +185,10 @@ public:
     (void)ncpus;
     (void)image_base;
   }
+  /// Whether the machine takes a kernel the emulator loads for its console
+  /// (the system block's kernel, initrd, cmdline and auto_action): only a
+  /// Marvel board in 21464 mode (docs/platforms/ev8-native.md, N29, S12b).
+  virtual bool loads_kernel() const { return false; }
   /// The processor ID of the configuration's processor `index`: its number
   /// everywhere but on Marvel, where a PID follows from where the processor
   /// sits in the mesh (chipsets/marvel/Topology.hpp).

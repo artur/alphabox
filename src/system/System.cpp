@@ -101,6 +101,16 @@ CSystem::CSystem(CConfigurator *cfg) try {
   // range goes to it (Chipset.hpp).
   m_chipset = create_chipset(m_platform->chipset, this);
   m_phys_mask = m_chipset->phys_mask();
+  // A kernel the emulator loads is for the native EV8's console alone
+  // (docs/platforms/ev8-native.md, N29, S12b): refused anywhere else.
+  if (!m_chipset->loads_kernel())
+    for (const char *key : {"kernel", "initrd", "cmdline", "auto_action"})
+      if (myCfg->get_text_value(key, (const char *)0))
+        FAILURE_2(Configuration,
+                  "%s: only an ES47, ES80 or GS1280 of ev8n processors (21464 "
+                  "mode) loads a kernel for its console; the %s's console "
+                  "boots its own",
+                  key, m_platform->description);
   // Where the memory goes is the chipset's to say: from 0 on a Tsunami,
   // per processor at PID-dependent bases on an EV7 machine, in which case
   // the array spans them all and memory.bits is each processor's share.

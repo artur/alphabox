@@ -224,6 +224,16 @@ each one goes.
 - **The EV7 machines**: their console terminal is the first serial port
   (`serial0`), and `rom.nvram` names the file the console's NVRAM is kept
   in (default `cmm_nvram.bin`).
+- **The native 21464** (`ev8n` processors on the EV7 machines, 21464
+  mode): no EV7 console runs; the machine starts from a boot image,
+  `rom.decompressed`, which `firmware/ev8/build.py` writes with
+  Alphabox's own PALcode and console ([headless.md](headless.md),
+  [ev8-native.md](platforms/ev8-native.md), S12b). That console boots a
+  kernel the emulator loads, named in the machine block: `kernel` (an
+  Alpha ELF image such as `vmlinux`), `initrd`, `cmdline`, and
+  `auto_action` (`boot`, the default, enters the kernel at once; `halt`
+  waits at the console's `P00>>>` prompt for `boot`). Every other machine
+  refuses the four keys.
 
 The ES40's ten PCI slots are `pci0.1`-`pci0.4` and `pci1.1`-`pci1.6`. The
 M1543C's functions sit at `pci0.7`, `pci0.15`, `pci0.17` and `pci0.19`.

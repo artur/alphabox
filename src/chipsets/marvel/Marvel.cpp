@@ -300,19 +300,21 @@ void CMarvel::console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) {
       c->reset();
       c->load_routes(m_topology, present());
     }
-  // 21464 mode: no XSROM and no console. Every TPU of every chip has been
-  // reset into the boot image's PALcode at PAL_BASE + 0xB00 (N17; the
-  // loader's hand_to_console, CAlphaCPU::ev8_reset), with CPU_BASE its
-  // chip's dense PID (N6, N19) -- which is this machine's PID for it.
+  // 21464 mode: no XSROM. Every TPU of every chip has been reset into the
+  // boot image's PALcode at PAL_BASE + 0xB00 (N17; the loader's
+  // hand_to_console, CAlphaCPU::ev8_reset), with CPU_BASE its chip's dense
+  // PID (N6, N19) -- which is this machine's PID for it. An image with the
+  // Alphabox console gets its boot block and the kernel (S12b).
   if (m_21464) {
     for (int i = 0; i < ncpus; i++)
       if (cpus[i]->get_pid() != (u32)(i / m_topology.tpus()))
         FAILURE_2(Configuration,
                   "processor %d has PID %u, not its chip's dense number", i,
                   cpus[i]->get_pid());
-    printf("%%MVL-I-21464: %d TPU%s at PAL_BASE %" PRIx64 " + 0xB00, no "
-           "console (a boot image).\n",
+    printf("%%MVL-I-21464: %d TPU%s at PAL_BASE %" PRIx64 " + 0xB00 (a boot "
+           "image).\n",
            ncpus, ncpus == 1 ? "" : "s", cpus[0]->get_pal_base());
+    direct_boot_load(m_sys, *this, m_boot);
     return;
   }
   for (int i = 0; i < ncpus; i++) {

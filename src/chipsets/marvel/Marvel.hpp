@@ -45,6 +45,7 @@
 #define INCLUDED_MARVEL_H_
 
 #include "Chipset.hpp"
+#include "DirectBoot.hpp"
 #include "Ev7.hpp"
 #include "Ev7Csr.hpp"
 #include "Gio.hpp"
@@ -81,6 +82,10 @@ public:
   u64 pci_phys(int hose, u32 address) override;
 
   void console_started(CAlphaCPU **cpus, int ncpus, u64 image_base) override;
+  bool loads_kernel() const override { return m_21464; }
+  /// 21464 mode: the kernel, initrd and command line the system block names
+  /// for the console (DirectBoot.hpp), loaded at each start.
+  void set_direct_boot(const direct_boot_config &boot) { m_boot = boot; }
   u32 cpu_pid(int index) const override;
 
   void reset() override;
@@ -129,6 +134,7 @@ private:
   static constexpr int kMaxPids = 256;
   CMarvelTopology m_topology;
   bool m_21464 = false;
+  direct_boot_config m_boot;
   const ev7::address_map *m_map = &ev7::kEv7Map;
   u64 m_memory_per_pid = 0;
   std::vector<memory_region> m_memory_regions; ///< each processor's, by base

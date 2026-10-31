@@ -768,13 +768,15 @@ typedef struct {
 // in a device's config section is ignored by the code, so initialize() warns
 // the user to remove it.
 static const char *const kv_none[] = {0};
+// kernel, initrd, cmdline and auto_action: the native EV8's direct start, in
+// 21464 mode only; CSystem refuses them elsewhere (docs/platforms/
+// ev8-native.md, N29, S12b).
 static const char *const kv_tsunami[] = {
-    "memory.bits", "rom.srm",          "rom.flash",
-    "rom.dpr",     "rom.decompressed", "rom.nvram",
-    "time",        "arc_year_compat",  "exit_on_pal_halt",
-    "platform",    "memory.arrays",    "gdb",
-    "gdb.wait",    "timezone",         "serial_number",
-    0,
+    "memory.bits",      "rom.srm",   "rom.flash",     "rom.dpr",
+    "rom.decompressed", "rom.nvram", "time",          "arc_year_compat",
+    "exit_on_pal_halt", "platform",  "memory.arrays", "gdb",
+    "gdb.wait",         "timezone",  "serial_number", "kernel",
+    "initrd",           "cmdline",   "auto_action",   0,
 };
 // palcode.vms.nohle is accepted and ignored: it switched off the native
 // OpenVMS PALcode routines, which are gone, and old configurations set it.
