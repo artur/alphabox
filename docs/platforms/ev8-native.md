@@ -147,8 +147,9 @@ the PALmode timeout [IDS p. 632].
 - **The HW_LD/HW_ST types 001 and 011** have no meaning on the 21464.
   **[decision, N4]**: OPCDEC, as an unassigned code, so that a PALcode
   written for the 21264 fails visibly; an atomic physical update is done
-  with LDQ_L/STQ_C through a kernel superpage, which PALmode may use
-  (it runs with kernel access checks, [IDS p. 308]).
+  with LDQ_L/STQ_C through a kernel superpage, which PALmode may use once
+  CM is kernel: its virtual accesses are checked against IER_CM<CM>, as
+  normal mode's are, the Alt forms against M_MODE<ALT> [IDS p. 308].
 - **Outside PALmode** the 0x19, 0x1B, 0x1D, 0x1F and 0x1E opcodes raise
   OPCDEC **[inference]**: the 21264 allows them only with I_CTL<HWE>, and
   the 21464's I_CTL has no such field [IDS pp. 489-490]. The disruption
@@ -1629,6 +1630,16 @@ S11b (2026-10-25):
   its order; the packet checked only DNS and DEW on the scan. Nothing but
   our own code reads them.
 - [ev8-isa.md](ev8-isa.md) needed no correction.
+
+S12a (2026-10-31):
+
+- **1.2 said PALmode "runs with kernel access checks" [IDS p. 308]**: the
+  page gives the mode a virtual access is checked against as IER_CM<CM>
+  (M_MODE<ALT> for the Alt forms), with no exception for PALmode. A
+  PALcode that loads, stores or takes a lock through a superpage sets CM
+  to kernel first, as this one's entry flows do; Alphabox's
+  `ev8_virt2phys` already checks the current mode. Corrected in its own
+  commit.
 
 ## Rules
 
