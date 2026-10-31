@@ -12,8 +12,9 @@ decisions D1 to D16 and the EV7-compatible track (S1 to S10) are in
 the same day. S11, the native interface on an `ev8n` row, done the same
 day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode,
 done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, phase
-1 done 2026-10-31 ([below](#s12a-phase-1-2026-10-31)), phase 2 after the
-owner's checkpoint, which also decides N8's call. The owner's decisions that
+1 done 2026-10-31 ([below](#s12a-phase-1-2026-10-31)); at the checkpoint
+the same day the owner decided N8's call (CALL_PAL 0x3B) and started
+phase 2. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -310,7 +311,9 @@ HW_INT_CLR described [IDS pp. 479, 513-514]:
   Ibox IPR 0xAC (`1 0101 100`, the PAL_BASE group), per TPU, VEN <0>,
   reset 0, read and written by HW_MFPR and HW_MTPR; the CSR offset is not
   decoded on an `ev8n` row. The OS sets it through a PALcode call
-  (section 3.1, `wrval`-style), since it cannot execute HW_MTPR.
+  (section 3.1), since it cannot execute HW_MTPR: CALL_PAL 0x3B,
+  privileged, `v0 <- VCTL; VCTL<VEN> <- a0<0>` (the owner, 2026-10-31,
+  as S12a proposed it).
 - **DTB_PTE0/1 and DTB_TAG0/1** are one entry written twice, once per
   load/store bus (Restriction 3: Mbox IPRs of groups M2 and M3 have a
   copy per bus) [IDS pp. 504-506, 575-576]. **[decision, N9]**: the
@@ -861,6 +864,7 @@ must do on the 21464's registers:
 | swpipl, rdps | 35, 36 | IPL | PS<IPL> through the IPL table (below) into IER_CM's enables |
 | wrkgp, wrusp, rdusp | 37, 38, 3A | | impure area; USP in the PCB |
 | wrperfmon | 39 | performance counters | returns 0: not modelled |
+| (VCTL) | 3B | Tarantula's vector enable (S9, lazily) | `v0 <- VCTL; VCTL<VEN> <- a0<0>`, VCTL the IPR 0xAC; privileged, so OPCDEC from user mode **[decision, N8: the owner, 2026-10-31]** |
 | whami | 3C | `hard_smp_processor_id()` | PID x 4 + TPU, from CPU_BASE and TPU_CNFG (N25) |
 | retsys, rti | 3D, 3F | return to user or kernel | pop the frame [ARM pp. 527-528], set the mode and IPL, `RET` with Rb<1:0> = 00 |
 | wtint | 3E | idle, if `CONFIG_ALPHA_WTINT` | a QUIESCE on the TPU's own wake word with the timer set to the requested ticks: the idle TPU gives its issue slots to the others, which is what QUIESCE is for [IDS p. 46] **[decision, N26]** |
@@ -1213,8 +1217,8 @@ Each is a gap, a conflict or a choice the native track needs. The
 owner accepted all of them as proposed on 2026-10-25, N22's revision of
 D5 for the native track included (D5 stands for EV7-compatible mode); a
 stage that changes one says so. N8's PALcode call (the OS's way to set
-VCTL) gets its function code when S12a starts: S12a proposes 0x3B
-([below](#s12a-phase-1-2026-10-31)), for the owner to decide.
+VCTL) got its function code at S12a: 0x3B, as S12a proposed it
+([below](#s12a-phase-1-2026-10-31)), decided by the owner on 2026-10-31.
 
 | # | Area | What is missing or in conflict | Proposal | Why |
 | --- | --- | --- | --- | --- |
@@ -1225,7 +1229,7 @@ VCTL) gets its function code when S12a starts: S12a proposes 0x3B
 | N5 | FP shadow registers | "R24/F24 and R25/F25" once [IDS p. 574] | integer only | no other mention, p. 580's table is integer |
 | N6 | CPU_BASE | shares 0xAA with PAL_TEMP2, no section [IDS p. 478] | 0xAB, the chip's PID <9:0>, read-only, set at reset; PAL_BASE<51:48> MBZ | nothing else tells a chip its PID |
 | N7 | IER_CM, ISUM, SIRR, HW_INT_CLR | no index, three with no layout [IDS pp. 479, 513] | 0xB0-0xB3, the 21264's layouts without ASTEN; IER_CM<CM> aliases I_MODE and M_MODE CURRENT; MFPR of CC reads it | the IDS keeps the 21264's six levels [p. 465]; a free aligned block |
-| N8 | VCTL | an IPR in the native interface, no index | Ibox 0xAC, per TPU, VEN <0>; the OS sets it through PALcode | the owner's 2026-10-24 statement; HW_MTPR is PALcode's |
+| N8 | VCTL | an IPR in the native interface, no index | Ibox 0xAC, per TPU, VEN <0>; the OS sets it through PALcode, CALL_PAL 0x3B, a swap (the owner, 2026-10-31) | the owner's 2026-10-24 statement; HW_MTPR is PALcode's; 0x3B is the one code of 0x38-0x3F, the ARM's implementation-specific range, free in its three PALcode tables [ARM pp. 799-801] |
 | N9 | DTB_PTE0/1, DTB_TAG0/1 | two copies, one per bus [IDS pp. 504-506, 575-576] | one entry; the second write of a pair replaces the first | the copies are an implementation detail |
 | N10 | An invalid PTE written | the chip hangs [IDS pp. 505, 578] | dropped and traced | an emulator never hangs |
 | N11 | Entries 0x980, 0xA80, 0xB00, 0xB80 | two tables disagree [IDS pp. 499, 633-634] | chapter 22's names; power-up at 0xB00; DST_NXM not raised | the later, fuller table |
@@ -1746,9 +1750,10 @@ the test fails each time, at the results that name the fault
 **No emulator problem** was found: every flow ran as the IDS describes on
 the `ev8n` row, on the four lanes.
 
-**N8's call, proposed** (for the owner, not implemented): CALL_PAL
-**0x3B**, privileged, `v0 <- VCTL; VCTL<VEN> <- a0<0>`, t0 and t8 to t11
-UNPREDICTABLE, as for the other calls. Why:
+**N8's call**, proposed here and **decided by the owner on 2026-10-31**
+(implemented in phase 2): CALL_PAL **0x3B**, privileged, `v0 <- VCTL;
+VCTL<VEN> <- a0<0>`, t0 and t8 to t11 UNPREDICTABLE, as for the other
+calls. Why:
 
 - 0x3B is free in the three PALcode tables of the ARM, OpenVMS, Tru64 UNIX
   and Alpha Linux [ARM pp. 798-801], in Linux's `pal.h` (whose own

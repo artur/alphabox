@@ -157,15 +157,19 @@ each TPU listed as a processor has a PID and a window of its own
 - **Lazy switching** (D11): an OS that knows vectors leaves VEN at 0 until
   a thread first uses one; the OPCDEC tells it (section 5), it stores 1 to
   the VCTL in its own processor's window (the PID WHAMI returns, offset
-  0x3F0000) and returns. An OS that never stores (OpenVMS) keeps VEN at 0
+  0x3F0000), or on `ev8n` calls CALL_PAL 0x3B with a0 = 1 (below), and
+  returns. An OS that never stores (OpenVMS) keeps VEN at 0
   for every process, so no vector state ever passes between its processes.
 - **Not an I_CTL bit**, because I_CTL has none free: the 21264 assigns
   every bit, <63:48> the sign extension of VPTB, <47:30> VPTB, <29:24>
   CHIP_ID and each of <23:0> a named field [HRM pp. 158-160], and the EV7
   PALcodes use <47:30>, <29:24>, <23>, <19:18>, <16:15>, <14>, <9:8>, <7>
   and <0> of it ([marvel.md](marvel.md), "The EV7 PALcodes' internal registers").
-- In the native interface (S11) VCTL becomes an IPR in the IDS's Ibox map,
-  with an index of its own; open.
+- In the native interface (the `ev8n` row) VCTL is the Ibox IPR 0xAC, per
+  TPU, VEN <0> ([ev8-native.md](ev8-native.md), N8), which only PALcode
+  writes; the OS sets VEN with CALL_PAL 0x3B, privileged, a swap: `v0 <-
+  VCTL; VCTL<VEN> <- a0<0>` (the owner, 2026-10-31). The CSR offset
+  0x3F0000 is not decoded there.
 
 ## 3. EV8 instructions fixed by the IDS
 
@@ -894,7 +898,8 @@ to 05, raises OPCDEC with VEN = 0, with no exception, and EXC_ADDR is the
 instruction's PC. An OS that knows vectors reads the opcode at that PC: 01
 to 05 with VEN off means "vector unit disabled", so it gives the thread its
 vector state, stores 1 to its processor's VCTL (section 2) with a quadword
-store and returns to the instruction; with VEN on, an OPCDEC there is a
+store (on `ev8n`, CALL_PAL 0x3B with a0 = 1) and returns to the
+instruction; with VEN on, an OPCDEC there is a
 genuinely unused code and the program gets SIGILL. An OS that does not know
 vectors never sets VEN and delivers the illegal-instruction signal on the
 first vector instruction, so no vector state ever passes between its

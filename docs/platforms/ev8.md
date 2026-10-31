@@ -1423,7 +1423,9 @@ section), the decode in `cpu/AlphaCPU.cpp`, VCTL in
   RAZ/IGN, reset 0: `CEv7Csr` answers it from the processor's value, so
   any processor can write any processor's VCTL as the sheet places it,
   and TPUs listed as processors (S4) each have their own. On `ev8n` it is
-  the IPR 0xAC that S11 stores (N8), and the CSR offset is not decoded.
+  the IPR 0xAC that S11 stores (N8), and the CSR offset is not decoded;
+  the OS sets it there with CALL_PAL 0x3B (N8's call, the owner,
+  2026-10-31).
   With VEN = 0 every word of opcodes 01-06 raises OPCDEC, EXC_ADDR its
   own PC, and changes nothing; it is not reported as an unknown opcode,
   since that is how an OS's lazy switching works (section 5).
