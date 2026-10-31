@@ -531,12 +531,17 @@ default, or `NADA`) and boots it on the ES47 in 21464 mode (2 chips of 4
 `ev8n` TPUs) with a test program in the console's place, its output on the
 CMM's terminal. It checks the reset and parking of every TPU, the start of
 each secondary through the HWRPB's RXRDY as Linux starts one, the DTB and
-ITB fills through the virtual page table and the double miss, entMM for
-ten faults (one from user mode), entInt for interprocessor interrupts, the
-CALL_PALs of S12a's phase 1 against the ARM, the halts and each TPU's
-impure area ([ev8-native.md](platforms/ev8-native.md), "S12a"). About 1050
-results, under a second; `firmware/ev8/build.py` alone writes the
-`rom.decompressed` into `lab/firmware-ev8/`.
+ITB fills through the virtual page table and the double miss, every OS
+entry with its arguments and frame from kernel and user mode (entMM for
+the TB faults, DFAULT, IACV and BAD_JUMP_IVA; entIF, entArith, entUna,
+entSys; entInt for the interprocessor interrupt, the timer, two IIDs put
+into the interrupt queue and a sym53c810's interrupt ended by the
+PALcode), every CALL_PAL against its ARM page (swpctx, tbi, wtint and
+cserve's TOY among them), the halts with their records and message, and
+each TPU's impure area ([ev8-native.md](platforms/ev8-native.md), "S12a,
+phase 1" and "phase 2"). About 2700 results in under a second;
+`firmware/ev8/build.py` alone writes the `rom.decompressed` into
+`lab/firmware-ev8/`.
 
 **The EV8's 1C SIMD set and paired single.** Group `simd`
 (`test/cpu/simd_cases.py`) checks every row of

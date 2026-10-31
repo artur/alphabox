@@ -14,7 +14,8 @@ day ([below](#s11-2026-10-25)); S11b, the Marvel model in 21464 mode,
 done the same day ([below](#s11b-2026-10-25)); S12a, the PALcode, phase
 1 done 2026-10-31 ([below](#s12a-phase-1-2026-10-31)); at the checkpoint
 the same day the owner decided N8's call (CALL_PAL 0x3B) and started
-phase 2. The owner's decisions that
+phase 2, done the same day ([below](#s12a-phase-2-2026-10-31)): every
+CALL_PAL and entry of section 3 is in. The owner's decisions that
 frame it: option A first (an `ev8` row in EV7-compatible mode, S1 to S4
 done), then the native interface as planned work, gaps
 filled by inference and marked (2026-10-24); in EV7-compatible mode one
@@ -851,7 +852,7 @@ must do on the 21464's registers:
 | halt | 00 | `halt`, `poweroff`, `reboot`: back to the console | record the halt in the per-CPU slot (reason, PC, PS) and enter the console's halt path; a TPU other than the console's parks (N17) |
 | cflush | 01 | (not on Marvel) | nothing: no cache is modelled |
 | draina | 02 | after machine-check handling | MB; machine checks are never raised |
-| cserve | 09 | 0x48 PUT_TOY and 0x49 GET_TOY on Marvel, boot CPU only (`__marvel_access_rtc`, [marvel.md](marvel.md), "Interrupts") | the TOY bytes in the CMM's memory through the GIO byte window (registers 1 and 2), under the GIO lock word; any other function returns failure |
+| cserve | 09 | 0x48 PUT_TOY and 0x49 GET_TOY on Marvel, boot CPU only (`__marvel_access_rtc`, [marvel.md](marvel.md), "Interrupts") | the TOY bytes in the CMM's memory through the GIO byte window (registers 0 to 2), under the GIO lock word; any other function, or an index outside 0 to 0x10B, returns -1 ([S12a, phase 2](#s12a-phase-2-2026-10-31)) |
 | swppal | 0A | (a bootstrap switching PALcode) | returns 1, "unknown PALcode variant": there is one PALcode **[decision, N24]** |
 | wripir | 0D | IPIs | target n: write 1 << (n & 3) to R_INT_REQ of PID n >> 2, a physical HW_ST to `ipe8(n >> 2) \| 0x7FFC << 20 \| 0x70` (N22) |
 | rdmces, wrmces | 10, 11 | machine-check summary | per TPU, in the impure area |
@@ -867,10 +868,10 @@ must do on the 21464's registers:
 | (VCTL) | 3B | Tarantula's vector enable (S9, lazily) | `v0 <- VCTL; VCTL<VEN> <- a0<0>`, VCTL the IPR 0xAC; privileged, so OPCDEC from user mode **[decision, N8: the owner, 2026-10-31]** |
 | whami | 3C | `hard_smp_processor_id()` | PID x 4 + TPU, from CPU_BASE and TPU_CNFG (N25) |
 | retsys, rti | 3D, 3F | return to user or kernel | pop the frame [ARM pp. 527-528], set the mode and IPL, `RET` with Rb<1:0> = 00 |
-| wtint | 3E | idle, if `CONFIG_ALPHA_WTINT` | a QUIESCE on the TPU's own wake word with the timer set to the requested ticks: the idle TPU gives its issue slots to the others, which is what QUIESCE is for [IDS p. 46] **[decision, N26]** |
+| wtint | 3E | idle, if `CONFIG_ALPHA_WTINT` | a QUIESCE on the TPU's own wake word: the idle TPU gives its issue slots to the others, which is what QUIESCE is for [IDS p. 46] **[decision, N26]**; any interrupt or QUIESCE_TIMEOUT's longest timeout ends it, no tick is skipped (v0 = 0) ([S12a, phase 2](#s12a-phase-2-2026-10-31)) |
 | bpt, bugchk, gentrap | 80, 81, AA | | entIF with the type [ARM pp. 544-548] |
 | callsys | 83 | system calls | entSys; from kernel mode, a bugcheck |
-| imb | 86 | instruction-stream barrier | IC_FLUSH (0xCC) and IFETCHB |
+| imb | 86 | instruction-stream barrier | IC_FLUSH (0xCC) and IFETCHB; from user mode, the PCB's IMB bit (+40 <32>) set [ARM p. 267; Figure 23-1, p. 596] |
 | rdunique, wrunique | 9E, 9F | thread pointer | the PCB's UNIQUE |
 | clrfen | AE | | FP_ENABLE off |
 
@@ -913,7 +914,8 @@ rest of the HWRPB is the console's ([section 4](#4-the-minimal-console-s12)).
 Per TPU, in an impure area of its own: the six entry addresses, KGP,
 PTBR, PCBB, MCES, the per-CPU value, the scratch the flows save into
 (only two shadow registers, so the flows spill more than the 21264's
-do), and the IPL. PAL_TEMP1 holds the area's PA, PAL_TEMP2 is free.
+do), and the IPL. PAL_TEMP1 holds the area's PA, PAL_TEMP2 an ITB miss's
+VA across a double miss ([S12a](#s12a-phase-1-2026-10-31)).
 
 ### 3.4 SMP: WHAMI, IPIs, per-TPU state
 
@@ -1082,7 +1084,7 @@ use `alpha_asm.py`. The console is C (section 4), compiled by nada for
 | Its OpenVMS PALcode V2.11-25 | 64 KB, 16384 instructions, 11168 reached | the same |
 | qemu-palcode's `pal.S` | 1950 lines, for QEMU's own idealised processor (no TB fill flows: QEMU walks the page tables itself) | `lab/datasheets/ev8-native/qemu-palcode/` |
 | The oracle image's PALcode | a few hundred instructions (`image.py`, `build_pal`) | `test/cpu/image.py` |
-| **Ours** | **2000 to 3000 instructions** (8 to 12 KB) **[guess]**: the EV7's UNIX PALcode less its machine-check, error-logging and console-service code, plus the 21464's TB fill flows | |
+| **Ours** | **2000 to 3000 instructions** (8 to 12 KB) **[guess]**: the EV7's UNIX PALcode less its machine-check, error-logging and console-service code, plus the 21464's TB fill flows; **as built at S12a: 1642 words in 0x49F0 bytes, about 1400 doing the work** | `firmware/ev8/pal.c` |
 
 ## 4. The minimal console (S12)
 
@@ -1775,7 +1777,8 @@ calls. Why:
   nothing; SWPCTX leaves VEN as the kernel set it".
 
 **Phase 2**, each part's tests written from the ARM and the IDS before
-the code, in `pal8_test.py`:
+the code, in `pal8_test.py` (done the same day,
+[below](#s12a-phase-2-2026-10-31)):
 
 - The rest of 3.1: swpctx (its load half is the start's), tbi, imb, wrfen
   and clrfen, wrvptptr, wrusp and rdusp, rdunique and wrunique, retsys,
@@ -1794,6 +1797,254 @@ the code, in `pal8_test.py`:
 - The HWRPB slot fields 3.3 gives the PALcode, the kernel stack's checks,
   and a DTB miss in PALmode taken rather than halting, if the owner wants
   it.
+
+## S12a, phase 2 (2026-10-31)
+
+The rest of section 3 in the same sources, after the owner's checkpoint
+of the same day (N8 decided: CALL_PAL 0x3B, a swap of VCTL<VEN>). The
+tests came first: `pal8_test.py` grew from 1054 results to 1536 written
+from the ARM and the IDS, of which phase 1's PALcode passed 322 and
+failed 1214. Now every CALL_PAL of 3.1 and every entry of 3.2 is in; no
+entry or call halts for want of code.
+
+**What phase 2 adds**, by the section it implements:
+
+- **Reset** (3.2): R_INT_MASK[t] gets its full set: the TPU's
+  interprocessor bit <t>, its timer bit <4+t> and its halt bit <8+t>, and
+  on TPU 0 of each chip the interrupt queue <12> **[decision]**: the IO7
+  sends a chip's device interrupts to its PID (N22), and one TPU takes
+  them, as the EV7 did. GIO's bits <14:13> stay clear: Linux's console
+  terminal is polled (`srmcons.c`) **[decision]**.
+- **The start** (3.3): the slot's PALcode fields [ARM pp. 632-633]: its
+  memory at PA 0, 0xA000 bytes (the text and the shared data), its scratch
+  at 0xA000, 0x4000 bytes (32 impure areas), and its revision
+  0x0020000100020100: 32 processors may share it, compatibility 1,
+  variation 2 (Tru64 UNIX and Alpha Linux, [ARM p. 808]), version 1.0
+  **[decision]**; and the flags PL, PMV and PV with BIP **[decision]**: the
+  console sets them for processor 0 (S12b).
+- **The entries** (3.2), the faults among them halting the TPU when
+  raised in PALmode (below):
+  - FEN: entIF type 3 at the instruction; OPCDEC: entIF type 4 at the next
+    one [ARM p. 605]. A Tarantula word with VEN clear arrives as OPCDEC,
+    and the lazy enable of [ev8-isa.md](ev8-isa.md) section 5 (0x3B, then
+    the word again) is tested.
+  - UNALIGN: entUna with the VA, M_STAT<OPCODE> (<9:4>) and EXC_SUM's Ra
+    (<28:24>) [ARM p. 607], the frame's PC the next instruction
+    **[inference]**: Linux's `do_entUna` emulates the access and returns
+    past it, and qemu-palcode adds 4 the same way.
+  - DFAULT: entMM with the VA, the MMCSR from M_STAT (ACV <1>, else FOR
+    <2>, else FOW; a bad VA is ACV, N12) and M_STAT<WR> as the cause [ARM
+    pp. 593, 606], at the instruction. IACV: entMM with the instruction's
+    VA, ACV and cause -1, at it.
+  - BAD_JUMP_IVA: entMM with the jump's target, ACV and cause -1. The jump
+    did not complete [IDS p. 629], so the frame's PC is the jump's and its
+    link register is unchanged **[decision]**: Linux's `do_page_fault`
+    sees the faulting instruction. The target is EXC_SUM's Rb (<23:19>),
+    read through a table of 32 moves reached by a computed jump and an
+    IFETCHB (Restriction 14); R22 and R23 are named as operand A there,
+    the architectural registers.
+  - ARITH: entArith with EXC_SUM<6:0>, which is the ARM's exception
+    summary [ARM p. 603], and the register write mask, bit Rc of
+    EXC_SUM<18:14> for an integer instruction (EXC_SUM<INT>, <13>) and bit
+    32 + Rc for a floating one **[inference]**, at EXC_ADDR, already the
+    next PC [IDS p. 485]. EXC_SUM<SET_*> asks the PALcode to set those FPCR
+    bits [IDS p. 486], which it does with SUM through f0, kept; Alphabox's
+    core sets the FPCR itself and reads those bits zero
+    ([cpu-fidelity.md](../cpu-fidelity.md)), so that path is never taken
+    here.
+  - INTERRUPT: ISUM's levels against this TPU's bits of R_INT_STAT, the
+    highest IPL first: EI2 the timer (entInt type 1 at IPL 5), EI3 the
+    interprocessor interrupt (type 0 at IPL 5), EI4 a halt request (the
+    TPU halts, reason 1) or GIO (cleared and dismissed: no mask enables
+    it), EI1 the queue: the IID at R_INT_QUE's head (<24> valid) is
+    removed by a write, kept for its end of interrupt, and passed as the
+    vector Linux decodes, `PE << 16 | 0x800 + (LSI << 4)`, or `0x1000 +
+    (MSI << 4)` for an IID with <13> (`io7_device_interrupt`), entInt type
+    3 at IPL 4 [ARM p. 605]. Each bit is written back with one to clear it
+    before the OS runs. A level with none of this TPU's bits (a race) is
+    dismissed; EI0 and EI5, never raised, halt the TPU **[decision]**.
+  - **The end of interrupt** **[inference]**: Linux never writes an IO7's
+    EOI_DAT; the EV7 console's PALcode does, and the IO7 model follows it
+    ([marvel.md](marvel.md), M5): until EOI_DAT names the IID, that line is
+    not sent again. So this PALcode ends the IID in service when the IPL
+    drops below 4, in swpipl, rti and retsys **[decision]**, by a physical
+    store of the IID to EOI_DAT of the IO7 port the IID's <6:5> name, at
+    `ipe8(PE) | (~port & 7) << 32 | 0xFF800000 + 0x2400` (N18; Linux's
+    `io7_ioport_csrs`). One IID is in service at a time, since IPL 4 masks
+    EI1 until then.
+  - The entries never raised (0x080, MCHK, IMCHK, FAST_RESET, WAKEUP,
+    TPU_RESTART, DST_NXM, 0xC00 to 0xF80), and FEN, UNALIGN, OPCDEC,
+    IACV, ARITH or BAD_JUMP_IVA raised in PALmode, halt the TPU with reason
+    0x10000 | the entry's offset **[decision, as in phase 1]**; a DFAULT in
+    PALmode is a fault at the kernel stack, reason 2 [ARM p. 607].
+- **The entries' common path**: a kernel stack pointer that is not
+  quadword aligned halts the TPU with reason 2, kernel stack not valid
+  [ARM p. 607], before any frame is pushed; rti and retsys check it too.
+- **The CALL_PALs** (3.1), from their ARM pages: cflush (nothing), draina
+  (an MB), swppal (v0 = 1, N24), wrperfmon (v0 = 0), rdmces and wrmces
+  (a0<2:0> clear MIP, SCE and PCE; DPC and DSC become a0<3> and a0<4>),
+  wrfen and clrfen (I_PCTX<FP_ENABLE> and the PCB's FEN), wrvptptr (both
+  VPTE_BASEs), wrusp and rdusp, rdunique and wrunique (kept in the impure
+  area while the context runs, saved by swpctx), 0x3B (N8), imb (IC_FLUSH;
+  from user mode the PCB's IMB bit, +40 <32> [ARM p. 267; Figure 23-1,
+  p. 596]), bpt, bugchk and gentrap (entIF types 0, 1 and 2 at the next
+  PC), callsys (entSys from user mode with a0 to a2 the caller's; from
+  kernel mode a bugcheck, entIF type 1, as 3.1 has it), retsys (PC and GP
+  from the frame, KSP = SP + 48, SP = USP, PS user at IPL 0, the lock flag
+  cleared). Every code 3.1 does not list is opDec, entIF type 4 at the
+  next PC [ARM pp. 605, 801].
+  - **swpctx** [ARM p. 560]: the old PCB at PCBB gets KSP, USP, the
+    charged process cycles (PCC's two halves added, into +24 <31:0>) and
+    UNIQUE; the new PCB gives SP, USP, PTBR, UNIQUE, CC<OFFSET> = its
+    cycles - PCC<31:0> (the counter kept enabled), its ASN into I_PCTX and
+    M_PCTX and FEN into I_PCTX; v0 the old PCBB.
+  - **tbi** [ARM p. 565]: -2 ITB_IM and DTB_IM mode 01 (this TPU's
+    group), -1 mode 05 (the group's entries without ASM), 1 ITB_IS, 2
+    DTB_IS, 3 both, with a1; anything else nothing.
+  - **wtint** (N26): IER_CM gets IPL 0's enables, QUIESCE_TIMEOUT its
+    largest timeout (0xFFFF0 cycles, 1.3 ms at 800 MHz) with WATCH_EN,
+    then LDQ_ARM on the TPU's impure area and QUIESCE; then the IPL's
+    enables and the parking's QUIESCE_TIMEOUT again, and v0 = 0. Any
+    interrupt ends the sleep, whatever the IPL **[decision]**: the ARM ends
+    wtint at "any interrupt other than a clock tick" and lets it return at
+    once [p. 579]. The ticks a0 asks to skip are not counted: one Linux
+    tick (HZ 1024) is shorter than the longest timeout, and a timer tick
+    ends the sleep like any interrupt, so v0 = 0 is always true
+    **[decision]**, refining N26's "with the timer".
+  - **cserve** [ARM p. 553]: 0x49 GET_TOY and 0x48 PUT_TOY with a1 the
+    index and a2 the byte, as `__marvel_access_rtc` passes them. The TOY
+    is the MC146818 image in the CMM's memory: 0x40000 + (PID & 1) x
+    0x6000, plus 0x1AAC + index for 0 to 11, 0x4B98 + index - 12 for 12 to
+    0x10B ([marvel.md](marvel.md), M4) **[inference]**. Under the chip's
+    GIO lock word, after writing GIO_CNFG's divisor (2) if it is zero
+    (S11b's finding), the address goes to the CMM's register 2; a GET
+    writes GO to register 0 and reads register 1, the byte in the lane the
+    address's parity names; a PUT writes the byte in its lane to register
+    1, then GO with LOW or HIGH to register 0. v0 is the byte, 0 for a
+    PUT, -1 for any other function or an index outside 0 to 0x10B
+    **[decision]**;
+    r2 to r5 are kept, r1 and r16 to r18 are not (Linux's clobbers).
+- **Halt** (3.1, 3.3) [ARM pp. 634-638]: interrupts off in kernel mode;
+  the IID in service ended; the context into the HWPCB at PCBB as swpctx
+  saves it (KSP, USP, the cycle count, UNIQUE) **[decision]**; for reason 2
+  and from 0x10000 up, a message on the CMM's terminal, `%PAL8-F-HALT, CPU
+  w, reason r, PC p`, through the chip's GIO under its lock
+  **[decision]**; then the slot's record (PCBB, PC, PS, R25 to R27, the
+  reason, OH with reason 1 [p. 638]); then processor 0 to the console with
+  a0 = the reason and a1 = 0, any other to its parking. The message comes
+  before the record **[decision]**: a processor waiting for the record
+  then finds the terminal free. The first order failed 3 of 150 runs of
+  six concurrent loops: processor 7's message (chip 1) ran into processor
+  0's results (chip 0) on the one terminal, which two chips' locks do not
+  exclude.
+- **A halt request** (R_INT_REQ<11:8>, N22) stops the TPU with reason 1,
+  the operator's [ARM p. 635], at the interrupted PC.
+- **A DTB miss in PALmode still halts** the TPU (phase 1's decision,
+  kept): Linux never causes one **[inference]**. The PALcode's virtual
+  accesses are the kernel stack and KSEG addresses (the impure area for
+  STQ_C, RXRDY, the GIO lock words), and Alpha Linux's kernel stacks are
+  in its task structures, which come from the direct map: KSEG, mapped by
+  SPE43 with no TB entry (alpha selects no `HAVE_ARCH_VMAP_STACK`,
+  `lab/datasheets/ev8-native/linux/arch_alpha_Kconfig`).
+
+**Layout additions** (`layout.h`): the slot's PALcode fields and their
+values; the GIO lock words at PAL_DATA + 0x100 + PID x 0x40, through KSEG
+**[decision]** (part of N22); the CMM's registers and TOY offsets; the IO7
+EOI address's parts; the impure area's new words (the IID in service, the
+saves of do_eoi and the scratch). `build.py` checks the new derived
+values and the third RET word, RET $31, (R6), with which the message's
+subroutines return.
+
+**Size**: 1642 words in 0x49F0 bytes, the message's 40 bytes among them:
+94 unassigned CALL_PAL slots of two instructions each and 15 entries
+never raised of three are stubs, so about 1400 instructions do the work,
+under 3.7's guess of 2000 to 3000.
+
+**The test**, `pal8_test.py`: 2693 results. Beside phase 1's: every
+CALL_PAL of 3.1 against its ARM page, among them swpctx there and back
+(the PCB's fields, the ASN: TB entries filled at one ASN are missed at the
+other), tbi's five forms on loads and calls through the page tables, imb
+after rewriting code, wtint idle and with an IPI pending, cserve on the
+TOY (register B, the year and month against the host's clock, an NVRAM
+byte written and read, two bad indexes and a bad function); every entry
+of 3.2 with its arguments, frame and PS, from kernel and user mode (user
+programs reach callsys, retsys, rdunique, imb, clrfen, a privileged call
+and three access violations); the timer's two ticks; an LSI's and an
+MSI's IID put
+into the queue; a sym53c810 on the IO7 whose interrupt arrives, is ended
+by the PALcode as the IPL drops, and arrives again; a halt request, a
+kernel stack not quadword aligned with its message, and every halt's
+HWPCB and slot. Two tests follow Alphabox where the hardware differs: the
+unaligned accesses cross a page, since Alphabox traps only those
+([cpu-fidelity.md](../cpu-fidelity.md), "Unaligned data accesses do not
+trap"), and the idle wtint is repeated for up to a second until 32 have
+lasted the timeout, since the JIT fails a QUIESCE on a newly watched page
+until every other processor has dropped its cached translations, which
+the IDS allows [IDS p. 671] (cpu-fidelity.md, the QUIESCE row), and a
+loaded host can take many tries to get there. That they were QUIESCEs
+ended by the timeout is read from the emulator's own count
+(`ALPHABOX_TRACE_QUIESCE`): an RPCC check alone was passed with QUIESCE
+removed by a host that ran processor 0 late, and stopped the loop before
+a real sleep in 17 of 200 runs at a load of 74.
+
+**The proofs**, with main's binaries at 4b90085 (no `src/` change): PASS
+2693 on the interpreter, JIT, JIT_VERIFY (0 mismatches) and x86-64
+lanes; repeated, 200 of 200 on the JIT, 100 of 100 on the interpreter
+and on x86-64, 50 of 50 on JIT_VERIFY; six concurrent loops of 100 on the
+JIT, 600 of 600, and twelve of 50, 600 of 600. On the JIT,
+`tarantula_vv.py` and `tarantula_mem.py` with `--cpu ev8n` and
+`marvel8_mp.py` (1034 results) pass. Made wrong on purpose in 42 ways in
+a scratch copy (phase 1's ten, and in phase 2 cserve's two index bounds,
+GET's and PUT's byte lanes, swpctx's USP, I-stream ASN and D-stream ASN,
+tbi -1 and tbi 2, retsys's PS, imb's PCB bit, the MSI vector, the EOI's
+port, the timer's type, OH,
+wtint without QUIESCE, FEN's type, OPCDEC's PC, UNALIGN's register,
+ARITH's register bank, BAD_JUMP_IVA's register field, the stack
+alignment check, FOR as FOW, the KSP at a halt, the PALcode revision, VEN
+not written, the message's text, wrmces, callsys from kernel mode, the
+PCB's FEN, wrvptptr's I-stream base, the timer bit at reset), the test
+fails in 41, at the results that name the fault. The one it passes,
+I_CTL<VPTE_BASE> left unwritten by wrvptptr, cannot be seen from outside:
+the double miss walks only the PTE address's index bits from PTBR, so an
+ITB miss through a wrong IVA_FORM still finds the right PTE.
+
+**Emulator problems**: none new. The two differences the test meets are
+already documented (above). One observation for S13, from
+`ALPHABOX_TRACE_QUIESCE` in one run on the JIT: the parked TPUs' QUIESCEs
+failed as unsettled 300 to 7700 times each in the 0.2 s of the test, and
+ended "other" 50 to 320 times, while each still slept about 115 ms of
+it. The IDS allows a QUIESCE to fail; whether eight TPUs idling under
+Linux cost the host noticeably is S13's to measure.
+
+**What S12b's console gets from this PALcode, and owes it**:
+
+- **Its entry**: KSEG | 0x20000, kernel mode, IPL 7, IER_CM 0, FP
+  enabled, no stack; a0 = 0 at power-up, or after a halt the reason (5
+  for CALL_PAL HALT, 1 a halt request, 2 a kernel stack not valid,
+  0x10000 | an offset for an entry never raised); a1 = its WHAMI (0) at
+  power-up, 0 after a halt. Its PCB is the impure area's, PCBB =
+  0xA000 + 0x180, PTBR 0, until it swaps to its own with swpctx.
+- **The HWRPB at PA 0x10000**, which it builds: the PALcode reads the id
+  ("HWRPB" at +8) before writing any halt record, the VPTB (+0x78), the
+  number of processors, the slot size and offset (+0x90 to +0xA0), the
+  restart routine and its data (+0x100, +0x108) and RXRDY (+0x128); slots
+  indexed by WHAMI, 4 per PID (N25). For processor 0 the console writes
+  its own slot's PALcode fields (the values in `layout.h`) and the flags
+  `smp.c` counts (PA, PP, PL, PMV, PV, 0x1CC); for a secondary, CV in its
+  slot is what lets the PALcode start it.
+- **The secondaries** are parked on RXRDY; Linux starts them (`smp.c`),
+  the console need not.
+- **GIO**: the console takes its chip's lock word (KSEG | 0x8100 + PID x
+  0x40) around each GIO transaction, as cserve and the halt message do,
+  and may set GIO_CNFG's divisor first; the PALcode writes 2 only if it
+  finds zero.
+- **The interval timer**: R_INTER_TIM is the console's or Linux's to
+  start; the PALcode only takes and clears the ticks. R_INT_MASK is set at
+  reset and should be left as it is.
+- **To start the kernel**: page tables with Linux's self-map, the VPTB in
+  the HWRPB, then wrvptptr and a swpctx to a PCB with KSP, PTBR and FEN,
+  and the jump to the kernel in kernel mode; Linux calls wrent, wrkgp and
+  swpipl itself (`head.S`, `setup.c`).
 
 ## Findings
 
@@ -1873,6 +2124,21 @@ S12a (2026-10-31):
   to kernel first, as this one's entry flows do; Alphabox's
   `ev8_virt2phys` already checks the current mode. Corrected in its own
   commit.
+- **One terminal, a lock per chip** (phase 2): N22's GIO lock words are
+  per PID, which keeps each chip's GIO port to one transaction at a time,
+  but every chip of a CMM writes the same terminal, so two chips' output
+  can interleave by the character. The PALcode's halt message did, with
+  the test's own output from the other chip, until the halt record was
+  moved after the message. A console (S12b) that prints from more than
+  one chip at once needs a lock of its own for the terminal; Linux prints
+  from one CPU at a time.
+- **3.2's DFAULT row** adjusts VA back "if big-endian" [IDS p. 512]: this
+  PALcode never sets M_CTL<BIG_ENDIAN> (N15), so it does not.
+- **The ARM's text layer loses the PCB figures' bit positions**: it
+  keeps only the labels 62 and 61 beside PME and IMB, which read as if
+  IMB were <61>; the rendered pages put IMB at <32> of the flags
+  quadword, in Linux's PCB (+40, PME <62>, FEN <0>, Figure 23-1 [ARM
+  p. 596]) as in OpenVMS's HWPCB (+56, Figure 12-1 [p. 388]).
 
 ## Rules
 
