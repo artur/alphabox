@@ -16,16 +16,29 @@ way [21464 IDS Rev 1.1k, PDF p. 674] while processor 0, after a delay of
 
   1 store      processor 0 stores 0 to the lock
   2 STx_C      processor 0 stores 0 with LDQ_L/STQ_C
-  3 timeout    nobody writes: one LDQ_ARM and QUIESCE, which last the timeout
-  4 interrupt  processor 1 enables the interprocessor interrupt and
+  3 interrupt  processor 1 enables the interprocessor interrupt and
                QUIESCEs; processor 0 sends it (the Cchip's MISC<IPREQ>)
-  5 DMA        a SCSI controller's SCRIPTS Memory Move (a sym53c810 in
+  4 DMA        a SCSI controller's SCRIPTS Memory Move (a sym53c810 in
                pci0.3, PCI window 0 direct-mapped) writes 0 to the lock
+  5 timeout    nobody writes: one LDQ_ARM and QUIESCE, which last the timeout
 
-Each scenario but the timeout must end after the delay and well before the
-timeout, and the emulator's own count (ALPHABOX_TRACE_QUIESCE) must name
-the cause: woken by store 1, STx_C 1, DMA 1, interrupt 1, timeout 1.
-Exit status 0 when everything holds.
+Each scenario but the timeout must end well before the timeout, as many
+delays must have passed on processor 1's counter since its first wait
+began, and the emulator's own count (ALPHABOX_TRACE_QUIESCE) must name the
+cause: woken by store 1, STx_C 1, DMA 1, interrupt 1, timeout 1. Exit
+status 0 when everything holds.
+
+The count since the first wait, and the timeout last, are for a loaded
+host. A starved processor's counter stops at its bound and then runs ahead
+of the host's clock until it has caught up (TickSchedule.hpp, CcBound), so
+one of processor 0's delays can be short in host time, while processor 1,
+asleep, counts the host's time in full: one wait can read long and the next
+short. What was lost is repaid exactly, so the delays still add up on
+processor 1's counter. Time lost outside the delays does not add up: so
+processor 0 spends one delay repaying what the boot lost before the first
+wait begins, and nothing is measured after its long spin through a timeout.
+Under 64 busy processes on 16 cores 25 of 30 runs read a short wait with
+the timeout third, none without the bound.
 """
 import argparse
 import os
@@ -49,7 +62,9 @@ DELAY = 1 << 24          # processor 0's wait before it releases, cycles
 
 DATA_PA = 0x1E0000       # the shared page: one 64-byte line each
 LOCK, WHO, ALIVE, GO, READY, DONE = 0x000, 0x040, 0x080, 0x0C0, 0x100, 0x140
-RES = 0x400              # results: 4 quadwords per scenario
+START = 0x180            # processor 1's RPCC when its first wait began
+RES = 0x400              # results: RES_Q quadwords per scenario
+RES_Q = 5
 SCRIPTS_PA = 0x1E8000    # the SCSI controller's program, and its source
 ZERO_PA = 0x1E8100       # eight zero bytes the Memory Move copies
 
@@ -62,7 +77,7 @@ SYM_DEV = 3                                  # pci0.3
 SYM_BAR = 0x10000000                         # its registers, PCI memory
 SYM_DSP = 0x2C
 
-SCENARIOS = ("store", "STx_C", "timeout", "interrupt", "DMA")
+SCENARIOS = ("store", "STx_C", "interrupt", "DMA", "timeout")
 
 CFG = """sys0 = tsunami
 {
@@ -164,6 +179,7 @@ def build():
     a.li(5, seg48(DPR_START1))
     a.emit(mem(OP["STQ"], R31, 5, 0))
     wait_eq(ALIVE, 1, "w_alive")
+    delay("settle")
     for k, name in enumerate(SCENARIOS, 1):
         a.emit(mem(OP["LDA"], 1, R31, 1))
         a.emit(mem(OP["STQ"], 1, D, LOCK))       # locked
@@ -190,9 +206,9 @@ def build():
             a.emit(mem(OP["STL"], 1, 5, SYM_DSP))  # starts the SCRIPTS
         a.emit(mfc(A.MISC["MB"]))
         wait_eq(DONE, k, "w_done%d" % k)
-    image.emit_print_text(a, "\n@@BEGIN %d\n" % (4 * len(SCENARIOS)))
+    image.emit_print_text(a, "\n@@BEGIN %d\n" % (RES_Q * len(SCENARIOS)))
     a.li(16, kseg(DATA_PA + RES))
-    a.li(17, 4 * len(SCENARIOS))
+    a.li(17, RES_Q * len(SCENARIOS))
     a.branch(OP["BSR"], 18, "print_hex")
     image.emit_print_text(a, "@@END\n")
     a.emit(call_pal(0x00))
@@ -204,7 +220,7 @@ def build():
     a.emit(mem(OP["LDA"], 1, R31, 1))
     a.emit(mem(OP["STQ"], 1, D, ALIVE))
     for k, name in enumerate(SCENARIOS, 1):
-        res = RES + 32 * (k - 1)
+        res = RES + 8 * RES_Q * (k - 1)
         wait_eq(GO, k, "w_go%d" % k)
         if name == "interrupt":
             a.li(17, 1 << (33 + 3))              # IER: EIEN<3>, the IPI
@@ -213,6 +229,8 @@ def build():
             a.emit(mem(OP["STQ"], R31, 21, image.TR_COUNT))
         a.emit(mem(OP["LDA"], 9, R31, 0))        # r9: QUIESCEs executed
         a.emit(mfc(A.MISC["RPCC"], 6))
+        if k == 1:
+            a.emit(mem(OP["STQ"], 6, D, START))
         a.emit(mem(OP["LDA"], 1, R31, k))
         a.emit(mem(OP["STQ"], 1, D, READY))
         if name in ("timeout", "interrupt"):
@@ -231,6 +249,10 @@ def build():
             a.branch(OP["BR"], R31, "busy%d" % k)
             a.label("got%d" % k)
         a.emit(mfc(A.MISC["RPCC"], 7))
+        a.emit(mem(OP["LDQ"], 1, D, START))
+        a.emit(opr(0x10, 0x29, 7, 1, 1))
+        a.emit(opl(0x12, 0x31, 1, 0x0F, 1))
+        a.emit(mem(OP["STQ"], 1, D, res + 32))   # since the first wait began
         a.emit(opr(0x10, 0x29, 7, 6, 7))
         a.emit(opl(0x12, 0x31, 7, 0x0F, 7))
         a.emit(mem(OP["STQ"], 7, D, res))        # the wait, in cycles
@@ -307,20 +329,23 @@ def main():
                 break
             if ln:
                 vals.append(int(ln, 16))
-    if len(vals) != 4 * len(SCENARIOS):
+    if len(vals) != RES_Q * len(SCENARIOS):
         print("  no results (see %s)" % workdir)
         for ln in emu.splitlines()[-10:]:
             print("   |", ln)
         print("  QUIESCE MP: FAIL")
         return 1
+    delays = 0
     for k, name in enumerate(SCENARIOS):
-        wait, n, traps, vec = vals[4 * k:4 * k + 4]
+        wait, n, traps, vec, since = vals[RES_Q * k:RES_Q * k + RES_Q]
         if name == "timeout":
             good = wait >= TIMEOUT and n == 1
             want = ">= %d (the timeout)" % TIMEOUT
         else:
-            good = DELAY <= wait < TIMEOUT and n >= 1
-            want = "from %d (the delay) to below %d (the timeout)" % (DELAY, TIMEOUT)
+            delays += 1
+            good = since >= delays * DELAY and wait < TIMEOUT and n >= 1
+            want = "%d since the first wait, from %d (the delays), below %d (the timeout) each" % (
+                since, delays * DELAY, TIMEOUT)
         if name == "interrupt":
             good = good and traps == 1 and vec == 0x680
         print("  %-9s waited %10d cycles (%6.1f ms), %d QUIESCE%s%s: %s (%s)" % (

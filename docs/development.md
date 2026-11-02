@@ -489,11 +489,18 @@ two processors of the row on the ES40 (the same hook and image PALcode;
 processor 0 starts processor 1 through the dual-port RAM's start word),
 the timeout at 2^28 cycles. Processor 1 waits on a lock, as the 21464 IDS
 writes the loop; processor 0 releases it 2^24 cycles later with a store,
-then with a STx_C; then nobody writes; then processor 0 sends an
-interprocessor interrupt; then a sym53c810's SCRIPTS Memory Move writes
-the lock (DMA). Each wait must end after the release and before the
-timeout (the third at it), and `ALPHABOX_TRACE_QUIESCE` must count one
-wake-up of each cause. About a second. The Linux side is
+then with a STx_C; then processor 0 sends an interprocessor interrupt;
+then a sym53c810's SCRIPTS Memory Move writes the lock (DMA); then nobody
+writes. Each wait must end before the timeout (the last at it), as many
+delays as were released must have passed on processor 1's counter since
+its first wait began, and `ALPHABOX_TRACE_QUIESCE` must count one wake-up
+of each cause. The delays are added up, not checked one by one, because
+on a loaded host a starved processor 0's counter runs ahead of the host's
+clock while it catches up, so one wait can read long and the next short
+([cpu-fidelity.md](cpu-fidelity.md), the cycle counter's bound); time
+processor 0 loses outside the delays would not add up, so it spends one
+delay before the first wait and nothing is measured after the timeout.
+About a second. The Linux side is
 `test/tools/es47_quiesce.py` ([ev8.md](platforms/ev8.md), "S3").
 
 **The native EV8's TPUs.** `test/cpu/tpu_mp.py <alphabox-binary> [label]

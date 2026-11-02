@@ -1630,7 +1630,12 @@ not have spent.
 **The divergence:** on a starved thread the counter runs behind the host's
 clock by up to the ticks still owed (a second at most, then they are
 dropped) and catches up as they are repaid: read against the host it runs
-slow, then fast, and against the processor's own ticks it is right. Time
+slow, then fast, and against the processor's own ticks it is right. So a
+delay timed on a lagging processor's counter can be short in host time,
+and two processors' counters agree only over the whole repayment: gate
+nadaret's `quiesce_mp.py` read a sleeper's 14.3 M cycles for a delay of
+16.8 M, and 64 busy processes on 16 cores as little as 1.3 M, in 25 of 30
+runs a wait under the delay, none in 30 with the bound removed. Time
 the ticks give up (a host sleep, a thread starved below about a tenth of
 a core) is not counted, where a gap over a second used to count as one
 second.
