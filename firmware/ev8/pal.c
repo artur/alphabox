@@ -34,7 +34,7 @@
  * raised, or a fault inside the PALcode, halts its TPU with reason 0x10000
  * | the offset; a CALL_PAL the interface lacks is opDec.
  *
- * Assembled by nada (main 9152b521) for alpha-none with -mcpu=ev8 -mpal,
+ * Assembled by nada (main 2fd7c977) for alpha-none with -mcpu=ev8 -mpal,
  * as a flat image linked 16 bytes below PAL_BASE so that every label is
  * its physical address and every .align counts from PAL_BASE; build.py
  * drops the 16 bytes (nada's branch to _start) and checks the layout.
@@ -49,7 +49,7 @@
  *   - PAL_TEMP1 holds this TPU's impure area (IDS p. 500); PAL_TEMP2 holds
  *     an ITB miss's VA across a double miss.
  *   - A flow leaves PALmode with RET (IDS p. 573, not JMP: Restriction
- *     14), written as a word: nada assembles only the bare `ret`. A PALmode
+ *     14), through RET_S1, RET_S0 or RET_R6 below. A PALmode
  *     subroutine is reached with BSR, whose link keeps the mode bits (N2),
  *     and returns with RET through that link.
  *   - Mbox IPRs are written twice in a row (Restriction 3); an IFETCHB
@@ -64,11 +64,12 @@
 #define S_(x) #x
 #define S(x) S_(x)
 
-/* RET $31, (S1), RET $31, (S0) and RET $31, (R6): opcode 1A, function 2
-   (alpha_asm's ret(23), ret(22) and ret(6); build.py checks them) */
-#define RET_S1 "    .long 0x6bf78000\n"
-#define RET_S0 "    .long 0x6bf68000\n"
-#define RET_R6 "    .long 0x6be68000\n"
+/* RET $31, (S1), RET $31, (S0) and RET $31, (R6) with hint 0, which must be
+   written: nada's default for `ret` is 1, a different word (alpha_asm's
+   ret(23), ret(22) and ret(6); build.py checks the words assembled) */
+#define RET_S1 "    ret $31, ($s1), 0\n"
+#define RET_S0 "    ret $31, ($s0), 0\n"
+#define RET_R6 "    ret $31, ($6), 0\n"
 
 /* Each entry and CALL_PAL slot starts with a no-op naming its own offset,
    which build.py finds at that offset: the layout's proof. */

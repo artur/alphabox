@@ -15,7 +15,7 @@ N27 and N28; S12a).
     build.py [--nada PATH] [--console FILE | --no-console] [--out PATH]
              [--size N]
 
-The PALcode is pal.c, nada assembler source: nada main 9152b521
+The PALcode is pal.c, nada assembler source: nada main 2fd7c977
 (lab/tools/nada/NADA-COMMIT.txt), invoked as
 
     nada -t alpha-none -mcpu=ev8 -mpal -n -f flat -B 0xfffffffffffffff0
@@ -46,10 +46,9 @@ reads: the entry PC (PAL_BASE | 1), PAL_BASE, the board's console bytes
 TPU then resets at PAL_BASE + 0xB00. Nothing is committed but the sources;
 the default output is <ALPHABOX_WORK or lab>/firmware-ev8/rom.decompressed.
 
-nada assembles only the bare `ret` (`ret $31, ($ra), 1`), not RET through
-another register: the PALcode's RET $31, (S1), (S0) and (R6) are words, which
-this script checks against test/cpu/alpha_asm.py's ret() (S12a, a form the
-agreement of ev8-native.md 3.5 implies and nada does not take).
+nada's `ret` takes operands since main 2fd7c977, with hint 1 when none is
+written: the PALcode's RET $31, (S1), (S0) and (R6) write hint 0, and this
+script checks each word assembled against test/cpu/alpha_asm.py's ret().
 """
 import argparse
 import hashlib
@@ -69,8 +68,8 @@ import alpha_asm as A  # noqa: E402
 SOURCE = os.path.join(HERE, "pal.c")
 CONSOLE_SOURCE = os.path.join(HERE, "console.c")
 LAYOUT = os.path.join(HERE, "layout.h")
-NADA_COMMIT = "9152b521cfa37aa88d7afb41bd52cff9fc2967de"
-NADA_SHA256 = "47c4e6509ce8e09a6d0707d585c4a7cd7d7f039bd6406c2cc4a1c82973138914"
+NADA_COMMIT = "2fd7c977"
+NADA_SHA256 = "1e935c482aa4d9d41c7a0783ea43268a09ec961cb8ae9b34679ca0a7bb08d403"
 LOAD_ADDRESS = 0xFFFFFFFFFFFFFFF0     # PAL_BASE - 16: nada's branch drops off
 CONSOLE_BYTES = 0x480000              # the Marvel rows' decompressed console
 TAG = b"ALPHDC01"
@@ -168,15 +167,19 @@ def check_layout(L):
          % L["MAX_WHAMI"])
 
 
-def check_ret_words():
-    """pal.c's RET words are alpha_asm's RET $31, (S1), (S0) and (R6)."""
+def check_ret_words(pal):
+    """Each RET_S1, RET_S0 and RET_R6 of pal.c assembled as alpha_asm's
+    RET $31, (S1), (S0) and (R6): nada's default hint is another word."""
     with open(SOURCE) as f:
         src = f.read()
+    words = struct.unpack("<%dI" % (len(pal) // 4), pal)
     for name, rb in (("RET_S1", A.S1B), ("RET_S0", A.S0B), ("RET_R6", 6)):
-        m = re.search(r'#define %s "\s*\.long (0x[0-9a-fA-F]+)' % name, src)
-        if not m or int(m.group(1), 16) != A.ret(rb):
-            raise SystemExit("pal.c: %s is not RET $31, ($%d) (%#x)"
-                             % (name, rb, A.ret(rb)))
+        used = len(re.findall(r"^\s*%s\s*$" % name, src, re.M))
+        found = words.count(A.ret(rb))
+        if not used or found != used:
+            raise SystemExit("pal.c: %s used %d times, RET $31, ($%d) (%#x) "
+                             "assembled %d times"
+                             % (name, used, rb, A.ret(rb), found))
 
 
 def assemble(nada=None, keep=None):
@@ -231,9 +234,9 @@ def build_pal(nada=None):
     """The checked PALcode, and layout.h's values."""
     L = layout()
     check_layout(L)
-    check_ret_words()
     pal = assemble(nada)
     check_pal(pal, L)
+    check_ret_words(pal)
     return pal, L
 
 

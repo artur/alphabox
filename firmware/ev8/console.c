@@ -30,7 +30,7 @@
  * callbacks; a halt comes back to its prompt on the CMM's terminal.
  * Written by the project; nothing is copied from another console.
  *
- * C compiled by nada (main 9152b521) for alpha-none at KSEG | CONSOLE_PA
+ * C compiled by nada (main 2fd7c977) for alpha-none at KSEG | CONSOLE_PA
  * with the large code model (build.py), entered by the PALcode at its
  * first word in kernel mode, IPL 7, with no stack: a0 0 at power-up or the
  * reason of a halt, a1 the WHAMI. It runs on processor 0 alone, at KSEG

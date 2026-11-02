@@ -1009,9 +1009,12 @@ batch after its item 3; Artur on both sides):
 - **The macro** `__nada_alpha_pal__` is defined under `-mpal`.
 - **Restrictions 3 to 8**: no warnings in the first version; S12a does not
   need them.
-- At S12a (2026-10-31) nada main 9152b521 assembled every form above; RET
-  through another register than `$ra` it does not take, and the PALcode
-  writes it as a word ([S12a](#s12a-phase-1-2026-10-31)).
+- At S12a (2026-10-31) nada main 9152b521 assembled every form above but
+  RET through another register than `$ra`, which the PALcode wrote as a
+  word ([S12a](#s12a-phase-1-2026-10-31)). nada main 2fd7c977 (2026-11-01)
+  takes `ret` and `jsr_coroutine` with GNU as's operands, and the PALcode
+  now writes `ret $31, ($s1), 0`: the hint must be written, since nada's
+  default for `ret` is 1, a different word.
 
 **The IPR names** (for assemblers). The names are Alphabox's: the IDS has
 none for assemblers. A field-select variant is a name of its own. Combined
@@ -1587,7 +1590,8 @@ interprocessor interrupt, and the CALL_PALs below; phase 2, the rest of
 
 **How it is assembled** (3.5):
 
-- nada main 9152b521, the copy in `lab/tools/nada/`, run as `nada -t
+- nada main 9152b521 at this stage (2fd7c977 since 2026-11-02, which
+  builds the same bytes), the copy in `lab/tools/nada/`, run as `nada -t
   alpha-none -mcpu=ev8 -mpal -n -f flat -B 0xfffffffffffffff0`. A flat
   image starts with nada's `br $31, _start` padded to 16 bytes, and
   `.align` counts from the code after it: linked 16 bytes below PAL_BASE,
@@ -1599,7 +1603,8 @@ interprocessor interrupt, and the CALL_PALs below; phase 2, the rest of
   21464's PALmode exit [IDS p. 573]; a JMP would leave PALmode the same way
   under N2 but needs an IFETCHB after it (Restriction 14). The PALcode
   writes RET $31, (S1) and RET $31, (S0) as `.long` words, which build.py
-  checks against `test/cpu/alpha_asm.py`'s `ret()`.
+  checks against `test/cpu/alpha_asm.py`'s `ret()`. (Since nada 2fd7c977
+  they are mnemonics, and build.py checks the words assembled; see 3.5.)
 - A conditional branch reaches only a label of its own asm text (nada's
   rule), so the entries' text uses two near trampolines.
 - Each entry and CALL_PAL slot starts with `lda $31, offset($31)`, a no-op
@@ -2111,7 +2116,8 @@ reads and enters the kernel. The emulator's part is
 **The console** (`console.c`, 918 lines, an image of 0x5C28 bytes; 1.5 to
 2.5 k lines were guessed in 4.2):
 
-- **Built** by nada 9152b521 as `nada -t alpha-none -mcpu=ev8
+- **Built** by nada 9152b521 (2fd7c977 since 2026-11-02, the same bytes) as
+  `nada -t alpha-none -mcpu=ev8
   -mcmodel=large -n -f flat -B 0xfffffc0000020000`: at its KSEG address,
   where the PALcode enters it, with the large code model, since the small
   one forms addresses with LDAH/LDA pairs that reach only the low and the
