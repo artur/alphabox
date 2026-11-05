@@ -1015,6 +1015,17 @@ batch after its item 3; Artur on both sides):
   takes `ret` and `jsr_coroutine` with GNU as's operands, and the PALcode
   now writes `ret $31, ($s1), 0`: the hint must be written, since nada's
   default for `ret` is 1, a different word.
+- nada main e6b27f04 (2026-11-05; Artur's decision of 2026-11-04 in
+  nada's session) adds `.arch_extension tarantula` and
+  `.arch_extension pal`. Valid only once the text's level is ev8
+  (`-mcpu=ev8`, `-Wa,-mev8` or `.arch ev8` before it), each admits to the
+  end of the file what `-mtarantula` or `-mpal` admits, with the same
+  words, without the flags' macros and without changing code generation
+  (nada `doc/asm-spec.md`, "`.arch_extension NAME`"). This is how S9's
+  vector context switch is assembled: one `.S` file of a kernel otherwise
+  built with Kbuild's own flags, starting with `.arch ev8` and
+  `.arch_extension tarantula`. nada's test of it is a save and restore in
+  the shape of [ev8-isa.md](ev8-isa.md) section 5.
 
 **The IPR names** (for assemblers). The names are Alphabox's: the IDS has
 none for assemblers. A field-select variant is a name of its own. Combined
