@@ -123,12 +123,16 @@ typedef unsigned char u8;
 #define R_OTHER 72
 #define R_ENTRY_SP 80
 #define R_FLAGS 88
+#define R_WTINT 96 /* idle=N: wtint returns */
 
 static u64 hw;          /* the HWRPB, KSEG */
 static u64 regs_bad;    /* registers a callback changed, all calls */
 static u64 calls;
 static u64 own_map;     /* the switch to this kernel's page tables is done */
 static u64 cyc_hz;
+static u64 idle_secs;  /* idle=N on the command line (test/cpu/idle8.py) */
+u64 idle_stop;         /* processor 0 ends the secondaries' idling */
+static u64 idle_base[MAXW * 2];
 u64 regs_after[32];
 u64 regs_sp_before;
 
@@ -143,6 +147,7 @@ void pal_wrent(u64 entry, u64 which);
 void pal_wrvptptr(u64 vptb);
 void pal_tbia(void);
 void pal_halt(void);
+void pal_wtint(void);
 u64 pal_swpctx_keep(u64 pcb_pa);
 u64 rpcc32(void);
 void do_mb(void);
@@ -278,6 +283,12 @@ static void text(void)
         ".global pal_halt\n"
         "pal_halt:\n"
         "    call_pal 0\n"
+        "    ret\n"
+        /* Linux's wtint(0) */
+        ".global pal_wtint\n"
+        "pal_wtint:\n"
+        "    bis $31, $31, $16\n"
+        "    call_pal 0x3e\n"
         "    ret\n"
         /* Linux's load_PCB: the current SP into the new PCB's KSP, then
            swpctx (its PA), so the stack goes on */
@@ -900,6 +911,23 @@ static void take_ticks(u64 w, u64 want)
     pal_swpipl(7);
 }
 
+/* idle=N (test/cpu/idle8.py): Linux's idle with nothing to run, do_idle's
+   arch_cpu_idle: wtint(0) at IPL 7, then the interrupts taken at IPL 0
+   and IPL 7 again. Until processor 0's own tick count reaches `until`, or
+   with `until` 0 until processor 0 sets idle_stop. */
+static void idle_loop(u64 w, u64 until)
+{
+    u64 r = rec(w);
+    for (;;) {
+        if (until ? rq(r + R_TICKS) >= until : rq((u64)&idle_stop) != 0)
+            break;
+        pal_wtint();
+        wq(r + R_WTINT, rq(r + R_WTINT) + 1);
+        pal_swpipl(0);
+        pal_swpipl(7);
+    }
+}
+
 void sec_main(u64 r27)
 {
     u64 w = pal_whami(), r, s;
@@ -917,6 +945,8 @@ void sec_main(u64 r27)
     take_ticks(w, 2);
     do_mb();
     wq(r + R_DONE, 1);
+    if (idle_secs)
+        idle_loop(w, 0);
     /* Linux's common_shutdown_1 for a secondary: "remain halted" */
     wq(s + S_FLAGS, (rq(s + S_FLAGS) & ~0x00ff0001UL) | 0x00040000UL);
     pal_halt();
@@ -983,11 +1013,68 @@ static void start_secondary(u64 w)
     rep(nm("sec.", w, ".whami"), rq(rec(w) + R_WHAMI));
     rep(nm("sec.", w, ".ticks"), rq(rec(w) + R_TICKS) >= 2);
     rep(nm("sec.", w, ".ticktype"), rq(rec(w) + R_TYPE));
+    if (idle_secs) /* it idles until idle_phase ends, then halts */
+        return;
     t = rpcc32();
     while (rq(s + S_HALT_REASON) != 5 && wait_cycles(t, cyc_hz))
         ;
     rep(nm("sec.", w, ".halt_reason"), rq(s + S_HALT_REASON));
     rep(nm("sec.", w, ".halt_flags"), rq(s + S_FLAGS));
+}
+
+/* The value of `key` (decimal) in the zero page's command line, or 0 */
+static u64 cmdline_num(const char *key)
+{
+    u64 i, j, v = 0, k = slen(key);
+    for (i = 0; rb(ZERO_PGE + i); i++) {
+        if (i && rb(ZERO_PGE + i - 1) != ' ')
+            continue;
+        for (j = 0; j < k && rb(ZERO_PGE + i + j) == (u8)key[j]; j++)
+            ;
+        if (j < k)
+            continue;
+        for (i += k; rb(ZERO_PGE + i) >= '0' && rb(ZERO_PGE + i) <= '9'; i++)
+            v = v * 10 + (rb(ZERO_PGE + i) - '0');
+        return v;
+    }
+    return 0;
+}
+
+/* idle=N: every started processor idles (idle_loop) for N seconds of
+   processor 0's ticks, between the marks @@IDLE-BEGIN and @@IDLE-END, at
+   which test/cpu/idle8.py reads the host's CPU time; then the counts in
+   that window, and the secondaries' halts */
+static void idle_phase(u64 n)
+{
+    u64 hz = rq(hw + H_INTR_FREQ) >> 12, w, t;
+    if (n > MAXW)
+        n = MAXW;
+    for (w = 0; w < n; w++) {
+        idle_base[2 * w] = rq(rec(w) + R_WTINT);
+        idle_base[2 * w + 1] = rq(rec(w) + R_TICKS);
+    }
+    put("@@IDLE-BEGIN\r\n");
+    idle_loop(0, rq(rec(0) + R_TICKS) + idle_secs * hz);
+    put("@@IDLE-END\r\n");
+    wq((u64)&idle_stop, 1);
+    do_mb();
+    rep("idle.secs", idle_secs);
+    rep("idle.hz", hz);
+    for (w = 0; w < n; w++) {
+        rep(nm("idle.", w, ".wtint"), rq(rec(w) + R_WTINT) - idle_base[2 * w]);
+        rep(nm("idle.", w, ".ticks"),
+            rq(rec(w) + R_TICKS) - idle_base[2 * w + 1]);
+        rep(nm("idle.", w, ".other"), rq(rec(w) + R_OTHER));
+    }
+    for (w = 1; w < n; w++) {
+        u64 s = hw + rq(hw + H_PROC_OFF) + w * rq(hw + H_PROC_SIZE);
+        if (!rq(rec(w) + R_DONE))
+            continue;
+        t = rpcc32();
+        while (rq(s + S_HALT_REASON) != 5 && wait_cycles(t, cyc_hz))
+            ;
+        rep(nm("idle.", w, ".halt_reason"), rq(s + S_HALT_REASON));
+    }
 }
 
 void kmain(u64 entry_sp)
@@ -1001,6 +1088,7 @@ void kmain(u64 entry_sp)
     for (w = 0; w < MAXW * 0x100; w += 8)
         wq(kseg(TK_REC) + w, 0);
     entries(); /* an unexpected fault halts, with what it was */
+    idle_secs = cmdline_num("idle=");
     put("\r\n@@BEGIN\r\n");
     rep("entry.sp", entry_sp);
     rep("entry.ps", pal_rdps());
@@ -1051,6 +1139,8 @@ void kmain(u64 entry_sp)
         if ((rq(s + S_FLAGS) & 0x1cc) == 0x1cc)
             start_secondary(w);
     }
+    if (idle_secs)
+        idle_phase(n);
     rep("cb.calls", calls);
     rep("cb.regs_bad", regs_bad);
     put("@@DONE\r\n");

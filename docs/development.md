@@ -573,6 +573,16 @@ HWRPB slots), and ten configurations the emulator refuses
 ([ev8-native.md](platforms/ev8-native.md), S12b). About 5000 results, a
 few seconds a run.
 
+**Idle EV8 processors.** `test/cpu/idle8.py <alphabox-binary> [label]
+[--secs N] [--platform es47|es80|gs1280] [--chips N] [--tpus N]` boots
+the same console and kernel with `idle=N` on the command line: every
+processor idles as Linux's does (`wtint` at IPL 7, the interrupt at IPL
+0) for N seconds (10 by default) of processor 0's ticks. It prints the
+host processors the emulator keeps busy between the kernel's two marks,
+and per processor the returns from `wtint` and the ticks per second and
+the `ALPHABOX_TRACE_QUIESCE` counts. A measurement, not a check, and not
+in the gate ([ev8-native.md](platforms/ev8-native.md), "Idle TPUs").
+
 **The EV8's 1C SIMD set and paired single.** Group `simd`
 (`test/cpu/simd_cases.py`) checks every row of
 [ev8-isa.md](platforms/ev8-isa.md) 3.3 on the rows with `CPU_EXT_EV8`, in

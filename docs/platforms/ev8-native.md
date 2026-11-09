@@ -2035,7 +2035,8 @@ already documented (above). One observation for S13, from
 failed as unsettled 300 to 7700 times each in the 0.2 s of the test, and
 ended "other" 50 to 320 times, while each still slept about 115 ms of
 it. The IDS allows a QUIESCE to fail; whether eight TPUs idling under
-Linux cost the host noticeably is S13's to measure.
+Linux cost the host noticeably is S13's to measure. (Measured before
+S13: "Idle TPUs" below.)
 
 **What S12b's console gets from this PALcode, and owes it**:
 
@@ -2376,6 +2377,61 @@ virtual), which the loader takes.
 - The timer ticks at 1017 Hz at 800 MHz (HZ 1024), the EV7 console's
   rule, as on a real ES47.
 - `poweroff` and `reboot` both end at the console's prompt.
+
+## Idle TPUs (2026-11-09)
+
+S12a's observation (parked TPUs' QUIESCEs failing as unsettled 300 to
+7700 times in 0.2 s) left a question for S13: what do idle TPUs cost the
+host? `test/cpu/idle8.py` measures it (docs/development.md). The S12b
+console boots `console8_kernel.c` with `idle=N` on its command line; the
+kernel starts every secondary, and then every processor idles as Linux's
+`do_idle` does with nothing to run (`arch_cpu_idle`: `wtint(0)` at IPL
+7, the interrupt taken at IPL 0) for N seconds of processor 0's ticks.
+The script reads the emulator's CPU time at the kernel's marks before and
+after. Host processors kept busy over the window, single runs of 10 s
+unless marked, on d511b23's binaries with the host at a load of 25 to 85
+from other sessions:
+
+| Machine | Processors | JIT | Interpreter |
+| --- | --- | --- | --- |
+| ES47, 2 chips of 1 TPU | 2 | 0.025 | 0.025 |
+| ES47, 2 chips of 4 TPUs | 8 | 0.168, 0.173; 0.178 (5 s); 0.169 (20 s) | 0.163 |
+| GS1280, 8 chips of 1 TPU | 8 | 0.156 | |
+| GS1280, 4 chips of 2 TPUs | 8 | 0.161 | |
+| GS1280, 8 chips of 4 TPUs | 32 | 0.744 | |
+
+- An idle processor takes about 2% of a host processor (1.25% with two,
+  2.3% with 32). The JIT and the interpreter cost the same, since the
+  PALcode, where an idle processor spends its time, is never compiled on
+  the row (S11, "The JIT"), and the split into chips and TPUs does not
+  matter.
+- Each processor returns from `wtint` about 1020 times a second, once per
+  tick of its timer (1017 Hz, S12b); `wtint`'s timeout (QT_WTINT, about a
+  million cycles) ends few of them. That is a host wake-up and the
+  PALcode's path in and out per tick, about 20 us each **[inference: 2%
+  of a processor over 1020 wake-ups]**.
+- The unsettled failures are not an idle cost. A QUIESCE fails as
+  unsettled only while some running processor has not yet dropped its
+  cached translations since a page was first watched
+  (`CSystem::cpu_watch_mark_page`, `cpu_watch_settled`): the HWRPB's page
+  at the first park, the impure areas' page at the first `wtint`, a few
+  times a boot. How many follows the host's scheduling of the processor
+  that has to drop them: 0 to 31 a processor in a run at loads of 25 to
+  55, and once 1016 on one processor at a load of 65 (each a pass of the
+  park loop, about a microsecond). A 20 s run has as many as a 3 s one.
+- So are the wake-ups `ALPHABOX_TRACE_QUIESCE` counts as "other" (the
+  flag found clear with no cause recorded): 6 to 370 a processor, as
+  many in pal8_test's 0.2 s as in idle runs of 3 and 20 s. They are not
+  RBOX_SCRATCH1's start hand-off (`ALPHABOX_TRACE_MP` shows no write),
+  and their cause is not found; the IDS lets the watch_flag clear at any
+  time [p. 670], and they cost nothing measurable.
+
+For comparison, an idle Linux or OpenVMS guest under the HP consoles'
+PALcode spins host cores (docs/cpu-fidelity.md; on the EV7, Linux
+patches `wtint` out of `arch_cpu_idle` after the console's PALcode traps
+on it), and Windows 2000's idle desktop on two processors takes 1.9 to
+2.7% of a host processor in all. Nothing needs changing before S13; an
+idle GS1280 of 32 TPUs costs three quarters of a host processor.
 
 ## Findings
 

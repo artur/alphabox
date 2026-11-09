@@ -151,10 +151,12 @@ def config(platform, port, chips, tpus, rom="console8.rom", keys=(),
     return cfg
 
 
-def run(binary, workdir, cfg, port, steps, timeout=TIMEOUT):
+def run(binary, workdir, cfg, port, steps, timeout=TIMEOUT, on_step=None):
     """Boot; read the CMM terminal; each step (pattern, text) waits for the
     pattern after the previous step's match and sends the text. Ends after
-    the last step's pattern, or at the timeout. Stops our own emulator."""
+    the last step's pattern, or at the timeout. Stops our own emulator.
+    on_step(index, proc), if given, is called as each step's pattern is
+    seen, before its text is sent (test/cpu/idle8.py)."""
     with open(os.path.join(workdir, "es40.cfg"), "w") as f:
         f.write(cfg)
     out = open(os.path.join(workdir, "alphabox.out"), "wb")
@@ -181,6 +183,8 @@ def run(binary, workdir, cfg, port, steps, timeout=TIMEOUT):
                 i = data.find(pat, pos)
                 if i >= 0:
                     pos = i + len(pat)
+                    if on_step:
+                        on_step(done, proc)
                     if text:
                         time.sleep(0.05)
                         sock.sendall(text)
