@@ -121,6 +121,16 @@ memory, TOY offset and NVRAM image).
 Output goes to `$ALPHABOX_WORK/runs/snap-<label>/`, the boot to
 `boards-snap-<label>/`.
 
+`refusal_check.sh <alphabox> <label>` checks what the emulator must refuse
+at once, with a message and a non-zero exit status, in place of starting a
+machine that is not the one asked for: `ALPHABOX_RESTORE` of a file that is
+no state file, is missing, or has a version this build does not read (each
+used to cold-boot in silence); a card on a hose a DS20E or DS20L does not
+have; a Permedia 2 with `memory = 6` (skipped on a build without SDL3). A
+case whose emulator is still running after `REFUSAL_TMO` seconds (300) has
+accepted what it should have refused, and fails. Output goes to
+`$ALPHABOX_WORK/runs/refusal-<label>/`.
+
 `guests_check.sh <alphabox> <label> [guest ...]` is the gate for a change
 that only a guest exercises: input, timers, disks, video, USB, sound,
 floating point. It boots each guest from an APFS clone of its image (never
