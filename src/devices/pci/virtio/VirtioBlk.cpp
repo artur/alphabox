@@ -309,6 +309,49 @@ void CVirtioBlk::selftest() {
   pass &= st_say("NO_INTERRUPT honoured",
                  st == S_OK && !st_irq() && st_reg_read(REG_ISR, 8) == 0);
 
+  // An indirect table of one entry more than the queue has: no chain is
+  // that long (virtio 1.x 2.7.5.3.1), and the device drops it: given back
+  // with nothing done, the status byte untouched. The chain is a good one
+  // otherwise, sector 0 read into 255 pieces, and was served before the
+  // table's length was looked at.
+  {
+    const u32 BIG = base + 0x40000, PIECES = base + 0x50000;
+    const u32 n = kQueueSize + 1;
+    auto entry = [&](u32 i, u64 addr, u32 elen, u16 flags, u16 next) {
+      u8 *t = st_mem(BIG + 16 * i);
+      memcpy(t, &addr, 8), memcpy(t + 8, &elen, 4), memcpy(t + 12, &flags, 2),
+          memcpy(t + 14, &next, 2);
+    };
+    entry(0, st_bus(HDR), 16, D_NEXT, 1);
+    u32 off = 0;
+    for (u32 i = 1; i < n - 1; i++) { // 254 pieces of two bytes, one of four
+      const u32 plen = i == n - 2 ? kSector - off : 2;
+      entry(i, st_bus(PIECES + off), plen, D_NEXT | D_WRITE, u16(i + 1));
+      off += plen;
+    }
+    entry(n - 1, st_bus(STAT), 1, D_WRITE, 0);
+    hdr(HDR, T_IN, 0);
+    *st_mem(STAT) = 0xff;
+    u8 e[16] = {};
+    const u64 ia = st_bus(BIG);
+    const u32 il = 16 * n;
+    const u16 fl = D_INDIRECT;
+    memcpy(e, &ia, 8), memcpy(e + 8, &il, 4), memcpy(e + 12, &fl, 2);
+    const u16 head = sq.next_desc;
+    memcpy(st_mem(sq.desc + 16 * head), e, 16);
+    sq.next_desc = u16((head + 1) % kQueueSize);
+    memcpy(st_mem(sq.avail + 4 + 2 * (sq.avail_idx % kQueueSize)), &head, 2);
+    std::atomic_thread_fence(std::memory_order_release);
+    sq.avail_idx++;
+    memcpy(st_mem(sq.avail + 2), &sq.avail_idx, 2);
+    st_reg_write(REG_QUEUE_NOTIFY, 16, 0);
+    const bool got = st_wait_used(sq, id, len, 300);
+    pass &= st_say("an indirect table of 257 entries: dropped, nothing done",
+                   got && id == head && len == 0 && *st_mem(STAT) == 0xff);
+    st = req(T_GET_ID, 0, DATA, 20, true);
+    pass &= st_say("and the next request is served", st == S_OK);
+  }
+
   // Reset: queues forgotten.
   st_reg_write(REG_STATUS, 8, 0);
   st_reg_write(REG_QUEUE_SEL, 16, 0);

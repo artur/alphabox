@@ -249,5 +249,36 @@ void CAliM1543C_usb::selftest() {
   }
   reg(0x10, 0x80000000);
 
+  // Last, so that nothing above runs with it done: an isochronous ED on the
+  // bulk list (the driver's mistake). Its TD is
+  // retired once, not accessed, and the ED's head moves past it. A head
+  // left where it was had the same TD retired again every pass, and its
+  // NextTD, the done queue's link, pointing at itself.
+  {
+    const u32 ED2 = base + 0x180, ITD = base + 0x800, ITAIL = base + 0x840;
+    w32(HCCA + 0x84, 0);
+    reg(0x0c, 0x2); // clear WritebackDoneHead
+    w32(ITD + 0, 0xf0000000u);
+    w32(ITD + 4, 0);
+    w32(ITD + 8, ITAIL);
+    w32(ITD + 12, 0);
+    w32(ITAIL + 0, 0xf0000000u);
+    w32(ED2 + 0, (1u << 15) | (8u << 16)); // F: isochronous
+    w32(ED2 + 4, ITAIL);
+    w32(ED2 + 8, ITD);
+    w32(ED2 + 12, 0);
+    reg(0x28, ED2);        // HcBulkHeadED
+    reg(0x4, 0x80 | 0x20); // UsbOperational again, the bulk list enabled
+    reg(0x08, 4);          // BulkListFilled
+    nap_ms(20);
+    say("an isochronous ED on the bulk list: its head moves past the TD",
+        (r32(ED2 + 8) & ~0xfu) == ITAIL);
+    say("... and the TD is on the done queue once",
+        (r32(ITD + 8) & ~0xfu) != ITD);
+    reg(0x4, 0); // UsbReset, as the checks before left it
+    reg(0x28, 0);
+    reg(0x0c, 0xffffffffu);
+  }
+
   printf("%%OHCI-I-SELFTEST: %s\n", pass ? "PASS" : "FAIL");
 }

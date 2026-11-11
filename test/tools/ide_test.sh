@@ -5,7 +5,12 @@
 # with no guest and no processor, and checks the answers against ATA/ATAPI-6,
 # SFF-8038i, the Intel 82077AA and 8237A datasheets
 # (src/devices/pci/IdeControllerTest.cpp). A command that stops the machine
-# or leaves a channel busy fails its check.
+# or leaves a channel busy fails its check. The machine also has a CMD 649
+# and a 21143: the last groups check a WRITE DMA with a short table, a wide
+# access past the ISA DMA channel ports, a quadword interrupt acknowledge, a
+# 21143 without bus mastering, and a machine saved with a command in hand
+# and restored in a second process (the program runs itself again with
+# --restored).
 #
 # usage: ide_test.sh <alphabox-binary> [-v]
 #   Runs in $ALPHABOX_WORK/idetest (ALPHABOX_WORK defaults to <repo>/lab);
@@ -18,7 +23,7 @@
 set -u
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 1 ] || { sed -n '2,15p' "$0"; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,22p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 WORK=${ALPHABOX_WORK:-$R/lab}
 D=$WORK/idetest

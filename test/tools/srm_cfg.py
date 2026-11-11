@@ -134,6 +134,7 @@ def main():
     ap.add_argument("--nic-nat")
     ap.add_argument("--extra-cfg")
     ap.add_argument("--ide-cfg")
+    ap.add_argument("--usb-cfg")
     ap.add_argument("--floppy")
     ap.add_argument("--exit-on-halt", action="store_true")
     ap.add_argument("--gdb", type=int)
@@ -204,6 +205,13 @@ def main():
                        lambda mm: mm.group(1) + "\n" + body + "  }", t)
         if n != 1:
             sys.exit("srm_cfg: empty ali_ide block not found in base config")
+
+    if args.usb_cfg:
+        body = open(args.usb_cfg).read()
+        t, n = re.subn(r"(  pci0\.19 = ali_usb\s*\{)\s*\}",
+                       lambda mm: mm.group(1) + "\n" + body + "  }", t)
+        if n != 1:
+            sys.exit("srm_cfg: empty ali_usb block not found in base config")
 
     slots = SLOTS[platform]
     for dev in ("ali", "ali_ide", "ali_usb"):

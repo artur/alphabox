@@ -765,8 +765,11 @@ int COhci::service_ed(u32 ed_addr, bool periodic, bool *found) {
         return service_iso_ed(ed_addr, ed);
       // An isochronous endpoint on the control or bulk list is the
       // driver's mistake: its TDs are retired untouched.
+      // NextTD is taken first: retiring the TD makes that word the done
+      // queue's link.
+      const u32 next_td = first.w[2] & ~0xfu;
       retire_td(head, first.w, 0xf); // NotAccessed
-      ed[2] = (first.w[2] & ~0xfu) | (ed[2] & 3);
+      ed[2] = next_td | (ed[2] & 3);
       do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1); // the new head
       ++done;
       continue;

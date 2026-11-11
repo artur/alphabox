@@ -819,7 +819,8 @@ and transfers. It writes the emulator's pid to `emulator.pid`: profile
 | `usb_snap.sh` | USB devices across a snapshot and a restore of a running Windows 2000. |
 | `wav_compare.py` | Compares a captured WAV with its reference. |
 | `cdb_test.sh` | The SCSI disk's and the 53C8xx's conformance test (`alphabox cdbtest`): status, sense, data and lengths of each command, and SCRIPTS programs, with no guest. |
-| `ide_test.sh` | The IDE controller's register-level test (`alphabox idetest`): task file, control block and bus master registers driven the way a driver does, with its own PRD tables in guest memory, no guest and no firmware. Each check cites ATA/ATAPI-6 or SFF-8038i. |
+| `ide_test.sh` | The IDE controller's register-level test (`alphabox idetest`): task file, control block and bus master registers driven the way a driver does, with its own PRD tables in guest memory, no guest and no firmware. Each check cites ATA/ATAPI-6 or SFF-8038i. The same machine carries a CMD 649 and a 21143, and the groups after the IDE's own use them and the ISA DMA controllers: `dma-short-table` (a WRITE DMA whose table is short of the data, or never ends, aborts and writes nothing), `isa-dma` (a word access past the second controller's channel ports), `iack` (a quadword interrupt acknowledge acknowledges once), `nic-no-master` (a 21143 started with Bus Master Enable clear still stops), and `restore`, which saves the machine with a WRITE DMA in hand and the CMD 649's interrupt pending, runs the program again to restore it in a new process, and checks there that the command completes and the interrupt line follows its status read. |
+| `marvel_toy_check.sh` | The Marvel boards' TOY takes the time a guest sets: `guests_check.sh` boots OpenVMS on the ES47, `SET TIME` puts 2 January 2022 into the CMM's TOY, and the offset from the host's clock that the CMM reports must be that date's. A few minutes; PASS or FAIL last. |
 | `win_storage.sh` | A storage controller (`CTRL=<class>`) with a FAT16 disk added to a Windows guest, which copies a file on it. |
 | `fat_disk.py` | Builds and inspects small FAT16 test disks. |
 | `aboot_disk.py` | A sparse disk SRM boots Linux from: boot block, BSD disklabel, aboot's `bootlx`, a `/boot` and a root partition ([linux.md](linux.md)). |
@@ -908,6 +909,7 @@ driver does. Each is an executable in every build directory, and `ctest
 | `irqlines_test` | The wire-OR of the chipset's interrupt inputs (`InterruptLines.hpp`): devices and functions sharing an input, from several threads at once. |
 | `pcicfg_test` | The configuration space every PCI device inherits (`PCIDevice.cpp`): write masks, BAR and ROM sizing, access sizes, accesses past a function's 256 bytes, the state file. |
 | `pcibridge_test` | The PCI-PCI bridge (`bridge/`), configured as the ES40 console configures one: the type 1 header, configuration cycles once the bus is numbered, the windows and what a master abort reads, the interrupt swizzle, the secondary bus reset. |
+| `ethernet_test` | The frame check sequence a NIC with `crc = true` appends to a received frame (`Ethernet.cpp`): the CRC-32's check value, the four bytes least significant first, and the residue a receiver computes over frame and FCS. |
 | `tarantula_state_test` | Tarantula's section of the state file (`cpu/Tarantula.cpp`): every register, vl, vs, the mask and VCTL read back; a file with no section (written before S7) restores nothing and leaves the file where it was; a truncated or damaged section is refused. |
 
 ### The original regression test

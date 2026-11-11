@@ -440,8 +440,9 @@ The other hooks and tools:
   emulator once the console has set up the DMA window (put
   `port1 = "tablet";` on `ali_usb`) and prints PASS or FAIL: the
   HcRhDescriptorA fields, a TD to a suspended port, the done queue's wait
-  after a host controller reset, Bus Master Enable, and the interrupt line
-  following USBIR.
+  after a host controller reset, Bus Master Enable, an isochronous ED on
+  the bulk list (retired once, the ED's head moved on), and the interrupt
+  line following USBIR.
 - `ALPHABOX_USBTRACE=1` logs register writes, the port status the driver
   reads, every control request a device serves, each Bulk-Only command,
   TDs retired with an error, isochronous TDs retired late and packets not

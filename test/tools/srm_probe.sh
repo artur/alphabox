@@ -24,6 +24,8 @@
 #                        (needs a build that lists libslirp)
 #   EXTRA_CFG=<file>     configuration text for the machine block
 #   IDE_CFG=<file>       drives for the ali_ide block
+#   USB_CFG=<file>       keys for the ali_usb block (port1 = "tablet"; for
+#                        ALPHABOX_OHCI_SELFTEST)
 #   FLOPPY=<image>|halt  fdc0 with this image; "halt" generates the CALL_PAL
 #                        HALT boot-block floppy (make_halt_floppy.py)
 #   EXIT_ON_HALT=1       sys0 exit_on_pal_halt = true
@@ -47,7 +49,7 @@ set -u
 export LC_ALL=C
 T=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "$T/../.." && pwd)
-[ $# -ge 2 ] || { sed -n '2,42p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,44p' "$0"; exit 2; }
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 LABEL=$2
 TMO=${3:-300}
@@ -82,6 +84,7 @@ if [ "${NAT:-0}" = 1 ]; then
 fi
 [ -n "${EXTRA_CFG:-}" ] && cfg+=(--extra-cfg "$(cd "$(dirname "$EXTRA_CFG")" && pwd)/$(basename "$EXTRA_CFG")")
 [ -n "${IDE_CFG:-}" ] && cfg+=(--ide-cfg "$IDE_CFG")
+[ -n "${USB_CFG:-}" ] && cfg+=(--usb-cfg "$USB_CFG")
 [ "${EXIT_ON_HALT:-0}" = 1 ] && cfg+=(--exit-on-halt)
 [ "${GUI:-0}" = 1 ] && cfg+=(--gui) && export SDL_VIDEO_DRIVER=dummy
 for o in ${CPU_OPT:-}; do cfg+=(--cpu-opt "$o"); done

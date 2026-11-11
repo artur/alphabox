@@ -41,13 +41,24 @@
 #include "StdAfx.hpp"
 #include "System.hpp"
 
+#include "Cmd649.hpp"
+#include "Tulip.hpp"
+
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
+#include <spawn.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
+extern char **environ;
 
 namespace {
 
@@ -692,6 +703,280 @@ void t_floppy(Rig &r) {
         msr);
 }
 
+// SFF-8038i 4.0 (p.6): a table that describes less than the command moves
+// leaves the transfer unfinished. The sectors the table did not supply have
+// not come, so nothing of the command is written: the buffer past what came
+// holds the command before's data.
+void t_short_table(Rig &r) {
+  g_group = "dma-short-table";
+  const u32 b = Rig::bm(0);
+  const u32 total = 8 * 512;
+  auto fill = [&](u32 at, u64 seed) {
+    for (u32 i = 0; i < total; i += 8)
+      r.sys->WriteMem(at + i, 64, U64(0x0101010101010101) * (seed + i / 8),
+                      nullptr);
+  };
+  auto reads_back = [&](u32 lba, u32 want) {
+    for (u32 i = 0; i < total; i += 8)
+      r.sys->WriteMem(kDst + i, 64, 0, nullptr);
+    r.prd_table(kPrd, kDst, total, 1, 0x80);
+    bool ok;
+    r.dma(0, 0, true, 8, lba, kPrd, &ok);
+    bool same = ok;
+    for (u32 i = 0; i < total; i += 8)
+      same &= r.sys->ReadMem(kDst + i, 64, nullptr) ==
+              r.sys->ReadMem(want + i, 64, nullptr);
+    return same;
+  };
+  const u32 kOld = 0x310000, kNew = 0x320000;
+  fill(kOld, 0x11);
+  fill(kNew, 0x80);
+  r.prd_table(kPrd, kOld, total, 1, 0x80);
+  bool ok;
+  u32 st = r.dma(0, 0, false, 8, 700, kPrd, &ok);
+  check(ok && (st & 0x07) == 0x04, "eight sectors written", "bm status %02x",
+        st);
+
+  // Eight sectors asked for, a table of four.
+  r.prd_table(kPrd, kNew, total / 2, 1, 0x80);
+  r.o32(b + 4, kPrd);
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  r.issue(0, 0, 0xca, 8, 700);
+  r.o8(b + 0, 0x01);
+  ok = r.wait_ready(0, 2000);
+  check(ok, "WRITE DMA with a table of half the data does not hang");
+  check(!(r.i8(b + 2) & 0x01), "Active is clear", "bm status %02x",
+        r.i8(b + 2));
+  u32 s7 = r.status(0);
+  check((s7 & 0x01) && (r.error(0) & 0x04), "the command ends with ABRT",
+        "st %02x err %02x", s7, r.error(0));
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  check(reads_back(700, kOld), "and the disk holds what it held");
+
+  // The same with a table that never ends (8192 entries of two bytes).
+  for (u32 e = 0; e < 8192; e++) {
+    r.mw32(0x500000 + 8 * e, kNew);
+    r.mw32(0x500000 + 8 * e + 4, 2);
+  }
+  r.o32(b + 4, 0x500000);
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  r.issue(0, 0, 0xca, 64, 700);
+  r.o8(b + 0, 0x01);
+  ok = r.wait_ready(0, 2000);
+  check(ok, "WRITE DMA with a table without an end bit does not hang");
+  check((r.i8(b + 2) & 0x03) == 0x02, "Error set, Active clear",
+        "bm status %02x", r.i8(b + 2));
+  s7 = r.status(0);
+  check((s7 & 0x01) && (r.error(0) & 0x04), "the command ends with ABRT",
+        "st %02x err %02x", s7, r.error(0));
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  check(reads_back(700, kOld), "and the disk holds what it held");
+}
+
+// Intel 8237A: the second controller's channel registers are the sixteen
+// ports from C0h. A word access that begins at CFh ends outside them, and
+// its second byte is no channel's register.
+void t_isa_dma(Rig &r) {
+  g_group = "isa-dma";
+  r.o8(0x0f, 0x0f); // the first controller: all four channels masked
+  const u32 mask = r.i8(0x0f);
+  check(mask == 0x0f, "the first controller's mask reads back", "%02x", mask);
+  r.o8(0xd8, 0);       // the second controller's byte pointer: low
+  r.o16(0xcf, 0x0500); // channel 7's count, and a byte past the range
+  check(r.i8(0x0f) == mask,
+        "a word write at CFh leaves the first controller's mask",
+        "%02x, was %02x", r.i8(0x0f), mask);
+  r.o8(0xd8, 0);
+  r.o8(0xcf, 0); // and with the byte pointer the other way round
+  r.o16(0xcf, 0x0500);
+  check(r.i8(0x0f) == mask, "whichever byte the pointer is at", "%02x",
+        r.i8(0x0f));
+  r.o8(0xd8, 0);
+  const u32 w = r.i16(0xcf);
+  check((w >> 8) == 0xff,
+        "a word read at CFh has FFh for the byte past the range", "%04x", w);
+  r.o8(0xd8, 0);
+}
+
+// A PCI interrupt acknowledge cycle is one read, whatever its size: the
+// quadword a processor may make of it acknowledges one interrupt, not two.
+void t_iack(Rig &r) {
+  g_group = "iack";
+  // Both 8259s as a console leaves them: vectors 08h and 70h, cascade on 2.
+  r.o8(0x20, 0x11), r.o8(0x21, 0x08), r.o8(0x21, 0x04), r.o8(0x21, 0x01);
+  r.o8(0xa0, 0x11), r.o8(0xa1, 0x70), r.o8(0xa1, 0x02), r.o8(0xa1, 0x01);
+  r.o8(0x21, 0x00), r.o8(0xa1, 0x00);
+  r.status(0);
+  r.run(0, 0, 0xec, 0, 0); // IDENTIFY DEVICE: IRQ 14 pending
+  const u64 v = r.sys->ReadMem(U64(0x801f8000000), 64, nullptr);
+  check((v & 0xff) == 0x76, "a quadword acknowledge reads IRQ 14's vector",
+        "%016llx", (unsigned long long)v);
+  check((v >> 32) == 0, "and acknowledges nothing a second time", "%016llx",
+        (unsigned long long)v);
+  r.o8(0xa0, 0x0b); // OCW3: read the in-service register
+  const u32 isr = r.i8(0xa0);
+  check(isr == 0x40, "IRQ 14 alone is in service", "slave ISR %02x", isr);
+  r.read_words(0, 256);
+  r.wait_ready(0);
+  r.status(0);
+  r.o8(0xa0, 0x20), r.o8(0x20, 0x20); // end of interrupt, both
+  r.o8(0x21, 0xff), r.o8(0xa1, 0xff);
+}
+
+const u64 kCfg = U64(0x801fe000000); // Pchip 0, PCI configuration space
+const int kNicSlot = 4;              // the 21143's place on hose 0
+const u32 kNicIo = 0x3000;           // its CSRs, eight bytes apart
+
+// A 21143 whose Bus Master Enable is clear reads every descriptor as all
+// ones: an owned setup frame it cannot give back. A PCI reset leaves it so
+// with its transmitter still started (ResetPCI clears the command register
+// and keeps the CSRs). Its thread must go on answering, a stop above all.
+void t_nic_no_master(Rig &r, CTulip *nic) {
+  g_group = "nic-no-master";
+  r.sys->WriteMem(kCfg + (kNicSlot << 11) + 0x10, 32, kNicIo, nullptr);
+  r.sys->WriteMem(kCfg + (kNicSlot << 11) + 4, 32, 0x3, nullptr); // no master
+  nic->start_threads();
+  r.o32(kNicIo + 0x20, 0x600000);               // CSR4: the transmit list
+  r.o32(kNicIo + 0x18, 0x610000);               // CSR3: the receive list
+  r.o32(kNicIo + 0x30, (1u << 13) | (1u << 1)); // CSR6: ST and SR
+  r.o32(kNicIo + 0x08, 1);                      // CSR1: transmit poll demand
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  check((r.i32(kNicIo + 0x30) & (1u << 13)) != 0, "CSR6 still answers, ST set");
+  // The stop is asked for on another thread, so that one that never comes
+  // back fails the check and not the run.
+  std::atomic<bool> *stopped = new std::atomic<bool>(false);
+  std::thread([nic, stopped]() {
+    nic->stop_threads();
+    stopped->store(true);
+  }).detach();
+  for (int t = 0; t < 3000 && !stopped->load(); t++)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  check(stopped->load(),
+        "the NIC's thread stops with ST set and no bus mastering");
+}
+
+// --- a machine saved with a command in hand, restored in a new process ---
+
+const u64 kDrir = U64(0x801a0000300); // Cchip DRIR
+const int kCmdSlot = 3;               // the CMD 649's place on hose 0
+const u32 kCmdIo = 0x2000;            // its command block; control at +10h
+const u32 kSaveLba = 900;
+
+bool own_path(char *buf, uint32_t size) {
+#if defined(__APPLE__)
+  return _NSGetExecutablePath(buf, &size) == 0;
+#elif defined(__linux__)
+  const ssize_t n = readlink("/proc/self/exe", buf, size - 1);
+  if (n <= 0)
+    return false;
+  buf[n] = 0;
+  return true;
+#else
+  (void)buf;
+  (void)size;
+  return false;
+#endif
+}
+
+/// The saving half: the CMD 649 with an interrupt pending and the ALi's
+/// first channel with a WRITE DMA whose Start is written and not yet taken
+/// (the controller thread is held where a busy host would hold it), saved
+/// to ide.axp; then this program again, to restore it (t_restored).
+void t_save(Rig &r) {
+  g_group = "restore";
+  char self[4096];
+  if (!own_path(self, sizeof(self))) {
+    printf("  SKIP restore: no way to this program's own file here\n");
+    return;
+  }
+  // The CMD 649: IDENTIFY DEVICE, and INTRQ left pending.
+  const u64 before = r.sys->ReadMem(kDrir, 64, nullptr);
+  r.o8(kCmdIo + 6, 0xe0);
+  r.o8(kCmdIo + 7, 0xec);
+  for (int t = 0; t < 10000 && (r.i8(kCmdIo + 0x12) & 0x80); t++)
+    std::this_thread::sleep_for(std::chrono::microseconds(200));
+  const u64 pending = r.sys->ReadMem(kDrir, 64, nullptr) & ~before;
+  check(pending != 0, "the CMD 649's IDENTIFY asserts INTA", "DRIR %016llx",
+        (unsigned long long)r.sys->ReadMem(kDrir, 64, nullptr));
+
+  const u32 b = Rig::bm(0);
+  for (u32 i = 0; i < 512; i += 8)
+    r.sys->WriteMem(kSrc + i, 64, U64(0x0101010101010101) * (0x21 + i / 8),
+                    nullptr);
+  r.prd_table(kPrd, kSrc, 512, 1, 0x80);
+  r.o32(b + 4, kPrd);
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  CIdeController::test_start_pause_us = 5000000;
+  r.issue(0, 0, 0xca, 1, kSaveLba);
+  r.alt(0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  r.o8(b + 0, 0x01); // Start: set, and not taken while the thread is held
+  r.sys->SaveState(path("ide.axp").c_str());
+  check(r.alt(0) & 0x80, "the command was in hand when the machine was saved");
+
+  char *args[] = {self,
+                  strdup("idetest"),
+                  strdup(g_dir.c_str()),
+                  strdup("--restored"),
+                  g_verbose ? strdup("-v") : nullptr,
+                  nullptr};
+  pid_t pid = 0;
+  int status = -1;
+  if (posix_spawn(&pid, self, nullptr, nullptr, args, environ) == 0)
+    waitpid(pid, &status, 0);
+  g_group = "restore";
+  check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+        "the restored machine's checks (above)", "status %d", status);
+  CIdeController::test_start_pause_us = 0;
+  r.wait_ready(0, 8000);
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  r.status(0);
+  r.i8(kCmdIo + 7);
+}
+
+/// The restoring half, in a process that never saw the command issued.
+void t_restored(Rig &r) {
+  g_group = "restored";
+  const u32 b = Rig::bm(0);
+  // The Start bit and the wake-up are not in the file: the command must
+  // run to its end with nothing more written.
+  bool ok = r.wait_ready(0, 3000);
+  check(ok, "the WRITE DMA in hand at the save completes after the restore");
+  if (!ok) { // let the rest run
+    r.o8(r.ctlport(0), 0x04);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    r.o8(r.ctlport(0), 0x00);
+    r.wait_ready(0, 3000);
+    r.select(0, 0);
+  }
+  r.o8(b + 0, 0x00);
+  r.o8(b + 2, 0x06);
+  r.status(0);
+  r.prd_table(kPrd, kDst, 512, 1, 0x80);
+  bool rd;
+  r.dma(0, 0, true, 1, kSaveLba, kPrd, &rd);
+  bool same = rd && ok;
+  for (u32 i = 0; i < 512; i += 8)
+    same &= r.sys->ReadMem(kDst + i, 64, nullptr) ==
+            r.sys->ReadMem(kSrc + i, 64, nullptr);
+  check(same, "and its sector is on the disk");
+
+  // The CMD 649's INTA came back asserted; reading Status lets go of it.
+  const u64 d1 = r.sys->ReadMem(kDrir, 64, nullptr);
+  r.i8(kCmdIo + 7);
+  const u64 d2 = r.sys->ReadMem(kDrir, 64, nullptr);
+  check((d1 & ~d2) != 0,
+        "the CMD 649's INTA, pending at the save, drops when Status is read",
+        "DRIR %016llx then %016llx", (unsigned long long)d1,
+        (unsigned long long)d2);
+}
+
 } // namespace
 
 int main_idetest(int argc, char **argv) {
@@ -701,19 +986,29 @@ int main_idetest(int argc, char **argv) {
     return 2;
   }
   g_dir = argv[1];
-  g_verbose = argc > 2 && strcmp(argv[2], "-v") == 0;
+  bool restored = false;
+  for (int i = 2; i < argc; i++) {
+    g_verbose |= strcmp(argv[i], "-v") == 0;
+    restored |= strcmp(argv[i], "--restored") == 0; // t_save runs this
+  }
   mkdir(g_dir.c_str(), 0755);
 
-  if (!make_image(path("ide0.img"), (u64)kDiskSectors * 512) ||
-      !make_image(path("ide.iso"), (u64)kCdBlocks * 2048) ||
-      !make_image(path("ide-big.img"), (u64)200 << 30) ||
-      !make_image(path("fdd.img"), 1474560)) {
+  if (restored) {
+    // the images are the saving process's
+  } else if (!make_image(path("cmd0.img"), (u64)2048 * 512) ||
+             !make_image(path("ide0.img"), (u64)kDiskSectors * 512) ||
+             !make_image(path("ide.iso"), (u64)kCdBlocks * 2048) ||
+             !make_image(path("ide-big.img"), (u64)200 << 30) ||
+             !make_image(path("fdd.img"), 1474560)) {
     printf("idetest: cannot create the images in %s\n", g_dir.c_str());
     return 2;
   }
 
   const std::string systext =
-      "sys0 = tsunami { memory.bits = 26; pci0.7 = ali { } pci0.15 = ali_ide { "
+      "sys0 = tsunami { memory.bits = 26; pci0.7 = ali { } pci0." +
+      std::to_string(kCmdSlot) + " = cmd649 { disk0.0 = file { file = \"" +
+      path("cmd0.img") + "\"; } } pci0." + std::to_string(kNicSlot) +
+      " = dec21143 { type = \"null\"; } pci0.15 = ali_ide { "
       "disk0.0 = file { file = \"" +
       path("ide0.img") + "\"; } disk0.1 = file { file = \"" + path("ide.iso") +
       "\"; cdrom = true; read_only = true; } disk1.0 = file { file = \"" +
@@ -726,11 +1021,20 @@ int main_idetest(int argc, char **argv) {
                     strlen(roottext));
   Rig r;
   r.sys = theSystem;
-  CIdeController *ide = nullptr;
+  CIdeController *ide = nullptr, *cmd = nullptr;
+  CTulip *nic = nullptr;
   for (int i = 0; i < r.sys->component_count(); i++)
-    if (CIdeController *c = dynamic_cast<CIdeController *>(r.sys->component(i)))
-      ide = c;
-  if (!ide) {
+    if (CTulip *t = dynamic_cast<CTulip *>(r.sys->component(i)))
+      nic = t;
+  for (int i = 0; i < r.sys->component_count(); i++)
+    if (CIdeController *c =
+            dynamic_cast<CIdeController *>(r.sys->component(i))) {
+      if (dynamic_cast<CCmd649 *>(c))
+        cmd = c;
+      else
+        ide = c;
+    }
+  if (!ide || !cmd || !nic) {
     printf("idetest: no IDE controller in the test machine\n");
     return 2;
   }
@@ -740,7 +1044,25 @@ int main_idetest(int argc, char **argv) {
   r.sys->WriteMem(U64(0x80180000000), 64, 1, nullptr);
   // I/O space and bus mastering on, as the console leaves them.
   r.sys->WriteMem(U64(0x801fe000000) + (15 << 11) + 4, 32, 0x7, nullptr);
+  // The CMD 649: its five I/O blocks from kCmdIo, 10h apart, the same.
+  for (u32 n = 0; n < 5; n++)
+    r.sys->WriteMem(kCfg + (kCmdSlot << 11) + 0x10 + 4 * n, 32,
+                    kCmdIo + 0x10 * n, nullptr);
+  r.sys->WriteMem(kCfg + (kCmdSlot << 11) + 4, 32, 0x7, nullptr);
+  if (restored) {
+    // As ALPHABOX_RESTORE does: every component built, no thread running.
+    if (!r.sys->RestoreState(path("ide.axp").c_str())) {
+      printf("idetest: cannot restore %s\n", path("ide.axp").c_str());
+      _exit(2);
+    }
+    ide->start_threads();
+    cmd->start_threads();
+    t_restored(r);
+    fflush(stdout);
+    _exit(g_fail ? 1 : 0);
+  }
   ide->start_threads();
+  cmd->start_threads();
 
   printf("idetest: checks\n");
   // IDETEST_ONLY=name,name runs only the groups named (a group that stops
@@ -773,10 +1095,22 @@ int main_idetest(int argc, char **argv) {
     t_odd_count(r);
   if (want("floppy"))
     t_floppy(r);
+  if (want("short-table"))
+    t_short_table(r);
+  if (want("isa-dma"))
+    t_isa_dma(r);
+  if (want("iack"))
+    t_iack(r);
+  if (want("nic"))
+    t_nic_no_master(r, nic);
+  if (want("restore")) // last: it leaves the first channel's thread held
+    t_save(r);
 
   printf("idetest: %d passed, %d failed\n", g_pass, g_fail);
   printf("%s\n", g_fail ? "FAIL" : "PASS");
   remove(path("ide0.img").c_str());
+  remove(path("cmd0.img").c_str());
+  remove(path("ide.axp").c_str());
   remove(path("ide.iso").c_str());
   remove(path("ide-big.img").c_str());
   remove(path("fdd.img").c_str());

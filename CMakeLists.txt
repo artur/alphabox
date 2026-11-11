@@ -639,6 +639,14 @@ add_executable(hostsock_test test/unit/hostsock_test.cpp
 target_include_directories(hostsock_test PRIVATE src/common)
 add_test(NAME hostsock COMMAND hostsock_test)
 
+# The frame check sequence a NIC with `crc = true` appends to what it
+# receives (Ethernet.cpp): least significant byte first.
+add_executable(ethernet_test test/unit/ethernet_test.cpp
+    src/devices/net/Ethernet.cpp)
+target_include_directories(ethernet_test PRIVATE
+    $<TARGET_PROPERTY:alphabox,INCLUDE_DIRECTORIES>)
+add_test(NAME ethernet COMMAND ethernet_test)
+
 # The NAT network back end (libslirp) driven with hand-built guest frames:
 # DHCP, BOOTP, TFTP, TCP to the host, hostfwd, loss and retransmission.
 if(HAVE_SLIRP)
