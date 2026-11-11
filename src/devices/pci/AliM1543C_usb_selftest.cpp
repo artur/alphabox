@@ -204,18 +204,33 @@ void CAliM1543C_usb::selftest() {
     return (u32)cSystem->ReadMem(cSystem->PCI_Phys(myPCIBus, HCCA + 0x80), 32,
                                  this);
   };
+  // A frame is a millisecond, but on a loaded host the controller's thread
+  // may not run for many: wait for the number to move, up to a second.
+  auto advances = [&](u32 from) {
+    for (int i = 0; i < 200; i++) {
+      if (frame_no() != from)
+        return true;
+      nap_ms(5);
+    }
+    return false;
+  };
   nap_ms(5);
   const u32 f1 = frame_no();
-  nap_ms(10);
-  say("bus master on: the HCCA frame number advances", frame_no() != f1);
+  say("bus master on: the HCCA frame number advances", advances(f1));
   cmd(config_read(0, 4, 16) & ~4u);
   nap_ms(5);
-  const u32 f2 = frame_no();
+  u32 f2 = frame_no();
   nap_ms(15);
+  // One write may still land: a frame that had passed its check of the bit
+  // when the host took the thread away (seen once in 12 runs at a host load
+  // of 141). A controller that ignored the bit writes one a millisecond.
+  if (frame_no() != f2) {
+    f2 = frame_no();
+    nap_ms(15);
+  }
   say("bus master off: the HCCA frame number holds", frame_no() == f2);
   cmd(config_read(0, 4, 16) | 4u);
-  nap_ms(15);
-  say("bus master on again: it advances", frame_no() != f2);
+  say("bus master on again: it advances", advances(f2));
 
   // The interrupt line follows the routing. An event with the controller
   // not running leaves a level that nothing re-evaluates but the move.
@@ -227,25 +242,32 @@ void CAliM1543C_usb::selftest() {
   reg(0x54, 1 << 2);      // SetPortSuspend: a port status change
   reg(0x54, 1 << 3);      // ClearSuspendStatus: PSSC
   nap_ms(3);
+  // The checks read the PIC's input, not its request bit: the console is
+  // running, and its acknowledge of an edge-triggered IRQ would consume the
+  // request.
   if (theAli) {
     const u32 was = theAli->config_read(0, 0x74, 8);
     const int old_irq = theAli->routed_irq(0x74);
     say("RHSC pending with MIE: the line is up",
-        old_irq >= 0 && theAli->irq_requested(old_irq));
-    // 0xb routes to IRQ 12; pick another if that is where it already is.
-    const u32 to = old_irq == 12 ? 0x3 : 0xb;
-    const int new_irq = old_irq == 12 ? 10 : 12;
+        old_irq >= 0 && theAli->irq_held(old_irq));
+    // 0x9 routes to IRQ 11; pick another if that is where it already is.
+    // Not IRQ 12: the keyboard controller drives that line for the mouse,
+    // and each time the console polls it the level this function put there
+    // is gone (which a real board's two drivers on one line would fight
+    // over as well).
+    const u32 to = old_irq == 11 ? 0x1 : 0x9;
+    const int new_irq = old_irq == 11 ? 9 : 11;
     theAli->config_write(0, 0x74, 8, (was & ~0xfu) | to);
     nap_ms(3);
     say("USBIR moved: the old IRQ is released",
-        !theAli->irq_requested(old_irq));
-    say("USBIR moved: the new one is raised", theAli->irq_requested(new_irq));
+        !theAli->irq_held(old_irq));
+    say("USBIR moved: the new one is raised", theAli->irq_held(new_irq));
     theAli->config_write(0, 0x74, 8, was);
     nap_ms(3);
     say("USBIR moved back: the new IRQ is released",
-        !theAli->irq_requested(new_irq));
+        !theAli->irq_held(new_irq));
     say("USBIR moved back: the old one is raised",
-        theAli->irq_requested(old_irq));
+        theAli->irq_held(old_irq));
   }
   reg(0x10, 0x80000000);
 

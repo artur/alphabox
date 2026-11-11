@@ -115,6 +115,13 @@ public:
     return (s.irr[irq >> 3] >> (irq & 7)) & 1;
   }
 
+  /// Whether the source holds ISA IRQ `irq` (0-15) up: the input, which an
+  /// acknowledge does not consume as it does an edge-triggered IRR bit.
+  bool line(int irq) {
+    std::lock_guard<std::mutex> guard(lock);
+    return (s.last_irr[irq >> 3] >> (irq & 7)) & 1;
+  }
+
 private:
   void init_reset(int index);
   int get_irq(int index);

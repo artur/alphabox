@@ -84,6 +84,8 @@ public:
   int routed_irq(int config_offset) const;
   /// Whether ISA IRQ `irq` is requested at the 8259s (for the self-tests).
   bool irq_requested(int irq);
+  /// Whether the source holds ISA IRQ `irq` up (the PIC's input).
+  bool irq_held(int irq);
   /// Functions that follow the USBIR routing byte (0x74): `fn` runs when a
   /// configuration write moves it. Keyed by the owner, who removes it.
   void add_usbir_listener(const void *owner, std::function<void()> fn);

@@ -812,6 +812,7 @@ int CAliM1543C::routed_irq(int config_offset) const {
 }
 
 bool CAliM1543C::irq_requested(int irq) { return pic.requested(irq); }
+bool CAliM1543C::irq_held(int irq) { return pic.line(irq); }
 
 void CAliM1543C::add_usbir_listener(const void *owner,
                                     std::function<void()> fn) {
