@@ -195,6 +195,16 @@ void CS3Virge::mmio_write_dword(u32 offset, u32 data) {
  * values -- and moves the write pointer; the chip fetches up to it.
  **/
 void CS3Virge::command_dma_run() {
+  // An entry may name any register, the write pointer among them, whose
+  // write runs the buffer: not from inside itself, where it would start
+  // at the same entry again and never return.
+  if (m_dma_running)
+    return;
+  m_dma_running = true;
+  struct leave {
+    bool &f;
+    ~leave() { f = false; }
+  } on_exit{m_dma_running};
   const u32 base_reg = M(DMA_BASE);
   const u32 size = (base_reg & 2) ? 0x10000 : 0x1000;
   const u32 base = base_reg & ~(size - 1);

@@ -66,6 +66,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
+#include <csignal>
 #include <mutex>
 #include <stdlib.h>
 #include <string.h>
@@ -1478,8 +1479,17 @@ void bx_sdl_gui_c::handle_events(void) {
       break;
 
     case SDL_EVENT_QUIT:
-      if (!sdl_grab)
+      if (!sdl_grab) {
+#if defined(__APPLE__)
+        // on the main thread (main_thread_pump), whose loop takes it
         FAILURE(Graceful, "User requested shutdown");
+#else
+        // On the card's thread, where the exception would be taken for the
+        // thread's death, with the GUI lock held: the orderly way out is
+        // the main loop's (flash and DPR saved), as the gdb stub's kill.
+        raise(SIGTERM);
+#endif
+      }
     }
   }
 

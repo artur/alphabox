@@ -412,6 +412,9 @@ void CPermedia2::raster_begin(u32 render) {
  * polyline -- the line's deltas with its fractions adjusted.
  **/
 void CPermedia2::raster_continue(int kind, u32 count) {
+  // Twelve bits, as the register's (gp_write); the delta unit's comes from
+  // vertices that may be anywhere.
+  count = std::min(count, 0xfffu);
   auto &g = r.g;
   const s32 bias = coordinate_bias(G(T_RASTERIZER_MODE));
   switch (kind) {

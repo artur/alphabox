@@ -125,8 +125,15 @@ void CTulip::run() {
   try {
     while (!StopThread.load()) {
       apply_filter();
-      const bool more = receive_process();
-      while (dec21143_tx())
+      // Without Bus Master Enable every descriptor reads as all ones (an
+      // owned setup frame that cannot be given back), which the rings must
+      // not be walked through: a PCI reset clears the bit and keeps the
+      // CSRs, ST and SR among them. The transmit loop is bounded for the
+      // same reason, and so that a stop is seen.
+      const bool master = (config_read(0, 4, 16) & 4) != 0;
+      const bool more = master && receive_process();
+      for (int n = 0; master && n < 256 && !StopThread.load() && dec21143_tx();
+           n++)
         ;
       update_irq();
       // A back end with frames still waiting gets the next pass at once.

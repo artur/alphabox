@@ -767,6 +767,7 @@ int COhci::service_ed(u32 ed_addr, bool periodic, bool *found) {
       // driver's mistake: its TDs are retired untouched.
       retire_td(head, first.w, 0xf); // NotAccessed
       ed[2] = (first.w[2] & ~0xfu) | (ed[2] & 3);
+      do_pci_write(ed_addr + 8, &ed[2], sizeof(u32), 1); // the new head
       ++done;
       continue;
     }

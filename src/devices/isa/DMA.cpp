@@ -176,6 +176,11 @@ u64 CDMA::ReadMem(int index, u64 address, int dsize) {
   case 8: {
     std::lock_guard<std::mutex> lock(dma_mutex);
 
+    // A wide access that began in the range and runs past its end: those
+    // bytes are not the channel registers'.
+    if ((index == DMA0_IO_CHANNEL && address >= 8) ||
+        (index == DMA1_IO_CHANNEL && address >= 16))
+      return 0xff;
     if (index == DMA1_IO_CHANNEL || index == DMA1_IO_MAIN)
       address >>= 1;
 
@@ -251,6 +256,9 @@ void CDMA::WriteMem(int index, u64 address, int dsize, u64 data) {
     std::lock_guard<std::mutex> lock(dma_mutex);
 
     data &= 0xff;
+    if ((index == DMA0_IO_CHANNEL && address >= 8) ||
+        (index == DMA1_IO_CHANNEL && address >= 16))
+      return; // past the range's end (see ReadMem)
     if (index == DMA1_IO_CHANNEL || index == DMA1_IO_MAIN)
       address >>= 1;
 

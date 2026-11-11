@@ -461,6 +461,8 @@ void CIsp1040::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 
   case ISP_BIU_RSPOUTP:
     state.response_out = value;
+    if (state.queue_pending)
+      myWake.notify_all(); // room for the responses of what waits
     return;
 
   case ISP_HCCR:
@@ -503,6 +505,8 @@ void CIsp1040::WriteMem_Bar(int func, int bar, u32 address, int dsize,
         run_request_queue();
       } else if (n == 5 && state.response_length) {
         state.response_out = value;
+        if (state.queue_pending)
+          myWake.notify_all();
       }
     }
     return;

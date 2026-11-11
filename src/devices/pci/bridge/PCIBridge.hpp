@@ -130,6 +130,7 @@ private:
   const pci_bridge_config m_chip;
   std::vector<CPCIDevice *> m_children;
   std::vector<child_range> m_ranges;
+  std::mutex m_ranges_mx; ///< m_ranges: placed by one processor, read by all
   std::vector<window> m_windows;
 };
 

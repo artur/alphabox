@@ -479,7 +479,7 @@ void CRadeonR100_3D::raster_setup() {
     t.w = 1 << lw;
     t.h = 1 << lh;
     const int maxlev = int((t.filter >> 16) & 15);
-    t.levels = std::min(maxlev, std::max(lw, lh)) + 1;
+    t.levels = std::min(std::min(maxlev, std::max(lw, lh)) + 1, 12);
     u32 off = base;
     for (int l = 0; l < t.levels && l < 12; l++) {
       const int w = std::max(1, t.w >> l), h = std::max(1, t.h >> l);
@@ -688,6 +688,11 @@ void CRadeonR100_3D::sample(int unit, float s, float t, float lod, float o[4]) {
   // LOD bias: Mesa's encoding, -1.0 at -128 up to +4.0 at 127
   const int b = int(int8_t((flt >> 8) & 0xff));
   lod += b >= 0 ? float(b) * 4.0f / 127.0f : float(b) / 128.0f;
+  // No texture has more levels than 12; an infinite or undefined level
+  // (texture coordinates past a float's range) must not reach the int
+  // conversions below, which x86-64 turns into INT_MIN.
+  if (!(lod < 16.0f))
+    lod = 16.0f;
   const bool mag = lod <= 0.0f;
   const u32 minf = (flt >> 1) & 15;
   bool linear;
@@ -1565,12 +1570,23 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b,
   const double m0 = xmaj ? ay : ax, dm = xmaj ? ldy : ldx;
   const int dir = s1 > s0 ? 1 : -1;
   // centres c + 0.5 in [s0, s1) going up, in (s1, s0] going down
-  const int c0 = dir > 0 ? int(std::ceil(s0 - 0.5)) : int(std::floor(s0 - 0.5));
-  const int c1 = dir > 0 ? int(std::ceil(s1 - 0.5)) : int(std::floor(s1 - 0.5));
+  // The walk is kept to the scissor along the major axis (endpoints may be
+  // anywhere, 1e9 from uninitialised vertices): outside it no pixel is
+  // drawn, and only the stipple counts the steps.
+  const double lo = double(std::max(xmaj ? rs.clip_l : rs.clip_t, 0)) - 1.0;
+  const double hi = double(xmaj ? rs.clip_r : rs.clip_b) + 2.0;
+  const double w0 = std::min(std::max(s0, lo), hi);
+  const double w1 = std::min(std::max(s1, lo), hi);
+  const int c0 = dir > 0 ? int(std::ceil(w0 - 0.5)) : int(std::floor(w0 - 0.5));
+  const int c1 = dir > 0 ? int(std::ceil(w1 - 0.5)) : int(std::floor(w1 - 0.5));
   const u32 pat = reg(RE_LINE_PATTERN);
   const u32 repeat = std::max(1u, (pat >> 16) & 0xff);
   if (pat & (1u << 29))
     line_stipple_count = 0;
+  // the steps before the scissor, which the walk above skipped
+  line_stipple_count += u32(std::min(std::fabs(w0 - s0), 4294967295.0));
+  if ((c1 - c0) * dir < 0)
+    return; // wholly outside
   const int route[3] = {rs.tex[0].route, rs.tex[1].route, rs.tex[2].route};
   for (int cc = c0; cc != c1; cc += dir) {
     const double mc = double(cc) + 0.5;

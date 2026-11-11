@@ -657,6 +657,9 @@ CUsbDevice::Result CUsbHostDevice::control(int pid, u8 *buf, int &len) {
       if (!s.xfer && !s.done) {
         std::vector<u8> all(m_setup, m_setup + 8);
         all.insert(all.end(), m_out.begin(), m_out.end());
+        // submit() sends wLength bytes after the SETUP: a guest that sent
+        // fewer gets zeros for the rest, not what lies past the buffer.
+        all.resize(8 + (size_t)(m_setup[6] | (m_setup[7] << 8)));
         if (!submit(kControl, 0x00, LIBUSB_TRANSFER_TYPE_CONTROL, all.data(),
                     0)) {
           len = 0;

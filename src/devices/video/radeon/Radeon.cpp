@@ -318,6 +318,7 @@ void CRadeon::WriteMem_Bar(int func, int bar, u32 address, int dsize,
 static constexpr u32 kRadeonMagic = 0x37354152; // 'RA57'
 
 static constexpr u32 kCpMagic = 0x50435241; // 'ARCP'
+static constexpr u32 k2dMagic = 0x44325241; // 'AR2D'
 
 int CRadeon::save_card_state(FILE *f) {
   // The engine finishes what it was given first: the state file holds no
@@ -338,6 +339,18 @@ int CRadeon::save_card_state(FILE *f) {
   fwrite(m_me_written, sizeof(m_me_written), 1, f);
   const u32 loaded = m_me_loaded;
   fwrite(&loaded, 4, 1, f);
+  // The 2D engine's decoded state: a register written once (a scissor, a
+  // pitch) is not decoded again by anything after a restore.
+  const u32 e[18] = {eng.dst_offset,    eng.dst_pitch,    eng.src_offset,
+                     eng.src_pitch,     (u32)eng.dst_x,   (u32)eng.dst_y,
+                     (u32)eng.src_x,    (u32)eng.src_y,   (u32)eng.width,
+                     (u32)eng.height,   (u32)eng.sc_left, (u32)eng.sc_top,
+                     (u32)eng.sc_right, (u32)eng.sc_bottom,
+                     (u32)eng.src_sc_right, (u32)eng.src_sc_bottom,
+                     (u32)eng.bpp,      eng.gmc};
+  fwrite(&k2dMagic, 4, 1, f);
+  fwrite(e, sizeof(e), 1, f);
+  fwrite(&eng.dp_cntl, 4, 1, f);
   return 0;
 }
 
@@ -381,6 +394,34 @@ int CRadeon::restore_card_state(FILE *f) {
   m_ucode = m_me_loaded
                 ? identify_microcode(m_me_ram, m_chip->me_ram_entries, *m_chip)
                 : MicrocodeId();
+  // The 2D engine's block, absent from older state files, which leave the
+  // engine as it was built.
+  const long at2 = ftell(f);
+  u32 e[18], dp = 0;
+  if (fread(&m, 4, 1, f) == 1 && m == k2dMagic &&
+      fread(e, sizeof(e), 1, f) == 1 && fread(&dp, 4, 1, f) == 1) {
+    eng.dst_offset = e[0];
+    eng.dst_pitch = e[1];
+    eng.src_offset = e[2];
+    eng.src_pitch = e[3];
+    eng.dst_x = (int)e[4];
+    eng.dst_y = (int)e[5];
+    eng.src_x = (int)e[6];
+    eng.src_y = (int)e[7];
+    eng.width = (int)e[8];
+    eng.height = (int)e[9];
+    eng.sc_left = (int)e[10];
+    eng.sc_top = (int)e[11];
+    eng.sc_right = (int)e[12];
+    eng.sc_bottom = (int)e[13];
+    eng.src_sc_right = (int)e[14];
+    eng.src_sc_bottom = (int)e[15];
+    eng.bpp = (int)e[16];
+    eng.gmc = e[17];
+    eng.dp_cntl = dp;
+  } else {
+    fseek(f, at2, SEEK_SET);
+  }
   return 0;
 }
 

@@ -373,8 +373,16 @@ int CIdeController::RestoreState(FILE *f) {
     return -1;
   }
 
-  for (int i = 0; i < 2; i++)
+  for (int i = 0; i < 2; i++) {
     cmd_drive[i] = CONTROLLER(i).selected;
+    // A command the controller thread had in hand when the machine was
+    // saved: its Start bit and its wake-up are not in the file. One waiting
+    // for the guest (DRQ: data, or a PACKET's command bytes) is left alone.
+    dma_start[i].store((CONTROLLER(i).busmaster[0] & 0x01) != 0);
+    if (SEL_COMMAND(i).command_in_progress && SEL_STATUS(i).busy &&
+        !SEL_STATUS(i).drq)
+      wake_controller(i);
+  }
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
   return 0;
 }
@@ -2530,8 +2538,15 @@ void CIdeController::execute(int index) {
           }
 
           u8 *ptr = (u8 *)(&CONTROLLER(index).data[0]);
-          do_dma_transfer(index, ptr, SEL_REGISTERS(index).sector_count * 512,
-                          true);
+          // A table that ends short of the data (1) or never ends (3) has
+          // not supplied the sectors: nothing is written, where the whole
+          // buffer, stale past what came, used to be.
+          const int dma = do_dma_transfer(
+              index, ptr, SEL_REGISTERS(index).sector_count * 512, true);
+          if (dma == 1 || dma == 3) {
+            fail_transfer(index, 0x04); // ABRT
+            break;
+          }
           if (!SEL_DISK(index)->seek_block(lba) ||
               SEL_DISK(index)->write_blocks(
                   &(CONTROLLER(index).data[0]),

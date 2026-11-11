@@ -235,6 +235,10 @@ int CI8255x::store_frame_rbds(const u8 *data, int len, u32 *first_rbd) {
     const u32 buffer = dma_read32(rbd + RBD_BUFFER);
     const u16 size_word = dma_read16(rbd + RBD_SIZE);
     const int n = std::min(len - stored, int(size_word & COUNT_MASK));
+    // A buffer of no size holds nothing, and a list of them (one linked to
+    // itself) would never end: the frame is out of buffers here.
+    if (n == 0 && !(size_word & RBD_EL))
+      break;
 
     if (*first_rbd == 0xffffffff)
       *first_rbd = state.rbd_offset;

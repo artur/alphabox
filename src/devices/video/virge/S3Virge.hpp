@@ -274,6 +274,7 @@ protected:
   u64 m_direct_size = 0;
   std::mutex m_int_lock;
   bool m_int_asserted = false;
+  bool m_dma_running = false; ///< command_dma_run is on the stack
   /// ALPHABOX_TRACE_VIRGE (see init()): every access (switched by the
   /// render thread when a trace file comes and goes), the engine's
   /// commands, the display mode.

@@ -423,6 +423,7 @@ protected:
   /// modelled).
   u32 m_scaler_palette[256] = {};
   int m_cp_depth = 0, m_cp_ib_depth = 0;
+  u32 m_cp_ib_left = 0; ///< dwords an outermost indirect buffer may still run
   u32 m_me_ram[256][2] = {}; ///< the CP microcode, kept for read-back
   u32 m_me_index = 0;
   u32 m_me_written[8] = {}; ///< which entries a driver has loaded

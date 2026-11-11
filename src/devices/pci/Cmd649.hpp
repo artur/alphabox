@@ -81,6 +81,7 @@ private:
   /// Bus master bytes 1, 3, 9 and 11: the configuration registers they
   /// mirror, or 0 for the SFF-8038i bytes.
   static u32 bm_alias(u32 address);
+  int RestoreState(FILE *f) override;
   std::mutex m_line_mx;
   bool m_line = false;
 };

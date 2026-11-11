@@ -392,7 +392,10 @@ bool CVirtioPci::pop_chain(int q, Chain &c) {
     memcpy(&flags, d + 12, 2);
     memcpy(&next, d + 14, 2);
     if (flags & D_INDIRECT) {
-      if (indirect || (flags & D_NEXT) || len < 16 || (len & 15))
+      // No chain is longer than the queue (virtio 1.x 2.7.5.3.1), so no
+      // table need be.
+      if (indirect || (flags & D_NEXT) || len < 16 || (len & 15) ||
+          len / 16 > (u32)kQueueSize)
         return broken("bad indirect descriptor");
       table = addr;
       entries = len / 16;

@@ -2622,6 +2622,7 @@ int CAlphaCPU::SaveState(FILE *f) {
   fwrite(&cpu_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
+  fwrite(&cpu_magic2, sizeof(u32), 1, f);
   // The DTB_TAG0/1 staging registers (state file format 2.4 on): PALcode
   // writes the tag, then the PTE, and a save may fall between the two.
   fwrite(last_dtb_virt, sizeof(last_dtb_virt), 1, f);

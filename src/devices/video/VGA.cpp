@@ -325,7 +325,7 @@ void CVGA::vga_vh_text(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   (((ch & 0xe0) == 0xc0) && (vga.attribute.data[0x10] & 4))
 
   int width = BIT(vga.sequencer.data[1], 0) ? 8 : 9,
-      height = (vga.crtc.maximum_scan_line) * (vga.crtc.scan_doubling + 1);
+      height = scan_line_height();
 
   const u32 frame_number = (u32)(screen().frame_number());
 
@@ -411,7 +411,7 @@ void CVGA::vga_vh_text(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 }
 
 void CVGA::vga_vh_ega(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
-  const int height = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+  const int height = scan_line_height();
   const int pel_shift = (vga.attribute.pel_shift & 7);
   const int LINES = (vga.crtc.vert_disp_end + 1) * (get_interlace_mode() + 1);
   const int EGA_COLUMNS = vga.crtc.horz_disp_end + 1;
@@ -455,7 +455,7 @@ void CVGA::vga_vh_ega(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 // In mode 13h (256 colors) every pixel actually double height/width
 // i.e. a 320x200 is really 640x400
 void CVGA::vga_vh_vga(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
-  int height = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+  int height = scan_line_height();
   int pel_shift = (vga.attribute.pel_shift & 6);
   int addrmask = vga.crtc.no_wrap ? -1 : 0xffff;
 
@@ -627,7 +627,7 @@ void CVGA::svga_vh_rgb8(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   rgb8_dump_late++;
 #endif
 
-  const int height = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+  const int height = scan_line_height();
 
   const uint16_t mask_comp = line_compare_mask();
   int curr_addr = 0;
@@ -687,7 +687,7 @@ void CVGA::svga_vh_rgb8(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 void CVGA::svga_vh_rgb15(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   constexpr uint32_t IV = 0xff000000;
   const unsigned height =
-      vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+      scan_line_height();
 
   const unsigned TLINES =
       (vga.crtc.vert_disp_end + 1) * (get_interlace_mode() + 1);
@@ -727,7 +727,7 @@ void CVGA::svga_vh_rgb15(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 void CVGA::svga_vh_rgb16(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   constexpr uint32_t IV = 0xff000000;
   const unsigned height =
-      vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+      scan_line_height();
   const unsigned TLINES =
       (vga.crtc.vert_disp_end + 1) * (get_interlace_mode() + 1);
   const unsigned TGA_COLUMNS = vga.crtc.horz_disp_end + 1;
@@ -766,7 +766,7 @@ void CVGA::svga_vh_rgb16(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 
 void CVGA::svga_vh_rgb24(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   constexpr uint32_t ID = 0xff000000;
-  const int height = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+  const int height = scan_line_height();
   const int TLINES = (vga.crtc.vert_disp_end + 1) * (get_interlace_mode() + 1);
   const int TGA_COLUMNS = vga.crtc.horz_disp_end + 1;
 
@@ -803,7 +803,7 @@ void CVGA::svga_vh_rgb24(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
 
 void CVGA::svga_vh_rgb32(bitmap_rgb32 &bitmap, const rectangle &cliprect) {
   constexpr uint32_t ID = 0xff000000;
-  const int height = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+  const int height = scan_line_height();
   const int TLINES = (vga.crtc.vert_disp_end + 1) * (get_interlace_mode() + 1);
   const int TGA_COLUMNS = vga.crtc.horz_disp_end + 1;
 

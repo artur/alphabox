@@ -147,11 +147,22 @@ void CI8255x::run() {
     while (!StopThread) {
       const u8 *frame = nullptr;
       int len = 0;
-      while (net_backend->receive(&frame, &len) > 0)
+      // At most 64 frames a pass, as the Tulip's RX_BURST: a flood must not
+      // keep the lock from a processor at the CSRs.
+      int burst = 0;
+      while (burst < 64 && net_backend->receive(&frame, &len) > 0) {
         receive_frame(frame, len);
+        burst++;
+      }
       if (state.cu_pending)
         run_command_list();
       update_irq();
+      if (burst == 64) { // more may wait: let the others in, then go on
+        lock.unlock();
+        std::this_thread::yield();
+        lock.lock();
+        continue;
+      }
       myWake.wait_for(lock, std::chrono::milliseconds(10));
     }
   } catch (std::exception &e) {

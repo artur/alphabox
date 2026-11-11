@@ -46,12 +46,13 @@ CPermedia2::~CPermedia2() {
 }
 
 void CPermedia2::init() {
-  // "memory" is the SGRAM fitted, in MB: 2, 4, 6 or 8, one to four 2 MB
-  // banks (MemConfig's NumberBanks). The boards shipped with 4 or 8.
+  // "memory" is the SGRAM fitted, in MB: 2, 4 or 8. The boards shipped
+  // with 4 or 8. Three banks (6 MB) the chip can have, but every address
+  // here wraps by a mask (vram_mask), which only a power of two gives.
   const u64 mb = myCfg->get_num_value("memory", false, 8);
-  if (mb != 2 && mb != 4 && mb != 6 && mb != 8)
+  if (mb != 2 && mb != 4 && mb != 8)
     FAILURE_1(Configuration,
-              "permedia2: memory must be 2, 4, 6 or 8 (MB), not %llu",
+              "permedia2: memory must be 2, 4 or 8 (MB), not %llu",
               (unsigned long long)mb);
   m_vram_bytes = u32(mb) << 20;
 

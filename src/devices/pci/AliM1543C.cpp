@@ -316,6 +316,10 @@ CAliM1543C::~CAliM1543C() {
  **/
 u32 CAliM1543C::ReadMem_Legacy(int index, u32 address, int dsize) {
   // The interrupt vector is read in a PCI IACK cycle, whatever its size.
+  // A quadword read arrives as two longwords: the second is no second
+  // acknowledge.
+  if (index == 20 && address >= 4)
+    return 0;
   if (dsize == 8 || index == 20)
     return read_byte(index, address);
 
@@ -623,12 +627,14 @@ u8 CAliM1543C::reg_61_read() {
       m_r61_last_ns = now;
     }
   }
-  state.reg_61 &= ~0x30;
+  // The live bits are made here and not kept: writing them back raced a
+  // write of the low nibble on another processor, which could lose it.
+  u8 v = state.reg_61 & ~0x30;
   if ((refresh_ns / REFRESH_TOGGLE_NS) & 1U)
-    state.reg_61 |= 0x10;
+    v |= 0x10;
   if (pit.out(2))
-    state.reg_61 |= 0x20;
-  return state.reg_61;
+    v |= 0x20;
+  return v;
 }
 
 /**

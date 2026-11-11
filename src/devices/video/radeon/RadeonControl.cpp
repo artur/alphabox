@@ -87,8 +87,11 @@ u32 CRadeon::reg_read(u32 offset, int bytes) {
     const u32 idx = R(MM_INDEX);
     if (idx & 0x80000000u)
       v = vram_read((idx & 0x7fffffffu) + (offset & 3), bytes);
-    else if ((idx & ~3u) > MM_DATA)
-      v = reg_read((idx & ~3u) + (offset & 3), bytes);
+    // The index as the aperture decodes it: one that names MM_DATA itself
+    // through an alias (0x10004) would come back here for ever.
+    else if ((idx & (REG_APERTURE_BYTES - 1) & ~3u) > MM_DATA)
+      v = reg_read((idx & (REG_APERTURE_BYTES - 1) & ~3u) + (offset & 3),
+                   bytes);
     else
       v = 0;
     return v;
@@ -123,8 +126,9 @@ void CRadeon::reg_write(u32 offset, int bytes, u32 data) {
     const u32 idx = R(MM_INDEX);
     if (idx & 0x80000000u)
       vram_write((idx & 0x7fffffffu) + (offset & 3), bytes, data);
-    else if ((idx & ~3u) > MM_DATA)
-      reg_write((idx & ~3u) + (offset & 3), bytes, data);
+    else if ((idx & (REG_APERTURE_BYTES - 1) & ~3u) > MM_DATA)
+      reg_write((idx & (REG_APERTURE_BYTES - 1) & ~3u) + (offset & 3), bytes,
+                data);
     return;
   }
   if (m_trace || m_trace_new)
@@ -311,7 +315,11 @@ void CRadeon::reg_write32(u32 reg, u32 data, u32 old, u32 byte_mask) {
     // and held while their bits are set; the FIFO keeps its entries.
     R(reg) = data;
     if (data & 0x7f) {
-      std::lock_guard<std::mutex> x(m_exec_mx);
+      // A CP packet may write this register, and the engine running the
+      // packet holds the lock already.
+      std::unique_lock<std::mutex> x(m_exec_mx, std::defer_lock);
+      if (!in_engine())
+        x.lock();
       engine_scope scope;
       engine_reset();
       if (data & 1)

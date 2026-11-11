@@ -302,7 +302,10 @@ void CMach64::setup_triangle() {
       };
 
       u32 color =
-          flat ? v[flat - 1].argb : lerp_argb(v[0].argb, v[1].argb, v[2].argb);
+          // the vertex as the guest numbered it: a negative area swapped
+          // the second and the third above
+          flat ? v[(area < 0 && flat > 1) ? ((flat - 1) ^ 3) : flat - 1].argb
+               : lerp_argb(v[0].argb, v[1].argb, v[2].argb);
       if (textured) {
         // S and T arrive as texture coordinates, not premultiplied by W:
         // the chip interpolates S*W, T*W and W and divides per pixel.

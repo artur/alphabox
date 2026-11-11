@@ -701,8 +701,9 @@ void CVGACard::vga_attribute_map(address_map &map) {
       .mirror(0x20)
       .lrw8(NAME([this](offs_t offset) { return vga.attribute.data[0x14]; }),
             NAME([this](offs_t offset, u8 data) {
-              vga.attribute.pel_shift_latch =
-                  data & 0xf; // MAME canonical (yes, same field)
+              // Color Select only: the pel shift is register 13h's, and a
+              // write here used to replace it (a pan lost, or a picture
+              // moved by the colour select's value).
               vga.attribute.data[0x14] = data & 0xf; // MAME canonical
               redraw_area(0, 0, old_iWidth, old_iHeight);
             }));
@@ -1493,7 +1494,8 @@ void CVGACard::load_option_rom(const char *default_name) {
 u32 CVGACard::rom_read(u32 address, int dsize) {
   u32 data = 0x00;
   u8 *x = (u8 *)option_rom;
-  if (address <= rom_max) {
+  // the whole datum inside the ROM (rom_max is its size)
+  if (address < rom_max && (u32)(dsize / 8) <= rom_max - address) {
     x += address;
     switch (dsize) {
     case 8:

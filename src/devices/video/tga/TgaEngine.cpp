@@ -381,7 +381,13 @@ void CTga::tga2_rect(u32 size) {
   const unsigned rows = (size >> 16) + 1;
   const unsigned cols = (size & 0xffff) + 1;
   const u32 pitch = e.rect_pitch;
-  for (unsigned y = 0; y < rows; y++) {
+  // Addresses wrap in the frame buffer, so rows beyond its size only write
+  // the same bytes again (up to 2^32 pixels in one register write): they
+  // are not drawn, and the address ends where it would have.
+  const unsigned drawn =
+      pitch ? std::min<u64>(rows, u64(m_vram_mask) / pitch + 2) : 1;
+  e.rect_addr += pitch * (rows - drawn);
+  for (unsigned y = 0; y < drawn; y++) {
     for (unsigned x = 0; x < cols; x += 2048) {
       const unsigned n = std::min(2048u, cols - x);
       op_fill(e.rect_addr + x * dst_step(), u32(n - 1), kind);

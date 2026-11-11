@@ -71,6 +71,14 @@ void CIsp1040::run_request_queue() {
   for (int n = 0; n < ISP_QUEUE_SLICE; n++) {
     if (!state.request_length || state.request_out == state.request_in)
       return; // nothing queued
+    // A response ring with one free entry is full: the request waits until
+    // the driver has taken some (it says so by moving its out pointer), in
+    // place of a response written over one it has not read.
+    if (state.response_length &&
+        (state.response_in + 1) % state.response_length == state.response_out) {
+      state.queue_pending = true;
+      return; // the thread tries again
+    }
 
     const u32 address =
         state.request_base + u32(state.request_out) * ISP_QUEUE_ENTRY_SIZE;

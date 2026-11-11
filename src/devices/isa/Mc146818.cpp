@@ -152,6 +152,11 @@ void CMc146818::write(u32 port, u8 data) {
     // registers and compute an offset from host time so the value sticks
     // after SET goes low.  Without this, the time read next would overwrite
     // the user's writes.
+    // SET going from 0 to 1 freezes the registers at the time it is now,
+    // as the chip's hold it: a guest that sets and clears SET without
+    // writing them (or without a read just before) keeps the time.
+    if (index == 0x0b && !(ram[0x0b] & 0x80) && (data & 0x80))
+      generate_time_locked();
     if (index == 0x0b && (ram[0x0b] & 0x80) && !(data & 0x80))
       set_time_from_registers(data);
     // "Writing the SET bit in Register B to a 1 inhibits any update cycle

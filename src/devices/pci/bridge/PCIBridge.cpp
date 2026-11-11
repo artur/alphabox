@@ -136,6 +136,7 @@ void CPCIBridge::remap_children() {
 
 void CPCIBridge::map_child_range(CPCIDevice *child, int index, bool is_io,
                                  u32 base, u64 length) {
+  std::lock_guard<std::mutex> g(m_ranges_mx);
   for (child_range &r : m_ranges) {
     if (r.dev == child && r.index == index) {
       r.io = is_io;
@@ -291,7 +292,16 @@ u64 CPCIBridge::ReadMem(int index, u64 address, int dsize) {
 
   const int w = index - PPB_WINDOW_BASE;
   const u32 addr = m_windows[w].base + (u32)address;
-  const child_range *r = decode(w, addr);
+  // A copy: another processor placing a child's range may move the list.
+  child_range found;
+  const child_range *r = nullptr;
+  {
+    std::lock_guard<std::mutex> g(m_ranges_mx);
+    if (const child_range *d = decode(w, addr)) {
+      found = *d;
+      r = &found;
+    }
+  }
   if (!r) {
     cSystem->trace_unknown("behind a PCI-PCI bridge",
                            bus_address(m_windows[w].io, addr), dsize, false, 0,
@@ -316,7 +326,16 @@ void CPCIBridge::WriteMem(int index, u64 address, int dsize, u64 data) {
 
   const int w = index - PPB_WINDOW_BASE;
   const u32 addr = m_windows[w].base + (u32)address;
-  const child_range *r = decode(w, addr);
+  // A copy: another processor placing a child's range may move the list.
+  child_range found;
+  const child_range *r = nullptr;
+  {
+    std::lock_guard<std::mutex> g(m_ranges_mx);
+    if (const child_range *d = decode(w, addr)) {
+      found = *d;
+      r = &found;
+    }
+  }
   if (!r) {
     cSystem->trace_unknown("behind a PCI-PCI bridge",
                            bus_address(m_windows[w].io, addr), dsize, true,

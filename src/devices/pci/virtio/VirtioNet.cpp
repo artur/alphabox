@@ -88,9 +88,13 @@ void CVirtioNet::process_queue(int q) {
   while (pop_chain(q, c)) {
     if (c.readable > kHdrLen) {
       const size_t len = c.readable - kHdrLen;
-      m_buf.resize(len);
-      if (chain_read(c, kHdrLen, m_buf.data(), len) == len)
-        m_backend->send(m_buf.data(), (int)len);
+      // No frame is this long (no offload is offered): a chain that says
+      // so is completed unsent, not given a buffer of the driver's size.
+      if (len <= 65536) {
+        m_buf.resize(len);
+        if (chain_read(c, kHdrLen, m_buf.data(), len) == len)
+          m_backend->send(m_buf.data(), (int)len);
+      }
     }
     push_used(q, c.head, 0);
     any = true;
@@ -115,7 +119,8 @@ void CVirtioNet::poll() {
   }
   Chain c;
   bool any = false;
-  for (;;) {
+  // At most 64 frames a pass (m_work is held); the rest wait in the back end.
+  for (int burst = 0; burst < 64; burst++) {
     if (m_pending.empty()) {
       if (m_backend->receive(&frame, &flen) <= 0)
         break;

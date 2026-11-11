@@ -99,6 +99,8 @@ void CRadeonR100_3D::reset() {
   m_aos_count = 0;
   m_port.clear();
   m_port_active = false;
+  memset(m_fog_table, 0, sizeof(m_fog_table));
+  m_fog_index = 0;
 }
 
 u32 CRadeonR100_3D::reg(u32 r) const { return c.R(r); }
@@ -1026,7 +1028,14 @@ void CRadeonR100_3D::clear_zmask(u32 start, u32 count, u32 mask) {
   const u32 blocks_per_band = pitch / 8;
   const u32 v = c.R(0x3230); // RB3D_DEPTHCLEARVALUE
   const u32 b0 = start;      // 8x8 blocks
-  const u32 nblocks = count * 2;
+  if (!blocks_per_band)
+    return;
+  // No depth surface is taller than 2048 lines: a count beyond it (2^31
+  // would be 2^38 writes) clears nothing more.
+  const u32 max_blocks = blocks_per_band * (2048 / 8);
+  if (b0 >= max_blocks)
+    return;
+  const u32 nblocks = (u32)std::min<u64>(u64(count) * 2, max_blocks - b0);
   for (u32 b = b0; b < b0 + nblocks; b++) {
     const u32 band = b / blocks_per_band, col = b % blocks_per_band;
     for (int y = 0; y < 8; y++)
@@ -1045,6 +1054,7 @@ void CRadeonR100_3D::clear_zmask(u32 start, u32 count, u32 mask) {
  * vertex array pointers, after the card's own block.
  **/
 static constexpr u32 k3dMagic = 0x44335241; // 'AR3D'
+static constexpr u32 kFogMagic = 0x47465241; // 'ARFG'
 
 void CRadeonR100_3D::save(FILE *f) const {
   fwrite(&k3dMagic, 4, 1, f);
@@ -1055,6 +1065,10 @@ void CRadeonR100_3D::save(FILE *f) const {
   fwrite(&m_aos_count, 4, 1, f);
   u32 idx[3] = {m_vec_index, m_vec_comp, m_scl_index};
   fwrite(idx, sizeof(idx), 1, f);
+  // The fog table, a block of its own that older files do not have.
+  fwrite(&kFogMagic, 4, 1, f);
+  fwrite(m_fog_table, sizeof(m_fog_table), 1, f);
+  fwrite(&m_fog_index, 4, 1, f);
 }
 
 /// Returns false (and leaves the file where it was) when the next block
@@ -1076,6 +1090,14 @@ bool CRadeonR100_3D::restore(FILE *f) {
   m_vec_index = idx[0];
   m_vec_comp = idx[1];
   m_scl_index = idx[2];
+  const long fog_at = ftell(f);
+  if (fread(&m, 4, 1, f) != 1 || m != kFogMagic ||
+      fread(m_fog_table, sizeof(m_fog_table), 1, f) != 1 ||
+      fread(&m_fog_index, 4, 1, f) != 1) {
+    fseek(f, fog_at, SEEK_SET); // a file from before the block
+    memset(m_fog_table, 0, sizeof(m_fog_table));
+    m_fog_index = 0;
+  }
   return true;
 }
 

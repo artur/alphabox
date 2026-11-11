@@ -143,6 +143,23 @@ void CCmd649::update_line() {
   }
 }
 
+/// INTA's level is not in the file: it follows from what is, and the line
+/// is driven to it, which a state file before 2.4 (no interrupt-line
+/// requests) needs and a later one does not mind.
+int CCmd649::RestoreState(FILE *f) {
+  const int r = CIdeController::RestoreState(f);
+  if (r)
+    return r;
+  std::lock_guard<std::mutex> lk(m_line_mx);
+  const u8 blk = cfg8(MRDMODE);
+  bool level = false;
+  for (int ch = 0; ch < 2; ++ch)
+    level |= irq_pending(ch) && !(blk & (MRDMODE_BLK_CH0 << ch));
+  m_line = level;
+  do_pci_interrupt(0, level);
+  return 0;
+}
+
 void CCmd649::irq_raise(int ch) {
   set_intr_latched(ch, true);
   update_line();

@@ -331,7 +331,10 @@ bool CRadeon::cp_reg_write(u32 reg, u32 data) {
       return true;
     }
     if (in_engine() || m_sync) {
-      m_csq.push_back(data);
+      {
+        std::lock_guard<std::mutex> l(m_q_mx); // the queue's, engine or not
+        m_csq.push_back(data);
+      }
       engine_kick();
       return true;
     }
@@ -350,7 +353,10 @@ bool CRadeon::cp_reg_write(u32 reg, u32 data) {
     // RB_RPTR_WR_ENA: the writable read pointer becomes the read pointer
     // when the write pointer is written (R5xx Acceleration 5.8).
     if (R(CP_RB_CNTL) & RB_RPTR_WR_ENA) {
-      std::lock_guard<std::mutex> x(m_exec_mx);
+      // not taken twice when a CP packet writes the register
+      std::unique_lock<std::mutex> x(m_exec_mx, std::defer_lock);
+      if (!in_engine())
+        x.lock();
       R(CP_RB_RPTR) = R(CP_RB_RPTR_WR);
       m_rptr_since_wb = 0;
     }
@@ -560,13 +566,19 @@ void CRadeon::cp_run_buffer(u32 mc, u32 dwords) {
   }
   if (m_cp_ib_depth > 2)
     return;
+  // One budget for a buffer and all it nests: buffers that name each other
+  // would otherwise run their lengths multiplied.
+  if (m_cp_ib_depth == 0)
+    m_cp_ib_left = 0x1000000;
   m_cp_ib_depth++;
   // The ring's packet in progress (the one that wrote CP_IB_BUFSZ) is
   // complete; the buffer's packets have a parser of their own.
   const cp_parser saved = m_cp;
   m_cp = cp_parser{};
-  for (u32 i = 0; i < dwords; i++)
+  for (u32 i = 0; i < dwords && m_cp_ib_left; i++) {
+    m_cp_ib_left--;
     cp_feed(cp_fetch(mc + i * 4));
+  }
   m_cp = saved;
   m_cp_ib_depth--;
 }

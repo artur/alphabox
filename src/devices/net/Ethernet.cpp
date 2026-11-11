@@ -163,8 +163,11 @@ bool CPacketQueue::add_tail(const u8 *packet_data, int packet_len,
   if (need_crc) {                               // If packet needs CRC
     u32 crc = calc_crc ? eth_crc32(0, packet_data, packet_len)
                        : 0;                     // recalculate crc if needed
-    u32 ncrc = htonl(crc);                      // put crc in network order
-    memcpy(&next->frame[packet_len], &ncrc, 4); // append CRC to packet
+    // The FCS follows the frame least significant byte first (IEEE 802.3
+    // 3.2.9), as the i8255x appends it.
+    const u8 fcs[4] = {(u8)crc, (u8)(crc >> 8), (u8)(crc >> 16),
+                       (u8)(crc >> 24)};
+    memcpy(&next->frame[packet_len], fcs, 4); // append CRC to packet
     next->len += 4;                             // increase packet length
   }
 

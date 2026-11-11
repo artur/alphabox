@@ -155,6 +155,13 @@ protected:
   // some stuff skipped
 
   void vga_vh_text(bitmap_rgb32 &bitmap, const rectangle &cliprect);
+  /// A character row's height in scan lines, at least one: with a zero
+  /// Maximum Scan Line (the display enabled before CR09 was written) the
+  /// renderers would step their line by nothing and never end.
+  int scan_line_height() const {
+    const int h = vga.crtc.maximum_scan_line * (vga.crtc.scan_doubling + 1);
+    return h > 0 ? h : 1;
+  }
   void vga_vh_ega(bitmap_rgb32 &bitmap, const rectangle &cliprect);
   void vga_vh_vga(bitmap_rgb32 &bitmap, const rectangle &cliprect);
   void vga_vh_cga(bitmap_rgb32 &bitmap, const rectangle &cliprect);
