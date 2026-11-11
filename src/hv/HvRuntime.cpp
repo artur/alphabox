@@ -130,12 +130,15 @@ uint64_t g_escape_pc = 0; // the in-VM stub that calls out to the host
 // inside. This block is alloc() memory -- genuinely shared -- and the
 // pointer to it is set before the VM is ever entered, so the copied
 // pointer is correct.
+// One stack per vCPU, and a machine has up to 32 processors
+// (CSystem::kMaxCPUs).
+constexpr uint32_t kMaxStacks = 64;
 struct Control {
   uint64_t escape_pc;
   uint32_t nstacks;
   struct {
     uint64_t base, top;
-  } stacks[16];
+  } stacks[kMaxStacks];
   Stats stats; // counted on both sides, so it cannot be an ordinary global
 };
 Control *g_ctl = nullptr;
@@ -549,7 +552,13 @@ bool vcpu_init(Vcpu &v) {
     // The stack is touched by the vectors before any fault could map it.
     if (!map_own(v.stack, kStackSize))
       return false;
-    if (g_ctl && g_ctl->nstacks < 16) {
+    // A stack inside() does not know would run its thread's escapes inside
+    // the VM, on the VM's private copy of memory: refuse instead.
+    if (g_ctl && g_ctl->nstacks >= kMaxStacks) {
+      fprintf(stderr, "hv: more than %u vCPU stacks\n", kMaxStacks);
+      return false;
+    }
+    if (g_ctl) {
       // inside() asks whether the stack pointer is on a vCPU stack.
       g_ctl->stacks[g_ctl->nstacks].base = (uint64_t)(uintptr_t)v.stack;
       g_ctl->stacks[g_ctl->nstacks].top =

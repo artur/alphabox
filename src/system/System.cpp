@@ -494,6 +494,27 @@ int CSystem::RegisterCPU(class CAlphaCPU *cpu) {
   return iNumCPUs - 1;
 }
 
+/// If this range carries a bulk data register, record its absolute address
+/// so the processor can serve the transfer without leaving the VM (see
+/// SBulkPort). A range registered again at a new address (firmware moving
+/// a BAR) replaces its entry.
+void CSystem::note_bulk_port(CSystemComponent *component, int index,
+                             u64 base) {
+  SBulkPort bp;
+  if (!(component->get_bulk_port(index, &bp) && bp.data))
+    return;
+  int slot = -1;
+  for (int k = 0; k < m_nbulk; k++)
+    if (m_bulk[k].d.data == bp.data)
+      slot = k;
+  if (slot < 0 && m_nbulk < kMaxBulkPorts)
+    slot = m_nbulk++;
+  if (slot >= 0) {
+    m_bulk[slot].addr = base + bp.offset;
+    m_bulk[slot].d = bp;
+  }
+}
+
 /**
  * Reserve a range of the 64-bit system address space for a device.
  **/
@@ -540,6 +561,7 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
       asMemories[i]->length = length;
       aMemoryBounds[i].base = base;
       aMemoryBounds[i].end = base + length;
+      note_bulk_port(component, index, base);
       return 0;
     }
   }
@@ -562,24 +584,7 @@ int CSystem::RegisterMemory(CSystemComponent *component, int index, u64 base,
   aMemoryRecord[iNumMemories].store(-1, std::memory_order_relaxed);
   iNumMemories++;
 
-  // If this range carries a bulk data register, record its absolute
-  // address so the processor can serve the transfer without leaving the
-  // VM (see SBulkPort). A range that is re-registered at a new address
-  // replaces its old entry; a stale one simply never matches again.
-  SBulkPort bp;
-  if (component->get_bulk_port(index, &bp) && bp.data) {
-    const u64 addr = base + bp.offset;
-    int slot = -1;
-    for (int k = 0; k < m_nbulk; k++)
-      if (m_bulk[k].d.data == bp.data)
-        slot = k;
-    if (slot < 0 && m_nbulk < kMaxBulkPorts)
-      slot = m_nbulk++;
-    if (slot >= 0) {
-      m_bulk[slot].addr = addr;
-      m_bulk[slot].d = bp;
-    }
-  }
+  note_bulk_port(component, index, base);
   return 0;
 }
 
@@ -790,7 +795,10 @@ void CSystem::Run() {
   // the snapshot was taken against (see ALPHABOX_SNAPSHOT_EXIT).
   if (const char *snap = getenv("ALPHABOX_RESTORE")) {
     printf("%%SYS-I-RESTORE: resuming from %s\n", snap);
-    RestoreState(snap);
+    // Asked for by name: a file that cannot be resumed must not turn into
+    // a cold boot that a test or a measurement takes for the snapshot.
+    if (!RestoreState(snap))
+      FAILURE_1(Runtime, "ALPHABOX_RESTORE: %s could not be resumed", snap);
     // ALPHABOX_RESTORE_SAVE=<file>, a test hook (test/tools/snap_roundtrip.sh):
     // save the machine as it was restored, before anything runs, and exit.
     // State that survives a save and a restore comes out byte for byte.
@@ -1451,6 +1459,15 @@ bool CSystem::load_console_from_flash_image() {
         theSROM->FindConsoleImage(&fl_off, &fl_hdr, &fl_size, &fl_base) &&
         PtrToMem(fl_base)))
     return false;
+  // The header is the flash's word, and a guest can write the flash: the
+  // image must fit in memory from its load address.
+  const u64 mem_size = U64(1) << iNumMemoryBits;
+  if (fl_base >= mem_size || fl_size > mem_size - fl_base) {
+    printf("%%SYS-W-READFLASH: Console image in flash at %x does not fit in "
+           "memory (%u bytes at %" PRIx64 "), ignored.\n",
+           fl_off, fl_size, fl_base);
+    return false;
+  }
   printf("%%SYS-I-READFLASH: Console image in flash at %x, %u bytes, "
          "loaded at %" PRIx64 ".\n",
          fl_off, fl_size, fl_base);
@@ -1812,9 +1829,11 @@ void CSystem::SaveState(const char *fn) {
 
   temp_32 = 0xa1fae540; // MAGIC NUMBER (ALFAES40 ==> A1FAE540 )
   fwrite(&temp_32, sizeof(u32), 1, f);
-  // File Format Version 2.2 (2.2: TIG IPCRs), or 2.3 (2.2 with the memory
-  // as regions)
-  temp_32 = sparse ? 0x00020003 : 0x00020002;
+  // File Format Version 2.4, or 2.5 (2.4 with the memory as regions). 2.4
+  // is 2.2 (TIG IPCRs) and 2.5 is 2.3, each with the interrupt lines'
+  // requests after the chipset and, on a Marvel, the management side's
+  // state (the CMM) at the end of the chipset's.
+  temp_32 = sparse ? 0x00020005 : 0x00020004;
   fwrite(&temp_32, sizeof(u32), 1, f);
 
   if (!sparse) {
@@ -1846,6 +1865,9 @@ void CSystem::SaveState(const char *fn) {
   if (map)
     fprintf(map, "%ld chipset\n", ftell(f));
   m_chipset->save_state(f);
+  if (map)
+    fprintf(map, "%ld interrupt-lines\n", ftell(f));
+  save_irq_lines(f);
 
   // components
   //
@@ -1884,10 +1906,47 @@ void CSystem::SaveState(const char *fn) {
   }
 }
 
+/// The interrupt lines' requests (InterruptLines.hpp): which component
+/// asserts which chipset input, the component by its place in the list.
+/// Without them a restored machine would take the first of two sources
+/// sharing an input to let go as the line going low.
+void CSystem::save_irq_lines(FILE *f) {
+  std::vector<CInterruptLines::request> on = m_irq_lines.requests();
+  std::vector<s32> rows;
+  for (const CInterruptLines::request &r : on)
+    for (int i = 0; i < iNumComponents; i++)
+      if ((const void *)acComponents[i] == r.source) {
+        rows.push_back(r.input);
+        rows.push_back(i);
+        rows.push_back(r.line);
+        break;
+      }
+  const u32 n = (u32)(rows.size() / 3);
+  fwrite(&n, sizeof(n), 1, f);
+  if (n)
+    fwrite(rows.data(), sizeof(s32), rows.size(), f);
+}
+
+bool CSystem::restore_irq_lines(FILE *f) {
+  u32 n = 0;
+  if (fread(&n, sizeof(n), 1, f) != 1 || n > 4096)
+    return false;
+  std::vector<CInterruptLines::request> on;
+  for (u32 k = 0; k < n; k++) {
+    s32 row[3];
+    if (fread(row, sizeof(s32), 3, f) != 3 || row[1] < 0 ||
+        row[1] >= iNumComponents)
+      return false;
+    on.push_back({row[0], (const void *)acComponents[row[1]], row[2]});
+  }
+  m_irq_lines.set_requests(std::move(on));
+  return true;
+}
+
 /**
  * Restore system state from a state file.
  **/
-void CSystem::RestoreState(const char *fn) {
+bool CSystem::RestoreState(const char *fn) {
   m_code_pages.note_write_all(); // the whole of memory is about to be replaced
   FILE *f;
   int i;
@@ -1898,7 +1957,7 @@ void CSystem::RestoreState(const char *fn) {
   f = fopen(fn, "rb");
   if (!f) {
     printf("%%SYS-F-NOFILE: Can't open restore file %s\n", fn);
-    return;
+    return false;
   }
 
   if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
@@ -1906,21 +1965,24 @@ void CSystem::RestoreState(const char *fn) {
   {
     printf("%%SYS-F-FORMAT: %s does not appear to be a state file.\n", fn);
     fclose(f);
-    return;
+    return false;
   }
 
-  if (fread(&temp_32, sizeof(u32), 1, f) != 1 ||
-      (temp_32 != 0x00020002 && temp_32 != 0x00020003)) // 2.2: TIG IPCRs,
-  {                                                     // 2.3: memory regions
+  // 2.2: TIG IPCRs; 2.3: memory regions; 2.4 and 2.5: those two with the
+  // interrupt lines' requests and the management side's state (SaveState).
+  // The older two still restore, without what they do not hold.
+  if (fread(&temp_32, sizeof(u32), 1, f) != 1 || temp_32 < 0x00020002 ||
+      temp_32 > 0x00020005) {
     printf("%%SYS-I-VERSION: State file %s is a different version.\n", fn);
     fclose(f);
-    return;
+    return false;
   }
 
   // memory: the whole array (2.2), or the regions (2.3), in the encoding of
   // SaveState. A 2.2 file of a board with sparse memory still restores; it
   // writes the whole array, holes included.
-  if (temp_32 == 0x00020002) {
+  m_state_version = temp_32 & 0xffff;
+  if (temp_32 == 0x00020002 || temp_32 == 0x00020004) {
     read_memory_image(f, mem, memints);
   } else {
     std::vector<memory_region> have;
@@ -1954,6 +2016,11 @@ void CSystem::RestoreState(const char *fn) {
 
   if (fread(&state, sizeof(state), 1, f) != 1 || !m_chipset->restore_state(f))
     FAILURE(Runtime, "State file is truncated in the system state");
+  // Before 2.4 the requests were not kept: every line starts with no
+  // source on it, and of two that shared one the first to let go drops it.
+  m_irq_lines.set_requests({});
+  if (m_state_version >= 4 && !restore_irq_lines(f))
+    FAILURE(Runtime, "State file is damaged in the interrupt lines");
   m_cpu_lock_flags = (u32)state.cpu_lock_flags.load() & 0xf;
   // Not in the file: every watch (LDx_ARM) is clear after a restore, a
   // wake-up the IDS allows [21464 IDS Rev 1.1k, PDF pp. 670, 674].
@@ -1973,6 +2040,7 @@ void CSystem::RestoreState(const char *fn) {
   }
 
   fclose(f);
+  return true;
 }
 
 /**

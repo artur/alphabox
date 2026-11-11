@@ -46,7 +46,11 @@ void CTitan::update_halt_lines() {
     m_sys->get_cpu(i)->irq_h(4, (lines >> i) & 1, 0);
 }
 
+// The TIG's registers carry the processors' start handshake (ipcr, the
+// halt registers), written by one processor and read by another: every
+// access holds m_lock.
 u8 CTitan::tig_read(u32 a) {
+  std::lock_guard<std::mutex> g(m_lock);
   switch (a) {
   case 0x30000000: // trr
     return TIG_REV;
@@ -83,6 +87,7 @@ void CTitan::tig_write(u32 a, u8 data) {
   if (a == 0x300003c0 || a == 0x300005c0 ||
       (a >= 0x30000a00 && a <= 0x30000b00))
     m_sys->trace_mp("TIG write", a, data);
+  std::unique_lock<std::mutex> g(m_lock);
   switch (a) {
   case 0x30000000: // trr
   case 0x30000440: // clr_irq4 (the PALcode writes it): the halt lines are
@@ -96,10 +101,12 @@ void CTitan::tig_write(u32 a, u8 data) {
     return;
   case 0x300003c0:
     state.tig.ttcr = data;
+    g.unlock(); // update_halt_lines takes it
     update_halt_lines();
     return;
   case 0x300005c0:
     state.tig.ev6_halt = data;
+    g.unlock();
     update_halt_lines();
     return;
   case 0x30000a00:
@@ -112,6 +119,7 @@ void CTitan::tig_write(u32 a, u8 data) {
   case 0x30000600: // srcr0-1: the update utility asks for a reset here
   case 0x30000640:
     state.tig.srcr[(a >> 6) & 1] = data;
+    g.unlock();
     if (data & 0x30) {
       printf("%%SYS-I-RESETREQ: TIG SRCR write %07x=%02x\n", a, data);
       if (theSROM)

@@ -56,7 +56,11 @@
 /// and no guest so far enables AGP transactions, which are not modelled.
 static const u64 PCTL_RO = U64(0x0200000000020000);
 
+// The port CSRs are read by device threads (pci_phys, for every DMA
+// address) while a processor writes them, so every access holds m_lock, as
+// the Typhoon Pchip's do (TsunamiPchip.cpp).
 u64 CTitan::port_read(int hose, u32 a) {
+  std::lock_guard<std::mutex> g(m_lock);
   const SState::SPort &p = state.port[hose];
   const u32 i = a >> 6;
   switch (a) {
@@ -96,6 +100,7 @@ u64 CTitan::port_read(int hose, u32 a) {
 }
 
 void CTitan::port_write(int hose, u32 a, u64 data) {
+  std::unique_lock<std::mutex> g(m_lock);
   SState::SPort &p = state.port[hose];
   const u32 i = a >> 6;
   switch (a) {
@@ -139,10 +144,14 @@ void CTitan::port_write(int hose, u32 a, u64 data) {
   case 0x640:
     return;
   case 0x800: // SPRST: PCI reset while set
-    if ((data & 1) && !(p.csr[i] & 1))
-      m_sys->reset_pci_devices(hose);
+  {
+    const bool reset = (data & 1) && !(p.csr[i] & 1);
     p.csr[i] = data & 1;
+    g.unlock(); // the devices' resets may come back for an interrupt line
+    if (reset)
+      m_sys->reset_pci_devices(hose);
     return;
+  }
   default:
     m_sys->trace_unknown("PA-chip port CSR", (u64)hose << 12 | a, 64, true,
                          data, nullptr);

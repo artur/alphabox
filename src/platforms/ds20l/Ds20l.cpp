@@ -54,6 +54,8 @@ int ds20l_pci_interrupt(int hose, int slot, int intx, int func) {
 
 /// DS20L slots: the places its console gives an interrupt line.
 const char *ds20l_slot_refusal(const platform_config &, int hose, int slot) {
+  if (hose < 0 || hose > 1)
+    return "this machine has PCI hoses 0 and 1";
   if (ds20l_pci_interrupt(hose, slot, 0, 0) < 0)
     return "this machine wires add-in devices to hose 0 devices 3 to 6 and "
            "hose 1 devices 3 to 5 only";

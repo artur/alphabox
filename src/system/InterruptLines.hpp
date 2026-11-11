@@ -82,12 +82,26 @@ public:
     m_on.clear();
   }
 
-private:
+  /// One asserted request, as drive() was given it.
   struct request {
     int input;
     const void *source;
     int line;
   };
+
+  /// The requests asserted now, for a state file, and their return from
+  /// one: the chipset's own registers come back from the file with the
+  /// lines' levels, so nothing is delivered.
+  std::vector<request> requests() const {
+    std::lock_guard<std::mutex> g(m_mx);
+    return m_on;
+  }
+  void set_requests(std::vector<request> on) {
+    std::lock_guard<std::mutex> g(m_mx);
+    m_on = std::move(on);
+  }
+
+private:
 
   /// The requests asserted now: a handful at most, so a list it is.
   size_t find(int input, const void *source, int line) const {

@@ -701,6 +701,10 @@ SafeOp classify(uint32_t ins, bool pal_block, uint32_t ext) {
     if (!pal_block)
       return OP_NONE;
     const uint32_t f = (ins >> 12) & 0xf;
+    // Ra==31 on the physical forms: the interpreter still does the read,
+    // which a device sees; the emitters would skip it.
+    if (f <= 1 && ((ins >> 21) & 0x1f) == 31)
+      return OP_NONE;
     if (f == 0)
       return OP_HW_LDL;
     if (f == 1)
@@ -1956,6 +1960,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       a.cmp(x86::qword_ptr(x86::rbp, x86::r11, 0, m_off.dpc_cm), x86::rax);
       a.jne(slow); // vs slot {cm, asn}
       if (prefetch) { // the page is mapped for reading: nothing to fault
+        // ...if the slot is live: invalidate() leaves the page and the mode
+        // in place, and the load below, which a prefetch skips, is what
+        // finds host_base zero otherwise.
+        a.cmp(x86::byte_ptr(x86::rbp, x86::r11, 0, m_off.dpc_valid), imm(0));
+        a.je(slow);
         a.jmp(ldone);
         a.bind(slow);
         emit_helper();
@@ -2274,6 +2283,11 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
         if (disp)
           a.add(x86::rdx, imm(disp));
       }
+      // The virtual forms read the aligned datum, as the interpreter's do
+      // (READ_PHYS_NT after the translation); jit_read alone would follow
+      // LDx's rule and read at the unaligned address.
+      if (op == OP_HW_LD_VIRT)
+        a.and_(x86::rdx, imm(-(size_bits / 8)));
       // func 5 -> jit_read_vpte (kernel-checked virtual read); else
       // jit_read_phys
       emit_call(

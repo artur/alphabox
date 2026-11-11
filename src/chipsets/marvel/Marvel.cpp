@@ -379,6 +379,8 @@ void CMarvel::save_state(FILE *f) {
   for (auto &io : m_io7)
     if (io)
       io->save_state(f);
+  if (m_gio)
+    m_gio->save_state(f);
 }
 
 bool CMarvel::restore_state(FILE *f) {
@@ -388,5 +390,9 @@ bool CMarvel::restore_state(FILE *f) {
   for (auto &io : m_io7)
     if (io && !io->restore_state(f))
       return false;
+  // The management side's state is in the file from format 2.4 on; from an
+  // older one it stays as it was built.
+  if (m_gio && m_sys->state_file_version() >= 4 && !m_gio->restore_state(f))
+    return false;
   return true;
 }

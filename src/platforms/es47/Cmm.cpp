@@ -338,6 +338,83 @@ u8 *CEs47Cmm::mem_at(u32 pid, u32 a) {
   return &module_of(pid).mem[a - kMemBase];
 }
 
+// --- The state file -------------------------------------------------------
+
+/// The ports, each module's memory (the mailboxes, the TOY and its NVRAM,
+/// what the console wrote), the TOY's offset from the host and the
+/// console's NVRAM image. The files (the NVRAM's) are not written by a
+/// restore: the next change the console makes writes them.
+void CEs47Cmm::save_state(FILE *f) {
+  std::lock_guard<std::mutex> g(m_lock);
+  const u8 ready = m_ready;
+  fwrite(&m_toy_offset, sizeof(m_toy_offset), 1, f);
+  fwrite(&ready, sizeof(ready), 1, f);
+  const u32 ports = (u32)m_port.size();
+  fwrite(&ports, sizeof(ports), 1, f);
+  for (const auto &kv : m_port) {
+    const Port &p = kv.second;
+    const u8 kick = p.tx_kick;
+    fwrite(&kv.first, sizeof(kv.first), 1, f);
+    fwrite(&p.status, sizeof(p.status), 1, f);
+    fwrite(&p.data, sizeof(p.data), 1, f);
+    fwrite(&p.address, sizeof(p.address), 1, f);
+    fwrite(p.regs, sizeof(p.regs), 1, f);
+    fwrite(&p.reason, sizeof(p.reason), 1, f);
+    fwrite(&kick, sizeof(kick), 1, f);
+  }
+  u32 modules = 0;
+  for (const auto &kv : m_modules)
+    modules += kv.second.mem.size() == kMemSize;
+  fwrite(&modules, sizeof(modules), 1, f);
+  for (const auto &kv : m_modules) {
+    if (kv.second.mem.size() != kMemSize)
+      continue;
+    fwrite(&kv.first, sizeof(kv.first), 1, f);
+    fwrite(kv.second.mem.data(), 1, kMemSize, f);
+  }
+  fwrite(m_nvram.data(), 1, kNvramSize, f);
+}
+
+bool CEs47Cmm::restore_state(FILE *f) {
+  std::lock_guard<std::mutex> g(m_lock);
+  u8 ready = 0;
+  u32 ports = 0;
+  if (fread(&m_toy_offset, sizeof(m_toy_offset), 1, f) != 1 ||
+      fread(&ready, sizeof(ready), 1, f) != 1 ||
+      fread(&ports, sizeof(ports), 1, f) != 1 || ports > 1024)
+    return false;
+  m_ready = ready != 0;
+  for (u32 n = 0; n < ports; n++) {
+    u32 pid = 0;
+    Port p;
+    u8 kick = 0;
+    if (fread(&pid, sizeof(pid), 1, f) != 1 ||
+        fread(&p.status, sizeof(p.status), 1, f) != 1 ||
+        fread(&p.data, sizeof(p.data), 1, f) != 1 ||
+        fread(&p.address, sizeof(p.address), 1, f) != 1 ||
+        fread(p.regs, sizeof(p.regs), 1, f) != 1 ||
+        fread(&p.reason, sizeof(p.reason), 1, f) != 1 ||
+        fread(&kick, sizeof(kick), 1, f) != 1)
+      return false;
+    p.tx_kick = kick != 0;
+    m_port[pid] = p;
+  }
+  u32 modules = 0;
+  if (fread(&modules, sizeof(modules), 1, f) != 1)
+    return false;
+  for (u32 n = 0; n < modules; n++) {
+    u32 key = 0;
+    if (fread(&key, sizeof(key), 1, f) != 1)
+      return false;
+    const auto m = m_modules.find(key);
+    // A module this machine does not have: another machine's file.
+    if (m == m_modules.end() || m->second.mem.size() != kMemSize ||
+        fread(m->second.mem.data(), 1, kMemSize, f) != kMemSize)
+      return false;
+  }
+  return fread(m_nvram.data(), 1, kNvramSize, f) == kNvramSize;
+}
+
 // --- The registers -----------------------------------------------------------
 
 bool CEs47Cmm::gio_write(u32 pid, u32 reg, u64 value) {
@@ -508,6 +585,13 @@ void CEs47Cmm::window_op(u32 pid, Port &p, u64 control) {
     p.data = mem_read(pid, a) | (u16)mem_read(pid, a + 1) << 8;
     return;
   }
+  // Whether each area's TOY had SET (register B<7>) before this write: the
+  // time is taken when the console releases it, not at any write of B.
+  bool toy_set[2];
+  for (u32 m = 0; m < 2; m++) {
+    const u8 *t = mem_at((pid & ~1u) | m, area(m) + A_TOY);
+    toy_set[m] = t && (t[11] & 0x80);
+  }
   if (control & ST_LOW)
     mem_write(pid, a, (u8)p.data);
   if (control & ST_HIGH)
@@ -517,8 +601,12 @@ void CEs47Cmm::window_op(u32 pid, Port &p, u64 control) {
   for (u32 m = 0; m < 2; m++) {
     const u32 owner = (pid & ~1u) | m;
     const u32 toy = area(m) + A_TOY;
-    if (a + 1 >= toy && a < toy + 12)
-      toy_written(owner, a < toy ? 0 : a - toy);
+    // Each register the access wrote, low lane then high: register 11 (B,
+    // whose SET the console releases) is the high lane of the word at 10.
+    for (u32 lane = 0; lane < 2; lane++)
+      if ((control & (lane ? ST_HIGH : ST_LOW)) && a + lane == toy + 11 &&
+          toy_set[m])
+        toy_written(owner, 11);
     for (u32 s = 0; s < kSlots; s++)
       if (a == area(m) + A_REQ + s * kSlotSize && (control & ST_LOW) &&
           a >= kMemBase && a < kMemBase + kMemSize && *mem_at(pid, a) == 0)

@@ -2622,7 +2622,9 @@ int CAlphaCPU::SaveState(FILE *f) {
   fwrite(&cpu_magic1, sizeof(u32), 1, f);
   fwrite(&ss, sizeof(long), 1, f);
   fwrite(&state, sizeof(state), 1, f);
-  fwrite(&cpu_magic2, sizeof(u32), 1, f);
+  // The DTB_TAG0/1 staging registers (state file format 2.4 on): PALcode
+  // writes the tag, then the PTE, and a save may fall between the two.
+  fwrite(last_dtb_virt, sizeof(last_dtb_virt), 1, f);
   if (m_ev8n) // the native EV8's own IPRs, after the core's
     ev8_save(f);
   if (m_vec) // Tarantula's state, last (Tarantula.hpp)
@@ -2678,6 +2680,13 @@ int CAlphaCPU::RestoreState(FILE *f) {
     printf("%s: MAGIC 2 does not match!\n", devid_string);
     return -1;
   }
+  // The DTB tags PALcode has staged; a file before 2.4 does not hold them.
+  u64 dtb_tags[2] = {0, 0};
+  if (cSystem->state_file_version() >= 4 &&
+      fread(dtb_tags, sizeof(dtb_tags), 1, f) != 1) {
+    printf("%s: unexpected end of file!\n", devid_string);
+    return -1;
+  }
   if (m_ev8n && ev8_restore(f))
     return -1;
   // Tarantula's section, which a state file written before S7 does not
@@ -2703,7 +2712,8 @@ int CAlphaCPU::RestoreState(FILE *f) {
   }
 
   printf("%s: %d bytes restored.\n", devid_string, (int)ss);
-  last_dtb_virt[0] = last_dtb_virt[1] = 0;
+  last_dtb_virt[0] = dtb_tags[0];
+  last_dtb_virt[1] = dtb_tags[1];
   // The RPCC floor isn't part of the save-state format: rebase it on the
   // restored counter and a fresh host epoch so a restore can't jump the clock
   // or bill the paused wall time.
@@ -2717,13 +2727,18 @@ int CAlphaCPU::RestoreState(FILE *f) {
   // bump makes them re-hash against the restored RAM before they run).
   flush_data_page_cache();
   break_seq_icache();
+  // What is derived from the TB just read, on every engine: the index (and
+  // its count of granularity-hint entries, which the lookup trusts) and the
+  // shadow of data translations, which may hold what ran before the restore.
+  tb_idx_rebuild();
+  for (int k = 0; k < kTbShadowEntries; k++)
+    m_tb_shadow[k].valid = false;
 #ifdef ES40_JIT
   // The recognized idle and parked-loop heads are learned from RAM and are
   // NOT part of the saved state, so they would otherwise survive into a
   // restored image that has different code at those addresses -- and idle
   // pacing would then sleep on a PC that is not an idle loop. Re-learn them.
-  tb_idx_rebuild(); // derived from the state just read
-  m_idle_pc = m_park_pc = 0;
+  m_idle_pc = m_park_pc = m_stall_pc = 0;
   m_idle_streak = 0;
   m_link_from = nullptr; // pending link request into pre-restore code
   if (m_jit)

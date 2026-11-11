@@ -1366,6 +1366,9 @@ void CJitEngine::emit_op(void *a_ptr, const uint8_t *gpa, void *done_ptr,
       }
 #endif
       ea_x2((int32_t)(ins << 20) >> 20);
+      // The virtual forms read the aligned datum (see the x86 emitter).
+      if (op == OP_HW_LD_VIRT)
+        a.and_(x2, x2, imm(~(uint64_t)(size_bits / 8 - 1)));
 #ifndef JIT_VERIFY
       // Physical forms into DRAM load inline (NT's PALcode walks page tables
       // and per-CPU data this way millions of times per 100M instructions);
@@ -3025,6 +3028,7 @@ bool CJitEngine::assemble_block(JitBlock *b, const uint32_t *words,
     a64::Gp xr = a64::x0;
     if (bra == 31) {
       a.mov(a64::x0, imm(0)); // R31 reads as zero; keep the one code shape
+      ra.rax_holds = -1;      // x0 no longer holds what was forwarded in it
     } else if (ra.host_of(bra) >= 0) {
       xr = a64::x((uint32_t)ra.host_of(bra));
     } else if (ra.rax_holds == bra) {

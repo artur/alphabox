@@ -732,6 +732,9 @@ void CAlphaCPU::jit_run(int budget) {
           eva = (lrb == 31 ? (u64)0 : state.r[RREG(lrb)]) + (u64)ldisp;
           if (opc == 0x0b)
             eva &= ~U64(7); // LDQ_U: address forced to 8-byte alignment
+          // HW_LD virtual (8, 9, 12, 13): the aligned datum, as compiled
+          if (is_hwld && ((U64(0x3300) >> ((ins >> 12) & 0xf)) & 1))
+            eva &= ((ins >> 12) & 1) ? ~U64(7) : ~U64(3);
         }
         // Stores touch memory, not GPRs, so record (addr,value) for the
         // compiled-pass compare. Ra (lra) is the value source; Rb is the
@@ -1151,6 +1154,10 @@ void CAlphaCPU::jit_run(int budget) {
 #ifdef JIT_STATS
       const uint64_t _comp_t0 = jit_rdtsc();
 #endif
+      // F31 reads as zero in compiled code, which loads it from here; an
+      // interpreted operate into F31 leaves its result until the next
+      // interpreted instruction clears it.
+      state.f[31] = 0;
       const u32 done = b->code(this, &state.r[0]);
 #ifdef JIT_STATS
       const uint64_t _comp_tsc =

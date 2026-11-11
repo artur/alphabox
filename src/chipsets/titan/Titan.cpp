@@ -149,6 +149,8 @@ u64 CTitan::pci_space_base(int hose, pci_space space) const {
 
 /// Which hose's space `a` is in, and which space; false for CSR space.
 static bool hose_space(u64 a, int *hose, pci_space *space) {
+  if (a < U64(0x80000000000))
+    return false; // below I/O space: memory that is not there
   const u64 off = a - U64(0x80000000000);
   *hose = (int)((off >> 33) & 3);
   const u64 in = off & U64(0x1ffffffff);
@@ -292,11 +294,22 @@ void CTitan::interval_tick(int cpu) {
  * window takes stays on the hose (peer to peer), as on the Tsunami.
  **/
 u64 CTitan::pci_phys(int hose, u32 address) {
-  const SState::SPort &p = state.port[hose & 3];
-  const u64 pctl = p.csr[0x300 >> 6];
+  // The windows as they are now, copied under the lock a processor's write
+  // takes; the page-table read below is done without it.
+  u64 win[12], pctl;
+  {
+    std::lock_guard<std::mutex> g(m_lock);
+    const SState::SPort &p = state.port[hose & 3];
+    memcpy(win, p.csr, sizeof(win));
+    pctl = p.csr[0x300 >> 6];
+  }
   if (!(pctl & 0x20) || address < 0x80000 || address > 0xfffff) {
     for (int j = 0; j < 4; j++) {
-      const u64 wsba = p.csr[j], wsm = p.csr[4 + j], tba = p.csr[8 + j];
+      const u64 wsba = win[j], wsm = win[4 + j], tba = win[8 + j];
+      // Window 3 with WSBA3<39> set answers dual-address cycles only, as
+      // on the Typhoon (TsunamiPchip.cpp): a 32-bit address is not its.
+      if (j == 3 && (wsba & U64(0x8000000000)))
+        continue;
       if (!pci_window::hit(wsba, wsm, address))
         continue;
       if (!(wsba & 2))

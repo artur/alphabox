@@ -45,8 +45,10 @@ static int dim_index(u32 a) { return ((a >> 9) & 2) | ((a >> 6) & 1); }
 
 u64 CTitan::cchip_read(u32 a, CSystemComponent *source) {
   switch (a) {
-  case 0x000:
+  case 0x000: {
+    std::lock_guard<std::mutex> g(m_lock);
     return state.cchip.csc;
+  }
   case 0x040:
     return state.cchip.mtr;
   case 0x080: {
@@ -133,9 +135,16 @@ u64 CTitan::cchip_read(u32 a, CSystemComponent *source) {
 void CTitan::cchip_write(u32 a, u64 data, CSystemComponent *source) {
   CAlphaCPU *cpu = (CAlphaCPU *)source;
   switch (a) {
-  case 0x000:
-    state.cchip.csc = data;
+  case 0x000: {
+    // The Typhoon's writable fields (TsunamiCchip.cpp) [inference: no
+    // 21274 manual here]. The rest is what the board is: <14> P1P, by
+    // which Linux finds hoses 1 and 3, and <51>, the interleave the
+    // consoles print, among them.
+    std::lock_guard<std::mutex> g(m_lock);
+    state.cchip.csc = (state.cchip.csc & ~U64(0x0777777fff3f0000)) |
+                      (data & U64(0x0777777fff3f0000));
     return;
+  }
   case 0x040:
     state.cchip.mtr = data;
     return;

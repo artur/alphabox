@@ -77,6 +77,13 @@ public:
   /// processor 0's thread at its own tick, with no register block locked):
   /// the far side may raise the interrupts its own events call for.
   virtual void tick() {}
+  /// What the far side holds, into and out of a state file (format 2.4 on;
+  /// CMarvel::save_state). False from a file that does not hold it whole.
+  virtual void save_state(FILE *f) { (void)f; }
+  virtual bool restore_state(FILE *f) {
+    (void)f;
+    return true;
+  }
 };
 
 /**

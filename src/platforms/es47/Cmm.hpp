@@ -81,6 +81,8 @@ public:
   bool gio_write(u32 pid, u32 reg, u64 value) override;
   bool gio_read(u32 pid, u32 reg, u64 *value) override;
   void tick() override;
+  void save_state(FILE *f) override;
+  bool restore_state(FILE *f) override;
 
   // The CMM's memory as the processors see it through the byte window.
   static constexpr u32 kMemBase = 0x40000;

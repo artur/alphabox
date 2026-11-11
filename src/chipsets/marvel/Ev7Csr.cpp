@@ -1226,6 +1226,8 @@ bool CEv7Csr::restore_state(FILE *f) {
       fread(&m_start_hi_valid, sizeof(m_start_hi_valid), 1, f) != 1)
     return false;
   m_gio.restore(s);
+  // The mirror interval_period_ns() reads without the lock.
+  m_it.store(reg(RBOX_IT), std::memory_order_relaxed);
   u32 q = 0;
   if (fread(&q, sizeof(q), 1, f) != 1)
     return false;

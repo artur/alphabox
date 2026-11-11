@@ -67,6 +67,8 @@ int ds20e_pci_interrupt(int hose, int slot, int intx, int func) {
  * belongs at hose 0 device 5). A card anywhere else would get no interrupt.
  */
 const char *ds20e_slot_refusal(const platform_config &, int hose, int slot) {
+  if (hose < 0 || hose > 1)
+    return "this machine has PCI hoses 0 and 1";
   if (slot > 10)
     return "this machine's console does not look beyond PCI device 10";
   if (ds20e_pci_interrupt(hose, slot, 0, 0) < 0)

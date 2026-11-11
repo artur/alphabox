@@ -253,7 +253,12 @@ public:
   const uint32_t *memory_arrays() const {
     return m_has_memory_arrays ? m_memory_arrays : nullptr;
   }
-  void RestoreState(const char *fn);
+  /// False, with a message, when `fn` is not a state file this build
+  /// reads; the machine is then untouched.
+  bool RestoreState(const char *fn);
+  /// The format version (the low half of the file's version word) of the
+  /// state file being restored, for the parts later versions added.
+  u32 state_file_version() const { return m_state_version; }
   void SaveState(const char *fn);
 
   /// The machine's chipset (Chipset.hpp), chosen by the board row: what is
@@ -269,7 +274,9 @@ public:
   /// of one source (a PCI device's functions). The input is a wire the
   /// board ORs from everything on it, and the chipset is told that OR
   /// (InterruptLines.hpp, Chipset::interrupt).
-  void interrupt(int number, bool assert, const void *source, int line) {
+  /// The source is a component: a state file names it by its place among
+  /// them.
+  void interrupt(int number, bool assert, CSystemComponent *source, int line) {
     m_irq_lines.drive(number, source, line, assert, [this](int n, bool level) {
       m_chipset->interrupt(n, level);
     });
@@ -585,6 +592,9 @@ private:
   CChipset *m_chipset = nullptr; ///< the board's chipset (Chipset.hpp)
   /// What drives each of the chipset's device interrupt inputs (interrupt).
   CInterruptLines m_irq_lines;
+  u32 m_state_version = 0;
+  void save_irq_lines(FILE *f);
+  bool restore_irq_lines(FILE *f);
   /// The chipset's physical address mask (CChipset::phys_mask), kept here
   /// so the memory path masks with a member rather than a virtual call.
   u64 m_phys_mask = 0;
@@ -609,8 +619,10 @@ private:
   // cpu_stx_c cannot see another CPU writing a different value and putting the
   // old one back between our LDx_L and STx_C; a changed sequence can.
   static const u32 kLLBuckets = 65536; // 64-byte line hash, power of two
-  std::atomic<u32> m_ll_seq[kLLBuckets];
-  std::atomic<u8> m_ll_lock[kLLBuckets]; // seq check + CAS + bump, per bucket
+  // Zeroed here: a C++17 atomic's default constructor leaves it unset, and
+  // a lock that starts non-zero would never be taken.
+  std::atomic<u32> m_ll_seq[kLLBuckets] = {};
+  std::atomic<u8> m_ll_lock[kLLBuckets] = {}; // seq check + CAS + bump
 public:
   /// The most processors a machine has (a GS1280's 16 chips here, or eight
   /// EV8 chips of four TPUs; the arrays below are indexed by the
@@ -660,6 +672,7 @@ private:
   CSystemComponent *acComponents[MAX_COMPONENTS];
   int iNumMemories;
   BulkPort m_bulk[kMaxBulkPorts];
+  void note_bulk_port(CSystemComponent *component, int index, u64 base);
   int m_nbulk = 0;
   struct SMemoryUser *asMemories[MAX_COMPONENTS];
 

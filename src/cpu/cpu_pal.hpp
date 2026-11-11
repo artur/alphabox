@@ -388,6 +388,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
   case 2: /* longword physical locked */                                       \
   {                                                                            \
     phys_address = state.r[REG_2] + DISP_12;                                   \
+    phys_address = ALIGN_PHYS(4);                                              \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);    \
     state.r[REG_1] = READ_PHYS_NT(32);                                         \
     state.r[REG_1] =                                                           \
@@ -453,6 +454,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
   case 3: /* quadword physical locked */                                       \
   {                                                                            \
     phys_address = state.r[REG_2] + DISP_12;                                   \
+    phys_address = ALIGN_PHYS(8);                                              \
     CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);    \
     state.r[REG_1] = READ_PHYS_NT(64);                                         \
     cSystem->cpu_lock(state.iProcNum, phys_address, state.r[REG_1]);           \
@@ -499,6 +501,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
                                                                                \
   case 2: /* longword physical conditional */                                  \
     phys_address = state.r[REG_2] + DISP_12;                                   \
+    phys_address = ALIGN_PHYS(4);                                              \
     {                                                                          \
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
       state.r[REG_1] =                                                         \
@@ -533,6 +536,7 @@ inline void CAlphaCPU::hw_mtpr(u32 function, u64 value, bool jit) {
                                                                                \
   case 3: /* quadword physical conditional */                                  \
     phys_address = state.r[REG_2] + DISP_12;                                   \
+    phys_address = ALIGN_PHYS(8);                                              \
     {                                                                          \
       CSystem::CLLSCDRAMGuard _llsc_guard(cSystem, phys_address < dram_size);  \
       state.r[REG_1] =                                                         \

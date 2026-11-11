@@ -111,7 +111,7 @@ bool CFlash::FindConsoleImage(u32 *offset, u32 *header_size, u32 *image_size,
       continue;
     // A console image loads into memory and is larger than its header; the
     // small headers a machine keeps for its other partitions are not.
-    if (w[6] == 0 || w[4] <= w[2] || off + w[2] + w[4] > size)
+    if (w[6] == 0 || w[4] <= w[2] || (u64)off + w[2] + w[4] > size)
       continue;
     *offset = off;
     *header_size = w[2];

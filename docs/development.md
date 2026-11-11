@@ -113,8 +113,11 @@ component and its class) and the offsets in it, from the map
 again, the console is woken with a carriage return, and the same commands
 must print the same output. All twelve boards run by default. On an EV7
 board the memory array spans every processor's memory, 16 GB apart, up to
-2^40 bytes, and its state file (version 2.3) keeps only the processors'
-memory, so the save and the restore do not touch the holes.
+2^40 bytes, and its state file (version 2.5; 2.4 on the other boards) keeps
+only the processors' memory, so the save and the restore do not touch the
+holes. Files of versions 2.2 and 2.3 still restore, without what 2.4 added:
+which component asserts which interrupt line, and a Marvel's CMM (its ports,
+memory, TOY offset and NVRAM image).
 Output goes to `$ALPHABOX_WORK/runs/snap-<label>/`, the boot to
 `boards-snap-<label>/`.
 

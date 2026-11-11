@@ -577,7 +577,14 @@ bool CIo7::restore_state(FILE *f) {
       m[off] = v;
     }
   }
-  return fread(m_level, sizeof(m_level), 1, f) == 1 &&
-         fread(m_in_service, sizeof(m_in_service), 1, f) == 1 &&
-         fread(m_hp, sizeof(m_hp), 1, f) == 1;
+  if (fread(m_level, sizeof(m_level), 1, f) != 1 ||
+      fread(m_in_service, sizeof(m_in_service), 1, f) != 1 ||
+      fread(m_hp, sizeof(m_hp), 1, f) != 1)
+    return false;
+  // Not in the file: a line asserted and not in service was either refused
+  // by a full queue or is disabled, and resend() must try the first again
+  // (deliver() does nothing for the second).
+  for (u32 n = 0; n < kLsis; n++)
+    m_refused[n] = m_level[n] && !m_in_service[n];
+  return true;
 }

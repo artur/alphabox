@@ -834,6 +834,34 @@ runs on across that store. The order is the machine's and the
 timing is the host's. No wait is longer than 100 ms, so a host that sleeps
 cannot turn it into a failure.
 
+### Closed 2026-11-11: what a read of the code found
+
+A review of `src/cpu` and `src/jit` by reading, with no failing guest
+behind any of it:
+
+- Compiled `HW_LD` of the virtual types (8, 9, 12, 13) read at the address
+  as given, by `LDx`'s rule; the interpreter reads the datum the address is
+  in, aligned to its size, as every other `HW_LD` does. Both emitters now
+  align the address first, and JIT_VERIFY's log does the same.
+- The physical locked forms (`HW_LDx/L`, `HW_STx/C`) locked and stored at
+  the unaligned address while reading the aligned one. They align first.
+- A physical `HW_LD` into R31 was skipped by compiled code and done by the
+  interpreter, which a device register would see. It is interpreted now.
+- F31 was cleared only when the next instruction was interpreted, so a
+  compiled block entered right after an interpreted operate into F31 read
+  the discarded result. It is cleared before every compiled block.
+- AArch64: a never-taken branch on R31 in the middle of a block loaded zero
+  into the register the previous result was forwarded in, and the next
+  instruction took the zero for that result.
+- x86-64: a load to R31 (a prefetch) took an invalidated page-cache slot
+  for a mapped page and skipped the fault the interpreter dismisses.
+- A line's deassert could clear another thread's request to drop the cached
+  translations (`request_dpc_flush`) before the processor saw it.
+- After a restore the interpreter lanes kept the TB index of the machine
+  before it, and every lane its shadow of data translations; the DTB tags
+  PALcode had staged were zeroed. The index is rebuilt and the shadow
+  dropped on every lane, and the tags are in the state file (format 2.4).
+
 ### Smaller ones
 
 | What | Where | Consequence |

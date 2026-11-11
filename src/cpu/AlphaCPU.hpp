@@ -290,7 +290,7 @@ private:
   std::unique_ptr<std::thread> myThread;
   std::atomic_bool myThreadDead{false};
   WakeSemaphore mySemaphore;
-  bool StopThread;
+  bool StopThread = false;
 
   int get_icache(u64 address, u32 *data);
   u8 icache_exec_modes(u64 address, u64 v_a);
@@ -2026,7 +2026,7 @@ inline int CAlphaCPU::virt2phys_fast(u64 virt, int flags, int cm, u64 *phys,
       else
         hit = false;
       if (hit) {
-        if (cm)
+        if (cm && !(flags & NO_CHECK))
           return XL_ACV;
         // A superpage mapping involves neither the TB nor the ASN, so it
         // matches every address space: reported as ASM, instruction-cache
@@ -2146,6 +2146,11 @@ inline void CAlphaCPU::irq_h(int number, bool assert, int delay) {
       if (state.irq_h_timer[i].load(std::memory_order_relaxed))
         state.check_timers = true;
     }
+    // check_timers also carries another thread's request to drop the cached
+    // translations (request_dpc_flush): clear, then look, so one made just
+    // before the clear above is not lost.
+    if (m_dpc_flush_req.load(std::memory_order_acquire))
+      state.check_timers = true;
   }
 }
 
