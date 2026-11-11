@@ -81,13 +81,23 @@ SRM_FILES = {
 }
 
 
-def generated_malformed():
+def generated_malformed(with_gui):
     """Malformed cases too large or too odd to keep as files:
     (name, bytes, line, col, expected text[, "run"]). "run": a value only
-    the device reads, so `alphabox run` must refuse it, not --check."""
+    the device reads, so `alphabox run` must refuse it, not --check; the
+    place is then the one the device's error carries, its system's.
+    `with_gui`: the build has SDL, so a video card gets as far as reading
+    its own keys."""
     machine = b'sys0 = tsunami\n{\n  rom.srm = "x";\n  cpu0 = ev68cb\n  {\n  }\n'
     n = 100000
-    return [
+    video = [
+        # Three 2 MB banks: the Permedia 2's addresses wrap by a mask, which
+        # 6 MB does not give (Permedia2.cpp, init).
+        ("gen-permedia2-memory6.cfg", b"gui = sdl\n{\n}\n" + machine +
+         b"  pci0.2 = permedia2\n  {\n    memory = 6;\n  }\n}\n", 4, 1,
+         "memory must be 2, 4 or 8", "run"),
+    ] if with_gui else []
+    return video + [
         # The 17th section: 16 "a = b {" before it, 7 bytes each.
         ("gen-deep-nesting.cfg", b"a = b {" * n + b"}" * n + b"\n", 1, 113,
          "nested more than 16 deep"),
@@ -300,7 +310,7 @@ def main():
                           m.group(1) or "check"))
         gdir = os.path.join(work, "malformed")
         os.makedirs(gdir)
-        for case in generated_malformed():
+        for case in generated_malformed("SDL3" in feats):
             name, data = case[0], case[1]
             p = os.path.join(gdir, name)
             with open(p, "wb") as f:

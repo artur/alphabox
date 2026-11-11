@@ -615,22 +615,50 @@ cd lab/radeon-selftest      # an ES40 config with pci0.2 = radeon and gui = sdl
 SDL_VIDEO_DRIVER=dummy ALPHABOX_RADEON_SELFTEST=exit alphabox run
 ```
 
+`test/tools/radeon_selftest.sh <alphabox>` does both runs (with the
+engine's thread, and `ALPHABOX_RADEON_SYNC=1`), writes the configuration
+when there is none, and stops a run whose check never ends.
+
 It prints `%RADEON-I-SELFTEST: <check> ok|FAILED` per check and `PASS`
-or `FAIL`. 91 checks:
+or `FAIL`. 106 checks:
 
 | Checks | On | Where |
 | --- | --- | --- |
 | 11 | the command FIFO, the engine's busy time, the CP's streams and micro-engine, the GART and the clocks | `RadeonSelfTestQueue.cpp` |
 | 4 | the microcode lookups: the known-image table, synthetic images of each word width, the R100 and R200 packet sets, the self-test's own unknown image | `RadeonMicrocode.cpp` |
 | 26 | the 2D engine, the CP and the cursor | `RadeonSelfTest.cpp` |
-| 34 | the 3D engine: the generation's scenes, run between the 2D checks and the last two 2D/CP ones | `r100/RadeonR100SelfTest.cpp` |
+| 9 | what a review of the code found (2026-11-11), below | `RadeonSelfTest.cpp` |
+| 40 | the 3D engine: the generation's scenes, six of them the review's, run between the 2D checks and the last two 2D/CP ones | `r100/RadeonR100SelfTest.cpp` |
 | 15 | the overlay scaler (below) | `RadeonSelfTestOverlay.cpp` |
 | 1 | that every wait for idle ended | |
 
 The self-test waits for the engine as a driver does (64 free FIFO
 entries, then `GUI_ACTIVE` clear) before it touches memory the engine
 draws in, and for the CP before it goes back to MMIO. With
-`ALPHABOX_RADEON_SYNC=1` the queue checks are left out (81 checks).
+`ALPHABOX_RADEON_SYNC=1` the queue checks are left out (96 checks).
+
+The review's checks are register sequences and vertices a correct driver
+does not send, which must neither stop the emulator nor keep the engine:
+
+- `MM_INDEX` naming `MM_DATA` through an alias (0x10004) reads 0, and an
+  alias of a register is that register.
+- A CP packet may write `RBBM_SOFT_RESET`, and `CP_RB_WPTR` with
+  `RB_RPTR_WR_ENA`: the engine that runs the packet holds its own lock
+  already. In synchronous mode a packet's write of a register that kicks
+  the engine returns to the loop that is running it.
+- Indirect buffers that name themselves end: a buffer and all it nests
+  run 2^24 dwords at most.
+- Lines with endpoints at 1e9 are walked inside the scissor only, and
+  their pattern counts the whole walk, before and after the scissor.
+- An infinite level of detail samples the smallest level; a texture has
+  at most 12 levels.
+- `3D_CLEAR_ZMASK` with a count of 2^31 ends at the depth surface.
+- The 2D engine's decoded state and the fog table are in the state file,
+  and files from before them restore.
+- On the VGA core and the card base, which the other cards share and
+  which have no self-test of their own: a row's height with a zero
+  Maximum Scan Line, attribute register 14h leaving the pel shift, and
+  option ROM reads at the image's last bytes.
 
 The scenes are written as PNGs to `ALPHABOX_RADEON_SELFTEST_DIR` (default
 `$ALPHABOX_WORK/radeon-3d`), each with a `-cmp.png` (frame, reference,

@@ -337,6 +337,11 @@ bool CRadeon::engine_has_work_locked() const {
 
 void CRadeon::engine_kick() {
   if (m_sync) {
+    // From a register a CP packet wrote (CP_RB_WPTR, CP_CSQ_CNTL, the PIO
+    // queue): the loop below is already running on this thread, holds the
+    // lock, and takes what the packet added.
+    if (in_engine())
+      return;
     std::lock_guard<std::mutex> x(m_exec_mx);
     engine_scope scope;
     int guard = 0;

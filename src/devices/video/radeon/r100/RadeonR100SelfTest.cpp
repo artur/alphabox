@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -3180,5 +3181,196 @@ void CRadeonR100_3D::selftest_scenes(SelfTest &t) {
     const int d = compare("tcl-spot-dualcone-eye", ref, 2, &mx);
     scene_report("TCL: spot light, dual-cone spot, eye vector (far viewer)", d,
                  mx);
+  }
+
+  // ==== what a review of the code found (2026-11-11) =======================
+  // Vertices and counts a correct driver does not send, which must neither
+  // crash the emulator nor keep the engine for minutes: each check also
+  // needs the engine idle again, which the wait gives 20 s.
+
+  // -- scene: lines from far outside the scissor -----------------------------
+  {
+    // A line is walked inside the scissor only, and its pixels and its
+    // pattern are those of the whole walk. Solid lines with endpoints at
+    // 1e9 (a walk of 2^30 steps, minutes of the engine's time, were it
+    // made); then patterned ones that enter and leave the scissor, the
+    // pattern's phase counted from where each line starts, and one line's
+    // pattern going on from the end of another that left the scissor.
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    cp({pkt0(RE_SOLID_COLOR, 1), 0xffffffffu, pkt0(SE_CNTL, 1),
+        (3u << 1) | (3u << 3) | (1u << 27)});
+    struct L {
+      float x0, y0, x1, y1;
+    };
+    auto line = [&](const L &l) {
+      cp({pkt3(0x29, 2 + 4), 0, PRIM_LINE_LIST | (WALK_DATA << 4) | (2u << 16),
+          fbits(l.x0), fbits(l.y0), fbits(l.x1), fbits(l.y1)});
+    };
+    // the pixels of a line and each one's step number in the walk
+    auto ref_line = [&](const L &l, const std::function<bool(double)> &on) {
+      const bool xmaj = std::fabs(l.x1 - l.x0) >= std::fabs(l.y1 - l.y0);
+      const double a0 = xmaj ? l.x0 : l.y0, a1 = xmaj ? l.x1 : l.y1;
+      const double b0 = xmaj ? l.y0 : l.x0, b1 = xmaj ? l.y1 : l.x1;
+      const double first = a1 > a0 ? std::ceil(a0 - 0.5) : std::floor(a0 - 0.5);
+      for (int c = 0; c < W; c++) {
+        const double m = c + 0.5;
+        const bool in = a1 > a0 ? (m >= a0 && m < a1) : (m <= a0 && m > a1);
+        if (!in)
+          continue;
+        const double k = std::floor(b0 + (b1 - b0) * (m - a0) / (a1 - a0));
+        if (k < 0 || k >= H || !on(std::fabs(c - first)))
+          continue;
+        ref[size_t((xmaj ? int(k) : c) * W + (xmaj ? c : int(k)))] =
+            0xffffffffu;
+      }
+    };
+    const auto solid = [](double) { return true; };
+    const L far_lines[] = {{-1e9f, 20.5f, 60.5f, 20.5f},  // entering
+                           {100.5f, 1e9f, 100.5f, -1e9f}, // through, downwards
+                           {-1e9f, -1e9f, 1e9f, 1e9f},    // the diagonal
+                           {-1e9f, 200.5f, 1e9f, 200.5f}, // below the buffer
+                           {-1e9f, 5.5f, -5.5f, 5.5f}};   // left of it
+    for (const L &l : far_lines) {
+      line(l);
+      ref_line(l, solid);
+    }
+    // pattern 0xf0f0, each bit twice; <29> starts it again with each line
+    const u32 PAT = 0xf0f0u | (2u << 16);
+    const auto dashed = [](double base) {
+      return [base](double step) {
+        return ((0xf0f0u >> ((u64(base + step) / 2) & 15)) & 1) != 0;
+      };
+    };
+    cp({pkt0(PP_CNTL, 1), 4u, pkt0(RE_LINE_PATTERN, 1), PAT | (1u << 29)});
+    const L pat_lines[] = {{-3003.25f, 40.5f, 100.5f, 40.5f}, // 3003 steps in
+                           {-10.75f, 44.5f, 100.5f, 44.5f},   // 11 steps in
+                           {100.5f, 48.5f, -3003.25f, 48.5f}, // leaving
+                           {0.5f, 52.5f, 3000.5f, 52.5f}};    // 3000 steps
+    for (const L &l : pat_lines) {
+      line(l);
+      ref_line(l, dashed(0));
+    }
+    // without <29> the next line's pattern goes on from step 3000
+    cp({pkt0(RE_LINE_PATTERN, 1), PAT});
+    const L next = {0.5f, 56.5f, 60.5f, 56.5f};
+    line(next);
+    ref_line(next, dashed(3000));
+    cp({pkt0(PP_CNTL, 1), 0});
+    int mx;
+    const int d = compare("line-far", ref, 0, &mx);
+    scene_report("lines from far outside the scissor, their pattern", d, mx);
+  }
+
+  // -- scene: a level of detail out of range ---------------------------------
+  {
+    // Texture coordinates beyond a float's range make the level of detail
+    // infinite: the smallest level is sampled, nearest in the level, with
+    // the nearest level (2) or between two (3; the filters that are linear
+    // in the level have no texel at an infinite coordinate). And a texture
+    // has at most 12 levels, whatever its size fields say.
+    base_state();
+    clear_cb(0xff000000u);
+    std::vector<u32> ref(size_t(W * H), 0xff000000u);
+    const u32 lc[6] = {0xffff0000u, 0xff00ff00u, 0xff0000ffu,
+                       0xffffff00u, 0xff00ffffu, 0xffff00ffu};
+    u32 off = TEX;
+    for (int l = 0; l < 6; l++) {
+      const int s = 32 >> l, pitch = std::max(32, s * 4);
+      for (int y = 0; y < s; y++)
+        for (int x = 0; x < s; x++)
+          vw32(off + u32(y * pitch + x * 4), lc[l]);
+      off += u32(pitch * s);
+    }
+    cp({pkt0(PP_CNTL, 1), (1u << 4) | (1u << 12)});
+    const u32 minfs[2] = {2, 3};
+    for (int k = 0; k < 2; k++) {
+      set_tex(0, TEX, 6 | (1u << 6), 5, 5, (minfs[k] << 1) | (5u << 16),
+              C_REPLACE_T0, A_REPLACE_T0);
+      const float x0 = float(k * 32);
+      rect_st(x0, 0, x0 + 16, 16, 0, 0, 3e38f, 3e38f);
+      fill_rect(ref, int(x0), 0, int(x0) + 16, 16, lc[5]);
+    }
+    int mx;
+    const int d = compare("texture-lod-range", ref, 2, &mx);
+    scene_report("textures: an infinite level of detail", d, mx);
+    // size fields of 2^15 with 16 levels asked for
+    set_tex(0, TEX, 6 | (1u << 6), 15, 15, (2u << 1) | (15u << 16),
+            C_REPLACE_T0, A_REPLACE_T0);
+    sync();
+    raster_setup();
+    report("3D: a texture has at most 12 levels", rs.tex[0].levels == 12,
+           "(" + std::to_string(rs.tex[0].levels) + ")");
+    cp({pkt0(PP_CNTL, 1), 0});
+  }
+
+  // -- 3D_CLEAR_ZMASK with a count beyond the surface ------------------------
+  {
+    // A count of 2^31 clears the depth surface's 2048 lines and nothing
+    // after them, at once: 4096 blocks at this pitch of 128 pixels, which
+    // end where the textures begin.
+    base_state();
+    const u32 last = ZB + u32(2047 * W + (W - 1)) * 4;
+    const u32 after = ZB + u32(2048 * W) * 4;
+    vw32(ZB, 0);
+    vw32(last, 0);
+    vw32(after, 0x5e5e5e5eu);
+    cp({pkt0(RB3D_ZSTENCILCNTL, 1), 2u, pkt0(0x3230, 1), 0x00abcdefu,
+        pkt3(0x32, 3), 0, 0x7fffffffu, 0});
+    const auto t0 = std::chrono::steady_clock::now();
+    sync();
+    const double secs =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+            .count();
+    report("3D: 3D_CLEAR_ZMASK of 2^31 blocks ends at the surface",
+           secs < 10 && vr32(ZB) == 0x00abcdefu && vr32(last) == 0x00abcdefu &&
+               vr32(after) == 0x5e5e5e5eu,
+           secs >= 10 ? "(the engine was still busy after 10 s)" : "");
+  }
+
+  // -- the state file: the fog table -----------------------------------------
+  {
+    // The table and its index are a block after the 3D engine's own, which
+    // a file from before it does not have: that one restores with the
+    // table clear and leaves the file at what follows.
+    sync();
+    u8 want[256];
+    for (int i = 0; i < 256; i++)
+      want[i] = u8(rnd());
+    memcpy(m_fog_table, want, sizeof(want));
+    m_fog_index = 0x5c;
+    bool ok = false, old_ok = false;
+    FILE *f = tmpfile(), *g = tmpfile();
+    if (f && g) {
+      save(f);
+      const long size = ftell(f);
+      memset(m_fog_table, 0, sizeof(m_fog_table));
+      m_fog_index = 0;
+      rewind(f);
+      ok = restore(f) && ftell(f) == size &&
+           memcmp(m_fog_table, want, sizeof(want)) == 0 && m_fog_index == 0x5c;
+      // the same block without its last 264 bytes, and the next block's
+      // first word after it
+      const long old_size = size - long(4 + sizeof(m_fog_table) + 4);
+      std::vector<u8> bytes(size_t(std::max(old_size, 0L)));
+      rewind(f);
+      const u32 next_magic = 0x50435241u;
+      if (old_size > 0 &&
+          fread(bytes.data(), 1, bytes.size(), f) == bytes.size()) {
+        fwrite(bytes.data(), 1, bytes.size(), g);
+        fwrite(&next_magic, 4, 1, g);
+        rewind(g);
+        old_ok = restore(g) && ftell(g) == old_size && m_fog_index == 0;
+        for (u8 b : m_fog_table)
+          old_ok = old_ok && b == 0;
+      }
+    }
+    if (f)
+      fclose(f);
+    if (g)
+      fclose(g);
+    report("state file: the fog table saved and restored", ok);
+    report("state file: a 3D block from before the fog table", old_ok);
   }
 }

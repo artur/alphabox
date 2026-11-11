@@ -1572,21 +1572,22 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b,
   // centres c + 0.5 in [s0, s1) going up, in (s1, s0] going down
   // The walk is kept to the scissor along the major axis (endpoints may be
   // anywhere, 1e9 from uninitialised vertices): outside it no pixel is
-  // drawn, and only the stipple counts the steps.
+  // drawn, and only the stipple counts the steps, those before the scissor
+  // here and those after it below. e0 and e1 are where the whole walk
+  // starts and ends, c0 and c1 the part of it within a pixel of the scissor.
+  const double e0 = dir > 0 ? std::ceil(s0 - 0.5) : std::floor(s0 - 0.5);
+  const double e1 = dir > 0 ? std::ceil(s1 - 0.5) : std::floor(s1 - 0.5);
   const double lo = double(std::max(xmaj ? rs.clip_l : rs.clip_t, 0)) - 1.0;
-  const double hi = double(xmaj ? rs.clip_r : rs.clip_b) + 2.0;
-  const double w0 = std::min(std::max(s0, lo), hi);
-  const double w1 = std::min(std::max(s1, lo), hi);
-  const int c0 = dir > 0 ? int(std::ceil(w0 - 0.5)) : int(std::floor(w0 - 0.5));
-  const int c1 = dir > 0 ? int(std::ceil(w1 - 0.5)) : int(std::floor(w1 - 0.5));
+  const double hi = double(xmaj ? rs.clip_r : rs.clip_b) + 1.0;
+  const int c0 = int(std::min(std::max(e0, lo), hi));
+  const int c1 = int(std::min(std::max(e1, lo), hi));
+  // a count of steps as the stipple's counter takes it, modulo 2^32
+  auto steps = [](double n) { return u32(std::fmod(n, 4294967296.0)); };
   const u32 pat = reg(RE_LINE_PATTERN);
   const u32 repeat = std::max(1u, (pat >> 16) & 0xff);
   if (pat & (1u << 29))
     line_stipple_count = 0;
-  // the steps before the scissor, which the walk above skipped
-  line_stipple_count += u32(std::min(std::fabs(w0 - s0), 4294967295.0));
-  if ((c1 - c0) * dir < 0)
-    return; // wholly outside
+  line_stipple_count += steps(std::fabs(double(c0) - e0));
   const int route[3] = {rs.tex[0].route, rs.tex[1].route, rs.tex[2].route};
   for (int cc = c0; cc != c1; cc += dir) {
     const double mc = double(cc) + 0.5;
@@ -1619,6 +1620,9 @@ void CRadeonR100_3D::raster_line(const RadeonVertex &a, const RadeonVertex &b,
       fragment(f);
     }
   }
+  // the steps after the scissor: the next line's pattern goes on from the
+  // whole of this one
+  line_stipple_count += steps(std::fabs(e1 - double(c1)));
 }
 
 /**

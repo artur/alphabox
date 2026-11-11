@@ -222,7 +222,7 @@ register accesses, queue addresses, notifies and interrupt changes
 At the end of the `radeon` card's start-up, before the machine runs, it
 drives the 2D engine, the command processor, the cursor and the 3D engine
 through the MMIO BAR and the CP ring. Each result is compared with a
-software reference (91 checks, [radeon.md](radeon.md)), and the card's
+software reference (106 checks, [radeon.md](radeon.md)), and the card's
 registers and VRAM are put back afterwards.
 
 - It prints `%RADEON-I-SELFTEST` lines.

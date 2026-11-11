@@ -888,6 +888,217 @@ bool CRadeon::selftest() {
            "");
   }
 
+  // ======================================================================
+  // what a review of the code found (2026-11-11): register sequences a
+  // correct driver does not send, which must neither crash the emulator
+  // nor leave the engine waiting for itself
+  // ======================================================================
+  // The engine idle within `secs`, read as the wait reads it; a check that
+  // would otherwise read an engine register behind a stuck engine asks
+  // this first and fails instead.
+  auto idle_within = [&](int secs) {
+    dirty = cp_used = false;
+    const auto give_up =
+        std::chrono::steady_clock::now() + std::chrono::seconds(secs);
+    for (;;) {
+      const u32 s = ReadMem_Bar(0, 2, RBBM_STATUS, 32);
+      if ((s & RBBM_FIFOCNT_MASK) == m_chip->cmdfifo_entries &&
+          !(s & RBBM_ACTIVE))
+        return true;
+      if (std::chrono::steady_clock::now() > give_up)
+        return false;
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+  };
+
+  // -- MM_INDEX naming MM_DATA ----------------------------------------------
+  {
+    // The index is decoded as the aperture decodes an address: 0x10004 is
+    // MM_DATA again, which has nothing behind it (the access used to come
+    // back to itself until the stack ran out), and 0x10224 is CRTC_OFFSET.
+    sync();
+    WriteMem_Bar(0, 2, MM_INDEX, 32, 0x00010004u);
+    const u32 self = ReadMem_Bar(0, 2, MM_DATA, 32);
+    WriteMem_Bar(0, 2, MM_DATA, 32, 0x12345678u);
+    WriteMem_Bar(0, 2, MM_INDEX, 32, 0x00010000u | CRTC_OFFSET);
+    WriteMem_Bar(0, 2, MM_DATA, 32, 0x00001230u);
+    const u32 direct = ReadMem_Bar(0, 2, CRTC_OFFSET, 32);
+    const u32 indexed = ReadMem_Bar(0, 2, MM_DATA, 32);
+    WriteMem_Bar(0, 2, CRTC_OFFSET, 32, 0);
+    WriteMem_Bar(0, 2, MM_INDEX, 32, 0);
+    report("MM_INDEX: an alias of MM_DATA reads 0, one of a register is it",
+           self == 0 && direct == 0x1230 && indexed == 0x1230);
+  }
+
+  // -- registers a CP packet writes that take the engine's lock ------------
+  {
+    // RBBM_SOFT_RESET from a type-0 packet (E2 <5>, which leaves the ring's
+    // pointers): the engine that runs the packet resets its blocks and is
+    // held until the bit is cleared, here through the register BAR; the
+    // packet behind it then runs.
+    cp({pkt0(RBBM_SOFT_RESET, 1), 1u << 5, pkt0(0x15e0, 1), 0x5eed0001u});
+    dirty = cp_used = false; // no wait: the engine is held
+    bool seen = false;
+    for (int n = 0; n < 5000 && !seen; n++) {
+      seen = ReadMem_Bar(0, 2, RBBM_SOFT_RESET, 32) == (1u << 5);
+      if (!seen)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    WriteMem_Bar(0, 2, RBBM_SOFT_RESET, 32, 0);
+    const bool idle = idle_within(10);
+    report("CP: a packet's RBBM_SOFT_RESET, the engine held and let go",
+           seen && idle && rd(0x15e0) == 0x5eed0001u,
+           !seen   ? "(the packet did not run)"
+           : !idle ? "(the engine did not come back)"
+                   : "");
+  }
+  {
+    // CP_RB_WPTR from a packet with RB_RPTR_WR_ENA: the read pointer takes
+    // CP_RB_RPTR_WR, which the packet before sets to where the ring goes
+    // on, so the pointers end as they would have.
+    sync();
+    wr(0x071c, ring_pos);        // CP_RB_RPTR_WR: where the pointer is now
+    wr(0x0704, 15 | (1u << 31)); // CP_RB_CNTL: RPTR_WR_ENA
+    const u32 after = (ring_pos + 4) & 0xffff;
+    cp({pkt0(0x071c, 1), after, pkt0(0x0714, 1), after});
+    const bool idle = idle_within(10);
+    bool ok = idle;
+    if (idle) {
+      wr(0x0704, 15);
+      cp({pkt0(0x15e0, 1), 0x5eed0002u});
+      ok = rd(0x15e0) == 0x5eed0002u && rd(0x0710) == ring_pos;
+    }
+    report("CP: a packet's CP_RB_WPTR with RB_RPTR_WR_ENA", ok,
+           idle ? "" : "(the engine did not come back)");
+  }
+
+  // -- indirect buffers that name each other --------------------------------
+  {
+    // 2000 packets, each running the buffer they are in: three levels deep
+    // that would be 1.6e10 dwords. A buffer and all it nests run 2^24 at
+    // most, and the ring goes on after them.
+    const u32 K = 2000;
+    for (u32 i = 0; i < K; i++) {
+      vw32(IB + i * 8, pkt0(0x073c, 1)); // CP_IB_BUFSZ
+      vw32(IB + i * 8 + 4, K * 2);
+    }
+    cp({pkt0(0x0738, 2), IB, K * 2, pkt0(0x15e0, 1), 0x5eed0003u});
+    const bool idle = idle_within(15);
+    report("CP: indirect buffers that name themselves end",
+           idle && rd(0x15e0) == 0x5eed0003u,
+           idle ? "" : "(the engine was still busy after 15 s)");
+  }
+
+  // -- the state file: the 2D engine's decoded state ------------------------
+  {
+    // What the engine decoded from registers written once (a scissor, a
+    // pitch, the direction) is a block at the end of the card's, which a
+    // file from before it does not have: that one leaves the engine as it
+    // is.
+    sync();
+    wr(0x16ec, (5u << 16) | 7u);    // SC_TOP_LEFT
+    wr(0x16f0, (99u << 16) | 111u); // SC_BOTTOM_RIGHT
+    wr(0x16c0, 1);                  // DP_CNTL: left to right, bottom to top
+    sync();
+    auto same = [](const engine_t &a, const engine_t &b) {
+      return a.dst_offset == b.dst_offset && a.dst_pitch == b.dst_pitch &&
+             a.src_offset == b.src_offset && a.src_pitch == b.src_pitch &&
+             a.dst_x == b.dst_x && a.dst_y == b.dst_y && a.src_x == b.src_x &&
+             a.src_y == b.src_y && a.width == b.width && a.height == b.height &&
+             a.sc_left == b.sc_left && a.sc_top == b.sc_top &&
+             a.sc_right == b.sc_right && a.sc_bottom == b.sc_bottom &&
+             a.src_sc_right == b.src_sc_right &&
+             a.src_sc_bottom == b.src_sc_bottom && a.bpp == b.bpp &&
+             a.gmc == b.gmc && a.dp_cntl == b.dp_cntl;
+    };
+    const engine_t want = eng;
+    engine_t other = want;
+    other.dst_pitch = 0;
+    other.sc_left = other.sc_top = other.sc_right = other.sc_bottom = 0;
+    other.dp_cntl ^= 3;
+    other.bpp = 1;
+    bool ok = false, old_ok = false;
+    FILE *f = tmpfile(), *g = tmpfile();
+    if (f && g) {
+      save_card_state(f);
+      const long size = ftell(f);
+      eng = other;
+      rewind(f);
+      ok = restore_card_state(f) == 0 && ftell(f) == size && same(eng, want) &&
+           eng.sc_left == 7 && eng.sc_bottom == 99;
+      // the same file without the block: 4 + 18 * 4 + 4 bytes
+      const long old_size = size - 80;
+      std::vector<u8> bytes(size_t(std::max(old_size, 0L)));
+      rewind(f);
+      if (old_size > 0 &&
+          fread(bytes.data(), 1, bytes.size(), f) == bytes.size()) {
+        fwrite(bytes.data(), 1, bytes.size(), g);
+        rewind(g);
+        eng = other;
+        old_ok = restore_card_state(g) == 0 && ftell(g) == old_size &&
+                 same(eng, other);
+      }
+    }
+    if (f)
+      fclose(f);
+    if (g)
+      fclose(g);
+    eng = want;
+    wr(0x16ec, 0);
+    wr(0x16f0, (255u << 16) | 255u);
+    wr(0x16c0, 3);
+    report("state file: the 2D engine's decoded state", ok);
+    report("state file: a card block from before the 2D engine's", old_ok);
+  }
+
+  // -- the VGA core and the card base this card is built on ----------------
+  // (the other cards have no self-test; these three are theirs as well)
+  {
+    sync();
+    // A character row is at least one scan line high: with a Maximum Scan
+    // Line of zero (the display enabled before CR09 was written) the
+    // renderers, which all take the height from here, would never end.
+    const u8 msl = vga.crtc.maximum_scan_line, dbl = vga.crtc.scan_doubling;
+    vga.crtc.maximum_scan_line = 0;
+    vga.crtc.scan_doubling = 0;
+    const int h0 = scan_line_height();
+    vga.crtc.scan_doubling = 1;
+    const int h0d = scan_line_height();
+    vga.crtc.maximum_scan_line = 16;
+    const int h16d = scan_line_height();
+    vga.crtc.maximum_scan_line = msl;
+    vga.crtc.scan_doubling = dbl;
+    report("VGA: a row's height with a zero Maximum Scan Line",
+           h0 == 1 && h0d == 1 && h16d == 32);
+
+    // Attribute register 14h (Color Select) leaves the pel shift, which is
+    // register 13h's.
+    const auto atc = vga.attribute;
+    vga.attribute.state = 0;
+    for (u8 b : {0x13, 5, 0x14, 3})
+      atc_address_data_w(0, b);
+    const bool pel = vga.attribute.pel_shift_latch == 5 &&
+                     vga.attribute.data[0x13] == 5 &&
+                     vga.attribute.data[0x14] == 3;
+    vga.attribute = atc;
+    report("VGA: attribute register 14h leaves the pel shift", pel);
+
+    // The option ROM: a datum is read when the whole of it is in the image.
+    bool rom = true;
+    if (rom_max >= 8) {
+      const u8 *e = option_rom + rom_max;
+      const u32 last =
+          u32(e[-4]) | u32(e[-3]) << 8 | u32(e[-2]) << 16 | u32(e[-1]) << 24;
+      rom = rom_read(rom_max - 4, 32) == last &&
+            rom_read(rom_max - 1, 8) == e[-1] &&
+            rom_read(rom_max - 2, 16) == (last >> 16) &&
+            rom_read(rom_max - 3, 32) == 0 && rom_read(rom_max - 1, 16) == 0 &&
+            rom_read(rom_max, 8) == 0;
+    }
+    report("VGA: option ROM reads at the image's last bytes", rom,
+           rom_max >= 8 ? "" : "(no ROM image: not checked)");
+  }
+
   // the overlay scaler (RadeonSelfTestOverlay.cpp)
   sync();
   selftest_overlay(report, dir);
