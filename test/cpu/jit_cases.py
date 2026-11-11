@@ -909,6 +909,29 @@ def g_jitpal(b):
     b.store(23, "native R23 (the linkage is the shadow R23)",
             0x2323232323232323)
 
+    # HW_LD of the virtual types and the physical locked pair at addresses
+    # not aligned to their data: the datum the address is in, on both
+    # engines. Compiled HW_LD/V read at the address as given until
+    # 2026-11-11 (LDx's rule, cpu-fidelity "Closed 2026-11-11"), and the
+    # locked pair locked and stored at the unaligned address, so the
+    # conditional store compared other bytes and failed.
+    q0, q1 = 0x1122334455667788, 0x99AABBCCDDEEFF00
+    b.begin("jitpal: CALL_PAL 8B, HW_LD/V and HW_LDQ/L, HW_STQ/C unaligned")
+    b.need(rows.PAL21264)
+    b.emit(mem(OP["LDA"], 16, R_SCR, 0x2000 + 0x380))  # page 1 + 0x380
+    b.load(1, q0)
+    b.emit(mem(OP["STQ"], 1, 16, 0))
+    b.load(1, q1)
+    b.emit(mem(OP["STQ"], 1, 16, 8))
+    b.emit(call_pal(0x8B))
+    b.store(0, "HW_LDQ/V at +3: the quadword at +0", q0)
+    b.store(1, "HW_LDL/V at +9: the longword at +8, sign-extended",
+            0xFFFFFFFFDDEEFF00)
+    b.store(2, "HW_LDQ/V alt at +14: the quadword at +8", q1)
+    b.store(3, "HW_LDQ/L physical at +5: the quadword at +0", q0)
+    b.store(8, "HW_STQ/C physical at +5: stored", 1)
+    b.store(9, "the quadword at +0 after the conditional store", q0 + 1)
+
 
 # --- jitmode: one virtual address, two modes --------------------------------------------
 
@@ -1005,6 +1028,46 @@ def g_jitmisc(b):
     b.emit(opr(0x10, 0x6D, R31, 5, 7))
     b.store(6, "second read >= first", 1)
     b.store(7, "third read >= second", 1)
+
+    # F31 reads as zero after an operate into it. Such an operate is left
+    # to the interpreter, which clears F31 when it starts its next
+    # instruction. A compiled block entered right after it read the result
+    # from the register file until 2026-11-11, but only when the operate
+    # was the last instruction of a dispatch batch, which a case cannot
+    # arrange: this checks the values, not that window.
+    b.begin("jitmisc: F31 is zero after an operate into it")
+    b.load(1, 0x3FF0000000000000)                  # 1.0
+    b.load(2, 0x4000000000000000)                  # 2.0
+    b.emit(fop(*A.ITOF["ITOFT"], 1, R31, 1))
+    b.emit(fop(*A.ITOF["ITOFT"], 2, R31, 2))
+    b.emit(mem(OP["LDA"], 9, R_SCR, 0x2000 + 0x3A0))
+    b.emit(fop(0x16, 0x0A0, 1, 2, R31))            # ADDT f1,f2,f31
+    b.emit(fop(*A.CPYS, R31, R31, 5))              # f5 <- F31
+    b.emit(mem(OP["STT"], R31, 9, 0))              # STT f31
+    b.emit(fop(0x16, 0x0A0, R31, 1, 6))            # ADDT f31,f1,f6
+    b.emit(fop(*A.FTOI["FTOIT"], 5, R31, 3))
+    b.emit(mem(OP["LDQ"], 4, 9, 0))
+    b.emit(fop(*A.FTOI["FTOIT"], 6, R31, 5))
+    b.store(3, "CPYS f31,f31,f5", 0)
+    b.store(4, "STT f31", 0)
+    b.store(5, "ADDT f31,f1,f6 (0 + 1.0)", 0x3FF0000000000000)
+
+    # A branch on R31 that is never taken, in the middle of a block, after
+    # a result still held in a host register: the branch's zero must not
+    # be taken for that result (AArch64's value forward, until 2026-11-11).
+    # R20-R23 are among the registers least likely to be pinned.
+    for name in ("BLBS", "BNE", "BLT", "BGT"):
+        b.begin("jitmisc: %s r31 not taken between two uses of a result" % name)
+        b.load(1, 0x1111)
+        b.load(2, 0x2222)
+        b.load(4, 0x4444)
+        b.emit(opr(0x10, 0x20, 1, 2, 21))          # ADDQ r1,r2,r21
+        b.emit(bra(OP[name], R31, 1))
+        b.emit(opr(0x10, 0x20, 21, 4, 22))         # ADDQ r21,r4,r22
+        b.emit(opr(0x10, 0x20, 21, 22, 23))        # ADDQ r21,r22,r23
+        b.store(21, "r21", 0x3333)
+        b.store(22, "r22 = r21 + r4", 0x7777)
+        b.store(23, "r23 = r21 + r22", 0xAAAA)
 
 
 # --- jitxlate: the memory helpers' translation -----------------------------------------

@@ -131,6 +131,30 @@ static void test_set_time() {
   CHECK_EQ(r.rd(0x00), 1);
 }
 
+/// SET holds the registers at the time it is set (data sheet p.15: SET
+/// "inhibits any update cycle"): a guest that sets and clears it without
+/// writing the time, and without a read just before, keeps the time. The
+/// registers used to hold the time of the last read, and clearing SET took
+/// that for the new time (an hour back, here).
+static void test_set_without_writes() {
+  Rig r;
+  CHECK_EQ(r.rd(0x04), 12);
+  r.ns(3600000000000ull); // an hour on, nothing read
+  r.wr(0x0b, 0x86);
+  r.wr(0x0b, 0x06);
+  CHECK_EQ(r.rd(0x04), 13);
+  CHECK_EQ(r.rd(0x02), 34);
+  CHECK_EQ(r.rd(0x00), 56);
+  // and with one register written while SET: the rest are the time SET
+  // was set at
+  r.ns(60000000000ull); // 13:35:56
+  r.wr(0x0b, 0x86);
+  r.wr(0x04, 20);
+  r.wr(0x0b, 0x06);
+  CHECK_EQ(r.rd(0x04), 20);
+  CHECK_EQ(r.rd(0x02), 35);
+}
+
 /// The ARC console's years count from 1980.
 static void test_arc_year() {
   Rig r;
@@ -297,6 +321,7 @@ static void test_read_only_and_running_writes() {
 int main() {
   test_read_time();
   test_set_time();
+  test_set_without_writes();
   test_arc_year();
   test_periodic_flag();
   test_upper_ram();

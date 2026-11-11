@@ -213,6 +213,47 @@ static void test_file() {
   done();
 }
 
+/// A console image a machine's update utility left in the flash is found by
+/// its ROM header (FindConsoleImage): seven longwords at a multiple of 64
+/// bytes, the header's size in the third, the image's in the fifth, the
+/// load address in the seventh. A header whose sizes run past the flash is
+/// not one. The sum was made in 32 bits, where an image size near 2^32
+/// wrapped below the flash's size and the loader then copied that many
+/// bytes into memory.
+static void put_header(u32 at, u32 header, u32 image, u32 load) {
+  const u32 w[7] = {0x5a5ac3c3, 0xa5a53c3c, header, 0, image, 0, load};
+  for (u32 i = 0; i < 28; i++)
+    program(at + i, (u8)(w[i / 4] >> (8 * (i % 4))));
+}
+
+static void test_console_image() {
+  u32 off = 0, hdr = 0, size = 0;
+  u64 base = 0;
+  fl = fresh(1);
+  check("no header in an erased flash",
+        fl->FindConsoleImage(&off, &hdr, &size, &base), 0);
+  put_header(0x100000, 0x40, 0x80000, 0x900000);
+  check("a header whose image fits is found",
+        fl->FindConsoleImage(&off, &hdr, &size, &base), 1);
+  check("its offset", off, 0x100000);
+  check("its header size", hdr, 0x40);
+  check("its image size", size, 0x80000);
+  check("its load address", (unsigned)base, 0x900000);
+  done();
+
+  fl = fresh(1);
+  put_header(0x100000, 0x40, 0x100000, 0x900000); // ends 0x40 past the flash
+  check("an image that runs past the flash is not one",
+        fl->FindConsoleImage(&off, &hdr, &size, &base), 0);
+  done();
+
+  fl = fresh(1);
+  put_header(0x100000, 0x40, 0xffffff00, 0x900000); // wraps in 32 bits
+  check("nor one whose size wraps the sum",
+        fl->FindConsoleImage(&off, &hdr, &size, &base), 0);
+  done();
+}
+
 static void test_replay(const char *path) {
   const std::vector<RecordedAccess> rec = load_record(path, "flash");
   check("record has the console's accesses", rec.size() > 800, 1);
@@ -242,6 +283,7 @@ int main(int argc, char **argv) {
   test_erase();
   test_bus();
   test_file();
+  test_console_image();
   test_replay(argc > 1 ? argv[1] : TEST_DATA_DIR "/flash_srm_set.rec");
   remove(rom_file);
   printf("flash_test: %d checks, %d failed\n", checks, failures);

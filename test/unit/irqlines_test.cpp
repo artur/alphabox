@@ -165,6 +165,37 @@ static void test_reset() {
   CHECK_EQ(l.drive(12, B, 0, true, c), 1);
 }
 
+/// A state file keeps the requests (CSystem::save_irq_lines) and a restored
+/// machine gets them back: of two sources on one input, the first to let go
+/// then leaves the line high. A machine restored without them (a file
+/// before format 2.4) takes that for the line going low, which is what
+/// every restore did until 2026-11-11.
+static void test_requests_round_trip() {
+  CInterruptLines saved_from;
+  Chipset c;
+  saved_from.drive(21, A, 0, true, c);
+  saved_from.drive(21, B, 1, true, c);
+  saved_from.drive(30, B, 0, true, c);
+  const std::vector<CInterruptLines::request> on = saved_from.requests();
+  CHECK_EQ(on.size(), 3);
+
+  CInterruptLines restored;
+  Chipset c2;
+  restored.set_requests(on);
+  CHECK_EQ(c2.calls, 0); // the chipset's registers come from the file
+  CHECK_EQ(restored.level(21), 1);
+  CHECK_EQ(restored.level(30), 1);
+  CHECK_EQ(restored.drive(21, A, 0, false, c2), 1); // B still asserts
+  CHECK_EQ(c2.level[21], 1);
+  CHECK_EQ(restored.drive(21, B, 1, false, c2), 0);
+  CHECK_EQ(restored.level(30), 1);
+
+  CInterruptLines without; // a file that does not hold them
+  Chipset c3;
+  without.set_requests({});
+  CHECK_EQ(without.drive(21, A, 0, false, c3), 0);
+}
+
 /// Devices on threads of their own drive one input at once. The chipset is
 /// told under the lock, so it hears the levels in order: at every delivery
 /// the level it is told is the OR of the requests the test knows are up,
@@ -215,6 +246,7 @@ int main() {
   test_functions_share();
   test_inputs_independent();
   test_reset();
+  test_requests_round_trip();
   test_threads();
   printf("irqlines_test: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

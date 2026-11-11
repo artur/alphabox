@@ -220,7 +220,29 @@ def build_pal(tr_pa, main_va, fatal_va):
     jpal.emit(opr(0x10, 0x22, P4, P5, 1))      # S4ADDQ p4,p5,R1
     jpal.emit(opr(0x11, 0x24, P22, P6, 1))     # CMOVEQ p22,p6,R1
     jpal.emit(hw_ret(P23))
-    blocks = [init, com, cp, jpal]
+    # CALL_PAL 8B: HW_LD and the locked pair at addresses that are not
+    # aligned to their data (group jitpal). R16 is the KSEG address of two
+    # quadwords. Every HW_LD and HW_ST reads and writes the datum its
+    # address is in (the address is forced to the data size, as the
+    # interpreter's READ_PHYS_NT does after the translation):
+    #   R0 = HW_LDQ/V 3(R16)      the first quadword
+    #   R1 = HW_LDL/V 9(R16)      the second's low longword, sign-extended
+    #   R2 = HW_LDQ/V alt 14(R16) the second quadword
+    #   R3 = HW_LDQ/L physical 5(R16's PA): the first, locked
+    #   R8 = HW_STQ/C physical 5(...) of R3 + 1: 1, the store done
+    #   R9 = HW_LDQ physical 0(...): the first quadword, now R3 + 1
+    jpal2 = Asm(PAL_PA + 0x5C00)
+    jpal2.emit(hw_ld(0, 16, 3, typ=4))
+    jpal2.emit(hw_ld(1, 16, 9, typ=4, quad=False))
+    jpal2.emit(hw_ld(2, 16, 14, typ=6))
+    jpal2.emit(opl(0x12, 0x31, 16, 0x1F, P5))   # ZAPNOT: KSEG -> physical
+    jpal2.emit(hw_ld(3, P5, 5, typ=1))
+    jpal2.emit(opl(0x10, 0x20, 3, 1, P6))       # ADDQ R3,#1,p6
+    jpal2.emit(hw_st(P6, P5, 5, typ=1))
+    jpal2.emit(bis(P6, P6, 8))
+    jpal2.emit(hw_ld(9, P5, 0))
+    jpal2.emit(hw_ret(P23))
+    blocks = [init, com, cp, jpal, jpal2]
     for off in VECTORS:
         v = Asm(PAL_PA + off)
         v.emit(lda(P4, R31, off))
@@ -266,6 +288,8 @@ def build_pal(tr_pa, main_va, fatal_va):
             e.emit(hw_ret(P23))
         elif func == 0x8A:                 # the arithmetic above
             e.emit(bra(OP["BR"], R31, (jpal.base - (e.here + 4)) // 4))
+        elif func == 0x8B:                 # HW_LD unaligned, above
+            e.emit(bra(OP["BR"], R31, (jpal2.base - (e.here + 4)) // 4))
         elif func == 0x8C:                 # IER <- R17
             e.emit(hw_mtpr(17, IPR["IER"]))
             e.emit(hw_ret(P23, stall=True))
