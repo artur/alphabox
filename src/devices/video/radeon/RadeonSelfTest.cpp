@@ -1083,7 +1083,7 @@ bool CRadeon::selftest() {
     vga.attribute = atc;
     report("VGA: attribute register 14h leaves the pel shift", pel);
 
-    // The option ROM: a datum is read when the whole of it is in the image.
+    // The option ROM: of a datum across the image's end, the bytes inside.
     bool rom = true;
     if (rom_max >= 8) {
       const u8 *e = option_rom + rom_max;
@@ -1092,8 +1092,8 @@ bool CRadeon::selftest() {
       rom = rom_read(rom_max - 4, 32) == last &&
             rom_read(rom_max - 1, 8) == e[-1] &&
             rom_read(rom_max - 2, 16) == (last >> 16) &&
-            rom_read(rom_max - 3, 32) == 0 && rom_read(rom_max - 1, 16) == 0 &&
-            rom_read(rom_max, 8) == 0;
+            rom_read(rom_max - 3, 32) == (last >> 8) &&
+            rom_read(rom_max - 1, 16) == e[-1] && rom_read(rom_max, 8) == 0;
     }
     report("VGA: option ROM reads at the image's last bytes", rom,
            rom_max >= 8 ? "" : "(no ROM image: not checked)");
