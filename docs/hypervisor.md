@@ -459,6 +459,11 @@ default under `ALPHABOX_HV=1`.
   mark executable. The engine object, block cache and all, lives there
   too, because the compiled code reads it.
 - Device accesses go through `hv::escape()` as well.
+- The code space is 64 MB a processor (`ALPHABOX_HV_CODE_MB`). A reclaim
+  comes when three quarters are used and starts it again from its
+  beginning. Until 2026-11-12 the reclaim waited for the heap's threshold
+  of 768 MB, which 64 MB never reach, and the space was never rewound: once
+  full, nothing more was compiled. SRM boots with 1 MB (223 reclaims).
 
 Device crossings were the real collapse. A driver polling a data register
 cost ~1 us per access: a Windows disk check managed 1.24M crossings a

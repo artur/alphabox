@@ -890,6 +890,7 @@ private:
   static constexpr int kIndBits = 10;
   IndCacheEntry m_ind_cache[1 << kIndBits] = {};
   uint64_t m_code_bytes;    // compiled bytes since last reclaim (see flush())
+  uint64_t m_reclaim_bytes = kReclaimBytes; // reclaim at this many
   bool m_reclaim_pending =
       false; // flush() hit kReclaimBytes; reclaim at the next dispatch boundary
   void *m_rt;            // asmjit::JitRuntime*

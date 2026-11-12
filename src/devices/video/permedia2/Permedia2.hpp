@@ -133,6 +133,8 @@ protected:
   void gp_reset();
   void gp_unimplemented(const char *what);
   // The rasterizer.
+  /// ALPHABOX_VIDEO_SELFTEST (VideoSelfTest.hpp).
+  void selftest();
   void raster_begin(u32 render);
   void raster_continue(int kind, u32 count);
   void raster_run();
@@ -165,7 +167,7 @@ protected:
   void delta_triangle(u32 cmd);
   void delta_line(u32 cmd, int from, int to);
   void dda_span_start();
-  void dda_step_x();
+  void dda_step_x(s64 n = 1);
   void dda_step_y();
 
   // --- memory (Permedia2Memory.cpp) ----------------------------------------

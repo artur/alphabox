@@ -26,6 +26,7 @@
  **/
 
 #include "Permedia2.hpp"
+#include "VideoSelfTest.hpp"
 #include "System.hpp"
 
 using namespace permedia2;
@@ -154,6 +155,8 @@ void CPermedia2::init() {
   }
   printf("%s: 3Dlabs Permedia 2, %u KB, subsystem %04x:%04x\n", devid_string,
          m_vram_bytes / 1024, subsystem & 0xffff, subsystem >> 16);
+  if (VideoSelfTest::wanted())
+    selftest();
 }
 
 /**

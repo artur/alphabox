@@ -25,6 +25,7 @@
  **/
 
 #include "Mach64.hpp"
+#include "VideoSelfTest.hpp"
 #include "System.hpp"
 
 using namespace mach64;
@@ -237,6 +238,8 @@ void CMach64::init() {
     m_trace = !m_trace_new;
   }
   printf("%s: ATI %s, %u KB\n", devid_string, m_chip.part, m_vram_bytes / 1024);
+  if (VideoSelfTest::wanted())
+    selftest();
 }
 
 u32 CMach64::config_read_custom(int func, u32 address, int dsize, u32 data) {

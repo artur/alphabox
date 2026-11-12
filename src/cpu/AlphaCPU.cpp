@@ -160,20 +160,32 @@ void CAlphaCPU::run() {
   run_loop();
 }
 
-#ifdef ALPHABOX_HVF
+// The processor object is zeroed memory: the page cache's second level
+// (data_page_cache2, 2 MB) is never cleared, a slot being empty by its
+// generation, so what the allocator hands out must not look like a filled
+// one. calloc gets fresh pages for a block this size without touching them
+// (the VM's allocator likewise).
+static_assert(alignof(CAlphaCPU) <= alignof(std::max_align_t),
+              "calloc's alignment must do for CAlphaCPU");
 void *CAlphaCPU::operator new(size_t n) {
+#ifdef ALPHABOX_HVF
   if (hv::enabled()) {
     if (void *p = hv::alloc(n))
       return p;
   }
-  return ::operator new(n);
+#endif
+  void *p = calloc(1, n);
+  if (!p)
+    throw std::bad_alloc();
+  return p;
 }
 void CAlphaCPU::operator delete(void *p) noexcept {
+#ifdef ALPHABOX_HVF
   if (hv::enabled())
     return; // the VM's allocator releases everything at exit
-  ::operator delete(p);
-}
 #endif
+  free(p);
+}
 
 // The system-bus calls, performed on the host thread. hv::escape() lands
 // here with the argument block the caller built; see sys_read/sys_write.

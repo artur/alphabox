@@ -26,6 +26,7 @@
  **/
 
 #include "S3Virge.hpp"
+#include "VideoSelfTest.hpp"
 #include "System.hpp"
 
 using namespace virge;
@@ -219,6 +220,8 @@ void CS3Virge::init() {
     }
   }
   printf("%s: S3 %s, %u KB\n", devid_string, m_chip.part, m_vram_bytes / 1024);
+  if (VideoSelfTest::wanted())
+    selftest();
 }
 
 void CS3Virge::unimplemented(const std::string &what) {

@@ -538,6 +538,27 @@ void CPermedia2::raster_run() {
   const bool xlimits = (rm & (1u << 18)) && !bm && !hd;
   const s32 xmin = sext(G(T_X_LIMITS), 16),
             xmax = sext(G(T_X_LIMITS) >> 16, 16);
+  // [cx0, cx1): the columns a fragment can be drawn in, from the X limits
+  // and the scissors (scissor_pass). A span's part outside is stepped over
+  // at once: the delta unit's edges come from vertices that may be
+  // anywhere, and a span can be billions of pixels long. Not when the span
+  // is in step with the host (a mask bit or a data word a fragment) or its
+  // fragments are words of packed pixels.
+  const bool can_skip = !bm && !hd && !(G(T_FB_READ_MODE) & FBRM_PACKED_DATA);
+  s64 cx0 = INT64_MIN, cx1 = INT64_MAX;
+  if (xlimits) {
+    cx0 = std::max(cx0, s64(xmin));
+    cx1 = std::min(cx1, s64(xmax));
+  }
+  if (G(T_SCISSOR_MODE) & 1) {
+    cx0 = std::max(cx0, s64(sext(G(T_SCISSOR_MIN_XY), 12)));
+    cx1 = std::min(cx1, s64(sext(G(T_SCISSOR_MAX_XY), 12)));
+  }
+  if (G(T_SCISSOR_MODE) & 2) {
+    const s64 ox = sext(G(T_WINDOW_ORIGIN), 12);
+    cx0 = std::max(cx0, -ox);
+    cx1 = std::min(cx1, s64(G(T_SCREEN_SIZE) & 0x7ff) - ox);
+  }
 
   while (g.active) {
     if (!g.in_span) {
@@ -560,6 +581,19 @@ void CPermedia2::raster_run() {
       g.et += s32(G(T_DT_DY_DOM));
       g.eq += s32(G(T_DQ_DY_DOM));
       g.ef += s32(G(T_DF_DY_DOM));
+      continue;
+    }
+    if (can_skip && (g.x < cx0 || g.x >= cx1)) {
+      // To the window's near side, or to the span's end when the window is
+      // behind or the span ends before it.
+      s64 to;
+      if (g.xstep > 0)
+        to = g.x < cx0 ? std::min(s64(g.xend), cx0) : s64(g.xend);
+      else
+        to = g.x >= cx1 ? std::max(s64(g.xend), cx1 - 1) : s64(g.xend);
+      const s64 n = g.xstep > 0 ? to - g.x : g.x - to;
+      g.x = s32(to);
+      dda_step_x(n);
       continue;
     }
     bool pass = true;
@@ -616,17 +650,20 @@ void CPermedia2::dda_span_start() {
   dda_correct_span();
 }
 
-void CPermedia2::dda_step_x() {
+void CPermedia2::dda_step_x(s64 n) {
   auto &g = r.g;
-  const s32 k = g.xstep;
-  g.cr += s32(G(T_DR_DX)) * k;
-  g.cg += s32(G(T_DG_DX)) * k;
-  g.cb += s32(G(T_DB_DX)) * k;
-  g.z += ((s64(s32(G(T_DZ_DX_U))) << 11) | (G(T_DZ_DX_L) >> 21)) * k;
-  g.s += s64(s32(G(T_DS_DX))) * k;
-  g.t += s64(s32(G(T_DT_DX))) * k;
-  g.q += s64(s32(G(T_DQ_DX))) * k;
-  g.f += s32(G(T_DF_DX)) * k;
+  // n pixels in the span's direction; the sums wrap as the registers do.
+  const u64 k = u64(s64(g.xstep) * n);
+  auto add32 = [k](s32 &v, u32 d) { v = s32(u32(v) + u32(s32(d)) * u32(k)); };
+  auto add64 = [k](s64 &v, s64 d) { v = s64(u64(v) + u64(d) * k); };
+  add32(g.cr, G(T_DR_DX));
+  add32(g.cg, G(T_DG_DX));
+  add32(g.cb, G(T_DB_DX));
+  add64(g.z, (s64(s32(G(T_DZ_DX_U))) << 11) | (G(T_DZ_DX_L) >> 21));
+  add64(g.s, s64(s32(G(T_DS_DX))));
+  add64(g.t, s64(s32(G(T_DT_DX))));
+  add64(g.q, s64(s32(G(T_DQ_DX))));
+  add32(g.f, G(T_DF_DX));
 }
 
 void CPermedia2::dda_step_y() {}

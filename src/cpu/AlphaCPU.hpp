@@ -546,13 +546,12 @@ private:
 #endif
 
 public:
-#ifdef ALPHABOX_HVF
-  // An interrupt raised by a device thread, the stop flag, the instruction
-  // count the main thread reads: all of them cross the boundary, so under
-  // ALPHABOX_HV=1 the processor object lives in shared memory.
+  // Zeroed memory (see the definition). An interrupt raised by a device
+  // thread, the stop flag, the instruction count the main thread reads all
+  // cross the VM's boundary, so under ALPHABOX_HV=1 the processor object
+  // lives in shared memory.
   static void *operator new(size_t n);
   static void operator delete(void *p) noexcept;
-#endif
   inline u64 sys_read(u64 addr, int size) {
 #ifdef ALPHABOX_HVF
     if (hv::enabled()) {

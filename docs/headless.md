@@ -217,6 +217,27 @@ runs it `<s>` seconds later, through the DMA window the console set up.
 register accesses, queue addresses, notifies and interrupt changes
 (`VIRTIO` lines).
 
+### Mach64, Permedia 2, ViRGE (`ALPHABOX_VIDEO_SELFTEST=1`)
+
+Each of the three cards checks its engine at the end of its `init`, before
+any machine starts (`VideoSelfTest.hpp`, one `*SelfTest.cpp` a card), and
+puts its registers and memory back. `=exit` ends the emulator with the
+result. `test/tools/video_selftest.sh` runs the three with an empty option
+ROM, no guest and no firmware.
+
+- Mach64: colour host data for a rectangle, as a byte (no pixel at 16 bpp:
+  the rectangle waits), a word at either half of the register, longwords.
+- Permedia 2: a trapezoid whose edges lie two thousand million pixels to
+  either side of the scissor ends at once and fills the scissor only; the
+  colour DDA reaches the scissor with the value a pixel a step gives it.
+- ViRGE: a triangle whose spans grow to four million pixels, clipped to ten
+  columns, likewise; Gouraud colour at the clip in both directions.
+- All three: a read across the end of the option ROM returns the bytes
+  inside.
+
+It prints `%MACH64-I-SELFTEST`, `%PERMEDIA2-I-SELFTEST` and
+`%VIRGE-I-SELFTEST` lines, PASS or FAIL last.
+
 ### Radeon (`ALPHABOX_RADEON_SELFTEST=1`)
 
 At the end of the `radeon` card's start-up, before the machine runs, it
@@ -728,3 +749,4 @@ Builds with `-DALPHABOX_HVF=ON` only ([hypervisor.md](hypervisor.md)):
 | `ALPHABOX_HV_JIT=1` | With `ALPHABOX_HV=1`: run compiled code inside the VM too. The default there is the interpreter. |
 | `ALPHABOX_HV_TRACE=1` | Print every mapping, exit and proxied call. |
 | `ALPHABOX_HV_WATCHDOG=<s>` | Cancel a vCPU that never exits, and print where it was. |
+| `ALPHABOX_HV_CODE_MB=<n>` | The size of the compiled code's space under `ALPHABOX_HV_JIT=1` (default 64). A small one makes the reclaim frequent, which is how it is tested. |

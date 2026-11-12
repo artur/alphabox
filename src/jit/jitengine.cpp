@@ -1043,14 +1043,21 @@ CJitEngine::CJitEngine(int cpu_id, uint64_t *epoch_store)
 #ifdef ALPHABOX_HVF
   if (hv::enabled()) {
     // 64 MB of code, from the allocator whose memory may be shared with
-    // the VM. Never freed: a reclaim drops the blocks, not the arena.
+    // the VM. Never freed: a reclaim drops the blocks and starts the arena
+    // again from its beginning, and comes when three quarters are used
+    // (m_reclaim_bytes), not at the heap's far larger threshold, which a
+    // full arena never reached: nothing was compiled from then on.
     m_code_arena_size = 64u << 20;
+    if (const char *e = getenv("ALPHABOX_HV_CODE_MB")) // for the reclaim's test
+      m_code_arena_size = (size_t)std::max(1L, atol(e)) << 20;
     m_code_arena = (uint8_t *)hv::alloc(m_code_arena_size);
-    if (!m_code_arena)
+    if (!m_code_arena) {
       m_code_arena_size = 0;
-    else
+    } else {
+      m_reclaim_bytes = m_code_arena_size / 4 * 3;
       printf("%%JIT-I-HVCODE: %zu MB of code space shared with the VM\n",
              m_code_arena_size >> 20);
+    }
   }
 #endif
   if (const char *ca = getenv("ALPHABOX_JIT_COMPILE_AFTER")) {
@@ -1387,6 +1394,9 @@ void CJitEngine::reclaim_code() {
   m_chunk_cur = -1;
   m_exit_used = kExitChunk;
   m_code_bytes = 0;
+#ifdef ALPHABOX_HVF
+  m_code_arena_used = 0; // the VM's code space, from its beginning again
+#endif
 #ifdef JIT_STATS
   m_stat_reclaims++;
 #endif
@@ -1417,7 +1427,7 @@ void CJitEngine::flush() {
   // source words again (revalidate_flushed) before it next runs. An
   // epoch-free static link was tried and rejected (see the AArch64
   // emitter's emit_static_exit and docs/performance.md).
-  if (m_rt && m_code_bytes >= kReclaimBytes)
+  if (m_rt && m_code_bytes >= m_reclaim_bytes)
     m_reclaim_pending = true; // DEFER: reclaim frees all code -- unsafe from a
                               // compiled IC_FLUSH; reclaim_if_pending() does it
                               // at the next dispatch boundary.
@@ -1429,7 +1439,7 @@ void CJitEngine::flush() {
 // on next use (no recompile, no interpret pass, unless the bytes actually
 // changed)
 void CJitEngine::flush_non_global() {
-  if (m_rt && m_code_bytes >= kReclaimBytes) {
+  if (m_rt && m_code_bytes >= m_reclaim_bytes) {
     flush();
     return;
   }
@@ -3716,7 +3726,7 @@ void CJitEngine::compile_block(
   // guest executes IMB/IC_FLUSH, and a compute-heavy phase can go minutes
   // without one while recompiles keep allocating -- code memory grew unbounded
   // (multi-GB). Safe: we're in this CPU's cold path.
-  if (m_rt && m_code_bytes >= kReclaimBytes) {
+  if (m_rt && m_code_bytes >= m_reclaim_bytes) {
     reclaim_code();
     b->valid =
         true; // b was just (re)validated by record(); restore it after the wipe
@@ -4816,7 +4826,7 @@ uint64_t CJitEngine::note_exec(uint32_t native_instr, uint32_t interp_instr,
   printf("[JIT][STATS][CPU%d] code cache: %.1f MB live of %.0f MB budget | "
          "%llu reclaims\n",
          m_cpu_id, (double)m_code_bytes / (1024.0 * 1024.0),
-         (double)kReclaimBytes / (1024.0 * 1024.0),
+         (double)m_reclaim_bytes / (1024.0 * 1024.0),
          (unsigned long long)m_stat_reclaims);
   if (m_term_op[0]) { // CALL_PAL cut blocks -- show which function codes
                       // dominate (chain targets)

@@ -225,6 +225,8 @@ protected:
   void s3d_pixel(const S3dCtx &c, u32 dest, const s32 *attr);
   void s3d_span(const S3dCtx &c, s32 y, s32 x, s32 xe, int step, s32 *attr,
                 const s32 *dx);
+  /// ALPHABOX_VIDEO_SELFTEST (VideoSelfTest.hpp).
+  void selftest();
   void s3d_triangle();
   void s3d_line();
 

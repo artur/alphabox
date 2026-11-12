@@ -458,7 +458,11 @@ void CMach64::engine_write8(u32 reg, u8 val) {
 
 void CMach64::engine_write16(u32 reg, u16 val) {
   reg &= 0x3fe;
-  if ((reg & 2) && reg >= HOST_DATA0 && reg <= HOST_DATA_LAST) {
+  // Colour host data is a word of pixels at either half of the register;
+  // as two bytes, the low half's would be two writes narrower than a 16 bpp
+  // host pixel.
+  if (((reg & 2) || accel.source_host) && reg >= HOST_DATA0 &&
+      reg <= HOST_DATA_LAST) {
     engine_run(val, 16);
     return;
   }
@@ -1107,6 +1111,11 @@ void CMach64::engine_run_rect(u32 cpu_dat, int count) {
     const int src_y = (a.src_y + a.src_y_start) & 0x3fff;
 
     if (a.source_host) {
+      // A write narrower than a host pixel carries no pixel: wait for the
+      // next. Taken as one it left count below zero for good, and the
+      // rest of the command was drawn from this write's shifted-out zeros.
+      if (count > 0 && count < (8 << a.host_size))
+        break;
       host_dat = cpu_dat;
       if (a.host_size < 2)
         cpu_dat >>= (8 << a.host_size);
@@ -1266,6 +1275,11 @@ void CMach64::engine_run_line(u32 cpu_dat, int count) {
     bool draw_pixel = !(r.dst_cntl & DST_POLYGON_EN);
 
     if (a.source_host) {
+      // A write narrower than a host pixel carries no pixel: wait for the
+      // next. Taken as one it left count below zero for good, and the
+      // rest of the command was drawn from this write's shifted-out zeros.
+      if (count > 0 && count < (8 << a.host_size))
+        break;
       host_dat = cpu_dat;
       if (a.host_size < 2)
         cpu_dat >>= (8 << a.host_size);

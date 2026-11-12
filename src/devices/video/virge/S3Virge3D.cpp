@@ -482,6 +482,31 @@ void CS3Virge::s3d_span(const S3dCtx &c, s32 y, s32 x, s32 xe, int step,
   const int bytes = c.dest_fmt == 0 ? 1 : c.dest_fmt == 1 ? 2 : 3;
   const u8 *zb = vga.memory;
   const u32 mask = vram_mask();
+  // Only [lo, hi] is drawn: the part of the span before it is stepped over
+  // at once and the part after it left out. An edge slope can carry a span
+  // millions of pixels outside, a pixel a step.
+  s32 lo = 0, hi = 2047;
+  if (c.clip) {
+    lo = std::max(lo, s32(c.clip_l));
+    hi = std::min(hi, s32(c.clip_r));
+  }
+  s64 skip = 0;
+  if (step > 0) {
+    if (x < lo)
+      skip = std::min(s64(xe), s64(lo)) - x;
+    if (s64(xe) > s64(hi) + 1)
+      xe = s32(std::max(s64(x) + skip, s64(hi) + 1));
+  } else {
+    if (x > hi)
+      skip = s64(x) - std::max(s64(xe), s64(hi));
+    if (s64(xe) < s64(lo) - 1)
+      xe = s32(std::min(s64(x) - skip, s64(lo) - 1));
+  }
+  if (skip) {
+    x += s32(skip) * step;
+    for (int i = 0; i < 9; i++)
+      attr[i] = s32(u32(attr[i]) + u32(dx[i]) * u32(skip));
+  }
   for (; x != xe; x += step) {
     bool draw = !c.clip || (x >= c.clip_l && x <= c.clip_r);
     if (x < 0 || x > 2047)
@@ -504,7 +529,7 @@ void CS3Virge::s3d_span(const S3dCtx &c, s32 y, s32 x, s32 xe, int step,
       }
     }
     for (int i = 0; i < 9; i++)
-      attr[i] += dx[i];
+      attr[i] = s32(u32(attr[i]) + u32(dx[i]));
   }
 }
 

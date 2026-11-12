@@ -202,6 +202,8 @@ protected:
   void engine_write32(u32 reg, u32 data);
   void engine_set_gui_engine();
   void engine_load_context();
+  /// ALPHABOX_VIDEO_SELFTEST (VideoSelfTest.hpp).
+  void selftest();
   void engine_start_rect();
   void engine_start_line();
   void engine_run(u32 host_data, int count);

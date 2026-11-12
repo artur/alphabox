@@ -1492,24 +1492,15 @@ void CVGACard::load_option_rom(const char *default_name) {
  * Read from the option ROM.
  **/
 u32 CVGACard::rom_read(u32 address, int dsize) {
-  u32 data = 0x00;
-  u8 *x = (u8 *)option_rom;
-  // the whole datum inside the ROM (rom_max is its size)
-  if (address < rom_max && (u32)(dsize / 8) <= rom_max - address) {
-    x += address;
-    switch (dsize) {
-    case 8:
-      data = (u32)endian_8((*((u8 *)x)) & 0xff);
-      break;
-    case 16:
-      data = (u32)endian_16((*((u16 *)x)) & 0xffff);
-      break;
-    case 32:
-      data = (u32)endian_32((*((u32 *)x)) & 0xffffffff);
-      break;
-    }
+  // The bytes of the datum that are inside the ROM (rom_max is its size),
+  // least significant first; those past its end read as zero.
+  u32 data = 0;
+  if (address < rom_max) {
+    const u32 n = std::min((u32)(dsize / 8), rom_max - address);
+    const u8 *x = (const u8 *)option_rom + address;
+    for (u32 i = 0; i < n && i < 4; i++)
+      data |= (u32)x[i] << (8 * i);
   }
-
   return data;
 }
 
